@@ -1,0 +1,9 @@
+{
+  "name": "Camera 1",
+  "type": "camera",
+  "params": [
+    { "name": "X", "type": "slider", "default": "2.5", "min": -10.0, "max": 10.0 },
+    { "name": "Y", "type": "slider", "default": "1.8", "min": -10.0, "max": 10.0 },
+    { "name": "Z", "type": "slider", "default": "2.5", "min": -10.0, "max": 10.0 }
+  ]
+}

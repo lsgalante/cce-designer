@@ -60,6 +60,10 @@ struct ParamDef {
     default: String,
     #[serde(default)]
     options: Vec<String>,
+    #[serde(default)]
+    min: Option<f32>,
+    #[serde(default)]
+    max: Option<f32>,
 }
 
 fn default_param_type() -> String { "string".to_string() }
@@ -96,7 +100,14 @@ fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
         } else {
             p.default.clone()
         };
-        (key.clone(), value, p.param_type.clone())
+        let ptype = if p.param_type == "slider" {
+            let min = p.min.unwrap_or(0.0);
+            let max = p.max.unwrap_or(2.0);
+            format!("slider:{}:{}", min, max)
+        } else {
+            p.param_type.clone()
+        };
+        (key.clone(), value, ptype)
     }).collect()
 }
 
@@ -956,6 +967,7 @@ struct State {
     pan_start_x: f32,
     pan_start_y: f32,
     space_pressed: bool,
+    active_camera: String,
 }
 
 impl State {
@@ -1141,6 +1153,20 @@ impl State {
                 self.widgets[slot].set_display_params(&[]);
                 self.widgets[slot].set_geom_visible(true);
             }
+        }
+        let camera_nodes: Vec<String> = self.current_dir().children.iter()
+            .filter(|c| c.node_type == "camera")
+            .map(|c| c.name.clone())
+            .collect();
+        let mut items = vec!["Default Camera".to_string()];
+        items.extend(camera_nodes);
+        if !items.contains(&self.active_camera) {
+            self.active_camera = "Default Camera".to_string();
+        }
+        self.widgets[RIGHT_MENUBAR_IDX].set_menu_items(0, &items);
+        for (i, item) in items.iter().enumerate() {
+            let checked = item == &self.active_camera;
+            self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(0, i, checked);
         }
         let path_strs = self.current_path_names();
         self.widgets[BREADCRUMB_IDX].set_path(&path_strs);
@@ -1519,6 +1545,7 @@ impl State {
             pan_start_x: 0.0,
             pan_start_y: 0.0,
             space_pressed: false,
+            active_camera: "Default Camera".to_string(),
         };
 
         state.sync_nodes();
@@ -2396,7 +2423,31 @@ impl State {
 
                 self.rotation += 0.015;
                 let proj = Mat4::perspective_rh(0.9, aspect, 0.1, 100.0);
-                let view_mat = Mat4::look_at_rh(Vec3::new(2.5, 1.8, 2.5), Vec3::ZERO, Vec3::Y);
+                let mut camera_pos = Vec3::new(2.5, 1.8, 2.5);
+                if self.active_camera != "Default Camera" {
+                    if let Some(node) = self.current_dir().children.iter().find(|c| c.node_type == "camera" && c.name == self.active_camera) {
+                        let mut cx = 2.5f32;
+                        let mut cy = 1.8f32;
+                        let mut cz = 2.5f32;
+                        for p in &node.params {
+                            if p.name == "X" {
+                                if let Ok(val) = p.default.parse::<f32>() {
+                                    cx = val;
+                                }
+                            } else if p.name == "Y" {
+                                if let Ok(val) = p.default.parse::<f32>() {
+                                    cy = val;
+                                }
+                            } else if p.name == "Z" {
+                                if let Ok(val) = p.default.parse::<f32>() {
+                                    cz = val;
+                                }
+                            }
+                        }
+                        camera_pos = Vec3::new(cx, cy, cz);
+                    }
+                }
+                let view_mat = Mat4::look_at_rh(camera_pos, Vec3::ZERO, Vec3::Y);
                 let model = Mat4::from_rotation_y(self.rotation) * Mat4::from_rotation_x(self.rotation * 0.2);
                 let mvp = proj * view_mat * model;
                 self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[mvp.to_cols_array_2d()]));
@@ -2604,16 +2655,32 @@ impl ApplicationHandler for App {
                     }
 
                     if let Some((menu_idx, item_idx)) = state.widgets[RIGHT_MENUBAR_IDX].menu_click() {
-                        let action = if menu_idx == 1 {
-                            Some(Action::ToggleSquareViewport)
-                        } else if menu_idx == 2 {
-                            match item_idx {
-                                0 => Some(Action::ToggleGrid),
-                                1 => Some(Action::ToggleCube),
-                                _ => None,
+                        if menu_idx == 0 {
+                            let camera_nodes: Vec<String> = state.current_dir().children.iter()
+                                .filter(|c| c.node_type == "camera")
+                                .map(|c| c.name.clone())
+                                .collect();
+                            let mut items = vec!["Default Camera".to_string()];
+                            items.extend(camera_nodes);
+                            if item_idx < items.len() {
+                                state.active_camera = items[item_idx].clone();
+                                for (i, item) in items.iter().enumerate() {
+                                    state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(0, i, item == &state.active_camera);
+                                }
+                                changed = true;
                             }
-                        } else { None };
-                        if let Some(a) = action { state.execute_action(a); }
+                        } else {
+                            let action = if menu_idx == 1 {
+                                Some(Action::ToggleSquareViewport)
+                            } else if menu_idx == 2 {
+                                match item_idx {
+                                    0 => Some(Action::ToggleGrid),
+                                    1 => Some(Action::ToggleCube),
+                                    _ => None,
+                                }
+                            } else { None };
+                            if let Some(a) = action { state.execute_action(a); }
+                        }
                     }
 
                     while let Some((id, val)) = state.widgets[CONFIG_DIALOG_IDX].take_config_toggle() {
