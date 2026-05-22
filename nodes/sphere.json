@@ -1,0 +1,7 @@
+{
+  "name": "Sphere 1",
+  "type": "sphere",
+  "params": [
+    { "name": "Radius", "default": "0.5", "type": "slider" }
+  ]
+}

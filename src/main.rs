@@ -88,7 +88,7 @@ struct NodeTemplate {
     node: FsNode,
 }
 
-fn param_display(params: &[ParamDef]) -> Vec<(String, String)> {
+fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
     params.iter().map(|p| {
         let key = if p.label.is_empty() { &p.name } else { &p.label };
         let value = if p.param_type == "choice" && !p.options.is_empty() && p.default.is_empty() {
@@ -96,7 +96,7 @@ fn param_display(params: &[ParamDef]) -> Vec<(String, String)> {
         } else {
             p.default.clone()
         };
-        (key.clone(), value)
+        (key.clone(), value, p.param_type.clone())
     }).collect()
 }
 
@@ -166,6 +166,8 @@ struct ConfigDialog {
     network_grid_hovered: bool,
     grid_size_x: f32,
     grid_size_y: f32,
+    skipped_row_h: f32,
+    skipped_col_w: f32,
     grid_size_pending: Option<(usize, f32)>,
     hovered_spin_btn: Option<usize>,
 }
@@ -185,8 +187,10 @@ impl ConfigDialog {
             network_grid_enabled: true,
             network_grid_pending: None,
             network_grid_hovered: false,
-            grid_size_x: 75.0,
+            grid_size_x: 150.0,
             grid_size_y: 75.0,
+            skipped_row_h: 37.5,
+            skipped_col_w: 37.5,
             grid_size_pending: None,
             hovered_spin_btn: None,
         }
@@ -202,14 +206,20 @@ impl ConfigDialog {
         (px + pw - 28.0, py + 8.0, 20.0, 20.0)
     }
 
-    fn spin_btns(&self, px: f32, py: f32) -> [(usize, f32, f32); 4] {
+    fn spin_btns(&self, px: f32, py: f32) -> Vec<(usize, f32, f32)> {
         let row0_y = py + 156.0; // Grid X
         let row1_y = py + 178.0; // Grid Y
-        [
+        let row2_y = py + 200.0; // Skipped Row H
+        let row3_y = py + 222.0; // Skipped Col W
+        vec![
             (0, px + 160.0, row0_y - 2.0),
             (1, px + 210.0, row0_y - 2.0),
             (2, px + 160.0, row1_y - 2.0),
             (3, px + 210.0, row1_y - 2.0),
+            (4, px + 160.0, row2_y - 2.0),
+            (5, px + 210.0, row2_y - 2.0),
+            (6, px + 160.0, row3_y - 2.0),
+            (7, px + 210.0, row3_y - 2.0),
         ]
     }
 
@@ -259,6 +269,8 @@ impl Widget for ConfigDialog {
         match id {
             0 => self.grid_size_x = val,
             1 => self.grid_size_y = val,
+            2 => self.skipped_row_h = val,
+            3 => self.skipped_col_w = val,
             _ => {}
         }
     }
@@ -351,18 +363,21 @@ impl Widget for ConfigDialog {
             }
             for &(btn_id, bx, by) in &self.spin_btns(ppx, ppy) {
                 if px >= bx && px < bx + 22.0 && py >= by && py < by + 20.0 {
-                    let (val, delta) = match btn_id {
-                        0 => (&mut self.grid_size_x, -5.0),
-                        1 => (&mut self.grid_size_x, 5.0),
-                        2 => (&mut self.grid_size_y, -5.0),
-                        3 => (&mut self.grid_size_y, 5.0),
+                    let (val, delta, min_val, max_val, pending_id) = match btn_id {
+                        0 => (&mut self.grid_size_x, -5.0, 10.0, 200.0, 0),
+                        1 => (&mut self.grid_size_x, 5.0, 10.0, 200.0, 0),
+                        2 => (&mut self.grid_size_y, -5.0, 5.0, 100.0, 1),
+                        3 => (&mut self.grid_size_y, 5.0, 5.0, 100.0, 1),
+                        4 => (&mut self.skipped_row_h, -5.0, 0.0, 150.0, 2),
+                        5 => (&mut self.skipped_row_h, 5.0, 0.0, 150.0, 2),
+                        6 => (&mut self.skipped_col_w, -5.0, 0.0, 150.0, 3),
+                        7 => (&mut self.skipped_col_w, 5.0, 0.0, 150.0, 3),
                         _ => unreachable!(),
                     };
-                    let new = (*val + delta).clamp(5.0, 100.0);
+                    let new = (*val + delta).clamp(min_val, max_val);
                     if (new - *val).abs() > 0.01 {
                         *val = new;
-                        let id = if btn_id < 2 { 0 } else { 1 };
-                        self.grid_size_pending = Some((id, *val));
+                        self.grid_size_pending = Some((pending_id, *val));
                     }
                     return true;
                 }
@@ -478,6 +493,18 @@ impl Widget for ConfigDialog {
             labels.push(TextLabel { text: "\u{2212}".into(), x: px + 170.0, y: content_y + 122.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
             labels.push(TextLabel { text: format!("{}", gy), x: px + 188.0, y: content_y + 122.0, font_size: 12.0, color: [0xdd, 0xdd, 0x88] });
             labels.push(TextLabel { text: "+".into(), x: px + 220.0, y: content_y + 122.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
+
+            let srh = self.skipped_row_h as i32;
+            labels.push(TextLabel { text: "Skipped Row H:".into(), x: px + 16.0, y: content_y + 144.0, font_size: 12.0, color: [0xbb, 0xbb, 0xcc] });
+            labels.push(TextLabel { text: "\u{2212}".into(), x: px + 170.0, y: content_y + 144.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
+            labels.push(TextLabel { text: format!("{}", srh), x: px + 188.0, y: content_y + 144.0, font_size: 12.0, color: [0xdd, 0xdd, 0x88] });
+            labels.push(TextLabel { text: "+".into(), x: px + 220.0, y: content_y + 144.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
+
+            let scw = self.skipped_col_w as i32;
+            labels.push(TextLabel { text: "Skipped Col W:".into(), x: px + 16.0, y: content_y + 166.0, font_size: 12.0, color: [0xbb, 0xbb, 0xcc] });
+            labels.push(TextLabel { text: "\u{2212}".into(), x: px + 170.0, y: content_y + 166.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
+            labels.push(TextLabel { text: format!("{}", scw), x: px + 188.0, y: content_y + 166.0, font_size: 12.0, color: [0xdd, 0xdd, 0x88] });
+            labels.push(TextLabel { text: "+".into(), x: px + 220.0, y: content_y + 166.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
         } else {
             labels.push(TextLabel { text: "Keyboard Shortcuts".into(), x: px + 16.0, y: content_y, font_size: 13.0, color: [0xcc, 0xcc, 0xd4] });
             let shortcuts = [
@@ -916,6 +943,8 @@ struct State {
     network_grid_visible: bool,
     grid_size_x: f32,
     grid_size_y: f32,
+    skipped_row_h: f32,
+    skipped_col_w: f32,
 
     pan_x: f32,
     pan_y: f32,
@@ -1088,7 +1117,7 @@ impl State {
                 dir.children.get(i).map(|c| c.name.clone())
             }).collect()
         };
-        let params_list: Vec<Vec<(String, String)>> = {
+        let params_list: Vec<Vec<(String, String, String)>> = {
             let dir = self.current_dir();
             self.node_slots.iter().enumerate().map(|(i, _)| {
                 dir.children.get(i).map(|c| param_display(&c.params)).unwrap_or_default()
@@ -1358,10 +1387,9 @@ impl State {
         let fs_root = load_fs_tree();
         let node_templates = flatten_node_templates(&fs_root);
         let node_slots: Vec<usize> = (NODE_SLOT_START..NODE_SLOT_START + NODE_SLOT_COUNT).collect();
-        let mut left_offsets: Vec<(f32, f32)> = (0..NODE_SLOT_COUNT)
-            .map(|i| (0.0, i as f32 * 2.0))
+        let left_offsets: Vec<(f32, f32)> = (0..NODE_SLOT_COUNT)
+            .map(|i| (0.0, i as f32))
             .collect();
-        if left_offsets.len() > 1 { left_offsets[1] = (0.0, 3.0); }
 
         let mut widgets: Vec<Box<dyn Widget>> = vec![
             Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Designer").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom"]).with_item("Help", &["About"])),
@@ -1454,8 +1482,10 @@ impl State {
             square_viewport: false,
             grid_snap_enabled: true,
             network_grid_visible: true,
-            grid_size_x: 75.0,
+            grid_size_x: 150.0,
             grid_size_y: 75.0,
+            skipped_row_h: 37.5,
+            skipped_col_w: 37.5,
 
             pan_x: 0.0,
             pan_y: 0.0,
@@ -1484,48 +1514,67 @@ impl State {
         let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
         self.widgets[CONTENT_IDX].set_show_network_grid(self.network_grid_visible);
         self.widgets[CONTENT_IDX].set_grid_sizes(self.grid_size_x, self.grid_size_y);
+        self.widgets[CONTENT_IDX].set_skipped_sizes(self.skipped_row_h, self.skipped_col_w);
         self.widgets[CONTENT_IDX].set_grid_origin(self.pan_x, node_area_y + self.pan_y);
 
         for &i in &self.node_slots {
-            let gx = if self.grid_snap_enabled { self.grid_size_x } else { 0.0 };
-            let gy = if self.grid_snap_enabled { self.grid_size_y } else { 0.0 };
+            let gx = if self.grid_snap_enabled { self.grid_size_x + self.skipped_col_w } else { 0.0 };
+            let gy = if self.grid_snap_enabled { self.grid_size_y + self.skipped_row_h } else { 0.0 };
             self.widgets[i].set_grid_snap(gx, gy);
             self.widgets[i].set_grid_origin(self.pan_x, node_area_y + self.pan_y);
         }
     }
 
-    fn zoom(&mut self, factor: f32) {
+    fn zoom(&mut self, factor: f32, center: Option<(f32, f32)>) {
         let old_gx = self.grid_size_x;
         let old_gy = self.grid_size_y;
 
-        let new_gx = (old_gx * factor).clamp(15.0, 250.0);
+        let new_gx = (old_gx * factor).clamp(30.0, 500.0);
         let new_gy = (old_gy * factor).clamp(15.0, 250.0);
 
         if (new_gx - old_gx).abs() < 0.01 {
             return;
         }
 
-        let col = self.grid_cursor_col as f32;
-        let row = self.grid_cursor_row as f32;
+        let old_row_h = self.skipped_row_h;
+        let old_col_w = self.skipped_col_w;
 
-        self.pan_x += (col + 1.0) * (old_gx - new_gx);
-        self.pan_y += (row + 0.5) * (old_gy - new_gy);
+        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+        let (cx, cy) = match center {
+            Some(pt) => pt,
+            None => {
+                let col = self.grid_cursor_col as f32;
+                let row = self.grid_cursor_row as f32;
+                (
+                    col * (old_gx + old_col_w) + 0.5 * old_gx + self.pan_x,
+                    row * (old_gy + old_row_h) + 0.5 * old_gy + self.pan_y + node_area_y,
+                )
+            }
+        };
+
+        let col_f = (cx - self.pan_x) / old_gx;
+        let row_f = (cy - self.pan_y - node_area_y) / old_gy;
+
+        self.pan_x = cx - col_f * new_gx;
+        self.pan_y = cy - row_f * new_gy - node_area_y;
 
         self.grid_size_x = new_gx;
         self.grid_size_y = new_gy;
+        self.skipped_row_h = old_row_h * (new_gy / old_gy);
+        self.skipped_col_w = old_col_w * (new_gx / old_gx);
 
         self.sync_grid_settings();
         for &i in &self.node_slots {
             let (x, y, _, _) = self.widgets[i].rect();
-            self.widgets[i].set_rect(x, y, self.grid_size_x * 2.0, self.grid_size_y);
+            self.widgets[i].set_rect(x, y, self.grid_size_x, self.grid_size_y);
         }
     }
 
     fn keep_cursor_in_view(&mut self) {
         let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-        let cx = self.grid_cursor_col as f32 * self.grid_size_x + self.pan_x;
-        let cy = node_area_y + self.grid_cursor_row as f32 * self.grid_size_y + self.pan_y;
-        let cw = self.grid_size_x * 2.0;
+        let cx = self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
+        let cy = node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
+        let cw = self.grid_size_x;
         let ch = self.grid_size_y;
         let clw = self.content_left_w();
         let max_y = self.height - STATUS_H;
@@ -1571,7 +1620,12 @@ impl State {
         let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
         for (slot_idx, (&idx, off)) in self.node_slots.iter().zip(self.left_offsets.iter()).enumerate() {
             if slot_idx < active_nodes {
-                self.positions[idx] = (off.0 * self.grid_size_x + self.pan_x, node_area_y + BREADCRUMB_H + off.1 * self.grid_size_y + self.pan_y, self.grid_size_x * 2.0, self.grid_size_y);
+                self.positions[idx] = (
+                    off.0 * (self.grid_size_x + self.skipped_col_w) + self.pan_x,
+                    node_area_y + BREADCRUMB_H + off.1 * (self.grid_size_y + self.skipped_row_h) + self.pan_y,
+                    self.grid_size_x,
+                    self.grid_size_y,
+                );
             } else {
                 self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
             }
@@ -1617,6 +1671,8 @@ impl State {
                     self.widgets[CONFIG_DIALOG_IDX].set_config_toggle(1, self.network_grid_visible);
                     self.widgets[CONFIG_DIALOG_IDX].set_config_spin(0, self.grid_size_x);
                     self.widgets[CONFIG_DIALOG_IDX].set_config_spin(1, self.grid_size_y);
+                    self.widgets[CONFIG_DIALOG_IDX].set_config_spin(2, self.skipped_row_h);
+                    self.widgets[CONFIG_DIALOG_IDX].set_config_spin(3, self.skipped_col_w);
                     self.widgets[CONFIG_DIALOG_IDX].set_visible(true);
                 }
                 self.upload_vertices();
@@ -1631,9 +1687,43 @@ impl State {
         let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
         for (&idx, off) in self.node_slots.iter().take(active_nodes).zip(self.left_offsets.iter_mut()) {
             let (px, py, _, _) = self.widgets[idx].rect();
-            let c = ((px - self.pan_x) / self.grid_size_x).round();
-            let r = (((py - node_area_y) - self.pan_y) / self.grid_size_y).round();
+            let c = ((px - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).round();
+            let r = ((py - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).round();
             *off = (c, r);
+            if Some(idx) == self.focused_widget && self.drag_widget == Some(idx) {
+                self.grid_cursor_col = c as i32;
+                self.grid_cursor_row = r as i32;
+            }
+        }
+    }
+
+    fn sync_cursor_and_selection(&mut self) {
+        let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
+        let mut node_at_cursor = None;
+        for (slot_idx, (&idx, off)) in self.node_slots.iter().zip(self.left_offsets.iter()).enumerate() {
+            if slot_idx < active_nodes {
+                if off.0 as i32 == self.grid_cursor_col && off.1 as i32 == self.grid_cursor_row {
+                    node_at_cursor = Some(idx);
+                    break;
+                }
+            }
+        }
+
+        if let Some(idx) = node_at_cursor {
+            if self.focused_widget != Some(idx) {
+                if let Some(old) = self.focused_widget {
+                    self.widgets[old].unfocus();
+                }
+                self.widgets[idx].focus();
+                self.focused_widget = Some(idx);
+            }
+        } else {
+            if let Some(old) = self.focused_widget {
+                if self.node_slots.contains(&old) {
+                    self.widgets[old].unfocus();
+                    self.focused_widget = None;
+                }
+            }
         }
     }
 
@@ -1672,9 +1762,9 @@ impl State {
             }
 
             if i == CONTENT_IDX && show_cursor {
-                let cx = self.grid_cursor_col as f32 * self.grid_size_x + self.pan_x;
-                let cy = node_area_y + self.grid_cursor_row as f32 * self.grid_size_y + self.pan_y;
-                let cw = self.grid_size_x * 2.0;
+                let cx = self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
+                let cy = node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
+                let cw = self.grid_size_x;
                 let ch = self.grid_size_y;
 
                 let bg_color = [0.15, 0.25, 0.45, 0.15];
@@ -1831,6 +1921,69 @@ impl State {
 
     fn handle_event(&mut self, event: &WindowEvent) -> bool {
         match event {
+            WindowEvent::MouseWheel { delta, .. } => {
+                let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+                let dialog_open = self.widgets[CONFIG_DIALOG_IDX].visible() || self.node_palette_visible;
+                let in_network_pane = self.cursor_x >= 0.0
+                    && self.cursor_x < self.content_left_w()
+                    && self.cursor_y >= node_area_y
+                    && self.cursor_y < self.height - STATUS_H;
+
+                if !dialog_open && in_network_pane {
+                    if self.modifiers.control_key() {
+                        let factor = match delta {
+                            winit::event::MouseScrollDelta::LineDelta(_x, y) => {
+                                if *y > 0.0 { 1.15 } else if *y < 0.0 { 1.0 / 1.15 } else { 1.0 }
+                            }
+                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                                let dy = pos.y as f32;
+                                (1.0 + dy / 100.0).clamp(0.8, 1.25)
+                            }
+                        };
+                        if factor != 1.0 {
+                            self.zoom(factor, Some((self.cursor_x, self.cursor_y)));
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        let (dx, dy) = match delta {
+                            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                                (*x * 30.0, *y * 30.0)
+                            }
+                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                                (pos.x as f32 / self.scale as f32, pos.y as f32 / self.scale as f32)
+                            }
+                        };
+                        self.pan_x -= dx;
+                        self.pan_y -= dy;
+                        self.sync_grid_settings();
+                        true
+                    }
+                } else {
+                    false
+                }
+            }
+            WindowEvent::PinchGesture { delta, .. } => {
+                let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+                let dialog_open = self.widgets[CONFIG_DIALOG_IDX].visible() || self.node_palette_visible;
+                let in_network_pane = self.cursor_x >= 0.0
+                    && self.cursor_x < self.content_left_w()
+                    && self.cursor_y >= node_area_y
+                    && self.cursor_y < self.height - STATUS_H;
+
+                if !dialog_open && in_network_pane {
+                    if delta.is_finite() && *delta != 0.0 {
+                        let factor = (1.0 + *delta as f32).clamp(0.8, 1.25);
+                        self.zoom(factor, Some((self.cursor_x, self.cursor_y)));
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let old_cx = self.cursor_x;
                 let old_cy = self.cursor_y;
@@ -1936,10 +2089,17 @@ impl State {
                         let click_target = (0..self.widgets.len()).rev()
                             .find(|&i| self.widgets[i].hit_test(self.cursor_x, self.cursor_y));
                         if let Some(old) = self.focused_widget {
-                            if click_target != Some(old) {
+                            if click_target != Some(old) && click_target != Some(PARAM_IDX) {
                                 self.widgets[old].unfocus();
                                 self.focused_widget = None;
                             }
+                        }
+                        if click_target.is_none() && !dialog_open && in_network_pane {
+                            let col = ((self.cursor_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
+                            let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
+                            self.grid_cursor_col = col;
+                            self.grid_cursor_row = row;
+                            changed = true;
                         }
                         if let Some(i) = click_target {
                             if self.widgets[i].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y) {
@@ -1949,8 +2109,17 @@ impl State {
                                 self.widgets[i].drag_begin(self.cursor_x, self.cursor_y);
                                 self.drag_widget = Some(i);
                             }
-                            self.widgets[i].focus();
-                            self.focused_widget = Some(i);
+                            if i != PARAM_IDX {
+                                self.widgets[i].focus();
+                                self.focused_widget = Some(i);
+                            }
+                            if self.node_slots.contains(&i) {
+                                if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == i) {
+                                    let off = self.left_offsets[slot_idx];
+                                    self.grid_cursor_col = off.0 as i32;
+                                    self.grid_cursor_row = off.1 as i32;
+                                }
+                            }
                             // Double-click detection for node directory entry
                             if self.node_slots.contains(&i) {
                                 if let Some((t, prev)) = self.last_click {
@@ -2066,12 +2235,26 @@ impl State {
                                         self.grid_cursor_col += 1;
                                         changed = true;
                                     }
+                                    "e" | "E" => {
+                                        if let Some(idx) = self.focused_widget {
+                                            if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == idx) {
+                                                let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
+                                                if slot_idx < active_nodes {
+                                                    let visible = !self.widgets[idx].geom_visible();
+                                                    self.widgets[idx].set_geom_visible(visible);
+                                                    self.current_dir_mut().children[slot_idx].geometry_visible = visible;
+                                                    self.rebuild_scene_geometry();
+                                                    changed = true;
+                                                }
+                                            }
+                                        }
+                                    }
                                     "-" => {
-                                        self.zoom(1.0 / 1.15);
+                                        self.zoom(1.0 / 1.15, None);
                                         changed = true;
                                     }
                                     "=" | "+" => {
-                                        self.zoom(1.15);
+                                        self.zoom(1.15, None);
                                         changed = true;
                                     }
                                     _ => {}
@@ -2322,6 +2505,30 @@ impl ApplicationHandler for App {
                 if let Some(state) = &mut self.state {
                     let mut changed = state.handle_event(&event);
                     if changed {
+                        if let Some(focused) = state.focused_widget {
+                            if state.node_slots.contains(&focused) {
+                                if let Some(slot_idx) = state.node_slots.iter().position(|&x| x == focused) {
+                                    let updated_params = state.widgets[PARAM_IDX].node_params();
+                                    let dir = state.current_dir_mut();
+                                    if let Some(child) = dir.children.get_mut(slot_idx) {
+                                        let mut param_changed = false;
+                                        for (u_name, u_val, _type) in &updated_params {
+                                            if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                                                if p.default != *u_val {
+                                                    p.default = u_val.clone();
+                                                    param_changed = true;
+                                                }
+                                            }
+                                        }
+                                        if param_changed {
+                                            state.rebuild_scene_geometry();
+                                            state.sync_nodes();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         state.sync_layout();
                         state.read_panel_offsets();
                         state.upload_vertices();
@@ -2345,6 +2552,7 @@ impl ApplicationHandler for App {
                             state.sync_layout();
                             state.read_panel_offsets();
                             state.upload_vertices();
+                            changed = true;
                         }
                     }
 
@@ -2358,6 +2566,8 @@ impl ApplicationHandler for App {
                             state.widgets[CONFIG_DIALOG_IDX].set_config_toggle(1, state.network_grid_visible);
                             state.widgets[CONFIG_DIALOG_IDX].set_config_spin(0, state.grid_size_x);
                             state.widgets[CONFIG_DIALOG_IDX].set_config_spin(1, state.grid_size_y);
+                            state.widgets[CONFIG_DIALOG_IDX].set_config_spin(2, state.skipped_row_h);
+                            state.widgets[CONFIG_DIALOG_IDX].set_config_spin(3, state.skipped_col_w);
                             state.widgets[CONFIG_DIALOG_IDX].set_visible(true);
                             state.upload_vertices();
                             changed = true;
@@ -2382,8 +2592,8 @@ impl ApplicationHandler for App {
                             0 => {
                                 state.grid_snap_enabled = val;
                                 for &i in &state.node_slots {
-                                    let gx = if val { state.grid_size_x } else { 0.0 };
-                                    let gy = if val { state.grid_size_y } else { 0.0 };
+                                    let gx = if val { state.grid_size_x + state.skipped_col_w } else { 0.0 };
+                                    let gy = if val { state.grid_size_y + state.skipped_row_h } else { 0.0 };
                                     state.widgets[i].set_grid_snap(gx, gy);
                                 }
                             }
@@ -2400,17 +2610,24 @@ impl ApplicationHandler for App {
                         match id {
                             0 => state.grid_size_x = val,
                             1 => state.grid_size_y = val,
+                            2 => state.skipped_row_h = val,
+                            3 => state.skipped_col_w = val,
                             _ => {}
                         }
-                        state.widgets[CONTENT_IDX].set_grid_sizes(state.grid_size_x, state.grid_size_y);
                         for &i in &state.node_slots {
                             let (x, y, _, _) = state.widgets[i].rect();
-                            state.widgets[i].set_rect(x, y, state.grid_size_x * 2.0, state.grid_size_y);
+                            state.widgets[i].set_rect(x, y, state.grid_size_x, state.grid_size_y);
                         }
                         state.sync_layout();
+                        state.sync_grid_settings();
                         state.read_panel_offsets();
                         state.upload_vertices();
                         changed = true;
+                    }
+
+                    if changed {
+                        state.sync_cursor_and_selection();
+                        state.upload_vertices();
                     }
 
                     state.update_status_text(&format!(
