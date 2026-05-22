@@ -1976,7 +1976,51 @@ impl State {
                     && self.cursor_y >= node_area_y
                     && self.cursor_y < self.height - STATUS_H;
 
-                if !dialog_open && in_network_pane {
+                let mut handled = false;
+                if !dialog_open {
+                    for w in &mut self.widgets {
+                        if w.mouse_wheel(delta, self.cursor_x, self.cursor_y) {
+                            handled = true;
+                        }
+                    }
+                }
+
+                if handled {
+                    if let Some(focused) = self.focused_widget {
+                        if self.node_slots.contains(&focused) {
+                            if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == focused) {
+                                let updated_params = self.widgets[PARAM_IDX].node_params();
+                                let dir = self.current_dir_mut();
+                                if let Some(child) = dir.children.get_mut(slot_idx) {
+                                    let mut param_changed = false;
+                                    for (u_name, u_val, _type) in &updated_params {
+                                        if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                                            if p.default != *u_val {
+                                                p.default = u_val.clone();
+                                                param_changed = true;
+                                            }
+                                        }
+                                    }
+                                    if param_changed {
+                                        self.rebuild_scene_geometry();
+                                        self.sync_nodes();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Sync Parameters pane with selected node
+                    let params = self.focused_widget.and_then(|f| {
+                        if self.node_slots.contains(&f) { Some(f) } else { None }
+                    }).map(|f| self.widgets[f].node_params()).unwrap_or_default();
+                    self.widgets[PARAM_IDX].set_display_params(&params);
+
+                    self.sync_layout();
+                    self.read_panel_offsets();
+                    self.upload_vertices();
+                    true
+                } else if !dialog_open && in_network_pane {
                     if self.modifiers.control_key() {
                         let factor = match delta {
                             winit::event::MouseScrollDelta::LineDelta(_x, y) => {
