@@ -885,6 +885,8 @@ struct State {
     bind_group_3d: wgpu::BindGroup,
     bind_group_layout_3d: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
+    bind_group_grid: wgpu::BindGroup,
+    uniform_buffer_grid: wgpu::Buffer,
     vertex_buffer_3d: wgpu::Buffer,
     vertex_count_3d: u32,
     vertex_buffer_spheres: wgpu::Buffer,
@@ -1295,6 +1297,26 @@ impl State {
             }],
         });
 
+        let uniform_buffer_grid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Grid Uniform Buffer"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_grid = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Grid 3D Bind Group"),
+            layout: &bind_group_layout_3d,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniform_buffer_grid,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(64),
+                }),
+            }],
+        });
+
         let vertex_buffer_3d = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cube Vertex Buffer"),
             contents: bytemuck::cast_slice(&cube_vertices()),
@@ -1434,6 +1456,8 @@ impl State {
             bind_group_3d,
             bind_group_layout_3d,
             uniform_buffer,
+            bind_group_grid,
+            uniform_buffer_grid,
             vertex_buffer_3d,
             vertex_count_3d: cube_vertices().len() as u32,
             vertex_buffer_spheres,
@@ -1443,7 +1467,7 @@ impl State {
             depth_texture,
             depth_texture_view,
             rotation: 0.0,
-            show_grid: false,
+            show_grid: true,
             show_cube: false,
             fs_root,
             node_templates,
@@ -2377,6 +2401,9 @@ impl State {
                 let mvp = proj * view_mat * model;
                 self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[mvp.to_cols_array_2d()]));
 
+                let mvp_grid = proj * view_mat;
+                self.queue.write_buffer(&self.uniform_buffer_grid, 0, bytemuck::cast_slice(&[mvp_grid.to_cols_array_2d()]));
+
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("3D Render Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2401,12 +2428,14 @@ impl State {
 
                 pass.set_scissor_rect(sx, sy, cw, ch);
                 pass.set_pipeline(&self.pipeline_3d);
-                pass.set_bind_group(0, &self.bind_group_3d, &[]);
 
                 if self.show_grid {
+                    pass.set_bind_group(0, &self.bind_group_grid, &[]);
                     pass.set_vertex_buffer(0, self.vertex_buffer_grid.slice(..));
                     pass.draw(0..self.vertex_count_grid, 0..1);
                 }
+
+                pass.set_bind_group(0, &self.bind_group_3d, &[]);
 
                 if self.show_cube {
                     pass.set_vertex_buffer(0, self.vertex_buffer_3d.slice(..));
