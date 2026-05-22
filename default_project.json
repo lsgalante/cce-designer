@@ -1,0 +1,35 @@
+{
+  "name": "Default Project",
+  "view_state": {
+    "active_camera": "Camera 1",
+    "pan": [0.0, 0.0],
+    "current_path": []
+  },
+  "root": {
+    "name": "root",
+    "type": "node",
+    "position": [0.0, 0.0],
+    "children": [
+      {
+        "name": "Camera 1",
+        "type": "camera",
+        "position": [1.0, 1.0],
+        "params": [
+          { "name": "X", "type": "slider", "default": "2.5", "min": -10.0, "max": 10.0 },
+          { "name": "Y", "type": "slider", "default": "1.8", "min": -10.0, "max": 10.0 },
+          { "name": "Z", "type": "slider", "default": "2.5", "min": -10.0, "max": 10.0 }
+        ],
+        "children": []
+      },
+      {
+        "name": "Sphere 1",
+        "type": "sphere",
+        "position": [4.0, 2.0],
+        "params": [
+          { "name": "Radius", "type": "slider", "default": "0.5" }
+        ],
+        "children": []
+      }
+    ]
+  }
+}
