@@ -1786,11 +1786,7 @@ impl State {
         let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
         let dialog_open = self.widgets[CONFIG_DIALOG_IDX].visible() || self.node_palette_visible;
         let show_cursor = self.drag_widget.is_none()
-            && !dialog_open
-            && self.cursor_x >= 0.0
-            && self.cursor_x < self.content_left_w()
-            && self.cursor_y >= node_area_y
-            && self.cursor_y < self.height - STATUS_H;
+            && !dialog_open;
 
         let clip = (0.0, node_area_y, self.content_left_w(), self.height - STATUS_H);
 
@@ -2036,8 +2032,6 @@ impl State {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let old_cx = self.cursor_x;
-                let old_cy = self.cursor_y;
                 self.cursor_x = position.x as f32 / self.scale as f32;
                 self.cursor_y = position.y as f32 / self.scale as f32;
                 let mut changed = false;
@@ -2064,24 +2058,6 @@ impl State {
                             if w.cursor_moved(self.cursor_x, self.cursor_y) {
                                 changed = true;
                             }
-                        }
-
-                        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-                        let dialog_open = self.widgets[CONFIG_DIALOG_IDX].visible() || self.node_palette_visible;
-                        let show_old = old_cx >= 0.0
-                            && old_cx < self.content_left_w()
-                            && old_cy >= node_area_y
-                            && old_cy < self.height - STATUS_H
-                            && !dialog_open;
-
-                        let show_new = self.cursor_x >= 0.0
-                            && self.cursor_x < self.content_left_w()
-                            && self.cursor_y >= node_area_y
-                            && self.cursor_y < self.height - STATUS_H
-                            && !dialog_open;
-
-                        if show_old != show_new {
-                            changed = true;
                         }
                     }
                 }
