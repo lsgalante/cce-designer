@@ -710,6 +710,43 @@ impl Vertex {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum GAttribute {
+    Float(f32),
+    Float2([f32; 2]),
+    Float3([f32; 3]),
+    Float4([f32; 4]),
+}
+
+#[derive(Clone, Debug)]
+struct GVertex {
+    pos: [f32; 3],
+    col: [f32; 3],
+    attributes: std::collections::HashMap<String, GAttribute>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Geometry {
+    vertices: Vec<GVertex>,
+}
+
+impl Geometry {
+    fn new() -> Self {
+        Geometry { vertices: Vec::new() }
+    }
+
+    fn merge(&mut self, other: Geometry) {
+        self.vertices.extend(other.vertices);
+    }
+
+    fn to_vertex3d_vec(&self) -> Vec<Vertex3D> {
+        self.vertices.iter().map(|v| Vertex3D {
+            position: v.pos,
+            color: v.col,
+        }).collect()
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex3D {
@@ -748,10 +785,10 @@ fn cube_vertices() -> Vec<Vertex3D> {
     data.iter().map(|&(p, c)| Vertex3D { position: p, color: c }).collect()
 }
 
-fn sphere_vertices(center: Vec3, radius: f32) -> Vec<Vertex3D> {
+fn sphere_vertices(center: Vec3, radius: f32) -> Geometry {
     let lat_steps = 16;
     let lon_steps = 24;
-    let mut verts = Vec::new();
+    let mut vertices = Vec::new();
 
     for lat in 0..lat_steps {
         let theta0 = std::f32::consts::PI * lat as f32 / lat_steps as f32;
@@ -763,16 +800,16 @@ fn sphere_vertices(center: Vec3, radius: f32) -> Vec<Vertex3D> {
             let p10 = sphere_point(center, radius, theta1, phi0);
             let p11 = sphere_point(center, radius, theta1, phi1);
             let p01 = sphere_point(center, radius, theta0, phi1);
-            verts.push(sphere_vertex(center, p00));
-            verts.push(sphere_vertex(center, p10));
-            verts.push(sphere_vertex(center, p11));
-            verts.push(sphere_vertex(center, p00));
-            verts.push(sphere_vertex(center, p11));
-            verts.push(sphere_vertex(center, p01));
+            vertices.push(sphere_vertex(center, p00));
+            vertices.push(sphere_vertex(center, p10));
+            vertices.push(sphere_vertex(center, p11));
+            vertices.push(sphere_vertex(center, p00));
+            vertices.push(sphere_vertex(center, p11));
+            vertices.push(sphere_vertex(center, p01));
         }
     }
 
-    verts
+    Geometry { vertices }
 }
 
 fn sphere_point(center: Vec3, radius: f32, theta: f32, phi: f32) -> Vec3 {
@@ -783,11 +820,22 @@ fn sphere_point(center: Vec3, radius: f32, theta: f32, phi: f32) -> Vec3 {
     )
 }
 
-fn sphere_vertex(center: Vec3, point: Vec3) -> Vertex3D {
+fn sphere_vertex(center: Vec3, point: Vec3) -> GVertex {
     let n = (point - center).normalize_or_zero();
-    Vertex3D {
-        position: point.to_array(),
-        color: [0.35 + n.x.abs() * 0.35, 0.45 + n.y.abs() * 0.35, 0.85],
+    let u = 0.5 + n.z.atan2(n.x) / std::f32::consts::TAU;
+    let v = 0.5 - n.y.asin() / std::f32::consts::PI;
+
+    let pos = point.to_array();
+    let col = [0.35 + n.x.abs() * 0.35, 0.45 + n.y.abs() * 0.35, 0.85];
+
+    let mut attributes = std::collections::HashMap::new();
+    attributes.insert("Norm".to_string(), GAttribute::Float3(n.to_array()));
+    attributes.insert("UV".to_string(), GAttribute::Float2([u, v]));
+
+    GVertex {
+        pos,
+        col,
+        attributes,
     }
 }
 
@@ -798,14 +846,14 @@ fn node_param_f32(node: &FsNode, name: &str, fallback: f32) -> f32 {
         .unwrap_or(fallback)
 }
 
-fn network_sphere_vertices(root: &FsNode) -> Vec<Vertex3D> {
-    fn visit(node: &FsNode, count: &mut usize, out: &mut Vec<Vertex3D>) {
+fn network_sphere_vertices(root: &FsNode) -> Geometry {
+    fn visit(node: &FsNode, count: &mut usize, out: &mut Geometry) {
         if node.node_type.eq_ignore_ascii_case("sphere") {
             let idx = *count;
             *count += 1;
             if node.geometry_visible {
                 let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                out.extend(sphere_vertices(center, node_param_f32(node, "Radius", 0.5).max(0.05)));
+                out.merge(sphere_vertices(center, node_param_f32(node, "Radius", 0.5).max(0.05)));
             }
         }
         for child in &node.children {
@@ -813,7 +861,7 @@ fn network_sphere_vertices(root: &FsNode) -> Vec<Vertex3D> {
         }
     }
 
-    let mut out = Vec::new();
+    let mut out = Geometry::new();
     let mut count = 0;
     for child in &root.children {
         visit(child, &mut count, &mut out);
@@ -1035,6 +1083,8 @@ struct State {
     last_scroll_time: Instant,
     scroll_accum_x: f32,
     scroll_accum_y: f32,
+    last_spreadsheet_node_name: Option<String>,
+    last_spreadsheet_node_params: Option<Vec<(String, String)>>,
 }
 
 impl State {
@@ -1192,6 +1242,104 @@ impl State {
         }
     }
 
+fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut headers = vec![
+        "Vertex".to_string(),
+        "Pos X".to_string(),
+        "Pos Y".to_string(),
+        "Pos Z".to_string(),
+        "Col R".to_string(),
+        "Col G".to_string(),
+        "Col B".to_string(),
+    ];
+
+    let mut custom_keys = std::collections::BTreeSet::new();
+    for v in &geom.vertices {
+        for k in v.attributes.keys() {
+            custom_keys.insert(k.clone());
+        }
+    }
+    let custom_keys: Vec<String> = custom_keys.into_iter().collect();
+
+    for key in &custom_keys {
+        if let Some(val) = geom.vertices.iter().find_map(|v| v.attributes.get(key)) {
+            match val {
+                GAttribute::Float(_) => {
+                    headers.push(key.clone());
+                }
+                GAttribute::Float2(_) => {
+                    headers.push(format!("{}.x", key));
+                    headers.push(format!("{}.y", key));
+                }
+                GAttribute::Float3(_) => {
+                    headers.push(format!("{}.x", key));
+                    headers.push(format!("{}.y", key));
+                    headers.push(format!("{}.z", key));
+                }
+                GAttribute::Float4(_) => {
+                    headers.push(format!("{}.x", key));
+                    headers.push(format!("{}.y", key));
+                    headers.push(format!("{}.z", key));
+                    headers.push(format!("{}.w", key));
+                }
+            }
+        }
+    }
+
+    let mut rows = Vec::new();
+    for (i, v) in geom.vertices.iter().enumerate() {
+        let mut row = vec![
+            i.to_string(),
+            format!("{:.4}", v.pos[0]),
+            format!("{:.4}", v.pos[1]),
+            format!("{:.4}", v.pos[2]),
+            format!("{:.4}", v.col[0]),
+            format!("{:.4}", v.col[1]),
+            format!("{:.4}", v.col[2]),
+        ];
+
+        for key in &custom_keys {
+            if let Some(val) = v.attributes.get(key) {
+                match val {
+                    GAttribute::Float(f) => {
+                        row.push(format!("{:.4}", f));
+                    }
+                    GAttribute::Float2(arr) => {
+                        row.push(format!("{:.4}", arr[0]));
+                        row.push(format!("{:.4}", arr[1]));
+                    }
+                    GAttribute::Float3(arr) => {
+                        row.push(format!("{:.4}", arr[0]));
+                        row.push(format!("{:.4}", arr[1]));
+                        row.push(format!("{:.4}", arr[2]));
+                    }
+                    GAttribute::Float4(arr) => {
+                        row.push(format!("{:.4}", arr[0]));
+                        row.push(format!("{:.4}", arr[1]));
+                        row.push(format!("{:.4}", arr[2]));
+                        row.push(format!("{:.4}", arr[3]));
+                    }
+                }
+            } else {
+                if let Some(val) = geom.vertices.iter().find_map(|v| v.attributes.get(key)) {
+                    let count = match val {
+                        GAttribute::Float(_) => 1,
+                        GAttribute::Float2(_) => 2,
+                        GAttribute::Float3(_) => 3,
+                        GAttribute::Float4(_) => 4,
+                    };
+                    for _ in 0..count {
+                        row.push("-".to_string());
+                    }
+                }
+            }
+        }
+        rows.push(row);
+    }
+
+    (headers, rows)
+}
+
     fn sync_nodes(&mut self) {
         let node_infos: Vec<Option<(String, (f32, f32))>> = {
             let dir = self.current_dir();
@@ -1255,42 +1403,43 @@ impl State {
             }
         }
 
-        let mut headers = Vec::new();
-        let mut rows = Vec::new();
+        let mut cache_hit = false;
+        let mut current_name = None;
+        let mut current_params = None;
 
         if let Some(node) = selected_node {
-            if node.node_type.eq_ignore_ascii_case("sphere") {
-                if let Some(idx) = find_sphere_index(&self.fs_root, node) {
-                    let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                    let radius = node_param_f32(node, "Radius", 0.5).max(0.05);
-                    let verts = sphere_vertices(center, radius);
-
-                    headers = vec![
-                        "Vertex".to_string(),
-                        "Pos X".to_string(),
-                        "Pos Y".to_string(),
-                        "Pos Z".to_string(),
-                        "Col R".to_string(),
-                        "Col G".to_string(),
-                        "Col B".to_string(),
-                    ];
-
-                    for (i, v) in verts.iter().enumerate() {
-                        rows.push(vec![
-                            i.to_string(),
-                            format!("{:.4}", v.position[0]),
-                            format!("{:.4}", v.position[1]),
-                            format!("{:.4}", v.position[2]),
-                            format!("{:.4}", v.color[0]),
-                            format!("{:.4}", v.color[1]),
-                            format!("{:.4}", v.color[2]),
-                        ]);
-                    }
-                }
+            current_name = Some(node.name.clone());
+            current_params = Some(node.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>());
+            if self.last_spreadsheet_node_name == current_name && self.last_spreadsheet_node_params == current_params {
+                cache_hit = true;
+            }
+        } else {
+            if self.last_spreadsheet_node_name.is_none() {
+                cache_hit = true;
             }
         }
 
-        self.widgets[SPREADSHEET_IDX].set_spreadsheet_data(headers, rows);
+        if !cache_hit {
+            let mut headers = Vec::new();
+            let mut rows = Vec::new();
+
+            if let Some(node) = selected_node {
+                if node.node_type.eq_ignore_ascii_case("sphere") {
+                    if let Some(idx) = find_sphere_index(&self.fs_root, node) {
+                        let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
+                        let radius = node_param_f32(node, "Radius", 0.5).max(0.05);
+                        let geom = sphere_vertices(center, radius);
+                        let (h, r) = Self::geometry_to_spreadsheet_data(&geom);
+                        headers = h;
+                        rows = r;
+                    }
+                }
+            }
+
+            self.widgets[SPREADSHEET_IDX].set_spreadsheet_data(headers, rows);
+            self.last_spreadsheet_node_name = current_name;
+            self.last_spreadsheet_node_params = current_params;
+        }
     }
 
     fn save_to_file(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -1805,6 +1954,8 @@ impl State {
             last_scroll_time: Instant::now(),
             scroll_accum_x: 0.0,
             scroll_accum_y: 0.0,
+            last_spreadsheet_node_name: None,
+            last_spreadsheet_node_params: None,
         };
 
         state.sync_nodes();
@@ -2154,7 +2305,8 @@ impl State {
     }
 
     fn rebuild_scene_geometry(&mut self) {
-        let verts = network_sphere_vertices(&self.fs_root);
+        let geom = network_sphere_vertices(&self.fs_root);
+        let verts = geom.to_vertex3d_vec();
         self.vertex_count_spheres = verts.len() as u32;
         if verts.is_empty() {
             self.vertex_buffer_spheres = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2861,11 +3013,14 @@ impl State {
 
         // 3D canvas render pass (background layer)
         {
-            let (cx, cy, cw_logical, ch_logical) = self.widgets[VIEWPORT_IDX].rect();
+            let cx_logical = 0.0;
+            let cy_logical = HEADER_H;
+            let cw_logical = self.width;
+            let ch_logical = self.body_h();
             let mut cw = (cw_logical * self.scale as f32) as u32;
             let mut ch = (ch_logical * self.scale as f32) as u32;
-            let mut sx = (cx * self.scale as f32) as u32;
-            let mut sy = (cy * self.scale as f32) as u32;
+            let mut sx = (cx_logical * self.scale as f32) as u32;
+            let mut sy = (cy_logical * self.scale as f32) as u32;
 
             if self.square_viewport {
                 let s = cw.min(ch);
@@ -3325,5 +3480,79 @@ mod tests {
         assert_eq!(proj.root.children.len(), proj2.root.children.len());
         assert_eq!(proj.root.children[0].name, proj2.root.children[0].name);
         assert_eq!(proj.root.children[0].position, proj2.root.children[0].position);
+    }
+
+    #[test]
+    fn test_geometry_attributes_system() {
+        let mut attrs1 = std::collections::HashMap::new();
+        attrs1.insert("UV".to_string(), GAttribute::Float2([0.1, 0.2]));
+        attrs1.insert("ID".to_string(), GAttribute::Float(42.0));
+
+        let v1 = GVertex {
+            pos: [1.0, 2.0, 3.0],
+            col: [1.0, 0.0, 0.0],
+            attributes: attrs1,
+        };
+
+        let mut attrs2 = std::collections::HashMap::new();
+        attrs2.insert("Norm".to_string(), GAttribute::Float3([0.0, 1.0, 0.0]));
+        attrs2.insert("UV".to_string(), GAttribute::Float2([0.3, 0.4]));
+
+        let v2 = GVertex {
+            pos: [4.0, 5.0, 6.0],
+            col: [0.0, 1.0, 0.0],
+            attributes: attrs2,
+        };
+
+        let mut geom1 = Geometry { vertices: vec![v1] };
+        let geom2 = Geometry { vertices: vec![v2] };
+
+        geom1.merge(geom2);
+        assert_eq!(geom1.vertices.len(), 2);
+
+        let render_verts = geom1.to_vertex3d_vec();
+        assert_eq!(render_verts.len(), 2);
+        assert_eq!(render_verts[0].position, [1.0, 2.0, 3.0]);
+        assert_eq!(render_verts[0].color, [1.0, 0.0, 0.0]);
+        assert_eq!(render_verts[1].position, [4.0, 5.0, 6.0]);
+        assert_eq!(render_verts[1].color, [0.0, 1.0, 0.0]);
+
+        let (headers, rows) = State::geometry_to_spreadsheet_data(&geom1);
+
+        let expected_headers = vec![
+            "Vertex".to_string(),
+            "Pos X".to_string(),
+            "Pos Y".to_string(),
+            "Pos Z".to_string(),
+            "Col R".to_string(),
+            "Col G".to_string(),
+            "Col B".to_string(),
+            "ID".to_string(),
+            "Norm.x".to_string(),
+            "Norm.y".to_string(),
+            "Norm.z".to_string(),
+            "UV.x".to_string(),
+            "UV.y".to_string(),
+        ];
+        assert_eq!(headers, expected_headers);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "0");
+        assert_eq!(rows[0][1], "1.0000"); // Pos X
+        assert_eq!(rows[0][7], "42.0000"); // ID
+        assert_eq!(rows[0][8], "-"); // Norm.x
+        assert_eq!(rows[0][9], "-"); // Norm.y
+        assert_eq!(rows[0][10], "-"); // Norm.z
+        assert_eq!(rows[0][11], "0.1000"); // UV.x
+        assert_eq!(rows[0][12], "0.2000"); // UV.y
+
+        assert_eq!(rows[1][0], "1");
+        assert_eq!(rows[1][1], "4.0000"); // Pos X
+        assert_eq!(rows[1][7], "-"); // ID
+        assert_eq!(rows[1][8], "0.0000"); // Norm.x
+        assert_eq!(rows[1][9], "1.0000"); // Norm.y
+        assert_eq!(rows[1][10], "0.0000"); // Norm.z
+        assert_eq!(rows[1][11], "0.3000"); // UV.x
+        assert_eq!(rows[1][12], "0.4000"); // UV.y
     }
 }
