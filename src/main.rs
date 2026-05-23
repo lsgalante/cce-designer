@@ -3470,7 +3470,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 }
 
                 if self.show_origin {
-                    pass.set_bind_group(0, &self.bind_group_grid, &[]);
+                    pass.set_bind_group(0, &self.bind_group_3d, &[]);
                     pass.set_vertex_buffer(0, self.vertex_buffer_origin.slice(..));
                     pass.draw(0..self.vertex_count_origin, 0..1);
                 }
