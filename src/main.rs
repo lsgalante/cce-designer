@@ -2888,7 +2888,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             let dy = *y * 0.05;
                             self.rotation_y += dx;
                             self.rotation_x -= dy;
-                            self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
 
                             self.is_rotating_viewport = false;
                             let dt_scroll = Instant::now().duration_since(self.last_frame).as_secs_f32().min(0.1);
@@ -2904,7 +2903,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             let dy = (pos.y as f32 / self.scale as f32) * 0.005;
                             self.rotation_y += dx;
                             self.rotation_x -= dy;
-                            self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
 
                             self.is_rotating_viewport = match phase {
                                 winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => true,
@@ -3386,7 +3384,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         if !self.is_rotating_viewport && (self.rotate_velocity_yaw.abs() > 0.001 || self.rotate_velocity_pitch.abs() > 0.001) {
             self.rotation_y += self.rotate_velocity_yaw * dt;
             self.rotation_x += self.rotate_velocity_pitch * dt;
-            self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
 
             // Apply friction decay
             let friction = 5.0_f32;
