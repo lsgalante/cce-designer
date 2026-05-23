@@ -1298,6 +1298,12 @@ struct State {
     depth_texture_view: wgpu::TextureView,
     rotation_y: f32,
     rotation_x: f32,
+    is_rotating_viewport: bool,
+    last_rotate_time: Instant,
+    rotate_accum_yaw: f32,
+    rotate_accum_pitch: f32,
+    rotate_velocity_yaw: f32,
+    rotate_velocity_pitch: f32,
     show_grid: bool,
     show_cube: bool,
     show_origin: bool,
@@ -2189,6 +2195,12 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             depth_texture_view,
             rotation_y: 0.0,
             rotation_x: 0.0,
+            is_rotating_viewport: false,
+            last_rotate_time: Instant::now(),
+            rotate_accum_yaw: 0.0,
+            rotate_accum_pitch: 0.0,
+            rotate_velocity_yaw: 0.0,
+            rotate_velocity_pitch: 0.0,
             show_grid: true,
             show_cube: false,
             show_origin: true,
@@ -2877,6 +2889,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             self.rotation_y += dx;
                             self.rotation_x -= dy;
                             self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+
+                            self.is_rotating_viewport = false;
+                            let dt_scroll = Instant::now().duration_since(self.last_frame).as_secs_f32().min(0.1);
+                            let vel_yaw = if dt_scroll > 1e-4 { dx / dt_scroll } else { dx * 60.0 };
+                            let vel_pitch = if dt_scroll > 1e-4 { -dy / dt_scroll } else { -dy * 60.0 };
+                            self.rotate_velocity_yaw = self.rotate_velocity_yaw * 0.4 + vel_yaw * 0.6;
+                            self.rotate_velocity_pitch = self.rotate_velocity_pitch * 0.4 + vel_pitch * 0.6;
+
                             true
                         }
                         winit::event::MouseScrollDelta::PixelDelta(pos) => {
@@ -2885,6 +2905,15 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             self.rotation_y += dx;
                             self.rotation_x -= dy;
                             self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+
+                            self.is_rotating_viewport = match phase {
+                                winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => true,
+                                winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => false,
+                            };
+                            self.last_rotate_time = Instant::now();
+                            self.rotate_accum_yaw += dx;
+                            self.rotate_accum_pitch -= dy;
+
                             true
                         }
                     }
@@ -2951,6 +2980,12 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     self.is_scrolling_trackpad = false;
                     self.scroll_accum_x = 0.0;
                     self.scroll_accum_y = 0.0;
+
+                    self.rotate_velocity_yaw = 0.0;
+                    self.rotate_velocity_pitch = 0.0;
+                    self.is_rotating_viewport = false;
+                    self.rotate_accum_yaw = 0.0;
+                    self.rotate_accum_pitch = 0.0;
                 }
                 let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
                 let dialog_open = self.widgets[CONFIG_DIALOG_IDX].visible() || self.node_palette_visible;
@@ -3302,6 +3337,20 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.scroll_accum_y = 0.0;
         }
 
+        // Viewport rotation velocity tracking & timeout detection
+        if self.is_rotating_viewport {
+            if now.duration_since(self.last_rotate_time).as_secs_f32() > 0.05 {
+                self.is_rotating_viewport = false;
+            } else if dt > 1e-5 {
+                let vel_yaw = self.rotate_accum_yaw / dt;
+                let vel_pitch = self.rotate_accum_pitch / dt;
+                self.rotate_velocity_yaw = self.rotate_velocity_yaw * 0.4 + vel_yaw * 0.6;
+                self.rotate_velocity_pitch = self.rotate_velocity_pitch * 0.4 + vel_pitch * 0.6;
+            }
+            self.rotate_accum_yaw = 0.0;
+            self.rotate_accum_pitch = 0.0;
+        }
+
         let mut tick_changed = false;
         for w in &mut self.widgets {
             if w.tick(dt) {
@@ -3330,6 +3379,23 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.rebuild_positions();
             self.apply_layout();
             self.update_panel_bounds();
+            tick_changed = true;
+        }
+
+        // Viewport rotation kinetic slide
+        if !self.is_rotating_viewport && (self.rotate_velocity_yaw.abs() > 0.001 || self.rotate_velocity_pitch.abs() > 0.001) {
+            self.rotation_y += self.rotate_velocity_yaw * dt;
+            self.rotation_x += self.rotate_velocity_pitch * dt;
+            self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+
+            // Apply friction decay
+            let friction = 5.0_f32;
+            let decay = (-friction * dt).exp();
+            self.rotate_velocity_yaw *= decay;
+            self.rotate_velocity_pitch *= decay;
+
+            if self.rotate_velocity_yaw.abs() < 0.01 { self.rotate_velocity_yaw = 0.0; }
+            if self.rotate_velocity_pitch.abs() < 0.01 { self.rotate_velocity_pitch = 0.0; }
             tick_changed = true;
         }
 
