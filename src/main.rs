@@ -1852,7 +1852,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         widgets.push(Box::new(NodePalette::new()));
         widgets.push(Box::new(Spreadsheet::new()));
         
-        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("spreadsheed");
+        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("Spreadsheet");
         spreadsheet_menubar.visible = false;
         widgets.push(Box::new(spreadsheet_menubar));
 
