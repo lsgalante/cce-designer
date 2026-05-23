@@ -1278,7 +1278,8 @@ struct State {
     vertex_count_grid: u32,
     depth_texture: wgpu::Texture,
     depth_texture_view: wgpu::TextureView,
-    rotation: f32,
+    rotation_y: f32,
+    rotation_x: f32,
     show_grid: bool,
     show_cube: bool,
     show_origin: bool,
@@ -2168,7 +2169,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             vertex_count_grid,
             depth_texture,
             depth_texture_view,
-            rotation: 0.0,
+            rotation_y: 0.0,
+            rotation_x: 0.0,
             show_grid: true,
             show_cube: false,
             show_origin: true,
@@ -2750,6 +2752,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     && self.cursor_y >= node_area_y
                     && self.cursor_y < self.height - STATUS_H;
 
+                let in_viewport = self.cursor_x >= self.content_right_x()
+                    && self.cursor_x < self.splitter2_x
+                    && self.cursor_y >= node_area_y
+                    && self.cursor_y < self.height - STATUS_H;
+
                 let mut handled = false;
                 if !dialog_open {
                     for w in &mut self.widgets {
@@ -2842,6 +2849,25 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 self.sync_grid_settings();
                                 true
                             }
+                        }
+                    }
+                } else if !dialog_open && in_viewport {
+                    match delta {
+                        winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                            let dx = *x * 0.05;
+                            let dy = *y * 0.05;
+                            self.rotation_y += dx;
+                            self.rotation_x -= dy;
+                            self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+                            true
+                        }
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            let dx = (pos.x as f32 / self.scale as f32) * 0.005;
+                            let dy = (pos.y as f32 / self.scale as f32) * 0.005;
+                            self.rotation_y += dx;
+                            self.rotation_x -= dy;
+                            self.rotation_x = self.rotation_x.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+                            true
                         }
                     }
                 } else {
@@ -3379,7 +3405,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             if cw > 0 && ch > 0 {
                 let aspect = cw as f32 / ch as f32;
 
-                self.rotation += 0.015;
                 let proj = Mat4::perspective_rh(0.9, aspect, 0.1, 100.0);
                 let mut camera_pos = Vec3::new(2.5, 1.8, 2.5);
                 if self.active_camera != "Default Camera" {
@@ -3406,7 +3431,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     }
                 }
                 let view_mat = Mat4::look_at_rh(camera_pos, Vec3::ZERO, Vec3::Y);
-                let model = Mat4::from_rotation_y(self.rotation) * Mat4::from_rotation_x(self.rotation * 0.2);
+                let model = Mat4::from_rotation_y(self.rotation_y) * Mat4::from_rotation_x(self.rotation_x);
                 let mvp = proj * view_mat * model;
                 self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[mvp.to_cols_array_2d()]));
 
