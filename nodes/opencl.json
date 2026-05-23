@@ -1,0 +1,11 @@
+{
+  "name": "OpenCL 1",
+  "type": "opencl",
+  "params": [
+    {
+      "name": "Code",
+      "type": "code",
+      "default": "__kernel void process(__global float* pos, __global float* col, int count) {\n    int id = get_global_id(0);\n    if (id < count) {\n        // Default deformation kernel (sine wave deforming Y based on X)\n        pos[id * 3 + 1] += sin(pos[id * 3] * 4.0f) * 0.15f;\n    }\n}"
+    }
+  ]
+}

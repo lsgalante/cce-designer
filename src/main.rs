@@ -5,6 +5,15 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use opencl3::platform::get_platforms;
+use opencl3::device::{Device, CL_DEVICE_TYPE_GPU, CL_DEVICE_TYPE_CPU};
+use opencl3::context::Context;
+use opencl3::command_queue::CommandQueue;
+use opencl3::program::Program;
+use opencl3::kernel::{Kernel, ExecuteKernel};
+use opencl3::memory::{Buffer as ClBuffer, CL_MEM_READ_WRITE};
+use opencl3::types::{cl_float, cl_int, CL_TRUE};
+
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -844,6 +853,113 @@ fn node_param_f32(node: &FsNode, name: &str, fallback: f32) -> f32 {
         .find(|p| p.name.eq_ignore_ascii_case(name))
         .and_then(|p| p.default.parse::<f32>().ok())
         .unwrap_or(fallback)
+}
+
+fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> {
+    if geom.vertices.is_empty() {
+        return Ok(());
+    }
+
+    let platforms = get_platforms().map_err(|e| format!("Failed to get platforms: {:?}", e))?;
+    if platforms.is_empty() {
+        return Err("No OpenCL platforms found".to_string());
+    }
+
+    // Try to find a GPU device first, then fallback to CPU
+    let mut device_id = None;
+    for platform in &platforms {
+        if let Ok(devices) = platform.get_devices(CL_DEVICE_TYPE_GPU) {
+            if !devices.is_empty() {
+                device_id = Some(devices[0]);
+                break;
+            }
+        }
+    }
+    if device_id.is_none() {
+        for platform in &platforms {
+            if let Ok(devices) = platform.get_devices(CL_DEVICE_TYPE_CPU) {
+                if !devices.is_empty() {
+                    device_id = Some(devices[0]);
+                    break;
+                }
+            }
+        }
+    }
+    let device_id = device_id.ok_or_else(|| "No OpenCL devices found".to_string())?;
+    let device = Device::new(device_id);
+
+    let context = Context::from_device(&device).map_err(|e| format!("Failed to create Context: {:?}", e))?;
+    let queue = unsafe { CommandQueue::create(&context, device_id, 0) }
+        .map_err(|e| format!("Failed to create CommandQueue: {:?}", e))?;
+
+    let mut program = Program::create_from_source(&context, code).map_err(|e| format!("Failed to create Program: {:?}", e))?;
+    if let Err(e) = program.build(&[device_id], "") {
+        let log = program.get_build_log(device_id).unwrap_or_else(|_| "Failed to retrieve build log".to_string());
+        return Err(format!("OpenCL JIT compilation error: {}\nLog:\n{}", e, log));
+    }
+
+    let kernel = Kernel::create(&program, "process").map_err(|e| format!("Failed to create kernel 'process': {:?}", e))?;
+
+    let count = geom.vertices.len();
+
+    // Prepare flat position and color buffers
+    let mut pos_data: Vec<cl_float> = Vec::with_capacity(count * 3);
+    let mut col_data: Vec<cl_float> = Vec::with_capacity(count * 3);
+    for v in &geom.vertices {
+        pos_data.extend_from_slice(&v.pos);
+        col_data.extend_from_slice(&v.col);
+    }
+
+    // Create device buffers
+    let mut pos_buf = unsafe {
+        ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, count * 3, std::ptr::null_mut())
+            .map_err(|e| format!("Failed to create positions buffer: {:?}", e))?
+    };
+    let mut col_buf = unsafe {
+        ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, count * 3, std::ptr::null_mut())
+            .map_err(|e| format!("Failed to create colors buffer: {:?}", e))?
+    };
+
+    // Write data to device
+    let _write_pos_event = unsafe {
+        queue.enqueue_write_buffer(&mut pos_buf, CL_TRUE, 0, &pos_data, &[])
+            .map_err(|e| format!("Failed to write positions buffer: {:?}", e))?
+    };
+    let _write_col_event = unsafe {
+        queue.enqueue_write_buffer(&mut col_buf, CL_TRUE, 0, &col_data, &[])
+            .map_err(|e| format!("Failed to write colors buffer: {:?}", e))?
+    };
+
+    // Execute kernel
+    let kernel_event = unsafe {
+        ExecuteKernel::new(&kernel)
+            .set_arg(&pos_buf)
+            .set_arg(&col_buf)
+            .set_arg(&(count as cl_int))
+            .set_global_work_size(count)
+            .enqueue_nd_range(&queue)
+            .map_err(|e| format!("Failed to enqueue kernel: {:?}", e))?
+    };
+
+    kernel_event.wait().map_err(|e| format!("Failed to wait for kernel: {:?}", e))?;
+
+    // Read data back from device
+    let _read_pos_event = unsafe {
+        queue.enqueue_read_buffer(&pos_buf, CL_TRUE, 0, &mut pos_data, &[])
+            .map_err(|e| format!("Failed to read positions buffer: {:?}", e))?
+    };
+    let _read_col_event = unsafe {
+        queue.enqueue_read_buffer(&col_buf, CL_TRUE, 0, &mut col_data, &[])
+            .map_err(|e| format!("Failed to read colors buffer: {:?}", e))?
+    };
+
+    // Write back to Geometry
+    for i in 0..count {
+        geom.vertices[i].pos = [pos_data[i * 3], pos_data[i * 3 + 1], pos_data[i * 3 + 2]];
+        geom.vertices[i].col = [col_data[i * 3], col_data[i * 3 + 1], col_data[i * 3 + 2]];
+    }
+
+    Ok(())
 }
 
 fn network_sphere_vertices(root: &FsNode) -> Geometry {
@@ -2305,7 +2421,39 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn rebuild_scene_geometry(&mut self) {
-        let geom = network_sphere_vertices(&self.fs_root);
+        let mut geom = network_sphere_vertices(&self.fs_root);
+
+        fn collect_opencl_codes<'a>(node: &'a FsNode, codes: &mut Vec<&'a str>) {
+            if node.node_type.eq_ignore_ascii_case("opencl") && node.geometry_visible {
+                let code = node.params.iter()
+                    .find(|p| p.name.eq_ignore_ascii_case("code"))
+                    .map(|p| p.default.as_str())
+                    .unwrap_or("");
+                codes.push(code);
+            }
+            for child in &node.children {
+                collect_opencl_codes(child, codes);
+            }
+        }
+        let mut opencl_codes = Vec::new();
+        collect_opencl_codes(&self.fs_root, &mut opencl_codes);
+
+        let mut ocl_error = None;
+        for code in &opencl_codes {
+            if !code.is_empty() {
+                if let Err(e) = run_opencl_kernel(code, &mut geom) {
+                    ocl_error = Some(e);
+                    break;
+                }
+            }
+        }
+
+        if let Some(err) = ocl_error {
+            self.update_status_text(&err);
+        } else if !opencl_codes.is_empty() {
+            self.update_status_text("OpenCL kernel executed successfully.");
+        }
+
         let verts = geom.to_vertex3d_vec();
         self.vertex_count_spheres = verts.len() as u32;
         if verts.is_empty() {
@@ -2751,6 +2899,27 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.logical_key == Key::Named(NamedKey::Space) {
                     self.space_pressed = event.state == ElementState::Pressed;
+                }
+
+                if self.widgets[PARAM_IDX].keyboard_input(event) {
+                    if let Some(focused) = self.focused_widget {
+                        if self.node_slots.contains(&focused) {
+                            if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == focused) {
+                                let updated_params = self.widgets[PARAM_IDX].node_params();
+                                let dir = self.current_dir_mut();
+                                if let Some(child) = dir.children.get_mut(slot_idx) {
+                                    for (u_name, u_val, _) in &updated_params {
+                                        if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                                            p.default = u_val.clone();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.rebuild_scene_geometry();
+                    self.sync_nodes();
+                    return true;
                 }
 
                 if self.node_palette_visible {
