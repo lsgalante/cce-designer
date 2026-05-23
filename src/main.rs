@@ -218,6 +218,15 @@ struct ConfigDialog {
     skipped_col_w: f32,
     grid_size_pending: Option<(usize, f32)>,
     hovered_spin_btn: Option<usize>,
+    show_grid_enabled: bool,
+    show_grid_pending: Option<bool>,
+    show_grid_hovered: bool,
+    show_cube_enabled: bool,
+    show_cube_pending: Option<bool>,
+    show_cube_hovered: bool,
+    show_origin_enabled: bool,
+    show_origin_pending: Option<bool>,
+    show_origin_hovered: bool,
 }
 
 impl ConfigDialog {
@@ -226,7 +235,7 @@ impl ConfigDialog {
             x: 0.0, y: 0.0, w: 0.0, h: 0.0,
             hovered: false, visible: false,
             close_hovered: false,
-            panel_w: 400.0, panel_h: 300.0,
+            panel_w: 800.0, panel_h: 600.0,
             active_page: 0,
             hovered_tab: None,
             grid_snap_enabled: true,
@@ -241,6 +250,15 @@ impl ConfigDialog {
             skipped_col_w: 20.0,
             grid_size_pending: None,
             hovered_spin_btn: None,
+            show_grid_enabled: true,
+            show_grid_pending: None,
+            show_grid_hovered: false,
+            show_cube_enabled: false,
+            show_cube_pending: None,
+            show_cube_hovered: false,
+            show_origin_enabled: true,
+            show_origin_pending: None,
+            show_origin_hovered: false,
         }
     }
 
@@ -271,17 +289,19 @@ impl ConfigDialog {
         ]
     }
 
-    fn tab_rects(&self, px: f32, py: f32) -> [(f32, f32, f32, f32); 3] {
+    fn tab_rects(&self, px: f32, py: f32) -> [(f32, f32, f32, f32); 4] {
         let tab_y = py + 30.0;
         let tab_h = 22.0;
         let general_w = "General".len() as f32 * 7.5 + 16.0;
         let network_w = "Network".len() as f32 * 7.5 + 16.0;
+        let viewport_w = "Viewport".len() as f32 * 7.5 + 16.0;
         let bindings_w = "Bindings".len() as f32 * 7.5 + 16.0;
         let gap = 4.0;
         [
             (px + 16.0, tab_y, general_w, tab_h),
             (px + 16.0 + general_w + gap, tab_y, network_w, tab_h),
-            (px + 16.0 + general_w + gap + network_w + gap, tab_y, bindings_w, tab_h),
+            (px + 16.0 + general_w + gap + network_w + gap, tab_y, viewport_w, tab_h),
+            (px + 16.0 + general_w + gap + network_w + gap + viewport_w + gap, tab_y, bindings_w, tab_h),
         ]
     }
 }
@@ -300,6 +320,9 @@ impl Widget for ConfigDialog {
         match id {
             0 => self.grid_snap_enabled = val,
             1 => self.network_grid_enabled = val,
+            2 => self.show_grid_enabled = val,
+            3 => self.show_cube_enabled = val,
+            4 => self.show_origin_enabled = val,
             _ => {}
         }
     }
@@ -308,6 +331,12 @@ impl Widget for ConfigDialog {
             Some((0, v))
         } else if let Some(v) = self.network_grid_pending.take() {
             Some((1, v))
+        } else if let Some(v) = self.show_grid_pending.take() {
+            Some((2, v))
+        } else if let Some(v) = self.show_cube_pending.take() {
+            Some((3, v))
+        } else if let Some(v) = self.show_origin_pending.take() {
+            Some((4, v))
         } else {
             None
         }
@@ -353,9 +382,17 @@ impl Widget for ConfigDialog {
         let old_tg = self.grid_snap_hovered;
         let old_ng = self.network_grid_hovered;
         let old_sb = self.hovered_spin_btn;
+        let old_sg = self.show_grid_hovered;
+        let old_sc = self.show_cube_hovered;
+        let old_so = self.show_origin_hovered;
+
         self.grid_snap_hovered = false;
         self.network_grid_hovered = false;
         self.hovered_spin_btn = None;
+        self.show_grid_hovered = false;
+        self.show_cube_hovered = false;
+        self.show_origin_hovered = false;
+
         if self.visible && self.active_page == 1 {
             let row1_y = ppy + 84.0;
             self.grid_snap_hovered = px >= ppx + 16.0 && px < ppx + 200.0
@@ -369,11 +406,22 @@ impl Widget for ConfigDialog {
                     break;
                 }
             }
+        } else if self.visible && self.active_page == 2 {
+            let row1_y = ppy + 84.0;
+            self.show_grid_hovered = px >= ppx + 16.0 && px < ppx + 200.0
+                && py >= row1_y - 2.0 && py < row1_y + 18.0;
+            let row2_y = ppy + 108.0;
+            self.show_cube_hovered = px >= ppx + 16.0 && px < ppx + 200.0
+                && py >= row2_y - 2.0 && py < row2_y + 18.0;
+            let row3_y = ppy + 132.0;
+            self.show_origin_hovered = px >= ppx + 16.0 && px < ppx + 200.0
+                && py >= row3_y - 2.0 && py < row3_y + 18.0;
         }
 
         was != self.hovered || old_close != self.close_hovered || old_tab != self.hovered_tab
             || old_tg != self.grid_snap_hovered || old_ng != self.network_grid_hovered
             || old_sb != self.hovered_spin_btn
+            || old_sg != self.show_grid_hovered || old_sc != self.show_cube_hovered || old_so != self.show_origin_hovered
     }
 
     fn mouse_input(&mut self, button: MouseButton, state: ElementState, px: f32, py: f32) -> bool {
@@ -429,6 +477,31 @@ impl Widget for ConfigDialog {
                     }
                     return true;
                 }
+            }
+        } else if self.active_page == 2 {
+            let row1_y = ppy + 84.0;
+            if px >= ppx + 16.0 && px < ppx + 200.0
+                && py >= row1_y - 2.0 && py < row1_y + 18.0
+            {
+                self.show_grid_enabled = !self.show_grid_enabled;
+                self.show_grid_pending = Some(self.show_grid_enabled);
+                return true;
+            }
+            let row2_y = ppy + 108.0;
+            if px >= ppx + 16.0 && px < ppx + 200.0
+                && py >= row2_y - 2.0 && py < row2_y + 18.0
+            {
+                self.show_cube_enabled = !self.show_cube_enabled;
+                self.show_cube_pending = Some(self.show_cube_enabled);
+                return true;
+            }
+            let row3_y = ppy + 132.0;
+            if px >= ppx + 16.0 && px < ppx + 200.0
+                && py >= row3_y - 2.0 && py < row3_y + 18.0
+            {
+                self.show_origin_enabled = !self.show_origin_enabled;
+                self.show_origin_pending = Some(self.show_origin_enabled);
+                return true;
             }
         }
         false
@@ -492,6 +565,19 @@ impl Widget for ConfigDialog {
                     }
                 }
             }
+        } else if self.visible && self.active_page == 2 {
+            if self.show_grid_hovered {
+                let row1_y = py + 84.0;
+                quads.push((px + 14.0, row1_y - 2.0, 186.0, 20.0, [0.25, 0.25, 0.35, 0.4]));
+            }
+            if self.show_cube_hovered {
+                let row2_y = py + 108.0;
+                quads.push((px + 14.0, row2_y - 2.0, 186.0, 20.0, [0.25, 0.25, 0.35, 0.4]));
+            }
+            if self.show_origin_hovered {
+                let row3_y = py + 132.0;
+                quads.push((px + 14.0, row3_y - 2.0, 186.0, 20.0, [0.25, 0.25, 0.35, 0.4]));
+            }
         }
 
         quads
@@ -508,7 +594,7 @@ impl Widget for ConfigDialog {
 
         // Tab labels
         let tabs = self.tab_rects(px, py);
-        let tab_labels = ["General", "Network", "Bindings"];
+        let tab_labels = ["General", "Network", "Viewport", "Bindings"];
         for (i, &(tx, ty, _, _)) in tabs.iter().enumerate() {
             let color = if i == self.active_page { [0xcc, 0xcc, 0xd4] } else { [0x88, 0x88, 0x99] };
             labels.push(TextLabel {
@@ -553,6 +639,14 @@ impl Widget for ConfigDialog {
             labels.push(TextLabel { text: "\u{2212}".into(), x: px + 170.0, y: content_y + 166.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
             labels.push(TextLabel { text: format!("{}", scw), x: px + 188.0, y: content_y + 166.0, font_size: 12.0, color: [0xdd, 0xdd, 0x88] });
             labels.push(TextLabel { text: "+".into(), x: px + 220.0, y: content_y + 166.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
+        } else if self.active_page == 2 {
+            labels.push(TextLabel { text: "Viewport Configuration".into(), x: px + 16.0, y: content_y, font_size: 13.0, color: [0xcc, 0xcc, 0xd4] });
+            let grid_text = if self.show_grid_enabled { "[\u{2713}] Show Grid Guide" } else { "[ ] Show Grid Guide" };
+            labels.push(TextLabel { text: grid_text.into(), x: px + 20.0, y: content_y + 26.0, font_size: 12.0, color: [0xaa, 0xaa, 0xbb] });
+            let cube_text = if self.show_cube_enabled { "[\u{2713}] Show Reference Cube" } else { "[ ] Show Reference Cube" };
+            labels.push(TextLabel { text: cube_text.into(), x: px + 20.0, y: content_y + 50.0, font_size: 12.0, color: [0xaa, 0xaa, 0xbb] });
+            let origin_text = if self.show_origin_enabled { "[\u{2713}] Show Origin Axes" } else { "[ ] Show Origin Axes" };
+            labels.push(TextLabel { text: origin_text.into(), x: px + 20.0, y: content_y + 74.0, font_size: 12.0, color: [0xaa, 0xaa, 0xbb] });
         } else {
             labels.push(TextLabel { text: "Keyboard Shortcuts".into(), x: px + 16.0, y: content_y, font_size: 13.0, color: [0xcc, 0xcc, 0xd4] });
             let shortcuts = [
@@ -2472,6 +2566,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 } else {
                     self.widgets[CONFIG_DIALOG_IDX].set_config_toggle(0, self.grid_snap_enabled);
                     self.widgets[CONFIG_DIALOG_IDX].set_config_toggle(1, self.network_grid_visible);
+                    self.widgets[CONFIG_DIALOG_IDX].set_config_toggle(2, self.show_grid);
+                    self.widgets[CONFIG_DIALOG_IDX].set_config_toggle(3, self.show_cube);
+                    self.widgets[CONFIG_DIALOG_IDX].set_config_toggle(4, self.show_origin);
                     self.widgets[CONFIG_DIALOG_IDX].set_config_spin(0, self.grid_size_x);
                     self.widgets[CONFIG_DIALOG_IDX].set_config_spin(1, self.grid_size_y);
                     self.widgets[CONFIG_DIALOG_IDX].set_config_spin(2, self.skipped_row_h);
@@ -3790,6 +3887,18 @@ impl ApplicationHandler for App {
                             1 => {
                                 state.network_grid_visible = val;
                                 state.widgets[CONTENT_IDX].set_show_network_grid(val);
+                            }
+                            2 => {
+                                state.show_grid = val;
+                                state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 0, val);
+                            }
+                            3 => {
+                                state.show_cube = val;
+                                state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, val);
+                            }
+                            4 => {
+                                state.show_origin = val;
+                                state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, val);
                             }
                             _ => {}
                         }
