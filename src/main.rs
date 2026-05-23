@@ -669,6 +669,7 @@ enum Action {
     ToggleSquareViewport,
     ToggleConfigure,
     ToggleSpreadsheet,
+    ToggleOrigin,
 }
 
 struct KeyBind {
@@ -1011,6 +1012,157 @@ fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {
     None
 }
 
+fn add_box(center: Vec3, size: Vec3, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
+    let dx = size.x * 0.5;
+    let dy = size.y * 0.5;
+    let dz = size.z * 0.5;
+
+    let faces = [
+        // front (z = +dz)
+        [-dx, -dy, dz,  dx, -dy, dz,  dx, dy, dz,  -dx, -dy, dz,  dx, dy, dz,  -dx, dy, dz],
+        // back (z = -dz)
+        [-dx, -dy, -dz,  -dx, dy, -dz,  dx, dy, -dz,  -dx, -dy, -dz,  dx, dy, -dz,  dx, -dy, -dz],
+        // left (x = -dx)
+        [-dx, -dy, -dz,  -dx, -dy, dz,  -dx, dy, dz,  -dx, -dy, -dz,  -dx, dy, dz,  -dx, dy, -dz],
+        // right (x = +dx)
+        [dx, -dy, -dz,  dx, dy, -dz,  dx, dy, dz,  dx, -dy, -dz,  dx, dy, dz,  dx, -dy, dz],
+        // top (y = +dy)
+        [-dx, dy, -dz,  -dx, dy, dz,  dx, dy, dz,  -dx, dy, -dz,  dx, dy, dz,  dx, dy, -dz],
+        // bottom (y = -dy)
+        [-dx, -dy, -dz,  dx, -dy, -dz,  dx, -dy, dz,  -dx, -dy, -dz,  dx, -dy, dz,  -dx, -dy, dz],
+    ];
+
+    for face in &faces {
+        for chunk in face.chunks(3) {
+            verts.push(Vertex3D {
+                position: [center.x + chunk[0], center.y + chunk[1], center.z + chunk[2]],
+                color,
+            });
+        }
+    }
+}
+
+fn add_pyramid_x(base_center: Vec3, base_size: f32, height: f32, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
+    let s = base_size * 0.5;
+    let x = base_center.x;
+    let y = base_center.y;
+    let z = base_center.z;
+    
+    let p0 = Vec3::new(x, y - s, z - s);
+    let p1 = Vec3::new(x, y + s, z - s);
+    let p2 = Vec3::new(x, y + s, z + s);
+    let p3 = Vec3::new(x, y - s, z + s);
+    let tip = Vec3::new(x + height, y, z);
+    
+    // Base (two triangles)
+    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
+    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
+    verts.push(Vertex3D { position: [p1.x, p1.y, p1.z], color });
+    
+    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
+    verts.push(Vertex3D { position: [p3.x, p3.y, p3.z], color });
+    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
+    
+    // Sides
+    let sides = [
+        (p0, p3), (p3, p2), (p2, p1), (p1, p0)
+    ];
+    for (a, b) in &sides {
+        verts.push(Vertex3D { position: [a.x, a.y, a.z], color });
+        verts.push(Vertex3D { position: [tip.x, tip.y, tip.z], color });
+        verts.push(Vertex3D { position: [b.x, b.y, b.z], color });
+    }
+}
+
+fn add_pyramid_y(base_center: Vec3, base_size: f32, height: f32, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
+    let s = base_size * 0.5;
+    let x = base_center.x;
+    let y = base_center.y;
+    let z = base_center.z;
+    
+    let p0 = Vec3::new(x - s, y, z - s);
+    let p1 = Vec3::new(x + s, y, z - s);
+    let p2 = Vec3::new(x + s, y, z + s);
+    let p3 = Vec3::new(x - s, y, z + s);
+    let tip = Vec3::new(x, y + height, z);
+    
+    // Base (two triangles)
+    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
+    verts.push(Vertex3D { position: [p1.x, p1.y, p1.z], color });
+    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
+    
+    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
+    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
+    verts.push(Vertex3D { position: [p3.x, p3.y, p3.z], color });
+    
+    // Sides
+    let sides = [
+        (p0, p1), (p1, p2), (p2, p3), (p3, p0)
+    ];
+    for (a, b) in &sides {
+        verts.push(Vertex3D { position: [a.x, a.y, a.z], color });
+        verts.push(Vertex3D { position: [tip.x, tip.y, tip.z], color });
+        verts.push(Vertex3D { position: [b.x, b.y, b.z], color });
+    }
+}
+
+fn add_pyramid_z(base_center: Vec3, base_size: f32, height: f32, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
+    let s = base_size * 0.5;
+    let x = base_center.x;
+    let y = base_center.y;
+    let z = base_center.z;
+    
+    let p0 = Vec3::new(x - s, y - s, z);
+    let p1 = Vec3::new(x + s, y - s, z);
+    let p2 = Vec3::new(x + s, y + s, z);
+    let p3 = Vec3::new(x - s, y + s, z);
+    let tip = Vec3::new(x, y, z + height);
+    
+    // Base (two triangles)
+    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
+    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
+    verts.push(Vertex3D { position: [p1.x, p1.y, p1.z], color });
+    
+    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
+    verts.push(Vertex3D { position: [p3.x, p3.y, p3.z], color });
+    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
+    
+    // Sides
+    let sides = [
+        (p0, p3), (p3, p2), (p2, p1), (p1, p0)
+    ];
+    for (a, b) in &sides {
+        verts.push(Vertex3D { position: [a.x, a.y, a.z], color });
+        verts.push(Vertex3D { position: [tip.x, tip.y, tip.z], color });
+        verts.push(Vertex3D { position: [b.x, b.y, b.z], color });
+    }
+}
+
+fn origin_vectors_vertices() -> Vec<Vertex3D> {
+    let mut verts = Vec::new();
+    
+    let t = 0.008; 
+    let a_size = 0.024;
+    let a_height = 0.15;
+    
+    // Red for X-axis (points to +1.0)
+    let red = [0.9, 0.1, 0.1];
+    add_box(Vec3::new(0.425, 0.0, 0.0), Vec3::new(0.85, t, t), red, &mut verts);
+    add_pyramid_x(Vec3::new(0.85, 0.0, 0.0), a_size, a_height, red, &mut verts);
+
+    // Green for Y-axis (points to +1.0)
+    let green = [0.1, 0.8, 0.1];
+    add_box(Vec3::new(0.0, 0.425, 0.0), Vec3::new(t, 0.85, t), green, &mut verts);
+    add_pyramid_y(Vec3::new(0.0, 0.85, 0.0), a_size, a_height, green, &mut verts);
+
+    // Blue for Z-axis (points to +1.0)
+    let blue = [0.1, 0.1, 0.9];
+    add_box(Vec3::new(0.0, 0.0, 0.425), Vec3::new(t, t, 0.85), blue, &mut verts);
+    add_pyramid_z(Vec3::new(0.0, 0.0, 0.85), a_size, a_height, blue, &mut verts);
+
+    verts
+}
+
 fn grid_vertices() -> Vec<Vertex3D> {
     let half_w = 0.015;
     let color = [0.35, 0.35, 0.40];
@@ -1129,6 +1281,9 @@ struct State {
     rotation: f32,
     show_grid: bool,
     show_cube: bool,
+    show_origin: bool,
+    vertex_buffer_origin: wgpu::Buffer,
+    vertex_count_origin: u32,
 
     fs_root: FsNode,
     node_templates: Vec<NodeTemplate>,
@@ -1831,6 +1986,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        let origin_verts = origin_vectors_vertices();
+        let vertex_count_origin = origin_verts.len() as u32;
+        let vertex_buffer_origin = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Origin Vectors Vertex Buffer"),
+            contents: bytemuck::cast_slice(&origin_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         let pipeline_3d = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("3D Pipeline"),
             layout: Some(&pipeline_layout_3d),
@@ -1956,7 +2119,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("Network").with_item("File", &["New", "Open", "Save"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out"])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin"])),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("Parameters").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"])),
         ];
         for _ in 0..NODE_SLOT_COUNT {
@@ -2008,6 +2171,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             rotation: 0.0,
             show_grid: true,
             show_cube: false,
+            show_origin: true,
+            vertex_buffer_origin,
+            vertex_count_origin,
             fs_root,
             node_templates,
             current_path,
@@ -2079,6 +2245,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         state.sync_grid_settings();
         state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 0, state.show_grid);
         state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, state.show_cube);
+        state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, state.show_origin);
 
         state.rebuild_positions();
         state.apply_layout();
@@ -2254,8 +2421,18 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
     fn execute_action(&mut self, action: Action) {
         match action {
-            Action::ToggleGrid => self.show_grid = !self.show_grid,
-            Action::ToggleCube => self.show_cube = !self.show_cube,
+            Action::ToggleGrid => {
+                self.show_grid = !self.show_grid;
+                self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 0, self.show_grid);
+            }
+            Action::ToggleCube => {
+                self.show_cube = !self.show_cube;
+                self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, self.show_cube);
+            }
+            Action::ToggleOrigin => {
+                self.show_origin = !self.show_origin;
+                self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, self.show_origin);
+            }
             Action::ToggleSquareViewport => self.square_viewport = !self.square_viewport,
             Action::ToggleConfigure => {
                 if self.widgets[CONFIG_DIALOG_IDX].take_click() {
@@ -3267,6 +3444,12 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     pass.draw(0..self.vertex_count_grid, 0..1);
                 }
 
+                if self.show_origin {
+                    pass.set_bind_group(0, &self.bind_group_grid, &[]);
+                    pass.set_vertex_buffer(0, self.vertex_buffer_origin.slice(..));
+                    pass.draw(0..self.vertex_count_origin, 0..1);
+                }
+
                 pass.set_bind_group(0, &self.bind_group_3d, &[]);
 
                 if self.show_cube {
@@ -3477,6 +3660,7 @@ impl ApplicationHandler for App {
                                 match item_idx {
                                     0 => Some(Action::ToggleGrid),
                                     1 => Some(Action::ToggleCube),
+                                    2 => Some(Action::ToggleOrigin),
                                     _ => None,
                                 }
                             } else { None };
