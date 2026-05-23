@@ -1245,12 +1245,12 @@ impl State {
 fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String>>) {
     let mut headers = vec![
         "Vertex".to_string(),
-        "Pos X".to_string(),
-        "Pos Y".to_string(),
-        "Pos Z".to_string(),
-        "Col R".to_string(),
-        "Col G".to_string(),
-        "Col B".to_string(),
+        "Pos.x".to_string(),
+        "Pos.y".to_string(),
+        "Pos.z".to_string(),
+        "Col.r".to_string(),
+        "Col.g".to_string(),
+        "Col.b".to_string(),
     ];
 
     let mut custom_keys = std::collections::BTreeSet::new();
@@ -3521,12 +3521,12 @@ mod tests {
 
         let expected_headers = vec![
             "Vertex".to_string(),
-            "Pos X".to_string(),
-            "Pos Y".to_string(),
-            "Pos Z".to_string(),
-            "Col R".to_string(),
-            "Col G".to_string(),
-            "Col B".to_string(),
+            "Pos.x".to_string(),
+            "Pos.y".to_string(),
+            "Pos.z".to_string(),
+            "Col.r".to_string(),
+            "Col.g".to_string(),
+            "Col.b".to_string(),
             "ID".to_string(),
             "Norm.x".to_string(),
             "Norm.y".to_string(),
