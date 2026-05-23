@@ -22,7 +22,7 @@ use winit::window::{Window, WindowAttributes};
 
 use wgpu::util::DeviceExt;
 
-use clear_ui::widget::{Breadcrumb, Canvas, ContentBg, MenuBar, Node, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Widget};
+use clear_ui::widget::{Breadcrumb, Canvas, ColorSelector, ContentBg, MenuBar, Node, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Widget};
 use clear_ui::colors;
 
 use glyphon::{
@@ -230,7 +230,8 @@ struct ConfigDialog {
     viewport_r: f32,
     viewport_g: f32,
     viewport_b: f32,
-    viewport_color_pending: Option<(usize, f32)>,
+    color_selector: ColorSelector,
+    last_sent_color: [u8; 3],
 }
 
 impl ConfigDialog {
@@ -266,7 +267,8 @@ impl ConfigDialog {
             viewport_r: 0.05,
             viewport_g: 0.05,
             viewport_b: 0.10,
-            viewport_color_pending: None,
+            color_selector: ColorSelector::new([13, 13, 26]).with_label("Viewport Background"),
+            last_sent_color: [13, 13, 26],
         }
     }
 
@@ -286,10 +288,6 @@ impl ConfigDialog {
         let row2_y = py + 200.0; // Skipped Row H
         let row3_y = py + 222.0; // Skipped Col W
 
-        let v_row0_y = py + 226.0; // Background R
-        let v_row1_y = py + 248.0; // Background G
-        let v_row2_y = py + 270.0; // Background B
-
         vec![
             (0, px + 160.0, row0_y - 2.0),
             (1, px + 210.0, row0_y - 2.0),
@@ -299,13 +297,6 @@ impl ConfigDialog {
             (5, px + 210.0, row2_y - 2.0),
             (6, px + 160.0, row3_y - 2.0),
             (7, px + 210.0, row3_y - 2.0),
-
-            (8, px + 160.0, v_row0_y - 2.0),
-            (9, px + 210.0, v_row0_y - 2.0),
-            (10, px + 160.0, v_row1_y - 2.0),
-            (11, px + 210.0, v_row1_y - 2.0),
-            (12, px + 160.0, v_row2_y - 2.0),
-            (13, px + 210.0, v_row2_y - 2.0),
         ]
     }
 
@@ -328,7 +319,12 @@ impl ConfigDialog {
 
 impl Widget for ConfigDialog {
     fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
-    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
+    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.x = x; self.y = y; self.w = w; self.h = h;
+        let px = x + (w - self.panel_w) / 2.0;
+        let py = y + (h - self.panel_h) / 2.0;
+        self.color_selector.set_rect(px + 20.0, py + 180.0, 240.0, 24.0);
+    }
     fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
     fn set_hovered(&mut self, v: bool) { self.hovered = v; }
     fn hovered(&self) -> bool { self.hovered }
@@ -368,20 +364,42 @@ impl Widget for ConfigDialog {
             1 => self.grid_size_y = val,
             2 => self.skipped_row_h = val,
             3 => self.skipped_col_w = val,
-            4 => self.viewport_r = val,
-            5 => self.viewport_g = val,
-            6 => self.viewport_b = val,
+            4 => {
+                self.viewport_r = val;
+                self.color_selector.color[0] = (val * 255.0).round().clamp(0.0, 255.0) as u8;
+                self.last_sent_color[0] = self.color_selector.color[0];
+            }
+            5 => {
+                self.viewport_g = val;
+                self.color_selector.color[1] = (val * 255.0).round().clamp(0.0, 255.0) as u8;
+                self.last_sent_color[1] = self.color_selector.color[1];
+            }
+            6 => {
+                self.viewport_b = val;
+                self.color_selector.color[2] = (val * 255.0).round().clamp(0.0, 255.0) as u8;
+                self.last_sent_color[2] = self.color_selector.color[2];
+            }
             _ => {}
         }
     }
     fn take_config_spin(&mut self) -> Option<(usize, f32)> {
         if let Some(v) = self.grid_size_pending.take() {
-            Some(v)
-        } else if let Some(v) = self.viewport_color_pending.take() {
-            Some(v)
-        } else {
-            None
+            return Some(v);
         }
+        for i in 0..3 {
+            if self.color_selector.color[i] != self.last_sent_color[i] {
+                let val = self.color_selector.color[i] as f32 / 255.0;
+                self.last_sent_color[i] = self.color_selector.color[i];
+                match i {
+                    0 => self.viewport_r = val,
+                    1 => self.viewport_g = val,
+                    2 => self.viewport_b = val,
+                    _ => {}
+                }
+                return Some((4 + i, val));
+            }
+        }
+        None
     }
 
     fn hit_test(&self, px: f32, py: f32) -> bool {
@@ -422,6 +440,14 @@ impl Widget for ConfigDialog {
         self.show_cube_hovered = false;
         self.show_origin_hovered = false;
 
+        let cs_changed = if self.visible && self.active_page == 2 {
+            self.color_selector.cursor_moved(px, py)
+        } else {
+            let was = self.color_selector.hovered();
+            self.color_selector.set_hovered(false);
+            was
+        };
+
         if self.visible && self.active_page == 1 {
             let row1_y = ppy + 84.0;
             self.grid_snap_hovered = px >= ppx + 16.0 && px < ppx + 200.0
@@ -445,18 +471,13 @@ impl Widget for ConfigDialog {
             let row3_y = ppy + 132.0;
             self.show_origin_hovered = px >= ppx + 16.0 && px < ppx + 200.0
                 && py >= row3_y - 2.0 && py < row3_y + 18.0;
-            for &(btn_id, bx, by) in &self.spin_btns(ppx, ppy) {
-                if btn_id >= 8 && px >= bx && px < bx + 22.0 && py >= by && py < by + 20.0 {
-                    self.hovered_spin_btn = Some(btn_id);
-                    break;
-                }
-            }
         }
 
         was != self.hovered || old_close != self.close_hovered || old_tab != self.hovered_tab
             || old_tg != self.grid_snap_hovered || old_ng != self.network_grid_hovered
             || old_sb != self.hovered_spin_btn
             || old_sg != self.show_grid_hovered || old_sc != self.show_cube_hovered || old_so != self.show_origin_hovered
+            || cs_changed
     }
 
     fn mouse_input(&mut self, button: MouseButton, state: ElementState, px: f32, py: f32) -> bool {
@@ -466,11 +487,13 @@ impl Widget for ConfigDialog {
         let (cx, cy, cw, ch) = self.close_rect(ppx, pw, ppy);
         let on_close = px >= cx && px < cx + cw && py >= cy && py < cy + ch;
         if !in_panel || on_close {
+            self.color_selector.unfocus();
             self.visible = false;
             return true;
         }
         for (i, (tx, ty, tw, th)) in self.tab_rects(ppx, ppy).iter().enumerate() {
             if px >= *tx && px < *tx + *tw && py >= *ty && py < *ty + *th {
+                self.color_selector.unfocus();
                 self.active_page = i;
                 return true;
             }
@@ -518,6 +541,7 @@ impl Widget for ConfigDialog {
             if px >= ppx + 16.0 && px < ppx + 200.0
                 && py >= row1_y - 2.0 && py < row1_y + 18.0
             {
+                self.color_selector.unfocus();
                 self.show_grid_enabled = !self.show_grid_enabled;
                 self.show_grid_pending = Some(self.show_grid_enabled);
                 return true;
@@ -526,6 +550,7 @@ impl Widget for ConfigDialog {
             if px >= ppx + 16.0 && px < ppx + 200.0
                 && py >= row2_y - 2.0 && py < row2_y + 18.0
             {
+                self.color_selector.unfocus();
                 self.show_cube_enabled = !self.show_cube_enabled;
                 self.show_cube_pending = Some(self.show_cube_enabled);
                 return true;
@@ -534,28 +559,16 @@ impl Widget for ConfigDialog {
             if px >= ppx + 16.0 && px < ppx + 200.0
                 && py >= row3_y - 2.0 && py < row3_y + 18.0
             {
+                self.color_selector.unfocus();
                 self.show_origin_enabled = !self.show_origin_enabled;
                 self.show_origin_pending = Some(self.show_origin_enabled);
                 return true;
             }
-            for &(btn_id, bx, by) in &self.spin_btns(ppx, ppy) {
-                if btn_id >= 8 && px >= bx && px < bx + 22.0 && py >= by && py < by + 20.0 {
-                    let (val, delta, min_val, max_val, pending_id) = match btn_id {
-                        8 => (&mut self.viewport_r, -0.05, 0.0, 1.0, 4),
-                        9 => (&mut self.viewport_r, 0.05, 0.0, 1.0, 4),
-                        10 => (&mut self.viewport_g, -0.05, 0.0, 1.0, 5),
-                        11 => (&mut self.viewport_g, 0.05, 0.0, 1.0, 5),
-                        12 => (&mut self.viewport_b, -0.05, 0.0, 1.0, 6),
-                        13 => (&mut self.viewport_b, 0.05, 0.0, 1.0, 6),
-                        _ => unreachable!(),
-                    };
-                    let new = (*val + delta).clamp(min_val, max_val);
-                    if (new - *val).abs() > 0.001 {
-                        *val = new;
-                        self.viewport_color_pending = Some((pending_id, *val));
-                    }
-                    return true;
-                }
+
+            if self.color_selector.mouse_input(button, state, px, py) {
+                return true;
+            } else {
+                self.color_selector.unfocus();
             }
         }
         false
@@ -563,7 +576,11 @@ impl Widget for ConfigDialog {
 
     fn keyboard_input(&mut self, event: &KeyEvent) -> bool {
         if !self.visible { return false; }
+        if self.active_page == 2 && self.color_selector.keyboard_input(event) {
+            return true;
+        }
         if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) {
+            self.color_selector.unfocus();
             self.visible = false;
             return true;
         }
@@ -632,20 +649,7 @@ impl Widget for ConfigDialog {
                 let row3_y = py + 132.0;
                 quads.push((px + 14.0, row3_y - 2.0, 186.0, 20.0, [0.25, 0.25, 0.35, 0.4]));
             }
-            if let Some(sb) = self.hovered_spin_btn {
-                for &(btn_id, bx, by) in &self.spin_btns(px, py) {
-                    if btn_id == sb {
-                        quads.push((bx, by, 22.0, 20.0, [0.35, 0.35, 0.45, 0.5]));
-                        break;
-                    }
-                }
-            }
-            let preview_x = px + 300.0;
-            let preview_y = py + 226.0;
-            let preview_w = 120.0;
-            let preview_h = 64.0;
-            quads.push((preview_x - 2.0, preview_y - 2.0, preview_w + 4.0, preview_h + 4.0, [0.35, 0.35, 0.45, 1.0]));
-            quads.push((preview_x, preview_y, preview_w, preview_h, [self.viewport_r, self.viewport_g, self.viewport_b, 1.0]));
+            quads.extend(self.color_selector.extra_quads());
         }
 
         quads
@@ -716,24 +720,7 @@ impl Widget for ConfigDialog {
             let origin_text = if self.show_origin_enabled { "[\u{2713}] Show Origin Axes" } else { "[ ] Show Origin Axes" };
             labels.push(TextLabel { text: origin_text.into(), x: px + 20.0, y: content_y + 74.0, font_size: 12.0, color: [0xaa, 0xaa, 0xbb] });
 
-            labels.push(TextLabel { text: "Background Color".into(), x: px + 16.0, y: content_y + 110.0, font_size: 12.0, color: [0x88, 0x88, 0x99] });
-
-            labels.push(TextLabel { text: "Red:".into(), x: px + 16.0, y: content_y + 132.0, font_size: 12.0, color: [0xbb, 0xbb, 0xcc] });
-            labels.push(TextLabel { text: "\u{2212}".into(), x: px + 170.0, y: content_y + 132.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
-            labels.push(TextLabel { text: format!("{:.2}", self.viewport_r), x: px + 188.0, y: content_y + 132.0, font_size: 12.0, color: [0xdd, 0xdd, 0x88] });
-            labels.push(TextLabel { text: "+".into(), x: px + 220.0, y: content_y + 132.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
-
-            labels.push(TextLabel { text: "Green:".into(), x: px + 16.0, y: content_y + 154.0, font_size: 12.0, color: [0xbb, 0xbb, 0xcc] });
-            labels.push(TextLabel { text: "\u{2212}".into(), x: px + 170.0, y: content_y + 154.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
-            labels.push(TextLabel { text: format!("{:.2}", self.viewport_g), x: px + 188.0, y: content_y + 154.0, font_size: 12.0, color: [0xdd, 0xdd, 0x88] });
-            labels.push(TextLabel { text: "+".into(), x: px + 220.0, y: content_y + 154.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
-
-            labels.push(TextLabel { text: "Blue:".into(), x: px + 16.0, y: content_y + 176.0, font_size: 12.0, color: [0xbb, 0xbb, 0xcc] });
-            labels.push(TextLabel { text: "\u{2212}".into(), x: px + 170.0, y: content_y + 176.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
-            labels.push(TextLabel { text: format!("{:.2}", self.viewport_b), x: px + 188.0, y: content_y + 176.0, font_size: 12.0, color: [0xdd, 0xdd, 0x88] });
-            labels.push(TextLabel { text: "+".into(), x: px + 220.0, y: content_y + 176.0, font_size: 12.0, color: [0xcc, 0xcc, 0xd4] });
-
-            labels.push(TextLabel { text: "Preview:".into(), x: px + 300.0, y: content_y + 110.0, font_size: 12.0, color: [0x88, 0x88, 0x99] });
+            labels.extend(self.color_selector.text_labels());
         } else {
             labels.push(TextLabel { text: "Keyboard Shortcuts".into(), x: px + 16.0, y: content_y, font_size: 13.0, color: [0xcc, 0xcc, 0xd4] });
             let shortcuts = [
