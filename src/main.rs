@@ -1175,6 +1175,15 @@ fn grid_vertices() -> Vec<Vertex3D> {
     while z <= range {
         let z0 = z - half_w;
         let z1 = z + half_w;
+        // CCW (visible from above)
+        verts.push(Vertex3D { position: [-range, y, z1], color });
+        verts.push(Vertex3D { position: [range, y, z1], color });
+        verts.push(Vertex3D { position: [-range, y, z0], color });
+        verts.push(Vertex3D { position: [range, y, z1], color });
+        verts.push(Vertex3D { position: [range, y, z0], color });
+        verts.push(Vertex3D { position: [-range, y, z0], color });
+
+        // CW (visible from below)
         verts.push(Vertex3D { position: [-range, y, z0], color });
         verts.push(Vertex3D { position: [range, y, z0], color });
         verts.push(Vertex3D { position: [-range, y, z1], color });
@@ -1188,6 +1197,15 @@ fn grid_vertices() -> Vec<Vertex3D> {
     while x <= range {
         let x0 = x - half_w;
         let x1 = x + half_w;
+        // CCW (visible from above)
+        verts.push(Vertex3D { position: [x0, y, range], color });
+        verts.push(Vertex3D { position: [x1, y, range], color });
+        verts.push(Vertex3D { position: [x0, y, -range], color });
+        verts.push(Vertex3D { position: [x1, y, range], color });
+        verts.push(Vertex3D { position: [x1, y, -range], color });
+        verts.push(Vertex3D { position: [x0, y, -range], color });
+
+        // CW (visible from below)
         verts.push(Vertex3D { position: [x0, y, -range], color });
         verts.push(Vertex3D { position: [x1, y, -range], color });
         verts.push(Vertex3D { position: [x0, y, range], color });
@@ -3435,7 +3453,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let mvp = proj * view_mat * model;
                 self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[mvp.to_cols_array_2d()]));
 
-                let mvp_grid = proj * view_mat;
+                let mvp_grid = proj * view_mat * model;
                 self.queue.write_buffer(&self.uniform_buffer_grid, 0, bytemuck::cast_slice(&[mvp_grid.to_cols_array_2d()]));
 
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
