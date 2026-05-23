@@ -494,7 +494,7 @@ impl Widget for ConfigDialog {
         let mut labels = Vec::new();
 
         // Title and close button
-        labels.push(TextLabel { text: "Configure Clear Designer".into(), x: px + 16.0, y: py + 10.0, font_size: 14.0, color: [0xcc, 0xcc, 0xd4] });
+        labels.push(TextLabel { text: "Configure Clear Design Interface".into(), x: px + 16.0, y: py + 10.0, font_size: 14.0, color: [0xcc, 0xcc, 0xd4] });
         labels.push(TextLabel { text: "\u{2715}".into(), x: px + pw - 22.0, y: py + 10.0, font_size: 14.0, color: [0xaa, 0xaa, 0xbb] });
 
         // Tab labels
@@ -514,7 +514,7 @@ impl Widget for ConfigDialog {
         // Page content
         let content_y = py + 60.0;
         if self.active_page == 0 {
-            labels.push(TextLabel { text: "General settings for Clear Designer".into(), x: px + 16.0, y: content_y, font_size: 12.0, color: [0x88, 0x88, 0x99] });
+            labels.push(TextLabel { text: "General settings for Clear Design Interface".into(), x: px + 16.0, y: content_y, font_size: 12.0, color: [0x88, 0x88, 0x99] });
         } else if self.active_page == 1 {
             labels.push(TextLabel { text: "Network Configuration".into(), x: px + 16.0, y: content_y, font_size: 13.0, color: [0xcc, 0xcc, 0xd4] });
             let snap_text = if self.grid_snap_enabled { "[\u{2713}] Snap to Grid" } else { "[ ] Snap to Grid" };
@@ -1832,7 +1832,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             .collect();
 
         let mut widgets: Vec<Box<dyn Widget>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Designer").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom"]).with_item("Help", &["About"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom"]).with_item("Help", &["About"])),
             Box::new(ContentBg::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
@@ -3153,7 +3153,7 @@ impl ApplicationHandler for App {
         let window = Arc::new(
             event_loop.create_window(
                 WindowAttributes::default()
-                    .with_title("Clear Designer")
+                    .with_title("Clear Design Interface")
                     .with_inner_size(winit::dpi::LogicalSize::new(1280, 800)),
             ).unwrap(),
         );
