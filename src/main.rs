@@ -16,11 +16,73 @@ use opencl3::kernel::{Kernel, ExecuteKernel};
 use opencl3::memory::{Buffer as ClBuffer, CL_MEM_READ_WRITE};
 use opencl3::types::{cl_float, cl_int, CL_TRUE};
 
-use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent, MouseScrollDelta};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowAttributes};
+use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey, Position};
+
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState},
+    delegate_compositor, delegate_keyboard, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window, delegate_output,
+    registry::{ProvidesRegistryState, RegistryState},
+    output::{OutputHandler, OutputState},
+    seat::{
+        keyboard::KeyboardHandler,
+        pointer::PointerHandler,
+        Capability, SeatHandler, SeatState,
+    },
+    shell::{
+        xdg::{
+            window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+            XdgShell,
+        },
+        WaylandSurface,
+    },
+    shm::{Shm, ShmHandler},
+};
+use wayland_client::{
+    globals::registry_queue_init,
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+    Connection, QueueHandle, Proxy,
+};
+use calloop_wayland_source::WaylandSource;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TouchPhase {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ModifiersState {
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    logo: bool,
+}
+
+impl ModifiersState {
+    fn control_key(&self) -> bool { self.ctrl }
+    fn alt_key(&self) -> bool { self.alt }
+    fn shift_key(&self) -> bool { self.shift }
+    fn super_key(&self) -> bool { self.logo }
+    fn state(&self) -> Self { *self }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalPosition {
+    x: f64,
+    y: f64,
+}
+
+enum WindowEvent {
+    MouseWheel { delta: clear_ui::widget::MouseScrollDelta, phase: TouchPhase },
+    PinchGesture { delta: f64 },
+    CursorMoved { position: LocalPosition },
+    MouseInput { state: clear_ui::widget::ElementState, button: clear_ui::widget::MouseButton },
+    ModifiersChanged(ModifiersState),
+    KeyboardInput { event: clear_ui::widget::KeyEvent },
+}
 
 use wgpu::util::DeviceExt;
 
@@ -2101,8 +2163,25 @@ fn make_text_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> Buff
     buffer
 }
 
+fn get_next_visible_pane(current_pane: usize, show_spreadsheet: bool, shift_pressed: bool) -> usize {
+    let visible_panes = if show_spreadsheet {
+        vec![LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX]
+    } else {
+        vec![LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX]
+    };
+
+    let current_pos = visible_panes.iter().position(|&x| x == current_pane).unwrap_or(0);
+    let next_pos = if shift_pressed {
+        (current_pos + visible_panes.len() - 1) % visible_panes.len()
+    } else {
+        (current_pos + 1) % visible_panes.len()
+    };
+    visible_panes[next_pos]
+}
+
 struct State {
-    window: Arc<Window>,
+    window: XdgWindow,
+    wl_surface: wl_surface::WlSurface,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -2349,18 +2428,16 @@ impl State {
         self.upload_vertices();
     }
 
-    fn next_node_offset(&self, _idx: usize) -> (f32, f32) {
-        (self.grid_cursor_col as f32, self.grid_cursor_row as f32)
-    }
 
     fn place_selected_node(&mut self) -> bool {
         let Some(&template_idx) = self.node_palette_filtered.get(self.node_palette_selected) else { return false; };
         let child_idx = self.current_dir().children.len();
         if child_idx >= self.node_slots.len() { return false; }
         let mut node = self.node_templates[template_idx].node.clone();
-        node.position = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
+        let (nx, ny) = self.find_empty_cell(self.grid_cursor_col as f32, self.grid_cursor_row as f32, None);
+        node.position = (nx, ny);
         self.current_dir_mut().children.push(node);
-        self.left_offsets[child_idx] = self.next_node_offset(child_idx);
+        self.left_offsets[child_idx] = (nx, ny);
         self.close_node_palette();
         self.sync_nodes();
         self.rebuild_positions();
@@ -2536,6 +2613,27 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.apply_layout();
         self.update_panel_bounds();
         self.upload_vertices();
+    }
+
+    fn find_empty_cell(&self, start_x: f32, start_y: f32, skip_idx: Option<usize>) -> (f32, f32) {
+        let x = start_x;
+        let mut y = start_y;
+        let dir = self.current_dir();
+        loop {
+            let occupied = dir.children.iter().enumerate().any(|(idx, c)| {
+                if Some(idx) == skip_idx {
+                    false
+                } else {
+                    (c.position.0 - x).abs() < 0.01 && (c.position.1 - y).abs() < 0.01
+                }
+            });
+            if occupied {
+                y += 1.0;
+            } else {
+                break;
+            }
+        }
+        (x, y)
     }
 
     fn sync_nodes(&mut self) {
@@ -2747,15 +2845,31 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         (tex, view)
     }
 
-    async fn new(window: Arc<Window>) -> Self {
+    async fn new(
+        conn: &Connection,
+        qh: &QueueHandle<AppState>,
+        compositor_state: &CompositorState,
+        xdg_shell_state: &XdgShell,
+        pw: u32,
+        ph: u32,
+    ) -> Self {
         let settings = DesignSettings::load();
-        let scale = window.scale_factor();
-        let physical_size = window.inner_size();
-        let pw = physical_size.width.max(1);
-        let ph = physical_size.height.max(1);
+        let scale = 2.0f64; // Default to 2.0 (high-DPI)
         let lw = pw as f32 / scale as f32;
         let lh = ph as f32 / scale as f32;
         let sw = lw;
+
+        let wl_surface = compositor_state.create_surface(qh);
+        let window = xdg_shell_state.create_window(wl_surface.clone(), WindowDecorations::None, qh);
+        window.set_title("Clear Design Interface");
+        window.set_app_id("clear-design-interface");
+        window.set_min_size(Some((pw, ph)));
+        window.commit();
+
+        let wayland_handle = Box::leak(Box::new(clear_ui::wayland::WaylandSurfaceHandle {
+            display_ptr: conn.backend().display_id().as_ptr() as *mut std::ffi::c_void,
+            surface_ptr: wl_surface.id().as_ptr() as *mut std::ffi::c_void,
+        }));
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
@@ -2763,7 +2877,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         });
 
         let surface = instance
-            .create_surface(window.clone())
+            .create_surface(wayland_handle)
             .expect("Failed to create surface");
 
         let adapter = instance
@@ -3114,6 +3228,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         let mut state = Self {
             window,
+            wl_surface,
             surface,
             device,
             queue,
@@ -3750,14 +3865,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         text_renderer.prepare(device, queue, font_system, text_atlas, text_viewport, areas, swash_cache).unwrap();
     }
 
-    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.physical_width = new_size.width;
-            self.physical_height = new_size.height;
-            self.width = new_size.width as f32 / self.scale as f32;
-            self.height = new_size.height as f32 / self.scale as f32;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
+    fn resize(&mut self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.physical_width = width;
+            self.physical_height = height;
+            self.width = width as f32 / self.scale as f32;
+            self.height = height as f32 / self.scale as f32;
+            self.config.width = width;
+            self.config.height = height;
             self.surface.configure(&self.device, &self.config);
 
             let (tex, view) = self.create_depth_texture();
@@ -3860,10 +3975,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 } else if !dialog_open && in_network_pane {
                     if self.modifiers.control_key() {
                         let factor = match delta {
-                            winit::event::MouseScrollDelta::LineDelta(_x, y) => {
+                            MouseScrollDelta::LineDelta(_x, y) => {
                                 if *y > 0.0 { 1.15 } else if *y < 0.0 { 1.0 / 1.15 } else { 1.0 }
                             }
-                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            MouseScrollDelta::PixelDelta(pos) => {
                                 let dy = pos.y as f32;
                                 (1.0 + dy / 100.0).clamp(0.8, 1.25)
                             }
@@ -3876,7 +3991,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         }
                     } else {
                         match delta {
-                            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                            MouseScrollDelta::LineDelta(x, y) => {
                                 let dx = *x * 30.0;
                                 let dy = *y * 30.0;
                                 self.pan_x -= dx;
@@ -3890,14 +4005,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 self.sync_grid_settings();
                                 true
                             }
-                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            MouseScrollDelta::PixelDelta(pos) => {
                                 let dx = pos.x as f32 / self.scale as f32;
                                 let dy = pos.y as f32 / self.scale as f32;
                                 self.pan_x -= dx;
                                 self.pan_y -= dy;
                                 self.is_scrolling_trackpad = match phase {
-                                    winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => true,
-                                    winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => false,
+                                    TouchPhase::Started | TouchPhase::Moved => true,
+                                    TouchPhase::Ended | TouchPhase::Cancelled => false,
                                 };
                                 self.last_scroll_time = Instant::now();
                                 self.scroll_accum_x += dx;
@@ -3910,7 +4025,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 } else if !dialog_open && in_viewport {
                     if self.modifiers.control_key() {
                         match delta {
-                            winit::event::MouseScrollDelta::LineDelta(_x, y) => {
+                            MouseScrollDelta::LineDelta(_x, y) => {
                                 let dy = *y * 0.15;
                                 self.viewport_zoom *= (-dy).exp();
                                 self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
@@ -3922,14 +4037,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
                                 true
                             }
-                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            MouseScrollDelta::PixelDelta(pos) => {
                                 let dy = (pos.y as f32 / self.scale as f32) * 0.005;
                                 self.viewport_zoom *= (-dy).exp();
                                 self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
 
                                 self.is_zooming_viewport = match phase {
-                                    winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => true,
-                                    winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => false,
+                                    TouchPhase::Started | TouchPhase::Moved => true,
+                                    TouchPhase::Ended | TouchPhase::Cancelled => false,
                                 };
                                 self.last_zoom_time = Instant::now();
                                 self.zoom_accum += dy;
@@ -3939,7 +4054,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         }
                     } else {
                         match delta {
-                            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                            MouseScrollDelta::LineDelta(x, y) => {
                                 self.scroll_lock = 0;
                                 let dx = *x * 0.05;
                                 let dy = *y * 0.05;
@@ -3955,11 +4070,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
                                 true
                             }
-                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            MouseScrollDelta::PixelDelta(pos) => {
                                 let mut dx = (pos.x as f32 / self.scale as f32) * 0.005;
                                 let mut dy = (pos.y as f32 / self.scale as f32) * 0.005;
 
-                                if *phase == winit::event::TouchPhase::Started {
+                                if *phase == TouchPhase::Started {
                                     self.scroll_lock = 0;
                                     self.rotate_accum_yaw = 0.0;
                                     self.rotate_accum_pitch = 0.0;
@@ -3989,8 +4104,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 self.rotation_x -= dy;
 
                                 self.is_rotating_viewport = match phase {
-                                    winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved => true,
-                                    winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => {
+                                    TouchPhase::Started | TouchPhase::Moved => true,
+                                    TouchPhase::Ended | TouchPhase::Cancelled => {
                                         self.scroll_lock = 0;
                                         false
                                     }
@@ -4232,6 +4347,18 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     ElementState::Released => {
                         if self.drag_widget.is_some() {
                             let idx = self.drag_widget.unwrap();
+                            if self.node_slots.contains(&idx) {
+                                if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == idx) {
+                                    let pos = self.current_dir().children[slot_idx].position;
+                                    let (nx, ny) = self.find_empty_cell(pos.0, pos.1, Some(slot_idx));
+                                    self.current_dir_mut().children[slot_idx].position = (nx, ny);
+                                    self.left_offsets[slot_idx] = (nx, ny);
+                                    self.rebuild_positions();
+                                    self.apply_layout();
+                                    self.update_panel_bounds();
+                                    self.upload_vertices();
+                                }
+                            }
                             self.widgets[idx].drag_end();
                             self.drag_widget = None;
                             changed = true;
@@ -4270,6 +4397,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.logical_key == Key::Named(NamedKey::Space) {
                     self.space_pressed = event.state == ElementState::Pressed;
+                }
+
+                if event.state == ElementState::Pressed {
+                    if event.logical_key == Key::Named(NamedKey::Tab) && self.modifiers.control_key() && !self.modifiers.alt_key() && !self.modifiers.super_key() {
+                        self.focused_pane = get_next_visible_pane(self.focused_pane, self.show_spreadsheet, self.modifiers.shift_key());
+                        self.sync_pane_focus();
+                        return true;
+                    }
                 }
 
                 if self.widgets[PARAM_IDX].keyboard_input(event) {
@@ -4458,7 +4593,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         }
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> bool {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
@@ -4627,7 +4762,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.sync_layout();
             self.read_panel_offsets();
             self.upload_vertices();
-            self.window.request_redraw();
         }
 
         self.prepare_text();
@@ -4636,10 +4770,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             Ok(t) => t,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 self.surface.configure(&self.device, &self.config);
-                return;
+                return false;
             }
-            Err(wgpu::SurfaceError::Timeout) => return,
-            Err(e) => { eprintln!("Surface error: {e:?}"); return; }
+            Err(wgpu::SurfaceError::Timeout) => return false,
+            Err(e) => { eprintln!("Surface error: {e:?}"); return false; }
         };
 
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -4795,309 +4929,632 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        self.window.pre_present_notify();
         output.present();
+        tick_changed || panned
     }
 }
 
-struct App { state: Option<State> }
+struct AppState {
+    registry_state: RegistryState,
+    compositor_state: CompositorState,
+    xdg_shell_state: XdgShell,
+    shm_state: Shm,
+    seat_state: SeatState,
+    output_state: OutputState,
 
-impl App { fn new() -> Self { Self { state: None } } }
+    seats: Vec<wl_seat::WlSeat>,
+    pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
 
-impl ApplicationHandler<CustomEvent> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() { return; }
+    window: XdgWindow,
+    surface: wl_surface::WlSurface,
 
-        let window = Arc::new(
-            event_loop.create_window(
-                WindowAttributes::default()
-                    .with_title("Clear Design Interface")
-                    .with_inner_size(winit::dpi::LogicalSize::new(1280, 800)),
-            ).unwrap(),
-        );
+    state: Option<State>,
+    exit: bool,
+    redraw: bool,
+}
 
-        let state = pollster::block_on(State::new(window));
-        self.state = Some(state);
-        self.state.as_ref().unwrap().window.request_redraw();
+impl CompositorHandler for AppState {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        scale_factor: i32,
+    ) {
+        if let Some(state) = &mut self.state {
+            state.scale = scale_factor as f64;
+            let pw = (state.width as f64 * state.scale) as u32;
+            let ph = (state.height as f64 * state.scale) as u32;
+            state.resize(pw, ph);
+            self.redraw = true;
+        }
     }
 
-    fn window_event(
-        &mut self, event_loop: &ActiveEventLoop,
-        _window_id: winit::window::WindowId, event: WindowEvent,
-    ) {
-        let needs_redraw = match event {
-            WindowEvent::CloseRequested => { event_loop.exit(); true }
-            WindowEvent::Resized(size) => {
-                if let Some(state) = &mut self.state { state.resize(size); }
-                true
-            }
-            WindowEvent::RedrawRequested => {
-                if let Some(state) = &mut self.state {
-                    state.render();
-                    state.window.request_redraw();
-                }
-                true
-            }
-            WindowEvent::ScaleFactorChanged { scale_factor, mut inner_size_writer } => {
-                if let Some(state) = &mut self.state {
-                    let new_physical = winit::dpi::PhysicalSize::new(
-                        (state.width as f64 * scale_factor) as u32,
-                        (state.height as f64 * scale_factor) as u32,
-                    );
-                    let _ = inner_size_writer.request_inner_size(new_physical);
-                    state.scale = scale_factor;
-                    state.resize(new_physical);
-                    state.window.request_redraw();
-                }
-                true
-            }
-            _ => {
-                if let Some(state) = &mut self.state {
-                    let mut changed = state.handle_event(&event);
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {}
 
-                    if let Some(seg) = state.widgets[BREADCRUMB_IDX].path_click() {
-                        if seg < state.current_path.len() {
-                            state.current_path.truncate(seg);
-                            state.on_path_changed();
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {}
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {}
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {}
+}
+
+impl OutputHandler for AppState {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {}
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {}
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {}
+}
+
+impl SeatHandler for AppState {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.seats.push(seat);
+    }
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            let pointer = self.seat_state.get_pointer(qh, &seat).unwrap();
+            self.pointer = Some(pointer);
+        }
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            let keyboard = self
+                .seat_state
+                .get_keyboard(qh, &seat, None)
+                .unwrap();
+            self.keyboard = Some(keyboard);
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer {
+            self.pointer = None;
+        }
+        if capability == Capability::Keyboard {
+            self.keyboard = None;
+        }
+    }
+
+    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.seats.retain(|s| s != &seat);
+    }
+}
+
+impl ShmHandler for AppState {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm_state
+    }
+}
+
+impl PointerHandler for AppState {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[smithay_client_toolkit::seat::pointer::PointerEvent],
+    ) {
+        use smithay_client_toolkit::seat::pointer::PointerEventKind;
+        for event in events {
+            let (x, y) = event.position;
+            if let Some(st) = &mut self.state {
+                let scale = st.scale;
+                match &event.kind {
+                    PointerEventKind::Motion { .. } => {
+                        let ev = WindowEvent::CursorMoved {
+                            position: LocalPosition {
+                                x: x * scale,
+                                y: y * scale,
+                            },
+                        };
+                        self.process_event(ev);
+                    }
+                    PointerEventKind::Press { button, .. } => {
+                        let btn = match *button {
+                            272 => clear_ui::widget::MouseButton::Left,
+                            273 => clear_ui::widget::MouseButton::Right,
+                            274 => clear_ui::widget::MouseButton::Middle,
+                            _ => continue,
+                        };
+                        let ev = WindowEvent::MouseInput {
+                            state: clear_ui::widget::ElementState::Pressed,
+                            button: btn,
+                        };
+                        self.process_event(ev);
+                    }
+                    PointerEventKind::Release { button, .. } => {
+                        let btn = match *button {
+                            272 => clear_ui::widget::MouseButton::Left,
+                            273 => clear_ui::widget::MouseButton::Right,
+                            274 => clear_ui::widget::MouseButton::Middle,
+                            _ => continue,
+                        };
+                        let ev = WindowEvent::MouseInput {
+                            state: clear_ui::widget::ElementState::Released,
+                            button: btn,
+                        };
+                        self.process_event(ev);
+                    }
+                    PointerEventKind::Axis { horizontal, vertical, .. } => {
+                        let h_val = horizontal.absolute as f32;
+                        let v_val = vertical.absolute as f32;
+                        let ev = WindowEvent::MouseWheel {
+                            delta: clear_ui::widget::MouseScrollDelta::LineDelta(-h_val / 10.0, -v_val / 10.0),
+                            phase: TouchPhase::Moved,
+                        };
+                        self.process_event(ev);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+impl KeyboardHandler for AppState {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+        _raw_modifiers: &[u32],
+        _keysyms: &[xkeysym::Keysym],
+    ) {}
+
+    fn leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+    ) {}
+
+    fn press_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: smithay_client_toolkit::seat::keyboard::KeyEvent,
+    ) {
+        self.handle_key(event, clear_ui::widget::ElementState::Pressed);
+    }
+
+    fn release_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: smithay_client_toolkit::seat::keyboard::KeyEvent,
+    ) {
+        self.handle_key(event, clear_ui::widget::ElementState::Released);
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        _modifiers: smithay_client_toolkit::seat::keyboard::Modifiers,
+        _layout: u32,
+    ) {}
+}
+
+impl WindowHandler for AppState {
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _window: &XdgWindow,
+        configure: WindowConfigure,
+        _serial: u32,
+    ) {
+        let (w, h) = configure.new_size;
+        if let (Some(w), Some(h)) = (w, h) {
+            let width = w.get();
+            let height = h.get();
+            if let Some(state) = &mut self.state {
+                state.resize(width, height);
+            }
+        }
+        self.redraw = true;
+    }
+
+    fn request_close(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _window: &XdgWindow) {
+        self.exit = true;
+    }
+}
+
+impl ProvidesRegistryState for AppState {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    
+    fn runtime_add_global(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _name: u32,
+        _interface: &str,
+        _version: u32,
+    ) {}
+    
+    fn runtime_remove_global(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _name: u32,
+        _interface: &str,
+    ) {}
+}
+
+delegate_compositor!(AppState);
+delegate_xdg_shell!(AppState);
+delegate_xdg_window!(AppState);
+delegate_shm!(AppState);
+delegate_seat!(AppState);
+delegate_pointer!(AppState);
+delegate_keyboard!(AppState);
+delegate_registry!(AppState);
+delegate_output!(AppState);
+
+impl AppState {
+    fn handle_key(&mut self, event: smithay_client_toolkit::seat::keyboard::KeyEvent, state: clear_ui::widget::ElementState) {
+        use clear_ui::widget::{Key, KeyEvent, NamedKey};
+        let logical_key = match event.keysym {
+            xkeysym::Keysym::Escape => Key::Named(NamedKey::Escape),
+            xkeysym::Keysym::Return => Key::Named(NamedKey::Enter),
+            xkeysym::Keysym::BackSpace => Key::Named(NamedKey::Backspace),
+            xkeysym::Keysym::Down => Key::Named(NamedKey::ArrowDown),
+            xkeysym::Keysym::Up => Key::Named(NamedKey::ArrowUp),
+            xkeysym::Keysym::Left => Key::Named(NamedKey::ArrowLeft),
+            xkeysym::Keysym::Right => Key::Named(NamedKey::ArrowRight),
+            xkeysym::Keysym::Tab => Key::Named(NamedKey::Tab),
+            xkeysym::Keysym::Delete => Key::Named(NamedKey::Delete),
+            xkeysym::Keysym::space => Key::Named(NamedKey::Space),
+            _ => {
+                if let Some(ref text) = event.utf8 {
+                    Key::Character(text.clone())
+                } else {
+                    return;
+                }
+            }
+        };
+
+        if let Some(st) = &mut self.state {
+            match event.keysym {
+                xkeysym::Keysym::Control_L | xkeysym::Keysym::Control_R => {
+                    st.modifiers.ctrl = state == clear_ui::widget::ElementState::Pressed;
+                }
+                xkeysym::Keysym::Alt_L | xkeysym::Keysym::Alt_R => {
+                    st.modifiers.alt = state == clear_ui::widget::ElementState::Pressed;
+                }
+                xkeysym::Keysym::Shift_L | xkeysym::Keysym::Shift_R => {
+                    st.modifiers.shift = state == clear_ui::widget::ElementState::Pressed;
+                }
+                xkeysym::Keysym::Super_L | xkeysym::Keysym::Super_R => {
+                    st.modifiers.logo = state == clear_ui::widget::ElementState::Pressed;
+                }
+                _ => {}
+            }
+
+            let custom_event = KeyEvent {
+                state,
+                logical_key,
+                text: event.utf8.clone(),
+                repeat: false,
+            };
+
+            let ev = WindowEvent::KeyboardInput { event: custom_event };
+            self.process_event(ev);
+        }
+    }
+
+    fn process_event(&mut self, ev: WindowEvent) {
+        if let Some(state) = &mut self.state {
+            let mut changed = state.handle_event(&ev);
+
+            if let Some(seg) = state.widgets[BREADCRUMB_IDX].path_click() {
+                if seg < state.current_path.len() {
+                    state.current_path.truncate(seg);
+                    state.on_path_changed();
+                    changed = true;
+                }
+            }
+
+            if let Some(action) = state.pending_action.take() {
+                state.execute_action(action);
+                changed = true;
+            }
+
+            if let Some((menu_idx, item_idx)) = state.widgets[HEADER_IDX].menu_click() {
+                if menu_idx == 0 { // File
+                    match item_idx {
+                        0 => { // New Project
+                            state.new_project();
                             changed = true;
                         }
-                    }
-
-                    if let Some(action) = state.pending_action.take() {
-                        state.execute_action(action);
-                        changed = true;
-                    }
-
-                    if let Some((menu_idx, item_idx)) = state.widgets[HEADER_IDX].menu_click() {
-                        if menu_idx == 0 { // File
-                            match item_idx {
-                                0 => { // New Project
-                                    state.new_project();
-                                    changed = true;
-                                }
-                                1 => { // Open
-                                    let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                                    if let Err(e) = state.load_from_file(&proj_path) {
-                                        eprintln!("Failed to load project: {:?}", e);
-                                    }
-                                    changed = true;
-                                }
-                                2 => { // Save
-                                    let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                                    if let Err(e) = state.save_to_file(&proj_path) {
-                                        eprintln!("Failed to save project: {:?}", e);
-                                    }
-                                    changed = true;
-                                }
-                                3 => { // Configure
-                                    state.execute_action(Action::ToggleConfigure);
-                                    changed = true;
-                                }
-                                4 => { // Exit
-                                    state.exit_requested = true;
-                                }
-                                _ => {}
+                        1 => { // Open
+                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
+                            if let Err(e) = state.load_from_file(&proj_path) {
+                                eprintln!("Failed to load project: {:?}", e);
                             }
+                            changed = true;
                         }
-                    }
-
-                    if let Some((menu_idx, item_idx)) = state.widgets[LEFT_MENUBAR_IDX].menu_click() {
-                        if menu_idx == 0 { // File
-                            match item_idx {
-                                0 => { // New
-                                    state.new_project();
-                                    changed = true;
-                                }
-                                1 => { // Open
-                                    let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                                    if let Err(e) = state.load_from_file(&proj_path) {
-                                        eprintln!("Failed to load project: {:?}", e);
-                                    }
-                                    changed = true;
-                                }
-                                2 => { // Save
-                                    let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                                    if let Err(e) = state.save_to_file(&proj_path) {
-                                        eprintln!("Failed to save project: {:?}", e);
-                                    }
-                                    changed = true;
-                                }
-                                _ => {}
+                        2 => { // Save
+                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
+                            if let Err(e) = state.save_to_file(&proj_path) {
+                                eprintln!("Failed to save project: {:?}", e);
                             }
+                            changed = true;
                         }
-                    }
-
-                    if let Some((menu_idx, item_idx)) = state.widgets[RIGHT_MENUBAR_IDX].menu_click() {
-                        if menu_idx == 0 {
-                            let camera_nodes: Vec<String> = state.current_dir().children.iter()
-                                .filter(|c| c.node_type == "camera")
-                                .map(|c| c.name.clone())
-                                .collect();
-                            let mut items = vec!["Default Camera".to_string()];
-                            items.extend(camera_nodes);
-                            if item_idx < items.len() {
-                                state.active_camera = items[item_idx].clone();
-                                for (i, item) in items.iter().enumerate() {
-                                    state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(0, i, item == &state.active_camera);
-                                }
-                                changed = true;
-                            }
-                        } else {
-                            let action = if menu_idx == 1 {
-                                Some(Action::ToggleSquareViewport)
-                            } else if menu_idx == 2 {
-                                match item_idx {
-                                    0 => Some(Action::ToggleGrid),
-                                    1 => Some(Action::ToggleCube),
-                                    2 => Some(Action::ToggleOrigin),
-                                    3 => Some(Action::ToggleCameraPivot),
-                                    _ => None,
-                                }
-                            } else { None };
-                            if let Some(a) = action {
-                                state.execute_action(a);
-                                changed = true;
-                            }
+                        3 => { // Configure
+                            state.execute_action(Action::ToggleConfigure);
+                            changed = true;
                         }
+                        4 => { // Exit
+                            state.exit_requested = true;
+                        }
+                        _ => {}
                     }
+                }
+            }
 
-                    let mut settings_changed = false;
-                    while let Some((id, val)) = state.widgets[CONFIG_DIALOG_IDX].take_config_toggle() {
-                        match id {
-                            0 => {
-                                state.grid_snap_enabled = val;
-                                for &i in &state.node_slots {
-                                    let gx = if val { state.grid_size_x + state.skipped_col_w } else { 0.0 };
-                                    let gy = if val { state.grid_size_y + state.skipped_row_h } else { 0.0 };
-                                    state.widgets[i].set_grid_snap(gx, gy);
-                                }
+            if let Some((menu_idx, item_idx)) = state.widgets[LEFT_MENUBAR_IDX].menu_click() {
+                if menu_idx == 0 { // File
+                    match item_idx {
+                        0 => { // New
+                            state.new_project();
+                            changed = true;
+                        }
+                        1 => { // Open
+                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
+                            if let Err(e) = state.load_from_file(&proj_path) {
+                                eprintln!("Failed to load project: {:?}", e);
                             }
-                            1 => {
-                                state.network_grid_visible = val;
-                                state.widgets[CONTENT_IDX].set_show_network_grid(val);
+                            changed = true;
+                        }
+                        2 => { // Save
+                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
+                            if let Err(e) = state.save_to_file(&proj_path) {
+                                eprintln!("Failed to save project: {:?}", e);
                             }
-                            2 => {
-                                state.show_grid = val;
-                                state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 0, val);
-                            }
-                            3 => {
-                                state.show_cube = val;
-                                state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, val);
-                            }
-                            4 => {
-                                state.show_origin = val;
-                                state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, val);
-                            }
-                            5 => {
-                                state.show_camera_pivot = val;
-                                state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 3, val);
-                            }
-                            _ => {}
+                            changed = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if let Some((menu_idx, item_idx)) = state.widgets[RIGHT_MENUBAR_IDX].menu_click() {
+                if menu_idx == 0 {
+                    let camera_nodes: Vec<String> = state.current_dir().children.iter()
+                        .filter(|c| c.node_type == "camera")
+                        .map(|c| c.name.clone())
+                        .collect();
+                    let mut items = vec!["Default Camera".to_string()];
+                    items.extend(camera_nodes);
+                    if item_idx < items.len() {
+                        state.active_camera = items[item_idx].clone();
+                        for (i, item) in items.iter().enumerate() {
+                            state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(0, i, item == &state.active_camera);
                         }
                         changed = true;
-                        settings_changed = true;
                     }
-
-                    while let Some((id, val)) = state.widgets[CONFIG_DIALOG_IDX].take_config_spin() {
-                        match id {
-                            0 => state.grid_size_x = val,
-                            1 => state.grid_size_y = val,
-                            2 => state.skipped_row_h = val,
-                            3 => state.skipped_col_w = val,
-                            4 => state.viewport_bg_color[0] = val,
-                            5 => state.viewport_bg_color[1] = val,
-                            6 => state.viewport_bg_color[2] = val,
-                            7 => {
-                                state.origin_size = val;
-                                state.update_origin_geometry();
-                            }
-                            8 => {
-                                state.grid_thickness = val;
-                                state.update_grid_geometry();
-                            }
-                            9 => {
-                                state.camera_pivot_size = val;
-                                state.update_pivot_geometry();
-                            }
-                            _ => {}
+                } else {
+                    let action = if menu_idx == 1 {
+                        Some(Action::ToggleSquareViewport)
+                    } else if menu_idx == 2 {
+                        match item_idx {
+                            0 => Some(Action::ToggleGrid),
+                            1 => Some(Action::ToggleCube),
+                            2 => Some(Action::ToggleOrigin),
+                            3 => Some(Action::ToggleCameraPivot),
+                            _ => None,
                         }
+                    } else { None };
+                    if let Some(a) = action {
+                        state.execute_action(a);
+                        changed = true;
+                    }
+                }
+            }
+
+            let mut settings_changed = false;
+            while let Some((id, val)) = state.widgets[CONFIG_DIALOG_IDX].take_config_toggle() {
+                match id {
+                    0 => {
+                        state.grid_snap_enabled = val;
                         for &i in &state.node_slots {
-                            let (x, y, _, _) = state.widgets[i].rect();
-                            state.widgets[i].set_rect(x, y, state.grid_size_x, state.grid_size_y);
+                            let gx = if val { state.grid_size_x + state.skipped_col_w } else { 0.0 };
+                            let gy = if val { state.grid_size_y + state.skipped_row_h } else { 0.0 };
+                            state.widgets[i].set_grid_snap(gx, gy);
                         }
-                        state.sync_grid_settings();
-                        changed = true;
-                        settings_changed = true;
                     }
-
-                    if settings_changed {
-                        state.save_settings();
+                    1 => {
+                        state.network_grid_visible = val;
+                        state.widgets[CONTENT_IDX].set_show_network_grid(val);
                     }
+                    2 => {
+                        state.show_grid = val;
+                        state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 0, val);
+                    }
+                    3 => {
+                        state.show_cube = val;
+                        state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, val);
+                    }
+                    4 => {
+                        state.show_origin = val;
+                        state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, val);
+                    }
+                    5 => {
+                        state.show_camera_pivot = val;
+                        state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 3, val);
+                    }
+                    _ => {}
+                }
+                changed = true;
+                settings_changed = true;
+            }
 
-                    if changed {
-                        state.sync_layout();
-                        state.read_panel_offsets();
-                        state.sync_cursor_and_selection();
+            while let Some((id, val)) = state.widgets[CONFIG_DIALOG_IDX].take_config_spin() {
+                match id {
+                    0 => state.grid_size_x = val,
+                    1 => state.grid_size_y = val,
+                    2 => state.skipped_row_h = val,
+                    3 => state.skipped_col_w = val,
+                    4 => state.viewport_bg_color[0] = val,
+                    5 => state.viewport_bg_color[1] = val,
+                    6 => state.viewport_bg_color[2] = val,
+                    7 => {
+                        state.origin_size = val;
+                        state.update_origin_geometry();
+                    }
+                    8 => {
+                        state.grid_thickness = val;
+                        state.update_grid_geometry();
+                    }
+                    9 => {
+                        state.camera_pivot_size = val;
+                        state.update_pivot_geometry();
+                    }
+                    _ => {}
+                }
+                for &i in &state.node_slots {
+                    let (x, y, _, _) = state.widgets[i].rect();
+                    state.widgets[i].set_rect(x, y, state.grid_size_x, state.grid_size_y);
+                }
+                state.sync_grid_settings();
+                changed = true;
+                settings_changed = true;
+            }
 
-                        if state.drag_widget == Some(PARAM_IDX) && state.widgets[PARAM_IDX].is_dragging() {
-                            if let Some(focused) = state.focused_widget {
-                                if state.node_slots.contains(&focused) {
-                                    if let Some(slot_idx) = state.node_slots.iter().position(|&x| x == focused) {
-                                        let updated_params = state.widgets[PARAM_IDX].node_params();
-                                        let dir = state.current_dir_mut();
-                                        if let Some(child) = dir.children.get_mut(slot_idx) {
-                                            let mut param_changed = false;
-                                            for (u_name, u_val, _type) in &updated_params {
-                                                if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
-                                                    if p.default != *u_val {
-                                                        p.default = u_val.clone();
-                                                        param_changed = true;
-                                                    }
-                                                }
-                                            }
-                                            if param_changed {
-                                                state.rebuild_scene_geometry();
+            if settings_changed {
+                state.save_settings();
+            }
+
+            if changed {
+                state.sync_layout();
+                state.read_panel_offsets();
+                state.sync_cursor_and_selection();
+
+                if state.drag_widget == Some(PARAM_IDX) && state.widgets[PARAM_IDX].is_dragging() {
+                    if let Some(focused) = state.focused_widget {
+                        if state.node_slots.contains(&focused) {
+                            if let Some(slot_idx) = state.node_slots.iter().position(|&x| x == focused) {
+                                let updated_params = state.widgets[PARAM_IDX].node_params();
+                                let dir = state.current_dir_mut();
+                                if let Some(child) = dir.children.get_mut(slot_idx) {
+                                    let mut param_changed = false;
+                                    for (u_name, u_val, _type) in &updated_params {
+                                        if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                                            if p.default != *u_val {
+                                                p.default = u_val.clone();
+                                                param_changed = true;
                                             }
                                         }
                                     }
+                                    if param_changed {
+                                        state.rebuild_scene_geometry();
+                                    }
                                 }
                             }
                         }
-
-                        state.sync_nodes();
-
-                        // Sync Parameters pane with selected node
-                        let params = state.focused_widget.and_then(|f| {
-                            if state.node_slots.contains(&f) { Some(f) } else { None }
-                        }).map(|f| state.widgets[f].node_params()).unwrap_or_default();
-                        state.widgets[PARAM_IDX].set_display_params(&params);
-
-                        state.upload_vertices();
                     }
+                }
 
-                    state.update_status_text(&format!(
-                        "col: {:.0}  vp: {:.0}  params: {:.0}",
-                        state.content_left_w(), state.viewport_w(), state.param_w(),
-                    ));
-                    changed
-                } else { false }
+                state.sync_nodes();
+
+                // Sync Parameters pane with selected node
+                let params = state.focused_widget.and_then(|f| {
+                    if state.node_slots.contains(&f) { Some(f) } else { None }
+                }).map(|f| state.widgets[f].node_params()).unwrap_or_default();
+                state.widgets[PARAM_IDX].set_display_params(&params);
+
+                state.upload_vertices();
             }
-        };
-        if needs_redraw {
-            if let Some(state) = &mut self.state { state.window.request_redraw(); }
-        }
-        if let Some(state) = &self.state {
-            if state.exit_requested {
-                event_loop.exit();
+
+            state.update_status_text(&format!(
+                "col: {:.0}  vp: {:.0}  params: {:.0}",
+                state.content_left_w(), state.viewport_w(), state.param_w(),
+            ));
+
+            if changed {
+                self.redraw = true;
             }
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: CustomEvent) {
+    fn handle_user_event(&mut self, event: CustomEvent) {
         let mut needs_redraw = false;
-        match event {
-            CustomEvent::GetState(tx) => {
-                if let Some(state) = &self.state {
+        if let Some(state) = &mut self.state {
+            match event {
+                CustomEvent::GetState(tx) => {
                     let proj = Project {
                         name: "Project".to_string(),
                         root: state.fs_root.clone(),
@@ -5109,12 +5566,8 @@ impl ApplicationHandler<CustomEvent> for App {
                     };
                     let json = serde_json::to_string_pretty(&proj).unwrap_or_default();
                     let _ = tx.send(json);
-                } else {
-                    let _ = tx.send("null".to_string());
                 }
-            }
-            CustomEvent::PostAction(action, tx) => {
-                if let Some(state) = &mut self.state {
+                CustomEvent::PostAction(action, tx) => {
                     let res = match action {
                         HttpAction::Up => {
                             if !state.current_path.is_empty() {
@@ -5208,12 +5661,13 @@ impl ApplicationHandler<CustomEvent> for App {
                                 });
                                 if let Some(idx) = template_idx {
                                     let mut node = state.node_templates[idx].node.clone();
-                                    node.position = (x, y);
+                                    let (nx, ny) = state.find_empty_cell(x, y, None);
+                                    node.position = (nx, ny);
                                     if let Some(n) = name {
                                         node.name = n;
                                     }
                                     state.current_dir_mut().children.push(node);
-                                    state.left_offsets[child_idx] = (x, y);
+                                    state.left_offsets[child_idx] = (nx, ny);
                                     state.sync_nodes();
                                     state.rebuild_positions();
                                     state.apply_layout();
@@ -5263,9 +5717,10 @@ impl ApplicationHandler<CustomEvent> for App {
                         HttpAction::MoveNode { slot, x, y } => {
                             let len = state.current_dir().children.len();
                             if slot < len {
-                                state.current_dir_mut().children[slot].position = (x, y);
+                                let (nx, ny) = state.find_empty_cell(x, y, Some(slot));
+                                state.current_dir_mut().children[slot].position = (nx, ny);
                                 if slot < state.left_offsets.len() {
-                                    state.left_offsets[slot] = (x, y);
+                                    state.left_offsets[slot] = (nx, ny);
                                 }
                                 state.sync_nodes();
                                 state.rebuild_positions();
@@ -5316,24 +5771,63 @@ impl ApplicationHandler<CustomEvent> for App {
                         }
                     };
                     let _ = tx.send(res);
-                } else {
+                }
+            }
+        } else {
+            match event {
+                CustomEvent::GetState(tx) => {
+                    let _ = tx.send("null".to_string());
+                }
+                CustomEvent::PostAction(_, tx) => {
                     let _ = tx.send(Err("State not initialized".to_string()));
                 }
             }
         }
         if needs_redraw {
-            if let Some(state) = &mut self.state {
-                state.window.request_redraw();
-            }
+            self.redraw = true;
         }
     }
 }
 
 fn main() {
-    let event_loop = EventLoop::<CustomEvent>::with_user_event().build().unwrap();
-    event_loop.set_control_flow(ControlFlow::Poll);
+    let conn = Connection::connect_to_env().unwrap();
+    let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
+    let qh = event_queue.handle();
 
-    let proxy = event_loop.create_proxy();
+    let compositor_state = CompositorState::bind(&globals, &qh).unwrap();
+    let xdg_shell_state = XdgShell::bind(&globals, &qh).unwrap();
+    let shm_state = Shm::bind(&globals, &qh).unwrap();
+    let seat_state = SeatState::new(&globals, &qh);
+    let output_state = OutputState::new(&globals, &qh);
+
+    let state = pollster::block_on(State::new(
+        &conn,
+        &qh,
+        &compositor_state,
+        &xdg_shell_state,
+        1280, 800
+    ));
+
+    let mut app = AppState {
+        registry_state: RegistryState::new(&globals),
+        compositor_state,
+        xdg_shell_state,
+        shm_state,
+        seat_state,
+        output_state,
+        seats: Vec::new(),
+        pointer: None,
+        keyboard: None,
+        window: state.window.clone(),
+        surface: state.wl_surface.clone(),
+        state: Some(state),
+        exit: false,
+        redraw: true,
+    };
+
+    let (sender, channel) = calloop::channel::channel::<CustomEvent>();
+
+    let server_sender = sender.clone();
     std::thread::spawn(move || {
         let listener = match TcpListener::bind("127.0.0.1:3000") {
             Ok(l) => l,
@@ -5350,7 +5844,7 @@ fn main() {
                 Err(_) => continue,
             };
 
-            let proxy = proxy.clone();
+            let server_sender = server_sender.clone();
             std::thread::spawn(move || {
                 let mut write_stream = match stream.try_clone() {
                     Ok(s) => s,
@@ -5364,7 +5858,7 @@ fn main() {
 
                 if request_line.starts_with("GET /state") {
                     let (tx, rx) = std::sync::mpsc::channel();
-                    if proxy.send_event(CustomEvent::GetState(tx)).is_ok() {
+                    if server_sender.send(CustomEvent::GetState(tx)).is_ok() {
                         let response_body = rx.recv().unwrap_or_else(|_| "null".to_string());
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -5403,7 +5897,7 @@ fn main() {
                         if let Ok(body_str) = String::from_utf8(body_bytes) {
                             if let Ok(action) = serde_json::from_str::<HttpAction>(&body_str) {
                                 let (tx, rx) = std::sync::mpsc::channel();
-                                if proxy.send_event(CustomEvent::PostAction(action, tx)).is_ok() {
+                                if server_sender.send(CustomEvent::PostAction(action, tx)).is_ok() {
                                     match rx.recv() {
                                         Ok(Ok(msg)) => {
                                             let body = format!("{{\"status\":\"success\",\"message\":\"{}\"}}", msg);
@@ -5483,8 +5977,38 @@ fn main() {
         }
     });
 
-    let mut app = App::new();
-    event_loop.run_app(&mut app).unwrap();
+    let mut event_loop = calloop::EventLoop::try_new().unwrap();
+    let loop_handle = event_loop.handle();
+
+    WaylandSource::new(conn, event_queue).insert(loop_handle.clone()).unwrap();
+
+    loop_handle.insert_source(channel, |event, _metadata, app_state: &mut AppState| {
+        if let calloop::channel::Event::Msg(msg) = event {
+            app_state.handle_user_event(msg);
+        }
+    }).unwrap();
+
+    loop {
+        let timeout = if app.redraw {
+            std::time::Duration::from_millis(0)
+        } else {
+            std::time::Duration::from_millis(16)
+        };
+        event_loop.dispatch(timeout, &mut app).unwrap();
+
+        if app.exit || app.state.as_ref().map(|s| s.exit_requested).unwrap_or(false) {
+            break;
+        }
+
+        if app.redraw {
+            app.redraw = false;
+            if let Some(state) = &mut app.state {
+                if state.render() {
+                    app.redraw = true;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5683,4 +6207,30 @@ mod tests {
             _ => panic!("Expected AddNode"),
         }
     }
+
+    #[test]
+    fn test_get_next_visible_pane() {
+        // Without spreadsheet (3 panes: LEFT, RIGHT, PARAM)
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, false, false), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, false, false), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, false, false), LEFT_MENUBAR_IDX);
+
+        // With spreadsheet (4 panes: LEFT, RIGHT, PARAM, SPREADSHEET)
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, false), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, false), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, false), SPREADSHEET_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, false), LEFT_MENUBAR_IDX);
+
+        // Reverse cycling with shift key (without spreadsheet)
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, false, true), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, false, true), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, false, true), LEFT_MENUBAR_IDX);
+
+        // Reverse cycling with shift key (with spreadsheet)
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true), SPREADSHEET_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true), LEFT_MENUBAR_IDX);
+    }
 }
+

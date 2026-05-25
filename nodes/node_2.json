@@ -1,7 +1,0 @@
-{
-  "name": "Node 2",
-  "params": [
-    { "name": "IP", "default": "10.0.0.1" },
-    { "name": "Port", "default": "443" }
-  ]
-}
