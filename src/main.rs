@@ -5310,6 +5310,7 @@ impl AppState {
                 logical_key,
                 text: event.utf8.clone(),
                 repeat: false,
+                ctrl: st.modifiers.ctrl,
             };
 
             let ev = WindowEvent::KeyboardInput { event: custom_event };
