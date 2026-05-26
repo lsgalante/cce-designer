@@ -2852,14 +2852,15 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         xdg_shell_state: &XdgShell,
         pw: u32,
         ph: u32,
+        scale: f64,
     ) -> Self {
         let settings = DesignSettings::load();
-        let scale = 2.0f64; // Default to 2.0 (high-DPI)
         let lw = pw as f32 / scale as f32;
         let lh = ph as f32 / scale as f32;
         let sw = lw;
 
         let wl_surface = compositor_state.create_surface(qh);
+        wl_surface.set_buffer_scale(scale as i32);
         let window = xdg_shell_state.create_window(wl_surface.clone(), WindowDecorations::None, qh);
         window.set_title("Clear Design Interface");
         window.set_app_id("clear-design-interface");
@@ -4589,7 +4590,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     self.widgets[idx].keyboard_input(event)
                 } else { false }
             }
-            _ => false,
         }
     }
 
@@ -4946,8 +4946,8 @@ struct AppState {
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
 
-    window: XdgWindow,
-    surface: wl_surface::WlSurface,
+    window: Option<XdgWindow>,
+    surface: Option<wl_surface::WlSurface>,
 
     state: Option<State>,
     exit: bool,
@@ -4962,6 +4962,7 @@ impl CompositorHandler for AppState {
         _surface: &wl_surface::WlSurface,
         scale_factor: i32,
     ) {
+        _surface.set_buffer_scale(scale_factor);
         if let Some(state) = &mut self.state {
             state.scale = scale_factor as f64;
             let pw = (state.width as f64 * state.scale) as u32;
@@ -5096,15 +5097,14 @@ impl PointerHandler for AppState {
     ) {
         use smithay_client_toolkit::seat::pointer::PointerEventKind;
         for event in events {
-            let (x, y) = event.position;
             if let Some(st) = &mut self.state {
-                let scale = st.scale;
+                let (cx, cy) = clear_ui::wayland::scale_pointer_pos(event.position, st.scale);
                 match &event.kind {
                     PointerEventKind::Motion { .. } => {
                         let ev = WindowEvent::CursorMoved {
                             position: LocalPosition {
-                                x: x * scale,
-                                y: y * scale,
+                                x: cx as f64,
+                                y: cy as f64,
                             },
                         };
                         self.process_event(ev);
@@ -5219,7 +5219,9 @@ impl WindowHandler for AppState {
             let width = w.get();
             let height = h.get();
             if let Some(state) = &mut self.state {
-                state.resize(width, height);
+                let pw = (width as f64 * state.scale) as u32;
+                let ph = (height as f64 * state.scale) as u32;
+                state.resize(pw, ph);
             }
         }
         self.redraw = true;
@@ -5800,14 +5802,6 @@ fn main() {
     let seat_state = SeatState::new(&globals, &qh);
     let output_state = OutputState::new(&globals, &qh);
 
-    let state = pollster::block_on(State::new(
-        &conn,
-        &qh,
-        &compositor_state,
-        &xdg_shell_state,
-        1280, 800
-    ));
-
     let mut app = AppState {
         registry_state: RegistryState::new(&globals),
         compositor_state,
@@ -5818,12 +5812,33 @@ fn main() {
         seats: Vec::new(),
         pointer: None,
         keyboard: None,
-        window: state.window.clone(),
-        surface: state.wl_surface.clone(),
-        state: Some(state),
+        window: None,
+        surface: None,
+        state: None,
         exit: false,
         redraw: true,
     };
+
+    // Perform a roundtrip to populate output_state with active output scales
+    event_queue.roundtrip(&mut app).unwrap();
+
+    let scale = clear_ui::wayland::detect_scale_factor(&app.output_state);
+
+    let pw = (1280.0 * scale) as u32;
+    let ph = (800.0 * scale) as u32;
+
+    let state = pollster::block_on(State::new(
+        &conn,
+        &qh,
+        &app.compositor_state,
+        &app.xdg_shell_state,
+        pw, ph,
+        scale,
+    ));
+
+    app.window = Some(state.window.clone());
+    app.surface = Some(state.wl_surface.clone());
+    app.state = Some(state);
 
     let (sender, channel) = calloop::channel::channel::<CustomEvent>();
 
