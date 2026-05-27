@@ -4934,6 +4934,29 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 }
 
+struct PressedKey {
+    logical_key: clear_ui::widget::Key,
+    text: Option<String>,
+    first_pressed: std::time::Instant,
+    last_repeated: std::time::Instant,
+}
+
+fn is_repeatable_key(key: &clear_ui::widget::Key) -> bool {
+    use clear_ui::widget::{Key, NamedKey};
+    match key {
+        Key::Named(NamedKey::Backspace) |
+        Key::Named(NamedKey::Delete) |
+        Key::Named(NamedKey::ArrowLeft) |
+        Key::Named(NamedKey::ArrowRight) |
+        Key::Named(NamedKey::ArrowUp) |
+        Key::Named(NamedKey::ArrowDown) |
+        Key::Named(NamedKey::Home) |
+        Key::Named(NamedKey::End) |
+        Key::Character(_) => true,
+        _ => false,
+    }
+}
+
 struct AppState {
     registry_state: RegistryState,
     compositor_state: CompositorState,
@@ -4952,6 +4975,7 @@ struct AppState {
     state: Option<State>,
     exit: bool,
     redraw: bool,
+    pressed_key: Option<PressedKey>,
 }
 
 impl CompositorHandler for AppState {
@@ -5311,7 +5335,27 @@ impl AppState {
                 text: event.utf8.clone(),
                 repeat: false,
                 ctrl: st.modifiers.ctrl,
+                shift: st.modifiers.shift,
             };
+
+            if state == clear_ui::widget::ElementState::Pressed {
+                if is_repeatable_key(&custom_event.logical_key) {
+                    self.pressed_key = Some(PressedKey {
+                        logical_key: custom_event.logical_key.clone(),
+                        text: custom_event.text.clone(),
+                        first_pressed: std::time::Instant::now(),
+                        last_repeated: std::time::Instant::now(),
+                    });
+                } else {
+                    self.pressed_key = None;
+                }
+            } else if state == clear_ui::widget::ElementState::Released {
+                if let Some(ref pk) = self.pressed_key {
+                    if pk.logical_key == custom_event.logical_key {
+                        self.pressed_key = None;
+                    }
+                }
+            }
 
             let ev = WindowEvent::KeyboardInput { event: custom_event };
             self.process_event(ev);
@@ -5818,6 +5862,7 @@ fn main() {
         state: None,
         exit: false,
         redraw: true,
+        pressed_key: None,
     };
 
     // Perform a roundtrip to populate output_state with active output scales
@@ -6004,6 +6049,9 @@ fn main() {
         }
     }).unwrap();
 
+    const KEY_REPEAT_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+    const KEY_REPEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
     loop {
         let timeout = if app.redraw {
             std::time::Duration::from_millis(0)
@@ -6014,6 +6062,27 @@ fn main() {
 
         if app.exit || app.state.as_ref().map(|s| s.exit_requested).unwrap_or(false) {
             break;
+        }
+
+        if let Some(ref mut pk) = app.pressed_key {
+            let now = std::time::Instant::now();
+            if now.duration_since(pk.first_pressed) >= KEY_REPEAT_DELAY {
+                if now.duration_since(pk.last_repeated) >= KEY_REPEAT_INTERVAL {
+                    pk.last_repeated = now;
+                    if let Some(st) = &mut app.state {
+                        let custom_event = clear_ui::widget::KeyEvent {
+                            state: clear_ui::widget::ElementState::Pressed,
+                            logical_key: pk.logical_key.clone(),
+                            text: pk.text.clone(),
+                            repeat: true,
+                            ctrl: st.modifiers.ctrl,
+                            shift: st.modifiers.shift,
+                        };
+                        let ev = WindowEvent::KeyboardInput { event: custom_event };
+                        app.process_event(ev);
+                    }
+                }
+            }
         }
 
         if app.redraw {
