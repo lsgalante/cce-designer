@@ -2595,6 +2595,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 }
 
     fn on_path_changed(&mut self) {
+        self.drag_widget = None;
+        self.focused_widget = None;
         self.pan_x = 0.0;
         self.pan_y = 0.0;
         self.pan_velocity_x = 0.0;
@@ -4350,14 +4352,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             let idx = self.drag_widget.unwrap();
                             if self.node_slots.contains(&idx) {
                                 if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == idx) {
-                                    let pos = self.current_dir().children[slot_idx].position;
-                                    let (nx, ny) = self.find_empty_cell(pos.0, pos.1, Some(slot_idx));
-                                    self.current_dir_mut().children[slot_idx].position = (nx, ny);
-                                    self.left_offsets[slot_idx] = (nx, ny);
-                                    self.rebuild_positions();
-                                    self.apply_layout();
-                                    self.update_panel_bounds();
-                                    self.upload_vertices();
+                                    if slot_idx < self.current_dir().children.len() {
+                                        let pos = self.current_dir().children[slot_idx].position;
+                                        let (nx, ny) = self.find_empty_cell(pos.0, pos.1, Some(slot_idx));
+                                        self.current_dir_mut().children[slot_idx].position = (nx, ny);
+                                        self.left_offsets[slot_idx] = (nx, ny);
+                                        self.rebuild_positions();
+                                        self.apply_layout();
+                                        self.update_panel_bounds();
+                                        self.upload_vertices();
+                                    }
                                 }
                             }
                             self.widgets[idx].drag_end();
