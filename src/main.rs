@@ -4331,7 +4331,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                     if prev == i && t.elapsed() < std::time::Duration::from_millis(500) {
                                         let dir_idx = self.node_slots.iter().position(|&x| x == i).unwrap();
                                         let dir = self.current_dir();
-                                        if dir_idx < dir.children.len() && !dir.children[dir_idx].children.is_empty() {
+                                        if dir_idx < dir.children.len() && (dir.children[dir_idx].node_type == "node" || dir.children[dir_idx].node_type == "opencl" || !dir.children[dir_idx].children.is_empty()) {
                                             self.current_path.push(dir_idx);
                                             self.on_path_changed();
                                             changed = true;
@@ -4543,8 +4543,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                                 if let Some(focused) = self.focused_widget {
                                                     if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == focused) {
                                                         let dir = self.current_dir();
-                                                        if slot_idx < dir.children.len() && !dir.children[slot_idx].children.is_empty() {
-                                                            self.current_path.push(slot_idx);
+                                                         if slot_idx < dir.children.len() && (dir.children[slot_idx].node_type == "node" || dir.children[slot_idx].node_type == "opencl" || !dir.children[slot_idx].children.is_empty()) {
+                                                             self.current_path.push(slot_idx);
                                                             self.on_path_changed();
                                                             changed = true;
                                                         }
@@ -4559,6 +4559,95 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                         "=" | "+" => {
                                             self.zoom(1.15, None);
                                             changed = true;
+                                        }
+                                        "f" | "F" => {
+                                            if self.focused_pane == LEFT_MENUBAR_IDX {
+                                                let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
+                                                if active_nodes == 0 {
+                                                    self.grid_size_x = 80.0;
+                                                    self.grid_size_y = 40.0;
+                                                    self.skipped_col_w = 20.0;
+                                                    self.skipped_row_h = 20.0;
+                                                    self.pan_x = 20.0;
+                                                    self.pan_y = 20.0;
+                                                } else {
+                                                    let base_gx = 80.0;
+                                                    let base_gy = 40.0;
+                                                    let base_col_w = 20.0;
+                                                    let base_row_h = 20.0;
+
+                                                    let mut b_xmin = f32::MAX;
+                                                    let mut b_xmax = f32::MIN;
+                                                    let mut b_ymin = f32::MAX;
+                                                    let mut b_ymax = f32::MIN;
+
+                                                    for slot_idx in 0..active_nodes {
+                                                        let (col, row) = self.left_offsets[slot_idx];
+                                                        let x_min = col * (base_gx + base_col_w);
+                                                        let x_max = x_min + base_gx;
+                                                        let y_min = row * (base_gy + base_row_h);
+                                                        let y_max = y_min + base_gy;
+
+                                                        if x_min < b_xmin { b_xmin = x_min; }
+                                                        if x_max > b_xmax { b_xmax = x_max; }
+                                                        if y_min < b_ymin { b_ymin = y_min; }
+                                                        if y_max > b_ymax { b_ymax = y_max; }
+                                                    }
+
+                                                    let w_base = b_xmax - b_xmin;
+                                                    let h_base = b_ymax - b_ymin;
+
+                                                    let viewport_w = self.content_left_w();
+                                                    let body_h = self.body_h();
+                                                    let viewport_h = body_h - MENUBAR_H - BREADCRUMB_H;
+
+                                                    let padding = 40.0;
+                                                    let padded_w = (viewport_w - 2.0 * padding).max(10.0);
+                                                    let padded_h = (viewport_h - 2.0 * padding).max(10.0);
+
+                                                    let fx = padded_w / w_base;
+                                                    let fy = padded_h / h_base;
+                                                    let mut f = fx.min(fy);
+
+                                                    f = f.min(1.0).max(30.0 / base_gx);
+
+                                                    self.grid_size_x = (base_gx * f).clamp(30.0, 500.0);
+                                                    self.grid_size_y = (base_gy * f).clamp(15.0, 250.0);
+                                                    self.skipped_col_w = base_col_w * f;
+                                                    self.skipped_row_h = base_row_h * f;
+
+                                                    let mut actual_xmin = f32::MAX;
+                                                    let mut actual_xmax = f32::MIN;
+                                                    let mut actual_ymin = f32::MAX;
+                                                    let mut actual_ymax = f32::MIN;
+
+                                                    for slot_idx in 0..active_nodes {
+                                                        let (col, row) = self.left_offsets[slot_idx];
+                                                        let x_min = col * (self.grid_size_x + self.skipped_col_w);
+                                                        let x_max = x_min + self.grid_size_x;
+                                                        let y_min = row * (self.grid_size_y + self.skipped_row_h);
+                                                        let y_max = y_min + self.grid_size_y;
+
+                                                        if x_min < actual_xmin { actual_xmin = x_min; }
+                                                        if x_max > actual_xmax { actual_xmax = x_max; }
+                                                        if y_min < actual_ymin { actual_ymin = y_min; }
+                                                        if y_max > actual_ymax { actual_ymax = y_max; }
+                                                    }
+
+                                                    let actual_w = actual_xmax - actual_xmin;
+                                                    let actual_h = actual_ymax - actual_ymin;
+
+                                                    self.pan_x = (viewport_w - actual_w) / 2.0 - actual_xmin;
+                                                    self.pan_y = (viewport_h - actual_h) / 2.0 - actual_ymin;
+                                                }
+
+                                                self.sync_grid_settings();
+                                                self.rebuild_positions();
+                                                self.apply_layout();
+                                                self.update_panel_bounds();
+                                                self.upload_vertices();
+                                                changed = true;
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -5628,7 +5717,7 @@ impl AppState {
                         }
                         HttpAction::Enter { slot } => {
                             let dir = state.current_dir();
-                            if slot < dir.children.len() && !dir.children[slot].children.is_empty() {
+                            if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "opencl" || !dir.children[slot].children.is_empty()) {
                                 state.current_path.push(slot);
                                 state.on_path_changed();
                                 needs_redraw = true;
