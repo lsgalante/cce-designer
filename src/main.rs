@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 use std::fs;
 use std::path::Path;
@@ -7,16 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 
 use serde::{Deserialize, Serialize};
 
-use opencl3::platform::get_platforms;
-use opencl3::device::{Device, CL_DEVICE_TYPE_GPU, CL_DEVICE_TYPE_CPU};
-use opencl3::context::Context;
-use opencl3::command_queue::CommandQueue;
-use opencl3::program::Program;
-use opencl3::kernel::{Kernel, ExecuteKernel};
-use opencl3::memory::{Buffer as ClBuffer, CL_MEM_READ_WRITE};
-use opencl3::types::{cl_float, cl_int, CL_TRUE};
-
-use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey, Position};
+use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -26,7 +16,7 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     seat::{
         keyboard::KeyboardHandler,
-        pointer::PointerHandler,
+        pointer::{PointerHandler, ThemedPointer, ThemeSpec, CursorIcon},
         Capability, SeatHandler, SeatState,
     },
     shell::{
@@ -44,6 +34,9 @@ use wayland_client::{
     Connection, QueueHandle, Proxy,
 };
 use calloop_wayland_source::WaylandSource;
+
+mod geometry;
+use geometry::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TouchPhase {
@@ -1390,6 +1383,10 @@ impl Widget for ConfigDialog {
         if !self.visible { return false; }
         true
     }
+
+    fn z_index(&self) -> i32 {
+        200
+    }
 }
 
 struct NodePalette {
@@ -1475,6 +1472,10 @@ impl Widget for NodePalette {
         }
         labels
     }
+
+    fn z_index(&self) -> i32 {
+        200
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1536,578 +1537,6 @@ impl Vertex {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-enum GAttribute {
-    Float(f32),
-    Float2([f32; 2]),
-    Float3([f32; 3]),
-    Float4([f32; 4]),
-}
-
-#[derive(Clone, Debug)]
-struct GVertex {
-    pos: [f32; 3],
-    col: [f32; 3],
-    attributes: std::collections::HashMap<String, GAttribute>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct Geometry {
-    vertices: Vec<GVertex>,
-}
-
-impl Geometry {
-    fn new() -> Self {
-        Geometry { vertices: Vec::new() }
-    }
-
-    fn merge(&mut self, other: Geometry) {
-        self.vertices.extend(other.vertices);
-    }
-
-    fn to_vertex3d_vec(&self) -> Vec<Vertex3D> {
-        self.vertices.iter().map(|v| Vertex3D {
-            position: v.pos,
-            color: v.col,
-        }).collect()
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex3D {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-
-impl Vertex3D {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-}
-
-fn cube_vertices() -> Vec<Vertex3D> {
-    let s = 0.5;
-    let data: &[([f32; 3], [f32; 3])] = &[
-        ([-s, -s, s], [0.8, 0.2, 0.2]), ([s, -s, s], [0.8, 0.2, 0.2]), ([s, s, s], [0.8, 0.2, 0.2]),
-        ([-s, -s, s], [0.8, 0.2, 0.2]), ([s, s, s], [0.8, 0.2, 0.2]), ([-s, s, s], [0.8, 0.2, 0.2]),
-        ([s, -s, -s], [0.2, 0.8, 0.2]), ([-s, -s, -s], [0.2, 0.8, 0.2]), ([-s, s, -s], [0.2, 0.8, 0.2]),
-        ([s, -s, -s], [0.2, 0.8, 0.2]), ([-s, s, -s], [0.2, 0.8, 0.2]), ([s, s, -s], [0.2, 0.8, 0.2]),
-        ([-s, s, s], [0.2, 0.2, 0.8]), ([s, s, s], [0.2, 0.2, 0.8]), ([s, s, -s], [0.2, 0.2, 0.8]),
-        ([-s, s, s], [0.2, 0.2, 0.8]), ([s, s, -s], [0.2, 0.2, 0.8]), ([-s, s, -s], [0.2, 0.2, 0.8]),
-        ([-s, -s, -s], [0.8, 0.8, 0.2]), ([s, -s, -s], [0.8, 0.8, 0.2]), ([s, -s, s], [0.8, 0.8, 0.2]),
-        ([-s, -s, -s], [0.8, 0.8, 0.2]), ([s, -s, s], [0.8, 0.8, 0.2]), ([-s, -s, s], [0.8, 0.8, 0.2]),
-        ([s, -s, s], [0.8, 0.2, 0.8]), ([s, -s, -s], [0.8, 0.2, 0.8]), ([s, s, -s], [0.8, 0.2, 0.8]),
-        ([s, -s, s], [0.8, 0.2, 0.8]), ([s, s, -s], [0.8, 0.2, 0.8]), ([s, s, s], [0.8, 0.2, 0.8]),
-        ([-s, -s, -s], [0.2, 0.8, 0.8]), ([-s, -s, s], [0.2, 0.8, 0.8]), ([-s, s, s], [0.2, 0.8, 0.8]),
-        ([-s, -s, -s], [0.2, 0.8, 0.8]), ([-s, s, s], [0.2, 0.8, 0.8]), ([-s, s, -s], [0.2, 0.8, 0.8]),
-    ];
-    data.iter().map(|&(p, c)| Vertex3D { position: p, color: c }).collect()
-}
-
-fn sphere_vertices(center: Vec3, radius: f32) -> Geometry {
-    let lat_steps = 16;
-    let lon_steps = 24;
-    let mut vertices = Vec::new();
-
-    for lat in 0..lat_steps {
-        let theta0 = std::f32::consts::PI * lat as f32 / lat_steps as f32;
-        let theta1 = std::f32::consts::PI * (lat + 1) as f32 / lat_steps as f32;
-        for lon in 0..lon_steps {
-            let phi0 = std::f32::consts::TAU * lon as f32 / lon_steps as f32;
-            let phi1 = std::f32::consts::TAU * (lon + 1) as f32 / lon_steps as f32;
-            let p00 = sphere_point(center, radius, theta0, phi0);
-            let p10 = sphere_point(center, radius, theta1, phi0);
-            let p11 = sphere_point(center, radius, theta1, phi1);
-            let p01 = sphere_point(center, radius, theta0, phi1);
-            vertices.push(sphere_vertex(center, p00));
-            vertices.push(sphere_vertex(center, p10));
-            vertices.push(sphere_vertex(center, p11));
-            vertices.push(sphere_vertex(center, p00));
-            vertices.push(sphere_vertex(center, p11));
-            vertices.push(sphere_vertex(center, p01));
-        }
-    }
-
-    Geometry { vertices }
-}
-
-fn sphere_point(center: Vec3, radius: f32, theta: f32, phi: f32) -> Vec3 {
-    center + Vec3::new(
-        radius * theta.sin() * phi.cos(),
-        radius * theta.cos(),
-        radius * theta.sin() * phi.sin(),
-    )
-}
-
-fn sphere_vertex(center: Vec3, point: Vec3) -> GVertex {
-    let n = (point - center).normalize_or_zero();
-    let u = 0.5 + n.z.atan2(n.x) / std::f32::consts::TAU;
-    let v = 0.5 - n.y.asin() / std::f32::consts::PI;
-
-    let pos = point.to_array();
-    let col = [0.35 + n.x.abs() * 0.35, 0.45 + n.y.abs() * 0.35, 0.85];
-
-    let mut attributes = std::collections::HashMap::new();
-    attributes.insert("Norm".to_string(), GAttribute::Float3(n.to_array()));
-    attributes.insert("UV".to_string(), GAttribute::Float2([u, v]));
-
-    GVertex {
-        pos,
-        col,
-        attributes,
-    }
-}
-
-fn line_vertices(start: Vec3, end: Vec3, thickness: f32) -> Geometry {
-    let mut vertices = Vec::new();
-    let dir = (end - start).normalize_or_zero();
-    if dir.length_squared() < 0.0001 {
-        return Geometry { vertices };
-    }
-    
-    // Find two orthogonal vectors to dir
-    let up = if dir.x.abs() > 0.9 { Vec3::Y } else { Vec3::X };
-    let u = dir.cross(up).normalize();
-    let v = dir.cross(u).normalize();
-    
-    let t = thickness * 0.5;
-    
-    // 8 corners of the box
-    let c0 = start - t * u - t * v;
-    let c1 = start + t * u - t * v;
-    let c2 = start + t * u + t * v;
-    let c3 = start - t * u + t * v;
-    
-    let c4 = end - t * u - t * v;
-    let c5 = end + t * u - t * v;
-    let c6 = end + t * u + t * v;
-    let c7 = end - t * u + t * v;
-    
-    // Helper to add a triangle face
-    let mut add_quad = |p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, normal: Vec3, color: [f32; 3]| {
-        let make_vertex = |p: Vec3| {
-            let mut attributes = std::collections::HashMap::new();
-            attributes.insert("Norm".to_string(), GAttribute::Float3(normal.to_array()));
-            attributes.insert("UV".to_string(), GAttribute::Float2([0.0, 0.0]));
-            GVertex {
-                pos: p.to_array(),
-                col: color,
-                attributes,
-            }
-        };
-        // Triangle 1: p0, p1, p2
-        vertices.push(make_vertex(p0));
-        vertices.push(make_vertex(p1));
-        vertices.push(make_vertex(p2));
-        // Triangle 2: p0, p2, p3
-        vertices.push(make_vertex(p0));
-        vertices.push(make_vertex(p2));
-        vertices.push(make_vertex(p3));
-    };
-
-    let col = [0.85, 0.45, 0.35]; // distinct color for lines
-    
-    // Front face (start cap)
-    add_quad(c0, c1, c2, c3, -dir, col);
-    // Back face (end cap)
-    add_quad(c5, c4, c7, c6, dir, col);
-    // Left face
-    add_quad(c4, c0, c3, c7, -u, col);
-    // Right face
-    add_quad(c1, c5, c6, c2, u, col);
-    // Top face
-    add_quad(c3, c2, c6, c7, v, col);
-    // Bottom face
-    add_quad(c0, c4, c5, c1, -v, col);
-
-    Geometry { vertices }
-}
-
-fn node_param_f32(node: &FsNode, name: &str, fallback: f32) -> f32 {
-    node.params.iter()
-        .find(|p| p.name.eq_ignore_ascii_case(name))
-        .and_then(|p| p.default.parse::<f32>().ok())
-        .unwrap_or(fallback)
-}
-
-fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> {
-    if geom.vertices.is_empty() {
-        return Ok(());
-    }
-
-    let platforms = get_platforms().map_err(|e| format!("Failed to get platforms: {:?}", e))?;
-    if platforms.is_empty() {
-        return Err("No OpenCL platforms found".to_string());
-    }
-
-    // Try to find a GPU device first, then fallback to CPU
-    let mut device_id = None;
-    for platform in &platforms {
-        if let Ok(devices) = platform.get_devices(CL_DEVICE_TYPE_GPU) {
-            if !devices.is_empty() {
-                device_id = Some(devices[0]);
-                break;
-            }
-        }
-    }
-    if device_id.is_none() {
-        for platform in &platforms {
-            if let Ok(devices) = platform.get_devices(CL_DEVICE_TYPE_CPU) {
-                if !devices.is_empty() {
-                    device_id = Some(devices[0]);
-                    break;
-                }
-            }
-        }
-    }
-    let device_id = device_id.ok_or_else(|| "No OpenCL devices found".to_string())?;
-    let device = Device::new(device_id);
-
-    let context = Context::from_device(&device).map_err(|e| format!("Failed to create Context: {:?}", e))?;
-    let queue = unsafe { CommandQueue::create(&context, device_id, 0) }
-        .map_err(|e| format!("Failed to create CommandQueue: {:?}", e))?;
-
-    let mut program = Program::create_from_source(&context, code).map_err(|e| format!("Failed to create Program: {:?}", e))?;
-    if let Err(e) = program.build(&[device_id], "") {
-        let log = program.get_build_log(device_id).unwrap_or_else(|_| "Failed to retrieve build log".to_string());
-        return Err(format!("OpenCL JIT compilation error: {}\nLog:\n{}", e, log));
-    }
-
-    let kernel = Kernel::create(&program, "process").map_err(|e| format!("Failed to create kernel 'process': {:?}", e))?;
-
-    let count = geom.vertices.len();
-
-    // Prepare flat position and color buffers
-    let mut pos_data: Vec<cl_float> = Vec::with_capacity(count * 3);
-    let mut col_data: Vec<cl_float> = Vec::with_capacity(count * 3);
-    for v in &geom.vertices {
-        pos_data.extend_from_slice(&v.pos);
-        col_data.extend_from_slice(&v.col);
-    }
-
-    // Create device buffers
-    let mut pos_buf = unsafe {
-        ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, count * 3, std::ptr::null_mut())
-            .map_err(|e| format!("Failed to create positions buffer: {:?}", e))?
-    };
-    let mut col_buf = unsafe {
-        ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, count * 3, std::ptr::null_mut())
-            .map_err(|e| format!("Failed to create colors buffer: {:?}", e))?
-    };
-
-    // Write data to device
-    let _write_pos_event = unsafe {
-        queue.enqueue_write_buffer(&mut pos_buf, CL_TRUE, 0, &pos_data, &[])
-            .map_err(|e| format!("Failed to write positions buffer: {:?}", e))?
-    };
-    let _write_col_event = unsafe {
-        queue.enqueue_write_buffer(&mut col_buf, CL_TRUE, 0, &col_data, &[])
-            .map_err(|e| format!("Failed to write colors buffer: {:?}", e))?
-    };
-
-    // Execute kernel
-    let kernel_event = unsafe {
-        ExecuteKernel::new(&kernel)
-            .set_arg(&pos_buf)
-            .set_arg(&col_buf)
-            .set_arg(&(count as cl_int))
-            .set_global_work_size(count)
-            .enqueue_nd_range(&queue)
-            .map_err(|e| format!("Failed to enqueue kernel: {:?}", e))?
-    };
-
-    kernel_event.wait().map_err(|e| format!("Failed to wait for kernel: {:?}", e))?;
-
-    // Read data back from device
-    let _read_pos_event = unsafe {
-        queue.enqueue_read_buffer(&pos_buf, CL_TRUE, 0, &mut pos_data, &[])
-            .map_err(|e| format!("Failed to read positions buffer: {:?}", e))?
-    };
-    let _read_col_event = unsafe {
-        queue.enqueue_read_buffer(&col_buf, CL_TRUE, 0, &mut col_data, &[])
-            .map_err(|e| format!("Failed to read colors buffer: {:?}", e))?
-    };
-
-    // Write back to Geometry
-    for i in 0..count {
-        geom.vertices[i].pos = [pos_data[i * 3], pos_data[i * 3 + 1], pos_data[i * 3 + 2]];
-        geom.vertices[i].col = [col_data[i * 3], col_data[i * 3 + 1], col_data[i * 3 + 2]];
-    }
-
-    Ok(())
-}
-
-fn network_sphere_vertices(root: &FsNode) -> Geometry {
-    fn visit(node: &FsNode, count: &mut usize, out: &mut Geometry) {
-        if node.node_type.eq_ignore_ascii_case("sphere") {
-            let idx = *count;
-            *count += 1;
-            if node.geometry_visible {
-                let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                out.merge(sphere_vertices(center, node_param_f32(node, "Radius", 0.5).max(0.05)));
-            }
-        } else if node.node_type.eq_ignore_ascii_case("line") {
-            let idx = *count;
-            *count += 1;
-            if node.geometry_visible {
-                let start = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                let length = node_param_f32(node, "Length", 1.0);
-                let thickness = node_param_f32(node, "Thickness", 0.02);
-                let end = start + Vec3::new(0.0, length, 0.0);
-                out.merge(line_vertices(start, end, thickness));
-            }
-        }
-        for child in &node.children {
-            visit(child, count, out);
-        }
-    }
-
-    let mut out = Geometry::new();
-    let mut count = 0;
-    for child in &root.children {
-        visit(child, &mut count, &mut out);
-    }
-    out
-}
-
-fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {
-    fn visit(node: &FsNode, target: &FsNode, count: &mut usize) -> Option<usize> {
-        let is_target = std::ptr::eq(node, target);
-        if node.node_type.eq_ignore_ascii_case("sphere") || node.node_type.eq_ignore_ascii_case("line") {
-            let idx = *count;
-            *count += 1;
-            if is_target {
-                return Some(idx);
-            }
-        }
-        for child in &node.children {
-            if let Some(res) = visit(child, target, count) {
-                return Some(res);
-            }
-        }
-        None
-    }
-    let mut count = 0;
-    for child in &root.children {
-        if let Some(res) = visit(child, target, &mut count) {
-            return Some(res);
-        }
-    }
-    None
-}
-
-fn add_box(center: Vec3, size: Vec3, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
-    let dx = size.x * 0.5;
-    let dy = size.y * 0.5;
-    let dz = size.z * 0.5;
-
-    let faces = [
-        // front (z = +dz)
-        [-dx, -dy, dz,  dx, -dy, dz,  dx, dy, dz,  -dx, -dy, dz,  dx, dy, dz,  -dx, dy, dz],
-        // back (z = -dz)
-        [-dx, -dy, -dz,  -dx, dy, -dz,  dx, dy, -dz,  -dx, -dy, -dz,  dx, dy, -dz,  dx, -dy, -dz],
-        // left (x = -dx)
-        [-dx, -dy, -dz,  -dx, -dy, dz,  -dx, dy, dz,  -dx, -dy, -dz,  -dx, dy, dz,  -dx, dy, -dz],
-        // right (x = +dx)
-        [dx, -dy, -dz,  dx, dy, -dz,  dx, dy, dz,  dx, -dy, -dz,  dx, dy, dz,  dx, -dy, dz],
-        // top (y = +dy)
-        [-dx, dy, -dz,  -dx, dy, dz,  dx, dy, dz,  -dx, dy, -dz,  dx, dy, dz,  dx, dy, -dz],
-        // bottom (y = -dy)
-        [-dx, -dy, -dz,  dx, -dy, -dz,  dx, -dy, dz,  -dx, -dy, -dz,  dx, -dy, dz,  -dx, -dy, dz],
-    ];
-
-    for face in &faces {
-        for chunk in face.chunks(3) {
-            verts.push(Vertex3D {
-                position: [center.x + chunk[0], center.y + chunk[1], center.z + chunk[2]],
-                color,
-            });
-        }
-    }
-}
-
-fn add_pyramid_x(base_center: Vec3, base_size: f32, height: f32, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
-    let s = base_size * 0.5;
-    let x = base_center.x;
-    let y = base_center.y;
-    let z = base_center.z;
-    
-    let p0 = Vec3::new(x, y - s, z - s);
-    let p1 = Vec3::new(x, y + s, z - s);
-    let p2 = Vec3::new(x, y + s, z + s);
-    let p3 = Vec3::new(x, y - s, z + s);
-    let tip = Vec3::new(x + height, y, z);
-    
-    // Base (two triangles)
-    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
-    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
-    verts.push(Vertex3D { position: [p1.x, p1.y, p1.z], color });
-    
-    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
-    verts.push(Vertex3D { position: [p3.x, p3.y, p3.z], color });
-    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
-    
-    // Sides
-    let sides = [
-        (p0, p3), (p3, p2), (p2, p1), (p1, p0)
-    ];
-    for (a, b) in &sides {
-        verts.push(Vertex3D { position: [a.x, a.y, a.z], color });
-        verts.push(Vertex3D { position: [tip.x, tip.y, tip.z], color });
-        verts.push(Vertex3D { position: [b.x, b.y, b.z], color });
-    }
-}
-
-fn add_pyramid_y(base_center: Vec3, base_size: f32, height: f32, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
-    let s = base_size * 0.5;
-    let x = base_center.x;
-    let y = base_center.y;
-    let z = base_center.z;
-    
-    let p0 = Vec3::new(x - s, y, z - s);
-    let p1 = Vec3::new(x + s, y, z - s);
-    let p2 = Vec3::new(x + s, y, z + s);
-    let p3 = Vec3::new(x - s, y, z + s);
-    let tip = Vec3::new(x, y + height, z);
-    
-    // Base (two triangles)
-    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
-    verts.push(Vertex3D { position: [p1.x, p1.y, p1.z], color });
-    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
-    
-    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
-    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
-    verts.push(Vertex3D { position: [p3.x, p3.y, p3.z], color });
-    
-    // Sides
-    let sides = [
-        (p0, p1), (p1, p2), (p2, p3), (p3, p0)
-    ];
-    for (a, b) in &sides {
-        verts.push(Vertex3D { position: [a.x, a.y, a.z], color });
-        verts.push(Vertex3D { position: [tip.x, tip.y, tip.z], color });
-        verts.push(Vertex3D { position: [b.x, b.y, b.z], color });
-    }
-}
-
-fn add_pyramid_z(base_center: Vec3, base_size: f32, height: f32, color: [f32; 3], verts: &mut Vec<Vertex3D>) {
-    let s = base_size * 0.5;
-    let x = base_center.x;
-    let y = base_center.y;
-    let z = base_center.z;
-    
-    let p0 = Vec3::new(x - s, y - s, z);
-    let p1 = Vec3::new(x + s, y - s, z);
-    let p2 = Vec3::new(x + s, y + s, z);
-    let p3 = Vec3::new(x - s, y + s, z);
-    let tip = Vec3::new(x, y, z + height);
-    
-    // Base (two triangles)
-    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
-    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
-    verts.push(Vertex3D { position: [p1.x, p1.y, p1.z], color });
-    
-    verts.push(Vertex3D { position: [p0.x, p0.y, p0.z], color });
-    verts.push(Vertex3D { position: [p3.x, p3.y, p3.z], color });
-    verts.push(Vertex3D { position: [p2.x, p2.y, p2.z], color });
-    
-    // Sides
-    let sides = [
-        (p0, p3), (p3, p2), (p2, p1), (p1, p0)
-    ];
-    for (a, b) in &sides {
-        verts.push(Vertex3D { position: [a.x, a.y, a.z], color });
-        verts.push(Vertex3D { position: [tip.x, tip.y, tip.z], color });
-        verts.push(Vertex3D { position: [b.x, b.y, b.z], color });
-    }
-}
-
-fn origin_vectors_vertices(scale: f32) -> Vec<Vertex3D> {
-    let mut verts = Vec::new();
-    
-    let t = 0.008 * scale; 
-    let a_size = 0.024 * scale;
-    let a_height = 0.15 * scale;
-    let axis_len = 0.85 * scale;
-    let half_axis_len = 0.425 * scale;
-    
-    // Red for X-axis (points to +scale)
-    let red = [0.9, 0.1, 0.1];
-    add_box(Vec3::new(half_axis_len, 0.0, 0.0), Vec3::new(axis_len, t, t), red, &mut verts);
-    add_pyramid_x(Vec3::new(axis_len, 0.0, 0.0), a_size, a_height, red, &mut verts);
-
-    // Green for Y-axis (points to +scale)
-    let green = [0.1, 0.8, 0.1];
-    add_box(Vec3::new(0.0, half_axis_len, 0.0), Vec3::new(t, axis_len, t), green, &mut verts);
-    add_pyramid_y(Vec3::new(0.0, axis_len, 0.0), a_size, a_height, green, &mut verts);
-
-    // Blue for Z-axis (points to +scale)
-    let blue = [0.1, 0.1, 0.9];
-    add_box(Vec3::new(0.0, 0.0, half_axis_len), Vec3::new(t, t, axis_len), blue, &mut verts);
-    add_pyramid_z(Vec3::new(0.0, 0.0, axis_len), a_size, a_height, blue, &mut verts);
-
-    verts
-}
-
-fn camera_pivot_vertices(scale: f32) -> Vec<Vertex3D> {
-    let mut verts = Vec::new();
-    let t = 0.002 * scale; 
-    let len = 0.4 * scale;
-    
-    // Red for X-axis
-    let red = [0.9, 0.1, 0.1];
-    add_box(Vec3::new(len * 0.5, 0.0, 0.0), Vec3::new(len, t, t), red, &mut verts);
-
-    // Green for Y-axis
-    let green = [0.1, 0.8, 0.1];
-    add_box(Vec3::new(0.0, len * 0.5, 0.0), Vec3::new(t, len, t), green, &mut verts);
-
-    // Blue for Z-axis
-    let blue = [0.1, 0.1, 0.9];
-    add_box(Vec3::new(0.0, 0.0, len * 0.5), Vec3::new(t, t, len), blue, &mut verts);
-
-    verts
-}
-
-fn grid_vertices(thickness: f32) -> Vec<Vertex3D> {
-    let color = [0.35, 0.35, 0.40];
-    let range = 4.0;
-    let step = 1.0;
-    let mut geom = Geometry::new();
-
-    let mut z = -range;
-    while z <= range {
-        let start = Vec3::new(-range, 0.0, z);
-        let end = Vec3::new(range, 0.0, z);
-        let mut line_geom = line_vertices(start, end, thickness);
-        for v in &mut line_geom.vertices {
-            v.col = color;
-        }
-        geom.merge(line_geom);
-        z += step;
-    }
-
-    let mut x = -range;
-    while x <= range {
-        let start = Vec3::new(x, 0.0, -range);
-        let end = Vec3::new(x, 0.0, range);
-        let mut line_geom = line_vertices(start, end, thickness);
-        for v in &mut line_geom.vertices {
-            v.col = color;
-        }
-        geom.merge(line_geom);
-        x += step;
-    }
-
-    geom.to_vertex3d_vec()
-}
 
 fn quad_vertices(
     x: f32, y: f32, w: f32, h: f32,
@@ -3129,8 +2558,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         let status_buffer = make_text_buffer(&mut font_system, "Ready", 12.0);
 
-        let splitter1_x = (sw - SPLITTER_W) * 0.25;
-        let splitter2_x = (sw - SPLITTER_W) * 0.75;
+        let splitter1_x = (sw - 2.0 * SPLITTER_W) / 3.0;
+        let splitter2_x = splitter1_x + SPLITTER_W + (sw - 2.0 * SPLITTER_W) / 3.0;
         let (depth_texture, depth_texture_view) = {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Depth Texture"),
@@ -3195,7 +2624,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             .collect();
 
         let mut widgets: Vec<Box<dyn Widget>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom"]).with_item("Help", &["About"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom"]).with_item("Help", &["About"]).with_z_index(110)),
             Box::new(ContentBg::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
@@ -3523,11 +2952,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
     fn sync_pane_focus(&mut self) {
         for &menubar_idx in &[LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
-            if menubar_idx == self.focused_pane {
-                self.widgets[menubar_idx].focus();
-            } else {
-                self.widgets[menubar_idx].unfocus();
-            }
+            self.widgets[menubar_idx].set_selected(menubar_idx == self.focused_pane);
         }
     }
 
@@ -3680,7 +3105,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         let clip = (0.0, node_area_y, self.content_left_w(), self.height - STATUS_H);
 
-        for (i, w) in self.widgets.iter().enumerate() {
+        let mut draw_order: Vec<usize> = (0..self.widgets.len()).collect();
+        draw_order.sort_by_key(|&i| self.widgets[i].z_index());
+
+        for &i in &draw_order {
+            let w = &self.widgets[i];
             if i == CONTENT_IDX {
                 verts.extend(widget_vertices(w.as_ref(), sw, sh));
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
@@ -3870,6 +3299,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
     fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
+            let old_width = self.width;
             self.physical_width = width;
             self.physical_height = height;
             self.width = width as f32 / self.scale as f32;
@@ -3881,6 +3311,15 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             let (tex, view) = self.create_depth_texture();
             self.depth_texture = tex;
             self.depth_texture_view = view;
+
+            if old_width > 0.0 {
+                let r = self.width / old_width;
+                self.splitter1_x *= r;
+                self.splitter2_x *= r;
+                let body_h = self.body_h();
+                self.widgets[SPLITTER1_IDX].set_rect(self.splitter1_x, HEADER_H, SPLITTER_W, body_h);
+                self.widgets[SPLITTER2_IDX].set_rect(self.splitter2_x, HEADER_H, SPLITTER_W, body_h);
+            }
 
             self.sync_layout();
             self.read_panel_offsets();
@@ -4256,8 +3695,23 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
                 match btn_state {
                     ElementState::Pressed => {
-                        let click_target = (0..self.widgets.len()).rev()
-                            .find(|&i| self.widgets[i].hit_test(self.cursor_x, self.cursor_y));
+                        eprintln!("[DEBUG] Left click at cursor logical coords: ({:.2}, {:.2})", self.cursor_x, self.cursor_y);
+                        let mut click_target = None;
+                        for i in 0..self.widgets.len() {
+                            if self.widgets[i].is_menu_open() && self.widgets[i].hit_test(self.cursor_x, self.cursor_y) {
+                                click_target = Some(i);
+                                break;
+                            }
+                        }
+                        if click_target.is_none() {
+                            click_target = (0..self.widgets.len()).rev()
+                                .find(|&i| self.widgets[i].hit_test(self.cursor_x, self.cursor_y));
+                        }
+                        eprintln!("[DEBUG] Selected click target: {:?}", click_target);
+                        if let Some(i) = click_target {
+                            let (rx, ry, rw, rh) = self.widgets[i].rect();
+                            eprintln!("[DEBUG] Target rect: ({:.2}, {:.2}, {:.2}, {:.2}), is_menu_bar: {}, is_menu_open: {}", rx, ry, rw, rh, self.widgets[i].is_menu_bar(), self.widgets[i].is_menu_open());
+                        }
 
                         // Determine new focused pane
                         let mut new_pane = None;
@@ -5059,7 +4513,7 @@ struct AppState {
     output_state: OutputState,
 
     seats: Vec<wl_seat::WlSeat>,
-    pointer: Option<wl_pointer::WlPointer>,
+    pointer: Option<ThemedPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
 
     window: Option<XdgWindow>,
@@ -5166,8 +4620,15 @@ impl SeatHandler for AppState {
         capability: Capability,
     ) {
         if capability == Capability::Pointer && self.pointer.is_none() {
-            let pointer = self.seat_state.get_pointer(qh, &seat).unwrap();
-            self.pointer = Some(pointer);
+            let surface = self.compositor_state.create_surface(qh);
+            let themed_pointer = self.seat_state.get_pointer_with_theme(
+                qh,
+                &seat,
+                self.shm_state.wl_shm(),
+                surface,
+                ThemeSpec::System,
+            ).unwrap();
+            self.pointer = Some(themed_pointer);
         }
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             let keyboard = self
@@ -5260,6 +4721,11 @@ impl PointerHandler for AppState {
                             phase: TouchPhase::Moved,
                         };
                         self.process_event(ev);
+                    }
+                    PointerEventKind::Enter { .. } => {
+                        if let Some(ref themed_pointer) = self.pointer {
+                            let _ = themed_pointer.set_cursor(_conn, CursorIcon::Default);
+                        }
                     }
                     _ => {}
                 }
@@ -5396,6 +4862,12 @@ impl AppState {
             xkeysym::Keysym::Tab => Key::Named(NamedKey::Tab),
             xkeysym::Keysym::Delete => Key::Named(NamedKey::Delete),
             xkeysym::Keysym::space => Key::Named(NamedKey::Space),
+            xkeysym::Keysym::comma => Key::Character(",".into()),
+            xkeysym::Keysym::g | xkeysym::Keysym::G => Key::Character("g".into()),
+            xkeysym::Keysym::e | xkeysym::Keysym::E => Key::Character("e".into()),
+            xkeysym::Keysym::a | xkeysym::Keysym::A => Key::Character("a".into()),
+            xkeysym::Keysym::f | xkeysym::Keysym::F => Key::Character("f".into()),
+            xkeysym::Keysym::grave => Key::Character("`".into()),
             _ => {
                 if let Some(ref text) = event.utf8 {
                     Key::Character(text.clone())
