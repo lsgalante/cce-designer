@@ -332,7 +332,7 @@ impl DesignSettings {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
         let mut path = std::path::PathBuf::from(home);
         path.push(".config");
-        path.push("clearwm");
+        path.push("ccec");
         path.push("design.json");
         path
     }
@@ -923,7 +923,7 @@ impl Widget for ConfigDialog {
         px >= self.x && px <= self.x + self.w && py >= self.y && py <= self.y + self.h
     }
 
-    fn cursor_moved(&mut self, px: f32, py: f32) -> bool {
+    fn on_cursor_moved(&mut self, px: f32, py: f32) -> bool {
         let was = self.hovered;
         self.hovered = self.hit_test(px, py);
         let (ppx, ppy, pw, _ph) = self.panel_rect();
@@ -2314,7 +2314,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: wgpu::PowerPreference::LowPower,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -4523,6 +4523,7 @@ struct AppState {
     exit: bool,
     redraw: bool,
     pressed_key: Option<PressedKey>,
+    inspector: Option<clear_ui::protocol::zclear_inspector_v1::ZclearInspectorV1>,
 }
 
 impl CompositorHandler for AppState {
@@ -4835,6 +4836,17 @@ impl ProvidesRegistryState for AppState {
         _qh: &QueueHandle<Self>,
         _name: u32,
         _interface: &str,
+    ) {}
+}
+
+impl wayland_client::Dispatch<clear_ui::protocol::zclear_inspector_v1::ZclearInspectorV1, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &clear_ui::protocol::zclear_inspector_v1::ZclearInspectorV1,
+        _event: clear_ui::protocol::zclear_inspector_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
     ) {}
 }
 
@@ -5411,6 +5423,7 @@ fn main() {
     let shm_state = Shm::bind(&globals, &qh).unwrap();
     let seat_state = SeatState::new(&globals, &qh);
     let output_state = OutputState::new(&globals, &qh);
+    let inspector = globals.bind(&qh, 1..=1, ()).ok();
 
     let mut app = AppState {
         registry_state: RegistryState::new(&globals),
@@ -5428,6 +5441,7 @@ fn main() {
         exit: false,
         redraw: true,
         pressed_key: None,
+        inspector,
     };
 
     // Perform a roundtrip to populate output_state with active output scales
@@ -5450,6 +5464,12 @@ fn main() {
     app.window = Some(state.window.clone());
     app.surface = Some(state.wl_surface.clone());
     app.state = Some(state);
+
+    if let Some(ref inspector) = app.inspector {
+        if let Some(ref surface) = app.surface {
+            inspector.register_client(surface);
+        }
+    }
 
     let (sender, channel) = calloop::channel::channel::<CustomEvent>();
 
@@ -5655,6 +5675,12 @@ fn main() {
             if let Some(state) = &mut app.state {
                 if state.render() {
                     app.redraw = true;
+                }
+                if let Some(ref inspector) = app.inspector {
+                    if let Some(ref surface) = app.surface {
+                        let json = clear_ui::widget::serialize_widgets(&state.widgets);
+                        inspector.update_state(surface, json);
+                    }
                 }
             }
         }
