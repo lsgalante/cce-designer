@@ -79,7 +79,7 @@ enum WindowEvent {
 
 use wgpu::util::DeviceExt;
 
-use clear_ui::widget::{Breadcrumb, Canvas, ColorSelector, ContentBg, MenuBar, Node, ParametersBg, Spinbox, Splitter, Spreadsheet, StatusBar, TextLabel, Toggle, ViewportBg, Widget};
+use clear_ui::widget::{Breadcrumb, Canvas, ColorSelector, ContentBg, MenuBar, Node, ParametersBg, Spinbox, Splitter, Spreadsheet, StatusBar, TextLabel, Toggle, ViewportBg, Widget, GraphNode, Graph};
 use clear_ui::colors;
 use clear_ui::layout::{RenderTarget, Section};
 
@@ -100,16 +100,15 @@ const CANVAS_IDX: usize = 6;
 const LEFT_MENUBAR_IDX: usize = 7;
 const RIGHT_MENUBAR_IDX: usize = 8;
 const PARAM_MENUBAR_IDX: usize = 9;
-const NODE_SLOT_START: usize = 10;
-const NODE_SLOT_COUNT: usize = 32;
-const STATUS_IDX: usize = NODE_SLOT_START + NODE_SLOT_COUNT;
-const BREADCRUMB_IDX: usize = STATUS_IDX + 1;
-const CONFIG_DIALOG_IDX: usize = BREADCRUMB_IDX + 1;
-const NODE_PALETTE_IDX: usize = CONFIG_DIALOG_IDX + 1;
-const SPREADSHEET_IDX: usize = NODE_PALETTE_IDX + 1;
-const SPREADSHEET_MENUBAR_IDX: usize = SPREADSHEET_IDX + 1;
+const STATUS_IDX: usize = 10;
+const BREADCRUMB_IDX: usize = 11;
+const CONFIG_DIALOG_IDX: usize = 12;
+const NODE_PALETTE_IDX: usize = 13;
+const SPREADSHEET_IDX: usize = 14;
+const SPREADSHEET_MENUBAR_IDX: usize = 15;
 
-const HEADER_H: f32 = 40.0;
+
+const HEADER_H: f32 = 26.0;
 const STATUS_H: f32 = 28.0;
 const MENUBAR_H: f32 = 26.0;
 const SPLITTER_W: f32 = 6.0;
@@ -196,6 +195,7 @@ enum HttpAction {
     MoveNode { slot: usize, x: f32, y: f32 },
     AddParam { slot: usize, name: String, param_type: String, default: String },
     DeleteParam { slot: usize, name: String },
+    ToggleCircularPane,
 }
 
 #[derive(Debug)]
@@ -282,6 +282,7 @@ fn load_fs_tree() -> FsNode {
 fn default_grid_thickness() -> f32 { 0.03 }
 fn default_show_camera_pivot() -> bool { false }
 fn default_camera_pivot_size() -> f32 { 1.0 }
+fn default_node_color() -> [f32; 3] { [0.10, 0.45, 0.70] }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct DesignSettings {
@@ -303,6 +304,8 @@ struct DesignSettings {
     show_camera_pivot_enabled: bool,
     #[serde(default = "default_camera_pivot_size")]
     camera_pivot_size: f32,
+    #[serde(default = "default_node_color")]
+    node_color: [f32; 3],
 }
 
 impl Default for DesignSettings {
@@ -323,6 +326,7 @@ impl Default for DesignSettings {
             grid_thickness: 0.03,
             show_camera_pivot_enabled: false,
             camera_pivot_size: 1.0,
+            node_color: default_node_color(),
         }
     }
 }
@@ -435,6 +439,8 @@ struct ConfigDialog {
     viewport_b: f32,
     color_selector: ColorSelector,
     last_sent_color: [u8; 3],
+    node_color_selector: ColorSelector,
+    last_sent_node_color: [u8; 3],
     origin_size: f32,
     camera_pivot_size: f32,
     grid_thickness: f32,
@@ -459,6 +465,9 @@ impl ConfigDialog {
         let r = (vr * 255.0).round().clamp(0.0, 255.0) as u8;
         let g = (vg * 255.0).round().clamp(0.0, 255.0) as u8;
         let b = (vb * 255.0).round().clamp(0.0, 255.0) as u8;
+        let nr = (settings.node_color[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+        let ng = (settings.node_color[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+        let nb = (settings.node_color[2] * 255.0).round().clamp(0.0, 255.0) as u8;
 
         let mut toggle_grid_snap = Toggle::new().with_label("Snap to Grid");
         toggle_grid_snap.set_toggled(settings.grid_snap_enabled);
@@ -495,6 +504,8 @@ impl ConfigDialog {
             viewport_b: vb,
             color_selector: ColorSelector::new([r, g, b]).with_label("Viewport Background"),
             last_sent_color: [r, g, b],
+            node_color_selector: ColorSelector::new([nr, ng, nb]).with_label("Node Base Color"),
+            last_sent_node_color: [nr, ng, nb],
             origin_size: settings.origin_size,
             camera_pivot_size: settings.camera_pivot_size,
             grid_thickness: settings.grid_thickness,
@@ -661,7 +672,16 @@ impl ConfigDialog {
             collector.active = true;
             let y2 = sec2.finish(&mut collector);
 
-            let total_h = y2 - (py + 65.0);
+            // Section 3: Node Styling Section (aligned vertically under sec2)
+            collector.active = true;
+            let mut sec3 = Section::new(&mut collector, px + 20.0, y2 + 12.0, 760.0, "Node Styling");
+            collector.active = false;
+            sec3.widget(&mut collector, &mut self.node_color_selector, 14.0, 240.0, 24.0);
+            sec3.spacing(8.0);
+            collector.active = true;
+            let y3 = sec3.finish(&mut collector);
+
+            let total_h = y3 - (py + 65.0);
             let visible_h = 510.0;
             max_scroll_y = (total_h - visible_h).max(0.0);
         }
@@ -729,6 +749,7 @@ impl ConfigDialog {
                 shift_widget(&mut self.spin_grid_y);
                 shift_widget(&mut self.spin_skipped_row_h);
                 shift_widget(&mut self.spin_skipped_col_w);
+                shift_widget(&mut self.node_color_selector);
             } else if self.active_page == 2 {
                 shift_widget(&mut self.toggle_show_grid);
                 shift_widget(&mut self.toggle_show_cube);
@@ -870,6 +891,18 @@ impl Widget for ConfigDialog {
                 self.camera_pivot_size = val;
                 self.spin_camera_pivot_size.value = (val * 10.0).round() as i32;
             }
+            10 => {
+                self.node_color_selector.color[0] = (val * 255.0).round().clamp(0.0, 255.0) as u8;
+                self.last_sent_node_color[0] = self.node_color_selector.color[0];
+            }
+            11 => {
+                self.node_color_selector.color[1] = (val * 255.0).round().clamp(0.0, 255.0) as u8;
+                self.last_sent_node_color[1] = self.node_color_selector.color[1];
+            }
+            12 => {
+                self.node_color_selector.color[2] = (val * 255.0).round().clamp(0.0, 255.0) as u8;
+                self.last_sent_node_color[2] = self.node_color_selector.color[2];
+            }
             _ => {}
         }
     }
@@ -915,6 +948,13 @@ impl Widget for ConfigDialog {
                 return Some((4 + i, val));
             }
         }
+        for i in 0..3 {
+            if self.node_color_selector.color[i] != self.last_sent_node_color[i] {
+                let val = self.node_color_selector.color[i] as f32 / 255.0;
+                self.last_sent_node_color[i] = self.node_color_selector.color[i];
+                return Some((10 + i, val));
+            }
+        }
         None
     }
 
@@ -949,6 +989,16 @@ impl Widget for ConfigDialog {
             self.color_selector.set_hovered(false);
             was
         };
+
+        let cs_node_changed = if self.visible && self.active_page == 1 {
+            self.node_color_selector.cursor_moved(px, py)
+        } else {
+            let was = self.node_color_selector.hovered();
+            self.node_color_selector.set_hovered(false);
+            was
+        };
+
+        let cs_changed = cs_changed || cs_node_changed;
 
         let mut widgets_changed = false;
         if self.visible {
@@ -1014,6 +1064,7 @@ impl Widget for ConfigDialog {
         if state == ElementState::Pressed {
             if !in_panel || on_close {
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 self.spin_grid_x.unfocus();
                 self.spin_grid_y.unfocus();
                 self.spin_skipped_row_h.unfocus();
@@ -1033,6 +1084,7 @@ impl Widget for ConfigDialog {
             for (i, (tx, ty, tw, th)) in self.tab_rects(ppx, ppy).iter().enumerate() {
                 if px >= *tx && px < *tx + *tw && py >= *ty && py < *ty + *th {
                     self.color_selector.unfocus();
+                    self.node_color_selector.unfocus();
                     self.spin_grid_x.unfocus();
                     self.spin_grid_y.unfocus();
                     self.spin_skipped_row_h.unfocus();
@@ -1064,6 +1116,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_y.unfocus();
                 self.spin_skipped_row_h.unfocus();
                 self.spin_skipped_col_w.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.toggle_network_grid.mouse_input(button, state, px, py) {
                 self.toggle_grid_snap.unfocus();
@@ -1071,6 +1124,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_y.unfocus();
                 self.spin_skipped_row_h.unfocus();
                 self.spin_skipped_col_w.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.spin_grid_x.mouse_input(button, state, px, py) {
                 self.toggle_grid_snap.unfocus();
@@ -1078,6 +1132,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_y.unfocus();
                 self.spin_skipped_row_h.unfocus();
                 self.spin_skipped_col_w.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.spin_grid_y.mouse_input(button, state, px, py) {
                 self.toggle_grid_snap.unfocus();
@@ -1085,6 +1140,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_x.unfocus();
                 self.spin_skipped_row_h.unfocus();
                 self.spin_skipped_col_w.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.spin_skipped_row_h.mouse_input(button, state, px, py) {
                 self.toggle_grid_snap.unfocus();
@@ -1092,6 +1148,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_x.unfocus();
                 self.spin_grid_y.unfocus();
                 self.spin_skipped_col_w.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.spin_skipped_col_w.mouse_input(button, state, px, py) {
                 self.toggle_grid_snap.unfocus();
@@ -1099,6 +1156,15 @@ impl Widget for ConfigDialog {
                 self.spin_grid_x.unfocus();
                 self.spin_grid_y.unfocus();
                 self.spin_skipped_row_h.unfocus();
+                self.node_color_selector.unfocus();
+                handled = true;
+            } else if self.node_color_selector.mouse_input(button, state, px, py) {
+                self.toggle_grid_snap.unfocus();
+                self.toggle_network_grid.unfocus();
+                self.spin_grid_x.unfocus();
+                self.spin_grid_y.unfocus();
+                self.spin_skipped_row_h.unfocus();
+                self.spin_skipped_col_w.unfocus();
                 handled = true;
             }
         } else if self.active_page == 2 {
@@ -1110,6 +1176,7 @@ impl Widget for ConfigDialog {
                 self.spin_origin_size.unfocus();
                 self.spin_camera_pivot_size.unfocus();
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.toggle_show_cube.mouse_input(button, state, px, py) {
                 self.toggle_show_grid.unfocus();
@@ -1119,6 +1186,7 @@ impl Widget for ConfigDialog {
                 self.spin_origin_size.unfocus();
                 self.spin_camera_pivot_size.unfocus();
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.toggle_show_origin.mouse_input(button, state, px, py) {
                 self.toggle_show_grid.unfocus();
@@ -1128,6 +1196,7 @@ impl Widget for ConfigDialog {
                 self.spin_origin_size.unfocus();
                 self.spin_camera_pivot_size.unfocus();
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.toggle_show_camera_pivot.mouse_input(button, state, px, py) {
                 self.toggle_show_grid.unfocus();
@@ -1137,6 +1206,7 @@ impl Widget for ConfigDialog {
                 self.spin_origin_size.unfocus();
                 self.spin_camera_pivot_size.unfocus();
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.spin_grid_thickness.mouse_input(button, state, px, py) {
                 self.toggle_show_grid.unfocus();
@@ -1146,6 +1216,7 @@ impl Widget for ConfigDialog {
                 self.spin_origin_size.unfocus();
                 self.spin_camera_pivot_size.unfocus();
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.spin_origin_size.mouse_input(button, state, px, py) {
                 self.toggle_show_grid.unfocus();
@@ -1155,6 +1226,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_thickness.unfocus();
                 self.spin_camera_pivot_size.unfocus();
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.spin_camera_pivot_size.mouse_input(button, state, px, py) {
                 self.toggle_show_grid.unfocus();
@@ -1164,6 +1236,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_thickness.unfocus();
                 self.spin_origin_size.unfocus();
                 self.color_selector.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             } else if self.color_selector.mouse_input(button, state, px, py) {
                 self.toggle_show_grid.unfocus();
@@ -1173,6 +1246,7 @@ impl Widget for ConfigDialog {
                 self.spin_grid_thickness.unfocus();
                 self.spin_origin_size.unfocus();
                 self.spin_camera_pivot_size.unfocus();
+                self.node_color_selector.unfocus();
                 handled = true;
             }
         }
@@ -1191,6 +1265,7 @@ impl Widget for ConfigDialog {
             self.spin_origin_size.unfocus();
             self.spin_camera_pivot_size.unfocus();
             self.color_selector.unfocus();
+            self.node_color_selector.unfocus();
             self.toggle_grid_snap.unfocus();
             self.toggle_network_grid.unfocus();
             self.toggle_show_grid.unfocus();
@@ -1209,6 +1284,7 @@ impl Widget for ConfigDialog {
             if self.spin_grid_y.keyboard_input(event) { return true; }
             if self.spin_skipped_row_h.keyboard_input(event) { return true; }
             if self.spin_skipped_col_w.keyboard_input(event) { return true; }
+            if self.node_color_selector.keyboard_input(event) { return true; }
         } else if self.active_page == 2 {
             if self.spin_grid_thickness.keyboard_input(event) { return true; }
             if self.spin_origin_size.keyboard_input(event) { return true; }
@@ -1217,6 +1293,7 @@ impl Widget for ConfigDialog {
         }
         if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) {
             self.color_selector.unfocus();
+            self.node_color_selector.unfocus();
             self.spin_grid_x.unfocus();
             self.spin_grid_y.unfocus();
             self.spin_skipped_row_h.unfocus();
@@ -1280,6 +1357,7 @@ impl Widget for ConfigDialog {
         if self.active_page == 1 {
             quads.extend(filter_quads(self.toggle_grid_snap.extra_quads()));
             quads.extend(filter_quads(self.toggle_network_grid.extra_quads()));
+            quads.extend(filter_quads(self.node_color_selector.extra_quads()));
 
             let draw_spin = |spin: &Spinbox, q: &mut Vec<(f32, f32, f32, f32, [f32; 4])>| {
                 let (sx, sy, sw, sh) = spin.rect();
@@ -1359,6 +1437,7 @@ impl Widget for ConfigDialog {
         if self.active_page == 1 {
             labels.extend(filter_labels(self.toggle_grid_snap.text_labels()));
             labels.extend(filter_labels(self.toggle_network_grid.text_labels()));
+            labels.extend(filter_labels(self.node_color_selector.text_labels()));
 
             labels.extend(filter_labels(self.spin_grid_x.text_labels()));
             labels.extend(filter_labels(self.spin_grid_y.text_labels()));
@@ -1487,6 +1566,7 @@ enum Action {
     ToggleSpreadsheet,
     ToggleOrigin,
     ToggleCameraPivot,
+    ToggleCircularPane,
 }
 
 struct KeyBind {
@@ -1515,6 +1595,7 @@ fn default_keybinds() -> Vec<KeyBind> {
         KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("a".into()), action: Action::ToggleSquareViewport },
         KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character(",".into()), action: Action::ToggleConfigure },
         KeyBind { ctrl: false, shift: false, alt: false, super_: false, key: Key::Character("`".into()), action: Action::ToggleSpreadsheet },
+        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("d".into()), action: Action::ToggleCircularPane },
     ]
 }
 
@@ -1523,10 +1604,15 @@ fn default_keybinds() -> Vec<KeyBind> {
 struct Vertex {
     position: [f32; 2],
     color: [f32; 4],
+    clip_circle: [f32; 3], // [cx, cy, r]
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
+    const ATTRIBS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x4,
+        2 => Float32x3,
+    ];
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -1542,24 +1628,25 @@ fn quad_vertices(
     x: f32, y: f32, w: f32, h: f32,
     surface_w: f32, surface_h: f32,
     color: [f32; 4],
+    clip_circle: [f32; 3],
 ) -> [Vertex; 6] {
     let x0 = (x / surface_w) * 2.0 - 1.0;
     let y0 = 1.0 - (y / surface_h) * 2.0;
     let x1 = ((x + w) / surface_w) * 2.0 - 1.0;
     let y1 = 1.0 - ((y + h) / surface_h) * 2.0;
     [
-        Vertex { position: [x0, y0], color },
-        Vertex { position: [x1, y0], color },
-        Vertex { position: [x0, y1], color },
-        Vertex { position: [x1, y0], color },
-        Vertex { position: [x1, y1], color },
-        Vertex { position: [x0, y1], color },
+        Vertex { position: [x0, y0], color, clip_circle },
+        Vertex { position: [x1, y0], color, clip_circle },
+        Vertex { position: [x0, y1], color, clip_circle },
+        Vertex { position: [x1, y0], color, clip_circle },
+        Vertex { position: [x1, y1], color, clip_circle },
+        Vertex { position: [x0, y1], color, clip_circle },
     ]
 }
 
-fn widget_vertices(w: &dyn Widget, sw: f32, sh: f32) -> Vec<Vertex> {
+fn widget_vertices(w: &dyn Widget, sw: f32, sh: f32, clip_circle: [f32; 3]) -> Vec<Vertex> {
     let (x, y, ww, h) = w.rect();
-    quad_vertices(x, y, ww, h, sw, sh, w.color()).to_vec()
+    quad_vertices(x, y, ww, h, sw, sh, w.color(), clip_circle).to_vec()
 }
 
 fn quad_vertices_clipped(
@@ -1567,6 +1654,7 @@ fn quad_vertices_clipped(
     surface_w: f32, surface_h: f32,
     color: [f32; 4],
     clip: (f32, f32, f32, f32),
+    clip_circle: [f32; 3],
 ) -> Vec<Vertex> {
     let (cx0, cy0, cx1, cy1) = clip;
     let ix0 = x.max(cx0);
@@ -1576,12 +1664,123 @@ fn quad_vertices_clipped(
     if ix1 <= ix0 || iy1 <= iy0 {
         return Vec::new();
     }
-    quad_vertices(ix0, iy0, ix1 - ix0, iy1 - iy0, surface_w, surface_h, color).to_vec()
+    quad_vertices(ix0, iy0, ix1 - ix0, iy1 - iy0, surface_w, surface_h, color, clip_circle).to_vec()
 }
 
-fn widget_vertices_clipped(w: &dyn Widget, sw: f32, sh: f32, clip: (f32, f32, f32, f32)) -> Vec<Vertex> {
+fn widget_vertices_clipped(w: &dyn Widget, sw: f32, sh: f32, clip: (f32, f32, f32, f32), clip_circle: [f32; 3]) -> Vec<Vertex> {
     let (x, y, ww, h) = w.rect();
-    quad_vertices_clipped(x, y, ww, h, sw, sh, w.color(), clip)
+    quad_vertices_clipped(x, y, ww, h, sw, sh, w.color(), clip, clip_circle)
+}
+
+fn circle_vertices(
+    cx: f32, cy: f32, r: f32,
+    sw: f32, sh: f32,
+    color: [f32; 4],
+    segments: usize,
+    clip_circle: [f32; 3],
+) -> Vec<Vertex> {
+    let mut verts = Vec::new();
+    for i in 0..segments {
+        let theta1 = (i as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        let theta2 = ((i + 1) as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        let x0 = cx;
+        let y0 = cy;
+        let x1 = cx + r * theta1.cos();
+        let y1 = cy + r * theta1.sin();
+        let x2 = cx + r * theta2.cos();
+        let y2 = cy + r * theta2.sin();
+        
+        let ndc_x0 = (x0 / sw) * 2.0 - 1.0;
+        let ndc_y0 = 1.0 - (y0 / sh) * 2.0;
+        let ndc_x1 = (x1 / sw) * 2.0 - 1.0;
+        let ndc_y1 = 1.0 - (y1 / sh) * 2.0;
+        let ndc_x2 = (x2 / sw) * 2.0 - 1.0;
+        let ndc_y2 = 1.0 - (y2 / sh) * 2.0;
+        
+        verts.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x1, ndc_y1], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+    }
+    verts
+}
+
+fn circle_border_vertices(
+    cx: f32, cy: f32, r: f32,
+    thickness: f32,
+    sw: f32, sh: f32,
+    color: [f32; 4],
+    segments: usize,
+    clip_circle: [f32; 3],
+) -> Vec<Vertex> {
+    let mut verts = Vec::new();
+    for i in 0..segments {
+        let theta1 = (i as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        let theta2 = ((i + 1) as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        
+        let x0 = cx + (r - thickness) * theta1.cos();
+        let y0 = cy + (r - thickness) * theta1.sin();
+        let x1 = cx + r * theta1.cos();
+        let y1 = cy + r * theta1.sin();
+        
+        let x2 = cx + r * theta2.cos();
+        let y2 = cy + r * theta2.sin();
+        let x3 = cx + (r - thickness) * theta2.cos();
+        let y3 = cy + (r - thickness) * theta2.sin();
+        
+        let ndc_x0 = (x0 / sw) * 2.0 - 1.0; let ndc_y0 = 1.0 - (y0 / sh) * 2.0;
+        let ndc_x1 = (x1 / sw) * 2.0 - 1.0; let ndc_y1 = 1.0 - (y1 / sh) * 2.0;
+        let ndc_x2 = (x2 / sw) * 2.0 - 1.0; let ndc_y2 = 1.0 - (y2 / sh) * 2.0;
+        let ndc_x3 = (x3 / sw) * 2.0 - 1.0; let ndc_y3 = 1.0 - (y3 / sh) * 2.0;
+        
+        verts.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x1, ndc_y1], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+        
+        verts.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x3, ndc_y3], color, clip_circle });
+    }
+    verts
+}
+
+fn arc_background_vertices(
+    cx: f32, cy: f32, r: f32,
+    thickness: f32,
+    start_angle: f32, end_angle: f32,
+    sw: f32, sh: f32,
+    color: [f32; 4],
+    segments: usize,
+    clip_circle: [f32; 3],
+) -> Vec<Vertex> {
+    let mut verts = Vec::new();
+    for i in 0..segments {
+        let theta1 = start_angle + (i as f32) * (end_angle - start_angle) / (segments as f32);
+        let theta2 = start_angle + ((i + 1) as f32) * (end_angle - start_angle) / (segments as f32);
+        
+        let x0 = cx + (r - thickness) * theta1.cos();
+        let y0 = cy + (r - thickness) * theta1.sin();
+        let x1 = cx + r * theta1.cos();
+        let y1 = cy + r * theta1.sin();
+        
+        let x2 = cx + r * theta2.cos();
+        let y2 = cy + r * theta2.sin();
+        let x3 = cx + (r - thickness) * theta2.cos();
+        let y3 = cy + (r - thickness) * theta2.sin();
+        
+        let ndc_x0 = (x0 / sw) * 2.0 - 1.0; let ndc_y0 = 1.0 - (y0 / sh) * 2.0;
+        let ndc_x1 = (x1 / sw) * 2.0 - 1.0; let ndc_y1 = 1.0 - (y1 / sh) * 2.0;
+        let ndc_x2 = (x2 / sw) * 2.0 - 1.0; let ndc_y2 = 1.0 - (y2 / sh) * 2.0;
+        let ndc_x3 = (x3 / sw) * 2.0 - 1.0; let ndc_y3 = 1.0 - (y3 / sh) * 2.0;
+        
+        verts.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x1, ndc_y1], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+        
+        verts.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+        verts.push(Vertex { position: [ndc_x3, ndc_y3], color, clip_circle });
+    }
+    verts
 }
 
 fn make_text_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> Buffer {
@@ -1649,6 +1848,7 @@ struct State {
     show_origin: bool,
     show_camera_pivot: bool,
     viewport_bg_color: [f32; 3],
+    node_color: [f32; 3],
     vertex_buffer_origin: wgpu::Buffer,
     vertex_count_origin: u32,
     vertex_buffer_pivot: wgpu::Buffer,
@@ -1668,10 +1868,8 @@ struct State {
 
     widgets: Vec<Box<dyn Widget>>,
     positions: Vec<(f32, f32, f32, f32)>,
-    node_slots: Vec<usize>,
     splitter1_x: f32,
     splitter2_x: f32,
-    left_offsets: Vec<(f32, f32)>,
     node_palette_visible: bool,
     node_palette_query: String,
     node_palette_filtered: Vec<usize>,
@@ -1734,6 +1932,16 @@ struct State {
     zoom_velocity: f32,
     grid_thickness: f32,
     focused_pane: usize,
+    inertial_scroll_enabled: bool,
+    inertial_scroll_friction: f32,
+    last_config_read: Instant,
+    circular_network_pane: bool,
+    network_circle_x: f32,
+    network_circle_y: f32,
+    network_circle_radius: f32,
+    is_dragging_network_circle: bool,
+    circle_drag_ox: f32,
+    circle_drag_oy: f32,
 }
 
 impl State {
@@ -1750,6 +1958,7 @@ impl State {
             show_origin_enabled: self.show_origin,
             origin_size: self.origin_size,
             viewport_bg_color: self.viewport_bg_color,
+            node_color: self.node_color,
             square_viewport: self.square_viewport,
             grid_thickness: self.grid_thickness,
             show_camera_pivot_enabled: self.show_camera_pivot,
@@ -1844,11 +2053,66 @@ impl State {
     }
 
     fn open_node_palette(&mut self) {
-        self.node_palette_visible = true;
-        self.node_palette_query.clear();
-        self.node_palette_selected = 0;
-        self.refresh_node_palette();
-        self.upload_vertices();
+        let templates: Vec<String> = self.node_templates.iter().map(|t| t.label.clone()).collect();
+        let grid_col = self.grid_cursor_col;
+        let grid_row = self.grid_cursor_row;
+        std::thread::spawn(move || {
+            use std::io::Write;
+            use std::process::{Command, Stdio};
+
+            let mut child = match Command::new("clear-cloud")
+                .arg("-p")
+                .arg("Add Node: ")
+                .arg("--dmenu")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Failed to spawn clear-cloud: {:?}", e);
+                    return;
+                }
+            };
+
+            if let Some(mut stdin) = child.stdin.take() {
+                for t in &templates {
+                    let _ = writeln!(stdin, "{}", t);
+                }
+            }
+
+            let output = match child.wait_with_output() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Failed to wait for clear-cloud: {:?}", e);
+                    return;
+                }
+            };
+
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !selected.is_empty() {
+                    let body = format!(
+                        "{{\"action\":\"add_node\",\"template_name\":\"{}\",\"x\":{},\"y\":{}}}",
+                        selected, grid_col, grid_row
+                    );
+                    let req = format!(
+                        "POST /action HTTP/1.1\r\n\
+                         Host: 127.0.0.1:3000\r\n\
+                         Content-Type: application/json\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n\
+                         {}",
+                        body.len(),
+                        body
+                    );
+                    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
+                        let _ = stream.write_all(req.as_bytes());
+                        let _ = stream.flush();
+                    }
+                }
+            }
+        });
     }
 
     fn close_node_palette(&mut self) {
@@ -1860,13 +2124,10 @@ impl State {
 
     fn place_selected_node(&mut self) -> bool {
         let Some(&template_idx) = self.node_palette_filtered.get(self.node_palette_selected) else { return false; };
-        let child_idx = self.current_dir().children.len();
-        if child_idx >= self.node_slots.len() { return false; }
         let mut node = self.node_templates[template_idx].node.clone();
         let (nx, ny) = self.find_empty_cell(self.grid_cursor_col as f32, self.grid_cursor_row as f32, None);
         node.position = (nx, ny);
         self.current_dir_mut().children.push(node);
-        self.left_offsets[child_idx] = (nx, ny);
         self.close_node_palette();
         self.sync_nodes();
         self.rebuild_positions();
@@ -1875,6 +2136,7 @@ impl State {
         self.upload_vertices();
         true
     }
+
 
     fn handle_node_palette_key(&mut self, event: &KeyEvent) -> bool {
         if event.state != ElementState::Pressed { return false; }
@@ -2068,39 +2330,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn sync_nodes(&mut self) {
-        let node_infos: Vec<Option<(String, (f32, f32))>> = {
-            let dir = self.current_dir();
-            self.node_slots.iter().enumerate().map(|(i, _)| {
-                dir.children.get(i).map(|c| (c.name.clone(), c.position))
-            }).collect()
-        };
-        let params_list: Vec<Vec<(String, String, String)>> = {
-            let dir = self.current_dir();
-            self.node_slots.iter().enumerate().map(|(i, _)| {
-                dir.children.get(i).map(|c| param_display(&c.params)).unwrap_or_default()
-            }).collect()
-        };
-        let geom_visibles: Vec<bool> = {
-            let dir = self.current_dir();
-            self.node_slots.iter().enumerate().map(|(i, _)| {
-                dir.children.get(i).map(|c| c.geometry_visible).unwrap_or(true)
-            }).collect()
-        };
-
-        for (i, &slot) in self.node_slots.iter().enumerate() {
-            if let Some((name, position)) = &node_infos[i] {
-                if i < self.left_offsets.len() {
-                    self.left_offsets[i] = *position;
-                }
-                self.widgets[slot].set_node_name(name);
-                self.widgets[slot].set_display_params(&params_list[i]);
-                self.widgets[slot].set_geom_visible(geom_visibles[i]);
-            } else {
-                self.widgets[slot].set_node_name("");
-                self.widgets[slot].set_display_params(&[]);
-                self.widgets[slot].set_geom_visible(true);
+        let graph_nodes: Vec<GraphNode> = self.current_dir().children.iter().map(|c| {
+            GraphNode {
+                name: c.name.clone(),
+                position: c.position,
+                parameters: param_display(&c.params),
+                geom_visible: c.geometry_visible,
             }
-        }
+        }).collect();
+        self.widgets[CONTENT_IDX].set_nodes(&graph_nodes);
+
         let camera_nodes: Vec<String> = self.current_dir().children.iter()
             .filter(|c| c.node_type == "camera")
             .map(|c| c.name.clone())
@@ -2119,16 +2358,15 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.widgets[BREADCRUMB_IDX].set_path(&path_strs);
 
         let mut selected_node = None;
-        if let Some(focused) = self.focused_widget {
-            if self.node_slots.contains(&focused) {
-                if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == focused) {
-                    let dir = self.current_dir();
-                    if slot_idx < dir.children.len() {
-                        selected_node = Some(&dir.children[slot_idx]);
-                    }
+        if self.focused_widget == Some(CONTENT_IDX) {
+            if let Some(slot_idx) = self.widgets[CONTENT_IDX].selected_node() {
+                let dir = self.current_dir();
+                if slot_idx < dir.children.len() {
+                    selected_node = Some(&dir.children[slot_idx]);
                 }
             }
         }
+
 
         let mut cache_hit = false;
         let mut current_name = None;
@@ -2295,7 +2533,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let window = xdg_shell_state.create_window(wl_surface.clone(), WindowDecorations::None, qh);
         window.set_title("Clear Design Interface");
         window.set_app_id("clear-design-interface");
-        window.set_min_size(Some((pw, ph)));
+        window.set_min_size(Some(((480.0 * scale) as u32, (320.0 * scale) as u32)));
         window.commit();
 
         let wayland_handle = Box::leak(Box::new(clear_ui::wayland::WaylandSurfaceHandle {
@@ -2618,31 +2856,23 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         } else {
             vec![]
         };
-        let node_slots: Vec<usize> = (NODE_SLOT_START..NODE_SLOT_START + NODE_SLOT_COUNT).collect();
-        let left_offsets: Vec<(f32, f32)> = (0..NODE_SLOT_COUNT)
-            .map(|i| (0.0, i as f32))
-            .collect();
-
         let mut widgets: Vec<Box<dyn Widget>> = vec![
             Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom"]).with_item("Help", &["About"]).with_z_index(110)),
-            Box::new(ContentBg::new()),
+            Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_item("File", &["New", "Open", "Save"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_item("File", &["New", "Open", "Save"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane"])),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"])),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"])),
+            Box::new(StatusBar::new()),
+            Box::new(Breadcrumb::new()),
+            Box::new(ConfigDialog::new(&settings)),
+            Box::new(NodePalette::new()),
+            Box::new(Spreadsheet::new()),
         ];
-        for _ in 0..NODE_SLOT_COUNT {
-            widgets.push(Box::new(Node::new(0.0, 0.0, 0.0, 0.0, "")));
-        }
-        widgets.push(Box::new(StatusBar::new()));
-        widgets.push(Box::new(Breadcrumb::new()));
-        widgets.push(Box::new(ConfigDialog::new(&settings)));
-        widgets.push(Box::new(NodePalette::new()));
-        widgets.push(Box::new(Spreadsheet::new()));
         
         let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet");
         spreadsheet_menubar.visible = false;
@@ -2698,6 +2928,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             show_origin: settings.show_origin_enabled,
             show_camera_pivot: settings.show_camera_pivot_enabled,
             viewport_bg_color: settings.viewport_bg_color,
+            node_color: settings.node_color,
             vertex_buffer_origin,
             vertex_count_origin,
             vertex_buffer_pivot,
@@ -2714,10 +2945,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             exit_requested: false,
             widgets,
             positions,
-            node_slots,
             splitter1_x,
             splitter2_x,
-            left_offsets,
             node_palette_visible: false,
             node_palette_query: String::new(),
             node_palette_filtered: Vec::new(),
@@ -2775,8 +3004,25 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             zoom_velocity: 0.0,
             grid_thickness: settings.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
+            inertial_scroll_enabled: true,
+            inertial_scroll_friction: 0.90,
+            last_config_read: Instant::now(),
+            circular_network_pane: false,
+            network_circle_x: 250.0,
+            network_circle_y: 300.0,
+            network_circle_radius: 180.0,
+            is_dragging_network_circle: false,
+            circle_drag_ox: 0.0,
+            circle_drag_oy: 0.0,
         };
 
+        state.update_inertial_settings();
+        colors::set_node_color([
+            settings.node_color[0],
+            settings.node_color[1],
+            settings.node_color[2],
+            1.0,
+        ]);
         state.sync_nodes();
         state.rebuild_scene_geometry();
         state.sync_grid_settings();
@@ -2784,6 +3030,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, state.show_cube);
         state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, state.show_origin);
         state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 3, state.show_camera_pivot);
+        state.widgets[LEFT_MENUBAR_IDX].set_item_checked(2, 2, state.circular_network_pane);
 
         state.rebuild_positions();
         state.apply_layout();
@@ -2795,18 +3042,54 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
     fn sync_grid_settings(&mut self) {
         let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+        let active_node_area_y = if self.circular_network_pane {
+            self.network_circle_y - self.network_circle_radius + 45.0 + MENUBAR_H + BREADCRUMB_H
+        } else {
+            node_area_y
+        };
+        let active_node_area_x = if self.circular_network_pane {
+            self.network_circle_x - self.network_circle_radius
+        } else {
+            0.0
+        };
+
         self.widgets[CONTENT_IDX].set_show_network_grid(self.network_grid_visible);
         self.widgets[CONTENT_IDX].set_grid_sizes(self.grid_size_x, self.grid_size_y);
         self.widgets[CONTENT_IDX].set_skipped_sizes(self.skipped_row_h, self.skipped_col_w);
-        self.widgets[CONTENT_IDX].set_grid_origin(self.pan_x, node_area_y + self.pan_y);
-
-        for &i in &self.node_slots {
-            let gx = if self.grid_snap_enabled { self.grid_size_x + self.skipped_col_w } else { 0.0 };
-            let gy = if self.grid_snap_enabled { self.grid_size_y + self.skipped_row_h } else { 0.0 };
-            self.widgets[i].set_grid_snap(gx, gy);
-            self.widgets[i].set_grid_origin(self.pan_x, node_area_y + self.pan_y);
-        }
+        self.widgets[CONTENT_IDX].set_grid_origin(active_node_area_x + self.pan_x, active_node_area_y + self.pan_y);
+        self.widgets[CONTENT_IDX].set_grid_snap_enabled(self.grid_snap_enabled);
     }
+
+    fn update_inertial_settings(&mut self) {
+        self.last_config_read = Instant::now();
+        let config_path = "/home/lsgalante/.config/ccec/config.toml";
+        if let Ok(content) = std::fs::read_to_string(config_path) {
+            #[derive(serde::Deserialize)]
+            struct InertialSection {
+                inertial_scroll: Option<bool>,
+                scroll_friction: Option<u16>,
+            }
+            #[derive(serde::Deserialize)]
+            struct Config {
+                inertial: Option<InertialSection>,
+            }
+            if let Ok(cfg) = toml::from_str::<Config>(&content) {
+                if let Some(inertial) = cfg.inertial {
+                    if let Some(val) = inertial.inertial_scroll {
+                        self.inertial_scroll_enabled = val;
+                    }
+                    if let Some(friction_val) = inertial.scroll_friction {
+                        let friction_f = (friction_val as f32 / 1000.0).clamp(0.1, 0.999);
+                        self.inertial_scroll_friction = friction_f;
+                    }
+                }
+            }
+        }
+        // Defaults if file read or parsing fails
+        self.inertial_scroll_enabled = true;
+        self.inertial_scroll_friction = 0.90;
+    }
+
 
     fn zoom(&mut self, factor: f32, center: Option<(f32, f32)>) {
         self.pan_velocity_x = 0.0;
@@ -2852,37 +3135,55 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.skipped_col_w = old_col_w * (new_gx / old_gx);
 
         self.sync_grid_settings();
-        for &i in &self.node_slots {
-            let (x, y, _, _) = self.widgets[i].rect();
-            self.widgets[i].set_rect(x, y, self.grid_size_x, self.grid_size_y);
-        }
     }
+
 
     fn keep_cursor_in_view(&mut self) {
         let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-        let cx = self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
-        let cy = node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
+        let active_node_area_y = if self.circular_network_pane {
+            self.network_circle_y - self.network_circle_radius + 45.0 + MENUBAR_H + BREADCRUMB_H
+        } else {
+            node_area_y
+        };
+        let active_node_area_x = if self.circular_network_pane {
+            self.network_circle_x - self.network_circle_radius
+        } else {
+            0.0
+        };
+
+        let cx = active_node_area_x + self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
+        let cy = active_node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
         let cw = self.grid_size_x;
         let ch = self.grid_size_y;
-        let clw = self.content_left_w();
-        let max_y = self.height - STATUS_H;
 
-        if cx < 0.0 {
-            self.pan_x -= cx;
-        } else if cx + cw > clw {
-            self.pan_x -= cx + cw - clw;
+        let active_graph_w = if self.circular_network_pane {
+            2.0 * self.network_circle_radius
+        } else {
+            self.content_left_w()
+        };
+        let active_max_y = if self.circular_network_pane {
+            self.network_circle_y + self.network_circle_radius
+        } else {
+            self.height - STATUS_H
+        };
+
+        if cx < active_node_area_x {
+            self.pan_x -= cx - active_node_area_x;
+        } else if cx + cw > active_node_area_x + active_graph_w {
+            self.pan_x -= cx + cw - (active_node_area_x + active_graph_w);
         }
 
-        if cy < node_area_y {
-            self.pan_y -= cy - node_area_y;
-        } else if cy + ch > max_y {
-            self.pan_y -= cy + ch - max_y;
+        if cy < active_node_area_y {
+            self.pan_y -= cy - active_node_area_y;
+        } else if cy + ch > active_max_y {
+            self.pan_y -= cy + ch - active_max_y;
         }
         self.sync_grid_settings();
     }
 
     fn rebuild_positions(&mut self) {
         self.clamp_splitters();
+        self.widgets[LEFT_MENUBAR_IDX].set_center_items(self.circular_network_pane);
 
         let body_h = self.body_h();
         let clw = self.content_left_w();
@@ -2890,51 +3191,65 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let vw = self.viewport_w();
         let px = self.param_x();
 
-        self.positions[0] = (0.0, 0.0, self.width, HEADER_H);
-        self.positions[CONTENT_IDX] = (0.0, HEADER_H, clw, body_h);
-        self.positions[SPLITTER1_IDX] = (self.splitter1_x, HEADER_H, SPLITTER_W, body_h);
-        self.positions[SPLITTER2_IDX] = (self.splitter2_x, HEADER_H, SPLITTER_W, body_h);
-        self.positions[PARAM_IDX] = (px, HEADER_H, self.param_w(), body_h);
-
-        self.positions[VIEWPORT_IDX] = (crx, HEADER_H, vw, body_h);
-        self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
-
-        if self.show_spreadsheet {
-            let viewport_h = body_h * 2.0 / 3.0;
-            let spreadsheet_h = body_h - viewport_h;
-
-            self.positions[SPREADSHEET_MENUBAR_IDX] = (crx, HEADER_H + viewport_h, vw, MENUBAR_H);
-            self.positions[SPREADSHEET_IDX] = (crx, HEADER_H + viewport_h + MENUBAR_H, vw, spreadsheet_h - MENUBAR_H);
-        } else {
-            self.positions[SPREADSHEET_IDX] = (0.0, 0.0, 0.0, 0.0);
-            self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-        }
-
-        self.positions[LEFT_MENUBAR_IDX] = (0.0, HEADER_H, clw, MENUBAR_H);
-        self.positions[RIGHT_MENUBAR_IDX] = (crx, HEADER_H, vw, MENUBAR_H);
-        self.positions[PARAM_MENUBAR_IDX] = (px, HEADER_H, self.param_w(), MENUBAR_H);
-
         let node_area_y = HEADER_H + MENUBAR_H;
-        self.positions[BREADCRUMB_IDX] = (0.0, node_area_y, clw, BREADCRUMB_H);
+        self.positions[0] = (0.0, 0.0, self.width, HEADER_H);
 
-        let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
-        for (slot_idx, (&idx, off)) in self.node_slots.iter().zip(self.left_offsets.iter()).enumerate() {
-            if slot_idx < active_nodes {
-                self.positions[idx] = (
-                    off.0 * (self.grid_size_x + self.skipped_col_w) + self.pan_x,
-                    node_area_y + BREADCRUMB_H + off.1 * (self.grid_size_y + self.skipped_row_h) + self.pan_y,
-                    self.grid_size_x,
-                    self.grid_size_y,
-                );
+        if self.circular_network_pane {
+            let cx = self.network_circle_x;
+            let cy = self.network_circle_y;
+            let r = self.network_circle_radius;
+
+            self.positions[LEFT_MENUBAR_IDX] = (cx - r, cy - r, 2.0 * r, 35.0);
+            self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(Some((cx, cy, r)));
+            self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H, 2.0 * r, BREADCRUMB_H);
+            self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + MENUBAR_H + BREADCRUMB_H));
+            self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
+            self.positions[SPLITTER2_IDX] = (self.splitter2_x, HEADER_H, SPLITTER_W, body_h);
+            self.positions[PARAM_IDX] = (px, HEADER_H, self.param_w(), body_h);
+
+            let viewport_w = self.splitter2_x;
+            self.positions[VIEWPORT_IDX] = (0.0, HEADER_H, viewport_w, body_h);
+            self.positions[RIGHT_MENUBAR_IDX] = (0.0, HEADER_H, viewport_w, MENUBAR_H);
+
+            if self.show_spreadsheet {
+                let viewport_h = body_h * 2.0 / 3.0;
+                let spreadsheet_h = body_h - viewport_h;
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, HEADER_H + viewport_h, viewport_w, MENUBAR_H);
+                self.positions[SPREADSHEET_IDX] = (0.0, HEADER_H + viewport_h + MENUBAR_H, viewport_w, spreadsheet_h - MENUBAR_H);
             } else {
-                self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
+                self.positions[SPREADSHEET_IDX] = (0.0, 0.0, 0.0, 0.0);
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
+            }
+        } else {
+            self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
+            self.positions[CONTENT_IDX] = (0.0, node_area_y + BREADCRUMB_H, clw, self.height - STATUS_H - (node_area_y + BREADCRUMB_H));
+            self.positions[SPLITTER1_IDX] = (self.splitter1_x, HEADER_H, SPLITTER_W, body_h);
+            self.positions[SPLITTER2_IDX] = (self.splitter2_x, HEADER_H, SPLITTER_W, body_h);
+            self.positions[PARAM_IDX] = (px, HEADER_H, self.param_w(), body_h);
+
+            self.positions[VIEWPORT_IDX] = (crx, HEADER_H, vw, body_h);
+            self.positions[RIGHT_MENUBAR_IDX] = (crx, HEADER_H, vw, MENUBAR_H);
+            self.positions[BREADCRUMB_IDX] = (0.0, node_area_y, clw, BREADCRUMB_H);
+            self.positions[LEFT_MENUBAR_IDX] = (0.0, HEADER_H, clw, MENUBAR_H);
+
+            if self.show_spreadsheet {
+                let viewport_h = body_h * 2.0 / 3.0;
+                let spreadsheet_h = body_h - viewport_h;
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (crx, HEADER_H + viewport_h, vw, MENUBAR_H);
+                self.positions[SPREADSHEET_IDX] = (crx, HEADER_H + viewport_h + MENUBAR_H, vw, spreadsheet_h - MENUBAR_H);
+            } else {
+                self.positions[SPREADSHEET_IDX] = (0.0, 0.0, 0.0, 0.0);
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
             }
         }
 
+        self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
+        self.positions[PARAM_MENUBAR_IDX] = (px, HEADER_H, self.param_w(), MENUBAR_H);
         self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
         self.positions[CONFIG_DIALOG_IDX] = (0.0, 0.0, self.width, self.height);
         self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
     }
+
 
     fn apply_layout(&mut self) {
         for (i, pos) in self.positions.iter().enumerate() {
@@ -2953,6 +3268,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     fn sync_pane_focus(&mut self) {
         for &menubar_idx in &[LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
             self.widgets[menubar_idx].set_selected(menubar_idx == self.focused_pane);
+        }
+        if self.focused_pane != PARAM_MENUBAR_IDX {
+            self.widgets[PARAM_IDX].unfocus();
         }
     }
 
@@ -3029,6 +3347,13 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 self.sync_pane_focus();
                 self.sync_nodes();
             }
+            Action::ToggleCircularPane => {
+                self.circular_network_pane = !self.circular_network_pane;
+                self.widgets[LEFT_MENUBAR_IDX].set_item_checked(2, 2, self.circular_network_pane);
+                self.rebuild_positions();
+                self.apply_layout();
+                self.sync_grid_settings();
+            }
         }
         if settings_changed {
             self.save_settings();
@@ -3036,62 +3361,49 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn read_panel_offsets(&mut self) {
-        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-        let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
-        let mut coords = Vec::with_capacity(active_nodes);
-        for (&idx, off) in self.node_slots.iter().take(active_nodes).zip(self.left_offsets.iter_mut()) {
-            let (px, py, _, _) = self.widgets[idx].rect();
-            let c = ((px - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).round();
-            let r = ((py - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).round();
-            *off = (c, r);
-            coords.push((c, r));
-            if Some(idx) == self.focused_widget && self.drag_widget == Some(idx) {
-                self.grid_cursor_col = c as i32;
-                self.grid_cursor_row = r as i32;
+        let updated_nodes = self.widgets[CONTENT_IDX].get_nodes();
+        let dir = self.current_dir_mut();
+        for (i, node) in updated_nodes.iter().enumerate() {
+            if let Some(child) = dir.children.get_mut(i) {
+                child.position = node.position;
             }
         }
-        let dir = self.current_dir_mut();
-        for (i, coord) in coords.into_iter().enumerate() {
-            if let Some(child) = dir.children.get_mut(i) {
-                child.position = coord;
+        if let Some(sel_idx) = self.widgets[CONTENT_IDX].selected_node() {
+            if let Some(node) = updated_nodes.get(sel_idx) {
+                self.grid_cursor_col = node.position.0 as i32;
+                self.grid_cursor_row = node.position.1 as i32;
             }
         }
     }
 
     fn sync_cursor_and_selection(&mut self) {
         if let Some(old) = self.focused_widget {
-            if !self.node_slots.contains(&old) && old != SPREADSHEET_IDX {
+            if old != CONTENT_IDX && old != SPREADSHEET_IDX {
                 return;
             }
         }
-        let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
-        let mut node_at_cursor = None;
-        for (slot_idx, (&idx, off)) in self.node_slots.iter().zip(self.left_offsets.iter()).enumerate() {
-            if slot_idx < active_nodes {
-                if off.0 as i32 == self.grid_cursor_col && off.1 as i32 == self.grid_cursor_row {
-                    node_at_cursor = Some(idx);
-                    break;
-                }
+        let dir = self.current_dir();
+        let mut node_at_cursor_idx = None;
+        for (i, node) in dir.children.iter().enumerate() {
+            if node.position.0 as i32 == self.grid_cursor_col && node.position.1 as i32 == self.grid_cursor_row {
+                node_at_cursor_idx = Some(i);
+                break;
             }
         }
 
-        if let Some(idx) = node_at_cursor {
-            if self.focused_widget != Some(idx) {
-                if let Some(old) = self.focused_widget {
-                    self.widgets[old].unfocus();
-                }
-                self.widgets[idx].focus();
-                self.focused_widget = Some(idx);
+        if let Some(idx) = node_at_cursor_idx {
+            self.widgets[CONTENT_IDX].set_selected_node(Some(idx));
+            if self.focused_widget != Some(CONTENT_IDX) {
+                self.focused_widget = Some(CONTENT_IDX);
             }
         } else {
-            if let Some(old) = self.focused_widget {
-                if self.node_slots.contains(&old) {
-                    self.widgets[old].unfocus();
-                    self.focused_widget = None;
-                }
+            self.widgets[CONTENT_IDX].set_selected_node(None);
+            if self.focused_widget == Some(CONTENT_IDX) {
+                self.focused_widget = None;
             }
         }
     }
+
 
     fn collect_vertices(&self) -> Vec<Vertex> {
         let sw = self.width;
@@ -3103,33 +3415,140 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let show_cursor = self.drag_widget.is_none()
             && !dialog_open;
 
-        let clip = (0.0, node_area_y, self.content_left_w(), self.height - STATUS_H);
+        let clip = if self.circular_network_pane {
+            (
+                self.network_circle_x - self.network_circle_radius,
+                self.network_circle_y - self.network_circle_radius,
+                self.network_circle_x + self.network_circle_radius,
+                self.network_circle_y + self.network_circle_radius,
+            )
+        } else {
+            (0.0, node_area_y, self.content_left_w(), self.height - STATUS_H)
+        };
+
+        let clip_circle_val = if self.circular_network_pane {
+            [self.network_circle_x * self.scale as f32, self.network_circle_y * self.scale as f32, self.network_circle_radius * self.scale as f32]
+        } else {
+            [0.0, 0.0, 0.0]
+        };
 
         let mut draw_order: Vec<usize> = (0..self.widgets.len()).collect();
         draw_order.sort_by_key(|&i| self.widgets[i].z_index());
 
         for &i in &draw_order {
             let w = &self.widgets[i];
+            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX;
+            let active_clip_circle = if is_network_part { clip_circle_val } else { [0.0, 0.0, 0.0] };
+
             if i == CONTENT_IDX {
-                verts.extend(widget_vertices(w.as_ref(), sw, sh));
-                for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(quad_vertices_clipped(qx, qy, qw, qh, sw, sh, qc, clip));
+                if self.circular_network_pane {
+                    verts.extend(circle_vertices(
+                        self.network_circle_x,
+                        self.network_circle_y,
+                        self.network_circle_radius,
+                        sw,
+                        sh,
+                        [0.10, 0.10, 0.13, 0.95],
+                        64,
+                        active_clip_circle,
+                    ));
+                } else {
+                    verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
                 }
-            } else if self.node_slots.contains(&i) {
-                verts.extend(widget_vertices_clipped(w.as_ref(), sw, sh, clip));
+
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(quad_vertices_clipped(qx, qy, qw, qh, sw, sh, qc, clip));
+                    verts.extend(quad_vertices_clipped(qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle));
+                }
+
+                if self.circular_network_pane {
+                    verts.extend(circle_border_vertices(
+                        self.network_circle_x,
+                        self.network_circle_y,
+                        self.network_circle_radius,
+                        3.0,
+                        sw,
+                        sh,
+                        [0.35, 0.65, 0.95, 0.80],
+                        64,
+                        active_clip_circle,
+                    ));
+                }
+            } else if i == LEFT_MENUBAR_IDX && self.circular_network_pane {
+                let cx = self.network_circle_x;
+                let cy = self.network_circle_y;
+                let r = self.network_circle_radius;
+                
+                let bg_color = w.color();
+                verts.extend(arc_background_vertices(
+                    cx, cy, r,
+                    MENUBAR_H,
+                    std::f32::consts::PI,
+                    2.0 * std::f32::consts::PI,
+                    sw, sh,
+                    bg_color,
+                    64,
+                    active_clip_circle,
+                ));
+                
+                let border_color = [0.22, 0.22, 0.28, 0.90];
+                verts.extend(arc_background_vertices(
+                    cx, cy, r - MENUBAR_H,
+                    1.5,
+                    std::f32::consts::PI,
+                    2.0 * std::f32::consts::PI,
+                    sw, sh,
+                    border_color,
+                    64,
+                    active_clip_circle,
+                ));
+                
+                for (qx, qy, qw, qh, qc) in w.extra_quads() {
+                    verts.extend(quad_vertices(qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                }
+                for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
+                    verts.extend(arc_background_vertices(
+                        acx, acy, ar,
+                        ath,
+                        a_start, a_end,
+                        sw, sh,
+                        acolor,
+                        64,
+                        active_clip_circle,
+                    ));
                 }
             } else {
-                verts.extend(widget_vertices(w.as_ref(), sw, sh));
+                verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(quad_vertices(qx, qy, qw, qh, sw, sh, qc));
+                    verts.extend(quad_vertices(qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                }
+                for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
+                    verts.extend(arc_background_vertices(
+                        acx, acy, ar,
+                        ath,
+                        a_start, a_end,
+                        sw, sh,
+                        acolor,
+                        64,
+                        active_clip_circle,
+                    ));
                 }
             }
 
+
             if i == CONTENT_IDX && show_cursor {
-                let cx = self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
-                let cy = node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
+                let cx = active_clip_circle[0] / self.scale as f32 - self.network_circle_radius + self.pan_x; // Wait, let's keep the exact cursor coordinates!
+                let active_node_area_y = if self.circular_network_pane {
+                    self.network_circle_y - self.network_circle_radius + 45.0 + MENUBAR_H + BREADCRUMB_H
+                } else {
+                    node_area_y
+                };
+                let active_node_area_x = if self.circular_network_pane {
+                    self.network_circle_x - self.network_circle_radius
+                } else {
+                    0.0
+                };
+                let cx = active_node_area_x + self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
+                let cy = active_node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
                 let cw = self.grid_size_x;
                 let ch = self.grid_size_y;
 
@@ -3147,13 +3566,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     sh,
                     bg_color,
                     clip,
+                    active_clip_circle,
                 ));
 
                 // 4 border edges
-                verts.extend(quad_vertices_clipped(cx, cy, cw, thickness, sw, sh, border_color, clip));
-                verts.extend(quad_vertices_clipped(cx, cy + ch - thickness, cw, thickness, sw, sh, border_color, clip));
-                verts.extend(quad_vertices_clipped(cx, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip));
-                verts.extend(quad_vertices_clipped(cx + cw - thickness, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip));
+                verts.extend(quad_vertices_clipped(cx, cy, cw, thickness, sw, sh, border_color, clip, active_clip_circle));
+                verts.extend(quad_vertices_clipped(cx, cy + ch - thickness, cw, thickness, sw, sh, border_color, clip, active_clip_circle));
+                verts.extend(quad_vertices_clipped(cx, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip, active_clip_circle));
+                verts.extend(quad_vertices_clipped(cx + cw - thickness, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip, active_clip_circle));
             }
         }
         verts
@@ -3239,7 +3659,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             ref mut font_system, ref mut text_atlas, ref mut text_viewport,
             ref mut swash_cache, ref status_buffer,
             physical_width, physical_height, scale,
-            ref widgets, ref node_slots, ..
+            ref widgets, ..
         } = self;
 
         let viewport = Resolution { width: *physical_width, height: *physical_height };
@@ -3260,22 +3680,41 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let mut widget_labels: Vec<TextLabel> = Vec::new();
         let mut widget_is_node: Vec<bool> = Vec::new();
         for (i, w) in widgets.iter().enumerate() {
-            let is_node = node_slots.contains(&i);
+            let is_node = i == CONTENT_IDX;
+            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX;
             for label in w.text_labels() {
+                if self.circular_network_pane && is_network_part && i != LEFT_MENUBAR_IDX {
+                    let dx = label.x - self.network_circle_x;
+                    let dy = label.y - self.network_circle_y;
+                    let dist_sq = dx * dx + dy * dy;
+                    if dist_sq > self.network_circle_radius * self.network_circle_radius {
+                        continue;
+                    }
+                }
                 widget_buffers.push(make_text_buffer(font_system, &label.text, label.font_size));
                 widget_labels.push(label);
                 widget_is_node.push(is_node);
             }
         }
 
+
         for ((buf, label), &is_node) in widget_buffers.iter().zip(widget_labels.iter()).zip(widget_is_node.iter()) {
             let bounds = if is_node {
                 let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-                TextBounds {
-                    left: 0,
-                    top: (node_area_y * s) as i32,
-                    right: (splitter1_x * s) as i32,
-                    bottom: (((height - STATUS_H) * s) as i32).max(0),
+                if self.circular_network_pane {
+                    TextBounds {
+                        left: ((self.network_circle_x - self.network_circle_radius) * s) as i32,
+                        top: ((self.network_circle_y - self.network_circle_radius) * s) as i32,
+                        right: ((self.network_circle_x + self.network_circle_radius) * s) as i32,
+                        bottom: (((self.network_circle_y + self.network_circle_radius) * s) as i32).max(0),
+                    }
+                } else {
+                    TextBounds {
+                        left: 0,
+                        top: (node_area_y * s) as i32,
+                        right: (splitter1_x * s) as i32,
+                        bottom: (((height - STATUS_H) * s) as i32).max(0),
+                    }
                 }
             } else {
                 TextBounds {
@@ -3380,35 +3819,45 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 }
 
                 let result = if handled {
-                    if let Some(focused) = self.focused_widget {
-                        if self.node_slots.contains(&focused) {
-                            if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == focused) {
-                                let updated_params = self.widgets[PARAM_IDX].node_params();
-                                let dir = self.current_dir_mut();
-                                if let Some(child) = dir.children.get_mut(slot_idx) {
-                                    let mut param_changed = false;
-                                    for (u_name, u_val, _type) in &updated_params {
-                                        if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
-                                            if p.default != *u_val {
-                                                p.default = u_val.clone();
-                                                param_changed = true;
-                                            }
+                    if self.focused_widget == Some(CONTENT_IDX) {
+                        if let Some(slot_idx) = self.widgets[CONTENT_IDX].selected_node() {
+                            let updated_params = self.widgets[PARAM_IDX].node_params();
+                            let dir = self.current_dir_mut();
+                            if let Some(child) = dir.children.get_mut(slot_idx) {
+                                let mut param_changed = false;
+                                for (u_name, u_val, _type) in &updated_params {
+                                    if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                                        if p.default != *u_val {
+                                            p.default = u_val.clone();
+                                            param_changed = true;
                                         }
                                     }
-                                    if param_changed {
-                                        self.rebuild_scene_geometry();
-                                        self.sync_nodes();
-                                    }
+                                }
+                                if param_changed {
+                                    self.rebuild_scene_geometry();
+                                    self.sync_nodes();
                                 }
                             }
                         }
                     }
 
                     // Sync Parameters pane with selected node
-                    let params = self.focused_widget.and_then(|f| {
-                        if self.node_slots.contains(&f) { Some(f) } else { None }
-                    }).map(|f| self.widgets[f].node_params()).unwrap_or_default();
+                    let params = if self.focused_widget == Some(CONTENT_IDX) {
+                        if let Some(slot_idx) = self.widgets[CONTENT_IDX].selected_node() {
+                            let dir = self.current_dir();
+                            if slot_idx < dir.children.len() {
+                                param_display(&dir.children[slot_idx].params)
+                            } else {
+                                vec![]
+                            }
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        vec![]
+                    };
                     self.widgets[PARAM_IDX].set_display_params(&params);
+
 
                     self.sync_layout();
                     self.read_panel_offsets();
@@ -3592,11 +4041,20 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.cursor_x = position.x as f32 / self.scale as f32;
-                self.cursor_y = position.y as f32 / self.scale as f32;
+                self.cursor_x = position.x as f32;
+                self.cursor_y = position.y as f32;
+                println!("DEBUG: CursorMoved position=({:?}) scale={} => ({}, {})", position, self.scale, self.cursor_x, self.cursor_y);
+                let _ = std::io::Write::flush(&mut std::io::stdout());
                 let mut changed = false;
 
-                if self.is_panning {
+                if self.is_dragging_network_circle {
+                    self.network_circle_x = self.cursor_x - self.circle_drag_ox;
+                    self.network_circle_y = self.cursor_y - self.circle_drag_oy;
+                    self.rebuild_positions();
+                    self.apply_layout();
+                    self.sync_grid_settings();
+                    changed = true;
+                } else if self.is_panning {
                     let dx = self.cursor_x - self.pan_start_cx;
                     let dy = self.cursor_y - self.pan_start_cy;
                     self.pan_x = self.pan_start_x + dx;
@@ -3614,8 +4072,29 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     }
 
                     if self.drag_widget.is_none() {
-                        for w in &mut self.widgets {
-                            if w.cursor_moved(self.cursor_x, self.cursor_y) {
+                        for i in 0..self.widgets.len() {
+                            let (cx, cy) = (self.cursor_x, self.cursor_y);
+                            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX;
+                            let inside = if self.circular_network_pane && is_network_part {
+                                let cx_c = self.network_circle_x;
+                                let cy_c = self.network_circle_y;
+                                let r = self.network_circle_radius;
+                                if i == CONTENT_IDX {
+                                    let dx = cx - cx_c;
+                                    let dy = cy - cy_c;
+                                    dx * dx + dy * dy <= r * r && cy >= cy_c - r + 45.0 + MENUBAR_H + BREADCRUMB_H
+                                } else if i == LEFT_MENUBAR_IDX {
+                                    self.widgets[LEFT_MENUBAR_IDX].hit_test(cx, cy)
+                                } else if i == BREADCRUMB_IDX {
+                                    cx >= cx_c - r && cx <= cx_c + r && cy >= cy_c - r + 45.0 + MENUBAR_H && cy <= cy_c - r + 45.0 + MENUBAR_H + BREADCRUMB_H
+                                } else {
+                                    false
+                                }
+                            } else {
+                                self.widgets[i].hit_test(cx, cy)
+                            };
+                            let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
+                            if self.widgets[i].cursor_moved(tx, ty) {
                                 changed = true;
                             }
                         }
@@ -3624,6 +4103,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 changed
             }
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
+                println!("DEBUG: MouseInput state={:?} button={:?} cursor=({}, {})", btn_state, button, self.cursor_x, self.cursor_y);
                 if *btn_state == ElementState::Pressed {
                     self.pan_velocity_x = 0.0;
                     self.pan_velocity_y = 0.0;
@@ -3652,7 +4132,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let is_pan_trigger = !dialog_open
                     && in_network_pane
                     && (*button == MouseButton::Middle
-                        || *button == MouseButton::Right
                         || (*button == MouseButton::Left && self.space_pressed));
 
                 if is_pan_trigger {
@@ -3689,34 +4168,110 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     return true;
                 }
 
-                if *button != MouseButton::Left { return false; }
+                if *button != MouseButton::Left && *button != MouseButton::Right { return false; }
                 let mut changed = false;
                 let old_focus = self.focused_widget;
 
+                let hits_widget = |state: &State, i: usize, x: f32, y: f32| -> bool {
+                    if state.circular_network_pane && (i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX) {
+                        let cx_c = state.network_circle_x;
+                        let cy_c = state.network_circle_y;
+                        let r = state.network_circle_radius;
+                        if i == CONTENT_IDX {
+                            let dx = x - cx_c;
+                            let dy = y - cy_c;
+                            dx * dx + dy * dy <= r * r && y >= cy_c - r + 45.0 + MENUBAR_H + BREADCRUMB_H
+                        } else if i == LEFT_MENUBAR_IDX {
+                            state.widgets[LEFT_MENUBAR_IDX].hit_test(x, y)
+                        } else if i == BREADCRUMB_IDX {
+                            x >= cx_c - r && x <= cx_c + r && y >= cy_c - r + 45.0 + MENUBAR_H && y <= cy_c - r + 45.0 + MENUBAR_H + BREADCRUMB_H
+                        } else {
+                            false
+                        }
+                    } else {
+                        state.widgets[i].hit_test(x, y)
+                    }
+                };
+
+                let in_circle_network_pane = if self.circular_network_pane {
+                    let dx = self.cursor_x - self.network_circle_x;
+                    let dy = self.cursor_y - self.network_circle_y;
+                    let r = self.network_circle_radius;
+                    dx * dx + dy * dy <= r * r && self.cursor_y >= self.network_circle_y - r + 45.0 + MENUBAR_H + BREADCRUMB_H
+                } else {
+                    in_network_pane
+                };
+
                 match btn_state {
                     ElementState::Pressed => {
-                        eprintln!("[DEBUG] Left click at cursor logical coords: ({:.2}, {:.2})", self.cursor_x, self.cursor_y);
+                        println!("DEBUG: Mouse Pressed button={:?} position=({}, {})", button, self.cursor_x, self.cursor_y);
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                        if *button == MouseButton::Left && self.circular_network_pane {
+                            let dx = self.cursor_x - self.network_circle_x;
+                            let dy = self.cursor_y - self.network_circle_y;
+                            let dist = (dx * dx + dy * dy).sqrt();
+                            let on_border = dist >= self.network_circle_radius - 12.0 && dist <= self.network_circle_radius;
+                            let hit_menubar = self.widgets[LEFT_MENUBAR_IDX].hit_test(self.cursor_x, self.cursor_y);
+                            let mut clicked_menu_item = false;
+                            if hit_menubar {
+                                clicked_menu_item = self.widgets[LEFT_MENUBAR_IDX].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y);
+                            }
+                            if on_border || (hit_menubar && !clicked_menu_item) {
+                                self.is_dragging_network_circle = true;
+                                self.circle_drag_ox = self.cursor_x - self.network_circle_x;
+                                self.circle_drag_oy = self.cursor_y - self.network_circle_y;
+                                self.focused_pane = LEFT_MENUBAR_IDX;
+                                if let Some(old) = self.focused_widget {
+                                    self.widgets[old].unfocus();
+                                    self.focused_widget = None;
+                                }
+                                self.widgets[PARAM_IDX].unfocus();
+                                return true;
+                            } else if clicked_menu_item {
+                                self.focused_pane = LEFT_MENUBAR_IDX;
+                                if let Some(old) = self.focused_widget {
+                                    if old != LEFT_MENUBAR_IDX {
+                                        self.widgets[old].unfocus();
+                                    }
+                                }
+                                self.widgets[PARAM_IDX].unfocus();
+                                self.widgets[LEFT_MENUBAR_IDX].focus();
+                                self.focused_widget = Some(LEFT_MENUBAR_IDX);
+                                if !self.widgets[LEFT_MENUBAR_IDX].is_menu_open() {
+                                    self.widgets[LEFT_MENUBAR_IDX].unfocus();
+                                    self.focused_widget = None;
+                                }
+                                return true;
+                            }
+                        }
+
+                        if *button == MouseButton::Right {
+                            if !dialog_open && in_circle_network_pane {
+                                let col = ((self.cursor_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
+                                let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
+                                self.grid_cursor_col = col;
+                                self.grid_cursor_row = row;
+                                self.open_node_palette();
+                                return true;
+                            }
+                            return false;
+                        }
                         let mut click_target = None;
                         for i in 0..self.widgets.len() {
-                            if self.widgets[i].is_menu_open() && self.widgets[i].hit_test(self.cursor_x, self.cursor_y) {
+                            if self.widgets[i].is_menu_open() && hits_widget(self, i, self.cursor_x, self.cursor_y) {
                                 click_target = Some(i);
                                 break;
                             }
                         }
                         if click_target.is_none() {
                             click_target = (0..self.widgets.len()).rev()
-                                .find(|&i| self.widgets[i].hit_test(self.cursor_x, self.cursor_y));
-                        }
-                        eprintln!("[DEBUG] Selected click target: {:?}", click_target);
-                        if let Some(i) = click_target {
-                            let (rx, ry, rw, rh) = self.widgets[i].rect();
-                            eprintln!("[DEBUG] Target rect: ({:.2}, {:.2}, {:.2}, {:.2}), is_menu_bar: {}, is_menu_open: {}", rx, ry, rw, rh, self.widgets[i].is_menu_bar(), self.widgets[i].is_menu_open());
+                                .find(|&i| hits_widget(self, i, self.cursor_x, self.cursor_y));
                         }
 
                         // Determine new focused pane
                         let mut new_pane = None;
                         if let Some(i) = click_target {
-                            if i == LEFT_MENUBAR_IDX || i == CONTENT_IDX || i == CANVAS_IDX || (i >= NODE_SLOT_START && i < NODE_SLOT_START + NODE_SLOT_COUNT) || i == BREADCRUMB_IDX {
+                            if i == LEFT_MENUBAR_IDX || i == CONTENT_IDX || i == CANVAS_IDX || i == BREADCRUMB_IDX {
                                 new_pane = Some(LEFT_MENUBAR_IDX);
                             } else if i == RIGHT_MENUBAR_IDX || i == VIEWPORT_IDX {
                                 new_pane = Some(RIGHT_MENUBAR_IDX);
@@ -3726,15 +4281,27 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 new_pane = Some(SPREADSHEET_MENUBAR_IDX);
                             }
                         } else {
-                            if self.cursor_x < self.splitter1_x {
-                                new_pane = Some(LEFT_MENUBAR_IDX);
-                            } else if self.cursor_x > self.splitter2_x + SPLITTER_W {
-                                new_pane = Some(PARAM_MENUBAR_IDX);
-                            } else {
-                                if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_MENUBAR_IDX].1 {
-                                    new_pane = Some(SPREADSHEET_MENUBAR_IDX);
+                            if self.circular_network_pane {
+                                if self.cursor_x > self.splitter2_x + SPLITTER_W {
+                                    new_pane = Some(PARAM_MENUBAR_IDX);
                                 } else {
-                                    new_pane = Some(RIGHT_MENUBAR_IDX);
+                                    if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_MENUBAR_IDX].1 {
+                                        new_pane = Some(SPREADSHEET_MENUBAR_IDX);
+                                    } else {
+                                        new_pane = Some(RIGHT_MENUBAR_IDX);
+                                    }
+                                }
+                            } else {
+                                if self.cursor_x < self.splitter1_x {
+                                    new_pane = Some(LEFT_MENUBAR_IDX);
+                                } else if self.cursor_x > self.splitter2_x + SPLITTER_W {
+                                    new_pane = Some(PARAM_MENUBAR_IDX);
+                                } else {
+                                    if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_MENUBAR_IDX].1 {
+                                        new_pane = Some(SPREADSHEET_MENUBAR_IDX);
+                                    } else {
+                                        new_pane = Some(RIGHT_MENUBAR_IDX);
+                                    }
                                 }
                             }
                         }
@@ -3751,7 +4318,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 self.focused_widget = None;
                             }
                         }
-                        if click_target.is_none() && !dialog_open && in_network_pane {
+                        if click_target != Some(PARAM_IDX) {
+                            self.widgets[PARAM_IDX].unfocus();
+                        }
+                        if click_target.is_none() && !dialog_open && in_circle_network_pane {
                             let col = ((self.cursor_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
                             let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
                             self.grid_cursor_col = col;
@@ -3774,51 +4344,66 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                     self.focused_widget = None;
                                 }
                             }
-                            if self.node_slots.contains(&i) {
-                                if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == i) {
-                                    let off = self.left_offsets[slot_idx];
-                                    self.grid_cursor_col = off.0 as i32;
-                                    self.grid_cursor_row = off.1 as i32;
+                            if i == CONTENT_IDX {
+                                if let Some(slot_idx) = self.widgets[CONTENT_IDX].selected_node() {
+                                    let dir = self.current_dir();
+                                    if slot_idx < dir.children.len() {
+                                        let pos = dir.children[slot_idx].position;
+                                        self.grid_cursor_col = pos.0 as i32;
+                                        self.grid_cursor_row = pos.1 as i32;
+                                    }
+                                } else {
+                                    let col = ((self.cursor_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
+                                    let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
+                                    self.grid_cursor_col = col;
+                                    self.grid_cursor_row = row;
+                                    changed = true;
                                 }
-                            }
-                            // Double-click detection for node directory entry
-                            if self.node_slots.contains(&i) {
-                                if let Some((t, prev)) = self.last_click {
-                                    if prev == i && t.elapsed() < std::time::Duration::from_millis(500) {
-                                        let dir_idx = self.node_slots.iter().position(|&x| x == i).unwrap();
-                                        let dir = self.current_dir();
-                                        if dir_idx < dir.children.len() && (dir.children[dir_idx].node_type == "node" || dir.children[dir_idx].node_type == "opencl" || !dir.children[dir_idx].children.is_empty()) {
-                                            self.current_path.push(dir_idx);
-                                            self.on_path_changed();
-                                            changed = true;
-                                        }
+                                if let Some(dir_idx) = self.widgets[CONTENT_IDX].double_clicked_node() {
+                                    self.widgets[CONTENT_IDX].clear_double_clicked_node();
+                                    let dir = self.current_dir();
+                                    if dir_idx < dir.children.len() && (dir.children[dir_idx].node_type == "node" || dir.children[dir_idx].node_type == "opencl" || !dir.children[dir_idx].children.is_empty()) {
+                                        self.current_path.push(dir_idx);
+                                        self.on_path_changed();
+                                        changed = true;
                                     }
                                 }
-                                self.last_click = Some((Instant::now(), i));
-                            } else {
-                                self.last_click = None;
                             }
                         }
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
+                        if self.is_dragging_network_circle {
+                            self.is_dragging_network_circle = false;
+                            self.sync_layout();
+                            self.read_panel_offsets();
+                            self.upload_vertices();
+                            return true;
+                        }
                         if self.drag_widget.is_some() {
                             let idx = self.drag_widget.unwrap();
-                            if self.node_slots.contains(&idx) {
-                                if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == idx) {
-                                    if slot_idx < self.current_dir().children.len() {
-                                        let pos = self.current_dir().children[slot_idx].position;
-                                        let (nx, ny) = self.find_empty_cell(pos.0, pos.1, Some(slot_idx));
-                                        self.current_dir_mut().children[slot_idx].position = (nx, ny);
-                                        self.left_offsets[slot_idx] = (nx, ny);
-                                        self.rebuild_positions();
-                                        self.apply_layout();
-                                        self.update_panel_bounds();
-                                        self.upload_vertices();
+                            if idx == CONTENT_IDX {
+                                self.widgets[idx].drag_end();
+                                let updated_nodes = self.widgets[CONTENT_IDX].get_nodes();
+                                let dir = self.current_dir_mut();
+                                for (i, node) in updated_nodes.iter().enumerate() {
+                                    if let Some(child) = dir.children.get_mut(i) {
+                                        child.position = node.position;
                                     }
                                 }
+                                if let Some(sel_idx) = self.widgets[CONTENT_IDX].selected_node() {
+                                    if let Some(node) = updated_nodes.get(sel_idx) {
+                                        self.grid_cursor_col = node.position.0 as i32;
+                                        self.grid_cursor_row = node.position.1 as i32;
+                                    }
+                                }
+                                self.rebuild_positions();
+                                self.apply_layout();
+                                self.update_panel_bounds();
+                                self.upload_vertices();
+                            } else {
+                                self.widgets[idx].drag_end();
                             }
-                            self.widgets[idx].drag_end();
                             self.drag_widget = None;
                             changed = true;
                         }
@@ -3830,15 +4415,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     }
                 }
 
-                let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
-                let mut visibility_updates = Vec::new();
-                for (i, &slot) in self.node_slots.iter().enumerate().take(active_nodes) {
-                    if self.widgets[slot].take_geom_toggle() {
-                        let visible = self.widgets[slot].geom_visible();
-                        visibility_updates.push((i, visible));
-                    }
-                }
-                for (i, visible) in visibility_updates {
+
+                if let Some((i, visible)) = self.widgets[CONTENT_IDX].take_node_geom_toggle() {
                     self.current_dir_mut().children[i].geometry_visible = visible;
                     self.rebuild_scene_geometry();
                     changed = true;
@@ -3867,16 +4445,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 }
 
                 if self.widgets[PARAM_IDX].keyboard_input(event) {
-                    if let Some(focused) = self.focused_widget {
-                        if self.node_slots.contains(&focused) {
-                            if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == focused) {
-                                let updated_params = self.widgets[PARAM_IDX].node_params();
-                                let dir = self.current_dir_mut();
-                                if let Some(child) = dir.children.get_mut(slot_idx) {
-                                    for (u_name, u_val, _) in &updated_params {
-                                        if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
-                                            p.default = u_val.clone();
-                                        }
+                    if self.focused_widget == Some(CONTENT_IDX) {
+                        if let Some(slot_idx) = self.widgets[CONTENT_IDX].selected_node() {
+                            let updated_params = self.widgets[PARAM_IDX].node_params();
+                            let dir = self.current_dir_mut();
+                            if let Some(child) = dir.children.get_mut(slot_idx) {
+                                for (u_name, u_val, _) in &updated_params {
+                                    if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                                        p.default = u_val.clone();
                                     }
                                 }
                             }
@@ -3913,16 +4489,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             }
                             Key::Character(s) => {
                                 match s.as_str() {
-                                    "k" | "K" if is_plain_key || is_alt_key => {
+                                    "k" | "K" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
                                         delta = Some((0, -1));
                                     }
-                                    "j" | "J" if is_plain_key || is_alt_key => {
+                                    "j" | "J" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
                                         delta = Some((0, 1));
                                     }
-                                    "h" | "H" if is_plain_key || is_alt_key => {
+                                    "h" | "H" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
                                         delta = Some((-1, 0));
                                     }
-                                    "l" | "L" if is_plain_key || is_alt_key => {
+                                    "l" | "L" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
                                         delta = Some((1, 0));
                                     }
                                     _ => {}
@@ -3938,7 +4514,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             self.scroll_accum_x = 0.0;
                             self.scroll_accum_y = 0.0;
                             if is_alt_key {
-                                let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
+                                let active_nodes = self.current_dir().children.len();
                                 let node_idx_at_cursor = self.current_dir().children.iter().take(active_nodes).position(|child| {
                                     child.position.0 as i32 == self.grid_cursor_col && child.position.1 as i32 == self.grid_cursor_row
                                 });
@@ -3946,7 +4522,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                     let new_x = self.current_dir().children[idx].position.0 + dc as f32;
                                     let new_y = self.current_dir().children[idx].position.1 + dr as f32;
                                     self.current_dir_mut().children[idx].position = (new_x, new_y);
-                                    self.left_offsets[idx] = (new_x, new_y);
                                     self.sync_nodes();
                                     self.sync_layout();
                                     self.upload_vertices();
@@ -3954,19 +4529,20 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             }
                             self.grid_cursor_col += dc;
                             self.grid_cursor_row += dr;
+                            self.sync_cursor_and_selection();
                             changed = true;
                         } else {
                             if let Key::Character(s) = &event.logical_key {
                                 if is_plain_key {
                                     match s.as_str() {
                                         "e" | "E" => {
-                                            if let Some(idx) = self.focused_widget {
-                                                if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == idx) {
-                                                    let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
-                                                    if slot_idx < active_nodes {
-                                                        let visible = !self.widgets[idx].geom_visible();
-                                                        self.widgets[idx].set_geom_visible(visible);
+                                            if self.focused_widget == Some(CONTENT_IDX) {
+                                                if let Some(slot_idx) = self.widgets[CONTENT_IDX].selected_node() {
+                                                    let dir = self.current_dir();
+                                                    if slot_idx < dir.children.len() {
+                                                        let visible = !dir.children[slot_idx].geometry_visible;
                                                         self.current_dir_mut().children[slot_idx].geometry_visible = visible;
+                                                        self.sync_nodes();
                                                         self.rebuild_scene_geometry();
                                                         changed = true;
                                                     }
@@ -3998,14 +4574,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                         }
                                         "i" | "I" => {
                                             if self.focused_pane == LEFT_MENUBAR_IDX {
-                                                if let Some(focused) = self.focused_widget {
-                                                    if let Some(slot_idx) = self.node_slots.iter().position(|&x| x == focused) {
+                                                if self.focused_widget == Some(CONTENT_IDX) {
+                                                    if let Some(slot_idx) = self.widgets[CONTENT_IDX].selected_node() {
                                                         let dir = self.current_dir();
                                                          if slot_idx < dir.children.len() && (dir.children[slot_idx].node_type == "node" || dir.children[slot_idx].node_type == "opencl" || !dir.children[slot_idx].children.is_empty()) {
                                                              self.current_path.push(slot_idx);
-                                                            self.on_path_changed();
-                                                            changed = true;
-                                                        }
+                                                             self.on_path_changed();
+                                                             changed = true;
+                                                         }
                                                     }
                                                 }
                                             }
@@ -4020,7 +4596,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                         }
                                         "f" | "F" => {
                                             if self.focused_pane == LEFT_MENUBAR_IDX {
-                                                let active_nodes = self.current_dir().children.len().min(self.node_slots.len());
+                                                let active_nodes = self.current_dir().children.len();
                                                 if active_nodes == 0 {
                                                     self.grid_size_x = 80.0;
                                                     self.grid_size_y = 40.0;
@@ -4040,7 +4616,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                                     let mut b_ymax = f32::MIN;
 
                                                     for slot_idx in 0..active_nodes {
-                                                        let (col, row) = self.left_offsets[slot_idx];
+                                                        let (col, row) = self.current_dir().children[slot_idx].position;
                                                         let x_min = col * (base_gx + base_col_w);
                                                         let x_max = x_min + base_gx;
                                                         let y_min = row * (base_gy + base_row_h);
@@ -4080,7 +4656,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                                     let mut actual_ymax = f32::MIN;
 
                                                     for slot_idx in 0..active_nodes {
-                                                        let (col, row) = self.left_offsets[slot_idx];
+                                                        let (col, row) = self.current_dir().children[slot_idx].position;
                                                         let x_min = col * (self.grid_size_x + self.skipped_col_w);
                                                         let x_max = x_min + self.grid_size_x;
                                                         let y_min = row * (self.grid_size_y + self.skipped_row_h);
@@ -4145,6 +4721,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
 
+        if now.duration_since(self.last_config_read).as_secs_f32() > 2.0 {
+            self.update_inertial_settings();
+        }
+
         // Panning velocity tracking
         if self.is_panning {
             if dt > 1e-5 {
@@ -4206,26 +4786,30 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         // Panning kinetic slide
         if !self.is_panning && !self.is_scrolling_trackpad && (self.pan_velocity_x.abs() > 0.01 || self.pan_velocity_y.abs() > 0.01) {
-            self.pan_x += self.pan_velocity_x * dt;
-            self.pan_y += self.pan_velocity_y * dt;
-
-            // Apply friction decay
-            let friction = 5.0_f32;
-            let decay = (-friction * dt).exp();
-            self.pan_velocity_x *= decay;
-            self.pan_velocity_y *= decay;
-
-            // If velocity magnitude is below 10.0 px/sec, stop completely.
-            if self.pan_velocity_x.hypot(self.pan_velocity_y) < 10.0 {
+            if !self.inertial_scroll_enabled {
                 self.pan_velocity_x = 0.0;
                 self.pan_velocity_y = 0.0;
-            }
+            } else {
+                self.pan_x += self.pan_velocity_x * dt;
+                self.pan_y += self.pan_velocity_y * dt;
 
-            self.sync_grid_settings();
-            self.rebuild_positions();
-            self.apply_layout();
-            self.update_panel_bounds();
-            tick_changed = true;
+                // Apply dynamic friction decay
+                let decay = self.inertial_scroll_friction.powf(dt * 60.0);
+                self.pan_velocity_x *= decay;
+                self.pan_velocity_y *= decay;
+
+                // If velocity magnitude is below 10.0 px/sec, stop completely.
+                if self.pan_velocity_x.hypot(self.pan_velocity_y) < 10.0 {
+                    self.pan_velocity_x = 0.0;
+                    self.pan_velocity_y = 0.0;
+                }
+
+                self.sync_grid_settings();
+                self.rebuild_positions();
+                self.apply_layout();
+                self.update_panel_bounds();
+                tick_changed = true;
+            }
         }
 
         // Viewport rotation kinetic slide
@@ -4267,7 +4851,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         let mut panned = false;
         if let Some(idx) = self.drag_widget {
-            if self.node_slots.contains(&idx) {
+            if idx == CONTENT_IDX {
                 let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
                 let margin = 30.0_f32;
                 let pan_speed = 5.0_f32;
@@ -4678,12 +5262,14 @@ impl PointerHandler for AppState {
         for event in events {
             if let Some(st) = &mut self.state {
                 let (cx, cy) = clear_ui::wayland::scale_pointer_pos(event.position, st.scale);
+                st.cursor_x = event.position.0 as f32;
+                st.cursor_y = event.position.1 as f32;
                 match &event.kind {
                     PointerEventKind::Motion { .. } => {
                         let ev = WindowEvent::CursorMoved {
                             position: LocalPosition {
-                                x: cx as f64,
-                                y: cy as f64,
+                                x: event.position.0,
+                                y: event.position.1,
                             },
                         };
                         self.process_event(ev);
@@ -4695,6 +5281,7 @@ impl PointerHandler for AppState {
                             274 => clear_ui::widget::MouseButton::Middle,
                             _ => continue,
                         };
+                        eprintln!("DEBUG MOUSE PRESS: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
                         let ev = WindowEvent::MouseInput {
                             state: clear_ui::widget::ElementState::Pressed,
                             button: btn,
@@ -4708,6 +5295,7 @@ impl PointerHandler for AppState {
                             274 => clear_ui::widget::MouseButton::Middle,
                             _ => continue,
                         };
+                        eprintln!("DEBUG MOUSE RELEASE: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
                         let ev = WindowEvent::MouseInput {
                             state: clear_ui::widget::ElementState::Released,
                             button: btn,
@@ -4754,7 +5342,13 @@ impl KeyboardHandler for AppState {
         _keyboard: &wl_keyboard::WlKeyboard,
         _surface: &wl_surface::WlSurface,
         _serial: u32,
-    ) {}
+    ) {
+        self.pressed_key = None;
+        if let Some(st) = &mut self.state {
+            st.modifiers = ModifiersState::default();
+        }
+    }
+
 
     fn press_key(
         &mut self,
@@ -4784,9 +5378,16 @@ impl KeyboardHandler for AppState {
         _qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
         _serial: u32,
-        _modifiers: smithay_client_toolkit::seat::keyboard::Modifiers,
+        modifiers: smithay_client_toolkit::seat::keyboard::Modifiers,
         _layout: u32,
-    ) {}
+    ) {
+        if let Some(st) = &mut self.state {
+            st.modifiers.ctrl = modifiers.ctrl;
+            st.modifiers.alt = modifiers.alt;
+            st.modifiers.shift = modifiers.shift;
+            st.modifiers.logo = modifiers.logo;
+        }
+    }
 }
 
 impl WindowHandler for AppState {
@@ -4878,16 +5479,25 @@ impl AppState {
             xkeysym::Keysym::g | xkeysym::Keysym::G => Key::Character("g".into()),
             xkeysym::Keysym::e | xkeysym::Keysym::E => Key::Character("e".into()),
             xkeysym::Keysym::a | xkeysym::Keysym::A => Key::Character("a".into()),
+            xkeysym::Keysym::d | xkeysym::Keysym::D => Key::Character("d".into()),
             xkeysym::Keysym::f | xkeysym::Keysym::F => Key::Character("f".into()),
+            xkeysym::Keysym::h | xkeysym::Keysym::H => Key::Character("h".into()),
+            xkeysym::Keysym::j | xkeysym::Keysym::J => Key::Character("j".into()),
+            xkeysym::Keysym::k | xkeysym::Keysym::K => Key::Character("k".into()),
+            xkeysym::Keysym::l | xkeysym::Keysym::L => Key::Character("l".into()),
             xkeysym::Keysym::grave => Key::Character("`".into()),
             _ => {
                 if let Some(ref text) = event.utf8 {
                     Key::Character(text.clone())
+                } else if let Some(ch) = event.keysym.key_char() {
+                    Key::Character(ch.to_string())
                 } else {
                     return;
                 }
             }
         };
+
+        eprintln!("DEBUG KEY: keysym={:?}, state={:?}, logical_key={:?}", event.keysym, state, logical_key);
 
         if let Some(st) = &mut self.state {
             match event.keysym {
@@ -5012,6 +5622,18 @@ impl AppState {
                         }
                         _ => {}
                     }
+                } else if menu_idx == 2 { // View
+                    match item_idx {
+                        2 => {
+                            state.circular_network_pane = !state.circular_network_pane;
+                            state.widgets[LEFT_MENUBAR_IDX].set_item_checked(2, 2, state.circular_network_pane);
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.sync_grid_settings();
+                            changed = true;
+                        }
+                        _ => {}
+                    }
                 }
             }
 
@@ -5054,11 +5676,7 @@ impl AppState {
                 match id {
                     0 => {
                         state.grid_snap_enabled = val;
-                        for &i in &state.node_slots {
-                            let gx = if val { state.grid_size_x + state.skipped_col_w } else { 0.0 };
-                            let gy = if val { state.grid_size_y + state.skipped_row_h } else { 0.0 };
-                            state.widgets[i].set_grid_snap(gx, gy);
-                        }
+                        state.widgets[CONTENT_IDX].set_grid_snap_enabled(val);
                     }
                     1 => {
                         state.network_grid_visible = val;
@@ -5107,11 +5725,19 @@ impl AppState {
                         state.camera_pivot_size = val;
                         state.update_pivot_geometry();
                     }
+                    10 => {
+                        state.node_color[0] = val;
+                        colors::set_node_color([state.node_color[0], state.node_color[1], state.node_color[2], 1.0]);
+                    }
+                    11 => {
+                        state.node_color[1] = val;
+                        colors::set_node_color([state.node_color[0], state.node_color[1], state.node_color[2], 1.0]);
+                    }
+                    12 => {
+                        state.node_color[2] = val;
+                        colors::set_node_color([state.node_color[0], state.node_color[1], state.node_color[2], 1.0]);
+                    }
                     _ => {}
-                }
-                for &i in &state.node_slots {
-                    let (x, y, _, _) = state.widgets[i].rect();
-                    state.widgets[i].set_rect(x, y, state.grid_size_x, state.grid_size_y);
                 }
                 state.sync_grid_settings();
                 changed = true;
@@ -5128,24 +5754,22 @@ impl AppState {
                 state.sync_cursor_and_selection();
 
                 if state.drag_widget == Some(PARAM_IDX) && state.widgets[PARAM_IDX].is_dragging() {
-                    if let Some(focused) = state.focused_widget {
-                        if state.node_slots.contains(&focused) {
-                            if let Some(slot_idx) = state.node_slots.iter().position(|&x| x == focused) {
-                                let updated_params = state.widgets[PARAM_IDX].node_params();
-                                let dir = state.current_dir_mut();
-                                if let Some(child) = dir.children.get_mut(slot_idx) {
-                                    let mut param_changed = false;
-                                    for (u_name, u_val, _type) in &updated_params {
-                                        if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
-                                            if p.default != *u_val {
-                                                p.default = u_val.clone();
-                                                param_changed = true;
-                                            }
+                    if state.focused_widget == Some(CONTENT_IDX) {
+                        if let Some(slot_idx) = state.widgets[CONTENT_IDX].selected_node() {
+                            let updated_params = state.widgets[PARAM_IDX].node_params();
+                            let dir = state.current_dir_mut();
+                            if let Some(child) = dir.children.get_mut(slot_idx) {
+                                let mut param_changed = false;
+                                for (u_name, u_val, _type) in &updated_params {
+                                    if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                                        if p.default != *u_val {
+                                            p.default = u_val.clone();
+                                            param_changed = true;
                                         }
                                     }
-                                    if param_changed {
-                                        state.rebuild_scene_geometry();
-                                    }
+                                }
+                                if param_changed {
+                                    state.rebuild_scene_geometry();
                                 }
                             }
                         }
@@ -5155,9 +5779,16 @@ impl AppState {
                 state.sync_nodes();
 
                 // Sync Parameters pane with selected node
-                let params = state.focused_widget.and_then(|f| {
-                    if state.node_slots.contains(&f) { Some(f) } else { None }
-                }).map(|f| state.widgets[f].node_params()).unwrap_or_default();
+                let params = if state.focused_widget == Some(CONTENT_IDX) {
+                    state.widgets[CONTENT_IDX].selected_node().and_then(|sel_idx| {
+                        let dir = state.current_dir();
+                        if sel_idx < dir.children.len() {
+                            Some(param_display(&dir.children[sel_idx].params))
+                        } else { None }
+                    }).unwrap_or_default()
+                } else {
+                    vec![]
+                };
                 state.widgets[PARAM_IDX].set_display_params(&params);
 
                 state.upload_vertices();
@@ -5261,12 +5892,11 @@ impl AppState {
                             }
                         }
                         HttpAction::ToggleGeometry { slot } => {
-                            let active_nodes = state.current_dir().children.len().min(state.node_slots.len());
+                            let active_nodes = state.current_dir().children.len();
                             if slot < active_nodes {
-                                let idx = state.node_slots[slot];
-                                let visible = !state.widgets[idx].geom_visible();
-                                state.widgets[idx].set_geom_visible(visible);
+                                let visible = !state.current_dir().children[slot].geometry_visible;
                                 state.current_dir_mut().children[slot].geometry_visible = visible;
+                                state.sync_nodes();
                                 state.rebuild_scene_geometry();
                                 needs_redraw = true;
                                 Ok(format!("Geometry visible: {}", visible))
@@ -5275,33 +5905,27 @@ impl AppState {
                             }
                         }
                         HttpAction::AddNode { template_name, name, x, y } => {
-                            let child_idx = state.current_dir().children.len();
-                            if child_idx >= state.node_slots.len() {
-                                Err("Max node slots reached".to_string())
-                            } else {
-                                let template_idx = state.node_templates.iter().position(|t| {
-                                    t.label.to_lowercase() == template_name.to_lowercase()
-                                        || t.node.name.to_lowercase() == template_name.to_lowercase()
-                                });
-                                if let Some(idx) = template_idx {
-                                    let mut node = state.node_templates[idx].node.clone();
-                                    let (nx, ny) = state.find_empty_cell(x, y, None);
-                                    node.position = (nx, ny);
-                                    if let Some(n) = name {
-                                        node.name = n;
-                                    }
-                                    state.current_dir_mut().children.push(node);
-                                    state.left_offsets[child_idx] = (nx, ny);
-                                    state.sync_nodes();
-                                    state.rebuild_positions();
-                                    state.apply_layout();
-                                    state.update_panel_bounds();
-                                    state.upload_vertices();
-                                    needs_redraw = true;
-                                    Ok("Node added".to_string())
-                                } else {
-                                    Err(format!("Template '{}' not found", template_name))
+                            let template_idx = state.node_templates.iter().position(|t| {
+                                t.label.to_lowercase() == template_name.to_lowercase()
+                                    || t.node.name.to_lowercase() == template_name.to_lowercase()
+                            });
+                            if let Some(idx) = template_idx {
+                                let mut node = state.node_templates[idx].node.clone();
+                                let (nx, ny) = state.find_empty_cell(x, y, None);
+                                node.position = (nx, ny);
+                                if let Some(n) = name {
+                                    node.name = n;
                                 }
+                                state.current_dir_mut().children.push(node);
+                                state.sync_nodes();
+                                state.rebuild_positions();
+                                state.apply_layout();
+                                state.update_panel_bounds();
+                                state.upload_vertices();
+                                needs_redraw = true;
+                                Ok("Node added".to_string())
+                            } else {
+                                Err(format!("Template '{}' not found", template_name))
                             }
                         }
                         HttpAction::DeleteNode { slot } => {
@@ -5309,10 +5933,13 @@ impl AppState {
                             if slot < len {
                                 state.current_dir_mut().children.remove(slot);
                                 if let Some(focused) = state.focused_widget {
-                                    if let Some(pos) = state.node_slots.iter().position(|&x| x == focused) {
-                                        if pos >= slot {
-                                            state.widgets[focused].unfocus();
-                                            state.focused_widget = None;
+                                    if focused == CONTENT_IDX {
+                                        if let Some(sel_idx) = state.widgets[CONTENT_IDX].selected_node() {
+                                            if sel_idx == slot {
+                                                state.widgets[CONTENT_IDX].set_selected_node(None);
+                                            } else if sel_idx > slot {
+                                                state.widgets[CONTENT_IDX].set_selected_node(Some(sel_idx - 1));
+                                            }
                                         }
                                     }
                                 }
@@ -5343,9 +5970,6 @@ impl AppState {
                             if slot < len {
                                 let (nx, ny) = state.find_empty_cell(x, y, Some(slot));
                                 state.current_dir_mut().children[slot].position = (nx, ny);
-                                if slot < state.left_offsets.len() {
-                                    state.left_offsets[slot] = (nx, ny);
-                                }
                                 state.sync_nodes();
                                 state.rebuild_positions();
                                 state.apply_layout();
@@ -5392,6 +6016,16 @@ impl AppState {
                             } else {
                                 Err("Slot out of bounds".to_string())
                             }
+                        }
+                        HttpAction::ToggleCircularPane => {
+                            state.circular_network_pane = !state.circular_network_pane;
+                            state.widgets[LEFT_MENUBAR_IDX].set_item_checked(2, 2, state.circular_network_pane);
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.sync_grid_settings();
+                            state.upload_vertices();
+                            needs_redraw = true;
+                            Ok(format!("Circular pane: {}", state.circular_network_pane))
                         }
                     };
                     let _ = tx.send(res);
@@ -5670,6 +6304,22 @@ fn main() {
             }
         }
 
+fn create_memfd_with_data(name: &str, data: &[u8]) -> std::io::Result<std::os::unix::io::RawFd> {
+    use std::io::{Seek, Write};
+    use std::os::unix::io::FromRawFd;
+    use std::os::unix::io::IntoRawFd;
+
+    let c_name = std::ffi::CString::new(name).unwrap();
+    let fd = unsafe { libc::memfd_create(c_name.as_ptr(), libc::MFD_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    file.write_all(data)?;
+    file.seek(std::io::SeekFrom::Start(0))?;
+    Ok(file.into_raw_fd())
+}
+
         if app.redraw {
             app.redraw = false;
             if let Some(state) = &mut app.state {
@@ -5679,7 +6329,11 @@ fn main() {
                 if let Some(ref inspector) = app.inspector {
                     if let Some(ref surface) = app.surface {
                         let json = clear_ui::widget::serialize_widgets(&state.widgets);
-                        inspector.update_state(surface, json);
+                        if let Ok(raw_fd) = create_memfd_with_data("clear_ui_state", json.as_bytes()) {
+                            use std::os::unix::io::{FromRawFd, AsFd};
+                            let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+                            inspector.update_state(surface, file.as_fd(), json.len() as u32);
+                        }
                     }
                 }
             }
@@ -5907,6 +6561,28 @@ mod tests {
         assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true), PARAM_MENUBAR_IDX);
         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true), RIGHT_MENUBAR_IDX);
         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true), LEFT_MENUBAR_IDX);
+    }
+
+    #[test]
+    fn test_inertial_settings_fallback_and_ranges() {
+        let friction_raw = 90_u16;
+        let friction_f32 = (friction_raw as f32 / 100.0).clamp(0.5, 0.99);
+        assert!(friction_f32 >= 0.5 && friction_f32 <= 0.99);
+        
+        let friction_raw_low = 30_u16;
+        let friction_f32_low = (friction_raw_low as f32 / 100.0).clamp(0.5, 0.99);
+        assert_eq!(friction_f32_low, 0.5);
+    }
+
+    #[test]
+    fn test_decay_formula() {
+        let friction = 0.90_f32;
+        let dt_60 = 1.0 / 60.0;
+        let decay_60 = friction.powf(dt_60 * 60.0);
+        assert!((decay_60 - friction).abs() < 1e-5);
+
+        let decay_0 = friction.powf(0.0 * 60.0);
+        assert_eq!(decay_0, 1.0);
     }
 }
 

@@ -1,0 +1,415 @@
+Found 5 active inspected surface(s):
+============================================================
+Surface #1:
+  Title:       foot
+  App ID:      foot
+  Position:    (x: 984, y: 48)
+  Dimensions:  912x540 px
+  Widget Tree: 
+    {}
+============================================================
+Surface #2:
+  Title:       clear-design-interface
+  App ID:      antigravity
+  Position:    (x: 24, y: 48)
+  Dimensions:  912x540 px
+  Widget Tree: 
+    {}
+============================================================
+Surface #3:
+  Title:       Clear Design Interface
+  App ID:      clear-design-interface
+  Position:    (x: 24, y: 636)
+  Dimensions:  912x540 px
+  Widget Tree: 
+    [
+      {
+        "children": [
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "File",
+            "rect": [
+              197,
+              0,
+              46,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Edit",
+            "rect": [
+              243,
+              0,
+              46,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "View",
+            "rect": [
+              289,
+              0,
+              46,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Help",
+            "rect": [
+              335,
+              0,
+              46,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          }
+        ],
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          0,
+          912,
+          26
+        ],
+        "type": "MenuBar",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          70,
+          215,
+          360,
+          265
+        ],
+        "type": "Graph",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "type": "Splitter",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          26,
+          606.57495,
+          486
+        ],
+        "type": "ViewportBg",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          606.57495,
+          26,
+          6,
+          486
+        ],
+        "type": "Splitter",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          612.57495,
+          26,
+          299.42505,
+          486
+        ],
+        "type": "ParametersBg",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          26,
+          912,
+          486
+        ],
+        "type": "Canvas",
+        "value": 0
+      },
+      {
+        "children": [
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "File",
+            "rect": [
+              226.50006,
+              120.00076,
+              46,
+              35
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Edit",
+            "rect": [
+              271.90784,
+              126.32849,
+              46,
+              35
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "View",
+            "rect": [
+              313.74097,
+              145.0873,
+              46,
+              35
+            ],
+            "type": "Menu",
+            "value": 0
+          }
+        ],
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          70,
+          120,
+          360,
+          35
+        ],
+        "type": "MenuBar",
+        "value": 0
+      },
+      {
+        "children": [
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Camera",
+            "rect": [
+              114.5,
+              26,
+              61,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Display",
+            "rect": [
+              175.5,
+              26,
+              68.5,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Guides",
+            "rect": [
+              244,
+              26,
+              61,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          }
+        ],
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          26,
+          606.57495,
+          26
+        ],
+        "type": "MenuBar",
+        "value": 0
+      },
+      {
+        "children": [
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Preset",
+            "rect": [
+              742.07495,
+              26,
+              61,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          },
+          {
+            "focused": false,
+            "hovered": false,
+            "label": "Reset",
+            "rect": [
+              803.07495,
+              26,
+              53.5,
+              26
+            ],
+            "type": "Menu",
+            "value": 0
+          }
+        ],
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          612.57495,
+          26,
+          299.42505,
+          26
+        ],
+        "type": "MenuBar",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          512,
+          912,
+          28
+        ],
+        "type": "StatusBar",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          70,
+          191,
+          360,
+          24
+        ],
+        "type": "Breadcrumb",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          0,
+          912,
+          540
+        ],
+        "type": "ConfigDialog",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          0,
+          912,
+          540
+        ],
+        "type": "NodePalette",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "type": "Spreadsheet",
+        "value": 0
+      },
+      {
+        "focused": false,
+        "hovered": false,
+        "label": "",
+        "rect": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "type": "MenuBar",
+        "value": 0
+      }
+    ]
+============================================================
+Surface #4:
+  Title:       when it is a circle the (Draft) - Text Editor
+  App ID:      org.gnome.TextEditor
+  Position:    (x: 24, y: 48)
+  Dimensions:  1872x1128 px
+  Widget Tree: 
+    {}
+============================================================
+Surface #5:
+  Title:       Clear Status Interface
+  App ID:      clear-status-interface
+  Position:    (x: 0, y: 0)
+  Dimensions:  1920x1200 px
+  Widget Tree: 
+    {}
+============================================================
