@@ -567,12 +567,30 @@ fn make_text_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> Buff
     buffer
 }
 
-fn get_next_visible_pane(current_pane: usize, show_spreadsheet: bool, shift_pressed: bool) -> usize {
-    let visible_panes = if show_spreadsheet {
-        vec![LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX]
-    } else {
-        vec![LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX]
-    };
+fn get_next_visible_pane(
+    current_pane: usize,
+    show_network: bool,
+    show_viewport: bool,
+    show_parameters: bool,
+    show_spreadsheet: bool,
+    shift_pressed: bool,
+) -> usize {
+    let mut visible_panes = Vec::new();
+    if show_network {
+        visible_panes.push(LEFT_MENUBAR_IDX);
+    }
+    if show_viewport {
+        visible_panes.push(RIGHT_MENUBAR_IDX);
+    }
+    if show_parameters {
+        visible_panes.push(PARAM_MENUBAR_IDX);
+    }
+    if show_spreadsheet {
+        visible_panes.push(SPREADSHEET_MENUBAR_IDX);
+    }
+    if visible_panes.is_empty() {
+        return LEFT_MENUBAR_IDX;
+    }
 
     let current_pos = visible_panes.iter().position(|&x| x == current_pane).unwrap_or(0);
     let next_pos = if shift_pressed {
@@ -706,6 +724,9 @@ struct State {
     pan_start_y: f32,
     space_pressed: bool,
     active_camera: String,
+    show_network: bool,
+    show_viewport: bool,
+    show_parameters: bool,
     show_spreadsheet: bool,
     is_scrolling_trackpad: bool,
     last_scroll_time: Instant,
@@ -788,18 +809,67 @@ impl State {
 
     fn body_h(&self) -> f32 { self.height - HEADER_H - STATUS_H }
 
-    fn content_left_w(&self) -> f32 { self.splitter_layout.left_col().1 }
+    fn get_col_geometries(&self) -> (f32, f32, f32, f32, f32, f32) {
+        let left_visible = self.show_network && !self.circular_network_pane && !self.is_detached_network && !self.detached_circular_network;
+        let center_visible = self.show_viewport || self.show_spreadsheet;
+        let right_visible = self.show_parameters;
 
-    fn content_right_x(&self) -> f32 { self.splitter_layout.center_col().0 }
+        let (col_l_x, col_l_w, col_c_x, col_c_w, col_r_x, col_r_w) =
+            match (left_visible, center_visible, right_visible) {
+                (true, true, true) => {
+                    let l_w = self.splitter_layout.splitter1_x;
+                    let c_x = l_w + SPLITTER_W;
+                    let c_w = self.splitter_layout.splitter2_x - c_x;
+                    let r_x = self.splitter_layout.splitter2_x + SPLITTER_W;
+                    let r_w = (self.width - r_x).max(0.0);
+                    (0.0, l_w, c_x, c_w, r_x, r_w)
+                }
+                (true, true, false) => {
+                    let l_w = self.splitter_layout.splitter1_x;
+                    let c_x = l_w + SPLITTER_W;
+                    let c_w = (self.width - c_x).max(0.0);
+                    (0.0, l_w, c_x, c_w, 0.0, 0.0)
+                }
+                (true, false, true) => {
+                    let l_w = self.splitter_layout.splitter2_x;
+                    let r_x = l_w + SPLITTER_W;
+                    let r_w = (self.width - r_x).max(0.0);
+                    (0.0, l_w, 0.0, 0.0, r_x, r_w)
+                }
+                (false, true, true) => {
+                    let c_w = self.splitter_layout.splitter2_x;
+                    let r_x = c_w + SPLITTER_W;
+                    let r_w = (self.width - r_x).max(0.0);
+                    (0.0, 0.0, 0.0, c_w, r_x, r_w)
+                }
+                (true, false, false) => {
+                    (0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                }
+                (false, true, false) => {
+                    (0.0, 0.0, 0.0, self.width, 0.0, 0.0)
+                }
+                (false, false, true) => {
+                    (0.0, 0.0, 0.0, 0.0, 0.0, self.width)
+                }
+                (false, false, false) => {
+                    (0.0, 0.0, 0.0, self.width, 0.0, 0.0)
+                }
+            };
+        (col_l_x, col_l_w, col_c_x, col_c_w, col_r_x, col_r_w)
+    }
 
-    fn viewport_w(&self) -> f32 { self.splitter_layout.center_col().1 }
+    fn content_left_w(&self) -> f32 { self.get_col_geometries().1 }
 
-    fn param_x(&self) -> f32 { self.splitter_layout.right_col(self.width).0 }
+    fn content_right_x(&self) -> f32 { self.get_col_geometries().2 }
 
-    fn param_w(&self) -> f32 { self.splitter_layout.right_col(self.width).1 }
+    fn viewport_w(&self) -> f32 { self.get_col_geometries().3 }
+
+    fn param_x(&self) -> f32 { self.get_col_geometries().4 }
+
+    fn param_w(&self) -> f32 { self.get_col_geometries().5 }
     
     fn in_network_pane(&self) -> bool {
-        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+        let node_area_y = self.positions[CONTENT_IDX].1;
         if self.circular_network_pane {
             self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, MENUBAR_H, BREADCRUMB_H)
         } else {
@@ -2087,23 +2157,23 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             vec![]
         };
         let mut widgets: Vec<Box<dyn Widget>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window"]).with_item("Help", &["About"]).with_z_index(110)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110)),
             Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_item("File", &["New", "Open", "Save"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane"])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_item("File", &["New", "Open", "Save"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"])),
             Box::new(StatusBar::new().with_text("Ready")),
             Box::new(Breadcrumb::new()),
             Box::new(NodePalette::new()),
             Box::new(Spreadsheet::new()),
         ];
         
-        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet");
+        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_item("View", &["Close Pane"]);
         spreadsheet_menubar.visible = false;
         widgets.push(Box::new(spreadsheet_menubar));
 
@@ -2231,6 +2301,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             pan_start_y: 0.0,
             space_pressed: false,
             active_camera,
+            show_network: true,
+            show_viewport: true,
+            show_parameters: true,
             show_spreadsheet: false,
             is_scrolling_trackpad: false,
             last_scroll_time: Instant::now(),
@@ -2291,6 +2364,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         state.widgets[LEFT_MENUBAR_IDX].set_item_checked(2, 2, state.circular_network_pane);
         state.widgets[LEFT_MENUBAR_IDX].set_item_checked(2, 3, state.detached_circular_network);
         state.widgets[HEADER_IDX].set_item_checked(2, 3, state.detached_circular_network);
+        state.widgets[HEADER_IDX].set_item_checked(2, 4, state.show_network);
+        state.widgets[HEADER_IDX].set_item_checked(2, 5, state.show_viewport);
+        state.widgets[HEADER_IDX].set_item_checked(2, 6, state.show_parameters);
+        state.widgets[HEADER_IDX].set_item_checked(2, 7, state.show_spreadsheet);
 
         state.rebuild_positions();
         state.apply_layout();
@@ -2301,12 +2378,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn sync_grid_settings(&mut self) {
-        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-        let active_node_area_y = if self.circular_network_pane {
-            self.circular_network_layout.y - self.circular_network_layout.r + 45.0 + MENUBAR_H + BREADCRUMB_H
-        } else {
-            node_area_y
-        };
+        let active_node_area_y = self.positions[CONTENT_IDX].1;
         let active_node_area_x = if self.circular_network_pane {
             self.circular_network_layout.x - self.circular_network_layout.r
         } else {
@@ -2385,7 +2457,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let old_row_h = self.skipped_row_h;
         let old_col_w = self.skipped_col_w;
 
-        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+        let node_area_y = self.positions[CONTENT_IDX].1;
         let (cx, cy) = match center {
             Some(pt) => pt,
             None => {
@@ -2414,12 +2486,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
 
     fn keep_cursor_in_view(&mut self) {
-        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-        let active_node_area_y = if self.circular_network_pane {
-            self.circular_network_layout.y - self.circular_network_layout.r + 45.0 + MENUBAR_H + BREADCRUMB_H
-        } else {
-            node_area_y
-        };
+        let active_node_area_y = self.positions[CONTENT_IDX].1;
         let active_node_area_x = if self.circular_network_pane {
             self.circular_network_layout.x - self.circular_network_layout.r
         } else {
@@ -2466,7 +2533,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let vw = self.viewport_w();
         let px = self.param_x();
 
-        let node_area_y = HEADER_H + MENUBAR_H;
+        let node_area_y = HEADER_H;
 
         if self.is_detached_network {
             let cx = self.width / 2.0;
@@ -2495,113 +2562,335 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
         } else if self.detached_circular_network {
             // Parent process: Network pane is detached (hidden from main window)
-            let vw = self.splitter_layout.splitter2_x;
-            let px = self.splitter_layout.splitter2_x + SPLITTER_W;
-            let param_w = self.width - px;
+            let left_visible = false;
+            let viewport_visible = self.show_viewport;
+            let spreadsheet_visible = self.show_spreadsheet;
+            let center_visible = viewport_visible || spreadsheet_visible;
+            let right_visible = self.show_parameters;
+
+            let (col_l_x, col_l_w, s1_x, s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
+                match (left_visible, center_visible, right_visible) {
+                    (false, true, true) => {
+                        let c_w = self.splitter_layout.splitter2_x;
+                        let s2 = c_w;
+                        let r_x = s2 + SPLITTER_W;
+                        let r_w = (self.width - r_x).max(0.0);
+                        (0.0, 0.0, 0.0, 0.0, 0.0, c_w, s2, SPLITTER_W, r_x, r_w)
+                    }
+                    (false, true, false) => {
+                        (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                    }
+                    (false, false, true) => {
+                        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, self.width)
+                    }
+                    _ => {
+                        (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                    }
+                };
+
+            let mut vp_y = 0.0;
+            let mut vp_h = 0.0;
+            let mut sp_menub_y = 0.0;
+            let mut sp_menub_h = 0.0;
+            let mut sp_y = 0.0;
+            let mut sp_h = 0.0;
+
+            if center_visible {
+                if viewport_visible && spreadsheet_visible {
+                    let viewport_h = body_h * 2.0 / 3.0;
+                    let spreadsheet_h = body_h - viewport_h;
+                    vp_y = HEADER_H;
+                    vp_h = viewport_h;
+                    sp_menub_y = 0.0;
+                    sp_menub_h = 0.0;
+                    sp_y = HEADER_H + viewport_h;
+                    sp_h = spreadsheet_h;
+                } else if viewport_visible {
+                    vp_y = HEADER_H;
+                    vp_h = body_h;
+                } else if spreadsheet_visible {
+                    sp_menub_y = 0.0;
+                    sp_menub_h = 0.0;
+                    sp_y = HEADER_H;
+                    sp_h = body_h;
+                }
+            }
 
             self.positions[0] = (0.0, 0.0, self.width, HEADER_H);
             self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[BREADCRUMB_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[CONTENT_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
-            self.positions[SPLITTER2_IDX] = (self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
-            self.positions[PARAM_IDX] = (px, HEADER_H, param_w, body_h);
+            self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
+            self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
 
-            self.positions[VIEWPORT_IDX] = (0.0, HEADER_H, vw, body_h);
-            self.positions[RIGHT_MENUBAR_IDX] = (0.0, HEADER_H, vw, MENUBAR_H);
+            self.positions[VIEWPORT_IDX] = (col_c_x, vp_y, col_c_w, vp_h);
+            self.positions[RIGHT_MENUBAR_IDX] = (col_c_x, vp_y, col_c_w, if viewport_visible { MENUBAR_H } else { 0.0 });
 
-            if self.show_spreadsheet {
-                let viewport_h = body_h * 2.0 / 3.0;
-                let spreadsheet_h = body_h - viewport_h;
-                self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, HEADER_H + viewport_h, vw, MENUBAR_H);
-                self.positions[SPREADSHEET_IDX] = (0.0, HEADER_H + viewport_h + MENUBAR_H, vw, spreadsheet_h - MENUBAR_H);
-            } else {
-                self.positions[SPREADSHEET_IDX] = (0.0, 0.0, 0.0, 0.0);
-                self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-            }
+            self.positions[SPREADSHEET_MENUBAR_IDX] = (col_c_x, sp_menub_y, col_c_w, sp_menub_h);
+            self.positions[SPREADSHEET_IDX] = (col_c_x, sp_y, col_c_w, sp_h);
 
             self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
-            self.positions[PARAM_MENUBAR_IDX] = (px, HEADER_H, param_w, MENUBAR_H);
+            self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
             self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+
+            self.widgets[0].set_visible(true);
+            self.widgets[STATUS_IDX].set_visible(true);
+            self.widgets[CONTENT_IDX].set_visible(false);
+            self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
+            self.widgets[BREADCRUMB_IDX].set_visible(false);
+            self.widgets[SPLITTER1_IDX].set_visible(false);
+            self.widgets[SPLITTER2_IDX].set_visible(s2_w > 0.0);
+            self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
+            self.widgets[RIGHT_MENUBAR_IDX].set_visible(viewport_visible);
+            self.widgets[PARAM_IDX].set_visible(right_visible);
+            self.widgets[PARAM_MENUBAR_IDX].set_visible(right_visible);
+            self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
+            self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(spreadsheet_visible);
         } else {
             self.positions[0] = (0.0, 0.0, self.width, HEADER_H);
             if self.circular_network_pane {
+                let left_visible = false;
+                let viewport_visible = self.show_viewport;
+                let spreadsheet_visible = self.show_spreadsheet;
+                let center_visible = viewport_visible || spreadsheet_visible;
+                let right_visible = self.show_parameters;
+
+                let (col_l_x, col_l_w, s1_x, s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
+                    match (left_visible, center_visible, right_visible) {
+                        (false, true, true) => {
+                            let viewport_w = self.splitter_layout.splitter2_x;
+                            let s2 = viewport_w;
+                            let r_x = s2 + SPLITTER_W;
+                            let r_w = (self.width - r_x).max(0.0);
+                            (0.0, 0.0, 0.0, 0.0, 0.0, viewport_w, s2, SPLITTER_W, r_x, r_w)
+                        }
+                        (false, true, false) => {
+                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                        }
+                        (false, false, true) => {
+                            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, self.width)
+                        }
+                        _ => {
+                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                        }
+                    };
+
+                let mut vp_y = 0.0;
+                let mut vp_h = 0.0;
+                let mut sp_menub_y = 0.0;
+                let mut sp_menub_h = 0.0;
+                let mut sp_y = 0.0;
+                let mut sp_h = 0.0;
+
+                if center_visible {
+                    if viewport_visible && spreadsheet_visible {
+                        let viewport_h = body_h * 2.0 / 3.0;
+                        let spreadsheet_h = body_h - viewport_h;
+                        vp_y = HEADER_H;
+                        vp_h = viewport_h;
+                        sp_menub_y = 0.0;
+                        sp_menub_h = 0.0;
+                        sp_y = HEADER_H + viewport_h;
+                        sp_h = spreadsheet_h;
+                    } else if viewport_visible {
+                        vp_y = HEADER_H;
+                        vp_h = body_h;
+                    } else if spreadsheet_visible {
+                        sp_menub_y = 0.0;
+                        sp_menub_h = 0.0;
+                        sp_y = HEADER_H;
+                        sp_h = body_h;
+                    }
+                }
+
                 let cx = self.circular_network_layout.x;
                 let cy = self.circular_network_layout.y;
                 let r = self.circular_network_layout.r;
 
                 self.positions[LEFT_MENUBAR_IDX] = (cx - r, cy - r, 2.0 * r, 35.0);
-                self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(Some((cx, cy, r)));
+                self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
                 self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H, 2.0 * r, BREADCRUMB_H);
                 self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + MENUBAR_H + BREADCRUMB_H));
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
-                self.positions[SPLITTER2_IDX] = (self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
-                self.positions[PARAM_IDX] = (px, HEADER_H, self.param_w(), body_h);
+                self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
+                self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
 
-                let viewport_w = self.splitter_layout.splitter2_x;
-                self.positions[VIEWPORT_IDX] = (0.0, HEADER_H, viewport_w, body_h);
-                self.positions[RIGHT_MENUBAR_IDX] = (0.0, HEADER_H, viewport_w, MENUBAR_H);
+                self.positions[VIEWPORT_IDX] = (col_c_x, vp_y, col_c_w, vp_h);
+                self.positions[RIGHT_MENUBAR_IDX] = (col_c_x, vp_y, col_c_w, if viewport_visible { MENUBAR_H } else { 0.0 });
 
-                if self.show_spreadsheet {
-                    let viewport_h = body_h * 2.0 / 3.0;
-                    let spreadsheet_h = body_h - viewport_h;
-                    self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, HEADER_H + viewport_h, viewport_w, MENUBAR_H);
-                    self.positions[SPREADSHEET_IDX] = (0.0, HEADER_H + viewport_h + MENUBAR_H, viewport_w, spreadsheet_h - MENUBAR_H);
-                } else {
-                    self.positions[SPREADSHEET_IDX] = (0.0, 0.0, 0.0, 0.0);
-                    self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-                }
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (col_c_x, sp_menub_y, col_c_w, sp_menub_h);
+                self.positions[SPREADSHEET_IDX] = (col_c_x, sp_y, col_c_w, sp_h);
+
+                self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
+                self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
+                self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
+                self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+
+                self.widgets[0].set_visible(true);
+                self.widgets[STATUS_IDX].set_visible(true);
+                self.widgets[CONTENT_IDX].set_visible(self.show_network);
+                self.widgets[LEFT_MENUBAR_IDX].set_visible(self.show_network);
+                self.widgets[BREADCRUMB_IDX].set_visible(self.show_network);
+                self.widgets[SPLITTER1_IDX].set_visible(false);
+                self.widgets[SPLITTER2_IDX].set_visible(s2_w > 0.0);
+                self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
+                self.widgets[RIGHT_MENUBAR_IDX].set_visible(viewport_visible);
+                self.widgets[PARAM_IDX].set_visible(right_visible);
+                self.widgets[PARAM_MENUBAR_IDX].set_visible(right_visible);
+                self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
+                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(spreadsheet_visible);
             } else {
-                self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
-                self.positions[CONTENT_IDX] = (0.0, node_area_y + BREADCRUMB_H, clw, self.height - STATUS_H - (node_area_y + BREADCRUMB_H));
-                self.positions[SPLITTER1_IDX] = (self.splitter_layout.splitter1_x, HEADER_H, SPLITTER_W, body_h);
-                self.positions[SPLITTER2_IDX] = (self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
-                self.positions[PARAM_IDX] = (px, HEADER_H, self.param_w(), body_h);
+                let left_visible = self.show_network;
+                let viewport_visible = self.show_viewport;
+                let spreadsheet_visible = self.show_spreadsheet;
+                let center_visible = viewport_visible || spreadsheet_visible;
+                let right_visible = self.show_parameters;
 
-                self.positions[VIEWPORT_IDX] = (crx, HEADER_H, vw, body_h);
-                self.positions[RIGHT_MENUBAR_IDX] = (crx, HEADER_H, vw, MENUBAR_H);
-                self.positions[BREADCRUMB_IDX] = (0.0, node_area_y, clw, BREADCRUMB_H);
-                self.positions[LEFT_MENUBAR_IDX] = (0.0, HEADER_H, clw, MENUBAR_H);
+                let (col_l_x, col_l_w, s1_x, s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
+                    match (left_visible, center_visible, right_visible) {
+                        (true, true, true) => {
+                            let l_w = self.splitter_layout.splitter1_x;
+                            let s1 = l_w;
+                            let c_x = s1 + SPLITTER_W;
+                            let c_w = self.splitter_layout.splitter2_x - c_x;
+                            let s2 = self.splitter_layout.splitter2_x;
+                            let r_x = s2 + SPLITTER_W;
+                            let r_w = (self.width - r_x).max(0.0);
+                            (0.0, l_w, s1, SPLITTER_W, c_x, c_w, s2, SPLITTER_W, r_x, r_w)
+                        }
+                        (true, true, false) => {
+                            let l_w = self.splitter_layout.splitter1_x;
+                            let s1 = l_w;
+                            let c_x = s1 + SPLITTER_W;
+                            let c_w = (self.width - c_x).max(0.0);
+                            (0.0, l_w, s1, SPLITTER_W, c_x, c_w, 0.0, 0.0, 0.0, 0.0)
+                        }
+                        (true, false, true) => {
+                            let l_w = self.splitter_layout.splitter2_x;
+                            let s2 = l_w;
+                            let r_x = s2 + SPLITTER_W;
+                            let r_w = (self.width - r_x).max(0.0);
+                            (0.0, l_w, 0.0, 0.0, 0.0, 0.0, s2, SPLITTER_W, r_x, r_w)
+                        }
+                        (false, true, true) => {
+                            let c_w = self.splitter_layout.splitter2_x;
+                            let s2 = c_w;
+                            let r_x = s2 + SPLITTER_W;
+                            let r_w = (self.width - r_x).max(0.0);
+                            (0.0, 0.0, 0.0, 0.0, 0.0, c_w, s2, SPLITTER_W, r_x, r_w)
+                        }
+                        (true, false, false) => {
+                            (0.0, self.width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                        }
+                        (false, true, false) => {
+                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                        }
+                        (false, false, true) => {
+                            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, self.width)
+                        }
+                        (false, false, false) => {
+                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                        }
+                    };
 
-                if self.show_spreadsheet {
-                    let viewport_h = body_h * 2.0 / 3.0;
-                    let spreadsheet_h = body_h - viewport_h;
-                    self.positions[SPREADSHEET_MENUBAR_IDX] = (crx, HEADER_H + viewport_h, vw, MENUBAR_H);
-                    self.positions[SPREADSHEET_IDX] = (crx, HEADER_H + viewport_h + MENUBAR_H, vw, spreadsheet_h - MENUBAR_H);
-                } else {
-                    self.positions[SPREADSHEET_IDX] = (0.0, 0.0, 0.0, 0.0);
-                    self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
+                let mut vp_y = 0.0;
+                let mut vp_h = 0.0;
+                let mut sp_menub_y = 0.0;
+                let mut sp_menub_h = 0.0;
+                let mut sp_y = 0.0;
+                let mut sp_h = 0.0;
+
+                if center_visible {
+                    if viewport_visible && spreadsheet_visible {
+                        let viewport_h = body_h * 2.0 / 3.0;
+                        let spreadsheet_h = body_h - viewport_h;
+                        vp_y = HEADER_H;
+                        vp_h = viewport_h;
+                        sp_menub_y = 0.0;
+                        sp_menub_h = 0.0;
+                        sp_y = HEADER_H + viewport_h;
+                        sp_h = spreadsheet_h;
+                    } else if viewport_visible {
+                        vp_y = HEADER_H;
+                        vp_h = body_h;
+                    } else if spreadsheet_visible {
+                        sp_menub_y = 0.0;
+                        sp_menub_h = 0.0;
+                        sp_y = HEADER_H;
+                        sp_h = body_h;
+                    }
                 }
-            }
 
-            self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
-            self.positions[PARAM_MENUBAR_IDX] = (px, HEADER_H, self.param_w(), MENUBAR_H);
-            self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
-            self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+                self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
+                self.positions[CONTENT_IDX] = (col_l_x, node_area_y + BREADCRUMB_H, col_l_w, self.height - STATUS_H - (node_area_y + BREADCRUMB_H));
+                self.positions[SPLITTER1_IDX] = (s1_x, HEADER_H, s1_w, body_h);
+                self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
+                self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
+
+                self.positions[VIEWPORT_IDX] = (col_c_x, vp_y, col_c_w, vp_h);
+                self.positions[RIGHT_MENUBAR_IDX] = (col_c_x, vp_y, col_c_w, if viewport_visible { MENUBAR_H } else { 0.0 });
+                self.positions[BREADCRUMB_IDX] = (col_l_x, node_area_y, col_l_w, BREADCRUMB_H);
+                self.positions[LEFT_MENUBAR_IDX] = (col_l_x, HEADER_H, col_l_w, if left_visible { MENUBAR_H } else { 0.0 });
+
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (col_c_x, sp_menub_y, col_c_w, sp_menub_h);
+                self.positions[SPREADSHEET_IDX] = (col_c_x, sp_y, col_c_w, sp_h);
+
+                self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
+                self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
+                self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
+                self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+
+                self.widgets[0].set_visible(true);
+                self.widgets[STATUS_IDX].set_visible(true);
+                self.widgets[CONTENT_IDX].set_visible(left_visible);
+                self.widgets[LEFT_MENUBAR_IDX].set_visible(left_visible);
+                self.widgets[BREADCRUMB_IDX].set_visible(left_visible);
+                self.widgets[SPLITTER1_IDX].set_visible(s1_w > 0.0);
+                self.widgets[SPLITTER2_IDX].set_visible(s2_w > 0.0);
+                self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
+                self.widgets[RIGHT_MENUBAR_IDX].set_visible(viewport_visible);
+                self.widgets[PARAM_IDX].set_visible(right_visible);
+                self.widgets[PARAM_MENUBAR_IDX].set_visible(right_visible);
+                self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
+                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(spreadsheet_visible);
+            }
         }
 
-        if self.is_detached_network {
-            for i in 0..self.widgets.len() {
-                if i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == CONTENT_IDX {
-                    self.widgets[i].set_visible(true);
-                } else if i == NODE_PALETTE_IDX {
-                    // controlled dynamically
-                } else {
-                    self.widgets[i].set_visible(false);
-                }
+        if !self.is_detached_network {
+            let mut active_menubar = self.focused_pane;
+            if active_menubar == LEFT_MENUBAR_IDX && !self.show_network {
+                active_menubar = HEADER_IDX;
             }
-        } else {
-            // Restore visibility for main window widgets
-            for i in 0..self.widgets.len() {
-                if i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == CONTENT_IDX {
-                    self.widgets[i].set_visible(!self.detached_circular_network);
-                } else if i == SPREADSHEET_IDX || i == SPREADSHEET_MENUBAR_IDX {
-                    self.widgets[i].set_visible(self.show_spreadsheet);
-                } else if i == NODE_PALETTE_IDX {
-                    // controlled dynamically
+            if active_menubar == RIGHT_MENUBAR_IDX && !self.show_viewport {
+                active_menubar = HEADER_IDX;
+            }
+            if active_menubar == PARAM_MENUBAR_IDX && !self.show_parameters {
+                active_menubar = HEADER_IDX;
+            }
+            if active_menubar == SPREADSHEET_MENUBAR_IDX && !self.show_spreadsheet {
+                active_menubar = HEADER_IDX;
+            }
+
+            if active_menubar != self.focused_pane {
+                self.focused_pane = active_menubar;
+            }
+
+            let menubars = [
+                HEADER_IDX,
+                LEFT_MENUBAR_IDX,
+                RIGHT_MENUBAR_IDX,
+                PARAM_MENUBAR_IDX,
+                SPREADSHEET_MENUBAR_IDX,
+            ];
+            for &idx in &menubars {
+                if idx == active_menubar {
+                    self.positions[idx] = (0.0, 0.0, self.width, HEADER_H);
+                    self.widgets[idx].set_visible(true);
                 } else {
-                    self.widgets[i].set_visible(true);
+                    self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
+                    self.widgets[idx].set_visible(false);
                 }
             }
         }
@@ -2623,7 +2912,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn sync_pane_focus(&mut self) {
-        for &menubar_idx in &[LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
+        for &menubar_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
             self.widgets[menubar_idx].set_selected(menubar_idx == self.focused_pane);
         }
         if self.focused_pane != PARAM_MENUBAR_IDX {
@@ -2633,8 +2922,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn sync_layout(&mut self) {
-        self.splitter_layout.splitter1_x = self.widgets[SPLITTER1_IDX].rect().0;
-        self.splitter_layout.splitter2_x = self.widgets[SPLITTER2_IDX].rect().0;
+        let left_visible = self.show_network && !self.circular_network_pane && !self.is_detached_network && !self.detached_circular_network;
+        let center_visible = self.show_viewport || self.show_spreadsheet;
+        let right_visible = self.show_parameters;
+
+        if left_visible && center_visible {
+            self.splitter_layout.splitter1_x = self.widgets[SPLITTER1_IDX].rect().0;
+        }
+        if right_visible && (center_visible || left_visible) {
+            self.splitter_layout.splitter2_x = self.widgets[SPLITTER2_IDX].rect().0;
+        }
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
@@ -2871,8 +3168,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 self.show_spreadsheet = !self.show_spreadsheet;
                 self.widgets[SPREADSHEET_IDX].set_visible(self.show_spreadsheet);
                 self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(self.show_spreadsheet);
+                self.widgets[HEADER_IDX].set_item_checked(2, 7, self.show_spreadsheet);
                 if !self.show_spreadsheet && self.focused_pane == SPREADSHEET_MENUBAR_IDX {
-                    self.focused_pane = RIGHT_MENUBAR_IDX;
+                    self.focused_pane = get_next_visible_pane(
+                        self.focused_pane,
+                        self.show_network,
+                        self.show_viewport,
+                        self.show_parameters,
+                        self.show_spreadsheet,
+                        false,
+                    );
                 }
                 self.rebuild_positions();
                 self.apply_layout();
@@ -2962,7 +3267,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let sh = self.height;
         let mut verts = Vec::new();
 
-        let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+        let node_area_y = self.positions[CONTENT_IDX].1;
         let dialog_open = self.node_palette_visible;
         let show_cursor = self.drag_widget.is_none()
             && !dialog_open;
@@ -3258,7 +3563,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX;
 
             let bounds = if is_node {
-                let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+                let node_area_y = self.positions[CONTENT_IDX].1;
                 if circular_network_pane {
                     TextBounds {
                         left: ((network_circle_x - network_circle_radius) * s) as i32,
@@ -3575,7 +3880,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let dialog_open = self.node_palette_visible;
                 let in_network_pane = self.in_network_pane();
                 eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
-                let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+                let node_area_y = self.positions[CONTENT_IDX].1;
 
                 let in_viewport = self.cursor_x >= self.content_right_x()
                     && self.cursor_x < self.splitter_layout.splitter2_x
@@ -3588,7 +3893,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     if in_network_pane {
                         new_pane = Some(LEFT_MENUBAR_IDX);
                     } else if in_viewport {
-                        if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_MENUBAR_IDX].1 {
+                        if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_IDX].1 {
                             new_pane = Some(SPREADSHEET_MENUBAR_IDX);
                         } else {
                             new_pane = Some(RIGHT_MENUBAR_IDX);
@@ -3612,12 +3917,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         if w.mouse_wheel(delta, self.cursor_x, self.cursor_y) {
                             handled = true;
                             if i == CONTENT_IDX {
-                                let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
-                                let active_node_area_y = if self.circular_network_pane {
-                                    self.circular_network_layout.y - self.circular_network_layout.r + 45.0 + MENUBAR_H + BREADCRUMB_H
-                                } else {
-                                    node_area_y
-                                };
+                                let active_node_area_y = self.positions[CONTENT_IDX].1;
                                 let active_node_area_x = if self.circular_network_pane {
                                     self.circular_network_layout.x - self.circular_network_layout.r
                                 } else {
@@ -3944,7 +4244,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 }
                 let dialog_open = self.node_palette_visible;
                 let in_network_pane = self.in_network_pane();
-                let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+                let node_area_y = self.positions[CONTENT_IDX].1;
 
                 let is_pan_trigger = !dialog_open
                     && in_network_pane
@@ -4094,13 +4394,22 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 new_pane = Some(PARAM_MENUBAR_IDX);
                             } else if i == SPREADSHEET_MENUBAR_IDX || i == SPREADSHEET_IDX {
                                 new_pane = Some(SPREADSHEET_MENUBAR_IDX);
+                            } else if i == HEADER_IDX {
+                                new_pane = Some(HEADER_IDX);
+                            }
+
+                            // If clicked on a blank spot of any pane menubar, switch focus to main menubar (HEADER_IDX)
+                            if (i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX)
+                                && self.widgets[i].get_menu_items_at(self.cursor_x, self.cursor_y).is_none()
+                            {
+                                new_pane = Some(HEADER_IDX);
                             }
                         } else {
                             if self.circular_network_pane {
                                 if self.cursor_x > self.splitter_layout.splitter2_x + SPLITTER_W {
                                     new_pane = Some(PARAM_MENUBAR_IDX);
                                 } else {
-                                    if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_MENUBAR_IDX].1 {
+                                    if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_IDX].1 {
                                         new_pane = Some(SPREADSHEET_MENUBAR_IDX);
                                     } else {
                                         new_pane = Some(RIGHT_MENUBAR_IDX);
@@ -4112,7 +4421,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 } else if self.cursor_x > self.splitter_layout.splitter2_x + SPLITTER_W {
                                     new_pane = Some(PARAM_MENUBAR_IDX);
                                 } else {
-                                    if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_MENUBAR_IDX].1 {
+                                    if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_IDX].1 {
                                         new_pane = Some(SPREADSHEET_MENUBAR_IDX);
                                     } else {
                                         new_pane = Some(RIGHT_MENUBAR_IDX);
@@ -4261,7 +4570,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
                 if event.state == ElementState::Pressed {
                     if event.logical_key == Key::Named(NamedKey::Tab) && self.modifiers.control_key() && !self.modifiers.alt_key() && !self.modifiers.super_key() {
-                        self.focused_pane = get_next_visible_pane(self.focused_pane, self.show_spreadsheet, self.modifiers.shift_key());
+                        self.focused_pane = get_next_visible_pane(
+                            self.focused_pane,
+                            self.show_network,
+                            self.show_viewport,
+                            self.show_parameters,
+                            self.show_spreadsheet,
+                            self.modifiers.shift_key(),
+                        );
                         self.sync_pane_focus();
                         return true;
                     }
@@ -4707,7 +5023,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let mut panned = false;
         if let Some(idx) = self.drag_widget {
             if idx == CONTENT_IDX {
-                let node_area_y = HEADER_H + MENUBAR_H + BREADCRUMB_H;
+                let node_area_y = self.positions[CONTENT_IDX].1;
                 let margin = 30.0_f32;
                 let pan_speed = 5.0_f32;
                 let clw = self.content_left_w();
@@ -5643,6 +5959,91 @@ impl AppState {
                             state.execute_action(Action::DetachCircularWindow);
                             changed = true;
                         }
+                        4 => { // Show Network Pane
+                            state.show_network = !state.show_network;
+                            state.widgets[CONTENT_IDX].set_visible(state.show_network);
+                            state.widgets[LEFT_MENUBAR_IDX].set_visible(state.show_network);
+                            state.widgets[BREADCRUMB_IDX].set_visible(state.show_network);
+                            state.widgets[HEADER_IDX].set_item_checked(2, 4, state.show_network);
+                            if !state.show_network && state.focused_pane == LEFT_MENUBAR_IDX {
+                                state.focused_pane = get_next_visible_pane(
+                                    state.focused_pane,
+                                    state.show_network,
+                                    state.show_viewport,
+                                    state.show_parameters,
+                                    state.show_spreadsheet,
+                                    false,
+                                );
+                            }
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.sync_pane_focus();
+                            state.sync_nodes();
+                            changed = true;
+                        }
+                        5 => { // Show Viewport Pane
+                            state.show_viewport = !state.show_viewport;
+                            state.widgets[VIEWPORT_IDX].set_visible(state.show_viewport);
+                            state.widgets[RIGHT_MENUBAR_IDX].set_visible(state.show_viewport);
+                            state.widgets[HEADER_IDX].set_item_checked(2, 5, state.show_viewport);
+                            if !state.show_viewport && state.focused_pane == RIGHT_MENUBAR_IDX {
+                                state.focused_pane = get_next_visible_pane(
+                                    state.focused_pane,
+                                    state.show_network,
+                                    state.show_viewport,
+                                    state.show_parameters,
+                                    state.show_spreadsheet,
+                                    false,
+                                );
+                            }
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.sync_pane_focus();
+                            state.sync_nodes();
+                            changed = true;
+                        }
+                        6 => { // Show Parameters Pane
+                            state.show_parameters = !state.show_parameters;
+                            state.widgets[PARAM_IDX].set_visible(state.show_parameters);
+                            state.widgets[PARAM_MENUBAR_IDX].set_visible(state.show_parameters);
+                            state.widgets[HEADER_IDX].set_item_checked(2, 6, state.show_parameters);
+                            if !state.show_parameters && state.focused_pane == PARAM_MENUBAR_IDX {
+                                state.focused_pane = get_next_visible_pane(
+                                    state.focused_pane,
+                                    state.show_network,
+                                    state.show_viewport,
+                                    state.show_parameters,
+                                    state.show_spreadsheet,
+                                    false,
+                                );
+                            }
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.sync_pane_focus();
+                            state.sync_nodes();
+                            changed = true;
+                        }
+                        7 => { // Show Spreadsheet Pane
+                            state.show_spreadsheet = !state.show_spreadsheet;
+                            state.widgets[SPREADSHEET_IDX].set_visible(state.show_spreadsheet);
+                            state.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(state.show_spreadsheet);
+                            state.widgets[HEADER_IDX].set_item_checked(2, 7, state.show_spreadsheet);
+                            if !state.show_spreadsheet && state.focused_pane == SPREADSHEET_MENUBAR_IDX {
+                                state.focused_pane = get_next_visible_pane(
+                                    state.focused_pane,
+                                    state.show_network,
+                                    state.show_viewport,
+                                    state.show_parameters,
+                                    state.show_spreadsheet,
+                                    false,
+                                );
+                            }
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.sync_pane_focus();
+                            state.sync_nodes();
+                            changed = true;
+                        }
                         _ => {}
                     }
                 }
@@ -5685,6 +6086,28 @@ impl AppState {
                             state.execute_action(Action::DetachCircularWindow);
                             changed = true;
                         }
+                        4 => { // Close Pane
+                            state.show_network = false;
+                            state.widgets[CONTENT_IDX].set_visible(false);
+                            state.widgets[LEFT_MENUBAR_IDX].set_visible(false);
+                            state.widgets[BREADCRUMB_IDX].set_visible(false);
+                            state.widgets[HEADER_IDX].set_item_checked(2, 4, false);
+                            if state.focused_pane == LEFT_MENUBAR_IDX {
+                                state.focused_pane = get_next_visible_pane(
+                                    state.focused_pane,
+                                    state.show_network,
+                                    state.show_viewport,
+                                    state.show_parameters,
+                                    state.show_spreadsheet,
+                                    false,
+                                );
+                            }
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.sync_pane_focus();
+                            state.sync_nodes();
+                            changed = true;
+                        }
                         _ => {}
                     }
                 }
@@ -5703,6 +6126,28 @@ impl AppState {
                         for (i, item) in items.iter().enumerate() {
                             state.widgets[RIGHT_MENUBAR_IDX].set_item_checked(0, i, item == &state.active_camera);
                         }
+                        changed = true;
+                    }
+                } else if menu_idx == 3 { // View
+                    if item_idx == 0 { // Close Pane
+                        state.show_viewport = false;
+                        state.widgets[VIEWPORT_IDX].set_visible(false);
+                        state.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
+                        state.widgets[HEADER_IDX].set_item_checked(2, 5, false);
+                        if state.focused_pane == RIGHT_MENUBAR_IDX {
+                            state.focused_pane = get_next_visible_pane(
+                                state.focused_pane,
+                                state.show_network,
+                                state.show_viewport,
+                                state.show_parameters,
+                                state.show_spreadsheet,
+                                false,
+                            );
+                        }
+                        state.rebuild_positions();
+                        state.apply_layout();
+                        state.sync_pane_focus();
+                        state.sync_nodes();
                         changed = true;
                     }
                 } else {
@@ -5724,6 +6169,57 @@ impl AppState {
                 }
             }
 
+            if let Some((menu_idx, item_idx)) = state.widgets[PARAM_MENUBAR_IDX].menu_click() {
+                if menu_idx == 2 { // View
+                    if item_idx == 0 { // Close Pane
+                        state.show_parameters = false;
+                        state.widgets[PARAM_IDX].set_visible(false);
+                        state.widgets[PARAM_MENUBAR_IDX].set_visible(false);
+                        state.widgets[HEADER_IDX].set_item_checked(2, 6, false);
+                        if state.focused_pane == PARAM_MENUBAR_IDX {
+                            state.focused_pane = get_next_visible_pane(
+                                state.focused_pane,
+                                state.show_network,
+                                state.show_viewport,
+                                state.show_parameters,
+                                state.show_spreadsheet,
+                                false,
+                            );
+                        }
+                        state.rebuild_positions();
+                        state.apply_layout();
+                        state.sync_pane_focus();
+                        state.sync_nodes();
+                        changed = true;
+                    }
+                }
+            }
+
+            if let Some((menu_idx, item_idx)) = state.widgets[SPREADSHEET_MENUBAR_IDX].menu_click() {
+                if menu_idx == 0 { // View
+                    if item_idx == 0 { // Close Pane
+                        state.show_spreadsheet = false;
+                        state.widgets[SPREADSHEET_IDX].set_visible(false);
+                        state.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+                        state.widgets[HEADER_IDX].set_item_checked(2, 7, false);
+                        if state.focused_pane == SPREADSHEET_MENUBAR_IDX {
+                            state.focused_pane = get_next_visible_pane(
+                                state.focused_pane,
+                                state.show_network,
+                                state.show_viewport,
+                                state.show_parameters,
+                                state.show_spreadsheet,
+                                false,
+                            );
+                        }
+                        state.rebuild_positions();
+                        state.apply_layout();
+                        state.sync_pane_focus();
+                        state.sync_nodes();
+                        changed = true;
+                    }
+                }
+            }
 
             if changed {
                 state.sync_layout();
@@ -6567,26 +7063,26 @@ mod tests {
     #[test]
     fn test_get_next_visible_pane() {
         // Without spreadsheet (3 panes: LEFT, RIGHT, PARAM)
-        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, false, false), RIGHT_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, false, false), PARAM_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, false, false), LEFT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, false), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, false), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, false), LEFT_MENUBAR_IDX);
 
         // With spreadsheet (4 panes: LEFT, RIGHT, PARAM, SPREADSHEET)
-        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, false), RIGHT_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, false), PARAM_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, false), SPREADSHEET_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, false), LEFT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, false), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, false), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, false), SPREADSHEET_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, false), LEFT_MENUBAR_IDX);
 
         // Reverse cycling with shift key (without spreadsheet)
-        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, false, true), PARAM_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, false, true), RIGHT_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, false, true), LEFT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, true), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, true), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, true), LEFT_MENUBAR_IDX);
 
         // Reverse cycling with shift key (with spreadsheet)
-        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true), SPREADSHEET_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true), PARAM_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true), RIGHT_MENUBAR_IDX);
-        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true), LEFT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, true), SPREADSHEET_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, true), PARAM_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, true), RIGHT_MENUBAR_IDX);
+        assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, true), LEFT_MENUBAR_IDX);
     }
 
     #[test]
