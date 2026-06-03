@@ -1,0 +1,8 @@
+{
+  "name": "Transform 1",
+  "type": "transform",
+  "params": [
+    { "name": "Input", "default": "Sphere 1", "type": "text" },
+    { "name": "Translation", "default": "0.00:0.00:0.00", "type": "float3", "min": -10.0, "max": 10.0 }
+  ]
+}

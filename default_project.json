@@ -1,35 +1,116 @@
 {
   "name": "Default Project",
-  "view_state": {
-    "active_camera": "Camera 1",
-    "pan": [0.0, 0.0],
-    "current_path": []
-  },
   "root": {
     "name": "root",
     "type": "node",
-    "position": [0.0, 0.0],
     "children": [
       {
         "name": "Camera 1",
         "type": "camera",
-        "position": [1.0, 1.0],
+        "children": [],
         "params": [
-          { "name": "X", "type": "slider", "default": "2.5", "min": -10.0, "max": 10.0 },
-          { "name": "Y", "type": "slider", "default": "1.8", "min": -10.0, "max": 10.0 },
-          { "name": "Z", "type": "slider", "default": "2.5", "min": -10.0, "max": 10.0 }
+          {
+            "name": "Position",
+            "label": "",
+            "type": "float3",
+            "default": "2.50:1.80:2.50",
+            "options": [],
+            "min": -10.0,
+            "max": 10.0,
+            "step": null
+          },
+          {
+            "name": "Rotation",
+            "label": "",
+            "type": "float3",
+            "default": "23.62:-58.83:0.00",
+            "options": [],
+            "min": -180.0,
+            "max": 180.0,
+            "step": null
+          },
+          {
+            "name": "Pivot",
+            "label": "",
+            "type": "float3",
+            "default": "0.00:0.00:0.00",
+            "options": [],
+            "min": -10.0,
+            "max": 10.0,
+            "step": null
+          }
         ],
-        "children": []
+        "position": [
+          1.0,
+          1.0
+        ]
       },
       {
         "name": "Sphere 1",
         "type": "sphere",
-        "position": [4.0, 2.0],
+        "children": [],
         "params": [
-          { "name": "Radius", "type": "slider", "default": "0.5" }
+          {
+            "name": "Radius",
+            "label": "",
+            "type": "slider",
+            "default": "0.5",
+            "options": [],
+            "min": null,
+            "max": null,
+            "step": null
+          }
         ],
-        "children": []
+        "position": [
+          4.0,
+          2.0
+        ]
+      },
+      {
+        "name": "Transform 1",
+        "type": "transform",
+        "children": [],
+        "params": [
+          {
+            "name": "Input",
+            "label": "",
+            "type": "text",
+            "default": "Sphere 1",
+            "options": [],
+            "min": null,
+            "max": null,
+            "step": null
+          },
+          {
+            "name": "Translation",
+            "label": "",
+            "type": "float3",
+            "default": "1.00:0.50:0.00",
+            "options": [],
+            "min": -10.0,
+            "max": 10.0,
+            "step": null
+          }
+        ],
+        "position": [
+          4.0,
+          3.0
+        ]
       }
+    ],
+    "params": [],
+    "position": [
+      0.0,
+      0.0
     ]
+  },
+  "view_state": {
+    "active_camera": "Camera 1",
+    "pan": [
+      0.0,
+      122.9747
+    ],
+    "current_path": [],
+    "selected_node": null
   }
 }

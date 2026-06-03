@@ -1,0 +1,14 @@
+{
+  "name": "Add 1",
+  "type": "add",
+  "params": [
+    {
+      "name": "Points",
+      "default": "100",
+      "type": "spinbox",
+      "min": 1.0,
+      "max": 1000.0,
+      "step": 1.0
+    }
+  ]
+}
