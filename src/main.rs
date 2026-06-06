@@ -79,7 +79,7 @@ enum WindowEvent {
 
 use wgpu::util::DeviceExt;
 
-use clear_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Widget, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector};
+use clear_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector};
 use clear_ui::colors;
 
 use glyphon::{
@@ -418,7 +418,7 @@ impl NodePalette {
     }
 }
 
-impl Widget for NodePalette {
+impl Element for NodePalette {
     fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
     fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
     fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
@@ -700,7 +700,7 @@ struct State {
     pending_action: Option<Action>,
     exit_requested: bool,
 
-    widgets: Vec<Box<dyn Widget>>,
+    widgets: Vec<Box<dyn Element>>,
     positions: Vec<(f32, f32, f32, f32)>,
     splitter_layout: clear_ui::layout::SplitterLayout,
     node_palette_visible: bool,
@@ -806,7 +806,7 @@ struct State {
     floating_spreadsheet_height: f32,
     is_resizing_spreadsheet: bool,
     drag_start_spreadsheet_h: f32,
-    paginator_page_widgets: Vec<Vec<Box<dyn Widget>>>,
+    paginator_page_widgets: Vec<Vec<Box<dyn Element>>>,
     last_paginator_menubar: Option<usize>,
     loaded_project_path: Option<std::path::PathBuf>,
     last_saved_root_json: String,
@@ -2873,7 +2873,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         } else {
             vec![]
         };
-        let mut widgets: Vec<Box<dyn Widget>> = vec![
+        let mut widgets: Vec<Box<dyn Element>> = vec![
             Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110)),
             Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
@@ -3854,12 +3854,12 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         if !self.widgets[PAGINATOR_IDX].is_page_hidden() {
             if sel_page < self.paginator_page_widgets.len() {
                 for widget in &self.paginator_page_widgets[sel_page] {
-                    let ptr = &**widget as *const (dyn Widget + 'static) as *mut (dyn Widget + 'static);
+                    let ptr = &**widget as *const (dyn Element + 'static) as *mut (dyn Element + 'static);
                     self.widgets[PARAM_IDX].add_child(ptr);
                 }
                 if menu_names.get(sel_page).map(|s| s.as_str()) == Some("File") {
                     for btn in &mut self.recent_files_buttons {
-                        let ptr = btn as *mut Button as *mut (dyn Widget + 'static);
+                        let ptr = btn as *mut Button as *mut (dyn Element + 'static);
                         self.widgets[PARAM_IDX].add_child(ptr);
                     }
                 }
