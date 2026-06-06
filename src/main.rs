@@ -79,7 +79,7 @@ enum WindowEvent {
 
 use wgpu::util::DeviceExt;
 
-use clear_ui::widget::{Breadcrumb, Canvas, MenuBar, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Widget, GraphNode, Graph};
+use clear_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Widget, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector};
 use clear_ui::colors;
 
 use glyphon::{
@@ -94,20 +94,23 @@ const CONTENT_IDX: usize = 1;
 const SPLITTER1_IDX: usize = 2;
 const VIEWPORT_IDX: usize = 3;
 const SPLITTER2_IDX: usize = 4;
-const PARAM_IDX: usize = 5;
-const CANVAS_IDX: usize = 6;
-const LEFT_MENUBAR_IDX: usize = 7;
-const RIGHT_MENUBAR_IDX: usize = 8;
-const PARAM_MENUBAR_IDX: usize = 9;
-const STATUS_IDX: usize = 10;
-const BREADCRUMB_IDX: usize = 11;
-const NODE_PALETTE_IDX: usize = 12;
-const SPREADSHEET_IDX: usize = 13;
-const SPREADSHEET_MENUBAR_IDX: usize = 14;
+const PARAM_PLATE_IDX: usize = 5;
+const PARAM_IDX: usize = 6;
+const CANVAS_IDX: usize = 7;
+const LEFT_MENUBAR_IDX: usize = 8;
+const RIGHT_MENUBAR_IDX: usize = 9;
+const PARAM_MENUBAR_IDX: usize = 10;
+const STATUS_IDX: usize = 11;
+const BREADCRUMB_IDX: usize = 12;
+const NODE_PALETTE_IDX: usize = 13;
+const SPREADSHEET_IDX: usize = 14;
+const SPREADSHEET_MENUBAR_IDX: usize = 15;
+const NETWORK_PANEL_IDX: usize = 16;
+const PAGINATOR_IDX: usize = 17;
 
 
 const HEADER_H: f32 = 26.0;
-const STATUS_H: f32 = 28.0;
+const STATUS_H: f32 = 0.0;
 const MENUBAR_H: f32 = 26.0;
 const SPLITTER_W: f32 = 6.0;
 
@@ -495,6 +498,7 @@ enum Action {
     ToggleCameraPivot,
     ToggleCircularPane,
     DetachCircularWindow,
+    Save,
 }
 
 struct KeyBind {
@@ -524,12 +528,14 @@ fn default_keybinds() -> Vec<KeyBind> {
         KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character(",".into()), action: Action::ToggleConfigure },
         KeyBind { ctrl: false, shift: false, alt: false, super_: false, key: Key::Character("`".into()), action: Action::ToggleSpreadsheet },
         KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("d".into()), action: Action::ToggleCircularPane },
+        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("s".into()), action: Action::Save },
     ]
 }
 
 use clear_ui::engine::{
-    Vertex, quad_vertices_with_clip as quad_vertices, widget_vertices,
+    Vertex, widget_vertices,
     quad_vertices_clipped, circle_vertices, circle_border_vertices, arc_background_vertices,
+    extra_quad_vertices, extra_quad_vertices_clipped,
 };
 
 #[repr(C)]
@@ -563,6 +569,24 @@ fn make_text_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> Buff
     let metrics = Metrics::new(size, size * 1.4);
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_text(font_system, text, Attrs::new(), glyphon::Shaping::Advanced);
+    buffer.shape_until_scroll(font_system, true);
+    buffer
+}
+
+fn make_text_buffer_with_font(font_system: &mut FontSystem, text: &str, size: f32, font: Option<&str>) -> Buffer {
+    let metrics = Metrics::new(size, size * 1.4);
+    let mut buffer = Buffer::new(font_system, metrics);
+    let mut attrs = Attrs::new();
+    if let Some(font_name) = font {
+        let family = match font_name {
+            "monospace" => glyphon::Family::Monospace,
+            "sans-serif" => glyphon::Family::SansSerif,
+            "serif" => glyphon::Family::Serif,
+            _ => glyphon::Family::Name(font_name),
+        };
+        attrs = attrs.family(family);
+    }
+    buffer.set_text(font_system, text, attrs, glyphon::Shaping::Advanced);
     buffer.shape_until_scroll(font_system, true);
     buffer
 }
@@ -601,6 +625,14 @@ fn get_next_visible_pane(
     visible_panes[next_pos]
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResizeDirection {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
 struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -628,6 +660,11 @@ struct State {
     vertex_count_grid: u32,
     depth_texture: wgpu::Texture,
     depth_texture_view: wgpu::TextureView,
+    backdrop_texture: wgpu::Texture,
+    backdrop_texture_view: wgpu::TextureView,
+    backdrop_sampler: wgpu::Sampler,
+    backdrop_bind_group_layout: wgpu::BindGroupLayout,
+    backdrop_bind_group: wgpu::BindGroup,
     rotation_y: f32,
     rotation_x: f32,
     is_rotating_viewport: bool,
@@ -747,9 +784,6 @@ struct State {
     last_config_read: Instant,
     circular_network_pane: bool,
     circular_network_layout: clear_ui::layout::CircularPaneLayout,
-    is_dragging_network_circle: bool,
-    circle_drag_ox: f32,
-    circle_drag_oy: f32,
     is_detached_network: bool,
     detached_circular_network: bool,
     last_project_mod_time: Option<std::time::SystemTime>,
@@ -762,10 +796,157 @@ struct State {
     uniform_background: bool,
     network_opacity: f32,
     last_design_mod_time: Option<std::time::SystemTime>,
+    floating_network_layout: (f32, f32, f32, f32),
+    is_resizing_network: Option<ResizeDirection>,
+    drag_start_rect: (f32, f32, f32, f32),
+    drag_start_mouse: (f32, f32),
+    floating_param_width: f32,
+    is_resizing_param: bool,
+    drag_start_param_w: f32,
+    floating_spreadsheet_height: f32,
+    is_resizing_spreadsheet: bool,
+    drag_start_spreadsheet_h: f32,
+    paginator_page_widgets: Vec<Vec<Box<dyn Widget>>>,
+    last_paginator_menubar: Option<usize>,
+    loaded_project_path: Option<std::path::PathBuf>,
+    last_saved_root_json: String,
+    recent_files: Vec<std::path::PathBuf>,
+    recent_files_list: ScrollingList,
+    recent_files_buttons: Vec<Button>,
 }
 
 impl State {
-    fn save_settings(&self) {
+    fn has_unsaved_changes(&self) -> bool {
+        if let Ok(current_json) = serde_json::to_string(&self.fs_root) {
+            current_json != self.last_saved_root_json
+        } else {
+            false
+        }
+    }
+
+    fn update_window_title(&self) {
+        let base_title = if self.is_detached_network {
+            "Network Pane"
+        } else {
+            "Clear Design Interface"
+        };
+        
+        let mut title = base_title.to_string();
+        
+        if let Some(path) = &self.loaded_project_path {
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                title.push_str(" - ");
+                title.push_str(filename);
+            }
+        }
+        
+        if self.has_unsaved_changes() {
+            title.push_str("*");
+        }
+        
+        self.window.set_title(&title);
+    }
+
+    fn get_recent_files_path() -> Option<std::path::PathBuf> {
+        std::env::var("HOME").ok().map(|h| {
+            let mut path = std::path::PathBuf::from(h);
+            path.push(".config");
+            path.push("clear-design-interface");
+            path.push("recent_files.json");
+            path
+        })
+    }
+
+    fn load_recent_files() -> Vec<std::path::PathBuf> {
+        if let Some(path) = Self::get_recent_files_path() {
+            if let Ok(file) = std::fs::File::open(path) {
+                if let Ok(list) = serde_json::from_reader::<_, Vec<String>>(file) {
+                    return list.into_iter().map(std::path::PathBuf::from).collect();
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn save_recent_files(files: &[std::path::PathBuf]) {
+        if let Some(path) = Self::get_recent_files_path() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(file) = std::fs::File::create(path) {
+                let list: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                let _ = serde_json::to_writer_pretty(file, &list);
+            }
+        }
+    }
+
+    fn add_recent_file(&mut self, path: std::path::PathBuf) {
+        let abs_path = std::fs::canonicalize(&path).unwrap_or(path);
+        self.recent_files.retain(|p| p != &abs_path);
+        self.recent_files.insert(0, abs_path);
+        self.recent_files.truncate(10);
+        Self::save_recent_files(&self.recent_files);
+        self.rebuild_recent_buttons();
+        self.update_paginator();
+    }
+
+    fn rebuild_recent_buttons(&mut self) {
+        self.recent_files_buttons.clear();
+        for file in &self.recent_files {
+            let label = file.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| file.to_string_lossy().to_string());
+            let btn = Button::new_list_row(0.0, 0.0, 0.0, 0.0).with_label(&label);
+            self.recent_files_buttons.push(btn);
+        }
+    }
+
+    fn update_recent_files_layout(&mut self) {
+        let active_menubar = self.focused_pane;
+        let menu_names = self.widgets[active_menubar].menu_names();
+        let file_page_idx = match menu_names.iter().position(|name| name == "File") {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        if file_page_idx >= self.paginator_page_widgets.len() {
+            return;
+        }
+
+        let page = &mut self.paginator_page_widgets[file_page_idx];
+        let menu_items = self.widgets[active_menubar].menu_items_list();
+        if file_page_idx >= menu_items.len() {
+            return;
+        }
+        let num_base_items = menu_items[file_page_idx].len();
+        
+        let list_idx = num_base_items + 1;
+        if list_idx >= page.len() {
+            return;
+        }
+
+        let (list_x, list_y, list_w, list_h) = page[list_idx].rect();
+        if list_h <= 0.0 {
+            return;
+        }
+
+        let count = self.recent_files.len();
+        page[list_idx].update_bounds(count, list_y, list_h);
+
+        let btn_h = 22.0;
+        let inner_x = list_x + 4.0;
+        let inner_w = list_w - 16.0;
+
+        for (idx, btn) in self.recent_files_buttons.iter_mut().enumerate() {
+            if let Some(draw_y) = page[list_idx].get_item_draw_y(idx, 0.0) {
+                btn.set_rect(inner_x, draw_y, inner_w, btn_h);
+            } else {
+                btn.set_rect(-9999.0, -9999.0, 0.0, 0.0);
+            }
+        }
+    }
+
+    fn save_settings(&mut self) {
         let settings = DesignSettings {
             grid_snap_enabled: self.grid_snap_enabled,
             network_grid_enabled: self.network_grid_visible,
@@ -790,6 +971,243 @@ impl State {
             network_opacity: self.network_opacity,
         };
         settings.save();
+        self.last_design_mod_time = {
+            let design_path = DesignSettings::file_path();
+            std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
+        };
+    }
+
+    fn sync_settings_from_paginator(&mut self) {
+        let active_menubar = self.focused_pane;
+        let page_idx = if active_menubar == LEFT_MENUBAR_IDX {
+            3
+        } else if active_menubar == RIGHT_MENUBAR_IDX {
+            4
+        } else {
+            return;
+        };
+
+        if page_idx >= self.paginator_page_widgets.len() {
+            return;
+        }
+
+        let mut left_values = None;
+        let mut right_values = None;
+
+        {
+            let widgets = &self.paginator_page_widgets[page_idx];
+            if widgets.is_empty() {
+                return;
+            }
+
+            if active_menubar == LEFT_MENUBAR_IDX {
+                if widgets.len() >= 11 {
+                    let snap = widgets[0].value();
+                    let vis = widgets[1].value();
+                    let gx = widgets[2].value();
+                    let gy = widgets[3].value();
+                    let srh = widgets[4].value();
+                    let scw = widgets[5].value();
+                    let uni = widgets[6].value();
+                    let op = widgets[7].value();
+                    let node_col = widgets[8].color_u8();
+                    let cell_col = widgets[9].color_u8();
+                    let gap_col = widgets[10].color_u8();
+                    left_values = Some((snap, vis, gx, gy, srh, scw, uni, op, node_col, cell_col, gap_col));
+                }
+            } else if active_menubar == RIGHT_MENUBAR_IDX {
+                if widgets.len() >= 13 {
+                    let sg = widgets[0].value();
+                    let sc = widgets[1].value();
+                    let so = widgets[2].value();
+                    let cp = widgets[3].value();
+                    let gt = widgets[4].value();
+                    let os = widgets[5].value();
+                    let cps = widgets[6].value();
+                    let bgr = widgets[7].value();
+                    let bgg = widgets[8].value();
+                    let bgb = widgets[9].value();
+                    let gcr = widgets[10].value();
+                    let gcg = widgets[11].value();
+                    let gcb = widgets[12].value();
+                    right_values = Some((sg, sc, so, cp, gt, os, cps, bgr, bgg, bgb, gcr, gcg, gcb));
+                }
+            }
+        }
+
+        let mut changed = false;
+
+        if let Some((snap, vis, gx, gy, srh, scw, uni, op, node_col, cell_col, gap_col)) = left_values {
+            // LEFT pane Settings
+            // 0: Snap to Grid (Checkbox)
+            let snap = snap == 1;
+            if self.grid_snap_enabled != snap {
+                self.grid_snap_enabled = snap;
+                changed = true;
+            }
+            // 1: Grid Visible (Checkbox)
+            let vis = vis == 1;
+            if self.network_grid_visible != vis {
+                self.network_grid_visible = vis;
+                changed = true;
+            }
+            // 2: Grid X (Spinbox)
+            let gx = gx as f32;
+            if self.grid_size_x != gx {
+                self.grid_size_x = gx;
+                changed = true;
+            }
+            // 3: Grid Y (Spinbox)
+            let gy = gy as f32;
+            if self.grid_size_y != gy {
+                self.grid_size_y = gy;
+                changed = true;
+            }
+            // 4: Skipped Row H (Spinbox)
+            let srh = srh as f32;
+            if self.skipped_row_h != srh {
+                self.skipped_row_h = srh;
+                changed = true;
+            }
+            // 5: Skipped Col W (Spinbox)
+            let scw = scw as f32;
+            if self.skipped_col_w != scw {
+                self.skipped_col_w = scw;
+                changed = true;
+            }
+            // 6: Uniform Background (Checkbox)
+            let uni = uni == 1;
+            if self.uniform_background != uni {
+                self.uniform_background = uni;
+                changed = true;
+            }
+            // 7: Opacity (Slider, 0..100)
+            let op = op as f32 / 100.0;
+            if (self.network_opacity - op).abs() > 0.001 {
+                self.network_opacity = op;
+                changed = true;
+            }
+            // 8: Node Color (ColorSelector)
+            if let Some(col) = node_col {
+                let nr = col[0] as f32 / 255.0;
+                let ng = col[1] as f32 / 255.0;
+                let nb = col[2] as f32 / 255.0;
+                if (self.node_color[0] - nr).abs() > 0.001
+                    || (self.node_color[1] - ng).abs() > 0.001
+                    || (self.node_color[2] - nb).abs() > 0.001
+                {
+                    self.node_color = [nr, ng, nb];
+                    colors::set_node_color([nr, ng, nb, 1.0]);
+                    changed = true;
+                }
+            }
+            // 9: Cell Color (ColorSelector)
+            if let Some(col) = cell_col {
+                let cr = col[0] as f32 / 255.0;
+                let cg = col[1] as f32 / 255.0;
+                let cb = col[2] as f32 / 255.0;
+                if (self.cell_color[0] - cr).abs() > 0.001
+                    || (self.cell_color[1] - cg).abs() > 0.001
+                    || (self.cell_color[2] - cb).abs() > 0.001
+                {
+                    self.cell_color = [cr, cg, cb];
+                    changed = true;
+                }
+            }
+            // 10: Gap Color (ColorSelector)
+            if let Some(col) = gap_col {
+                let gr = col[0] as f32 / 255.0;
+                let gg = col[1] as f32 / 255.0;
+                let gb = col[2] as f32 / 255.0;
+                if (self.gap_color[0] - gr).abs() > 0.001
+                    || (self.gap_color[1] - gg).abs() > 0.001
+                    || (self.gap_color[2] - gb).abs() > 0.001
+                {
+                    self.gap_color = [gr, gg, gb];
+                    changed = true;
+                }
+            }
+        } else if let Some((sg, sc, so, cp, gt, os, cps, bgr, bgg, bgb, gcr, gcg, gcb)) = right_values {
+            // RIGHT pane Settings
+            // 0: Show Grid Guide (Checkbox)
+            let sg = sg == 1;
+            if self.show_grid != sg {
+                self.show_grid = sg;
+                self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 0, sg);
+                changed = true;
+            }
+            // 1: Show Reference Cube (Checkbox)
+            let sc = sc == 1;
+            if self.show_cube != sc {
+                self.show_cube = sc;
+                self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, sc);
+                changed = true;
+            }
+            // 2: Show Origin Axes (Checkbox)
+            let so = so == 1;
+            if self.show_origin != so {
+                self.show_origin = so;
+                self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, so);
+                changed = true;
+            }
+            // 3: Show Camera Pivot (Checkbox)
+            let cp = cp == 1;
+            if self.show_camera_pivot != cp {
+                self.show_camera_pivot = cp;
+                self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 3, cp);
+                changed = true;
+            }
+            // 4: Grid Thickness (Spinbox, decimals 3)
+            let gt = gt as f32 / 1000.0;
+            if (self.grid_thickness - gt).abs() > 0.0001 {
+                self.grid_thickness = gt;
+                self.update_grid_geometry();
+                changed = true;
+            }
+            // 5: Origin Guide Size (Spinbox, decimals 1)
+            let os = os as f32 / 10.0;
+            if (self.origin_size - os).abs() > 0.001 {
+                self.origin_size = os;
+                self.update_origin_geometry();
+                changed = true;
+            }
+            // 6: Camera Pivot Size (Spinbox, decimals 1)
+            let cps = cps as f32 / 10.0;
+            if (self.camera_pivot_size - cps).abs() > 0.001 {
+                self.camera_pivot_size = cps;
+                self.update_pivot_geometry();
+                changed = true;
+            }
+            // 7, 8, 9: BG Color (R, G, B Spinboxes, 0..255)
+            let bgr = bgr as f32 / 255.0;
+            let bgg = bgg as f32 / 255.0;
+            let bgb = bgb as f32 / 255.0;
+            if (self.viewport_bg_color[0] - bgr).abs() > 0.001
+                || (self.viewport_bg_color[1] - bgg).abs() > 0.001
+                || (self.viewport_bg_color[2] - bgb).abs() > 0.001
+            {
+                self.viewport_bg_color = [bgr, bgg, bgb];
+                changed = true;
+            }
+            // 10, 11, 12: Grid Color (R, G, B Spinboxes, 0..255)
+            let gcr = gcr as f32 / 255.0;
+            let gcg = gcg as f32 / 255.0;
+            let gcb = gcb as f32 / 255.0;
+            if (self.grid_color[0] - gcr).abs() > 0.001
+                || (self.grid_color[1] - gcg).abs() > 0.001
+                || (self.grid_color[2] - gcb).abs() > 0.001
+            {
+                self.grid_color = [gcr, gcg, gcb];
+                self.update_grid_geometry();
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.sync_grid_settings();
+            self.save_settings();
+            self.upload_vertices();
+        }
     }
 
     fn update_grid_geometry(&mut self) {
@@ -869,14 +1287,14 @@ impl State {
     fn param_w(&self) -> f32 { self.get_col_geometries().5 }
     
     fn in_network_pane(&self) -> bool {
-        let node_area_y = self.positions[CONTENT_IDX].1;
         if self.circular_network_pane {
             self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, MENUBAR_H, BREADCRUMB_H)
         } else {
-            self.cursor_x >= 0.0
-                && self.cursor_x < self.content_left_w()
-                && self.cursor_y >= node_area_y
-                && self.cursor_y < self.height - STATUS_H
+            let (cx, cy, cw, ch) = self.positions[CONTENT_IDX];
+            self.cursor_x >= cx
+                && self.cursor_x < cx + cw
+                && self.cursor_y >= cy
+                && self.cursor_y < cy + ch
         }
     }
 
@@ -958,6 +1376,132 @@ impl State {
             &items,
             self.node_palette_selected,
         );
+    }
+
+    fn open_file_chooser(&self) {
+        std::thread::spawn(move || {
+            use std::process::{Command, Stdio};
+            use std::io::Write;
+
+            // Find executable path
+            let exe_path = if let Ok(cur_exe) = std::env::current_exe() {
+                let sibling = cur_exe.with_file_name("clear-filesystem-interface");
+                if sibling.exists() {
+                    sibling
+                } else {
+                    std::path::PathBuf::from("clear-filesystem-interface")
+                }
+            } else {
+                std::path::PathBuf::from("clear-filesystem-interface")
+            };
+
+            let child = match Command::new(exe_path)
+                .arg("--select")
+                .stdout(Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Failed to spawn clear-filesystem-interface: {:?}", e);
+                    return;
+                }
+            };
+
+            let output = match child.wait_with_output() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Failed to wait for clear-filesystem-interface: {:?}", e);
+                    return;
+                }
+            };
+
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !selected.is_empty() {
+                    let body = format!(
+                        "{{\"action\":\"load\",\"path\":\"{}\"}}",
+                        selected.replace('\\', "\\\\").replace('"', "\\\"")
+                    );
+                    let req = format!(
+                        "POST /action HTTP/1.1\r\n\
+                         Host: 127.0.0.1:3000\r\n\
+                         Content-Type: application/json\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n\
+                         {}",
+                        body.len(),
+                        body
+                    );
+                    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
+                        let _ = stream.write_all(req.as_bytes());
+                        let _ = stream.flush();
+                    }
+                }
+            }
+        });
+    }
+
+    fn save_file_chooser(&self) {
+        std::thread::spawn(move || {
+            use std::process::{Command, Stdio};
+            use std::io::Write;
+
+            // Find executable path
+            let exe_path = if let Ok(cur_exe) = std::env::current_exe() {
+                let sibling = cur_exe.with_file_name("clear-filesystem-interface");
+                if sibling.exists() {
+                    sibling
+                } else {
+                    std::path::PathBuf::from("clear-filesystem-interface")
+                }
+            } else {
+                std::path::PathBuf::from("clear-filesystem-interface")
+            };
+
+            let child = match Command::new(exe_path)
+                .arg("--save")
+                .stdout(Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Failed to spawn clear-filesystem-interface: {:?}", e);
+                    return;
+                }
+            };
+
+            let output = match child.wait_with_output() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Failed to wait for clear-filesystem-interface: {:?}", e);
+                    return;
+                }
+            };
+
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !selected.is_empty() {
+                    let body = format!(
+                        "{{\"action\":\"save\",\"path\":\"{}\"}}",
+                        selected.replace('\\', "\\\\").replace('"', "\\\"")
+                    );
+                    let req = format!(
+                        "POST /action HTTP/1.1\r\n\
+                         Host: 127.0.0.1:3000\r\n\
+                         Content-Type: application/json\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n\
+                         {}",
+                        body.len(),
+                        body
+                    );
+                    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
+                        let _ = stream.write_all(req.as_bytes());
+                        let _ = stream.flush();
+                    }
+                }
+            }
+        });
     }
 
     fn open_node_palette(&mut self) {
@@ -1562,9 +2106,36 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         }
     }
 
-    fn save_to_file(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fn save_to_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        if path.file_name().map_or(false, |n| n == "default_project.json") {
+            let proj = Project {
+                name: "Default Project".to_string(),
+                root: self.fs_root.clone(),
+                view_state: ProjectViewState {
+                    active_camera: self.active_camera.clone(),
+                    pan: (self.pan_x, self.pan_y),
+                    current_path: self.current_path.clone(),
+                    selected_node: self.widgets[CONTENT_IDX].selected_node(),
+                },
+            };
+            let content = serde_json::to_string_pretty(&proj)?;
+            fs::write(path, content)?;
+            self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+            return Ok(());
+        }
+
+        let project_dir = path;
+        let project_name = project_dir.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Default Project")
+            .to_string();
+
+        fs::create_dir_all(project_dir)?;
+
+        let state_file_path = project_dir.join("state.json");
+
         let proj = Project {
-            name: "Default Project".to_string(),
+            name: project_name,
             root: self.fs_root.clone(),
             view_state: ProjectViewState {
                 active_camera: self.active_camera.clone(),
@@ -1574,12 +2145,75 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             },
         };
         let content = serde_json::to_string_pretty(&proj)?;
-        fs::write(path, content)?;
+        fs::write(&state_file_path, content)?;
+        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
         Ok(())
     }
 
     fn load_from_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
+        if path.file_name().map_or(false, |n| n == "default_project.json") {
+            let content = fs::read_to_string(path)?;
+            let proj: Project = serde_json::from_str(&content)?;
+            self.fs_root = proj.root;
+            self.active_camera = proj.view_state.active_camera;
+            self.pan_x = proj.view_state.pan.0;
+            self.pan_y = proj.view_state.pan.1;
+            self.pan_velocity_x = 0.0;
+            self.pan_velocity_y = 0.0;
+            self.last_frame_pan_x = self.pan_x;
+            self.last_frame_pan_y = self.pan_y;
+            self.is_scrolling_trackpad = false;
+            self.scroll_accum_x = 0.0;
+            self.scroll_accum_y = 0.0;
+            self.current_path = proj.view_state.current_path;
+
+            let sel = proj.view_state.selected_node;
+            self.widgets[CONTENT_IDX].set_selected_node(sel);
+            if sel.is_some() {
+                self.focused_widget = Some(CONTENT_IDX);
+            } else {
+                self.focused_widget = None;
+            }
+            self.drag_widget = None;
+            self.last_click = None;
+
+            self.sync_grid_settings();
+            self.sync_nodes();
+
+            let params = if !self.is_detached_network {
+                self.widgets[CONTENT_IDX].selected_node().and_then(|sel_idx| {
+                    let dir = self.current_dir();
+                    if sel_idx < dir.children.len() {
+                        Some(param_display(&dir.children[sel_idx].params))
+                    } else { None }
+                }).unwrap_or_default()
+            } else {
+                vec![]
+            };
+            self.widgets[PARAM_IDX].set_display_params(&params);
+
+            self.rebuild_scene_geometry();
+            self.rebuild_positions();
+            self.apply_layout();
+            self.update_panel_bounds();
+            self.upload_vertices();
+            self.loaded_project_path = None;
+            self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+            self.update_window_title();
+            return Ok(());
+        }
+
+        let (state_file_path, project_dir) = if path.is_dir() {
+            (path.join("state.json"), path.to_path_buf())
+        } else {
+            if path.file_name().map_or(false, |name| name == "state.json") {
+                (path.to_path_buf(), path.parent().unwrap_or(path).to_path_buf())
+            } else {
+                (path.to_path_buf(), path.parent().unwrap_or(path).to_path_buf())
+            }
+        };
+
+        let content = fs::read_to_string(&state_file_path)?;
         let proj: Project = serde_json::from_str(&content)?;
         self.fs_root = proj.root;
         self.active_camera = proj.view_state.active_camera;
@@ -1625,6 +2259,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.apply_layout();
         self.update_panel_bounds();
         self.upload_vertices();
+        self.loaded_project_path = Some(project_dir);
+        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+        self.update_window_title();
         Ok(())
     }
 
@@ -1662,6 +2299,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.apply_layout();
         self.update_panel_bounds();
         self.upload_vertices();
+        self.loaded_project_path = None;
+        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+        self.update_window_title();
     }
 
     fn create_depth_texture(&self) -> (wgpu::Texture, wgpu::TextureView) {
@@ -1679,6 +2319,21 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         (tex, view)
     }
 
+    fn create_backdrop_texture(&self) -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backdrop Texture"),
+            size: wgpu::Extent3d { width: self.physical_width.max(1), height: self.physical_height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    }
+
     async fn new(
         conn: &Connection,
         qh: &QueueHandle<AppState>,
@@ -1689,6 +2344,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         scale: f64,
         is_detached_network: bool,
     ) -> Self {
+        clear_ui::scale::set_scale_factor(scale as f32);
         let settings = DesignSettings::load();
         let lw = pw as f32 / scale as f32;
         let lh = ph as f32 / scale as f32;
@@ -1700,11 +2356,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         if is_detached_network {
             window.set_title("Network Pane");
             window.set_app_id("circular-network-pane");
-            window.set_min_size(Some(((200.0 * scale) as u32, (200.0 * scale) as u32)));
+            window.set_min_size(Some((200, 200)));
         } else {
             window.set_title("Clear Design Interface");
             window.set_app_id("clear-design-interface");
-            window.set_min_size(Some(((480.0 * scale) as u32, (320.0 * scale) as u32)));
+            window.set_min_size(Some((480, 320)));
         }
         window.commit();
 
@@ -1756,7 +2412,68 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             capabilities.alpha_modes[0]
         };
         config.alpha_mode = alpha_mode;
+        config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST;
         surface.configure(&device, &config);
+
+        let backdrop_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Backdrop Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let backdrop_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Backdrop Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let backdrop_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backdrop Texture"),
+            size: wgpu::Extent3d { width: pw.max(1), height: ph.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let backdrop_texture_view = backdrop_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let backdrop_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Backdrop Bind Group"),
+            layout: &backdrop_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&backdrop_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&backdrop_sampler),
+                },
+            ],
+        });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -1765,7 +2482,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&backdrop_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -2157,15 +2874,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             vec![]
         };
         let mut widgets: Vec<Box<dyn Widget>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Configure", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110)),
             Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
             Box::new(Splitter::new(SPLITTER_W)),
+            Box::new(Plate::new(0.0, 0.0, 0.0, 0.0).with_color(colors::PARAM_BG).with_blur(true)),
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_item("File", &["New", "Open", "Save"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_item("File", &["New", "Open", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_item("Settings", &[])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_item("Settings", &[])),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"])),
             Box::new(StatusBar::new().with_text("Ready")),
             Box::new(Breadcrumb::new()),
@@ -2177,8 +2895,25 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         spreadsheet_menubar.visible = false;
         widgets.push(Box::new(spreadsheet_menubar));
 
-        let mut positions = Vec::with_capacity(SPREADSHEET_MENUBAR_IDX + 1);
-        positions.resize_with(SPREADSHEET_MENUBAR_IDX + 1, || (0.0, 0.0, 0.0, 0.0));
+        let network_panel = Plate::new(0.0, 0.0, 0.0, 0.0).with_color([0.10, 0.10, 0.13, 0.95]);
+        widgets.push(Box::new(network_panel));
+
+        let paginator = Paginator::new(56.0, vec![]).with_sidebar_mode(true).with_column_layout(true);
+        widgets.push(Box::new(paginator));
+
+        let mut positions = Vec::with_capacity(PAGINATOR_IDX + 1);
+        positions.resize_with(PAGINATOR_IDX + 1, || (0.0, 0.0, 0.0, 0.0));
+
+        let recent_files = Self::load_recent_files();
+        let recent_files_list = ScrollingList::new(22.0, 2.0);
+        let mut recent_files_buttons = Vec::new();
+        for file in &recent_files {
+            let label = file.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| file.to_string_lossy().to_string());
+            let btn = Button::new_list_row(0.0, 0.0, 0.0, 0.0).with_label(&label);
+            recent_files_buttons.push(btn);
+        }
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"),
@@ -2213,6 +2948,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             vertex_count_grid,
             depth_texture,
             depth_texture_view,
+            backdrop_texture,
+            backdrop_texture_view,
+            backdrop_sampler,
+            backdrop_bind_group_layout,
+            backdrop_bind_group,
             rotation_y: 0.0,
             rotation_x: 0.0,
             is_rotating_viewport: false,
@@ -2237,7 +2977,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             vertex_count_pivot,
             origin_size: settings.origin_size,
             camera_pivot_size: settings.camera_pivot_size,
-            fs_root,
+            fs_root: fs_root.clone(),
             node_templates,
             current_path,
             last_click: None,
@@ -2324,9 +3064,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network,
             circular_network_layout: clear_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
-            is_dragging_network_circle: false,
-            circle_drag_ox: 0.0,
-            circle_drag_oy: 0.0,
             is_detached_network,
             detached_circular_network: false,
             last_project_mod_time: {
@@ -2345,9 +3082,27 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
             },
+            floating_network_layout: (18.0, 44.0, 400.0, 710.0),
+            is_resizing_network: None,
+            drag_start_rect: (0.0, 0.0, 0.0, 0.0),
+            drag_start_mouse: (0.0, 0.0),
+            floating_param_width: 300.0,
+            is_resizing_param: false,
+            drag_start_param_w: 0.0,
+            floating_spreadsheet_height: 250.0,
+            is_resizing_spreadsheet: false,
+            drag_start_spreadsheet_h: 0.0,
+            paginator_page_widgets: Vec::new(),
+            last_paginator_menubar: None,
+            loaded_project_path: None,
+            last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
+            recent_files,
+            recent_files_list,
+            recent_files_buttons,
         };
 
         state.update_inertial_settings();
+        state.update_window_title();
         colors::set_node_color([
             settings.node_color[0],
             settings.node_color[1],
@@ -2379,11 +3134,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
     fn sync_grid_settings(&mut self) {
         let active_node_area_y = self.positions[CONTENT_IDX].1;
-        let active_node_area_x = if self.circular_network_pane {
-            self.circular_network_layout.x - self.circular_network_layout.r
-        } else {
-            0.0
-        };
+        let active_node_area_x = self.positions[CONTENT_IDX].0;
 
         self.widgets[CONTENT_IDX].set_show_network_grid(self.network_grid_visible);
         self.widgets[CONTENT_IDX].set_grid_sizes(self.grid_size_x, self.grid_size_y);
@@ -2396,6 +3147,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.widgets[CONTENT_IDX].set_gap_color(self.gap_color);
         self.widgets[LEFT_MENUBAR_IDX].set_network_opacity(self.network_opacity);
         self.widgets[BREADCRUMB_IDX].set_network_opacity(self.network_opacity);
+        self.widgets[NETWORK_PANEL_IDX].set_network_opacity(self.network_opacity);
     }
 
     fn update_inertial_settings(&mut self) {
@@ -2486,39 +3238,23 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
 
     fn keep_cursor_in_view(&mut self) {
-        let active_node_area_y = self.positions[CONTENT_IDX].1;
-        let active_node_area_x = if self.circular_network_pane {
-            self.circular_network_layout.x - self.circular_network_layout.r
-        } else {
-            0.0
-        };
+        let (px, py, pw, ph) = self.positions[CONTENT_IDX];
 
-        let cx = active_node_area_x + self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
-        let cy = active_node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
+        let cx = px + self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
+        let cy = py + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
         let cw = self.grid_size_x;
         let ch = self.grid_size_y;
 
-        let active_graph_w = if self.circular_network_pane {
-            2.0 * self.circular_network_layout.r
-        } else {
-            self.content_left_w()
-        };
-        let active_max_y = if self.circular_network_pane {
-            self.circular_network_layout.y + self.circular_network_layout.r
-        } else {
-            self.height - STATUS_H
-        };
-
-        if cx < active_node_area_x {
-            self.pan_x -= cx - active_node_area_x;
-        } else if cx + cw > active_node_area_x + active_graph_w {
-            self.pan_x -= cx + cw - (active_node_area_x + active_graph_w);
+        if cx < px {
+            self.pan_x -= cx - px;
+        } else if cx + cw > px + pw {
+            self.pan_x -= cx + cw - (px + pw);
         }
 
-        if cy < active_node_area_y {
-            self.pan_y -= cy - active_node_area_y;
-        } else if cy + ch > active_max_y {
-            self.pan_y -= cy + ch - active_max_y;
+        if cy < py {
+            self.pan_y -= cy - py;
+        } else if cy + ch > py + ph {
+            self.pan_y -= cy + ch - (py + ph);
         }
         self.sync_grid_settings();
     }
@@ -2528,12 +3264,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.widgets[LEFT_MENUBAR_IDX].set_center_items(self.circular_network_pane);
 
         let body_h = self.body_h();
-        let clw = self.content_left_w();
-        let crx = self.content_right_x();
-        let vw = self.viewport_w();
-        let px = self.param_x();
-
-        let node_area_y = HEADER_H;
 
         if self.is_detached_network {
             let cx = self.width / 2.0;
@@ -2549,6 +3279,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(Some((cx, cy, r)));
             self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H, 2.0 * r, BREADCRUMB_H);
             self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + MENUBAR_H + BREADCRUMB_H));
+            self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
+            self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
+            self.widgets[NETWORK_PANEL_IDX].set_curved_circle(Some((cx, cy, r)));
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER2_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[PARAM_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -2568,7 +3301,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             let center_visible = viewport_visible || spreadsheet_visible;
             let right_visible = self.show_parameters;
 
-            let (col_l_x, col_l_w, s1_x, s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
+            let (_col_l_x, _col_l_w, _s1_x, _s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
                 match (left_visible, center_visible, right_visible) {
                     (false, true, true) => {
                         let c_w = self.splitter_layout.splitter2_x;
@@ -2620,6 +3353,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[BREADCRUMB_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[CONTENT_IDX] = (0.0, 0.0, 0.0, 0.0);
+            self.positions[NETWORK_PANEL_IDX] = (0.0, 0.0, 0.0, 0.0);
+            self.widgets[NETWORK_PANEL_IDX].set_rect(0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
             self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
@@ -2636,8 +3371,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
             self.widgets[0].set_visible(true);
-            self.widgets[STATUS_IDX].set_visible(true);
+            self.widgets[STATUS_IDX].set_visible(false);
             self.widgets[CONTENT_IDX].set_visible(false);
+            self.widgets[NETWORK_PANEL_IDX].set_visible(false);
             self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
             self.widgets[BREADCRUMB_IDX].set_visible(false);
             self.widgets[SPLITTER1_IDX].set_visible(false);
@@ -2649,7 +3385,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
             self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(spreadsheet_visible);
         } else {
-            self.positions[0] = (0.0, 0.0, self.width, HEADER_H);
+            let paginator_w = self.widgets[PAGINATOR_IDX].sidebar_w();
+            let body_h = self.height - STATUS_H;
+            self.positions[0] = (0.0, 0.0, 0.0, 0.0);
             if self.circular_network_pane {
                 let left_visible = false;
                 let viewport_visible = self.show_viewport;
@@ -2657,23 +3395,23 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let center_visible = viewport_visible || spreadsheet_visible;
                 let right_visible = self.show_parameters;
 
-                let (col_l_x, col_l_w, s1_x, s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
+                let (_col_l_x, _col_l_w, _s1_x, _s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
                     match (left_visible, center_visible, right_visible) {
                         (false, true, true) => {
-                            let viewport_w = self.splitter_layout.splitter2_x;
-                            let s2 = viewport_w;
+                            let s2 = self.splitter_layout.splitter2_x.max(paginator_w + MIN_COLUMN);
+                            let viewport_w = s2 - paginator_w;
                             let r_x = s2 + SPLITTER_W;
                             let r_w = (self.width - r_x).max(0.0);
-                            (0.0, 0.0, 0.0, 0.0, 0.0, viewport_w, s2, SPLITTER_W, r_x, r_w)
+                            (0.0, 0.0, 0.0, 0.0, paginator_w, viewport_w, s2, SPLITTER_W, r_x, r_w)
                         }
                         (false, true, false) => {
-                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                            (0.0, 0.0, 0.0, 0.0, paginator_w, self.width - paginator_w, 0.0, 0.0, 0.0, 0.0)
                         }
                         (false, false, true) => {
-                            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, self.width)
+                            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, paginator_w, self.width - paginator_w)
                         }
                         _ => {
-                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
+                            (0.0, 0.0, 0.0, 0.0, paginator_w, self.width - paginator_w, 0.0, 0.0, 0.0, 0.0)
                         }
                     };
 
@@ -2688,173 +3426,184 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     if viewport_visible && spreadsheet_visible {
                         let viewport_h = body_h * 2.0 / 3.0;
                         let spreadsheet_h = body_h - viewport_h;
-                        vp_y = HEADER_H;
+                        vp_y = 0.0;
                         vp_h = viewport_h;
                         sp_menub_y = 0.0;
                         sp_menub_h = 0.0;
-                        sp_y = HEADER_H + viewport_h;
+                        sp_y = viewport_h;
                         sp_h = spreadsheet_h;
                     } else if viewport_visible {
-                        vp_y = HEADER_H;
+                        vp_y = 0.0;
                         vp_h = body_h;
                     } else if spreadsheet_visible {
                         sp_menub_y = 0.0;
                         sp_menub_h = 0.0;
-                        sp_y = HEADER_H;
+                        sp_y = 0.0;
                         sp_h = body_h;
                     }
                 }
 
+                if self.widgets[NETWORK_PANEL_IDX].is_dragging() {
+                    let (px, py, _pw, _ph) = self.widgets[NETWORK_PANEL_IDX].rect();
+                    let r = self.circular_network_layout.r;
+                    self.circular_network_layout.x = px + r;
+                    self.circular_network_layout.y = py + r;
+                }
+
+                let gap = 18.0;
+                let max_r = ((self.width - paginator_w - 2.0 * gap).min(self.height - STATUS_H - 2.0 * gap) / 2.0).max(50.0);
+                self.circular_network_layout.r = self.circular_network_layout.r.clamp(50.0, max_r);
+
+                let r = self.circular_network_layout.r;
+                let min_x = paginator_w + gap + r;
+                let max_x = (self.width - gap - r).max(min_x);
+                self.circular_network_layout.x = self.circular_network_layout.x.clamp(min_x, max_x);
+
+                let min_y = gap + r;
+                let max_y = (self.height - STATUS_H - gap - r).max(min_y);
+                self.circular_network_layout.y = self.circular_network_layout.y.clamp(min_y, max_y);
+
                 let cx = self.circular_network_layout.x;
                 let cy = self.circular_network_layout.y;
-                let r = self.circular_network_layout.r;
 
-                self.positions[LEFT_MENUBAR_IDX] = (cx - r, cy - r, 2.0 * r, 35.0);
+                self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
-                self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H, 2.0 * r, BREADCRUMB_H);
-                self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + MENUBAR_H + BREADCRUMB_H));
+                self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
+                self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
+                self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
+                self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
+                self.widgets[NETWORK_PANEL_IDX].set_curved_circle(Some((cx, cy, r)));
+                self.widgets[NETWORK_PANEL_IDX].set_drag_bounds(0.0, 0.0, self.width, self.height);
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
-                self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
-                self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
+                self.positions[SPLITTER2_IDX] = (s2_x, 0.0, s2_w, body_h);
+                self.positions[PARAM_IDX] = (col_r_x, 0.0, col_r_w, body_h);
 
                 self.positions[VIEWPORT_IDX] = (col_c_x, vp_y, col_c_w, vp_h);
-                self.positions[RIGHT_MENUBAR_IDX] = (col_c_x, vp_y, col_c_w, if viewport_visible { MENUBAR_H } else { 0.0 });
+                self.positions[RIGHT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
 
-                self.positions[SPREADSHEET_MENUBAR_IDX] = (col_c_x, sp_menub_y, col_c_w, sp_menub_h);
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[SPREADSHEET_IDX] = (col_c_x, sp_y, col_c_w, sp_h);
 
-                self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
-                self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
+                self.positions[CANVAS_IDX] = (0.0, 0.0, self.width, body_h);
+                self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-                self.widgets[0].set_visible(true);
-                self.widgets[STATUS_IDX].set_visible(true);
+                self.positions[PAGINATOR_IDX] = (0.0, 0.0, paginator_w, self.height - STATUS_H);
+                self.widgets[PAGINATOR_IDX].set_rect(0.0, 0.0, paginator_w, self.height - STATUS_H);
+
+                self.widgets[0].set_visible(false);
+                self.widgets[STATUS_IDX].set_visible(false);
                 self.widgets[CONTENT_IDX].set_visible(self.show_network);
-                self.widgets[LEFT_MENUBAR_IDX].set_visible(self.show_network);
+                self.widgets[NETWORK_PANEL_IDX].set_visible(self.show_network);
+                self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
                 self.widgets[BREADCRUMB_IDX].set_visible(self.show_network);
                 self.widgets[SPLITTER1_IDX].set_visible(false);
                 self.widgets[SPLITTER2_IDX].set_visible(s2_w > 0.0);
                 self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
-                self.widgets[RIGHT_MENUBAR_IDX].set_visible(viewport_visible);
+                self.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
                 self.widgets[PARAM_IDX].set_visible(right_visible);
-                self.widgets[PARAM_MENUBAR_IDX].set_visible(right_visible);
+                self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
                 self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
-                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(spreadsheet_visible);
+                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+                self.widgets[PAGINATOR_IDX].set_visible(true);
             } else {
-                let left_visible = self.show_network;
-                let viewport_visible = self.show_viewport;
-                let spreadsheet_visible = self.show_spreadsheet;
-                let center_visible = viewport_visible || spreadsheet_visible;
-                let right_visible = self.show_parameters;
-
-                let (col_l_x, col_l_w, s1_x, s1_w, col_c_x, col_c_w, s2_x, s2_w, col_r_x, col_r_w) =
-                    match (left_visible, center_visible, right_visible) {
-                        (true, true, true) => {
-                            let l_w = self.splitter_layout.splitter1_x;
-                            let s1 = l_w;
-                            let c_x = s1 + SPLITTER_W;
-                            let c_w = self.splitter_layout.splitter2_x - c_x;
-                            let s2 = self.splitter_layout.splitter2_x;
-                            let r_x = s2 + SPLITTER_W;
-                            let r_w = (self.width - r_x).max(0.0);
-                            (0.0, l_w, s1, SPLITTER_W, c_x, c_w, s2, SPLITTER_W, r_x, r_w)
-                        }
-                        (true, true, false) => {
-                            let l_w = self.splitter_layout.splitter1_x;
-                            let s1 = l_w;
-                            let c_x = s1 + SPLITTER_W;
-                            let c_w = (self.width - c_x).max(0.0);
-                            (0.0, l_w, s1, SPLITTER_W, c_x, c_w, 0.0, 0.0, 0.0, 0.0)
-                        }
-                        (true, false, true) => {
-                            let l_w = self.splitter_layout.splitter2_x;
-                            let s2 = l_w;
-                            let r_x = s2 + SPLITTER_W;
-                            let r_w = (self.width - r_x).max(0.0);
-                            (0.0, l_w, 0.0, 0.0, 0.0, 0.0, s2, SPLITTER_W, r_x, r_w)
-                        }
-                        (false, true, true) => {
-                            let c_w = self.splitter_layout.splitter2_x;
-                            let s2 = c_w;
-                            let r_x = s2 + SPLITTER_W;
-                            let r_w = (self.width - r_x).max(0.0);
-                            (0.0, 0.0, 0.0, 0.0, 0.0, c_w, s2, SPLITTER_W, r_x, r_w)
-                        }
-                        (true, false, false) => {
-                            (0.0, self.width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-                        }
-                        (false, true, false) => {
-                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
-                        }
-                        (false, false, true) => {
-                            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, self.width)
-                        }
-                        (false, false, false) => {
-                            (0.0, 0.0, 0.0, 0.0, 0.0, self.width, 0.0, 0.0, 0.0, 0.0)
-                        }
-                    };
-
-                let mut vp_y = 0.0;
-                let mut vp_h = 0.0;
-                let mut sp_menub_y = 0.0;
-                let mut sp_menub_h = 0.0;
-                let mut sp_y = 0.0;
-                let mut sp_h = 0.0;
-
-                if center_visible {
-                    if viewport_visible && spreadsheet_visible {
-                        let viewport_h = body_h * 2.0 / 3.0;
-                        let spreadsheet_h = body_h - viewport_h;
-                        vp_y = HEADER_H;
-                        vp_h = viewport_h;
-                        sp_menub_y = 0.0;
-                        sp_menub_h = 0.0;
-                        sp_y = HEADER_H + viewport_h;
-                        sp_h = spreadsheet_h;
-                    } else if viewport_visible {
-                        vp_y = HEADER_H;
-                        vp_h = body_h;
-                    } else if spreadsheet_visible {
-                        sp_menub_y = 0.0;
-                        sp_menub_h = 0.0;
-                        sp_y = HEADER_H;
-                        sp_h = body_h;
-                    }
+                if !self.circular_network_pane && self.widgets[NETWORK_PANEL_IDX].is_dragging() {
+                    let (px, py, _pw, _ph) = self.widgets[NETWORK_PANEL_IDX].rect();
+                    self.floating_network_layout.0 = px;
+                    self.floating_network_layout.1 = py;
                 }
 
+                let gap = 18.0_f32;
+                let (mut _fx, mut _fy, mut fw, mut _fh) = self.floating_network_layout;
+                fw = fw.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
+                let fx = paginator_w + gap;
+                let fy = gap;
+                let fh = (self.height - STATUS_H - 2.0 * gap).max(100.0);
+                self.floating_network_layout = (fx, fy, fw, fh);
+
+                let param_w = self.floating_param_width.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
+                self.floating_param_width = param_w;
+                let param_x = self.width - gap - param_w;
+                let param_y = gap;
+                let param_h = (self.height - STATUS_H - 2.0 * gap).max(100.0);
+
+                let ss_x = if self.show_network { fx + fw + gap } else { paginator_w + gap };
+                let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
+                let ss_w = (ss_w_end - ss_x).max(150.0);
+                let ss_y_end = self.height - STATUS_H - gap;
+                let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
+                let ss_y = ss_y_end - ss_h;
+                self.floating_spreadsheet_height = ss_h;
+
+                let viewport_visible = self.show_viewport;
+                let spreadsheet_visible = self.show_spreadsheet;
+                let right_visible = self.show_parameters;
+
+                let col_c_x = paginator_w;
+                let col_c_w = self.width - paginator_w;
+                let vp_y = 0.0;
+                let vp_h = if viewport_visible { body_h } else { 0.0 };
+
+                let (px, py, pw, ph) = if self.show_network {
+                    (fx, fy, fw, fh)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                };
+
                 self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
-                self.positions[CONTENT_IDX] = (col_l_x, node_area_y + BREADCRUMB_H, col_l_w, self.height - STATUS_H - (node_area_y + BREADCRUMB_H));
-                self.positions[SPLITTER1_IDX] = (s1_x, HEADER_H, s1_w, body_h);
-                self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
-                self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
+                
+                let mb_h = 0.0;
+                let bc_h = if self.show_network { BREADCRUMB_H } else { 0.0 };
+                let content_h = (ph - mb_h - bc_h).max(0.0);
+
+                self.positions[CONTENT_IDX] = (px, py + mb_h + bc_h, pw, content_h);
+                self.positions[NETWORK_PANEL_IDX] = (px, py, pw, ph);
+                self.widgets[NETWORK_PANEL_IDX].set_rect(px, py, pw, ph);
+                self.widgets[NETWORK_PANEL_IDX].set_curved_circle(None);
+                self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
+                self.positions[SPLITTER2_IDX] = (0.0, 0.0, 0.0, 0.0);
+                let p_rect = if self.show_parameters { (param_x, param_y, param_w, param_h) } else { (0.0, 0.0, 0.0, 0.0) };
+                self.positions[PARAM_IDX] = p_rect;
+                self.widgets[PARAM_IDX].set_rect(p_rect.0, p_rect.1, p_rect.2, p_rect.3);
 
                 self.positions[VIEWPORT_IDX] = (col_c_x, vp_y, col_c_w, vp_h);
-                self.positions[RIGHT_MENUBAR_IDX] = (col_c_x, vp_y, col_c_w, if viewport_visible { MENUBAR_H } else { 0.0 });
-                self.positions[BREADCRUMB_IDX] = (col_l_x, node_area_y, col_l_w, BREADCRUMB_H);
-                self.positions[LEFT_MENUBAR_IDX] = (col_l_x, HEADER_H, col_l_w, if left_visible { MENUBAR_H } else { 0.0 });
+                self.positions[RIGHT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
+                self.positions[BREADCRUMB_IDX] = (px, py + mb_h, pw, bc_h);
+                self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
 
-                self.positions[SPREADSHEET_MENUBAR_IDX] = (col_c_x, sp_menub_y, col_c_w, sp_menub_h);
-                self.positions[SPREADSHEET_IDX] = (col_c_x, sp_y, col_c_w, sp_h);
+                self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
+                self.positions[SPREADSHEET_IDX] = if spreadsheet_visible { (ss_x, ss_y, ss_w, ss_h) } else { (0.0, 0.0, 0.0, 0.0) };
+                self.widgets[SPREADSHEET_IDX].set_rect(
+                    self.positions[SPREADSHEET_IDX].0,
+                    self.positions[SPREADSHEET_IDX].1,
+                    self.positions[SPREADSHEET_IDX].2,
+                    self.positions[SPREADSHEET_IDX].3,
+                );
 
-                self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
-                self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
+                self.positions[CANVAS_IDX] = (0.0, 0.0, self.width, body_h);
+                self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-                self.widgets[0].set_visible(true);
-                self.widgets[STATUS_IDX].set_visible(true);
-                self.widgets[CONTENT_IDX].set_visible(left_visible);
-                self.widgets[LEFT_MENUBAR_IDX].set_visible(left_visible);
-                self.widgets[BREADCRUMB_IDX].set_visible(left_visible);
-                self.widgets[SPLITTER1_IDX].set_visible(s1_w > 0.0);
-                self.widgets[SPLITTER2_IDX].set_visible(s2_w > 0.0);
+                self.positions[PAGINATOR_IDX] = (0.0, 0.0, paginator_w, self.height - STATUS_H);
+                self.widgets[PAGINATOR_IDX].set_rect(0.0, 0.0, paginator_w, self.height - STATUS_H);
+
+                self.widgets[0].set_visible(false);
+                self.widgets[STATUS_IDX].set_visible(false);
+                self.widgets[CONTENT_IDX].set_visible(self.show_network);
+                self.widgets[NETWORK_PANEL_IDX].set_visible(self.show_network);
+                self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
+                self.widgets[BREADCRUMB_IDX].set_visible(self.show_network);
+                self.widgets[SPLITTER1_IDX].set_visible(false);
+                self.widgets[SPLITTER2_IDX].set_visible(false);
                 self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
-                self.widgets[RIGHT_MENUBAR_IDX].set_visible(viewport_visible);
+                self.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
                 self.widgets[PARAM_IDX].set_visible(right_visible);
-                self.widgets[PARAM_MENUBAR_IDX].set_visible(right_visible);
+                self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
                 self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
-                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(spreadsheet_visible);
+                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+                self.widgets[PAGINATOR_IDX].set_visible(true);
             }
         }
 
@@ -2885,15 +3634,13 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 SPREADSHEET_MENUBAR_IDX,
             ];
             for &idx in &menubars {
-                if idx == active_menubar {
-                    self.positions[idx] = (0.0, 0.0, self.width, HEADER_H);
-                    self.widgets[idx].set_visible(true);
-                } else {
-                    self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
-                    self.widgets[idx].set_visible(false);
-                }
+                self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
+                self.widgets[idx].set_visible(false);
             }
         }
+        self.positions[PARAM_PLATE_IDX] = self.positions[PARAM_IDX];
+        let p_visible = self.widgets[PARAM_IDX].visible();
+        self.widgets[PARAM_PLATE_IDX].set_visible(p_visible);
     }
 
 
@@ -2905,10 +3652,228 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 widget.set_rect(x, y, w, h);
             }
         }
+        self.update_recent_files_layout();
     }
 
     fn update_panel_bounds(&mut self) {
         // Unbounded 2D canvas - no clamping
+    }
+
+    fn update_paginator(&mut self) {
+        let active_menubar = self.focused_pane;
+        let title = self.widgets[active_menubar].label().unwrap_or_default();
+        let label_name = if let Some(colon_idx) = title.find(':') {
+            title.split_at(colon_idx + 1).1.trim().to_uppercase()
+        } else {
+            title.to_uppercase()
+        };
+        self.widgets[PAGINATOR_IDX].set_sidebar_label(Some(label_name));
+
+        let menu_names = self.widgets[active_menubar].menu_names();
+        let menu_items = self.widgets[active_menubar].menu_items_list();
+        let menu_checked = self.widgets[active_menubar].menu_checked_list();
+
+        let num_pages = menu_names.len();
+        self.widgets[PAGINATOR_IDX].set_pages(menu_names.clone());
+
+        // Check if we need to rebuild paginator page widgets.
+        let need_rebuild = self.last_paginator_menubar != Some(active_menubar)
+            || self.paginator_page_widgets.len() != num_pages;
+
+        if need_rebuild {
+            self.last_paginator_menubar = Some(active_menubar);
+            self.paginator_page_widgets.clear();
+            self.paginator_page_widgets.resize_with(num_pages, Vec::new);
+
+            for (page_idx, page_name) in menu_names.iter().enumerate() {
+                if page_name == "Settings" {
+                    if active_menubar == LEFT_MENUBAR_IDX {
+                        // 0: Snap to Grid (Checkbox)
+                        let mut cb = Checkbox::new().with_label("Snap to Grid");
+                        cb.set_checked(self.grid_snap_enabled);
+                        cb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
+
+                        // 1: Grid Visible (Checkbox)
+                        let mut cb = Checkbox::new().with_label("Grid Visible");
+                        cb.set_checked(self.network_grid_visible);
+                        cb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
+
+                        // 2: Grid X (Spinbox, range 10-200)
+                        let mut sb = Spinbox::new(self.grid_size_x as i32, 10, 200, 1).with_label("Grid X");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 3: Grid Y (Spinbox, range 5-100)
+                        let mut sb = Spinbox::new(self.grid_size_y as i32, 5, 100, 1).with_label("Grid Y");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 4: Skipped Row H (Spinbox, range 0-150)
+                        let mut sb = Spinbox::new(self.skipped_row_h as i32, 0, 150, 1).with_label("Skipped Row H");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 5: Skipped Col W (Spinbox, range 0-150)
+                        let mut sb = Spinbox::new(self.skipped_col_w as i32, 0, 150, 1).with_label("Skipped Col W");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 6: Uniform Background (Checkbox)
+                        let mut cb = Checkbox::new().with_label("Uniform Background");
+                        cb.set_checked(self.uniform_background);
+                        cb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
+
+                        // 7: Opacity (Slider, range 0.0-1.0)
+                        let mut sl = Slider::new().with_range(0.0, 1.0).with_value(self.network_opacity).with_label("Opacity").with_readout(true).with_scroll(true);
+                        sl.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sl));
+
+                        // 8: Node Color (ColorSelector)
+                        let mut cs = ColorSelector::new([
+                            (self.node_color[0] * 255.0) as u8,
+                            (self.node_color[1] * 255.0) as u8,
+                            (self.node_color[2] * 255.0) as u8,
+                        ]).with_label("Node Color");
+                        cs.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cs));
+
+                        // 9: Cell Color (ColorSelector)
+                        let mut cs = ColorSelector::new([
+                            (self.cell_color[0] * 255.0) as u8,
+                            (self.cell_color[1] * 255.0) as u8,
+                            (self.cell_color[2] * 255.0) as u8,
+                        ]).with_label("Cell Color");
+                        cs.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cs));
+
+                        // 10: Gap Color (ColorSelector)
+                        let mut cs = ColorSelector::new([
+                            (self.gap_color[0] * 255.0) as u8,
+                            (self.gap_color[1] * 255.0) as u8,
+                            (self.gap_color[2] * 255.0) as u8,
+                        ]).with_label("Gap Color");
+                        cs.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cs));
+                    } else if active_menubar == RIGHT_MENUBAR_IDX {
+                        // 0: Show Grid Guide (Checkbox)
+                        let mut cb = Checkbox::new().with_label("Show Grid Guide");
+                        cb.set_checked(self.show_grid);
+                        cb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
+
+                        // 1: Show Reference Cube (Checkbox)
+                        let mut cb = Checkbox::new().with_label("Show Reference Cube");
+                        cb.set_checked(self.show_cube);
+                        cb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
+
+                        // 2: Show Origin Axes (Checkbox)
+                        let mut cb = Checkbox::new().with_label("Show Origin Axes");
+                        cb.set_checked(self.show_origin);
+                        cb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
+
+                        // 3: Show Camera Pivot (Checkbox)
+                        let mut cb = Checkbox::new().with_label("Show Camera Pivot");
+                        cb.set_checked(self.show_camera_pivot);
+                        cb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
+
+                        // 4: Grid Thickness (Spinbox, range 2-200, decimals 3)
+                        let mut sb = Spinbox::new((self.grid_thickness * 1000.0) as i32, 2, 200, 1).with_label("Grid Thickness").with_decimals(3);
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 5: Origin Guide Size (Spinbox, range 1-50, decimals 1)
+                        let mut sb = Spinbox::new((self.origin_size * 10.0) as i32, 1, 50, 1).with_label("Origin Guide Size").with_decimals(1);
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 6: Camera Pivot Size (Spinbox, range 1-50, decimals 1)
+                        let mut sb = Spinbox::new((self.camera_pivot_size * 10.0) as i32, 1, 50, 1).with_label("Camera Pivot Size").with_decimals(1);
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 7, 8, 9: BG Color R, G, B (Spinbox, range 0-255)
+                        let mut sb = Spinbox::new((self.viewport_bg_color[0] * 255.0) as i32, 0, 255, 1).with_label("BG Color R");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+                        let mut sb = Spinbox::new((self.viewport_bg_color[1] * 255.0) as i32, 0, 255, 1).with_label("BG Color G");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+                        let mut sb = Spinbox::new((self.viewport_bg_color[2] * 255.0) as i32, 0, 255, 1).with_label("BG Color B");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+
+                        // 10, 11, 12: Grid Color R, G, B (Spinbox, range 0-255)
+                        let mut sb = Spinbox::new((self.grid_color[0] * 255.0) as i32, 0, 255, 1).with_label("Grid Color R");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+                        let mut sb = Spinbox::new((self.grid_color[1] * 255.0) as i32, 0, 255, 1).with_label("Grid Color G");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+                        let mut sb = Spinbox::new((self.grid_color[2] * 255.0) as i32, 0, 255, 1).with_label("Grid Color B");
+                        sb.set_rect(0.0, 0.0, 0.0, 42.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(sb));
+                    }
+                } else {
+                    let items = &menu_items[page_idx];
+                    let checked_list = menu_checked.get(page_idx);
+                    for (item_idx, item_name) in items.iter().enumerate() {
+                        let is_checked = checked_list.and_then(|l| l.get(item_idx).copied().flatten());
+                        if let Some(checked_val) = is_checked {
+                            let mut cb = Checkbox::new().with_label(item_name);
+                            cb.set_checked(checked_val);
+                            self.paginator_page_widgets[page_idx].push(Box::new(cb));
+                        } else {
+                            let btn = Button::new(0.0, 0.0, 150.0, 24.0).with_label(item_name);
+                            self.paginator_page_widgets[page_idx].push(Box::new(btn));
+                        }
+                    }
+
+                    if menu_names[page_idx] == "File" {
+                        let mut recent_lbl = Label::new("Recent Files").with_font_size(11.0).with_color([0xd4, 0xd4, 0xd4]);
+                        recent_lbl.set_rect(0.0, 0.0, 150.0, 16.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(recent_lbl));
+
+                        let mut recent_list = ScrollingList::new(22.0, 2.0);
+                        recent_list.set_rect(0.0, 0.0, 150.0, 100.0);
+                        self.paginator_page_widgets[page_idx].push(Box::new(recent_list));
+                    }
+                }
+            }
+
+            // Page widgets rebuild completed.
+        }
+
+        let sel_page = self.widgets[PAGINATOR_IDX].selected_page();
+        self.widgets[PARAM_IDX].clear_children();
+        if !self.widgets[PAGINATOR_IDX].is_page_hidden() {
+            if sel_page < self.paginator_page_widgets.len() {
+                for widget in &self.paginator_page_widgets[sel_page] {
+                    let ptr = &**widget as *const (dyn Widget + 'static) as *mut (dyn Widget + 'static);
+                    self.widgets[PARAM_IDX].add_child(ptr);
+                }
+                if menu_names.get(sel_page).map(|s| s.as_str()) == Some("File") {
+                    for btn in &mut self.recent_files_buttons {
+                        let ptr = btn as *mut Button as *mut (dyn Widget + 'static);
+                        self.widgets[PARAM_IDX].add_child(ptr);
+                    }
+                }
+            }
+        }
+
+        let (px, py, pw, ph) = self.positions[PAGINATOR_IDX];
+        self.widgets[PAGINATOR_IDX].set_rect(px, py, pw, ph);
+
+        // Layout the parameters plate with the new children immediately.
+        let (ppx, ppy, ppw, pph) = self.positions[PARAM_IDX];
+        self.widgets[PARAM_IDX].set_rect(ppx, ppy, ppw, pph);
+
+        self.update_recent_files_layout();
     }
 
     fn sync_pane_focus(&mut self) {
@@ -2919,6 +3884,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.widgets[PARAM_IDX].unfocus();
             self.sync_parameters_to_project();
         }
+        self.update_paginator();
     }
 
     fn sync_layout(&mut self) {
@@ -2926,10 +3892,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let center_visible = self.show_viewport || self.show_spreadsheet;
         let right_visible = self.show_parameters;
 
-        if left_visible && center_visible {
+        if left_visible && center_visible && self.widgets[SPLITTER1_IDX].visible() && self.widgets[SPLITTER1_IDX].rect().2 > 0.0 {
             self.splitter_layout.splitter1_x = self.widgets[SPLITTER1_IDX].rect().0;
         }
-        if right_visible && (center_visible || left_visible) {
+        if right_visible && (center_visible || left_visible) && self.widgets[SPLITTER2_IDX].visible() && self.widgets[SPLITTER2_IDX].rect().2 > 0.0 {
             self.splitter_layout.splitter2_x = self.widgets[SPLITTER2_IDX].rect().0;
         }
         self.rebuild_positions();
@@ -2966,201 +3932,20 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 settings_changed = true;
             }
             Action::ToggleConfigure => {
-                use std::io::Write;
-                let json_config = serde_json::json!({
-                    "width": 550,
-                    "height": 550,
-                    "pages": [
-                        {
-                            "title": "Network",
-                            "widgets": [
-                                { "type": "checkbox", "id": "grid_snap_enabled", "text": "Snap to Grid", "checked": self.grid_snap_enabled },
-                                { "type": "checkbox", "id": "network_grid_visible", "text": "Network Grid Visible", "checked": self.network_grid_visible },
-                                { "type": "spinbox", "id": "grid_size_x", "text": "Grid X", "value": self.grid_size_x as i32, "min": 10, "max": 200, "step": 5 },
-                                { "type": "spinbox", "id": "grid_size_y", "text": "Grid Y", "value": self.grid_size_y as i32, "min": 5, "max": 100, "step": 5 },
-                                { "type": "spinbox", "id": "skipped_row_h", "text": "Skipped Row H", "value": self.skipped_row_h as i32, "min": 0, "max": 150, "step": 5 },
-                                { "type": "spinbox", "id": "skipped_col_w", "text": "Skipped Col W", "value": self.skipped_col_w as i32, "min": 0, "max": 150, "step": 5 },
-                                { "type": "color", "id": "node_color", "text": "Node Base Color", "color": [
-                                    (self.node_color[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.node_color[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.node_color[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                ]},
-                                { "type": "color", "id": "cell_color", "text": "Cell Color", "color": [
-                                    (self.cell_color[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.cell_color[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.cell_color[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                ]},
-                                { "type": "color", "id": "gap_color", "text": "Gap Color", "color": [
-                                    (self.gap_color[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.gap_color[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.gap_color[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                ]},
-                                { "type": "checkbox", "id": "uniform_background", "text": "Uniform Background", "checked": self.uniform_background },
-                                { "type": "slider", "id": "network_opacity", "text": "Opacity", "value_f32": self.network_opacity, "min_f32": 0.0, "max_f32": 1.0 },
-                                { "type": "button", "id": "save", "text": "Save Settings" },
-                                { "type": "button", "id": "cancel", "text": "Cancel" }
-                            ]
-                        },
-                        {
-                            "title": "Viewport",
-                            "widgets": [
-                                { "type": "checkbox", "id": "show_grid", "text": "Show Grid Guide", "checked": self.show_grid },
-                                { "type": "checkbox", "id": "show_cube", "text": "Show Reference Cube", "checked": self.show_cube },
-                                { "type": "checkbox", "id": "show_origin", "text": "Show Origin Axes", "checked": self.show_origin },
-                                { "type": "checkbox", "id": "show_camera_pivot", "text": "Show Camera Pivot", "checked": self.show_camera_pivot },
-                                { "type": "spinbox", "id": "grid_thickness", "text": "Grid Thickness", "value": (self.grid_thickness * 1000.0).round() as i32, "min": 2, "max": 200, "step": 5, "decimals": 3 },
-                                { "type": "spinbox", "id": "origin_size", "text": "Origin Guide Size", "value": (self.origin_size * 10.0).round() as i32, "min": 1, "max": 50, "step": 1, "decimals": 1 },
-                                { "type": "spinbox", "id": "camera_pivot_size", "text": "Camera Pivot Size", "value": (self.camera_pivot_size * 10.0).round() as i32, "min": 1, "max": 50, "step": 1, "decimals": 1 },
-                                { "type": "color", "id": "viewport_bg_color", "text": "Viewport Background", "color": [
-                                    (self.viewport_bg_color[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.viewport_bg_color[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.viewport_bg_color[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                ]},
-                                { "type": "color", "id": "grid_color", "text": "Grid Guide Color", "color": [
-                                    (self.grid_color[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.grid_color[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                    (self.grid_color[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-                                ]},
-                                { "type": "button", "id": "save", "text": "Save Settings" },
-                                { "type": "button", "id": "cancel", "text": "Cancel" }
-                            ]
-                        },
-                        {
-                            "title": "Shortcuts",
-                            "widgets": [
-                                { "type": "label", "text": "Keyboard Shortcuts" },
-                                { "type": "label", "text": "  Ctrl+G  : Toggle Grid (viewport)" },
-                                { "type": "label", "text": "  Ctrl+E  : Toggle Cube" },
-                                { "type": "label", "text": "  Ctrl+A  : Square Viewport Aspect" },
-                                { "type": "label", "text": "  Ctrl+,  : Configure Dialog" },
-                                { "type": "button", "id": "save", "text": "Save Settings" },
-                                { "type": "button", "id": "cancel", "text": "Cancel" }
-                            ]
-                        }
-                    ]
-                });
-
-                if let Ok(mut child) = std::process::Command::new("clear-cloud")
-                    .arg("--layout")
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .spawn()
-                {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        let _ = stdin.write_all(json_config.to_string().as_bytes());
-                    }
-                    if let Ok(output) = child.wait_with_output() {
-                        if output.status.success() {
-                            let out_str = String::from_utf8_lossy(&output.stdout);
-                            if let Ok(response) = serde_json::from_str::<serde_json::Value>(&out_str) {
-                                if response["button"] == "save" {
-                                    if let Some(val) = response["checkboxes"]["grid_snap_enabled"].as_bool() {
-                                        self.grid_snap_enabled = val;
-                                        self.widgets[CONTENT_IDX].set_grid_snap_enabled(val);
-                                    }
-                                    if let Some(val) = response["checkboxes"]["network_grid_visible"].as_bool() {
-                                        self.network_grid_visible = val;
-                                        self.widgets[CONTENT_IDX].set_show_network_grid(val);
-                                    }
-                                    if let Some(val) = response["checkboxes"]["show_grid"].as_bool() {
-                                        self.show_grid = val;
-                                        self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 0, val);
-                                    }
-                                    if let Some(val) = response["checkboxes"]["show_cube"].as_bool() {
-                                        self.show_cube = val;
-                                        self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 1, val);
-                                    }
-                                    if let Some(val) = response["checkboxes"]["show_origin"].as_bool() {
-                                        self.show_origin = val;
-                                        self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 2, val);
-                                    }
-                                    if let Some(val) = response["checkboxes"]["show_camera_pivot"].as_bool() {
-                                        self.show_camera_pivot = val;
-                                        self.widgets[RIGHT_MENUBAR_IDX].set_item_checked(2, 3, val);
-                                    }
-                                    if let Some(val) = response["checkboxes"]["uniform_background"].as_bool() {
-                                        self.uniform_background = val;
-                                    }
-                                    if let Some(val) = response["sliders"]["network_opacity"].as_f64() {
-                                        self.network_opacity = val as f32;
-                                    }
-                                    
-                                    if let Some(val) = response["spinboxes"]["grid_size_x"].as_f64() {
-                                        self.grid_size_x = val as f32;
-                                    }
-                                    if let Some(val) = response["spinboxes"]["grid_size_y"].as_f64() {
-                                        self.grid_size_y = val as f32;
-                                    }
-                                    if let Some(val) = response["spinboxes"]["skipped_row_h"].as_f64() {
-                                        self.skipped_row_h = val as f32;
-                                    }
-                                    if let Some(val) = response["spinboxes"]["skipped_col_w"].as_f64() {
-                                        self.skipped_col_w = val as f32;
-                                    }
-                                    if let Some(val) = response["spinboxes"]["origin_size"].as_f64() {
-                                        self.origin_size = val as f32 / 10.0;
-                                    }
-                                    if let Some(val) = response["spinboxes"]["grid_thickness"].as_f64() {
-                                        self.grid_thickness = val as f32 / 1000.0;
-                                    }
-                                    if let Some(val) = response["spinboxes"]["camera_pivot_size"].as_f64() {
-                                        self.camera_pivot_size = val as f32 / 10.0;
-                                    }
-
-                                    if let Some(arr) = response["colors"]["viewport_bg_color"].as_array() {
-                                        if arr.len() == 3 {
-                                            self.viewport_bg_color[0] = arr[0].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.viewport_bg_color[1] = arr[1].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.viewport_bg_color[2] = arr[2].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                        }
-                                    }
-
-                                    if let Some(arr) = response["colors"]["node_color"].as_array() {
-                                        if arr.len() == 3 {
-                                            self.node_color[0] = arr[0].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.node_color[1] = arr[1].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.node_color[2] = arr[2].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            colors::set_node_color([self.node_color[0], self.node_color[1], self.node_color[2], 1.0]);
-                                        }
-                                    }
-
-                                    if let Some(arr) = response["colors"]["grid_color"].as_array() {
-                                        if arr.len() == 3 {
-                                            self.grid_color[0] = arr[0].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.grid_color[1] = arr[1].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.grid_color[2] = arr[2].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                        }
-                                    }
-
-                                    if let Some(arr) = response["colors"]["cell_color"].as_array() {
-                                        if arr.len() == 3 {
-                                            self.cell_color[0] = arr[0].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.cell_color[1] = arr[1].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.cell_color[2] = arr[2].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                        }
-                                    }
-
-                                    if let Some(arr) = response["colors"]["gap_color"].as_array() {
-                                        if arr.len() == 3 {
-                                            self.gap_color[0] = arr[0].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.gap_color[1] = arr[1].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                            self.gap_color[2] = arr[2].as_f64().unwrap_or(0.0) as f32 / 255.0;
-                                        }
-                                    }
-
-                                    self.update_origin_geometry();
-                                    self.update_grid_geometry();
-                                    self.update_pivot_geometry();
-                                    self.sync_grid_settings();
-                                    self.save_settings();
-                                    self.sync_layout();
-                                    self.read_panel_offsets();
-                                    self.sync_cursor_and_selection();
-                                }
-                            }
-                        }
-                    }
-                }
+                let target_pane = if self.show_network {
+                    LEFT_MENUBAR_IDX
+                } else if self.show_viewport {
+                    RIGHT_MENUBAR_IDX
+                } else {
+                    LEFT_MENUBAR_IDX
+                };
+                self.focused_pane = target_pane;
+                self.widgets[PAGINATOR_IDX].set_page_hidden(false);
+                let page_idx = if target_pane == LEFT_MENUBAR_IDX { 3 } else { 4 };
+                self.widgets[PAGINATOR_IDX].set_selected_page(page_idx);
+                self.sync_pane_focus();
+                self.rebuild_positions();
+                self.apply_layout();
                 self.upload_vertices();
                 return;
             }
@@ -3210,6 +3995,20 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 self.rebuild_positions();
                 self.apply_layout();
                 self.sync_grid_settings();
+            }
+            Action::Save => {
+                let path_opt = self.loaded_project_path.clone();
+                if let Some(path) = path_opt {
+                    if let Err(e) = self.save_to_file(&path) {
+                        eprintln!("Failed to save project: {:?}", e);
+                        self.update_status_text(&format!("Failed to save: {:?}", e));
+                    } else {
+                        self.update_status_text(&format!("Project saved to {}", path.display()));
+                        self.add_recent_file(path);
+                    }
+                } else {
+                    self.save_file_chooser();
+                }
             }
         }
         if settings_changed {
@@ -3280,7 +4079,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 self.circular_network_layout.y + self.circular_network_layout.r,
             )
         } else {
-            (0.0, node_area_y, self.content_left_w(), self.height - STATUS_H)
+            let (cx, cy, cw, ch) = self.positions[CONTENT_IDX];
+            (cx, cy, cx + cw, cy + ch)
         };
 
         let clip_circle_val = if self.circular_network_pane {
@@ -3290,17 +4090,25 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         };
 
         let mut draw_order: Vec<usize> = (0..self.widgets.len()).collect();
-        draw_order.sort_by_key(|&i| self.widgets[i].z_index());
+        draw_order.sort_by_key(|&i| {
+            if i == NETWORK_PANEL_IDX || i == PARAM_PLATE_IDX {
+                -5
+            } else if i == VIEWPORT_IDX || i == PARAM_IDX {
+                -4
+            } else {
+                self.widgets[i].z_index()
+            }
+        });
 
         for &i in &draw_order {
             let w = &self.widgets[i];
             if !w.visible() {
                 continue;
             }
-            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX;
+            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
             let active_clip_circle = if is_network_part { clip_circle_val } else { [0.0, 0.0, 0.0] };
 
-            if i == CONTENT_IDX {
+            if i == NETWORK_PANEL_IDX {
                 if self.circular_network_pane {
                     verts.extend(circle_vertices(
                         self.circular_network_layout.x,
@@ -3308,19 +4116,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         self.circular_network_layout.r,
                         sw,
                         sh,
-                        [0.10, 0.10, 0.13, self.network_opacity],
+                        w.color(),
                         64,
                         active_clip_circle,
                     ));
-                } else {
-                    verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
-                }
-
-                for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(quad_vertices_clipped(qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle));
-                }
-
-                if self.circular_network_pane {
                     verts.extend(circle_border_vertices(
                         self.circular_network_layout.x,
                         self.circular_network_layout.y,
@@ -3332,6 +4131,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         64,
                         active_clip_circle,
                     ));
+                } else {
+                    verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
+                }
+            } else if i == CONTENT_IDX {
+                if !self.circular_network_pane {
+                    verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
+                }
+
+                for (qx, qy, qw, qh, qc) in w.extra_quads() {
+                    verts.extend(extra_quad_vertices_clipped(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle));
                 }
             } else if i == LEFT_MENUBAR_IDX && self.circular_network_pane {
                 let cx = self.circular_network_layout.x;
@@ -3363,7 +4172,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 ));
                 
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(quad_vertices(qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                    verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
                 }
                 for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
                     verts.extend(arc_background_vertices(
@@ -3379,7 +4188,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             } else {
                 verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(quad_vertices(qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                    verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
                 }
                 for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
                     verts.extend(arc_background_vertices(
@@ -3402,11 +4211,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 } else {
                     node_area_y
                 };
-                let active_node_area_x = if self.circular_network_pane {
-                    self.circular_network_layout.x - self.circular_network_layout.r
-                } else {
-                    0.0
-                };
+                let active_node_area_x = self.positions[CONTENT_IDX].0;
                 let cx = active_node_area_x + self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
                 let cy = active_node_area_y + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
                 let cw = self.grid_size_x;
@@ -3560,7 +4365,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 continue;
             }
             let is_node = i == CONTENT_IDX;
-            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX;
+            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
 
             let bounds = if is_node {
                 let node_area_y = self.positions[CONTENT_IDX].1;
@@ -3613,11 +4418,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     });
                 }
             } else {
-                let labels = w.text_labels();
+                let labels = w.text_labels_with_font_and_bounds();
                 // if i == LEFT_MENUBAR_IDX {
                 //     eprintln!("DEBUG_PREPARE_ELSE: i={} labels.len={}", i, labels.len());
                 // }
-                for label in labels {
+                for (label, font_opt, label_bounds) in labels {
                     let mut is_curved = false;
                     if circular_network_pane && i == LEFT_MENUBAR_IDX && label.text.chars().count() == 1 {
                         let dx = label.x - network_circle_x;
@@ -3640,9 +4445,25 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 continue;
                             }
                         }
-                        legacy_buffers.push(make_text_buffer(font_system, &label.text, label.font_size));
+                        let mut item_bounds = bounds;
+                        if let Some([l, t, r, b]) = label_bounds {
+                            let pl = (l * s).round() as i32;
+                            let pt = (t * s).round() as i32;
+                            let pr = (r * s).round() as i32;
+                            let pb = (b * s).round() as i32;
+                            item_bounds = TextBounds {
+                                left: item_bounds.left.max(pl),
+                                top: item_bounds.top.max(pt),
+                                right: item_bounds.right.min(pr),
+                                bottom: item_bounds.bottom.min(pb),
+                            };
+                        }
+                        if label.text.contains("Grid") || label.text.contains("Background") || label.text.contains("Snap") || label.text.contains("Opacity") {
+                            eprintln!("DEBUG_PREPARE_LABEL: text='{}' x={} y={} font_size={} s={} left={} top={} bounds={:?}", label.text, label.x, label.y, label.font_size, s, label.x * s, label.y * s, item_bounds);
+                        }
+                        legacy_buffers.push(make_text_buffer_with_font(font_system, &label.text, label.font_size, font_opt.as_deref()));
                         legacy_labels.push(label);
-                        legacy_bounds.push(bounds);
+                        legacy_bounds.push(item_bounds);
                     }
                 }
             }
@@ -3853,11 +4674,31 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.height = height as f32 / self.scale as f32;
             self.config.width = width;
             self.config.height = height;
+            self.config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST;
             self.surface.configure(&self.device, &self.config);
 
             let (tex, view) = self.create_depth_texture();
             self.depth_texture = tex;
             self.depth_texture_view = view;
+
+            let (b_tex, b_view) = self.create_backdrop_texture();
+            self.backdrop_texture = b_tex;
+            self.backdrop_texture_view = b_view;
+
+            self.backdrop_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Backdrop Bind Group"),
+                layout: &self.backdrop_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&self.backdrop_texture_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.backdrop_sampler),
+                    },
+                ],
+            });
 
             if old_width > 0.0 {
                 let r = self.width / old_width;
@@ -3918,11 +4759,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             handled = true;
                             if i == CONTENT_IDX {
                                 let active_node_area_y = self.positions[CONTENT_IDX].1;
-                                let active_node_area_x = if self.circular_network_pane {
-                                    self.circular_network_layout.x - self.circular_network_layout.r
-                                } else {
-                                    0.0
-                                };
+                                let active_node_area_x = self.positions[CONTENT_IDX].0;
                                 let (gx, gy) = w.grid_origin();
                                 let prev_pan_x = self.pan_x;
                                 let prev_pan_y = self.pan_y;
@@ -4172,14 +5009,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 let mut changed = false;
 
-                if self.is_dragging_network_circle {
-                    self.circular_network_layout.x = self.cursor_x - self.circle_drag_ox;
-                    self.circular_network_layout.y = self.cursor_y - self.circle_drag_oy;
-                    self.rebuild_positions();
-                    self.apply_layout();
-                    self.sync_grid_settings();
-                    changed = true;
-                } else if self.is_panning {
+                if self.is_panning {
                     let dx = self.cursor_x - self.pan_start_cx;
                     let dy = self.cursor_y - self.pan_start_cy;
                     self.pan_x = self.pan_start_x + dx;
@@ -4191,15 +5021,69 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     changed = true;
                 } else {
                     if let Some(idx) = self.drag_widget {
-                        if self.widgets[idx].drag_update(self.cursor_x, self.cursor_y) {
+                        if idx == NETWORK_PANEL_IDX && self.is_resizing_network.is_some() {
+                            let dir = self.is_resizing_network.unwrap();
+                            let dx = self.cursor_x - self.drag_start_mouse.0;
+                            let dy = self.cursor_y - self.drag_start_mouse.1;
+                            let (sx, sy, sw, sh) = self.drag_start_rect;
+
+                            let mut fx = sx;
+                            let mut fy = sy;
+                            let mut fw = sw;
+                            let mut fh = sh;
+
+                            if dir.left {
+                                let new_w = (sw - dx).max(150.0);
+                                fx = sx + sw - new_w;
+                                fw = new_w;
+                            } else if dir.right {
+                                fw = (sw + dx).max(150.0);
+                            }
+
+                            if dir.top {
+                                let new_h = (sh - dy).max(100.0);
+                                fy = sy + sh - new_h;
+                                fh = new_h;
+                            } else if dir.bottom {
+                                fh = (sh + dy).max(100.0);
+                            }
+
+                            self.floating_network_layout = (fx, fy, fw, fh);
+                            self.rebuild_positions();
+                            self.apply_layout();
+                            self.sync_grid_settings();
                             changed = true;
+                        } else if idx == PARAM_IDX && self.is_resizing_param {
+                            let dx = self.cursor_x - self.drag_start_mouse.0;
+                            let sw = self.drag_start_param_w;
+                            let new_w = (sw - dx).max(150.0);
+                            self.floating_param_width = new_w;
+                            self.rebuild_positions();
+                            self.apply_layout();
+                            changed = true;
+                        } else if idx == SPREADSHEET_IDX && self.is_resizing_spreadsheet {
+                            let dy = self.cursor_y - self.drag_start_mouse.1;
+                            let sh = self.drag_start_spreadsheet_h;
+                            let new_h = (sh - dy).max(100.0);
+                            self.floating_spreadsheet_height = new_h;
+                            self.rebuild_positions();
+                            self.apply_layout();
+                            changed = true;
+                        } else {
+                            self.widgets[idx].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                            if self.widgets[idx].drag_update(self.cursor_x, self.cursor_y) {
+                                changed = true;
+                                if idx == NETWORK_PANEL_IDX {
+                                    self.sync_grid_settings();
+                                }
+                            }
                         }
                     }
 
                     if self.drag_widget.is_none() {
                         for i in 0..self.widgets.len() {
                             let (cx, cy) = (self.cursor_x, self.cursor_y);
-                            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX;
+                            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
                             let inside = if self.circular_network_pane && is_network_part {
                                 if i == CONTENT_IDX {
                                     self.circular_network_layout.hit_test_content(cx, cy, MENUBAR_H, BREADCRUMB_H)
@@ -4207,6 +5091,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                     self.circular_network_layout.hit_test_menubar(cx, cy, MENUBAR_H)
                                 } else if i == BREADCRUMB_IDX {
                                     self.circular_network_layout.hit_test_breadcrumb(cx, cy, MENUBAR_H, BREADCRUMB_H)
+                                } else if i == NETWORK_PANEL_IDX {
+                                    self.widgets[NETWORK_PANEL_IDX].hit_test(cx, cy)
                                 } else {
                                     false
                                 }
@@ -4244,6 +5130,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 }
                 let dialog_open = self.node_palette_visible;
                 let in_network_pane = self.in_network_pane();
+                let node_area_x = self.positions[CONTENT_IDX].0;
                 let node_area_y = self.positions[CONTENT_IDX].1;
 
                 let is_pan_trigger = !dialog_open
@@ -4288,6 +5175,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 if *button != MouseButton::Left && *button != MouseButton::Right { return false; }
                 let mut changed = false;
                 let old_focus = self.focused_widget;
+                let was_page_hidden = self.widgets[PAGINATOR_IDX].is_page_hidden();
 
                 let hits_widget = |state: &State, i: usize, x: f32, y: f32| -> bool {
                     if state.circular_network_pane && (i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX) {
@@ -4346,9 +5234,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 }
                             }
                             if on_border || hit_menubar {
-                                self.is_dragging_network_circle = true;
-                                self.circle_drag_ox = self.cursor_x - self.circular_network_layout.x;
-                                self.circle_drag_oy = self.cursor_y - self.circular_network_layout.y;
+                                self.drag_widget = Some(NETWORK_PANEL_IDX);
+                                self.widgets[NETWORK_PANEL_IDX].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                                self.widgets[NETWORK_PANEL_IDX].drag_begin(self.cursor_x, self.cursor_y);
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
                                     self.widgets[old].unfocus();
@@ -4360,9 +5248,119 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             }
                         }
 
+                        if *button == MouseButton::Left && !self.circular_network_pane && self.show_network {
+                            let (fx, fy, fw, fh) = self.floating_network_layout;
+                            let cx = self.cursor_x;
+                            let cy = self.cursor_y;
+
+                            let margin = 8.0_f32;
+                            let on_left = false;
+                            let on_right = cx >= fx + fw - margin && cx <= fx + fw + margin && cy >= fy - margin && cy <= fy + fh + margin;
+                            let on_top = false;
+                            let on_bottom = false;
+
+                            if on_left || on_right || on_top || on_bottom {
+                                self.is_resizing_network = Some(ResizeDirection {
+                                    left: on_left,
+                                    right: on_right,
+                                    top: on_top,
+                                    bottom: on_bottom,
+                                });
+                                self.drag_widget = Some(NETWORK_PANEL_IDX);
+                                self.drag_start_rect = self.floating_network_layout;
+                                self.drag_start_mouse = (cx, cy);
+                                self.focused_pane = LEFT_MENUBAR_IDX;
+                                if let Some(old) = self.focused_widget {
+                                    self.widgets[old].unfocus();
+                                    self.focused_widget = None;
+                                }
+                                self.widgets[PARAM_IDX].unfocus();
+                                self.sync_parameters_to_project();
+                                return true;
+                            } else if cx >= fx && cx < fx + fw && cy >= fy && cy < fy + (if self.show_network { BREADCRUMB_H } else { 0.0 }) {
+                                if self.widgets[BREADCRUMB_IDX].mouse_input(*button, *btn_state, cx, cy) {
+                                    return true;
+                                }
+                                self.is_resizing_network = None;
+                                self.drag_widget = Some(NETWORK_PANEL_IDX);
+                                self.widgets[NETWORK_PANEL_IDX].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                                self.widgets[NETWORK_PANEL_IDX].drag_begin(cx, cy);
+                                self.focused_pane = LEFT_MENUBAR_IDX;
+                                if let Some(old) = self.focused_widget {
+                                    self.widgets[old].unfocus();
+                                    self.focused_widget = None;
+                                }
+                                self.widgets[PARAM_IDX].unfocus();
+                                self.sync_parameters_to_project();
+                                return true;
+                            }
+                        }
+
+                        if *button == MouseButton::Left && self.show_parameters {
+                            let gap = 18.0_f32;
+                            let param_w = self.floating_param_width;
+                            let param_x = self.width - gap - param_w;
+                            let param_y = HEADER_H + gap;
+                            let param_h = (self.height - HEADER_H - STATUS_H - 2.0 * gap).max(100.0);
+                            let cx = self.cursor_x;
+                            let cy = self.cursor_y;
+
+                            let margin = 8.0_f32;
+                            let on_left = cx >= param_x - margin && cx <= param_x + margin && cy >= param_y - margin && cy <= param_y + param_h + margin;
+
+                            if on_left {
+                                self.is_resizing_param = true;
+                                self.drag_widget = Some(PARAM_IDX);
+                                self.drag_start_param_w = param_w;
+                                self.drag_start_mouse = (cx, cy);
+                                self.focused_pane = PARAM_MENUBAR_IDX;
+                                if let Some(old) = self.focused_widget {
+                                    self.widgets[old].unfocus();
+                                    self.focused_widget = None;
+                                }
+                                return true;
+                            }
+                        }
+
+                        if *button == MouseButton::Left && self.show_spreadsheet {
+                            let gap = 18.0_f32;
+                            let fx = gap;
+                            let (mut _n_fx, mut _n_fy, mut fw, mut _n_fh) = self.floating_network_layout;
+                            fw = fw.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
+                            
+                            let param_w = self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
+                            let param_x = self.width - gap - param_w;
+                            
+                            let ss_x = if self.show_network { fx + fw + gap } else { gap };
+                            let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
+                            let ss_w = (ss_w_end - ss_x).max(150.0);
+                            
+                            let ss_y_end = self.height - STATUS_H - gap;
+                            let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - HEADER_H - gap).max(100.0));
+                            let ss_y = ss_y_end - ss_h;
+                            
+                            let cx = self.cursor_x;
+                            let cy = self.cursor_y;
+                            let margin = 8.0_f32;
+                            let on_top = cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin;
+                            
+                            if on_top {
+                                self.is_resizing_spreadsheet = true;
+                                self.drag_widget = Some(SPREADSHEET_IDX);
+                                self.drag_start_spreadsheet_h = ss_h;
+                                self.drag_start_mouse = (cx, cy);
+                                self.focused_pane = SPREADSHEET_MENUBAR_IDX;
+                                if let Some(old) = self.focused_widget {
+                                    self.widgets[old].unfocus();
+                                    self.focused_widget = None;
+                                }
+                                return true;
+                            }
+                        }
+
                         if *button == MouseButton::Right {
                             if !dialog_open && in_circle_network_pane {
-                                let col = ((self.cursor_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
+                                let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
                                 let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
                                 self.grid_cursor_col = col;
                                 self.grid_cursor_row = row;
@@ -4379,18 +5377,29 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             }
                         }
                         if click_target.is_none() {
-                            click_target = (0..self.widgets.len()).rev()
+                            let mut hit_order: Vec<usize> = (0..self.widgets.len()).collect();
+                            hit_order.sort_by_key(|&i| {
+                                let z = if i == NETWORK_PANEL_IDX || i == PARAM_PLATE_IDX {
+                                    -5
+                                } else if i == VIEWPORT_IDX || i == PARAM_IDX {
+                                    -4
+                                } else {
+                                    self.widgets[i].z_index()
+                                };
+                                -z
+                            });
+                            click_target = hit_order.into_iter()
                                 .find(|&i| hits_widget(self, i, self.cursor_x, self.cursor_y));
                         }
 
                         // Determine new focused pane
                         let mut new_pane = None;
                         if let Some(i) = click_target {
-                            if i == LEFT_MENUBAR_IDX || i == CONTENT_IDX || i == CANVAS_IDX || i == BREADCRUMB_IDX {
+                            if i == LEFT_MENUBAR_IDX || i == CONTENT_IDX || i == CANVAS_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX {
                                 new_pane = Some(LEFT_MENUBAR_IDX);
                             } else if i == RIGHT_MENUBAR_IDX || i == VIEWPORT_IDX {
                                 new_pane = Some(RIGHT_MENUBAR_IDX);
-                            } else if i == PARAM_MENUBAR_IDX || i == PARAM_IDX {
+                            } else if i == PARAM_MENUBAR_IDX || i == PARAM_IDX || i == PARAM_PLATE_IDX {
                                 new_pane = Some(PARAM_MENUBAR_IDX);
                             } else if i == SPREADSHEET_MENUBAR_IDX || i == SPREADSHEET_IDX {
                                 new_pane = Some(SPREADSHEET_MENUBAR_IDX);
@@ -4447,7 +5456,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             self.sync_parameters_to_project();
                         }
                         if click_target.is_none() && !dialog_open && in_circle_network_pane {
-                            let col = ((self.cursor_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
+                            let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
                             let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
                             self.grid_cursor_col = col;
                             self.grid_cursor_row = row;
@@ -4458,13 +5467,26 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 self.spawn_menu_cloud(i, menu_idx, title, items, rx, ry, rw, rh);
                                 return true;
                             }
+                            self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                             if self.widgets[i].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y) {
                                 changed = true;
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
                                 }
+                                if i == PAGINATOR_IDX {
+                                    self.update_paginator();
+                                    self.rebuild_positions();
+                                    self.apply_layout();
+                                }
+                            } else if i == PAGINATOR_IDX {
+                                if *button == MouseButton::Left {
+                                    self.focused_pane = HEADER_IDX;
+                                    self.sync_pane_focus();
+                                    changed = true;
+                                }
                             }
                             if self.widgets[i].draggable() {
+                                self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                                 self.widgets[i].drag_begin(self.cursor_x, self.cursor_y);
                                 self.drag_widget = Some(i);
                             }
@@ -4485,7 +5507,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                         self.grid_cursor_row = pos.1 as i32;
                                     }
                                 } else {
-                                    let col = ((self.cursor_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
+                                    let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
                                     let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
                                     self.grid_cursor_col = col;
                                     self.grid_cursor_row = row;
@@ -4505,16 +5527,25 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
-                        if self.is_dragging_network_circle {
-                            self.is_dragging_network_circle = false;
-                            self.sync_layout();
-                            self.read_panel_offsets();
-                            self.upload_vertices();
-                            return true;
-                        }
                         if self.drag_widget.is_some() {
                             let idx = self.drag_widget.unwrap();
-                            if idx == CONTENT_IDX {
+                            if idx == NETWORK_PANEL_IDX {
+                                self.widgets[idx].drag_end();
+                                self.is_resizing_network = None;
+                                self.sync_layout();
+                                self.read_panel_offsets();
+                                self.upload_vertices();
+                            } else if idx == PARAM_IDX {
+                                self.widgets[idx].drag_end();
+                                self.is_resizing_param = false;
+                                self.sync_layout();
+                                self.upload_vertices();
+                            } else if idx == SPREADSHEET_IDX {
+                                self.widgets[idx].drag_end();
+                                self.is_resizing_spreadsheet = false;
+                                self.sync_layout();
+                                self.upload_vertices();
+                            } else if idx == CONTENT_IDX {
                                 self.widgets[idx].drag_end();
                                 let updated_nodes = self.widgets[CONTENT_IDX].get_nodes();
                                 let dir = self.current_dir_mut();
@@ -4540,6 +5571,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             changed = true;
                         }
                         for w in &mut self.widgets {
+                            w.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                             if w.mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y) {
                                 changed = true;
                             }
@@ -4551,6 +5583,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 if let Some((i, visible)) = self.widgets[CONTENT_IDX].take_node_geom_toggle() {
                     self.current_dir_mut().children[i].geometry_visible = visible;
                     self.rebuild_scene_geometry();
+                    changed = true;
+                }
+
+                if self.widgets[PAGINATOR_IDX].is_page_hidden() != was_page_hidden {
+                    self.rebuild_positions();
+                    self.apply_layout();
+                    self.sync_pane_focus();
+                    self.sync_nodes();
                     changed = true;
                 }
 
@@ -4759,9 +5799,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                                     let w_base = b_xmax - b_xmin;
                                                     let h_base = b_ymax - b_ymin;
 
-                                                    let viewport_w = self.content_left_w();
-                                                    let body_h = self.body_h();
-                                                    let viewport_h = body_h - MENUBAR_H - BREADCRUMB_H;
+                                                     let (_px, _py, pw, ph) = self.positions[CONTENT_IDX];
+                                                     let viewport_w = pw;
+                                                     let viewport_h = ph;
 
                                                     let padding = 40.0;
                                                     let padded_w = (viewport_w - 2.0 * padding).max(10.0);
@@ -4821,7 +5861,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         self.keep_cursor_in_view();
                     }
 
-                    if !changed {
+                    if !changed && event.state == ElementState::Pressed {
                         if event.logical_key == Key::Named(NamedKey::Tab) {
                             self.open_node_palette();
                             return true;
@@ -4948,6 +5988,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 tick_changed = true;
             }
         }
+        self.update_recent_files_layout();
 
         // Panning kinetic slide
         if !self.is_panning && !self.is_scrolling_trackpad && (self.pan_velocity_x.abs() > 0.01 || self.pan_velocity_y.abs() > 0.01) {
@@ -5023,27 +6064,25 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let mut panned = false;
         if let Some(idx) = self.drag_widget {
             if idx == CONTENT_IDX {
-                let node_area_y = self.positions[CONTENT_IDX].1;
+                let (px, py, pw, ph) = self.positions[CONTENT_IDX];
                 let margin = 30.0_f32;
                 let pan_speed = 5.0_f32;
-                let clw = self.content_left_w();
-                let max_y = self.height - STATUS_H;
 
-                if self.cursor_x >= -50.0 && self.cursor_x < clw + 50.0
-                    && self.cursor_y >= node_area_y - 50.0 && self.cursor_y < max_y + 50.0
+                if self.cursor_x >= px - 50.0 && self.cursor_x < px + pw + 50.0
+                    && self.cursor_y >= py - 50.0 && self.cursor_y < py + ph + 50.0
                 {
-                    if self.cursor_x < margin {
+                    if self.cursor_x < px + margin {
                         self.pan_x += pan_speed;
                         panned = true;
-                    } else if self.cursor_x > clw - margin {
+                    } else if self.cursor_x > px + pw - margin {
                         self.pan_x -= pan_speed;
                         panned = true;
                     }
 
-                    if self.cursor_y < node_area_y + margin {
+                    if self.cursor_y < py + margin {
                         self.pan_y += pan_speed;
                         panned = true;
-                    } else if self.cursor_y > max_y - margin {
+                    } else if self.cursor_y > py + ph - margin {
                         self.pan_y -= pan_speed;
                         panned = true;
                     }
@@ -5059,6 +6098,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.scroll_accum_y = 0.0;
             self.sync_grid_settings();
             if let Some(idx) = self.drag_widget {
+                self.widgets[idx].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                 self.widgets[idx].drag_update(self.cursor_x, self.cursor_y);
             }
             self.sync_layout();
@@ -5189,7 +6229,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("3D Render Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view: &self.backdrop_texture_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -5245,7 +6285,65 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     pass.set_vertex_buffer(0, self.vertex_buffer_spheres.slice(..));
                     pass.draw(0..self.vertex_count_spheres, 0..1);
                 }
+            } else {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Backdrop Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.backdrop_texture_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: self.viewport_bg_color[0] as f64,
+                                g: self.viewport_bg_color[1] as f64,
+                                b: self.viewport_bg_color[2] as f64,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
             }
+        } else {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Backdrop Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.backdrop_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+
+        // Copy backdrop to output swapchain texture
+        if !self.is_detached_network {
+            encoder.copy_texture_to_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &self.backdrop_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::ImageCopyTexture {
+                    texture: &output.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: self.physical_width,
+                    height: self.physical_height,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
 
         // UI render pass (foreground layer)
@@ -5272,6 +6370,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             });
 
             pass.set_pipeline(&self.render_pipeline);
+            pass.set_bind_group(0, &self.backdrop_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.draw(0..self.vertex_count, 0..1);
 
@@ -5316,6 +6415,14 @@ fn is_repeatable_key(key: &clear_ui::widget::Key) -> bool {
     }
 }
 
+struct PendingResize {
+    serial: u32,
+    edge: smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge,
+    start_x: f32,
+    start_y: f32,
+    is_move: bool,
+}
+
 struct AppState {
     registry_state: RegistryState,
     compositor_state: CompositorState,
@@ -5336,6 +6443,7 @@ struct AppState {
     redraw: bool,
     pressed_key: Option<PressedKey>,
     inspector: Option<clear_ui::protocol::zclear_inspector_v1::ZclearInspectorV1>,
+    pending_resize: Option<PendingResize>,
     _sender: calloop::channel::Sender<CustomEvent>,
 }
 
@@ -5350,6 +6458,7 @@ impl CompositorHandler for AppState {
         _surface.set_buffer_scale(scale_factor);
         if let Some(state) = &mut self.state {
             state.scale = scale_factor as f64;
+            clear_ui::scale::set_scale_factor(scale_factor as f32);
             let pw = (state.width as f64 * state.scale) as u32;
             let ph = (state.height as f64 * state.scale) as u32;
             state.resize(pw, ph);
@@ -5542,6 +6651,29 @@ impl PointerHandler for AppState {
                             }
                         }
 
+                        if let Some(ref pending) = self.pending_resize {
+                            let lx = event.position.0 as f32;
+                            let ly = event.position.1 as f32;
+                            let rx = lx - pending.start_x;
+                            let ry = ly - pending.start_y;
+                            let rdist = (rx * rx + ry * ry).sqrt();
+                            if rdist > 4.0 {
+                                if let Some(ref window) = self.window {
+                                    let seat = self.seats.first().cloned().or_else(|| self.seat_state.seats().next());
+                                    if let Some(ref seat) = seat {
+                                        if pending.is_move {
+                                            eprintln!("DEBUG DRAG INITIATING window.move_ with serial={}", pending.serial);
+                                            window.move_(seat, pending.serial);
+                                        } else {
+                                            eprintln!("DEBUG RESIZE INITIATING window.resize with edge={:?}, serial={}", pending.edge, pending.serial);
+                                            window.resize(seat, pending.serial, pending.edge);
+                                        }
+                                    }
+                                }
+                                self.pending_resize = None;
+                            }
+                        }
+
                         let ev = WindowEvent::CursorMoved {
                             position: LocalPosition {
                                 x: event.position.0,
@@ -5575,9 +6707,9 @@ impl PointerHandler for AppState {
                                     dx, dy, dist, on_border, in_menubar_bg, hits_any_menu, self.seats.len(), self.window.is_some());
 
                                 if (on_border || in_menubar_bg) && !hits_any_menu {
-                                    if let Some(ref window) = self.window {
+                                    if let Some(ref _window) = self.window {
                                         let seat = self.seats.first().cloned().or_else(|| self.seat_state.seats().next());
-                                        if let Some(ref seat) = seat {
+                                        if let Some(ref _seat) = seat {
                                             if on_border {
                                                 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge;
                                                 let nx = dx / dist;
@@ -5606,12 +6738,22 @@ impl PointerHandler for AppState {
                                                         edge = ResizeEdge::Right;
                                                     }
                                                 }
-                                                eprintln!("DEBUG RESIZE INITIATING window.resize with edge={:?}, serial={}", edge, serial);
-                                                window.resize(seat, *serial, edge);
+                                                self.pending_resize = Some(PendingResize {
+                                                    serial: *serial,
+                                                    edge,
+                                                    start_x: lx,
+                                                    start_y: ly,
+                                                    is_move: false,
+                                                });
                                                 continue;
                                             } else {
-                                                eprintln!("DEBUG DRAG INITIATING window.move_ with serial={}", serial);
-                                                window.move_(seat, *serial);
+                                                self.pending_resize = Some(PendingResize {
+                                                    serial: *serial,
+                                                    edge: smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge::None,
+                                                    start_x: lx,
+                                                    start_y: ly,
+                                                    is_move: true,
+                                                });
                                                 continue;
                                             }
                                         }
@@ -5634,6 +6776,9 @@ impl PointerHandler for AppState {
                             _ => continue,
                         };
                         eprintln!("DEBUG MOUSE RELEASE: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
+                        if btn == clear_ui::widget::MouseButton::Left {
+                            self.pending_resize = None;
+                        }
                         let ev = WindowEvent::MouseInput {
                             state: clear_ui::widget::ElementState::Released,
                             button: btn,
@@ -5842,6 +6987,7 @@ impl AppState {
             xkeysym::Keysym::j | xkeysym::Keysym::J => Key::Character("j".into()),
             xkeysym::Keysym::k | xkeysym::Keysym::K => Key::Character("k".into()),
             xkeysym::Keysym::l | xkeysym::Keysym::L => Key::Character("l".into()),
+            xkeysym::Keysym::s | xkeysym::Keysym::S => Key::Character("s".into()),
             xkeysym::Keysym::grave => Key::Character("`".into()),
             _ => {
                 if let Some(ref text) = event.utf8 {
@@ -5909,6 +7055,7 @@ impl AppState {
     fn process_event(&mut self, ev: WindowEvent) {
         if let Some(state) = &mut self.state {
             let mut changed = state.handle_event(&ev);
+            state.sync_settings_from_paginator();
 
             if let Some(seg) = state.widgets[BREADCRUMB_IDX].path_click() {
                 if seg < state.current_path.len() {
@@ -5923,6 +7070,47 @@ impl AppState {
                 changed = true;
             }
 
+            // Poll Paginator Clicks
+            let mut paginator_click = None;
+            let active_menubar = state.focused_pane;
+            let menu_names = state.widgets[active_menubar].menu_names();
+            for (page_idx, page) in state.paginator_page_widgets.iter_mut().enumerate() {
+                if page_idx < menu_names.len() && menu_names[page_idx] == "Settings" {
+                    continue;
+                }
+                for (item_idx, widget) in page.iter_mut().enumerate() {
+                    if widget.take_click() {
+                        paginator_click = Some((page_idx, item_idx));
+                        break;
+                    }
+                }
+                if paginator_click.is_some() {
+                    break;
+                }
+            }
+
+            if let Some((menu_idx, item_idx)) = paginator_click {
+                state.widgets[state.focused_pane].trigger_menu_click(menu_idx, item_idx);
+                changed = true;
+            }
+
+            // Check recent files buttons clicks
+            let mut clicked_file = None;
+            for (i, btn) in state.recent_files_buttons.iter_mut().enumerate() {
+                if btn.take_click() {
+                    clicked_file = Some(state.recent_files[i].clone());
+                }
+            }
+            if let Some(path) = clicked_file {
+                if let Err(e) = state.load_from_file(&path) {
+                    eprintln!("Failed to load recent project: {:?}", e);
+                    state.update_status_text(&format!("Failed to load: {:?}", e));
+                } else {
+                    state.update_status_text(&format!("Loaded project from {}", path.display()));
+                }
+                changed = true;
+            }
+
             if let Some((menu_idx, item_idx)) = state.widgets[HEADER_IDX].menu_click() {
                 if menu_idx == 0 { // File
                     match item_idx {
@@ -5931,21 +7119,26 @@ impl AppState {
                             changed = true;
                         }
                         1 => { // Open
-                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                            if let Err(e) = state.load_from_file(&proj_path) {
-                                eprintln!("Failed to load project: {:?}", e);
-                            }
+                            state.open_file_chooser();
                             changed = true;
                         }
                         2 => { // Save
-                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                            if let Err(e) = state.save_to_file(&proj_path) {
-                                eprintln!("Failed to save project: {:?}", e);
+                            let path_opt = state.loaded_project_path.clone();
+                            if let Some(path) = path_opt {
+                                if let Err(e) = state.save_to_file(&path) {
+                                    eprintln!("Failed to save project: {:?}", e);
+                                    state.update_status_text(&format!("Failed to save: {:?}", e));
+                                } else {
+                                    state.update_status_text(&format!("Project saved to {}", path.display()));
+                                    state.add_recent_file(path);
+                                }
+                            } else {
+                                state.save_file_chooser();
                             }
                             changed = true;
                         }
-                        3 => { // Configure
-                            state.execute_action(Action::ToggleConfigure);
+                        3 => { // Save As
+                            state.save_file_chooser();
                             changed = true;
                         }
                         4 => { // Exit
@@ -6057,17 +7250,26 @@ impl AppState {
                             changed = true;
                         }
                         1 => { // Open
-                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                            if let Err(e) = state.load_from_file(&proj_path) {
-                                eprintln!("Failed to load project: {:?}", e);
-                            }
+                            state.open_file_chooser();
                             changed = true;
                         }
                         2 => { // Save
-                            let proj_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json");
-                            if let Err(e) = state.save_to_file(&proj_path) {
-                                eprintln!("Failed to save project: {:?}", e);
+                            let path_opt = state.loaded_project_path.clone();
+                            if let Some(path) = path_opt {
+                                if let Err(e) = state.save_to_file(&path) {
+                                    eprintln!("Failed to save project: {:?}", e);
+                                    state.update_status_text(&format!("Failed to save: {:?}", e));
+                                } else {
+                                    state.update_status_text(&format!("Project saved to {}", path.display()));
+                                    state.add_recent_file(path);
+                                }
+                            } else {
+                                state.save_file_chooser();
                             }
+                            changed = true;
+                        }
+                        3 => { // Save As
+                            state.save_file_chooser();
                             changed = true;
                         }
                         _ => {}
@@ -6254,6 +7456,7 @@ impl AppState {
             ));
 
             if changed {
+                state.update_window_title();
                 if state.is_detached_network || state.detached_circular_network {
                     let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
                     if let Err(e) = state.save_to_file(&default_proj_path) {
@@ -6356,6 +7559,9 @@ impl AppState {
                             if let Err(e) = state.save_to_file(Path::new(&path)) {
                                 Err(format!("Save failed: {:?}", e))
                             } else {
+                                let path_buf = Path::new(&path).to_path_buf();
+                                state.loaded_project_path = Some(path_buf.clone());
+                                state.add_recent_file(path_buf);
                                 needs_redraw = true;
                                 Ok("Project saved".to_string())
                             }
@@ -6526,6 +7732,7 @@ impl AppState {
         }
         if needs_redraw {
             if let Some(state) = &mut self.state {
+                state.update_window_title();
                 if state.is_detached_network || state.detached_circular_network {
                     let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
                     if let Err(e) = state.save_to_file(&default_proj_path) {
@@ -6575,6 +7782,7 @@ fn main() {
         redraw: true,
         pressed_key: None,
         inspector,
+        pending_resize: None,
         _sender: sender.clone(),
     };
 
@@ -7105,6 +8313,177 @@ mod tests {
 
         let decay_0 = friction.powf(0.0 * 60.0);
         assert_eq!(decay_0, 1.0);
+    }
+
+    #[test]
+    fn test_circular_network_clamping_math() {
+        let header_h = 26.0;
+        let status_h = 0.0;
+        let gap = 18.0;
+
+        let clamp_layout = |width: f32, height: f32, layout_x: f32, layout_y: f32, layout_r: f32| -> (f32, f32, f32) {
+            let max_r = ((width - 2.0 * gap).min(height - header_h - status_h - 2.0 * gap) / 2.0).max(50.0);
+            let r = layout_r.clamp(50.0, max_r);
+
+            let min_x = gap + r;
+            let max_x = (width - gap - r).max(min_x);
+            let x = layout_x.clamp(min_x, max_x);
+
+            let min_y = header_h + gap + r;
+            let max_y = (height - status_h - gap - r).max(min_y);
+            let y = layout_y.clamp(min_y, max_y);
+
+            (x, y, r)
+        };
+
+        let (x, y, r) = clamp_layout(1000.0, 800.0, 500.0, 400.0, 180.0);
+        assert_eq!(r, 180.0);
+        assert_eq!(x, 500.0);
+        assert_eq!(y, 400.0);
+
+        let (x, y, r) = clamp_layout(1000.0, 800.0, 50.0, 400.0, 180.0);
+        assert_eq!(r, 180.0);
+        assert_eq!(x, 198.0);
+        assert_eq!(y, 400.0);
+
+        let (x, y, r) = clamp_layout(1000.0, 800.0, 500.0, 100.0, 180.0);
+        assert_eq!(r, 180.0);
+        assert_eq!(x, 500.0);
+        assert_eq!(y, 224.0);
+
+        let (x, y, r) = clamp_layout(1000.0, 800.0, 500.0, 750.0, 180.0);
+        assert_eq!(r, 180.0);
+        assert_eq!(x, 500.0);
+        assert_eq!(y, 602.0);
+
+        let (x, y, r) = clamp_layout(50.0, 50.0, 10.0, 10.0, 180.0);
+        assert!(r >= 50.0);
+        assert!(x >= 0.0);
+        assert!(y >= 0.0);
+    }
+
+    #[test]
+    fn test_floating_rectangular_pane_clamping() {
+        let width = 1000.0_f32;
+        let height = 800.0_f32;
+        let header_h = 26.0_f32;
+        let status_h = 0.0_f32;
+        let gap = 18.0_f32;
+
+        let clamp_floating = |_fx: f32, _fy: f32, fw: f32, _fh: f32| -> (f32, f32, f32, f32) {
+            let fw = fw.clamp(150.0, (width - 2.0 * gap).max(150.0));
+            let fx = gap;
+            let fy = header_h + gap;
+            let fh = (height - header_h - status_h - 2.0 * gap).max(100.0);
+            (fx, fy, fw, fh)
+        };
+
+        let expected_h = height - header_h - status_h - 2.0 * gap;
+
+        // Standard center case (fx anchored to gap, fy/fh to full height)
+        let (x, y, w, h) = clamp_floating(100.0, 200.0, 400.0, 300.0);
+        assert_eq!((x, y, w, h), (gap, header_h + gap, 400.0, expected_h));
+
+        // Off-screen left/top
+        let (x, y, w, h) = clamp_floating(-50.0, 0.0, 400.0, 300.0);
+        assert_eq!((x, y, w, h), (gap, header_h + gap, 400.0, expected_h));
+
+        // Off-screen right/bottom
+        let (x, y, w, h) = clamp_floating(900.0, 700.0, 400.0, 300.0);
+        assert_eq!((x, y, w, h), (gap, header_h + gap, 400.0, expected_h));
+
+        let clamp_param = |pw: f32| -> (f32, f32, f32, f32) {
+            let pw = pw.clamp(150.0, (width - 2.0 * gap).max(150.0));
+            let px = width - gap - pw;
+            let py = header_h + gap;
+            let ph = (height - header_h - status_h - 2.0 * gap).max(100.0);
+            (px, py, pw, ph)
+        };
+
+        // Standard param case
+        let (px, py, pw, ph) = clamp_param(300.0);
+        assert_eq!((px, py, pw, ph), (width - gap - 300.0, header_h + gap, 300.0, expected_h));
+
+        // Off-screen/overflow width param case
+        let (px, py, pw, ph) = clamp_param(1200.0);
+        let max_w = width - 2.0 * gap;
+        assert_eq!((px, py, pw, ph), (gap, header_h + gap, max_w, expected_h));
+
+        let clamp_ss = |ss_h_val: f32, show_net: bool, show_param: bool| -> (f32, f32, f32, f32) {
+            let fx = gap;
+            let fw = 400.0;
+            let param_w = 300.0;
+            let param_x = width - gap - param_w;
+
+            let ss_x = if show_net { fx + fw + gap } else { gap };
+            let ss_w_end = if show_param { param_x - gap } else { width - gap };
+            let ss_w = (ss_w_end - ss_x).max(150.0);
+            let ss_y_end = height - status_h - gap;
+            let ss_h = ss_h_val.clamp(100.0, (ss_y_end - header_h - gap).max(100.0));
+            let ss_y = ss_y_end - ss_h;
+            (ss_x, ss_y, ss_w, ss_h)
+        };
+
+        // Standard spreadsheet case (both net and param visible)
+        let (sx, sy, sw, sh) = clamp_ss(250.0, true, true);
+        assert_eq!(sx, gap + 400.0 + gap);
+        assert_eq!(sw, (width - gap - 300.0 - gap) - (gap + 400.0 + gap));
+        assert_eq!(sh, 250.0);
+        assert_eq!(sy, height - status_h - gap - 250.0);
+
+        // Neither net nor param visible
+        let (sx2, _sy2, sw2, sh2) = clamp_ss(200.0, false, false);
+        assert_eq!(sx2, gap);
+        assert_eq!(sw2, width - 2.0 * gap);
+        assert_eq!(sh2, 200.0);
+
+        // Clamping height to min (100.0)
+        let (_, _, _, sh_min) = clamp_ss(50.0, true, true);
+        assert_eq!(sh_min, 100.0);
+
+        // Clamping height to max
+        let max_possible_h = height - status_h - gap - header_h - gap;
+        let (_, _, _, sh_max) = clamp_ss(1000.0, true, true);
+        assert_eq!(sh_max, max_possible_h);
+    }
+
+    #[test]
+    fn test_paginator_collapsed_layout() {
+        let width = 1000.0_f32;
+
+        let get_paginator_w = |page_hidden: bool| -> f32 {
+            if page_hidden {
+                56.0_f32
+            } else {
+                236.0_f32
+            }
+        };
+
+        // Collapsed layout
+        let w_collapsed = get_paginator_w(true);
+        assert_eq!(w_collapsed, 56.0);
+
+        // Expanded layout
+        let w_expanded = get_paginator_w(false);
+        assert_eq!(w_expanded, 236.0);
+
+        // Verify how other viewport bounds adjust relative to paginator_w
+        let check_viewport_layout = |page_hidden: bool| -> (f32, f32) {
+            let paginator_w = get_paginator_w(page_hidden);
+            let col_c_x = paginator_w;
+            let col_c_w = width - paginator_w;
+            (col_c_x, col_c_w)
+        };
+
+        // When collapsed, viewport/canvas has more space
+        let (vx_c, vw_c) = check_viewport_layout(true);
+        assert_eq!(vx_c, 56.0);
+        assert_eq!(vw_c, 944.0);
+
+        // When expanded, viewport/canvas has default space
+        let (vx_e, vw_e) = check_viewport_layout(false);
+        assert_eq!(vx_e, 236.0);
+        assert_eq!(vw_e, 764.0);
     }
 }
 
