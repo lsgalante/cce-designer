@@ -1337,7 +1337,7 @@ impl State {
     
     fn in_network_pane(&self) -> bool {
         if self.circular_network_pane {
-            self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, MENUBAR_H, BREADCRUMB_H)
+            self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, BREADCRUMB_H)
         } else {
             let (cx, cy, cw, ch) = self.positions[CONTENT_IDX];
             self.cursor_x >= cx
@@ -2685,8 +2685,15 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         } else {
             vec![]
         };
+        let context_opts = vec![
+            "0: Network".to_string(),
+            "1: Viewport".to_string(),
+            "2: Parameters".to_string(),
+            "3: Spreadsheet".to_string(),
+            "Main Menu".to_string(),
+        ];
         let mut widgets: Vec<Box<dyn Element>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_label("Main Menu Bar").with_item("File", &["New Project", "Open", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_label("Main Menu Bar").with_item("File", &["New Project", "Open", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
             Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
@@ -2694,23 +2701,27 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             Box::new(Plate::new(0.0, 0.0, 0.0, 0.0).with_color(colors::PARAM_BG).with_blur(true)),
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Open", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_item("Settings", &[])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_item("Settings", &[])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Open", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_item("Settings", &[]).with_context_options(context_opts.clone(), 0)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_item("Settings", &[]).with_context_options(context_opts.clone(), 1)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2)),
             Box::new(StatusBar::new().with_text("Ready")),
             Box::new(Breadcrumb::new()),
             Box::new(NodePalette::new()),
             Box::new(Spreadsheet::new()),
         ];
         
-        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]);
+        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 3);
         spreadsheet_menubar.set_visible(false);
         widgets.push(Box::new(spreadsheet_menubar));
 
         let network_panel = Plate::new(0.0, 0.0, 0.0, 0.0).with_color([0.10, 0.10, 0.13, 0.95]);
         widgets.push(Box::new(network_panel));
 
-        let paginator = Paginator::new(56.0, vec![]).with_sidebar_mode(true).with_column_layout(true).with_tabs_rotated(false);
+        let paginator = Paginator::new(56.0, vec![])
+            .with_sidebar_mode(true)
+            .with_column_layout(true)
+            .with_tabs_rotated(false)
+            .with_context_options(context_opts.clone(), 0);
         widgets.push(Box::new(paginator));
 
         let mut positions = Vec::with_capacity(PAGINATOR_IDX + 1);
@@ -3117,12 +3128,12 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.circular_network_layout.r = r;
 
             self.positions[0] = (0.0, 0.0, 0.0, 0.0);
-            self.positions[LEFT_MENUBAR_IDX] = (cx - r, cy - r, 2.0 * r, 35.0);
+            self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
             if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
-                menubar.set_curved_circle(Some((cx, cy, r)));
+                menubar.set_curved_circle(None);
             }
-            self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H, 2.0 * r, BREADCRUMB_H);
-            self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + MENUBAR_H + BREADCRUMB_H));
+            self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
+            self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
             self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
             self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
             if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
@@ -3139,6 +3150,21 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[STATUS_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+
+            self.widgets[0].set_visible(false);
+            self.widgets[STATUS_IDX].set_visible(false);
+            self.widgets[CONTENT_IDX].set_visible(true);
+            self.widgets[NETWORK_PANEL_IDX].set_visible(true);
+            self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
+            self.widgets[BREADCRUMB_IDX].set_visible(true);
+            self.widgets[SPLITTER1_IDX].set_visible(false);
+            self.widgets[SPLITTER2_IDX].set_visible(false);
+            self.widgets[VIEWPORT_IDX].set_visible(false);
+            self.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
+            self.widgets[PARAM_IDX].set_visible(false);
+            self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
+            self.widgets[SPREADSHEET_IDX].set_visible(false);
+            self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
         } else if self.detached_circular_network {
             // Parent process: Network pane is detached (hidden from main window)
             let left_visible = false;
@@ -3733,6 +3759,20 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.update_recent_files_layout();
     }
 
+    fn sync_context_dropdowns(&mut self) {
+        let selected_idx = match self.focused_pane {
+            LEFT_MENUBAR_IDX => 0,
+            RIGHT_MENUBAR_IDX => 1,
+            PARAM_MENUBAR_IDX => 2,
+            SPREADSHEET_MENUBAR_IDX => 3,
+            HEADER_IDX => 4,
+            _ => return,
+        };
+        for &widget_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, PAGINATOR_IDX] {
+            self.widgets[widget_idx].set_context_selected(selected_idx);
+        }
+    }
+
     fn sync_pane_focus(&mut self) {
         for &menubar_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
             self.widgets[menubar_idx].set_selected(menubar_idx == self.focused_pane);
@@ -3741,6 +3781,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.widgets[PARAM_IDX].unfocus();
             self.sync_parameters_to_project();
         }
+        self.sync_context_dropdowns();
         self.update_paginator();
     }
 
@@ -4077,7 +4118,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             if i == CONTENT_IDX && show_cursor {
                 let _cx = active_clip_circle[0] / self.scale as f32 - self.circular_network_layout.r + self.pan_x; // Wait, let's keep the exact cursor coordinates!
                 let active_node_area_y = if self.circular_network_pane {
-                    self.circular_network_layout.y - self.circular_network_layout.r + 45.0 + MENUBAR_H + BREADCRUMB_H
+                    self.circular_network_layout.y - self.circular_network_layout.r + 45.0 + BREADCRUMB_H
                 } else {
                     node_area_y
                 };
@@ -4962,11 +5003,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
                             let inside = if self.circular_network_pane && is_network_part {
                                 if i == CONTENT_IDX {
-                                    self.circular_network_layout.hit_test_content(cx, cy, MENUBAR_H, BREADCRUMB_H)
+                                    self.circular_network_layout.hit_test_content(cx, cy, 0.0, BREADCRUMB_H)
                                 } else if i == LEFT_MENUBAR_IDX {
-                                    self.circular_network_layout.hit_test_menubar(cx, cy, MENUBAR_H)
+                                    false
                                 } else if i == BREADCRUMB_IDX {
-                                    self.circular_network_layout.hit_test_breadcrumb(cx, cy, MENUBAR_H, BREADCRUMB_H)
+                                    self.circular_network_layout.hit_test_breadcrumb(cx, cy, 0.0, BREADCRUMB_H)
                                 } else if i == NETWORK_PANEL_IDX {
                                     self.widgets[NETWORK_PANEL_IDX].hit_test(cx, cy, &self.ui_context)
                                 } else {
@@ -5056,11 +5097,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let hits_widget = |state: &State, i: usize, x: f32, y: f32| -> bool {
                     if state.circular_network_pane && (i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX) {
                         if i == CONTENT_IDX {
-                            state.circular_network_layout.hit_test_content(x, y, MENUBAR_H, BREADCRUMB_H)
+                            state.circular_network_layout.hit_test_content(x, y, 0.0, BREADCRUMB_H)
                         } else if i == LEFT_MENUBAR_IDX {
-                            state.circular_network_layout.hit_test_menubar(x, y, MENUBAR_H)
+                            false
                         } else if i == BREADCRUMB_IDX {
-                            state.circular_network_layout.hit_test_breadcrumb(x, y, MENUBAR_H, BREADCRUMB_H)
+                            state.circular_network_layout.hit_test_breadcrumb(x, y, 0.0, BREADCRUMB_H)
                         } else {
                             false
                         }
@@ -5070,7 +5111,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 };
 
                 let in_circle_network_pane = if self.circular_network_pane {
-                    self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, MENUBAR_H, BREADCRUMB_H)
+                    self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, BREADCRUMB_H)
                 } else {
                     in_network_pane
                 };
@@ -5099,7 +5140,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
                         if *button == MouseButton::Left && self.circular_network_pane {
                             let on_border = self.circular_network_layout.hit_test_border(self.cursor_x, self.cursor_y, 12.0);
-                            let hit_menubar = self.circular_network_layout.hit_test_menubar(self.cursor_x, self.cursor_y, MENUBAR_H);
+                            let hit_menubar = false;
                             if hit_menubar {
                                 if self.widgets[LEFT_MENUBAR_IDX].get_menu_items_at(self.cursor_x, self.cursor_y).is_some() {
                                     self.focused_pane = LEFT_MENUBAR_IDX;
@@ -5107,7 +5148,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                     if self.widgets[LEFT_MENUBAR_IDX].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
                                         changed = true;
                                     }
-                                    return true;
                                 }
                             }
                             if on_border || hit_menubar {
@@ -7008,6 +7048,65 @@ impl AppState {
                     state.update_status_text(&format!("Loaded project from {}", path.display()));
                 }
                 changed = true;
+            }
+
+            // Check context switcher dropdown changes
+            for &widget_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, PAGINATOR_IDX] {
+                if let Some(new_sel) = state.widgets[widget_idx].take_context_change() {
+                    let target_pane = match new_sel {
+                        0 => LEFT_MENUBAR_IDX,
+                        1 => RIGHT_MENUBAR_IDX,
+                        2 => PARAM_MENUBAR_IDX,
+                        3 => SPREADSHEET_MENUBAR_IDX,
+                        4 => HEADER_IDX,
+                        _ => continue,
+                    };
+                    if state.focused_pane != target_pane {
+                        state.focused_pane = target_pane;
+                        // Make sure the switched pane is visible!
+                        match target_pane {
+                            LEFT_MENUBAR_IDX => {
+                                if !state.show_network {
+                                    state.show_network = true;
+                                    state.widgets[CONTENT_IDX].set_visible(true);
+                                    state.widgets[LEFT_MENUBAR_IDX].set_visible(true);
+                                    state.widgets[BREADCRUMB_IDX].set_visible(true);
+                                    state.widgets[HEADER_IDX].set_item_checked(2, 4, true);
+                                }
+                            }
+                            RIGHT_MENUBAR_IDX => {
+                                if !state.show_viewport {
+                                    state.show_viewport = true;
+                                    state.widgets[VIEWPORT_IDX].set_visible(true);
+                                    state.widgets[RIGHT_MENUBAR_IDX].set_visible(true);
+                                    state.widgets[HEADER_IDX].set_item_checked(2, 5, true);
+                                }
+                            }
+                            PARAM_MENUBAR_IDX => {
+                                if !state.show_parameters {
+                                    state.show_parameters = true;
+                                    state.widgets[PARAM_IDX].set_visible(true);
+                                    state.widgets[PARAM_MENUBAR_IDX].set_visible(true);
+                                    state.widgets[HEADER_IDX].set_item_checked(2, 6, true);
+                                }
+                            }
+                            SPREADSHEET_MENUBAR_IDX => {
+                                if !state.show_spreadsheet {
+                                    state.show_spreadsheet = true;
+                                    state.widgets[SPREADSHEET_IDX].set_visible(true);
+                                    state.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(true);
+                                    state.widgets[HEADER_IDX].set_item_checked(2, 7, true);
+                                }
+                            }
+                            _ => {}
+                        }
+                        state.rebuild_positions();
+                        state.apply_layout();
+                        state.sync_pane_focus();
+                        state.sync_nodes();
+                        changed = true;
+                    }
+                }
             }
 
             if let Some((menu_idx, item_idx)) = state.widgets[HEADER_IDX].menu_click() {
