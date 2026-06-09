@@ -109,7 +109,7 @@ const NETWORK_PANEL_IDX: usize = 16;
 const PAGINATOR_IDX: usize = 17;
 
 
-const HEADER_H: f32 = 26.0;
+const HEADER_H: f32 = 36.0;
 const STATUS_H: f32 = 0.0;
 const MENUBAR_H: f32 = 26.0;
 const SPLITTER_W: f32 = 6.0;
@@ -495,9 +495,10 @@ mod shortcut;
 use shortcut::{Shortcut, ShortcutManager, Action};
 
 use clear_ui::engine::{
-    Vertex, widget_vertices,
-    quad_vertices_clipped, circle_vertices, circle_border_vertices, arc_background_vertices,
-    extra_quad_vertices, extra_quad_vertices_clipped,
+    Vertex, push_widget_vertices,
+    push_extra_quad_vertices,
+    push_extra_quad_vertices_clipped, push_arc_background_vertices,
+    quad_vertices_with_clip,
 };
 
 #[repr(C)]
@@ -539,12 +540,13 @@ fn make_text_buffer_with_font(font_system: &mut FontSystem, text: &str, size: f3
     let metrics = Metrics::new(size, size * 1.4);
     let mut buffer = Buffer::new(font_system, metrics);
     let mut attrs = Attrs::new();
-    if let Some(font_name) = font {
-        let family = match font_name {
+    let family_name = font.map(|f| clear_ui::layout::parse_font_string(f).0);
+    if let Some(ref name) = family_name {
+        let family = match name.as_str() {
             "monospace" => glyphon::Family::Monospace,
             "sans-serif" => glyphon::Family::SansSerif,
             "serif" => glyphon::Family::Serif,
-            _ => glyphon::Family::Name(font_name),
+            _ => glyphon::Family::Name(name),
         };
         attrs = attrs.family(family);
     }
@@ -587,6 +589,94 @@ fn get_next_visible_pane(
     visible_panes[next_pos]
 }
 
+fn push_circle_vertices(
+    cx: f32, cy: f32, r: f32,
+    sw: f32, sh: f32,
+    color: [f32; 4],
+    segments: usize,
+    clip_circle: [f32; 3],
+    out: &mut Vec<Vertex>,
+) {
+    for i in 0..segments {
+        let theta1 = (i as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        let theta2 = ((i + 1) as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        let x0 = cx;
+        let y0 = cy;
+        let x1 = cx + r * theta1.cos();
+        let y1 = cy + r * theta1.sin();
+        let x2 = cx + r * theta2.cos();
+        let y2 = cy + r * theta2.sin();
+        
+        let ndc_x0 = (x0 / sw) * 2.0 - 1.0;
+        let ndc_y0 = 1.0 - (y0 / sh) * 2.0;
+        let ndc_x1 = (x1 / sw) * 2.0 - 1.0;
+        let ndc_y1 = 1.0 - (y1 / sh) * 2.0;
+        let ndc_x2 = (x2 / sw) * 2.0 - 1.0;
+        let ndc_y2 = 1.0 - (y2 / sh) * 2.0;
+        
+        out.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        out.push(Vertex { position: [ndc_x1, ndc_y1], color, clip_circle });
+        out.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+    }
+}
+
+fn push_circle_border_vertices(
+    cx: f32, cy: f32, r: f32,
+    thickness: f32,
+    sw: f32, sh: f32,
+    color: [f32; 4],
+    segments: usize,
+    clip_circle: [f32; 3],
+    out: &mut Vec<Vertex>,
+) {
+    for i in 0..segments {
+        let theta1 = (i as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        let theta2 = ((i + 1) as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
+        
+        let x0 = cx + (r - thickness) * theta1.cos();
+        let y0 = cy + (r - thickness) * theta1.sin();
+        let x1 = cx + r * theta1.cos();
+        let y1 = cy + r * theta1.sin();
+        
+        let x2 = cx + r * theta2.cos();
+        let y2 = cy + r * theta2.sin();
+        let x3 = cx + (r - thickness) * theta2.cos();
+        let y3 = cy + (r - thickness) * theta2.sin();
+        
+        let ndc_x0 = (x0 / sw) * 2.0 - 1.0; let ndc_y0 = 1.0 - (y0 / sh) * 2.0;
+        let ndc_x1 = (x1 / sw) * 2.0 - 1.0; let ndc_y1 = 1.0 - (y1 / sh) * 2.0;
+        let ndc_x2 = (x2 / sw) * 2.0 - 1.0; let ndc_y2 = 1.0 - (y2 / sh) * 2.0;
+        let ndc_x3 = (x3 / sw) * 2.0 - 1.0; let ndc_y3 = 1.0 - (y3 / sh) * 2.0;
+        
+        out.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        out.push(Vertex { position: [ndc_x1, ndc_y1], color, clip_circle });
+        out.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+        
+        out.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
+        out.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
+        out.push(Vertex { position: [ndc_x3, ndc_y3], color, clip_circle });
+    }
+}
+
+fn push_quad_vertices_clipped(
+    x: f32, y: f32, w: f32, h: f32,
+    surface_w: f32, surface_h: f32,
+    color: [f32; 4],
+    clip: (f32, f32, f32, f32),
+    clip_circle: [f32; 3],
+    out: &mut Vec<Vertex>,
+) {
+    let (cx0, cy0, cx1, cy1) = clip;
+    let ix0 = x.max(cx0);
+    let iy0 = y.max(cy0);
+    let ix1 = (x + w).min(cx1);
+    let iy1 = (y + h).min(cy1);
+    if ix1 <= ix0 || iy1 <= iy0 {
+        return;
+    }
+    out.extend_from_slice(&quad_vertices_with_clip(ix0, iy0, ix1 - ix0, iy1 - iy0, surface_w, surface_h, color, clip_circle));
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ResizeDirection {
     left: bool,
@@ -602,6 +692,7 @@ struct State {
     window: XdgWindow,
     wl_surface: wl_surface::WlSurface,
     vertex_count: u32,
+    vertex_data: Vec<Vertex>,
 
     pipeline_3d: wgpu::RenderPipeline,
     bind_group_3d: wgpu::BindGroup,
@@ -752,6 +843,7 @@ struct State {
     uniform_background: bool,
     network_opacity: f32,
     last_design_mod_time: Option<std::time::SystemTime>,
+    last_config_mod_time: Option<std::time::SystemTime>,
     floating_network_layout: (f32, f32, f32, f32),
     is_resizing_network: Option<ResizeDirection>,
     drag_start_rect: (f32, f32, f32, f32),
@@ -1462,200 +1554,11 @@ impl State {
     }
 
     fn open_node_palette(&mut self) {
-        let templates: Vec<String> = self.node_templates.iter().map(|t| t.label.clone()).collect();
-        let grid_col = self.grid_cursor_col;
-        let grid_row = self.grid_cursor_row;
-        std::thread::spawn(move || {
-            use std::io::Write;
-            use std::process::{Command, Stdio};
-
-            let mut child = match Command::new("clear-cloud")
-                .arg("-p")
-                .arg("Add Node: ")
-                .arg("--dmenu")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Failed to spawn clear-cloud: {:?}", e);
-                    return;
-                }
-            };
-
-            if let Some(mut stdin) = child.stdin.take() {
-                for t in &templates {
-                    let _ = writeln!(stdin, "{}", t);
-                }
-            }
-
-            let output = match child.wait_with_output() {
-                Ok(o) => o,
-                Err(e) => {
-                    eprintln!("Failed to wait for clear-cloud: {:?}", e);
-                    return;
-                }
-            };
-
-            if output.status.success() {
-                let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !selected.is_empty() {
-                    let body = format!(
-                        "{{\"action\":\"add_node\",\"template_name\":\"{}\",\"x\":{},\"y\":{}}}",
-                        selected, grid_col, grid_row
-                    );
-                    let req = format!(
-                        "POST /action HTTP/1.1\r\n\
-                         Host: 127.0.0.1:3000\r\n\
-                         Content-Type: application/json\r\n\
-                         Content-Length: {}\r\n\
-                         Connection: close\r\n\r\n\
-                         {}",
-                        body.len(),
-                        body
-                    );
-                    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
-                        let _ = stream.write_all(req.as_bytes());
-                        let _ = stream.flush();
-                    }
-                }
-            }
-        });
-    }
-
-    fn spawn_menu_cloud(&mut self, widget_idx: usize, menu_idx: usize, title: String, items: Vec<String>, rx: f32, ry: f32, _rw: f32, rh: f32) {
-        let is_same_menu = self.active_menu_cloud_idx == Some((widget_idx, menu_idx));
-        let mut process_was_running = false;
-
-        if let Some(pid) = self.active_menu_cloud_pid {
-            let is_running = unsafe {
-                libc::kill(pid as libc::pid_t, 0) == 0
-            };
-            if is_running {
-                process_was_running = true;
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGTERM);
-                }
-            }
-        }
-
-        self.active_menu_cloud_pid = None;
-        self.active_menu_cloud_idx = None;
-
-        if is_same_menu && process_was_running {
-            return;
-        }
-
-        let x = (self.window_x as f64 + rx as f64) as i32;
-        let y = (self.window_y as f64 + (ry + rh) as f64) as i32;
-
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let max_len = items.iter().map(|it| it.len()).max().unwrap_or(10);
-        let layout_width = (max_len * 8 + 48).max(140) as u32;
-
-        let mut widgets = vec![
-            serde_json::json!({
-                "type": "label",
-                "text": title.clone(),
-            })
-        ];
-        for (idx, item) in items.iter().enumerate() {
-            widgets.push(serde_json::json!({
-                "type": "button",
-                "id": idx.to_string(),
-                "text": item.clone(),
-            }));
-        }
-
-        let json_config = serde_json::json!({
-            "width": layout_width,
-            "widgets": widgets,
-        });
-
-        let mut child = match Command::new("clear-cloud")
-            .arg("--layout")
-            .arg("-x")
-            .arg(x.to_string())
-            .arg("-y")
-            .arg(y.to_string())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to spawn clear-cloud for menu: {:?}", e);
-                return;
-            }
-        };
-
-        let pid = child.id();
-        self.active_menu_cloud_pid = Some(pid);
-        self.active_menu_cloud_idx = Some((widget_idx, menu_idx));
-
-        std::thread::spawn(move || {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(json_config.to_string().as_bytes());
-            }
-
-            let output = match child.wait_with_output() {
-                Ok(o) => o,
-                Err(e) => {
-                    eprintln!("Failed to wait for clear-cloud for menu: {:?}", e);
-                    return;
-                }
-            };
-
-            if output.status.success() {
-                let out_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if let Ok(res_val) = serde_json::from_str::<serde_json::Value>(&out_str) {
-                    if let Some(btn_id) = res_val["button"].as_str() {
-                        if let Ok(item_idx) = btn_id.parse::<usize>() {
-                            let body = format!(
-                                "{{\"action\":\"menu_click\",\"widget_idx\":{},\"menu_idx\":{},\"item_idx\":{}}}",
-                                widget_idx, menu_idx, item_idx
-                            );
-                            let req = format!(
-                                "POST /action HTTP/1.1\r\n\
-                                 Host: 127.0.0.1:3000\r\n\
-                                 Content-Type: application/json\r\n\
-                                 Content-Length: {}\r\n\
-                                 Connection: close\r\n\r\n\
-                                 {}",
-                                body.len(),
-                                body
-                            );
-                            if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
-                                let _ = stream.write_all(req.as_bytes());
-                                let _ = stream.flush();
-                            }
-                        }
-                    }
-                }
-            }
-
-            let body = format!(
-                "{{\"action\":\"menu_closed\",\"widget_idx\":{},\"menu_idx\":{}}}",
-                widget_idx, menu_idx
-            );
-            let req = format!(
-                "POST /action HTTP/1.1\r\n\
-                 Host: 127.0.0.1:3000\r\n\
-                 Content-Type: application/json\r\n\
-                 Content-Length: {}\r\n\
-                 Connection: close\r\n\r\n\
-                 {}",
-                body.len(),
-                body
-            );
-            if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
-                let _ = stream.write_all(req.as_bytes());
-                let _ = stream.flush();
-            }
-        });
+        self.node_palette_visible = true;
+        self.node_palette_query = String::new();
+        self.node_palette_selected = 0;
+        self.refresh_node_palette();
+        self.upload_vertices();
     }
 
     fn close_node_palette(&mut self) {
@@ -2801,7 +2704,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         ];
         
         let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]);
-        spreadsheet_menubar.visible = false;
+        spreadsheet_menubar.set_visible(false);
         widgets.push(Box::new(spreadsheet_menubar));
 
         let network_panel = Plate::new(0.0, 0.0, 0.0, 0.0).with_color([0.10, 0.10, 0.13, 0.95]);
@@ -2847,6 +2750,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             render_pipeline,
             vertex_buffer,
             vertex_count: 0,
+            vertex_data: Vec::with_capacity(4096),
             pipeline_3d,
             bind_group_3d,
             bind_group_layout_3d,
@@ -2994,6 +2898,22 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
+            },
+            last_config_mod_time: {
+                let paths = [
+                    "/home/lsgalante/.config/cce/config.toml",
+                    "/home/lsgalante/.config/ccec/config.toml",
+                ];
+                let mut mod_time = None;
+                for path in &paths {
+                    if let Ok(m) = std::fs::metadata(path) {
+                        if let Ok(t) = m.modified() {
+                            mod_time = Some(t);
+                            break;
+                        }
+                    }
+                }
+                mod_time
             },
             floating_network_layout: (18.0, 44.0, 400.0, 710.0),
             is_resizing_network: None,
@@ -3611,7 +3531,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let menu_checked = self.widgets[active_menubar].menu_checked_list();
 
         let num_pages = menu_names.len();
-        self.widgets[PAGINATOR_IDX].set_pages(menu_names.clone());
+        self.widgets[PAGINATOR_IDX].set_pages_with_items(menu_names.clone(), menu_items.clone());
 
         // Check if we need to rebuild paginator page widgets.
         let need_rebuild = self.last_paginator_menubar != Some(active_menubar)
@@ -3996,10 +3916,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
 
-    fn collect_vertices(&self) -> Vec<Vertex> {
+    fn collect_vertices(&self, verts: &mut Vec<Vertex>) {
+        verts.clear();
         let sw = self.width;
         let sh = self.height;
-        let mut verts = Vec::new();
 
         let node_area_y = self.positions[CONTENT_IDX].1;
         let dialog_open = self.node_palette_visible;
@@ -4034,7 +3954,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 self.widgets[i].z_index()
             }
         });
-        println!("DEBUG_DRAW_ORDER: {:?}", draw_order.iter().map(|&i| (i, self.widgets[i].visible(), self.positions[i])).collect::<Vec<_>>());
+        // println!("DEBUG_DRAW_ORDER: {:?}", draw_order.iter().map(|&i| (i, self.widgets[i].visible(), self.positions[i])).collect::<Vec<_>>());
 
         for &i in &draw_order {
             let w = &self.widgets[i];
@@ -4046,7 +3966,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
             if i == NETWORK_PANEL_IDX {
                 if self.circular_network_pane {
-                    verts.extend(circle_vertices(
+                    push_circle_vertices(
                         self.circular_network_layout.x,
                         self.circular_network_layout.y,
                         self.circular_network_layout.r,
@@ -4055,8 +3975,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         w.color(),
                         64,
                         active_clip_circle,
-                    ));
-                    verts.extend(circle_border_vertices(
+                        verts,
+                    );
+                    push_circle_border_vertices(
                         self.circular_network_layout.x,
                         self.circular_network_layout.y,
                         self.circular_network_layout.r,
@@ -4066,17 +3987,18 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         [0.35, 0.65, 0.95, 0.80 * self.network_opacity],
                         64,
                         active_clip_circle,
-                    ));
+                        verts,
+                    );
                 } else {
-                    verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
+                    push_widget_vertices(w.as_ref(), sw, sh, active_clip_circle, verts);
                 }
             } else if i == CONTENT_IDX {
                 if !self.circular_network_pane {
-                    verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
+                    push_widget_vertices(w.as_ref(), sw, sh, active_clip_circle, verts);
                 }
 
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(extra_quad_vertices_clipped(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle));
+                    push_extra_quad_vertices_clipped(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle, verts);
                 }
             } else if i == LEFT_MENUBAR_IDX && self.circular_network_pane {
                 let cx = self.circular_network_layout.x;
@@ -4084,7 +4006,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let r = self.circular_network_layout.r;
                 
                 let bg_color = w.color();
-                verts.extend(arc_background_vertices(
+                push_arc_background_vertices(
                     cx, cy, r,
                     MENUBAR_H,
                     std::f32::consts::PI,
@@ -4093,10 +4015,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     bg_color,
                     64,
                     active_clip_circle,
-                ));
+                    verts,
+                );
                 
                 let border_color = [0.22, 0.22, 0.28, 0.90 * self.network_opacity];
-                verts.extend(arc_background_vertices(
+                push_arc_background_vertices(
                     cx, cy, r - MENUBAR_H,
                     1.5,
                     std::f32::consts::PI,
@@ -4105,13 +4028,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     border_color,
                     64,
                     active_clip_circle,
-                ));
+                    verts,
+                );
                 
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                    push_extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
                 }
                 for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
-                    verts.extend(arc_background_vertices(
+                    push_arc_background_vertices(
                         acx, acy, ar,
                         ath,
                         a_start, a_end,
@@ -4119,23 +4043,24 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         acolor,
                         64,
                         active_clip_circle,
-                    ));
+                        verts,
+                    );
                 }
             } else {
-                verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
+                push_widget_vertices(w.as_ref(), sw, sh, active_clip_circle, verts);
                 if i == PAGINATOR_IDX {
                     let eq = w.extra_quads();
-                    println!("DEBUG_COLLECT: Paginator extra_quads len = {}", eq.len());
+                    // println!("DEBUG_COLLECT: Paginator extra_quads len = {}", eq.len());
                     for (qx, qy, qw, qh, qc) in eq {
-                        verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                        push_extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
                     }
                 } else {
                     for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                        verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                        push_extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
                     }
                 }
                 for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
-                    verts.extend(arc_background_vertices(
+                    push_arc_background_vertices(
                         acx, acy, ar,
                         ath,
                         a_start, a_end,
@@ -4143,13 +4068,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         acolor,
                         64,
                         active_clip_circle,
-                    ));
+                        verts,
+                    );
                 }
             }
 
 
             if i == CONTENT_IDX && show_cursor {
-                let cx = active_clip_circle[0] / self.scale as f32 - self.circular_network_layout.r + self.pan_x; // Wait, let's keep the exact cursor coordinates!
+                let _cx = active_clip_circle[0] / self.scale as f32 - self.circular_network_layout.r + self.pan_x; // Wait, let's keep the exact cursor coordinates!
                 let active_node_area_y = if self.circular_network_pane {
                     self.circular_network_layout.y - self.circular_network_layout.r + 45.0 + MENUBAR_H + BREADCRUMB_H
                 } else {
@@ -4166,7 +4092,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let thickness = 2.0_f32;
 
                 // Filled cursor background
-                verts.extend(quad_vertices_clipped(
+                push_quad_vertices_clipped(
                     cx + thickness,
                     cy + thickness,
                     cw - 2.0 * thickness,
@@ -4176,20 +4102,21 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     bg_color,
                     clip,
                     active_clip_circle,
-                ));
+                    verts,
+                );
 
                 // 4 border edges
-                verts.extend(quad_vertices_clipped(cx, cy, cw, thickness, sw, sh, border_color, clip, active_clip_circle));
-                verts.extend(quad_vertices_clipped(cx, cy + ch - thickness, cw, thickness, sw, sh, border_color, clip, active_clip_circle));
-                verts.extend(quad_vertices_clipped(cx, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip, active_clip_circle));
-                verts.extend(quad_vertices_clipped(cx + cw - thickness, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip, active_clip_circle));
+                push_quad_vertices_clipped(cx, cy, cw, thickness, sw, sh, border_color, clip, active_clip_circle, verts);
+                push_quad_vertices_clipped(cx, cy + ch - thickness, cw, thickness, sw, sh, border_color, clip, active_clip_circle, verts);
+                push_quad_vertices_clipped(cx, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip, active_clip_circle, verts);
+                push_quad_vertices_clipped(cx + cw - thickness, cy + thickness, thickness, ch - 2.0 * thickness, sw, sh, border_color, clip, active_clip_circle, verts);
             }
         }
-        verts
     }
 
     fn upload_vertices(&mut self) {
-        let verts = self.collect_vertices();
+        let mut verts = std::mem::take(&mut self.vertex_data);
+        self.collect_vertices(&mut verts);
         self.vertex_count = verts.len() as u32;
         let data = bytemuck::cast_slice(&verts);
         let needed = data.len() as wgpu::BufferAddress;
@@ -4202,6 +4129,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             });
         }
         self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer, 0, data);
+        self.vertex_data = verts;
     }
 
     fn rebuild_scene_geometry(&mut self) {
@@ -4371,7 +4299,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     });
                 }
             }
-            if !has_cached_items || (circular_network_pane && i == LEFT_MENUBAR_IDX) || w.is_menu_bar() {
+            if !has_cached_items || (circular_network_pane && i == LEFT_MENUBAR_IDX) {
                 let labels = w.text_labels_with_font_and_bounds(&self.ui_context);
                 // if i == LEFT_MENUBAR_IDX {
                 //     eprintln!("DEBUG_PREPARE_ELSE: i={} labels.len={}", i, labels.len());
@@ -4437,9 +4365,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         }
 
         // for label in &legacy_labels {
-        //     if label.text.len() == 1 || label.text.contains("Network") || label.text.contains("File") || label.text.contains("Edit") || label.text.contains("View") {
-        //         eprintln!("DEBUG_LEGACY_LABEL: text='{}' x={} y={}", label.text, label.x, label.y);
-        //     }
+        //     eprintln!("DEBUG_LEGACY_LABEL: text='{}' x={} y={}", label.text, label.x, label.y);
         // }
 
         text_renderer.prepare(device, queue, font_system, text_atlas, text_viewport, areas, swash_cache).unwrap();
@@ -5059,7 +4985,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 changed
             }
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
-                // println!("DEBUG: MouseInput state={:?} button={:?} cursor=({}, {})", btn_state, button, self.cursor_x, self.cursor_y);
+                println!("DEBUG: MouseInput state={:?} button={:?} cursor=({}, {})", btn_state, button, self.cursor_x, self.cursor_y);
                 if *btn_state == ElementState::Pressed {
                     self.pan_velocity_x = 0.0;
                     self.pan_velocity_y = 0.0;
@@ -5175,12 +5101,12 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             let on_border = self.circular_network_layout.hit_test_border(self.cursor_x, self.cursor_y, 12.0);
                             let hit_menubar = self.circular_network_layout.hit_test_menubar(self.cursor_x, self.cursor_y, MENUBAR_H);
                             if hit_menubar {
-                                if let Some((menu_idx, title, items, rx, ry, rw, rh)) = self.widgets[LEFT_MENUBAR_IDX].get_menu_items_at(self.cursor_x, self.cursor_y) {
+                                if self.widgets[LEFT_MENUBAR_IDX].get_menu_items_at(self.cursor_x, self.cursor_y).is_some() {
                                     self.focused_pane = LEFT_MENUBAR_IDX;
-                                    self.widgets[PAGINATOR_IDX].set_page_hidden(false);
-                                    self.widgets[PAGINATOR_IDX].set_selected_page(menu_idx);
-                                    self.sync_pane_focus();
-                                    self.spawn_menu_cloud(LEFT_MENUBAR_IDX, menu_idx, title, items, rx, ry, rw, rh);
+                                    self.widgets[LEFT_MENUBAR_IDX].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                                    if self.widgets[LEFT_MENUBAR_IDX].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
+                                        changed = true;
+                                    }
                                     return true;
                                 }
                             }
@@ -5414,14 +5340,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             changed = true;
                         }
                         if let Some(i) = click_target {
-                            if let Some((menu_idx, title, items, rx, ry, rw, rh)) = self.widgets[i].get_menu_items_at(self.cursor_x, self.cursor_y) {
-                                self.focused_pane = i;
-                                self.widgets[PAGINATOR_IDX].set_page_hidden(false);
-                                self.widgets[PAGINATOR_IDX].set_selected_page(menu_idx);
-                                self.sync_pane_focus();
-                                self.spawn_menu_cloud(i, menu_idx, title, items, rx, ry, rw, rh);
-                                return true;
-                            }
                             self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                             if self.widgets[i].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
                                 changed = true;
@@ -5843,7 +5761,30 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.last_frame = now;
 
         if now.duration_since(self.last_config_read).as_secs_f32() > 2.0 {
-            self.update_inertial_settings();
+            self.last_config_read = now;
+            let config_paths = [
+                "/home/lsgalante/.config/cce/config.toml",
+                "/home/lsgalante/.config/ccec/config.toml",
+            ];
+            let mut current_mod_time = None;
+            for path in &config_paths {
+                if let Ok(m) = std::fs::metadata(path) {
+                    if let Ok(t) = m.modified() {
+                        current_mod_time = Some(t);
+                        break;
+                    }
+                }
+            }
+            if current_mod_time != self.last_config_mod_time {
+                self.last_config_mod_time = current_mod_time;
+                clear_ui::layout::reload_config();
+                self.update_inertial_settings();
+                self.rebuild_positions();
+                self.apply_layout();
+                self.upload_vertices();
+            } else {
+                self.update_inertial_settings();
+            }
             let design_path = DesignSettings::file_path();
             if let Ok(m) = std::fs::metadata(&design_path) {
                 if let Ok(mod_time) = m.modified() {
