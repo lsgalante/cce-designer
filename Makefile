@@ -5,7 +5,7 @@ build:
 
 install: build
 	mkdir -p ~/.local/bin
-	install -m 755 target/release/clear-design-interface ~/.local/bin/clear-design-interface
+	install -m 755 target/release/cce-design-interface ~/.local/bin/cce-design-interface
 
 run:
 	cargo run

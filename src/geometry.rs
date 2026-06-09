@@ -315,18 +315,20 @@ pub fn resolve_transform_geometry(root: &FsNode, target: &FsNode, visited: &mut 
 }
 
 
-pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> {
-    let is_generator = code.contains("out_count");
-    if geom.vertices.is_empty() && !is_generator {
-        return Ok(());
-    }
+struct OpenClCache {
+    device: opencl3::device::Device,
+    context: opencl3::context::Context,
+    queue: opencl3::command_queue::CommandQueue,
+    kernels: std::collections::HashMap<String, opencl3::kernel::Kernel>,
+}
 
-    let platforms = get_platforms().map_err(|e| format!("Failed to get platforms: {:?}", e))?;
+static OPENCL_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<OpenClCache>>> = std::sync::OnceLock::new();
+
+fn init_opencl() -> Option<OpenClCache> {
+    let platforms = get_platforms().ok()?;
     if platforms.is_empty() {
-        return Err("No OpenCL platforms found".to_string());
+        return None;
     }
-
-    // Try to find a GPU device first, then fallback to CPU
     let mut device_id = None;
     for platform in &platforms {
         if let Ok(devices) = platform.get_devices(CL_DEVICE_TYPE_GPU) {
@@ -346,20 +348,45 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
             }
         }
     }
-    let device_id = device_id.ok_or_else(|| "No OpenCL devices found".to_string())?;
+    let device_id = device_id?;
     let device = Device::new(device_id);
+    let context = Context::from_device(&device).ok()?;
+    let queue = unsafe { CommandQueue::create(&context, device_id, 0) }.ok()?;
+    Some(OpenClCache {
+        device,
+        context,
+        queue,
+        kernels: std::collections::HashMap::new(),
+    })
+}
 
-    let context = Context::from_device(&device).map_err(|e| format!("Failed to create Context: {:?}", e))?;
-    let queue = unsafe { CommandQueue::create(&context, device_id, 0) }
-        .map_err(|e| format!("Failed to create CommandQueue: {:?}", e))?;
-
-    let mut program = Program::create_from_source(&context, code).map_err(|e| format!("Failed to create Program: {:?}", e))?;
-    if let Err(e) = program.build(&[device_id], "") {
-        let log = program.get_build_log(device_id).unwrap_or_else(|_| "Failed to retrieve build log".to_string());
-        return Err(format!("OpenCL JIT compilation error: {}\nLog:\n{}", e, log));
+pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> {
+    let is_generator = code.contains("out_count");
+    if geom.vertices.is_empty() && !is_generator {
+        return Ok(());
     }
 
-    let kernel = Kernel::create(&program, "process").map_err(|e| format!("Failed to create kernel 'process': {:?}", e))?;
+    let mut cache_guard = OPENCL_CACHE
+        .get_or_init(|| std::sync::Mutex::new(init_opencl()))
+        .lock()
+        .map_err(|e| format!("Failed to lock OpenCL cache: {:?}", e))?;
+
+    let cache = cache_guard.as_mut().ok_or_else(|| "No OpenCL platforms/devices found".to_string())?;
+
+    if !cache.kernels.contains_key(code) {
+        let mut program = Program::create_from_source(&cache.context, code)
+            .map_err(|e| format!("Failed to create Program: {:?}", e))?;
+        if let Err(e) = program.build(&[cache.device.id()], "") {
+            let log = program.get_build_log(cache.device.id()).unwrap_or_else(|_| "Failed to retrieve build log".to_string());
+            return Err(format!("OpenCL JIT compilation error: {}\nLog:\n{}", e, log));
+        }
+        let kernel = Kernel::create(&program, "process")
+            .map_err(|e| format!("Failed to create kernel 'process': {:?}", e))?;
+        cache.kernels.insert(code.to_string(), kernel);
+    }
+    let kernel = cache.kernels.get(code).unwrap();
+    let context = &cache.context;
+    let queue = &cache.queue;
 
     if is_generator {
         let in_count = geom.vertices.len();
@@ -417,7 +444,7 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
         // Execute kernel
         let global_work_size = if in_count == 0 { 1 } else { in_count };
         let kernel_event = unsafe {
-            ExecuteKernel::new(&kernel)
+            ExecuteKernel::new(kernel)
                 .set_arg(&in_pos_buf)
                 .set_arg(&in_col_buf)
                 .set_arg(&(in_count as cl_int))
@@ -499,7 +526,7 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
 
         // Execute kernel
         let kernel_event = unsafe {
-            ExecuteKernel::new(&kernel)
+            ExecuteKernel::new(kernel)
                 .set_arg(&pos_buf)
                 .set_arg(&col_buf)
                 .set_arg(&(count as cl_int))

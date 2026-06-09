@@ -203,6 +203,7 @@ enum HttpAction {
     ToggleCircularPane,
     MenuClick { widget_idx: usize, menu_idx: usize, item_idx: usize },
     MenuClosed { widget_idx: usize, menu_idx: usize },
+    SelectPage { page: usize },
 }
 
 #[derive(Debug)]
@@ -372,7 +373,7 @@ impl DesignSettings {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
         let mut path = std::path::PathBuf::from(home);
         path.push(".config");
-        path.push("ccec");
+        path.push("cce");
         path.push("design.json");
         path
     }
@@ -422,7 +423,10 @@ impl Element for NodePalette {
     fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
     fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
     fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
-    fn hit_test(&self, px: f32, py: f32) -> bool {
+    fn hit_test(&self, px: f32, py: f32, ctx: &clear_ui::context::UiContext) -> bool {
+        if ctx.is_coordinate_covered(self as *const Self as *const () as usize, px, py) {
+            return false;
+        }
         self.visible && px >= self.x && px <= self.x + self.w && py >= self.y && py <= self.y + self.h
     }
     fn set_visible(&mut self, visible: bool) { self.visible = visible; }
@@ -487,50 +491,8 @@ impl Element for NodePalette {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Action {
-    ToggleGrid,
-    ToggleCube,
-    ToggleSquareViewport,
-    ToggleConfigure,
-    ToggleSpreadsheet,
-    ToggleOrigin,
-    ToggleCameraPivot,
-    ToggleCircularPane,
-    DetachCircularWindow,
-    Save,
-}
-
-struct KeyBind {
-    ctrl: bool,
-    shift: bool,
-    alt: bool,
-    super_: bool,
-    key: Key,
-    action: Action,
-}
-
-impl KeyBind {
-    fn matches(&self, mods: &ModifiersState, key: &Key) -> bool {
-        mods.control_key() == self.ctrl
-            && mods.shift_key() == self.shift
-            && mods.alt_key() == self.alt
-            && mods.super_key() == self.super_
-            && key == &self.key
-    }
-}
-
-fn default_keybinds() -> Vec<KeyBind> {
-    vec![
-        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("g".into()), action: Action::ToggleGrid },
-        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("e".into()), action: Action::ToggleCube },
-        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("a".into()), action: Action::ToggleSquareViewport },
-        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character(",".into()), action: Action::ToggleConfigure },
-        KeyBind { ctrl: false, shift: false, alt: false, super_: false, key: Key::Character("`".into()), action: Action::ToggleSpreadsheet },
-        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("d".into()), action: Action::ToggleCircularPane },
-        KeyBind { ctrl: true, shift: false, alt: false, super_: false, key: Key::Character("s".into()), action: Action::Save },
-    ]
-}
+mod shortcut;
+use shortcut::{Shortcut, ShortcutManager, Action};
 
 use clear_ui::engine::{
     Vertex, widget_vertices,
@@ -634,10 +596,7 @@ struct ResizeDirection {
 }
 
 struct State {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    wgpu_adapter: clear_ui::backend::WgpuAdapter,
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     window: XdgWindow,
@@ -696,7 +655,7 @@ struct State {
     last_click: Option<(Instant, usize)>,
     last_frame: Instant,
 
-    keybinds: Vec<KeyBind>,
+    shortcut_manager: ShortcutManager,
     pending_action: Option<Action>,
     exit_requested: bool,
 
@@ -707,12 +666,6 @@ struct State {
     node_palette_query: String,
     node_palette_filtered: Vec<usize>,
     node_palette_selected: usize,
-
-    font_system: FontSystem,
-    swash_cache: SwashCache,
-    text_atlas: TextAtlas,
-    text_renderer: TextRenderer,
-    text_viewport: Viewport,
 
     curved_text_texture: wgpu::Texture,
     curved_text_texture_view: wgpu::TextureView,
@@ -789,6 +742,9 @@ struct State {
     last_project_mod_time: Option<std::time::SystemTime>,
     last_project_check: std::time::Instant,
     last_inspector_check: std::time::Instant,
+    last_inspector_update: std::time::Instant,
+    needs_autosave: bool,
+    last_autosave_time: std::time::Instant,
     pub window_x: i32,
     pub window_y: i32,
     pub active_menu_cloud_pid: Option<u32>,
@@ -813,6 +769,7 @@ struct State {
     recent_files: Vec<std::path::PathBuf>,
     recent_files_list: ScrollingList,
     recent_files_buttons: Vec<Button>,
+    ui_context: clear_ui::context::UiContext,
 }
 
 impl State {
@@ -851,7 +808,7 @@ impl State {
         std::env::var("HOME").ok().map(|h| {
             let mut path = std::path::PathBuf::from(h);
             path.push(".config");
-            path.push("clear-design-interface");
+            path.push("cce-design-interface");
             path.push("recent_files.json");
             path
         })
@@ -1212,17 +1169,17 @@ impl State {
 
     fn update_grid_geometry(&mut self) {
         let grid_verts = grid_vertices(self.grid_thickness, self.grid_color);
-        self.queue.write_buffer(&self.vertex_buffer_grid, 0, bytemuck::cast_slice(&grid_verts));
+        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_grid, 0, bytemuck::cast_slice(&grid_verts));
     }
 
     fn update_origin_geometry(&mut self) {
         let origin_verts = origin_vectors_vertices(self.origin_size);
-        self.queue.write_buffer(&self.vertex_buffer_origin, 0, bytemuck::cast_slice(&origin_verts));
+        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_origin, 0, bytemuck::cast_slice(&origin_verts));
     }
 
     fn update_pivot_geometry(&mut self) {
         let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
-        self.queue.write_buffer(&self.vertex_buffer_pivot, 0, bytemuck::cast_slice(&pivot_verts));
+        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_pivot, 0, bytemuck::cast_slice(&pivot_verts));
     }
 
     fn body_h(&self) -> f32 { self.height - HEADER_H - STATUS_H }
@@ -1948,6 +1905,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn on_path_changed(&mut self) {
+        self.widgets[CONTENT_IDX].set_selected_node(None);
         self.drag_widget = None;
         self.focused_widget = None;
         self.pan_x = 0.0;
@@ -2305,7 +2263,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn create_depth_texture(&self) -> (wgpu::Texture, wgpu::TextureView) {
-        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+        let tex = self.wgpu_adapter.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
             size: wgpu::Extent3d { width: self.physical_width.max(1), height: self.physical_height.max(1), depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -2320,13 +2278,13 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn create_backdrop_texture(&self) -> (wgpu::Texture, wgpu::TextureView) {
-        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+        let tex = self.wgpu_adapter.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Backdrop Texture"),
             size: wgpu::Extent3d { width: self.physical_width.max(1), height: self.physical_height.max(1), depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: self.config.format,
+            format: self.wgpu_adapter.config.format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -2359,61 +2317,19 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             window.set_min_size(Some((200, 200)));
         } else {
             window.set_title("Clear Design Interface");
-            window.set_app_id("clear-design-interface");
+            window.set_app_id("cce-design-interface");
             window.set_min_size(Some((480, 320)));
         }
         window.commit();
 
-        let wayland_handle = Box::leak(Box::new(clear_ui::wayland::WaylandSurfaceHandle {
-            display_ptr: conn.backend().display_id().as_ptr() as *mut std::ffi::c_void,
-            surface_ptr: wl_surface.id().as_ptr() as *mut std::ffi::c_void,
-        }));
+        let display_ptr = conn.backend().display_id().as_ptr() as *mut std::ffi::c_void;
+        let surface_ptr = wl_surface.id().as_ptr() as *mut std::ffi::c_void;
+        let wgpu_adapter = clear_ui::backend::WgpuAdapter::new(display_ptr, surface_ptr, pw, ph).await;
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
-
-        let surface = instance
-            .create_surface(wayland_handle)
-            .expect("Failed to create surface");
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .expect("Failed to find adapter");
-
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("GPU Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
-                    memory_hints: wgpu::MemoryHints::MemoryUsage,
-                },
-                None,
-            )
-            .await
-            .expect("Failed to create device");
-
-        let mut config = surface
-            .get_default_config(&adapter, pw, ph)
-            .expect("Failed to get surface config");
-        let capabilities = surface.get_capabilities(&adapter);
-        let alpha_mode = if capabilities.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
-            wgpu::CompositeAlphaMode::PreMultiplied
-        } else if capabilities.alpha_modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
-            wgpu::CompositeAlphaMode::PostMultiplied
-        } else {
-            capabilities.alpha_modes[0]
-        };
-        config.alpha_mode = alpha_mode;
-        config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST;
-        surface.configure(&device, &config);
+        let device = &wgpu_adapter.device;
+        let queue = &wgpu_adapter.queue;
+        let surface = &wgpu_adapter.surface;
+        let config = &wgpu_adapter.config;
 
         let backdrop_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Backdrop Bind Group Layout"),
@@ -2615,7 +2531,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let vertex_buffer_spheres = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Sphere Node Vertex Buffer"),
             size: 1,
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -2683,14 +2599,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             cache: None,
         });
 
-        let mut font_system = FontSystem::new();
-        let swash_cache = SwashCache::new();
-        let cache = Cache::new(&device);
-        let mut text_atlas = TextAtlas::new(&device, &queue, &cache, config.format);
-        let text_renderer = TextRenderer::new(&mut text_atlas, &device, wgpu::MultisampleState::default(), None);
-
-        let mut text_viewport = Viewport::new(&device, &cache);
-        text_viewport.update(&queue, Resolution { width: pw, height: ph });
+        let cache = Cache::new(device);
 
         let shader_textured = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Textured Shader"),
@@ -2874,7 +2783,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             vec![]
         };
         let mut widgets: Vec<Box<dyn Element>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_item("File", &["New Project", "Open", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_label("Main Menu Bar").with_item("File", &["New Project", "Open", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110)),
             Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
@@ -2882,23 +2791,23 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             Box::new(Plate::new(0.0, 0.0, 0.0, 0.0).with_color(colors::PARAM_BG).with_blur(true)),
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_item("File", &["New", "Open", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_item("Settings", &[])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_item("Settings", &[])),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Open", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_item("Settings", &[])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_item("Settings", &[])),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"])),
             Box::new(StatusBar::new().with_text("Ready")),
             Box::new(Breadcrumb::new()),
             Box::new(NodePalette::new()),
             Box::new(Spreadsheet::new()),
         ];
         
-        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_item("View", &["Close Pane"]);
+        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]);
         spreadsheet_menubar.visible = false;
         widgets.push(Box::new(spreadsheet_menubar));
 
         let network_panel = Plate::new(0.0, 0.0, 0.0, 0.0).with_color([0.10, 0.10, 0.13, 0.95]);
         widgets.push(Box::new(network_panel));
 
-        let paginator = Paginator::new(56.0, vec![]).with_sidebar_mode(true).with_column_layout(true);
+        let paginator = Paginator::new(56.0, vec![]).with_sidebar_mode(true).with_column_layout(true).with_tabs_rotated(false);
         widgets.push(Box::new(paginator));
 
         let mut positions = Vec::with_capacity(PAGINATOR_IDX + 1);
@@ -2922,13 +2831,19 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             mapped_at_creation: false,
         });
 
+        let mut shortcut_manager = ShortcutManager::new();
+        shortcut_manager.register("Ctrl+g", Action::ToggleGrid).unwrap();
+        shortcut_manager.register("Ctrl+e", Action::ToggleCube).unwrap();
+        shortcut_manager.register("Ctrl+a", Action::ToggleSquareViewport).unwrap();
+        shortcut_manager.register("Ctrl+,", Action::ToggleConfigure).unwrap();
+        shortcut_manager.register("`", Action::ToggleSpreadsheet).unwrap();
+        shortcut_manager.register("Ctrl+d", Action::ToggleCircularPane).unwrap();
+        shortcut_manager.register("Ctrl+s", Action::Save).unwrap();
+
         let mut state = Self {
             window,
             wl_surface,
-            surface,
-            device,
-            queue,
-            config,
+            wgpu_adapter,
             render_pipeline,
             vertex_buffer,
             vertex_count: 0,
@@ -2982,7 +2897,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             current_path,
             last_click: None,
             last_frame: Instant::now(),
-            keybinds: default_keybinds(),
+            shortcut_manager,
             pending_action: None,
             exit_requested: false,
             widgets,
@@ -2992,11 +2907,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             node_palette_query: String::new(),
             node_palette_filtered: Vec::new(),
             node_palette_selected: 0,
-            font_system,
-            swash_cache,
-            text_atlas,
-            text_renderer,
-            text_viewport,
             curved_text_texture,
             curved_text_texture_view,
             curved_text_sampler,
@@ -3072,6 +2982,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             },
             last_project_check: std::time::Instant::now(),
             last_inspector_check: std::time::Instant::now(),
+            last_inspector_update: std::time::Instant::now(),
+            needs_autosave: false,
+            last_autosave_time: std::time::Instant::now(),
             window_x: 0,
             window_y: 0,
             active_menu_cloud_pid: None,
@@ -3099,6 +3012,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             recent_files,
             recent_files_list,
             recent_files_buttons,
+            ui_context: clear_ui::context::UiContext::new(),
         };
 
         state.update_inertial_settings();
@@ -3141,18 +3055,26 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         self.widgets[CONTENT_IDX].set_skipped_sizes(self.skipped_row_h, self.skipped_col_w);
         self.widgets[CONTENT_IDX].set_grid_origin(active_node_area_x + self.pan_x, active_node_area_y + self.pan_y);
         self.widgets[CONTENT_IDX].set_grid_snap_enabled(self.grid_snap_enabled);
-        self.widgets[CONTENT_IDX].set_uniform_background(self.uniform_background);
-        self.widgets[CONTENT_IDX].set_network_opacity(self.network_opacity);
-        self.widgets[CONTENT_IDX].set_cell_color(self.cell_color);
-        self.widgets[CONTENT_IDX].set_gap_color(self.gap_color);
-        self.widgets[LEFT_MENUBAR_IDX].set_network_opacity(self.network_opacity);
-        self.widgets[BREADCRUMB_IDX].set_network_opacity(self.network_opacity);
-        self.widgets[NETWORK_PANEL_IDX].set_network_opacity(self.network_opacity);
+        if let Some(graph) = self.widgets[CONTENT_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Graph>() {
+            graph.set_uniform_background(self.uniform_background);
+            graph.set_network_opacity(self.network_opacity);
+            graph.set_cell_color(self.cell_color);
+            graph.set_gap_color(self.gap_color);
+        }
+        if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+            menubar.set_network_opacity(self.network_opacity);
+        }
+        if let Some(breadcrumb) = self.widgets[BREADCRUMB_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Breadcrumb>() {
+            breadcrumb.set_network_opacity(self.network_opacity);
+        }
+        if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+            plate.set_network_opacity(self.network_opacity);
+        }
     }
 
     fn update_inertial_settings(&mut self) {
         self.last_config_read = Instant::now();
-        let config_path = "/home/lsgalante/.config/ccec/config.toml";
+        let config_path = "/home/lsgalante/.config/cce/config.toml";
         
         let mut enabled = true;
         let mut friction = 0.90;
@@ -3276,12 +3198,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
             self.positions[0] = (0.0, 0.0, 0.0, 0.0);
             self.positions[LEFT_MENUBAR_IDX] = (cx - r, cy - r, 2.0 * r, 35.0);
-            self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(Some((cx, cy, r)));
+            if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+                menubar.set_curved_circle(Some((cx, cy, r)));
+            }
             self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H, 2.0 * r, BREADCRUMB_H);
             self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + MENUBAR_H + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + MENUBAR_H + BREADCRUMB_H));
             self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
             self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-            self.widgets[NETWORK_PANEL_IDX].set_curved_circle(Some((cx, cy, r)));
+            if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+                plate.set_curved_circle(Some((cx, cy, r)));
+            }
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER2_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[PARAM_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -3467,12 +3393,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let cy = self.circular_network_layout.y;
 
                 self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-                self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
+                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+                    menubar.set_curved_circle(None);
+                }
                 self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
                 self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
                 self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
                 self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-                self.widgets[NETWORK_PANEL_IDX].set_curved_circle(Some((cx, cy, r)));
+                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+                    plate.set_curved_circle(Some((cx, cy, r)));
+                }
                 self.widgets[NETWORK_PANEL_IDX].set_drag_bounds(0.0, 0.0, self.width, self.height);
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[SPLITTER2_IDX] = (s2_x, 0.0, s2_w, body_h);
@@ -3551,7 +3481,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     (0.0, 0.0, 0.0, 0.0)
                 };
 
-                self.widgets[LEFT_MENUBAR_IDX].set_curved_circle(None);
+                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+                    menubar.set_curved_circle(None);
+                }
                 
                 let mb_h = 0.0;
                 let bc_h = if self.show_network { BREADCRUMB_H } else { 0.0 };
@@ -3560,7 +3492,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 self.positions[CONTENT_IDX] = (px, py + mb_h + bc_h, pw, content_h);
                 self.positions[NETWORK_PANEL_IDX] = (px, py, pw, ph);
                 self.widgets[NETWORK_PANEL_IDX].set_rect(px, py, pw, ph);
-                self.widgets[NETWORK_PANEL_IDX].set_curved_circle(None);
+                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+                    plate.set_curved_circle(None);
+                }
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[SPLITTER2_IDX] = (0.0, 0.0, 0.0, 0.0);
                 let p_rect = if self.show_parameters { (param_x, param_y, param_w, param_h) } else { (0.0, 0.0, 0.0, 0.0) };
@@ -3662,11 +3596,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     fn update_paginator(&mut self) {
         let active_menubar = self.focused_pane;
         let title = self.widgets[active_menubar].label().unwrap_or_default();
-        let label_name = if let Some(colon_idx) = title.find(':') {
+        let mut label_name = if let Some(colon_idx) = title.find(':') {
             title.split_at(colon_idx + 1).1.trim().to_uppercase()
         } else {
             title.to_uppercase()
         };
+        if label_name.ends_with(" MENU BAR") {
+            label_name = label_name.replace(" MENU BAR", "");
+        }
         self.widgets[PAGINATOR_IDX].set_sidebar_label(Some(label_name));
 
         let menu_names = self.widgets[active_menubar].menu_names();
@@ -3850,17 +3787,17 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         }
 
         let sel_page = self.widgets[PAGINATOR_IDX].selected_page();
-        self.widgets[PARAM_IDX].clear_children();
+        self.widgets[PARAM_IDX].clear_children(&mut self.ui_context);
         if !self.widgets[PAGINATOR_IDX].is_page_hidden() {
             if sel_page < self.paginator_page_widgets.len() {
                 for widget in &self.paginator_page_widgets[sel_page] {
                     let ptr = &**widget as *const (dyn Element + 'static) as *mut (dyn Element + 'static);
-                    self.widgets[PARAM_IDX].add_child(ptr);
+                    self.widgets[PARAM_IDX].add_child(ptr, &mut self.ui_context);
                 }
                 if menu_names.get(sel_page).map(|s| s.as_str()) == Some("File") {
                     for btn in &mut self.recent_files_buttons {
                         let ptr = btn as *mut Button as *mut (dyn Element + 'static);
-                        self.widgets[PARAM_IDX].add_child(ptr);
+                        self.widgets[PARAM_IDX].add_child(ptr, &mut self.ui_context);
                     }
                 }
             }
@@ -4033,10 +3970,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn sync_cursor_and_selection(&mut self) {
-        if let Some(old) = self.focused_widget {
-            if old != CONTENT_IDX && old != SPREADSHEET_IDX {
-                return;
-            }
+        if self.focused_widget != Some(CONTENT_IDX) {
+            return;
         }
         let dir = self.current_dir();
         let mut node_at_cursor_idx = None;
@@ -4099,6 +4034,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 self.widgets[i].z_index()
             }
         });
+        println!("DEBUG_DRAW_ORDER: {:?}", draw_order.iter().map(|&i| (i, self.widgets[i].visible(), self.positions[i])).collect::<Vec<_>>());
 
         for &i in &draw_order {
             let w = &self.widgets[i];
@@ -4187,8 +4123,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 }
             } else {
                 verts.extend(widget_vertices(w.as_ref(), sw, sh, active_clip_circle));
-                for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                    verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                if i == PAGINATOR_IDX {
+                    let eq = w.extra_quads();
+                    println!("DEBUG_COLLECT: Paginator extra_quads len = {}", eq.len());
+                    for (qx, qy, qw, qh, qc) in eq {
+                        verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                    }
+                } else {
+                    for (qx, qy, qw, qh, qc) in w.extra_quads() {
+                        verts.extend(extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle));
+                    }
                 }
                 for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
                     verts.extend(arc_background_vertices(
@@ -4250,14 +4194,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let data = bytemuck::cast_slice(&verts);
         let needed = data.len() as wgpu::BufferAddress;
         if needed > self.vertex_buffer.size() {
-            self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.vertex_buffer = self.wgpu_adapter.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Vertex Buffer"),
                 size: needed,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
         }
-        self.queue.write_buffer(&self.vertex_buffer, 0, data);
+        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer, 0, data);
     }
 
     fn rebuild_scene_geometry(&mut self) {
@@ -4296,19 +4240,18 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         let verts = geom.to_vertex3d_vec();
         self.vertex_count_spheres = verts.len() as u32;
-        if verts.is_empty() {
-            self.vertex_buffer_spheres = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Sphere Node Vertex Buffer"),
-                size: 1,
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: false,
-            });
-        } else {
-            self.vertex_buffer_spheres = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Sphere Node Vertex Buffer"),
-                contents: bytemuck::cast_slice(&verts),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+        if !verts.is_empty() {
+            let data = bytemuck::cast_slice(&verts);
+            let needed = data.len() as wgpu::BufferAddress;
+            if needed > self.vertex_buffer_spheres.size() {
+            self.vertex_buffer_spheres = self.wgpu_adapter.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Sphere Node Vertex Buffer"),
+                    size: needed,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_spheres, 0, data);
         }
     }
 
@@ -4317,9 +4260,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
     }
 
     fn prepare_text(&mut self) {
-        // 1. Prepare text on all widgets using self.font_system
+        // 1. Prepare text on all widgets using self.wgpu_adapter.font_system
         for w in &mut self.widgets {
-            w.prepare_text(&mut self.font_system);
+            w.prepare_text(&mut self.wgpu_adapter.font_system);
         }
 
         // 2. Destructure self
@@ -4333,9 +4276,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         let network_circle_radius = self.circular_network_layout.r;
 
         let Self {
-            ref mut text_renderer, ref device, ref queue,
-            ref mut font_system, ref mut text_atlas, ref mut text_viewport,
-            ref mut swash_cache,
+            ref mut wgpu_adapter,
             physical_width, physical_height, scale,
             ref widgets,
             ref curved_text_texture,
@@ -4346,6 +4287,17 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             ref mut textured_vertex_count,
             ..
         } = self;
+
+        let clear_ui::backend::WgpuAdapter {
+            ref device,
+            ref queue,
+            ref mut font_system,
+            ref mut text_atlas,
+            ref mut text_viewport,
+            ref mut text_renderer,
+            ref mut swash_cache,
+            ..
+        } = wgpu_adapter;
 
         let viewport = Resolution { width: *physical_width, height: *physical_height };
         text_viewport.update(queue, viewport);
@@ -4394,10 +4346,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             };
 
             let cached_items = w.get_text_items();
+            let has_cached_items = !cached_items.is_empty();
             // if i == LEFT_MENUBAR_IDX {
             //     eprintln!("DEBUG_PREPARE: i={} cached_items.len={} circular_network_pane={}", i, cached_items.len(), circular_network_pane);
             // }
-            if !cached_items.is_empty() && !(circular_network_pane && i == LEFT_MENUBAR_IDX) {
+            if has_cached_items && !(circular_network_pane && i == LEFT_MENUBAR_IDX) {
                 for (buf, x, y, color) in cached_items {
                     if circular_network_pane && is_network_part && i != LEFT_MENUBAR_IDX {
                         let dx = x - network_circle_x;
@@ -4409,16 +4362,17 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     }
                     areas.push(TextArea {
                         buffer: buf,
-                        left: x * s,
-                        top: y * s,
+                        left: (x * s).round(),
+                        top: (y * s).round(),
                         scale: s,
                         bounds,
                         default_color: color,
                         custom_glyphs: &[],
                     });
                 }
-            } else {
-                let labels = w.text_labels_with_font_and_bounds();
+            }
+            if !has_cached_items || (circular_network_pane && i == LEFT_MENUBAR_IDX) || w.is_menu_bar() {
+                let labels = w.text_labels_with_font_and_bounds(&self.ui_context);
                 // if i == LEFT_MENUBAR_IDX {
                 //     eprintln!("DEBUG_PREPARE_ELSE: i={} labels.len={}", i, labels.len());
                 // }
@@ -4458,9 +4412,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 bottom: item_bounds.bottom.min(pb),
                             };
                         }
-                        if label.text.contains("Grid") || label.text.contains("Background") || label.text.contains("Snap") || label.text.contains("Opacity") {
-                            eprintln!("DEBUG_PREPARE_LABEL: text='{}' x={} y={} font_size={} s={} left={} top={} bounds={:?}", label.text, label.x, label.y, label.font_size, s, label.x * s, label.y * s, item_bounds);
-                        }
+                        // if label.text.contains("Grid") || label.text.contains("Background") || label.text.contains("Snap") || label.text.contains("Opacity") {
+                        //     eprintln!("DEBUG_PREPARE_LABEL: text='{}' x={} y={} font_size={} s={} left={} top={} bounds={:?}", label.text, label.x, label.y, label.font_size, s, label.x * s, label.y * s, item_bounds);
+                        // }
                         legacy_buffers.push(make_text_buffer_with_font(font_system, &label.text, label.font_size, font_opt.as_deref()));
                         legacy_labels.push(label);
                         legacy_bounds.push(item_bounds);
@@ -4473,8 +4427,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         for ((buf, label), bounds) in legacy_buffers.iter().zip(legacy_labels.iter()).zip(legacy_bounds.iter()) {
             areas.push(TextArea {
                 buffer: buf,
-                left: label.x * s,
-                top: label.y * s,
+                left: (label.x * s).round(),
+                top: (label.y * s).round(),
                 scale: s,
                 bounds: *bounds,
                 default_color: glyphon::Color::rgb(label.color[0], label.color[1], label.color[2]),
@@ -4532,8 +4486,8 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             for draw in &curved_draws {
                 curved_areas.push(TextArea {
                     buffer: &draw.buffer,
-                    left: draw.tx,
-                    top: draw.ty,
+                    left: draw.tx.round(),
+                    top: draw.ty.round(),
                     scale: s,
                     bounds: TextBounds {
                         left: 0,
@@ -4672,10 +4626,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.physical_height = height;
             self.width = width as f32 / self.scale as f32;
             self.height = height as f32 / self.scale as f32;
-            self.config.width = width;
-            self.config.height = height;
-            self.config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST;
-            self.surface.configure(&self.device, &self.config);
+            self.wgpu_adapter.resize(width, height);
 
             let (tex, view) = self.create_depth_texture();
             self.depth_texture = tex;
@@ -4685,7 +4636,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             self.backdrop_texture = b_tex;
             self.backdrop_texture_view = b_view;
 
-            self.backdrop_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            self.backdrop_bind_group = self.wgpu_adapter.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Backdrop Bind Group"),
                 layout: &self.backdrop_bind_group_layout,
                 entries: &[
@@ -4720,7 +4671,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let dialog_open = self.node_palette_visible;
                 let in_network_pane = self.in_network_pane();
-                eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
+                // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
 
                 let in_viewport = self.cursor_x >= self.content_right_x()
@@ -4754,8 +4705,9 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let mut handled = false;
                 let mut needs_sync_grid = false;
                 if !dialog_open && !self.modifiers.control_key() {
+                    let ctx = &mut self.ui_context;
                     for (i, w) in self.widgets.iter_mut().enumerate() {
-                        if w.mouse_wheel(delta, self.cursor_x, self.cursor_y) {
+                        if w.mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
                             handled = true;
                             if i == CONTENT_IDX {
                                 let active_node_area_y = self.positions[CONTENT_IDX].1;
@@ -5005,8 +4957,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_x = position.x as f32;
                 self.cursor_y = position.y as f32;
-                println!("DEBUG: CursorMoved position=({:?}) scale={} => ({}, {})", position, self.scale, self.cursor_x, self.cursor_y);
-                let _ = std::io::Write::flush(&mut std::io::stdout());
                 let mut changed = false;
 
                 if self.is_panning {
@@ -5092,15 +5042,15 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 } else if i == BREADCRUMB_IDX {
                                     self.circular_network_layout.hit_test_breadcrumb(cx, cy, MENUBAR_H, BREADCRUMB_H)
                                 } else if i == NETWORK_PANEL_IDX {
-                                    self.widgets[NETWORK_PANEL_IDX].hit_test(cx, cy)
+                                    self.widgets[NETWORK_PANEL_IDX].hit_test(cx, cy, &self.ui_context)
                                 } else {
                                     false
                                 }
                             } else {
-                                self.widgets[i].hit_test(cx, cy)
+                                self.widgets[i].hit_test(cx, cy, &self.ui_context)
                             };
                             let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
-                            if self.widgets[i].cursor_moved(tx, ty) {
+                            if self.widgets[i].cursor_moved(tx, ty, &mut self.ui_context) {
                                 changed = true;
                             }
                         }
@@ -5109,7 +5059,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 changed
             }
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
-                println!("DEBUG: MouseInput state={:?} button={:?} cursor=({}, {})", btn_state, button, self.cursor_x, self.cursor_y);
+                // println!("DEBUG: MouseInput state={:?} button={:?} cursor=({}, {})", btn_state, button, self.cursor_x, self.cursor_y);
                 if *btn_state == ElementState::Pressed {
                     self.pan_velocity_x = 0.0;
                     self.pan_velocity_y = 0.0;
@@ -5189,7 +5139,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             false
                         }
                     } else {
-                        state.widgets[i].hit_test(x, y)
+                        state.widgets[i].hit_test(x, y, &state.ui_context)
                     }
                 };
 
@@ -5201,9 +5151,6 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
                 match btn_state {
                     ElementState::Pressed => {
-                        println!("DEBUG: Mouse Pressed button={:?} position=({}, {})", button, self.cursor_x, self.cursor_y);
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
-
                         let hits_any_menu = (0..self.widgets.len()).any(|i| {
                             hits_widget(self, i, self.cursor_x, self.cursor_y)
                                 && self.widgets[i].get_menu_items_at(self.cursor_x, self.cursor_y).is_some()
@@ -5229,6 +5176,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             let hit_menubar = self.circular_network_layout.hit_test_menubar(self.cursor_x, self.cursor_y, MENUBAR_H);
                             if hit_menubar {
                                 if let Some((menu_idx, title, items, rx, ry, rw, rh)) = self.widgets[LEFT_MENUBAR_IDX].get_menu_items_at(self.cursor_x, self.cursor_y) {
+                                    self.focused_pane = LEFT_MENUBAR_IDX;
+                                    self.widgets[PAGINATOR_IDX].set_page_hidden(false);
+                                    self.widgets[PAGINATOR_IDX].set_selected_page(menu_idx);
+                                    self.sync_pane_focus();
                                     self.spawn_menu_cloud(LEFT_MENUBAR_IDX, menu_idx, title, items, rx, ry, rw, rh);
                                     return true;
                                 }
@@ -5278,7 +5229,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                                 self.sync_parameters_to_project();
                                 return true;
                             } else if cx >= fx && cx < fx + fw && cy >= fy && cy < fy + (if self.show_network { BREADCRUMB_H } else { 0.0 }) {
-                                if self.widgets[BREADCRUMB_IDX].mouse_input(*button, *btn_state, cx, cy) {
+                                if self.widgets[BREADCRUMB_IDX].mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context) {
                                     return true;
                                 }
                                 self.is_resizing_network = None;
@@ -5464,11 +5415,15 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                         }
                         if let Some(i) = click_target {
                             if let Some((menu_idx, title, items, rx, ry, rw, rh)) = self.widgets[i].get_menu_items_at(self.cursor_x, self.cursor_y) {
+                                self.focused_pane = i;
+                                self.widgets[PAGINATOR_IDX].set_page_hidden(false);
+                                self.widgets[PAGINATOR_IDX].set_selected_page(menu_idx);
+                                self.sync_pane_focus();
                                 self.spawn_menu_cloud(i, menu_idx, title, items, rx, ry, rw, rh);
                                 return true;
                             }
                             self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if self.widgets[i].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y) {
+                            if self.widgets[i].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
                                 changed = true;
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
@@ -5493,7 +5448,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             if i != PARAM_IDX {
                                 self.widgets[i].focus();
                                 self.focused_widget = Some(i);
-                                if self.widgets[i].is_menu_bar() && !self.widgets[i].focused() {
+                                if self.widgets[i].is_menu_bar() && !self.widgets[i].focused(&self.ui_context) {
                                     self.widgets[i].unfocus();
                                     self.focused_widget = None;
                                 }
@@ -5570,9 +5525,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             self.drag_widget = None;
                             changed = true;
                         }
+                        let ctx = &mut self.ui_context;
                         for w in &mut self.widgets {
                             w.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if w.mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y) {
+                            if w.mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, ctx) {
                                 changed = true;
                             }
                         }
@@ -5623,7 +5579,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                     }
                 }
 
-                if self.widgets[PARAM_IDX].keyboard_input(event) {
+                if self.widgets[PARAM_IDX].keyboard_input(event, &mut self.ui_context) {
                     self.sync_parameters_to_project();
                     return true;
                 }
@@ -5866,18 +5822,16 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                             self.open_node_palette();
                             return true;
                         }
-                        for bind in &self.keybinds {
-                            if bind.matches(&self.modifiers, &event.logical_key) {
-                                self.pending_action = Some(bind.action);
-                                return true;
-                            }
+                        if let Some(action) = self.shortcut_manager.match_action(&self.modifiers, &event.logical_key) {
+                            self.pending_action = Some(action);
+                            return true;
                         }
                     }
                 }
                 if changed {
                     true
                 } else if let Some(idx) = self.focused_widget {
-                    self.widgets[idx].keyboard_input(event)
+                    self.widgets[idx].keyboard_input(event, &mut self.ui_context)
                 } else { false }
             }
         }
@@ -5983,10 +5937,14 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         }
 
         let mut tick_changed = false;
+        let ctx = &mut self.ui_context;
         for w in &mut self.widgets {
-            if w.tick(dt) {
+            if w.tick(dt, ctx) {
                 tick_changed = true;
             }
+        }
+        if clear_ui::widget::hover_animation::tick(dt) {
+            tick_changed = true;
         }
         self.update_recent_files_layout();
 
@@ -6108,10 +6066,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
 
         self.prepare_text();
 
-        let output = match self.surface.get_current_texture() {
+        let output = match self.wgpu_adapter.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                self.surface.configure(&self.device, &self.config);
+                self.wgpu_adapter.surface.configure(&self.wgpu_adapter.device, &self.wgpu_adapter.config);
                 return false;
             }
             Err(wgpu::SurfaceError::Timeout) => return false,
@@ -6119,7 +6077,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
         };
 
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = self.wgpu_adapter.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Encoder"),
         });
 
@@ -6211,10 +6169,10 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 let view_mat = Mat4::from_rotation_z(rz.to_radians()) * Mat4::look_at_rh(camera_world_pos, pivot, camera_up);
                 let model = Mat4::from_rotation_y(self.rotation_y) * Mat4::from_rotation_x(self.rotation_x);
                 let mvp = proj * view_mat * model;
-                self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[mvp.to_cols_array_2d()]));
+                self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[mvp.to_cols_array_2d()]));
 
                 let mvp_grid = proj * view_mat * model;
-                self.queue.write_buffer(&self.uniform_buffer_grid, 0, bytemuck::cast_slice(&[mvp_grid.to_cols_array_2d()]));
+                self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_grid, 0, bytemuck::cast_slice(&[mvp_grid.to_cols_array_2d()]));
 
                 let cam_angle_y = camera_pos.x.atan2(camera_pos.z);
                 let rot_angle = if self.active_camera != "Default Camera" {
@@ -6224,7 +6182,7 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 };
                 let model_pivot = Mat4::from_translation(pivot) * Mat4::from_rotation_y(rot_angle);
                 let mvp_pivot = proj * view_mat * model_pivot;
-                self.queue.write_buffer(&self.uniform_buffer_pivot, 0, bytemuck::cast_slice(&[mvp_pivot.to_cols_array_2d()]));
+                self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_pivot, 0, bytemuck::cast_slice(&[mvp_pivot.to_cols_array_2d()]));
 
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("3D Render Pass"),
@@ -6382,11 +6340,11 @@ fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String
                 pass.draw(0..self.textured_vertex_count, 0..1);
             }
 
-            self.text_renderer.render(&self.text_atlas, &self.text_viewport, &mut pass).unwrap();
+            self.wgpu_adapter.text_renderer.render(&self.wgpu_adapter.text_atlas, &self.wgpu_adapter.text_viewport, &mut pass).unwrap();
 
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.wgpu_adapter.queue.submit(std::iter::once(encoder.finish()));
         output.present();
         tick_changed || panned
     }
@@ -6533,7 +6491,7 @@ impl SeatHandler for AppState {
 
     fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         self.seats.push(seat);
-        eprintln!("DEBUG SEAT: new_seat called, total seats now: {}", self.seats.len());
+        // eprintln!("DEBUG SEAT: new_seat called, total seats now: {}", self.seats.len());
     }
 
     fn new_capability(
@@ -6543,7 +6501,7 @@ impl SeatHandler for AppState {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        eprintln!("DEBUG SEAT: new_capability: {:?}", capability);
+        // eprintln!("DEBUG SEAT: new_capability: {:?}", capability);
         if capability == Capability::Pointer && self.pointer.is_none() {
             let surface = self.compositor_state.create_surface(qh);
             let themed_pointer = self.seat_state.get_pointer_with_theme(
@@ -6581,7 +6539,7 @@ impl SeatHandler for AppState {
 
     fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         self.seats.retain(|s| s != &seat);
-        eprintln!("DEBUG SEAT: remove_seat called, total seats now: {}", self.seats.len());
+        // eprintln!("DEBUG SEAT: remove_seat called, total seats now: {}", self.seats.len());
     }
 }
 
@@ -6662,10 +6620,10 @@ impl PointerHandler for AppState {
                                     let seat = self.seats.first().cloned().or_else(|| self.seat_state.seats().next());
                                     if let Some(ref seat) = seat {
                                         if pending.is_move {
-                                            eprintln!("DEBUG DRAG INITIATING window.move_ with serial={}", pending.serial);
+                                            // eprintln!("DEBUG DRAG INITIATING window.move_ with serial={}", pending.serial);
                                             window.move_(seat, pending.serial);
                                         } else {
-                                            eprintln!("DEBUG RESIZE INITIATING window.resize with edge={:?}, serial={}", pending.edge, pending.serial);
+                                            // eprintln!("DEBUG RESIZE INITIATING window.resize with edge={:?}, serial={}", pending.edge, pending.serial);
                                             window.resize(seat, pending.serial, pending.edge);
                                         }
                                     }
@@ -6689,7 +6647,7 @@ impl PointerHandler for AppState {
                             274 => clear_ui::widget::MouseButton::Middle,
                             _ => continue,
                         };
-                        eprintln!("DEBUG MOUSE PRESS: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
+                        // eprintln!("DEBUG MOUSE PRESS: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
 
                         if let Some(ref st) = self.state {
                             if st.is_detached_network && btn == clear_ui::widget::MouseButton::Left {
@@ -6702,9 +6660,9 @@ impl PointerHandler for AppState {
                                 let in_menubar_bg = dy < 0.0 && dist >= st.circular_network_layout.r - 35.0 && dist <= st.circular_network_layout.r;
                                 let hits_any_menu = st.widgets[LEFT_MENUBAR_IDX].get_menu_items_at(lx, ly).is_some();
 
-                                eprintln!("DEBUG DRAG: lx={}, ly={}, cx={}, cy={}, r={}, dx={}, dy={}, dist={}, on_border={}, in_menubar_bg={}, hits_any_menu={}, seats_len={}, has_window={}",
-                                    lx, ly, st.circular_network_layout.x, st.circular_network_layout.y, st.circular_network_layout.r,
-                                    dx, dy, dist, on_border, in_menubar_bg, hits_any_menu, self.seats.len(), self.window.is_some());
+                                // eprintln!("DEBUG DRAG: lx={}, ly={}, cx={}, cy={}, r={}, dx={}, dy={}, dist={}, on_border={}, in_menubar_bg={}, hits_any_menu={}, seats_len={}, has_window={}",
+                                //     lx, ly, st.circular_network_layout.x, st.circular_network_layout.y, st.circular_network_layout.r,
+                                //     dx, dy, dist, on_border, in_menubar_bg, hits_any_menu, self.seats.len(), self.window.is_some());
 
                                 if (on_border || in_menubar_bg) && !hits_any_menu {
                                     if let Some(ref _window) = self.window {
@@ -6775,7 +6733,7 @@ impl PointerHandler for AppState {
                             274 => clear_ui::widget::MouseButton::Middle,
                             _ => continue,
                         };
-                        eprintln!("DEBUG MOUSE RELEASE: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
+                        // eprintln!("DEBUG MOUSE RELEASE: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
                         if btn == clear_ui::widget::MouseButton::Left {
                             self.pending_resize = None;
                         }
@@ -6788,7 +6746,7 @@ impl PointerHandler for AppState {
                     PointerEventKind::Axis { horizontal, vertical, .. } => {
                         let h_val = horizontal.absolute as f32;
                         let v_val = vertical.absolute as f32;
-                        eprintln!("DEBUG AXIS EVENT: horizontal={:?}, vertical={:?}, scale={}", horizontal, vertical, st.scale);
+                        // eprintln!("DEBUG AXIS EVENT: horizontal={:?}, vertical={:?}, scale={}", horizontal, vertical, st.scale);
                         let ev = WindowEvent::MouseWheel {
                             delta: clear_ui::widget::MouseScrollDelta::LineDelta(-h_val / 10.0, -v_val / 10.0),
                             phase: TouchPhase::Moved,
@@ -6884,7 +6842,7 @@ impl WindowHandler for AppState {
         _serial: u32,
     ) {
         let (w, h) = configure.new_size;
-        eprintln!("DEBUG CONFIGURE: new_size={:?}, configure={:?}", configure.new_size, configure);
+        // eprintln!("DEBUG CONFIGURE: new_size={:?}, configure={:?}", configure.new_size, configure);
         if let (Some(w), Some(h)) = (w, h) {
             let width = w.get();
             let height = h.get();
@@ -6940,7 +6898,7 @@ impl wayland_client::Dispatch<clear_ui::protocol::zclear_inspector_v1::ZclearIns
                     let expected_id = if st.is_detached_network {
                         "circular-network-pane"
                     } else {
-                        "clear-design-interface"
+                        "cce-design-interface"
                     };
                     if app_id == expected_id {
                         st.window_x = x;
@@ -7000,7 +6958,7 @@ impl AppState {
             }
         };
 
-        eprintln!("DEBUG KEY: keysym={:?}, state={:?}, logical_key={:?}", event.keysym, state, logical_key);
+        // eprintln!("DEBUG KEY: keysym={:?}, state={:?}, logical_key={:?}", event.keysym, state, logical_key);
 
         if let Some(st) = &mut self.state {
             match event.keysym {
@@ -7148,6 +7106,22 @@ impl AppState {
                     }
                 } else if menu_idx == 2 { // View
                     match item_idx {
+                        0 => { // Zoom In
+                            state.zoom(1.15, None);
+                            changed = true;
+                        }
+                        1 => { // Zoom Out
+                            state.zoom(1.0 / 1.15, None);
+                            changed = true;
+                        }
+                        2 => { // Reset Zoom
+                            state.grid_size_x = 150.0;
+                            state.grid_size_y = 75.0;
+                            state.skipped_col_w = 37.5;
+                            state.skipped_row_h = 37.5;
+                            state.sync_grid_settings();
+                            changed = true;
+                        }
                         3 => { // Detach Circular Window
                             state.execute_action(Action::DetachCircularWindow);
                             changed = true;
@@ -7276,6 +7250,14 @@ impl AppState {
                     }
                 } else if menu_idx == 2 { // View
                     match item_idx {
+                        0 => { // Zoom In
+                            state.zoom(1.15, None);
+                            changed = true;
+                        }
+                        1 => { // Zoom Out
+                            state.zoom(1.0 / 1.15, None);
+                            changed = true;
+                        }
                         2 => {
                             state.circular_network_pane = !state.circular_network_pane;
                             state.widgets[LEFT_MENUBAR_IDX].set_item_checked(2, 2, state.circular_network_pane);
@@ -7372,7 +7354,69 @@ impl AppState {
             }
 
             if let Some((menu_idx, item_idx)) = state.widgets[PARAM_MENUBAR_IDX].menu_click() {
-                if menu_idx == 2 { // View
+                if menu_idx == 0 { // Preset
+                    if let Some(slot_idx) = state.widgets[CONTENT_IDX].selected_node() {
+                        let node_type = state.current_dir().children[slot_idx].node_type.clone();
+                        let template_params = state.node_templates.iter()
+                            .find(|t| t.node.node_type == node_type)
+                            .map(|t| t.node.params.clone());
+                        if let Some(params_to_reset) = template_params {
+                            if item_idx == 0 { // Default
+                                for template_param in &params_to_reset {
+                                    if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
+                                        p.default = template_param.default.clone();
+                                    }
+                                }
+                            } else if item_idx == 1 { // Custom
+                                for template_param in &params_to_reset {
+                                    if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
+                                        if let Ok(v) = template_param.default.parse::<f32>() {
+                                            p.default = format!("{:.2}", v * 1.5);
+                                        } else if let Ok(v) = template_param.default.parse::<i32>() {
+                                            p.default = format!("{}", v * 2);
+                                        } else if template_param.default.contains(':') {
+                                            let parts: Vec<&str> = template_param.default.split(':').collect();
+                                            let custom_parts: Vec<String> = parts.iter().map(|p_str| {
+                                                if let Ok(v) = p_str.parse::<f32>() {
+                                                    format!("{:.2}", v * 1.5)
+                                                } else {
+                                                    p_str.to_string()
+                                                }
+                                            }).collect();
+                                            p.default = custom_parts.join(":");
+                                        } else {
+                                            p.default = template_param.default.clone();
+                                        }
+                                    }
+                                }
+                            }
+                            state.sync_nodes();
+                            state.rebuild_scene_geometry();
+                            state.upload_vertices();
+                            changed = true;
+                        }
+                    }
+                } else if menu_idx == 1 { // Reset
+                    if item_idx == 0 { // All
+                        if let Some(slot_idx) = state.widgets[CONTENT_IDX].selected_node() {
+                            let node_type = state.current_dir().children[slot_idx].node_type.clone();
+                            let template_params = state.node_templates.iter()
+                                .find(|t| t.node.node_type == node_type)
+                                .map(|t| t.node.params.clone());
+                            if let Some(params_to_reset) = template_params {
+                                for template_param in &params_to_reset {
+                                    if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
+                                        p.default = template_param.default.clone();
+                                    }
+                                }
+                                state.sync_nodes();
+                                state.rebuild_scene_geometry();
+                                state.upload_vertices();
+                                changed = true;
+                            }
+                        }
+                    }
+                } else if menu_idx == 2 { // View
                     if item_idx == 0 { // Close Pane
                         state.show_parameters = false;
                         state.widgets[PARAM_IDX].set_visible(false);
@@ -7446,6 +7490,7 @@ impl AppState {
                     vec![]
                 };
                 state.widgets[PARAM_IDX].set_display_params(&params);
+                state.update_paginator();
 
                 state.upload_vertices();
             }
@@ -7458,14 +7503,7 @@ impl AppState {
             if changed {
                 state.update_window_title();
                 if state.is_detached_network || state.detached_circular_network {
-                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
-                    if let Err(e) = state.save_to_file(&default_proj_path) {
-                        eprintln!("Failed to auto-save default project in process_event: {:?}", e);
-                    } else if let Ok(m) = std::fs::metadata(&default_proj_path) {
-                        if let Ok(mod_time) = m.modified() {
-                            state.last_project_mod_time = Some(mod_time);
-                        }
-                    }
+                    state.needs_autosave = true;
                 }
                 self.redraw = true;
             }
@@ -7716,6 +7754,16 @@ impl AppState {
                             }
                             Ok("Menu closed".to_string())
                         }
+                        HttpAction::SelectPage { page } => {
+                            state.widgets[PAGINATOR_IDX].set_page_hidden(false);
+                            state.widgets[PAGINATOR_IDX].set_selected_page(page);
+                            state.update_paginator();
+                            state.rebuild_positions();
+                            state.apply_layout();
+                            state.upload_vertices();
+                            needs_redraw = true;
+                            Ok("Page selected".to_string())
+                        }
                     };
                     let _ = tx.send(res);
                 }
@@ -7734,14 +7782,7 @@ impl AppState {
             if let Some(state) = &mut self.state {
                 state.update_window_title();
                 if state.is_detached_network || state.detached_circular_network {
-                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
-                    if let Err(e) = state.save_to_file(&default_proj_path) {
-                        eprintln!("Failed to auto-save default project in handle_user_event: {:?}", e);
-                    } else if let Ok(m) = std::fs::metadata(&default_proj_path) {
-                        if let Ok(mod_time) = m.modified() {
-                            state.last_project_mod_time = Some(mod_time);
-                        }
-                    }
+                    state.needs_autosave = true;
                 }
             }
             self.redraw = true;
@@ -7958,14 +7999,16 @@ fn main() {
     const KEY_REPEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
     loop {
-        let timeout = if app.redraw {
-            std::time::Duration::from_millis(0)
-        } else {
-            std::time::Duration::from_millis(16)
-        };
+        let timeout = std::time::Duration::from_millis(16);
         event_loop.dispatch(timeout, &mut app).unwrap();
 
         if app.exit || app.state.as_ref().map(|s| s.exit_requested).unwrap_or(false) {
+            if let Some(state) = &mut app.state {
+                if state.needs_autosave && (state.is_detached_network || state.detached_circular_network) {
+                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
+                    let _ = state.save_to_file(&default_proj_path);
+                }
+            }
             break;
         }
 
@@ -7975,6 +8018,22 @@ fn main() {
                 if now.duration_since(state.last_inspector_check) >= std::time::Duration::from_millis(250) {
                     state.last_inspector_check = now;
                     inspector.get_inspected_surfaces();
+                }
+            }
+
+            if state.needs_autosave && (state.is_detached_network || state.detached_circular_network) {
+                let now = std::time::Instant::now();
+                if now.duration_since(state.last_autosave_time) >= std::time::Duration::from_millis(200) {
+                    state.needs_autosave = false;
+                    state.last_autosave_time = now;
+                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
+                    if let Err(e) = state.save_to_file(&default_proj_path) {
+                        eprintln!("Failed to auto-save default project in main loop: {:?}", e);
+                    } else if let Ok(m) = std::fs::metadata(&default_proj_path) {
+                        if let Ok(mod_time) = m.modified() {
+                            state.last_project_mod_time = Some(mod_time);
+                        }
+                    }
                 }
             }
 
@@ -8044,11 +8103,15 @@ fn create_memfd_with_data(name: &str, data: &[u8]) -> std::io::Result<std::os::u
                 }
                 if let Some(ref inspector) = app.inspector {
                     if let Some(ref surface) = app.surface {
-                        let json = clear_ui::widget::serialize_widgets(&state.widgets);
-                        if let Ok(raw_fd) = create_memfd_with_data("clear_ui_state", json.as_bytes()) {
-                            use std::os::unix::io::{FromRawFd, AsFd};
-                            let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
-                            inspector.update_state(surface, file.as_fd(), json.len() as u32);
+                        let now = std::time::Instant::now();
+                        if now.duration_since(state.last_inspector_update) >= std::time::Duration::from_millis(100) {
+                            state.last_inspector_update = now;
+                            let json = clear_ui::widget::serialize_widgets(&state.widgets);
+                            if let Ok(raw_fd) = create_memfd_with_data("clear_ui_state", json.as_bytes()) {
+                                use std::os::unix::io::{FromRawFd, AsFd};
+                                let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+                                inspector.update_state(surface, file.as_fd(), json.len() as u32);
+                            }
                         }
                     }
                 }
@@ -8484,6 +8547,54 @@ mod tests {
         let (vx_e, vw_e) = check_viewport_layout(false);
         assert_eq!(vx_e, 236.0);
         assert_eq!(vw_e, 764.0);
+    }
+
+    #[test]
+    fn test_keyboard_shortcut_system() {
+        // Test parsing simple shortcut
+        let ctrl_g = Shortcut::parse("Ctrl+g").unwrap();
+        assert_eq!(ctrl_g.ctrl, true);
+        assert_eq!(ctrl_g.shift, false);
+        assert_eq!(ctrl_g.alt, false);
+        assert_eq!(ctrl_g.logo, false);
+        assert_eq!(ctrl_g.key, Key::Character("g".to_string()));
+
+        // Test parsing complex shortcut
+        let complex = Shortcut::parse("Ctrl+Shift+Alt+Logo+s").unwrap();
+        assert_eq!(complex.ctrl, true);
+        assert_eq!(complex.shift, true);
+        assert_eq!(complex.alt, true);
+        assert_eq!(complex.logo, true);
+        assert_eq!(complex.key, Key::Character("s".to_string()));
+
+        // Test parsing named keys
+        let tab_sc = Shortcut::parse("Tab").unwrap();
+        assert_eq!(tab_sc.key, Key::Named(NamedKey::Tab));
+
+        // Test parsing case insensitivity
+        let case_sc = Shortcut::parse("cTrL+sHiFt+ArrowDown").unwrap();
+        assert_eq!(case_sc.ctrl, true);
+        assert_eq!(case_sc.shift, true);
+        assert_eq!(case_sc.key, Key::Named(NamedKey::ArrowDown));
+
+        // Test register and match
+        let mut mgr = ShortcutManager::new();
+        mgr.register("Ctrl+g", Action::ToggleGrid).unwrap();
+        mgr.register("`", Action::ToggleSpreadsheet).unwrap();
+
+        // Matches with ctrl and g
+        let mods_ctrl = ModifiersState { ctrl: true, alt: false, shift: false, logo: false };
+        let key_g = Key::Character("g".to_string());
+        assert_eq!(mgr.match_action(&mods_ctrl, &key_g), Some(Action::ToggleGrid));
+
+        // No match with ctrl and a
+        let key_a = Key::Character("a".to_string());
+        assert_eq!(mgr.match_action(&mods_ctrl, &key_a), None);
+
+        // Matches backtick with no modifiers
+        let mods_none = ModifiersState::default();
+        let key_tick = Key::Character("`".to_string());
+        assert_eq!(mgr.match_action(&mods_none, &key_tick), Some(Action::ToggleSpreadsheet));
     }
 }
 
