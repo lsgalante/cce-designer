@@ -1,4 +1,4 @@
-use super::{FsNode, ParamDef};
+use crate::app::{FsNode, ParamDef};
 use std::collections::HashMap;
 use opencl3::platform::get_platforms;
 use opencl3::device::{Device, CL_DEVICE_TYPE_GPU, CL_DEVICE_TYPE_CPU};
@@ -256,6 +256,16 @@ pub fn find_node_by_name<'a>(root: &'a FsNode, name: &str) -> Option<&'a FsNode>
 }
 
 pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
+    let mut err = None;
+    generate_single_node_geometry_with_errors(root, target, visited, &mut err)
+}
+
+pub fn generate_single_node_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+) -> Option<Geometry> {
     if visited.contains(&target.name) {
         return None;
     }
@@ -289,7 +299,9 @@ pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &m
         }
         Some(geom)
     } else if target.node_type.eq_ignore_ascii_case("transform") {
-        resolve_transform_geometry(root, target, visited)
+        resolve_transform_geometry_with_errors(root, target, visited, ocl_error)
+    } else if target.node_type.eq_ignore_ascii_case("opencl") {
+        resolve_opencl_geometry_with_errors(root, target, visited, ocl_error)
     } else {
         None
     };
@@ -299,17 +311,51 @@ pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &m
 }
 
 pub fn resolve_transform_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
+    let mut err = None;
+    resolve_transform_geometry_with_errors(root, target, visited, &mut err)
+}
+
+pub fn resolve_transform_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+) -> Option<Geometry> {
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
         return None;
     }
     let input_node = find_node_by_name(root, &input_name)?;
-    let mut geom = generate_single_node_geometry(root, input_node, visited)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)?;
     let translation = node_param_vec3(target, "Translation", Vec3::ZERO);
     for v in &mut geom.vertices {
         v.pos[0] += translation.x;
         v.pos[1] += translation.y;
         v.pos[2] += translation.z;
+    }
+    Some(geom)
+}
+
+pub fn resolve_opencl_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+) -> Option<Geometry> {
+    let input_name = node_param_str(target, "Input", "");
+    let mut geom = if !input_name.is_empty() {
+        let input_node = find_node_by_name(root, &input_name)?;
+        generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)?
+    } else {
+        Geometry::default()
+    };
+    let code = node_param_str(target, "Code", "");
+    if !code.is_empty() {
+        if let Err(e) = run_opencl_kernel(&code, &mut geom) {
+            if ocl_error.is_none() {
+                *ocl_error = Some(e);
+            }
+        }
     }
     Some(geom)
 }
@@ -558,7 +604,12 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
 }
 
 pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
-    fn visit(root: &FsNode, node: &FsNode, count: &mut usize, out: &mut Geometry) {
+    let mut err = None;
+    network_sphere_vertices_with_errors(root, &mut err)
+}
+
+pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option<String>) -> Geometry {
+    fn visit(root: &FsNode, node: &FsNode, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>) {
         if node.node_type.eq_ignore_ascii_case("sphere") {
             let idx = *count;
             *count += 1;
@@ -598,20 +649,29 @@ pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
             *count += 1;
             if node.geometry_visible {
                 let mut visited = Vec::new();
-                if let Some(geom) = resolve_transform_geometry(root, node, &mut visited) {
+                if let Some(geom) = resolve_transform_geometry_with_errors(root, node, &mut visited, ocl_error) {
+                    out.merge(geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("opencl") {
+            let idx = *count;
+            *count += 1;
+            if node.geometry_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_opencl_geometry_with_errors(root, node, &mut visited, ocl_error) {
                     out.merge(geom);
                 }
             }
         }
         for child in &node.children {
-            visit(root, child, count, out);
+            visit(root, child, count, out, ocl_error);
         }
     }
 
     let mut out = Geometry::new();
     let mut count = 0;
     for child in &root.children {
-        visit(root, child, &mut count, &mut out);
+        visit(root, child, &mut count, &mut out, ocl_error);
     }
     out
 }
@@ -622,7 +682,8 @@ pub fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {
         if node.node_type.eq_ignore_ascii_case("sphere") 
             || node.node_type.eq_ignore_ascii_case("line") 
             || node.node_type.eq_ignore_ascii_case("add")
-            || node.node_type.eq_ignore_ascii_case("transform") {
+            || node.node_type.eq_ignore_ascii_case("transform")
+            || node.node_type.eq_ignore_ascii_case("opencl") {
             let idx = *count;
             *count += 1;
             if is_target {
@@ -1134,6 +1195,90 @@ mod tests {
         let mut visited = Vec::new();
         let geom_loop = resolve_transform_geometry(&root_loop, &transform_loop, &mut visited);
         assert!(geom_loop.is_none());
+    }
+
+    #[test]
+    fn test_opencl_local_node() {
+        if opencl3::platform::get_platforms().unwrap_or_default().is_empty() {
+            println!("Skipping OpenCL local node test: No OpenCL platforms found");
+            return;
+        }
+
+        let sphere = FsNode {
+            name: "Sphere 1".to_string(),
+            node_type: "sphere".to_string(),
+            children: vec![],
+            params: vec![
+                ParamDef {
+                    name: "Radius".to_string(),
+                    label: String::new(),
+                    param_type: "slider".to_string(),
+                    default: "0.5".to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                }
+            ],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+        };
+
+        let opencl_node = FsNode {
+            name: "OpenCL 1".to_string(),
+            node_type: "opencl".to_string(),
+            children: vec![],
+            params: vec![
+                ParamDef {
+                    name: "Input".to_string(),
+                    label: String::new(),
+                    param_type: "text".to_string(),
+                    default: "Sphere 1".to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                },
+                ParamDef {
+                    name: "Code".to_string(),
+                    label: String::new(),
+                    param_type: "code".to_string(),
+                    default: r#"
+                        __kernel void process(__global float* pos, __global float* col, int count) {
+                            int id = get_global_id(0);
+                            if (id < count) {
+                                pos[id * 3 + 1] += 2.0f;
+                            }
+                        }
+                    "#.to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                }
+            ],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+        };
+
+        let root = FsNode {
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![sphere, opencl_node.clone()],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+        };
+
+        let mut visited = Vec::new();
+        let mut err = None;
+        let geom = resolve_opencl_geometry_with_errors(&root, &opencl_node, &mut visited, &mut err).unwrap();
+        assert!(!geom.vertices.is_empty());
+        assert!(err.is_none());
+
+        // The sphere should be translated up by 2.0 on the y axis compared to the standard sphere (which centers around y=0.55 for index 0)
+        let avg_y = geom.vertices.iter().map(|v| v.pos[1]).sum::<f32>() / geom.vertices.len() as f32;
+        assert!((avg_y - 2.55).abs() < 0.01);
     }
 }
 
