@@ -659,6 +659,9 @@ impl AppState {
             xkeysym::Keysym::k | xkeysym::Keysym::K => Key::Character("k".into()),
             xkeysym::Keysym::l | xkeysym::Keysym::L => Key::Character("l".into()),
             xkeysym::Keysym::s | xkeysym::Keysym::S => Key::Character("s".into()),
+            xkeysym::Keysym::c | xkeysym::Keysym::C => Key::Character("c".into()),
+            xkeysym::Keysym::x | xkeysym::Keysym::X => Key::Character("x".into()),
+            xkeysym::Keysym::v | xkeysym::Keysym::V => Key::Character("v".into()),
             xkeysym::Keysym::grave => Key::Character("`".into()),
             _ => {
                 if let Some(ref text) = event.utf8 {
@@ -726,12 +729,28 @@ impl AppState {
     pub fn process_event(&mut self, ev: WindowEvent) {
         if let Some(state) = &mut self.state {
             let mut changed = state.handle_event(&ev);
-            state.sync_settings_from_paginator();
 
             if let Some(seg) = state.path_mut().path_click() {
                 if seg < state.current_path.len() {
+                    let exited_idx = state.current_path.get(seg).copied();
                     state.current_path.truncate(seg);
                     state.on_path_changed();
+                    if let Some(idx) = exited_idx {
+                        let pos = {
+                            let dir = state.current_dir();
+                            if idx < dir.children.len() {
+                                Some(dir.children[idx].position)
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some((pos_x, pos_y)) = pos {
+                            state.grid_cursor_col = pos_x as i32;
+                            state.grid_cursor_row = pos_y as i32;
+                            state.sync_cursor_and_selection();
+                            state.upload_vertices();
+                        }
+                    }
                     changed = true;
                 }
             }
@@ -1309,9 +1328,7 @@ impl AppState {
                 CustomEvent::PostAction(action, tx) => {
                     let res = match action {
                         HttpAction::Up => {
-                            if !state.current_path.is_empty() {
-                                state.current_path.pop();
-                                state.on_path_changed();
+                            if state.move_up() {
                                 needs_redraw = true;
                                 Ok("Moved up".to_string())
                             } else {
@@ -1320,7 +1337,7 @@ impl AppState {
                         }
                         HttpAction::Enter { slot } => {
                             let dir = state.current_dir();
-                            if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "opencl" || !dir.children[slot].children.is_empty()) {
+                            if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "utility" || !dir.children[slot].children.is_empty()) {
                                 state.current_path.push(slot);
                                 state.on_path_changed();
                                 needs_redraw = true;
@@ -1385,12 +1402,16 @@ impl AppState {
                         HttpAction::ToggleGeometry { slot } => {
                             let active_nodes = state.current_dir().children.len();
                             if slot < active_nodes {
-                                let visible = !state.current_dir().children[slot].geometry_visible;
-                                state.current_dir_mut().children[slot].geometry_visible = visible;
-                                state.sync_nodes();
-                                state.rebuild_scene_geometry();
-                                needs_redraw = true;
-                                Ok(format!("Geometry visible: {}", visible))
+                                if state.current_dir().children[slot].node_type == "utility" {
+                                    Err("Cannot toggle geometry visibility on utility nodes".to_string())
+                                } else {
+                                    let visible = !state.current_dir().children[slot].geometry_visible;
+                                    state.current_dir_mut().children[slot].geometry_visible = visible;
+                                    state.sync_nodes();
+                                    state.rebuild_scene_geometry();
+                                    needs_redraw = true;
+                                    Ok(format!("Geometry visible: {}", visible))
+                                }
                             } else {
                                 Err("Slot out of bounds".to_string())
                             }
@@ -1402,43 +1423,39 @@ impl AppState {
                             });
                             if let Some(idx) = template_idx {
                                 let mut node = state.node_templates[idx].node.clone();
-                                let (nx, ny) = state.find_empty_cell(x, y, None);
-                                node.position = (nx, ny);
-                                if let Some(n) = name {
-                                    node.name = n;
+                                let mut allowed = true;
+                                let is_in_utility = !state.current_path.is_empty() && state.fs_root.children[state.current_path[0]].node_type == "utility";
+                                if is_in_utility {
+                                    if crate::geometry::is_geometry_node_type(&node.node_type) {
+                                        allowed = false;
+                                    }
                                 }
-                                state.current_dir_mut().children.push(node);
-                                state.sync_nodes();
-                                state.rebuild_positions();
-                                state.apply_layout();
-                                state.update_panel_bounds();
-                                state.upload_vertices();
-                                needs_redraw = true;
-                                Ok("Node added".to_string())
+                                if !allowed {
+                                    Err("Utility nodes cannot contain geometry.".to_string())
+                                } else {
+                                    let (nx, ny) = state.find_empty_cell(x, y, None);
+                                    node.position = (nx, ny);
+                                    if let Some(n) = name {
+                                        node.name = n;
+                                    } else {
+                                        node.name = state.get_lowest_unused_name(&node.name);
+                                    }
+                                    state.current_dir_mut().children.push(node);
+                                    state.sync_nodes();
+                                    state.rebuild_positions();
+                                    state.apply_layout();
+                                    state.update_panel_bounds();
+                                    state.rebuild_scene_geometry();
+                                    state.upload_vertices();
+                                    needs_redraw = true;
+                                    Ok("Node added".to_string())
+                                }
                             } else {
                                 Err(format!("Template '{}' not found", template_name))
                             }
                         }
                         HttpAction::DeleteNode { slot } => {
-                            let len = state.current_dir().children.len();
-                            if slot < len {
-                                state.current_dir_mut().children.remove(slot);
-                                if let Some(focused) = state.focused_widget {
-                                    if focused == CONTENT_IDX {
-                                        if let Some(sel_idx) = state.graph().selected_node() {
-                                            if sel_idx == slot {
-                                                state.graph_mut().set_selected_node(None);
-                                            } else if sel_idx > slot {
-                                                state.graph_mut().set_selected_node(Some(sel_idx - 1));
-                                            }
-                                        }
-                                    }
-                                }
-                                state.sync_nodes();
-                                state.rebuild_positions();
-                                state.apply_layout();
-                                state.update_panel_bounds();
-                                state.upload_vertices();
+                            if state.delete_node(slot) {
                                 needs_redraw = true;
                                 Ok("Node deleted".to_string())
                             } else {

@@ -1,0 +1,9 @@
+{
+  "name": "Subnet",
+  "type": "node",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" }
+  ]
+}

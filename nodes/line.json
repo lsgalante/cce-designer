@@ -1,6 +1,8 @@
 {
-  "name": "Line 1",
+  "name": "Line",
   "type": "line",
+  "inputs": 0,
+  "outputs": 1,
   "params": [
     { "name": "Length", "default": "1.0", "type": "slider" },
     { "name": "Thickness", "default": "0.02", "type": "slider" }

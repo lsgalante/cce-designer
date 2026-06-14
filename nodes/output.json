@@ -1,0 +1,9 @@
+{
+  "name": "Output",
+  "type": "output",
+  "inputs": 1,
+  "outputs": 0,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" }
+  ]
+}

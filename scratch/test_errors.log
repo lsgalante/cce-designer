@@ -1,0 +1,1507 @@
+warning: unused import: `KeyEvent`
+ --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/json_layout.rs:3:5
+  |
+3 |     KeyEvent, MouseButton, ElementState, focus, Slider, Event, UiContext,
+  |     ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Ordering`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/mod.rs:67:38
+   |
+67 | use std::sync::atomic::{AtomicUsize, Ordering};
+   |                                      ^^^^^^^^
+
+warning: unused import: `wl_shm`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/backend/window_runner.rs:24:61
+   |
+24 |     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_s...
+   |                                                             ^^^^^^
+
+warning: unused imports: `SwashCache`, `TextAtlas`, and `TextRenderer`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/backend/window_runner.rs:34:36
+   |
+34 |     Cache, FontSystem, Resolution, SwashCache, TextArea, TextAtlas,
+   |                                    ^^^^^^^^^^            ^^^^^^^^^
+35 |     TextBounds, TextRenderer, Viewport, Buffer, Attrs, Metrics,
+   |                 ^^^^^^^^^^^^
+
+warning: unused imports: `KeyEvent` and `MouseScrollDelta`
+ --> /home/lsgalante/Dropbox/Clear/clear-ui/src/context.rs:2:57
+  |
+2 | ...e, Key, KeyEvent, MouseButton, ElementState, MouseScrollDelta};
+  |            ^^^^^^^^                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::widget::TextBox`
+ --> /home/lsgalante/Dropbox/Clear/clear-ui/src/context.rs:5:5
+  |
+5 | use crate::widget::TextBox;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/backend/window_runner.rs:925:13
+    |
+925 | ...   let mut adapter = WgpuAdapter::new(display_ptr, surface_ptr, pw, ...
+    |           ----^^^^^^^
+    |           |
+    |           help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/json_layout.rs:381:39
+    |
+381 | ...abels_with_bounds(&self, ctx: &UiContext) -> Vec<(TextLabel, Option<...
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `x`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/json_layout.rs:440:49
+    |
+440 |             Event::MouseButton { button, state, x, y } => {
+    |                                                 ^ help: try ignoring the field: `x: _`
+
+warning: unused variable: `y`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/json_layout.rs:440:52
+    |
+440 |             Event::MouseButton { button, state, x, y } => {
+    |                                                    ^ help: try ignoring the field: `y: _`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/button.rs:98:30
+   |
+98 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/slider.rs:200:75
+    |
+200 | ...Delta, px: f32, py: f32, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/slider.rs:307:52
+    |
+307 | ... self, event: &KeyEvent, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/spinbox.rs:209:52
+    |
+209 | ... self, event: &KeyEvent, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/color_selector.rs:158:34
+    |
+158 |     fn tick(&mut self, _dt: f32, ctx: &mut UiContext) -> bool {
+    |                                  ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/color_selector.rs:201:52
+    |
+201 | ... self, event: &KeyEvent, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/dropdown.rs:264:52
+    |
+264 | ... self, event: &KeyEvent, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/text_box.rs:565:52
+    |
+565 | ... self, event: &KeyEvent, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/text_box.rs:918:39
+    |
+918 | ...abels_with_bounds(&self, ctx: &UiContext) -> Vec<(TextLabel, Option<...
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/text_box.rs:923:48
+    |
+923 | ...h_font_and_bounds(&self, ctx: &UiContext) -> Vec<(TextLabel, Option<...
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/trackpad.rs:147:91
+    |
+147 | ...State, px: f32, py: f32, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/button_strip.rs:216:91
+    |
+216 | ...State, px: f32, py: f32, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: value assigned to `next` is never read
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/input/button_strip.rs:359:24
+    |
+359 |         let mut next = current;
+    |                        ^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/container.rs:25:22
+   |
+25 |     fn parent(&self, ctx: &UiContext) -> Option<*mut (dyn Element + 'sta...
+   |                      ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/container.rs:26:76
+   |
+26 | ... (dyn Element + 'static)>, ctx: &mut UiContext) { self.parent = paren...
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/container.rs:27:24
+   |
+27 |     fn children(&self, ctx: &UiContext) -> Vec<*mut (dyn Element + 'stat...
+   |                        ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/container.rs:28:66
+   |
+28 | ...t (dyn Element + 'static), ctx: &mut UiContext) { self.children.push(...
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/container.rs:29:34
+   |
+29 | ... clear_children(&mut self, ctx: &mut UiContext) { self.children.clear...
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/menu.rs:577:23
+    |
+577 |     fn focused(&self, ctx: &UiContext) -> bool {
+    |                       ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+    --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/menu.rs:1258:22
+     |
+1258 |     fn parent(&self, ctx: &UiContext) -> Option<*mut (dyn Element + 's...
+     |                      ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+    --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/menu.rs:1262:76
+     |
+1262 | ...dyn Element + 'static)>, ctx: &mut UiContext) {
+     |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+    --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/menu.rs:1270:23
+     |
+1270 |     fn focused(&self, ctx: &UiContext) -> bool {
+     |                       ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/breadcrumb.rs:60:92
+   |
+60 | ...tState, px: f32, _py: f32, ctx: &mut UiContext) -> bool {
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/spreadsheet.rs:233:33
+    |
+233 |     fn tick(&mut self, dt: f32, ctx: &mut UiContext) -> bool {
+    |                                 ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/scroll_box.rs:68:31
+   |
+68 |     fn highlight_color(&self, ctx: &UiContext) -> Option<[f32; 4]> { None }
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/scroll_box.rs:149:52
+    |
+149 | ... self, event: &KeyEvent, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/scroll_box.rs:191:22
+    |
+191 |     fn parent(&self, ctx: &UiContext) -> Option<*mut (dyn Element + 'st...
+    |                      ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/scroll_box.rs:192:76
+    |
+192 | ...dyn Element + 'static)>, ctx: &mut UiContext) { self.parent = parent; }
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/scroll_box.rs:193:24
+    |
+193 |     fn children(&self, ctx: &UiContext) -> Vec<*mut (dyn Element + 'sta...
+    |                        ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/scroll_box.rs:194:66
+    |
+194 | ...(dyn Element + 'static), ctx: &mut UiContext) { self.children.push(c...
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/scroll_box.rs:195:34
+    |
+195 | ...lear_children(&mut self, ctx: &mut UiContext) { self.children.clear(...
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/paginator.rs:719:39
+    |
+719 | ...abels_with_bounds(&self, ctx: &UiContext) -> Vec<(TextLabel, Option<...
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/paginator.rs:967:22
+    |
+967 |     fn parent(&self, ctx: &UiContext) -> Option<*mut (dyn Element + 'st...
+    |                      ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/paginator.rs:971:76
+    |
+971 | ...dyn Element + 'static)>, ctx: &mut UiContext) {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/paginator.rs:975:24
+    |
+975 |     fn children(&self, ctx: &UiContext) -> Vec<*mut (dyn Element + 'sta...
+    |                        ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/paginator.rs:984:67
+    |
+984 | ...(dyn Element + 'static), ctx: &mut UiContext) {}
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/container/paginator.rs:985:34
+    |
+985 |     fn clear_children(&mut self, ctx: &mut UiContext) {}
+    |                                  ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/panel.rs:37:30
+   |
+37 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/float3.rs:101:91
+    |
+101 | ...State, px: f32, py: f32, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/float3.rs:152:52
+    |
+152 | ... self, event: &KeyEvent, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/progress_bar.rs:25:30
+   |
+25 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/list_item.rs:48:30
+   |
+48 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/graph.rs:253:53
+    |
+253 | ... self, px: f32, py: f32, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+   --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/graph.rs:267:91
+    |
+267 | ...State, px: f32, py: f32, ctx: &mut UiContext) -> bool {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/usage_bar.rs:35:30
+   |
+35 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/layout_preview.rs:55:30
+   |
+55 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/font_preview.rs:26:30
+   |
+26 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/info_box.rs:25:30
+   |
+25 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: unused variable: `ctx`
+  --> /home/lsgalante/Dropbox/Clear/clear-ui/src/widget/display/status_dot.rs:32:30
+   |
+32 |     fn highlight_quad(&self, ctx: &UiContext) -> Option<(f32, f32, f32, ...
+   |                              ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+
+warning: variable does not need to be mutable
+    --> /home/lsgalante/Dropbox/Clear/clear-ui/src/layout.rs:1918:31
+     |
+1918 |     pub fn with_section_count(mut self, count: usize) -> Self {
+     |                               ----^^^^
+     |                               |
+     |                               help: remove this `mut`
+
+warning: field `min_col_width` is never read
+    --> /home/lsgalante/Dropbox/Clear/clear-ui/src/layout.rs:1793:5
+     |
+1791 | pub struct GridLayout {
+     |            ---------- field in this struct
+1792 |     grid: Option<Grid>,
+1793 |     min_col_width: f32,
+     |     ^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `clear-ui` (lib) generated 61 warnings (run `cargo fix --lib -p clear-ui` to apply 59 suggestions)
+   Compiling cce-design-interface v0.1.0 (/home/lsgalante/Dropbox/Clear/cce-design-interface)
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:606:20
+    |
+606 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, false), RIGHT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:606:42
+    |
+606 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, false), RIGHT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:606:93
+    |
+606 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, false), RIGHT_MENUBAR_IDX);
+    |                                                                                             ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:607:20
+    |
+607 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, false), PARAM_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:607:42
+    |
+607 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, false), PARAM_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:607:94
+    |
+607 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, false), PARAM_MENUBAR_IDX);
+    |                                                                                              ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:608:20
+    |
+608 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, false), LEFT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:608:42
+    |
+608 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, false), LEFT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:608:94
+    |
+608 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, false), LEFT_MENUBAR_IDX);
+    |                                                                                              ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:611:20
+    |
+611 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, false), RIGHT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:611:42
+    |
+611 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, false), RIGHT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:611:92
+    |
+611 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, false), RIGHT_MENUBAR_IDX);
+    |                                                                                            ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:612:20
+    |
+612 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, false), PARAM_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:612:42
+    |
+612 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, false), PARAM_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:612:93
+    |
+612 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, false), PARAM_MENUBAR_IDX);
+    |                                                                                             ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:613:20
+    |
+613 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, false), SPREADSHEET_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:613:42
+    |
+613 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, false), SPREADSHEET_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `SPREADSHEET_MENUBAR_IDX` in this scope
+   --> src/main.rs:613:93
+    |
+613 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, false), SPREADSHEET_MENUBAR_IDX);
+    |                                                                                             ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::SPREADSHEET_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:614:20
+    |
+614 |         assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, false), LEFT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `SPREADSHEET_MENUBAR_IDX` in this scope
+   --> src/main.rs:614:42
+    |
+614 |         assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, false), LEFT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::SPREADSHEET_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:614:99
+    |
+614 |         assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, false), LEFT_MENUBAR_IDX);
+    |                                                                                                   ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:617:20
+    |
+617 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, true), PARAM_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:617:42
+    |
+617 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, true), PARAM_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:617:92
+    |
+617 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, false, true), PARAM_MENUBAR_IDX);
+    |                                                                                            ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:618:20
+    |
+618 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, true), RIGHT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:618:42
+    |
+618 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, true), RIGHT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:618:93
+    |
+618 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, false, true), RIGHT_MENUBAR_IDX);
+    |                                                                                             ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:619:20
+    |
+619 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, true), LEFT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:619:42
+    |
+619 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, true), LEFT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:619:93
+    |
+619 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, false, true), LEFT_MENUBAR_IDX);
+    |                                                                                             ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:622:20
+    |
+622 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, true), SPREADSHEET_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:622:42
+    |
+622 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, true), SPREADSHEET_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `SPREADSHEET_MENUBAR_IDX` in this scope
+   --> src/main.rs:622:91
+    |
+622 |         assert_eq!(get_next_visible_pane(LEFT_MENUBAR_IDX, true, true, true, true, true), SPREADSHEET_MENUBAR_IDX);
+    |                                                                                           ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::SPREADSHEET_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:623:20
+    |
+623 |         assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, true), PARAM_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `SPREADSHEET_MENUBAR_IDX` in this scope
+   --> src/main.rs:623:42
+    |
+623 |         assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, true), PARAM_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::SPREADSHEET_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:623:98
+    |
+623 |         assert_eq!(get_next_visible_pane(SPREADSHEET_MENUBAR_IDX, true, true, true, true, true), PARAM_MENUBAR_IDX);
+    |                                                                                                  ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:624:20
+    |
+624 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, true), RIGHT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `PARAM_MENUBAR_IDX` in this scope
+   --> src/main.rs:624:42
+    |
+624 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, true), RIGHT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::PARAM_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:624:92
+    |
+624 |         assert_eq!(get_next_visible_pane(PARAM_MENUBAR_IDX, true, true, true, true, true), RIGHT_MENUBAR_IDX);
+    |                                                                                            ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find function `get_next_visible_pane` in this scope
+   --> src/main.rs:625:20
+    |
+625 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, true), LEFT_MENUBAR_IDX);
+    |                    ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+392 +     use crate::app::get_next_visible_pane;
+    |
+
+error[E0425]: cannot find value `RIGHT_MENUBAR_IDX` in this scope
+   --> src/main.rs:625:42
+    |
+625 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, true), LEFT_MENUBAR_IDX);
+    |                                          ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::RIGHT_MENUBAR_IDX;
+    |
+
+error[E0425]: cannot find value `LEFT_MENUBAR_IDX` in this scope
+   --> src/main.rs:625:92
+    |
+625 |         assert_eq!(get_next_visible_pane(RIGHT_MENUBAR_IDX, true, true, true, true, true), LEFT_MENUBAR_IDX);
+    |                                                                                            ^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this constant
+    |
+392 +     use crate::app::LEFT_MENUBAR_IDX;
+    |
+
+error[E0433]: cannot find type `Shortcut` in this scope
+   --> src/main.rs:824:22
+    |
+824 |         let ctrl_g = Shortcut::parse("Ctrl+g").unwrap();
+    |                      ^^^^^^^^ use of undeclared type `Shortcut`
+    |
+help: consider importing this struct
+    |
+392 +     use crate::shortcut::Shortcut;
+    |
+
+error[E0433]: cannot find type `Shortcut` in this scope
+   --> src/main.rs:832:23
+    |
+832 |         let complex = Shortcut::parse("Ctrl+Shift+Alt+Logo+s").unwrap();
+    |                       ^^^^^^^^ use of undeclared type `Shortcut`
+    |
+help: consider importing this struct
+    |
+392 +     use crate::shortcut::Shortcut;
+    |
+
+error[E0433]: cannot find type `Shortcut` in this scope
+   --> src/main.rs:840:22
+    |
+840 |         let tab_sc = Shortcut::parse("Tab").unwrap();
+    |                      ^^^^^^^^ use of undeclared type `Shortcut`
+    |
+help: consider importing this struct
+    |
+392 +     use crate::shortcut::Shortcut;
+    |
+
+error[E0433]: cannot find type `Shortcut` in this scope
+   --> src/main.rs:844:23
+    |
+844 |         let case_sc = Shortcut::parse("cTrL+sHiFt+ArrowDown").unwrap();
+    |                       ^^^^^^^^ use of undeclared type `Shortcut`
+    |
+help: consider importing this struct
+    |
+392 +     use crate::shortcut::Shortcut;
+    |
+
+error[E0433]: cannot find type `ShortcutManager` in this scope
+   --> src/main.rs:850:23
+    |
+850 |         let mut mgr = ShortcutManager::new();
+    |                       ^^^^^^^^^^^^^^^ use of undeclared type `ShortcutManager`
+    |
+help: consider importing this struct
+    |
+392 +     use crate::shortcut::ShortcutManager;
+    |
+
+error[E0433]: cannot find type `Action` in this scope
+   --> src/main.rs:851:32
+    |
+851 |         mgr.register("Ctrl+g", Action::ToggleGrid).unwrap();
+    |                                ^^^^^^ use of undeclared type `Action`
+    |
+help: an enum with a similar name exists
+    |
+851 -         mgr.register("Ctrl+g", Action::ToggleGrid).unwrap();
+851 +         mgr.register("Ctrl+g", Option::ToggleGrid).unwrap();
+    |
+help: consider importing this enum
+    |
+392 +     use crate::shortcut::Action;
+    |
+
+error[E0433]: cannot find type `Action` in this scope
+   --> src/main.rs:852:27
+    |
+852 |         mgr.register("`", Action::ToggleSpreadsheet).unwrap();
+    |                           ^^^^^^ use of undeclared type `Action`
+    |
+help: an enum with a similar name exists
+    |
+852 -         mgr.register("`", Action::ToggleSpreadsheet).unwrap();
+852 +         mgr.register("`", Option::ToggleSpreadsheet).unwrap();
+    |
+help: consider importing this enum
+    |
+392 +     use crate::shortcut::Action;
+    |
+
+error[E0433]: cannot find type `Action` in this scope
+   --> src/main.rs:857:63
+    |
+857 |         assert_eq!(mgr.match_action(&mods_ctrl, &key_g), Some(Action::ToggleGrid));
+    |                                                               ^^^^^^ use of undeclared type `Action`
+    |
+help: an enum with a similar name exists
+    |
+857 -         assert_eq!(mgr.match_action(&mods_ctrl, &key_g), Some(Action::ToggleGrid));
+857 +         assert_eq!(mgr.match_action(&mods_ctrl, &key_g), Some(Option::ToggleGrid));
+    |
+help: consider importing this enum
+    |
+392 +     use crate::shortcut::Action;
+    |
+
+error[E0433]: cannot find type `Action` in this scope
+   --> src/main.rs:866:66
+    |
+866 |         assert_eq!(mgr.match_action(&mods_none, &key_tick), Some(Action::ToggleSpreadsheet));
+    |                                                                  ^^^^^^ use of undeclared type `Action`
+    |
+help: an enum with a similar name exists
+    |
+866 -         assert_eq!(mgr.match_action(&mods_none, &key_tick), Some(Action::ToggleSpreadsheet));
+866 +         assert_eq!(mgr.match_action(&mods_none, &key_tick), Some(Option::ToggleSpreadsheet));
+    |
+help: consider importing this enum
+    |
+392 +     use crate::shortcut::Action;
+    |
+
+warning: unused import: `std::time::Instant`
+ --> src/main.rs:1:5
+  |
+1 | use std::time::Instant;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `Deserialize` and `Serialize`
+ --> src/main.rs:7:13
+  |
+7 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `ElementState`, `KeyEvent`, `MouseButton`, and `MouseScrollDelta`
+ --> src/main.rs:9:24
+  |
+9 | use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
+  |                        ^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `Capability`, `CompositorHandler`, `CursorIcon`, `PointerHandler`, `ProvidesRegistryState`, `SeatHandler`, `ShmHandler`, `ThemeSpec`, `ThemedPointer`, `Window as XdgWindow`, `WindowConfigure`, `WindowDecorations`, `WindowHandler`, `delegate_compositor`, `delegate_keyboard`, `delegate_output`, `delegate_pointer`, `delegate_registry`, `delegate_seat`, `delegate_shm`, `delegate_xdg_shell`, `delegate_xdg_window`, and `keyboard::KeyboardHandler`
+  --> src/main.rs:12:18
+   |
+12 |     compositor::{CompositorHandler, CompositorState},
+   |                  ^^^^^^^^^^^^^^^^^
+13 |     delegate_compositor, delegate_keyboard, delegate_pointer, delegate_registry,
+   |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+14 |     delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window, delegate_output,
+   |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+15 |     registry::{ProvidesRegistryState, RegistryState},
+   |                ^^^^^^^^^^^^^^^^^^^^^
+...
+18 |         keyboard::KeyboardHandler,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+19 |         pointer::{PointerHandler, ThemedPointer, ThemeSpec, CursorIcon},
+   |                   ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^
+20 |         Capability, SeatHandler, SeatState,
+   |         ^^^^^^^^^^  ^^^^^^^^^^^
+...
+24 |             window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+   |                      ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+...
+29 |     shm::{Shm, ShmHandler},
+   |                ^^^^^^^^^^
+
+warning: unused imports: `Proxy`, `QueueHandle`, `wl_keyboard`, `wl_output`, `wl_pointer`, `wl_seat`, `wl_shm`, and `wl_surface`
+  --> src/main.rs:33:16
+   |
+33 |     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+   |                ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^  ^^^^^^  ^^^^^^^^^^
+34 |     Connection, QueueHandle, Proxy,
+   |                 ^^^^^^^^^^^  ^^^^^
+
+warning: unused import: `wgpu::util::DeviceExt`
+  --> src/main.rs:38:5
+   |
+38 | use wgpu::util::DeviceExt;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Breadcrumb`, `Button`, `Canvas`, `Checkbox`, `ColorSelector`, `GraphNode`, `Graph`, `Label`, `MenuBar`, `Paginator`, `ParametersBg`, `Plate`, `ScrollingList`, `Slider`, `Spinbox`, `Splitter`, `Spreadsheet`, `StatusBar`, `Switcher`, `TextLabel`, and `ViewportBg`
+  --> src/main.rs:39:24
+   |
+39 | ...::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
+   |       ^^^^^^^^^^  ^^^^^^  ^^^^^^^  ^^^^^  ^^^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^           ^^^^^^^^^  ^^^^^  ^^^^^^^^^  ^^^^^^  ^^^^^^^^  ^^^^^^  ^^^^^^^  ^^^^^^^^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `clear_ui::colors`
+  --> src/main.rs:40:5
+   |
+40 | use clear_ui::colors;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Attrs`, `Buffer`, `Cache`, `FontSystem`, `Metrics`, `Resolution`, `SwashCache`, `TextArea`, `TextAtlas`, `TextBounds`, `TextRenderer`, and `Viewport`
+  --> src/main.rs:41:15
+   |
+41 | ...::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
+   |       ^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^  ^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `Mat4`
+  --> src/main.rs:42:12
+   |
+42 | use glam::{Mat4, Vec3};
+   |            ^^^^
+
+warning: unused import: `std::net::TcpListener`
+ --> src/app.rs:4:5
+  |
+4 | use std::net::TcpListener;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `BufReader`
+ --> src/app.rs:5:24
+  |
+5 | use std::io::{BufRead, BufReader, Read, Write};
+  |                        ^^^^^^^^^
+
+warning: unused imports: `Capability`, `CompositorHandler`, `CursorIcon`, `OutputHandler`, `OutputState`, `PointerHandler`, `ProvidesRegistryState`, `RegistryState`, `SeatHandler`, `SeatState`, `ShmHandler`, `Shm`, `ThemeSpec`, `ThemedPointer`, `WindowConfigure`, `delegate_compositor`, `delegate_keyboard`, `delegate_output`, `delegate_pointer`, `delegate_registry`, `delegate_seat`, `delegate_shm`, `delegate_xdg_shell`, `delegate_xdg_window`, and `keyboard::KeyboardHandler`
+  --> src/app.rs:12:18
+   |
+12 |     compositor::{CompositorHandler, CompositorState},
+   |                  ^^^^^^^^^^^^^^^^^
+13 |     delegate_compositor, delegate_keyboard, delegate_pointer, delegate_registry,
+   |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+14 |     delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window, delegate_output,
+   |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+15 |     registry::{ProvidesRegistryState, RegistryState},
+   |                ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+16 |     output::{OutputHandler, OutputState},
+   |              ^^^^^^^^^^^^^  ^^^^^^^^^^^
+17 |     seat::{
+18 |         keyboard::KeyboardHandler,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+19 |         pointer::{PointerHandler, ThemedPointer, ThemeSpec, CursorIcon},
+   |                   ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^
+20 |         Capability, SeatHandler, SeatState,
+   |         ^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^
+...
+24 |             window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+   |                                           ^^^^^^^^^^^^^^^
+...
+29 |     shm::{Shm, ShmHandler},
+   |           ^^^  ^^^^^^^^^^
+
+warning: unused imports: `globals::registry_queue_init`, `wl_keyboard`, `wl_output`, `wl_pointer`, `wl_seat`, and `wl_shm`
+  --> src/app.rs:32:5
+   |
+32 |     globals::registry_queue_init,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+33 |     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+   |                ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^  ^^^^^^
+
+warning: unused import: `calloop_wayland_source::WaylandSource`
+  --> src/app.rs:36:5
+   |
+36 | use calloop_wayland_source::WaylandSource;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Switcher`
+  --> src/app.rs:39:241
+   |
+39 | ...kbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
+   |                                                                ^^^^^^^^
+
+warning: unused imports: `SwashCache`, `TextArea`, and `TextBounds`
+  --> src/app.rs:42:70
+   |
+42 | use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, View...
+   |                                                                      ^^^^^^^^^^  ^^^^^^^^             ^^^^^^^^^^
+
+warning: unused import: `crate::project::*`
+  --> src/app.rs:46:5
+   |
+46 | use crate::project::*;
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::render::*`
+  --> src/app.rs:47:5
+   |
+47 | use crate::render::*;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `Shortcut`
+  --> src/app.rs:48:23
+   |
+48 | use crate::shortcut::{Shortcut, ShortcutManager, Action};
+   |                       ^^^^^^^^
+
+warning: unused import: `LocalPosition`
+  --> src/app.rs:51:44
+   |
+51 | use crate::window::{AppState, WindowEvent, LocalPosition};
+   |                                            ^^^^^^^^^^^^^
+
+warning: unused import: `clear_ui::engine::Vertex`
+ --> src/graphics.rs:1:5
+  |
+1 | use clear_ui::engine::Vertex;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::time::Instant`
+ --> src/window.rs:1:5
+  |
+1 | use std::time::Instant;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::fs`
+ --> src/window.rs:2:5
+  |
+2 | use std::fs;
+  |     ^^^^^^^
+
+warning: unused import: `std::net::TcpListener`
+ --> src/window.rs:4:5
+  |
+4 | use std::net::TcpListener;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `BufReader` and `Write`
+ --> src/window.rs:5:24
+  |
+5 | use std::io::{BufRead, BufReader, Read, Write};
+  |                        ^^^^^^^^^        ^^^^^
+
+warning: unused imports: `Deserialize` and `Serialize`
+ --> src/window.rs:7:13
+  |
+7 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `ElementState`, `KeyEvent`, `Key`, `MouseButton`, `MouseScrollDelta`, and `NamedKey`
+ --> src/window.rs:9:24
+  |
+9 | use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
+  |                        ^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^  ^^^  ^^^^^^^^
+
+warning: unused import: `WindowDecorations`
+  --> src/window.rs:24:75
+   |
+24 |             window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+   |                                                                           ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Proxy`, `globals::registry_queue_init`, and `wl_shm`
+  --> src/window.rs:32:5
+   |
+32 |     globals::registry_queue_init,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+33 |     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+   |                                                             ^^^^^^
+34 |     Connection, QueueHandle, Proxy,
+   |                              ^^^^^
+
+warning: unused import: `calloop_wayland_source::WaylandSource`
+  --> src/window.rs:36:5
+   |
+36 | use calloop_wayland_source::WaylandSource;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `wgpu::util::DeviceExt`
+  --> src/window.rs:38:5
+   |
+38 | use wgpu::util::DeviceExt;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Breadcrumb`, `Button`, `Canvas`, `Checkbox`, `ColorSelector`, `GraphNode`, `Graph`, `Label`, `MenuBar`, `Paginator`, `ParametersBg`, `Plate`, `ScrollingList`, `Slider`, `Spinbox`, `Splitter`, `Spreadsheet`, `StatusBar`, `Switcher`, `TextLabel`, and `ViewportBg`
+  --> src/window.rs:39:24
+   |
+39 | ...::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
+   |       ^^^^^^^^^^  ^^^^^^  ^^^^^^^  ^^^^^  ^^^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^           ^^^^^^^^^  ^^^^^  ^^^^^^^^^  ^^^^^^  ^^^^^^^^  ^^^^^^  ^^^^^^^  ^^^^^^^^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `clear_ui::colors`
+  --> src/window.rs:40:5
+   |
+40 | use clear_ui::colors;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Attrs`, `Buffer`, `Cache`, `FontSystem`, `Metrics`, `Resolution`, `SwashCache`, `TextArea`, `TextAtlas`, `TextBounds`, `TextRenderer`, and `Viewport`
+  --> src/window.rs:41:15
+   |
+41 | ...::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
+   |       ^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^  ^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `Mat4` and `Vec3`
+  --> src/window.rs:42:12
+   |
+42 | use glam::{Mat4, Vec3};
+   |            ^^^^  ^^^^
+
+warning: unused import: `crate::geometry::*`
+  --> src/window.rs:44:5
+   |
+44 | use crate::geometry::*;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::project::*`
+  --> src/window.rs:45:5
+   |
+45 | use crate::project::*;
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::render::*`
+  --> src/window.rs:46:5
+   |
+46 | use crate::render::*;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ShortcutManager` and `Shortcut`
+  --> src/window.rs:47:23
+   |
+47 | use crate::shortcut::{Shortcut, ShortcutManager, Action};
+   |                       ^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused imports: `DesignSettings`, `NODE_PALETTE_IDX`, and `NodePalette`
+  --> src/window.rs:48:78
+   |
+48 | ...tion, ModifiersState, TouchPhase, DesignSettings, param_display, NodePalette, NODE_PALETTE_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_I...
+   |                                      ^^^^^^^^^^^^^^                 ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `clear_ui::engine::Vertex`
+  --> src/window.rs:49:5
+   |
+49 | use clear_ui::engine::Vertex;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `PathBuf`
+ --> src/project.rs:2:23
+  |
+2 | use std::path::{Path, PathBuf};
+  |                       ^^^^^^^
+
+warning: unused import: `std::time::Instant`
+ --> src/project.rs:3:5
+  |
+3 | use std::time::Instant;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::time::Instant`
+ --> src/render.rs:1:5
+  |
+1 | use std::time::Instant;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::Path`
+ --> src/render.rs:2:5
+  |
+2 | use std::path::Path;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused imports: `CustomEvent`, `HEADER_H`, `SPLITTER1_IDX`, `SPLITTER2_IDX`, and `SPLITTER_W`
+  --> src/render.rs:10:20
+   |
+10 |     State, FsNode, CustomEvent,
+   |                    ^^^^^^^^^^^
+...
+14 |     SPREADSHEET_MENUBAR_IDX, SPLITTER1_IDX, SPLITTER2_IDX,
+   |                              ^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+15 |     MENUBAR_H, STATUS_H, HEADER_H, SPLITTER_W,
+   |                          ^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `network_sphere_vertices_with_errors`
+  --> src/render.rs:22:5
+   |
+22 |     network_sphere_vertices_with_errors,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ParamDef`, `TouchPhase`, and `param_display`
+  --> src/main.rs:53:59
+   |
+53 | ...ion, ModifiersState, TouchPhase, DesignSettings, param_display, FsNode, Project, ProjectViewState, ParamDef};
+   |                         ^^^^^^^^^^                  ^^^^^^^^^^^^^                                     ^^^^^^^^
+
+warning: unused import: `api::start_http_server`
+  --> src/main.rs:55:5
+   |
+55 | use api::start_http_server;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `project::*`
+  --> src/main.rs:57:5
+   |
+57 | use project::*;
+   |     ^^^^^^^^^^
+
+warning: unused import: `render::*`
+  --> src/main.rs:58:5
+   |
+58 | use render::*;
+   |     ^^^^^^^^^
+
+warning: use of deprecated type alias `wgpu::ImageCopyTexture`: This has been renamed to `TexelCopyTextureInfo`, and will be removed in 25.0.0.
+    --> src/app.rs:5548:23
+     |
+5548 |                 wgpu::ImageCopyTexture {
+     |                       ^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `wgpu::ImageCopyTexture`: This has been renamed to `TexelCopyTextureInfo`, and will be removed in 25.0.0.
+    --> src/app.rs:5554:23
+     |
+5554 |                 wgpu::ImageCopyTexture {
+     |                       ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `opencl3::command_queue::CommandQueue::create`: From CL_VERSION_2_0 use create_command_queue_with_properties
+   --> src/geometry.rs:400:40
+    |
+400 |     let queue = unsafe { CommandQueue::create(&context, device_id, 0) }.ok()?;
+    |                                        ^^^^^^
+
+warning: unused import: `Write`
+ --> src/app.rs:5:41
+  |
+5 | use std::io::{BufRead, BufReader, Read, Write};
+  |                                         ^^^^^
+
+warning: unused import: `BufRead`
+ --> src/app.rs:5:15
+  |
+5 | use std::io::{BufRead, BufReader, Read, Write};
+  |               ^^^^^^^
+
+warning: unused import: `Read`
+ --> src/app.rs:5:35
+  |
+5 | use std::io::{BufRead, BufReader, Read, Write};
+  |                                   ^^^^
+
+warning: unused import: `WindowHandler`
+  --> src/app.rs:24:60
+   |
+24 |             window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+   |                                                            ^^^^^^^^^^^^^
+
+warning: unused import: `WaylandSurface`
+  --> src/window.rs:27:9
+   |
+27 |         WaylandSurface,
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `Read`
+ --> src/window.rs:5:35
+  |
+5 | use std::io::{BufRead, BufReader, Read, Write};
+  |                                   ^^^^
+
+warning: unused import: `BufRead`
+ --> src/window.rs:5:15
+  |
+5 | use std::io::{BufRead, BufReader, Read, Write};
+  |               ^^^^^^^
+
+warning: unused import: `Element`
+ --> src/project.rs:5:32
+  |
+5 | use clear_ui::widget::{Button, Element};
+  |                                ^^^^^^^
+
+warning: unused import: `OutputHandler`
+  --> src/main.rs:16:14
+   |
+16 |     output::{OutputHandler, OutputState},
+   |              ^^^^^^^^^^^^^
+
+warning: unused import: `WaylandSurface`
+  --> src/main.rs:27:9
+   |
+27 |         WaylandSurface,
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `Element`
+  --> src/main.rs:39:131
+   |
+39 | ...Bg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spin...
+   |                                                                 ^^^^^^^
+
+warning: unused variable: `surface`
+    --> src/app.rs:2036:13
+     |
+2036 |         let surface = &wgpu_adapter.surface;
+     |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_surface`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `sp_menub_y` is assigned to, but never used
+    --> src/app.rs:3137:21
+     |
+3137 |                 let mut sp_menub_y = 0.0;
+     |                     ^^^^^^^^^^^^^^
+     |
+     = note: consider using `_sp_menub_y` instead
+
+warning: variable `sp_menub_h` is assigned to, but never used
+    --> src/app.rs:3138:21
+     |
+3138 |                 let mut sp_menub_h = 0.0;
+     |                     ^^^^^^^^^^^^^^
+     |
+     = note: consider using `_sp_menub_h` instead
+
+warning: value assigned to `sp_menub_y` is never read
+    --> src/app.rs:3156:25
+     |
+3156 |                         sp_menub_y = 0.0;
+     |                         ^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `sp_menub_y` is never read
+    --> src/app.rs:3148:25
+     |
+3148 |                         sp_menub_y = 0.0;
+     |                         ^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `sp_menub_h` is never read
+    --> src/app.rs:3157:25
+     |
+3157 |                         sp_menub_h = 0.0;
+     |                         ^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `sp_menub_h` is never read
+    --> src/app.rs:3149:25
+     |
+3149 |                         sp_menub_h = 0.0;
+     |                         ^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `cx`
+   --> src/window.rs:276:22
+    |
+276 |                 let (cx, cy) = clear_ui::wayland::scale_pointer_pos(event.position, st.scale);
+    |                      ^^ help: if this is intentional, prefix it with an underscore: `_cx`
+
+warning: unused variable: `cy`
+   --> src/window.rs:276:26
+    |
+276 |                 let (cx, cy) = clear_ui::wayland::scale_pointer_pos(event.position, st.scale);
+    |                          ^^ help: if this is intentional, prefix it with an underscore: `_cy`
+
+warning: unused variable: `idx`
+   --> src/geometry.rs:656:17
+    |
+656 |             let idx = *count;
+    |                 ^^^ help: if this is intentional, prefix it with an underscore: `_idx`
+
+warning: unused variable: `idx`
+   --> src/geometry.rs:665:17
+    |
+665 |             let idx = *count;
+    |                 ^^^ help: if this is intentional, prefix it with an underscore: `_idx`
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+warning: `cce-design-interface` (bin "cce-design-interface" test) generated 77 warnings
+error: could not compile `cce-design-interface` (bin "cce-design-interface" test) due to 51 previous errors; 77 warnings emitted

@@ -1,6 +1,8 @@
 {
-  "name": "Camera 1",
+  "name": "Camera",
   "type": "camera",
+  "inputs": 0,
+  "outputs": 0,
   "params": [
     { "name": "Position", "type": "float3", "default": "2.50:1.80:2.50", "min": -10.0, "max": 10.0 },
     { "name": "Rotation", "type": "float3", "default": "0.00:0.00:0.00", "min": -180.0, "max": 180.0 },

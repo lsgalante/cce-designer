@@ -63,9 +63,7 @@ impl State {
         let sh = self.height;
 
         let node_area_y = self.positions[CONTENT_IDX].1;
-        let dialog_open = self.node_palette_visible;
-        let show_cursor = self.drag_widget.is_none()
-            && !dialog_open;
+        let show_cursor = self.drag_widget.is_none();
 
         let clip = if self.circular_network_pane {
             (
@@ -103,7 +101,6 @@ impl State {
             };
             (self.has_any_open_menu(i), base_key)
         });
-        println!("DEBUG_DRAW_ORDER: {:?}", draw_order.iter().map(|&i| (i, self.widgets[i].visible(), self.positions[i])).collect::<Vec<_>>());
 
         let mut visited = vec![false; self.widgets.len()];
         for &i in &draw_order {
@@ -266,9 +263,27 @@ impl State {
         }
 
         // Dropdown popover
-        if w.visible() && self.focused_widget == Some(idx) {
-            if let Some((px, py, pw, ph)) = w.popover_rect() {
-                push_widget_popover_vertices(px, py, pw, ph, sw, sh, verts);
+        if w.visible() && (self.focused_widget == Some(idx) || idx == PARAM_IDX) {
+            let mut popover_pc = clear_ui::layout::PopoverCollector::new();
+            w.render_popover(&mut popover_pc);
+            for (color, px, py, pw, ph) in popover_pc.rects {
+                let ndc_x = (px / sw) * 2.0 - 1.0;
+                let ndc_y = 1.0 - (py / sh) * 2.0;
+                let ndc_w = (pw / sw) * 2.0;
+                let ndc_h = (ph / sh) * 2.0;
+
+                let v_tl = Vertex { position: [ndc_x, ndc_y], color, clip_circle: [0.0, 0.0, 0.0] };
+                let v_tr = Vertex { position: [ndc_x + ndc_w, ndc_y], color, clip_circle: [0.0, 0.0, 0.0] };
+                let v_bl = Vertex { position: [ndc_x, ndc_y - ndc_h], color, clip_circle: [0.0, 0.0, 0.0] };
+                let v_br = Vertex { position: [ndc_x + ndc_w, ndc_y - ndc_h], color, clip_circle: [0.0, 0.0, 0.0] };
+
+                verts.push(v_tl);
+                verts.push(v_tr);
+                verts.push(v_bl);
+
+                verts.push(v_tr);
+                verts.push(v_br);
+                verts.push(v_bl);
             }
         }
     }
@@ -299,6 +314,7 @@ impl State {
     }
 
     pub(crate) fn upload_vertices(&mut self) {
+        self.text_dirty = true;
         let mut verts = std::mem::take(&mut self.vertex_data);
         self.collect_vertices(&mut verts);
         self.vertex_count = verts.len() as u32;
@@ -317,31 +333,24 @@ impl State {
     }
 
     pub(crate) fn rebuild_scene_geometry(&mut self) {
-        let mut geom = crate::geometry::network_sphere_vertices(&self.fs_root);
+        let mut ocl_error = None;
+        let geom = network_sphere_vertices_with_errors(&self.fs_root, &mut ocl_error);
 
-        fn collect_opencl_codes(node: &FsNode, codes: &mut Vec<String>) {
+        fn has_visible_opencl(node: &FsNode) -> bool {
             if node.node_type.eq_ignore_ascii_case("opencl") && node.geometry_visible {
-                let code = node.params.iter()
-                    .find(|p| p.name.eq_ignore_ascii_case("code"))
-                    .map(|p| p.default.clone())
-                    .unwrap_or_else(String::new);
-                codes.push(code);
+                return true;
             }
             for child in &node.children {
-                collect_opencl_codes(child, codes);
-            }
-        }
-        let mut opencl_codes = Vec::new();
-        collect_opencl_codes(&self.fs_root, &mut opencl_codes);
-
-        for code in &opencl_codes {
-            if !code.is_empty() {
-                if let Err(e) = crate::geometry::run_opencl_kernel(code, &mut geom) {
-                    self.update_status_text(&format!("OpenCL Error: {}", e));
+                if has_visible_opencl(child) {
+                    return true;
                 }
             }
+            false
         }
-        if !opencl_codes.is_empty() {
+
+        if let Some(e) = ocl_error {
+            self.update_status_text(&format!("OpenCL Error: {}", e));
+        } else if has_visible_opencl(&self.fs_root) {
             self.update_status_text("OpenCL kernel executed successfully.");
         } else {
             self.update_status_text("Geometry updated successfully.");
@@ -360,13 +369,54 @@ impl State {
             });
         }
         self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_spheres, 0, data);
+        self.viewport_dirty = true;
     }
 
     pub(crate) fn update_status_text(&mut self, text: &str) {
-        self.widgets[STATUS_IDX].set_text(text);
+        if self.last_status_text != text {
+            self.last_status_text = text.to_string();
+            self.widgets[STATUS_IDX].set_text(text);
+            self.text_dirty = true;
+        }
     }
 
     pub(crate) fn prepare_text(&mut self) {
+        let mut current_popovers = Vec::new();
+        {
+            fn collect_popovers(
+                w: &dyn Element,
+                popovers: &mut Vec<(f32, f32, f32, f32)>,
+                ctx: &clear_ui::context::UiContext,
+            ) {
+                if let Some(rect) = w.popover_rect() {
+                    popovers.push(rect);
+                }
+                for child_ptr in w.children(ctx) {
+                    unsafe {
+                        if let Some(child) = child_ptr.as_ref() {
+                            collect_popovers(child, popovers, ctx);
+                        }
+                    }
+                }
+            }
+
+            for w in &self.widgets {
+                if w.visible() {
+                    collect_popovers(w.as_ref(), &mut current_popovers, &self.ui_context);
+                }
+            }
+        }
+
+        if current_popovers != self.last_popover_rects {
+            self.last_popover_rects = current_popovers;
+            self.text_dirty = true;
+        }
+
+        if !self.text_dirty {
+            return;
+        }
+        self.text_dirty = false;
+
         // 1. Prepare text on all widgets using self.wgpu_adapter.font_system
         for (i, w) in self.widgets.iter_mut().enumerate() {
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
@@ -457,9 +507,55 @@ impl State {
             }
         }
 
+        // Pass 1b: Populate text_buffer_cache with popover texts
+        for (i, w) in widgets.iter().enumerate() {
+            if !w.visible() {
+                continue;
+            }
+            let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
+            if is_menubar {
+                continue;
+            }
+            if self.focused_widget == Some(i) || i == PARAM_IDX {
+                let mut popover_pc = clear_ui::layout::PopoverCollector::new();
+                w.render_popover(&mut popover_pc);
+                for (t, size, _x, _y, _tc, font_opt, _bounds) in popover_pc.texts {
+                    let key = (t.clone(), (size * 100.0) as u32, font_opt.clone());
+                    if !text_buffer_cache.contains_key(&key) {
+                        let buf = make_text_buffer_with_font(font_system, &t, size, font_opt.as_deref());
+                        text_buffer_cache.insert(key, buf);
+                    }
+                }
+            }
+        }
+
         let viewport = Resolution { width: *physical_width, height: *physical_height };
         text_viewport.update(queue, viewport);
         let s = *scale as f32;
+
+        let mut popovers = Vec::new();
+        fn collect_popovers(
+            w: &dyn Element,
+            popovers: &mut Vec<(f32, f32, f32, f32)>,
+            ctx: &clear_ui::context::UiContext,
+        ) {
+            if let Some(rect) = w.popover_rect() {
+                popovers.push(rect);
+            }
+            for child_ptr in w.children(ctx) {
+                unsafe {
+                    if let Some(child) = child_ptr.as_ref() {
+                        collect_popovers(child, popovers, ctx);
+                    }
+                }
+            }
+        }
+
+        for w in widgets {
+            if w.visible() {
+                collect_popovers(w.as_ref(), &mut popovers, ui_context);
+            }
+        }
 
         let mut areas: Vec<TextArea> = Vec::new();
 
@@ -548,6 +644,21 @@ impl State {
                             continue;
                         }
                     }
+                    // Overlap check
+                    let mut overlaps = false;
+                    let tw = buf.layout_runs().next().map(|r| r.line_w).unwrap_or(0.0) / s;
+                    let th = (buf.layout_runs().count() as f32 * 14.0).max(14.0);
+                    for &(px, py, pw, ph) in &popovers {
+                        let x_overlap = x <= px + pw && (x + tw) >= px;
+                        let y_overlap = y <= py + ph && (y + th) >= py;
+                        if x_overlap && y_overlap {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    if overlaps {
+                        continue;
+                    }
                     areas.push(TextArea {
                         buffer: buf,
                         left: (x * s).round(),
@@ -598,6 +709,26 @@ impl State {
                         }
                         let key = (label.text.clone(), (label.font_size * 100.0) as u32, font_opt.clone());
                         let buf_ref = text_buffer_cache.get(&key).unwrap();
+
+                        // Overlap check
+                        let mut overlaps = false;
+                        let tw = buf_ref.layout_runs().next().map(|r| r.line_w).unwrap_or(0.0) / s;
+                        let th = label.font_size * 1.4;
+                        for &(px, py, pw, ph) in &popovers {
+                            let x_overlap = label.x <= px + pw && (label.x + tw) >= px;
+                            let y_overlap = label.y <= py + ph && (label.y + th) >= py;
+                            if x_overlap && y_overlap {
+                                overlaps = true;
+                                break;
+                            }
+                        }
+                        if label.text.contains("Save") {
+                            println!("DEBUG SAVE OVERLAP: i={}, label_text={:?}, label.x={}, label.y={}, tw={}, th={}, popovers={:?}, overlaps={}", i, label.text, label.x, label.y, tw, th, popovers, overlaps);
+                        }
+                        if overlaps {
+                            continue;
+                        }
+
                         legacy_buffers.push(buf_ref);
                         legacy_labels.push(label);
                         legacy_bounds.push(item_bounds);
@@ -617,6 +748,65 @@ impl State {
                 default_color: glyphon::Color::rgb(label.color[0], label.color[1], label.color[2]),
                 custom_glyphs: &[],
             });
+        }
+
+        // Add popover text areas
+        for (i, w) in widgets.iter().enumerate() {
+            if !w.visible() {
+                continue;
+            }
+            let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
+            if is_menubar {
+                continue;
+            }
+            if self.focused_widget == Some(i) || i == PARAM_IDX {
+                let mut popover_pc = clear_ui::layout::PopoverCollector::new();
+                w.render_popover(&mut popover_pc);
+                for (t, size, x, y, tc, font_opt, label_bounds) in popover_pc.texts {
+                    let key = (t.clone(), (size * 100.0) as u32, font_opt.clone());
+                    if let Some(buf_ref) = text_buffer_cache.get(&key) {
+                        let mut item_bounds = TextBounds {
+                            left: 0,
+                            top: 0,
+                            right: *physical_width as i32,
+                            bottom: *physical_height as i32,
+                        };
+                        if let Some([l, t_bound, r, b]) = label_bounds {
+                            let pl = (l * s).round() as i32;
+                            let pt = (t_bound * s).round() as i32;
+                            let pr = (r * s).round() as i32;
+                            let pb = (b * s).round() as i32;
+                            item_bounds = TextBounds {
+                                left: item_bounds.left.max(pl),
+                                top: item_bounds.top.max(pt),
+                                right: item_bounds.right.min(pr),
+                                bottom: item_bounds.bottom.min(pb),
+                            };
+                        }
+                        areas.push(TextArea {
+                            buffer: buf_ref,
+                            left: (x * s).round(),
+                            top: (y * s).round(),
+                            scale: s,
+                            bounds: item_bounds,
+                            default_color: glyphon::Color::rgb(
+                                (tc[0] * 255.0) as u8,
+                                (tc[1] * 255.0) as u8,
+                                (tc[2] * 255.0) as u8,
+                            ),
+                            custom_glyphs: &[],
+                        });
+                    }
+                }
+            }
+        }
+
+        if !popovers.is_empty() {
+            for (idx, area) in areas.iter().enumerate() {
+                for run in area.buffer.layout_runs() {
+                    println!("DEBUG: Area {}, text={:?}, x={}, y={}", idx, run.text, area.left, area.top);
+                }
+            }
         }
 
         text_renderer.prepare(device, queue, font_system, text_atlas, text_viewport, areas, swash_cache).unwrap();

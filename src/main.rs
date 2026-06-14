@@ -50,7 +50,7 @@ pub mod project;
 pub mod render;
 pub mod shortcut;
 
-use app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, DesignSettings, param_display};
+use app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, DesignSettings, param_display, FsNode, Project, ProjectViewState, ParamDef};
 use window::{AppState, WindowEvent};
 use api::start_http_server;
 use geometry::*;
@@ -266,7 +266,11 @@ fn main() {
     const KEY_REPEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
     loop {
-        let timeout = std::time::Duration::from_millis(16);
+        let timeout = if app.redraw {
+            std::time::Duration::ZERO
+        } else {
+            std::time::Duration::from_millis(16)
+        };
         event_loop.dispatch(timeout, &mut app).unwrap();
 
         if app.exit || app.state.as_ref().map(|s| s.exit_requested).unwrap_or(false) {
@@ -390,6 +394,8 @@ fn create_memfd_with_data(name: &str, data: &[u8]) -> std::io::Result<std::os::u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{get_next_visible_pane, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX};
+    use crate::shortcut::{Shortcut, ShortcutManager, Action};
 
     #[test]
     fn test_load_default_project() {
@@ -399,33 +405,230 @@ mod tests {
         assert_eq!(proj.name, "Default Project");
         assert_eq!(proj.view_state.active_camera, "Camera 1");
         assert_eq!(proj.root.name, "root");
-        assert_eq!(proj.root.children.len(), 3);
+        assert_eq!(proj.root.children.len(), 2);
         assert_eq!(proj.root.children[0].name, "Camera 1");
         assert_eq!(proj.root.children[0].position, (1.0, 1.0));
         assert_eq!(proj.root.children[1].name, "Sphere 1");
         assert_eq!(proj.root.children[1].position, (4.0, 2.0));
-        assert_eq!(proj.root.children[2].name, "Transform 1");
-        assert_eq!(proj.root.children[2].position, (4.0, 3.0));
+    }
+
+    #[test]
+    fn test_node_template_names() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        assert!(!templates.is_empty(), "No templates loaded!");
+        for t in templates {
+            let last_char = t.label.chars().last().unwrap();
+            assert!(!last_char.is_ascii_digit(), "Template name '{}' ends with a digit, but templates should not have numeric suffixes in the add node popup.", t.label);
+        }
+    }
+
+    #[test]
+    fn test_subnet_template_child_resolution() {
+        let templates_root = crate::app::load_fs_tree();
+        let box_template = templates_root
+            .children
+            .iter()
+            .find(|t| t.name == "Box")
+            .expect("Box template should be loaded");
+        
+        assert_eq!(box_template.children.len(), 3);
+        
+        let input1 = box_template.children.iter().find(|c| c.name == "input1").unwrap();
+        assert_eq!(input1.node_type, "input");
+        
+        let opencl1 = box_template.children.iter().find(|c| c.name == "opencl1").unwrap();
+        assert_eq!(opencl1.node_type, "opencl");
+        
+        let input_param = opencl1.params.iter().find(|p| p.name == "Input").unwrap();
+        assert_eq!(input_param.default, "input1");
+        
+        let update_param = opencl1.params.iter().find(|p| p.name == "Update Parameters").unwrap();
+        assert_eq!(update_param.param_type, "button");
+        
+        let output1 = box_template.children.iter().find(|c| c.name == "output1").unwrap();
+        assert_eq!(output1.node_type, "output");
+        let output_input = output1.params.iter().find(|p| p.name == "Input").unwrap();
+        assert_eq!(output_input.default, "opencl1");
+    }
+
+    #[test]
+    fn test_sphere_subnet_geometry_generation() {
+        let templates_root = crate::app::load_fs_tree();
+        let sphere_template = templates_root
+            .children
+            .iter()
+            .find(|t| t.name == "Sphere")
+            .expect("Sphere template should be loaded");
+        
+        assert_eq!(sphere_template.children.len(), 2);
+        
+        let opencl1 = sphere_template.children.iter().find(|c| c.name == "opencl1").unwrap();
+        assert_eq!(opencl1.node_type, "opencl");
+        
+        let output1 = sphere_template.children.iter().find(|c| c.name == "output1").unwrap();
+        assert_eq!(output1.node_type, "output");
+        
+        let mut sphere_instance = sphere_template.clone();
+        sphere_instance.id = "sphere_inst".to_string();
+        for child in &mut sphere_instance.children {
+            child.id = format!("{}_{}", sphere_instance.id, child.name);
+        }
+        
+        let root = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![sphere_instance],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+        
+        let mut visited = Vec::new();
+        let mut ocl_err = None;
+        let geom = crate::geometry::generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[0],
+            &mut visited,
+            &mut ocl_err,
+        ).expect("Geometry generation failed");
+        
+        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+        assert_eq!(geom.vertices.len(), 2304);
+        
+        let mut max_dist: f32 = 0.0;
+        for v in &geom.vertices {
+            let dx = v.pos[0] - 0.0;
+            let dy = v.pos[1] - 0.55;
+            let dz = v.pos[2] - 0.0;
+            let dist = (dx*dx + dy*dy + dz*dz).sqrt();
+            if dist > max_dist {
+                max_dist = dist;
+            }
+        }
+        assert!((max_dist - 0.5).abs() < 0.01, "Expected radius around 0.5, got {}", max_dist);
+        
+        let mut sphere_instance_2 = sphere_template.clone();
+        sphere_instance_2.id = "sphere_inst_2".to_string();
+        for child in &mut sphere_instance_2.children {
+            child.id = format!("{}_{}", sphere_instance_2.id, child.name);
+        }
+        if let Some(radius_param) = sphere_instance_2.params.iter_mut().find(|p| p.name == "Radius") {
+            radius_param.default = "1.0".to_string();
+        }
+        
+        let root_2 = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![sphere_instance_2],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+        
+        let mut visited_2 = Vec::new();
+        let mut ocl_err_2 = None;
+        let geom_2 = crate::geometry::generate_single_node_geometry_with_errors(
+            &root_2,
+            &root_2.children[0],
+            &mut visited_2,
+            &mut ocl_err_2,
+        ).expect("Geometry generation failed");
+        
+        assert!(ocl_err_2.is_none(), "OpenCL compilation error: {:?}", ocl_err_2);
+        assert_eq!(geom_2.vertices.len(), 2304);
+        
+        let mut max_dist_2: f32 = 0.0;
+        for v in &geom_2.vertices {
+            let dx = v.pos[0] - 0.0;
+            let dy = v.pos[1] - 0.55;
+            let dz = v.pos[2] - 0.0;
+            let dist = (dx*dx + dy*dy + dz*dz).sqrt();
+            if dist > max_dist_2 {
+                max_dist_2 = dist;
+            }
+        }
+        assert!((max_dist_2 - 1.0).abs() < 0.01, "Expected radius around 1.0, got {}", max_dist_2);
+    }
+
+    #[test]
+    fn test_dynamic_parameters_parsing_and_preprocessing() {
+        let code = r#"
+            float freq = chf("freq", 4.0f);
+            int count = chi("count", 15);
+            float3 col = chv("col", 0.8f, 0.2f, 0.2f);
+            float scale = chf("scale");
+        "#;
+        
+        let parsed = crate::geometry::parse_dynamic_params(code);
+        assert_eq!(parsed.len(), 4);
+        
+        assert_eq!(parsed[0].name, "freq");
+        assert_eq!(parsed[0].param_type, "slider");
+        assert_eq!(parsed[0].default, "4.0");
+        
+        assert_eq!(parsed[1].name, "scale");
+        assert_eq!(parsed[1].param_type, "slider");
+        assert_eq!(parsed[1].default, "0.5");
+        
+        assert_eq!(parsed[2].name, "count");
+        assert_eq!(parsed[2].param_type, "spinbox");
+        assert_eq!(parsed[2].default, "15");
+        
+        assert_eq!(parsed[3].name, "col");
+        assert_eq!(parsed[3].param_type, "float3");
+        assert_eq!(parsed[3].default, "0.80:0.20:0.20");
+        
+        let mut target = FsNode {
+            id: "node1".to_string(),
+            name: "OpenCL Node".to_string(),
+            node_type: "opencl".to_string(),
+            children: Vec::new(),
+            params: parsed,
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        
+        target.params[1].default = "1.25".to_string(); // "scale"
+        let preprocessed = crate::geometry::preprocess_opencl_code(code);
+        assert!(preprocessed.contains("param_values[0]"));
+        assert!(preprocessed.contains("((int)param_values[2])"));
+        assert!(preprocessed.contains("(float3)(param_values[3], param_values[4], param_values[5])"));
+        assert!(preprocessed.contains("param_values[1]"));
     }
 
     #[test]
     fn test_project_serialization_roundtrip() {
         let root = FsNode {
+            id: "root".to_string(),
             name: "test_root".to_string(),
             node_type: "node".to_string(),
             children: vec![
                 FsNode {
+                    id: "child1".to_string(),
                     name: "child1".to_string(),
                     node_type: "sphere".to_string(),
                     children: vec![],
                     params: vec![],
                     geometry_visible: true,
                     position: (5.0, 6.0),
+                    inputs: 0,
+                    outputs: 1,
                 }
             ],
             params: vec![],
             geometry_visible: true,
             position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
         };
         let view_state = ProjectViewState {
             active_camera: "child1".to_string(),
@@ -567,8 +770,6 @@ mod tests {
         assert_eq!(settings.show_camera_pivot_enabled, false);
         assert_eq!(settings.camera_pivot_size, 1.0);
         assert_eq!(settings.grid_color, [0.35, 0.35, 0.40]);
-        assert_eq!(settings.uniform_background, false);
-        assert_eq!(settings.network_opacity, 0.95);
         assert_eq!(settings.cell_color, [0.13, 0.13, 0.16]);
         assert_eq!(settings.gap_color, [0.07, 0.07, 0.09]);
         
@@ -577,8 +778,6 @@ mod tests {
         assert_eq!(settings_roundtrip.show_camera_pivot_enabled, false);
         assert_eq!(settings_roundtrip.camera_pivot_size, 1.0);
         assert_eq!(settings_roundtrip.grid_color, [0.35, 0.35, 0.40]);
-        assert_eq!(settings_roundtrip.uniform_background, false);
-        assert_eq!(settings_roundtrip.network_opacity, 0.95);
         assert_eq!(settings_roundtrip.cell_color, [0.13, 0.13, 0.16]);
         assert_eq!(settings_roundtrip.gap_color, [0.07, 0.07, 0.09]);
     }

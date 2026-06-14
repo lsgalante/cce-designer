@@ -1,0 +1,25 @@
+{
+  "name": "Scatter",
+  "type": "scatter",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" },
+    {
+      "name": "Points",
+      "type": "spinbox",
+      "default": "100",
+      "min": 10.0,
+      "max": 5000.0,
+      "step": 10.0
+    },
+    {
+      "name": "Radius",
+      "type": "slider",
+      "default": "0.02",
+      "min": 0.005,
+      "max": 0.1,
+      "step": 0.005
+    }
+  ]
+}

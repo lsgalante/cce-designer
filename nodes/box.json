@@ -1,0 +1,38 @@
+{
+  "name": "Box",
+  "type": "node",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" },
+    { "name": "Scale", "default": "1.0", "type": "slider" },
+    { "name": "Wireframe", "default": "false", "type": "toggle" }
+  ],
+  "children": [
+    {
+      "name": "input1",
+      "type": "input",
+      "position": [4.0, 1.0]
+    },
+    {
+      "name": "opencl1",
+      "type": "opencl",
+      "params": [
+        { "name": "Input", "default": "input1" },
+        {
+          "name": "Code",
+          "default": "void add_box(float cx, float cy, float cz, float hx, float hy, float hz, __global float* out_pos, __global float* out_col, int* count, int max_vertices) {\n    float temp_pos[108] = {\n        -hx, -hy, hz,   hx, -hy, hz,   hx,  hy, hz,\n        -hx, -hy, hz,   hx,  hy, hz,  -hx,  hy, hz,\n        -hx, -hy, -hz, -hx,  hy, -hz,  hx,  hy, -hz,\n        -hx, -hy, -hz,  hx,  hy, -hz,  hx, -hy, -hz,\n        -hx, -hy, -hz, -hx, -hy, hz,  -hx,  hy, hz,\n        -hx, -hy, -hz, -hx,  hy, hz,  -hx,  hy, -hz,\n        hx, -hy, -hz,  hx,  hy, -hz,  hx,  hy, hz,\n        hx, -hy, -hz,  hx,  hy, hz,   hx, -hy, hz,\n        -hx,  hy, -hz, -hx,  hy, hz,   hx,  hy, hz,\n        -hx,  hy, -hz,  hx,  hy, hz,   hx,  hy, -hz,\n        -hx, -hy, -hz,  hx, -hy, -hz,  hx, -hy, hz,\n        -hx, -hy, -hz,  hx, -hy, hz,  -hx, -hy, hz\n    };\n    int start = *count;\n    for (int i = 0; i < 36; i++) {\n        int idx = start + i;\n        if (idx < max_vertices) {\n            out_pos[idx * 3 + 0] = cx + temp_pos[i * 3 + 0];\n            out_pos[idx * 3 + 1] = cy + temp_pos[i * 3 + 1];\n            out_pos[idx * 3 + 2] = cz + temp_pos[i * 3 + 2];\n            out_col[idx * 3 + 0] = 0.8f;\n            out_col[idx * 3 + 1] = 0.2f;\n            out_col[idx * 3 + 2] = 0.2f;\n        }\n    }\n    *count = start + 36;\n}\n\n__kernel void process(__global const float* in_pos, __global const float* in_col, int in_count, __global float* out_pos, __global float* out_col, __global int* out_count, int max_vertices) {\n    int id = get_global_id(0);\n    if (id == 0) {\n        float scale = chf(\"Scale\", 1.0f);\n        int wireframe = chb(\"Wireframe\", 0);\n        float dx = 0.5f * scale;\n        float dy = 0.5f * scale;\n        float dz = 0.5f * scale;\n        float center_x = 0.0f;\n        float center_y = 0.55f;\n        float center_z = 0.0f;\n        int count = 0;\n        if (wireframe) {\n            float t_line = 0.008f * scale;\n            float t_corner = 0.012f * scale;\n            for (int ix = 0; ix < 2; ix++) {\n                float cx = center_x + (ix == 0 ? -dx : dx);\n                for (int iy = 0; iy < 2; iy++) {\n                    float cy = center_y + (iy == 0 ? -dy : dy);\n                    for (int iz = 0; iz < 2; iz++) {\n                        float cz = center_z + (iz == 0 ? -dz : dz);\n                        add_box(cx, cy, cz, t_corner, t_corner, t_corner, out_pos, out_col, &count, max_vertices);\n                    }\n                }\n            }\n            for (int iy = 0; iy < 2; iy++) {\n                float cy = center_y + (iy == 0 ? -dy : dy);\n                for (int iz = 0; iz < 2; iz++) {\n                    float cz = center_z + (iz == 0 ? -dz : dz);\n                    add_box(center_x, cy, cz, dx, t_line, t_line, out_pos, out_col, &count, max_vertices);\n                }\n            }\n            for (int ix = 0; ix < 2; ix++) {\n                float cx = center_x + (ix == 0 ? -dx : dx);\n                for (int iz = 0; iz < 2; iz++) {\n                    float cz = center_z + (iz == 0 ? -dz : dz);\n                    add_box(cx, center_y, cz, t_line, dy, t_line, out_pos, out_col, &count, max_vertices);\n                }\n            }\n            for (int ix = 0; ix < 2; ix++) {\n                float cx = center_x + (ix == 0 ? -dx : dx);\n                for (int iy = 0; iy < 2; iy++) {\n                    float cy = center_y + (iy == 0 ? -dy : dy);\n                    add_box(cx, cy, center_z, t_line, t_line, dz, out_pos, out_col, &count, max_vertices);\n                }\n            }\n        } else {\n            add_box(center_x, center_y, center_z, dx, dy, dz, out_pos, out_col, &count, max_vertices);\n        }\n        *out_count = count;\n    }\n}"
+        }
+      ],
+      "position": [4.0, 2.0]
+    },
+    {
+      "name": "output1",
+      "type": "output",
+      "params": [
+        { "name": "Input", "default": "opencl1" }
+      ],
+      "position": [4.0, 3.0]
+    }
+  ]
+}

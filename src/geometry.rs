@@ -10,6 +10,63 @@ use opencl3::memory::{Buffer as ClBuffer, CL_MEM_READ_WRITE};
 use opencl3::types::{cl_float, cl_int, CL_TRUE};
 use glam::Vec3;
 
+struct SimpleRng {
+    state: u32,
+}
+
+impl SimpleRng {
+    fn new(seed: u32) -> Self {
+        Self { state: if seed == 0 { 1 } else { seed } }
+    }
+    
+    fn next_u32(&mut self) -> u32 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.state = x;
+        x
+    }
+    
+    fn next_f32(&mut self) -> f32 {
+        (self.next_u32() as f32) / (u32::MAX as f32)
+    }
+}
+
+#[allow(dead_code)]
+fn ray_triangle_intersect(
+    origin: Vec3,
+    dir: Vec3,
+    v0: Vec3,
+    v1: Vec3,
+    v2: Vec3,
+) -> Option<f32> {
+    let edge1 = v1 - v0;
+    let edge2 = v2 - v0;
+    let h = dir.cross(edge2);
+    let a = edge1.dot(h);
+    if a.abs() < 1e-6 {
+        return None;
+    }
+    let f = 1.0 / a;
+    let s = origin - v0;
+    let u = f * s.dot(h);
+    if u < 0.0 || u > 1.0 {
+        return None;
+    }
+    let q = s.cross(edge1);
+    let v = f * dir.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = f * edge2.dot(q);
+    if t > 1e-5 {
+        Some(t)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum GAttribute {
     Float(f32),
@@ -85,9 +142,7 @@ pub fn cube_vertices() -> Vec<Vertex3D> {
     data.iter().map(|&(p, c)| Vertex3D { position: p, color: c }).collect()
 }
 
-pub fn sphere_vertices(center: Vec3, radius: f32) -> Geometry {
-    let lat_steps = 16;
-    let lon_steps = 24;
+pub fn sphere_vertices_res(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usize) -> Geometry {
     let mut vertices = Vec::new();
 
     for lat in 0..lat_steps {
@@ -110,6 +165,10 @@ pub fn sphere_vertices(center: Vec3, radius: f32) -> Geometry {
     }
 
     Geometry { vertices }
+}
+
+pub fn sphere_vertices(center: Vec3, radius: f32) -> Geometry {
+    sphere_vertices_res(center, radius, 16, 24)
 }
 
 fn sphere_point(center: Vec3, radius: f32, theta: f32, phi: f32) -> Vec3 {
@@ -255,6 +314,21 @@ pub fn find_node_by_name<'a>(root: &'a FsNode, name: &str) -> Option<&'a FsNode>
     None
 }
 
+pub fn find_parent_node<'a>(root: &'a FsNode, child_id: &str) -> Option<&'a FsNode> {
+    fn visit<'a>(node: &'a FsNode, child_id: &str) -> Option<&'a FsNode> {
+        for child in &node.children {
+            if child.id == child_id {
+                return Some(node);
+            }
+            if let Some(res) = visit(child, child_id) {
+                return Some(res);
+            }
+        }
+        None
+    }
+    visit(root, child_id)
+}
+
 pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
     let mut err = None;
     generate_single_node_geometry_with_errors(root, target, visited, &mut err)
@@ -295,13 +369,54 @@ pub fn generate_single_node_geometry_with_errors(
             let py = center.y + t * 0.5 - 0.25;
             let pz = center.z + r * angle.sin();
             let pt_center = Vec3::new(px, py, pz);
-            geom.merge(sphere_vertices(pt_center, 0.02));
+            geom.merge(sphere_vertices_res(pt_center, 0.02, 6, 8));
         }
         Some(geom)
     } else if target.node_type.eq_ignore_ascii_case("transform") {
         resolve_transform_geometry_with_errors(root, target, visited, ocl_error)
+    } else if target.node_type.eq_ignore_ascii_case("scatter") {
+        resolve_scatter_geometry_with_errors(root, target, visited, ocl_error)
     } else if target.node_type.eq_ignore_ascii_case("opencl") {
         resolve_opencl_geometry_with_errors(root, target, visited, ocl_error)
+    } else if target.node_type.eq_ignore_ascii_case("node") {
+        if let Some(output_node) = target.children.iter().find(|c| c.node_type.eq_ignore_ascii_case("output")) {
+            generate_single_node_geometry_with_errors(root, output_node, visited, ocl_error)
+        } else {
+            None
+        }
+    } else if target.node_type.eq_ignore_ascii_case("output") {
+        let input_name = node_param_str(target, "Input", "");
+        if input_name.is_empty() {
+            None
+        } else {
+            let parent_node = find_parent_node(root, &target.id);
+            let input_node = if let Some(parent) = parent_node {
+                parent.children.iter().find(|c| c.name == input_name || c.id == input_name)
+            } else {
+                None
+            };
+            let input_node = input_node.or_else(|| find_node_by_name(root, &input_name));
+            if let Some(node) = input_node {
+                generate_single_node_geometry_with_errors(root, node, visited, ocl_error)
+            } else {
+                None
+            }
+        }
+    } else if target.node_type.eq_ignore_ascii_case("input") {
+        if let Some(parent) = find_parent_node(root, &target.id) {
+            let input_name = node_param_str(parent, "Input", "");
+            if !input_name.is_empty() {
+                if let Some(input_node) = find_node_by_name(root, &input_name) {
+                    generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -336,6 +451,337 @@ pub fn resolve_transform_geometry_with_errors(
     Some(geom)
 }
 
+pub fn resolve_scatter_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
+    let mut err = None;
+    resolve_scatter_geometry_with_errors(root, target, visited, &mut err)
+}
+
+struct PrecomputedTriangle {
+    v0: Vec3,
+    edge1: Vec3,
+    edge2: Vec3,
+    h: Vec3,
+    f: f32,
+}
+
+pub fn resolve_scatter_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+) -> Option<Geometry> {
+    if visited.contains(&target.id) {
+        return None;
+    }
+    visited.push(target.id.clone());
+
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        visited.pop();
+        return None;
+    }
+    let input_node = match find_node_by_name(root, &input_name) {
+        Some(node) => node,
+        None => {
+            visited.pop();
+            return None;
+        }
+    };
+    let geom = match generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error) {
+        Some(g) => g,
+        None => {
+            visited.pop();
+            return None;
+        }
+    };
+
+    let num_points = node_param_f32(target, "Points", 100.0) as usize;
+    let radius = node_param_f32(target, "Radius", 0.02);
+
+    let ray_dir = Vec3::new(0.19, 0.98, 0.05).normalize();
+    let mut triangles = Vec::new();
+    let mut min_pos = Vec3::splat(f32::MAX);
+    let mut max_pos = Vec3::splat(f32::MIN);
+
+    for chunk in geom.vertices.chunks_exact(3) {
+        let v0 = Vec3::from_array(chunk[0].pos);
+        let v1 = Vec3::from_array(chunk[1].pos);
+        let v2 = Vec3::from_array(chunk[2].pos);
+
+        min_pos = min_pos.min(v0).min(v1).min(v2);
+        max_pos = max_pos.max(v0).max(v1).max(v2);
+
+        let edge1 = v1 - v0;
+        let edge2 = v2 - v0;
+        let h = ray_dir.cross(edge2);
+        let a = edge1.dot(h);
+        if a.abs() >= 1e-6 {
+            let f = 1.0 / a;
+            triangles.push(PrecomputedTriangle {
+                v0,
+                edge1,
+                edge2,
+                h,
+                f,
+            });
+        }
+    }
+
+    let res = if triangles.is_empty() {
+        Geometry::new()
+    } else {
+        let mut rng = SimpleRng::new(1337);
+        let mut scattered_geom = Geometry::new();
+        let mut found_count = 0;
+        let max_attempts = (num_points * 100).max(10_000);
+
+        for _ in 0..max_attempts {
+            if found_count >= num_points {
+                break;
+            }
+            let rx = min_pos.x + rng.next_f32() * (max_pos.x - min_pos.x);
+            let ry = min_pos.y + rng.next_f32() * (max_pos.y - min_pos.y);
+            let rz = min_pos.z + rng.next_f32() * (max_pos.z - min_pos.z);
+            let candidate = Vec3::new(rx, ry, rz);
+
+            let mut intersection_count = 0;
+            for tri in &triangles {
+                let s = candidate - tri.v0;
+                let u = tri.f * s.dot(tri.h);
+                if u < 0.0 || u > 1.0 {
+                    continue;
+                }
+                let q = s.cross(tri.edge1);
+                let v = tri.f * ray_dir.dot(q);
+                if v < 0.0 || u + v > 1.0 {
+                    continue;
+                }
+                let t = tri.f * tri.edge2.dot(q);
+                if t > 1e-5 {
+                    intersection_count += 1;
+                }
+            }
+
+            if intersection_count % 2 == 1 {
+                scattered_geom.merge(sphere_vertices_res(candidate, radius, 6, 8));
+                found_count += 1;
+            }
+        }
+        scattered_geom
+    };
+
+    visited.pop();
+    Some(res)
+}
+
+fn rewrite_kernel_signature(code: &str) -> String {
+    let bytes = code.as_bytes();
+    if let Some(process_idx) = code.find("process") {
+        let mut idx = process_idx + "process".len();
+        while idx < bytes.len() && (bytes[idx] as char).is_whitespace() {
+            idx += 1;
+        }
+        if idx < bytes.len() && bytes[idx] == b'(' {
+            let start_args = idx + 1;
+            let mut paren_count = 1;
+            let mut end_args = start_args;
+            while end_args < bytes.len() && paren_count > 0 {
+                if bytes[end_args] == b'(' {
+                    paren_count += 1;
+                } else if bytes[end_args] == b')' {
+                    paren_count -= 1;
+                }
+                end_args += 1;
+            }
+            if paren_count == 0 {
+                let closing_paren_idx = end_args - 1;
+                let before = &code[..closing_paren_idx];
+                let after = &code[closing_paren_idx..];
+                let args_str = &code[start_args..closing_paren_idx].trim();
+                let insertion = if args_str.is_empty() {
+                    "__global const float* param_values"
+                } else {
+                    ", __global const float* param_values"
+                };
+                return format!("{}{}{}", before, insertion, after);
+            }
+        }
+    }
+    code.to_string()
+}
+
+pub fn preprocess_opencl_code(code: &str) -> String {
+    let parsed_params = parse_dynamic_params(code);
+    if parsed_params.is_empty() {
+        return code.to_string();
+    }
+
+    let mut param_indices = std::collections::HashMap::new();
+    let mut flat_idx = 0;
+    for p in &parsed_params {
+        param_indices.insert(p.name.clone(), flat_idx);
+        if p.param_type == "float3" {
+            flat_idx += 3;
+        } else {
+            flat_idx += 1;
+        }
+    }
+
+    let mut processed = rewrite_kernel_signature(code);
+
+    let prefixes = [("chf", "slider"), ("chi", "spinbox"), ("chv", "float3"), ("chb", "toggle")];
+    for &(prefix, _) in &prefixes {
+        let pattern = format!("{}(", prefix);
+        while let Some(pos) = processed.find(&pattern) {
+            let start_idx = pos + pattern.len();
+            let mut paren_count = 1;
+            let mut end_pos = start_idx;
+            let bytes = processed.as_bytes();
+            while end_pos < bytes.len() && paren_count > 0 {
+                if bytes[end_pos] == b'(' {
+                    paren_count += 1;
+                } else if bytes[end_pos] == b')' {
+                    paren_count -= 1;
+                }
+                end_pos += 1;
+            }
+            if paren_count == 0 {
+                let full_match = &processed[pos..end_pos];
+                let args_str = &processed[start_idx..end_pos - 1];
+                let mut replacement = None;
+                if let Some(first_quote_pos) = args_str.find(|c| c == '"' || c == '\'') {
+                    let quote_char = args_str.chars().nth(first_quote_pos).unwrap();
+                    if let Some(second_quote_pos) = args_str[first_quote_pos + 1..].find(quote_char) {
+                        let name = &args_str[first_quote_pos + 1..first_quote_pos + 1 + second_quote_pos];
+                        if !name.is_empty() {
+                            if let Some(&flat_idx) = param_indices.get(name) {
+                                match prefix {
+                                    "chf" => {
+                                        replacement = Some(format!("param_values[{}]", flat_idx));
+                                    }
+                                    "chi" | "chb" => {
+                                        replacement = Some(format!("((int)param_values[{}])", flat_idx));
+                                    }
+                                    "chv" => {
+                                        replacement = Some(format!(
+                                            "(float3)(param_values[{}], param_values[{}], param_values[{}])",
+                                            flat_idx, flat_idx + 1, flat_idx + 2
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(rep) = replacement {
+                    processed = processed.replace(full_match, &rep);
+                } else {
+                    processed = processed.replace(full_match, "0");
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    processed
+}
+
+pub fn parse_dynamic_params(code: &str) -> Vec<ParamDef> {
+    let mut parsed = Vec::new();
+    let prefixes = [("chf", "slider"), ("chi", "spinbox"), ("chv", "float3"), ("chb", "toggle")];
+    for &(prefix, ptype) in &prefixes {
+        let pattern = format!("{}(", prefix);
+        let mut start_idx = 0;
+        while let Some(pos) = code[start_idx..].find(&pattern) {
+            let actual_pos = start_idx + pos;
+            start_idx = actual_pos + pattern.len();
+            let mut paren_count = 1;
+            let mut end_pos = start_idx;
+            let code_bytes = code.as_bytes();
+            while end_pos < code_bytes.len() && paren_count > 0 {
+                if code_bytes[end_pos] == b'(' {
+                    paren_count += 1;
+                } else if code_bytes[end_pos] == b')' {
+                    paren_count -= 1;
+                }
+                end_pos += 1;
+            }
+            if paren_count == 0 {
+                let args_str = &code[start_idx..end_pos - 1];
+                if let Some(first_quote_pos) = args_str.find(|c| c == '"' || c == '\'') {
+                    let quote_char = args_str.chars().nth(first_quote_pos).unwrap();
+                    if let Some(second_quote_pos) = args_str[first_quote_pos + 1..].find(quote_char) {
+                        let name = &args_str[first_quote_pos + 1..first_quote_pos + 1 + second_quote_pos];
+                        if !name.is_empty() {
+                            let mut default_val = match prefix {
+                                "chf" => "0.5".to_string(),
+                                "chi" => "0".to_string(),
+                                "chb" => "false".to_string(),
+                                "chv" => "0.00:0.00:0.00".to_string(),
+                                _ => "".to_string(),
+                            };
+                            let rest = &args_str[first_quote_pos + 1 + second_quote_pos + 1..];
+                            if let Some(comma_pos) = rest.find(',') {
+                                let val_part = rest[comma_pos + 1..].trim();
+                                if !val_part.is_empty() {
+                                    let mut clean_val = val_part.to_string();
+                                    if clean_val.ends_with('f') {
+                                        clean_val.pop();
+                                    }
+                                    if clean_val.ends_with("f32") {
+                                        clean_val.truncate(clean_val.len() - 3);
+                                    }
+                                    let clean_val = clean_val.trim();
+                                    if prefix == "chv" {
+                                        let parts: Vec<String> = val_part.split(',')
+                                            .map(|p| {
+                                                let mut s = p.trim().to_string();
+                                                if s.ends_with('f') { s.pop(); }
+                                                if s.ends_with("f32") { s.truncate(s.len() - 3); }
+                                                s.trim().to_string()
+                                            })
+                                            .collect();
+                                        if parts.len() >= 3 {
+                                            if let (Ok(x), Ok(y), Ok(z)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                                                default_val = format!("{:.2}:{:.2}:{:.2}", x, y, z);
+                                            }
+                                        } else {
+                                            if let Ok(val) = clean_val.parse::<f32>() {
+                                                default_val = format!("{:.2}:{:.2}:{:.2}", val, val, val);
+                                            }
+                                        }
+                                    } else {
+                                        default_val = clean_val.to_string();
+                                    }
+                                }
+                            }
+                            if !parsed.iter().any(|p: &ParamDef| p.name == name) {
+                                let (min, max, step) = match prefix {
+                                    "chf" => (Some(0.0), Some(2.0), Some(0.01)),
+                                    "chi" => (Some(0.0), Some(1000.0), Some(1.0)),
+                                    _ => (None, None, None),
+                                };
+                                parsed.push(ParamDef {
+                                    name: name.to_string(),
+                                    label: String::new(),
+                                    param_type: ptype.to_string(),
+                                    default: default_val,
+                                    options: Vec::new(),
+                                    min,
+                                    max,
+                                    step,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    parsed
+}
+
 pub fn resolve_opencl_geometry_with_errors(
     root: &FsNode,
     target: &FsNode,
@@ -344,14 +790,49 @@ pub fn resolve_opencl_geometry_with_errors(
 ) -> Option<Geometry> {
     let input_name = node_param_str(target, "Input", "");
     let mut geom = if !input_name.is_empty() {
-        let input_node = find_node_by_name(root, &input_name)?;
-        generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)?
+        if let Some(input_node) = find_node_by_name(root, &input_name) {
+            generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error).unwrap_or_default()
+        } else {
+            Geometry::default()
+        }
     } else {
         Geometry::default()
     };
     let code = node_param_str(target, "Code", "");
     if !code.is_empty() {
-        if let Err(e) = run_opencl_kernel(&code, &mut geom) {
+        let parsed_params = parse_dynamic_params(&code);
+        let mut flat_values = Vec::new();
+        for p in &parsed_params {
+            let mut val_str = node_param_str(target, &p.name, &p.default);
+            if !target.params.iter().any(|p_def| p_def.name.eq_ignore_ascii_case(&p.name)) {
+                if let Some(parent) = find_parent_node(root, &target.id) {
+                    val_str = node_param_str(parent, &p.name, &val_str);
+                }
+            }
+            if p.param_type == "float3" {
+                let parts: Vec<&str> = val_str.split(':').collect();
+                let (x, y, z) = if parts.len() >= 3 {
+                    (parts[0].parse::<f32>().unwrap_or(0.0), parts[1].parse::<f32>().unwrap_or(0.0), parts[2].parse::<f32>().unwrap_or(0.0))
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+                flat_values.push(x);
+                flat_values.push(y);
+                flat_values.push(z);
+            } else {
+                let val = if val_str.eq_ignore_ascii_case("true") {
+                    1.0
+                } else if val_str.eq_ignore_ascii_case("false") {
+                    0.0
+                } else {
+                    val_str.parse::<f32>().unwrap_or(0.0)
+                };
+                flat_values.push(val);
+            }
+        }
+
+        let processed_code = preprocess_opencl_code(&code);
+        if let Err(e) = run_opencl_kernel_with_params(&processed_code, &mut geom, &flat_values) {
             if ocl_error.is_none() {
                 *ocl_error = Some(e);
             }
@@ -407,6 +888,10 @@ fn init_opencl() -> Option<OpenClCache> {
 }
 
 pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> {
+    run_opencl_kernel_with_params(code, geom, &[])
+}
+
+pub fn run_opencl_kernel_with_params(code: &str, geom: &mut Geometry, params: &[f32]) -> Result<(), String> {
     let is_generator = code.contains("out_count");
     if geom.vertices.is_empty() && !is_generator {
         return Ok(());
@@ -434,6 +919,20 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
     let context = &cache.context;
     let queue = &cache.queue;
 
+    // Prepare parameter values buffer
+    let mut param_values_data = params.to_vec();
+    if param_values_data.is_empty() {
+        param_values_data.push(0.0);
+    }
+    let mut param_values_buf = unsafe {
+        ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, param_values_data.len(), std::ptr::null_mut())
+            .map_err(|e| format!("Failed to create param_values buffer: {:?}", e))?
+    };
+    let _write_param_event = unsafe {
+        queue.enqueue_write_buffer(&mut param_values_buf, CL_TRUE, 0, &param_values_data, &[])
+            .map_err(|e| format!("Failed to write param_values buffer: {:?}", e))?
+    };
+
     if is_generator {
         let in_count = geom.vertices.len();
         let max_vertices = 200_000;
@@ -448,21 +947,23 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
 
         // Create GPU buffers for inputs
         let mut in_pos_buf = unsafe {
-            ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, in_count * 3, std::ptr::null_mut())
+            ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, (in_count * 3).max(1), std::ptr::null_mut())
                 .map_err(|e| format!("Failed to create input positions buffer: {:?}", e))?
         };
         let mut in_col_buf = unsafe {
-            ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, in_count * 3, std::ptr::null_mut())
+            ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, (in_count * 3).max(1), std::ptr::null_mut())
                 .map_err(|e| format!("Failed to create input colors buffer: {:?}", e))?
         };
 
         // Write input data to GPU
         let _write_pos_event = unsafe {
-            queue.enqueue_write_buffer(&mut in_pos_buf, CL_TRUE, 0, &in_pos_data, &[])
+            let write_data = if in_pos_data.is_empty() { &[0.0f32] } else { &in_pos_data[..] };
+            queue.enqueue_write_buffer(&mut in_pos_buf, CL_TRUE, 0, write_data, &[])
                 .map_err(|e| format!("Failed to write input positions buffer: {:?}", e))?
         };
         let _write_col_event = unsafe {
-            queue.enqueue_write_buffer(&mut in_col_buf, CL_TRUE, 0, &in_col_data, &[])
+            let write_data = if in_col_data.is_empty() { &[0.0f32] } else { &in_col_data[..] };
+            queue.enqueue_write_buffer(&mut in_col_buf, CL_TRUE, 0, write_data, &[])
                 .map_err(|e| format!("Failed to write input colors buffer: {:?}", e))?
         };
 
@@ -489,16 +990,22 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
 
         // Execute kernel
         let global_work_size = if in_count == 0 { 1 } else { in_count };
+        let mut exec = ExecuteKernel::new(kernel);
         let kernel_event = unsafe {
-            ExecuteKernel::new(kernel)
-                .set_arg(&in_pos_buf)
+            exec.set_arg(&in_pos_buf)
                 .set_arg(&in_col_buf)
                 .set_arg(&(in_count as cl_int))
                 .set_arg(&out_pos_buf)
                 .set_arg(&out_col_buf)
                 .set_arg(&out_count_buf)
-                .set_arg(&(max_vertices as cl_int))
-                .set_global_work_size(global_work_size)
+                .set_arg(&(max_vertices as cl_int));
+
+            let num_args = kernel.num_args().unwrap_or(0);
+            if num_args >= 8 {
+                exec.set_arg(&param_values_buf);
+            }
+
+            exec.set_global_work_size(global_work_size)
                 .enqueue_nd_range(&queue)
                 .map_err(|e| format!("Failed to enqueue kernel: {:?}", e))?
         };
@@ -571,12 +1078,18 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
         };
 
         // Execute kernel
+        let mut exec = ExecuteKernel::new(kernel);
         let kernel_event = unsafe {
-            ExecuteKernel::new(kernel)
-                .set_arg(&pos_buf)
+            exec.set_arg(&pos_buf)
                 .set_arg(&col_buf)
-                .set_arg(&(count as cl_int))
-                .set_global_work_size(count)
+                .set_arg(&(count as cl_int));
+
+            let num_args = kernel.num_args().unwrap_or(0);
+            if num_args >= 4 {
+                exec.set_arg(&param_values_buf);
+            }
+
+            exec.set_global_work_size(count)
                 .enqueue_nd_range(&queue)
                 .map_err(|e| format!("Failed to enqueue kernel: {:?}", e))?
         };
@@ -603,24 +1116,38 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
     Ok(())
 }
 
+pub fn is_geometry_node_type(node_type: &str) -> bool {
+    let nt = node_type.to_lowercase();
+    nt == "sphere"
+        || nt == "line"
+        || nt == "add"
+        || nt == "transform"
+        || nt == "opencl"
+        || nt == "box"
+        || nt == "input"
+        || nt == "output"
+        || nt == "scatter"
+}
+
 pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
     let mut err = None;
     network_sphere_vertices_with_errors(root, &mut err)
 }
 
 pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option<String>) -> Geometry {
-    fn visit(root: &FsNode, node: &FsNode, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>) {
+    fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>) {
+        let is_visible = parent_visible && node.geometry_visible;
         if node.node_type.eq_ignore_ascii_case("sphere") {
             let idx = *count;
             *count += 1;
-            if node.geometry_visible {
+            if is_visible {
                 let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
                 out.merge(sphere_vertices(center, node_param_f32(node, "Radius", 0.5).max(0.05)));
             }
         } else if node.node_type.eq_ignore_ascii_case("line") {
             let idx = *count;
             *count += 1;
-            if node.geometry_visible {
+            if is_visible {
                 let start = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
                 let length = node_param_f32(node, "Length", 1.0);
                 let thickness = node_param_f32(node, "Thickness", 0.02);
@@ -630,7 +1157,7 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
         } else if node.node_type.eq_ignore_ascii_case("add") {
             let idx = *count;
             *count += 1;
-            if node.geometry_visible {
+            if is_visible {
                 let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
                 let num_points = node_param_f32(node, "Points", 100.0) as i32;
                 for i in 0..num_points {
@@ -641,22 +1168,31 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
                     let py = center.y + t * 0.5 - 0.25;
                     let pz = center.z + r * angle.sin();
                     let pt_center = Vec3::new(px, py, pz);
-                    out.merge(sphere_vertices(pt_center, 0.02));
+                    out.merge(sphere_vertices_res(pt_center, 0.02, 6, 8));
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("transform") {
-            let idx = *count;
+            let _idx = *count;
             *count += 1;
-            if node.geometry_visible {
+            if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_transform_geometry_with_errors(root, node, &mut visited, ocl_error) {
                     out.merge(geom);
                 }
             }
-        } else if node.node_type.eq_ignore_ascii_case("opencl") {
-            let idx = *count;
+        } else if node.node_type.eq_ignore_ascii_case("scatter") {
+            let _idx = *count;
             *count += 1;
-            if node.geometry_visible {
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_scatter_geometry_with_errors(root, node, &mut visited, ocl_error) {
+                    out.merge(geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("opencl") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_opencl_geometry_with_errors(root, node, &mut visited, ocl_error) {
                     out.merge(geom);
@@ -664,14 +1200,14 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
             }
         }
         for child in &node.children {
-            visit(root, child, count, out, ocl_error);
+            visit(root, child, is_visible, count, out, ocl_error);
         }
     }
 
     let mut out = Geometry::new();
     let mut count = 0;
     for child in &root.children {
-        visit(root, child, &mut count, &mut out, ocl_error);
+        visit(root, child, true, &mut count, &mut out, ocl_error);
     }
     out
 }
@@ -683,7 +1219,8 @@ pub fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {
             || node.node_type.eq_ignore_ascii_case("line") 
             || node.node_type.eq_ignore_ascii_case("add")
             || node.node_type.eq_ignore_ascii_case("transform")
-            || node.node_type.eq_ignore_ascii_case("opencl") {
+            || node.node_type.eq_ignore_ascii_case("opencl")
+            || node.node_type.eq_ignore_ascii_case("scatter") {
             let idx = *count;
             *count += 1;
             if is_target {
@@ -1007,6 +1544,9 @@ mod tests {
     #[test]
     fn test_add_node_points() {
         let add_node = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "Add points test".to_string(),
             node_type: "add".to_string(),
             children: vec![],
@@ -1026,6 +1566,9 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "root".to_string(),
             node_type: "node".to_string(),
             children: vec![add_node],
@@ -1034,12 +1577,15 @@ mod tests {
             position: (0.0, 0.0),
         };
         let geom = network_sphere_vertices(&root);
-        assert_eq!(geom.vertices.len(), 5 * 2304);
+        assert_eq!(geom.vertices.len(), 5 * 288);
     }
 
     #[test]
     fn test_transform_node() {
         let sphere = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "Sphere 1".to_string(),
             node_type: "sphere".to_string(),
             children: vec![],
@@ -1059,6 +1605,9 @@ mod tests {
             position: (0.0, 0.0),
         };
         let transform1 = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "Transform 1".to_string(),
             node_type: "transform".to_string(),
             children: vec![],
@@ -1088,6 +1637,9 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "root".to_string(),
             node_type: "node".to_string(),
             children: vec![sphere.clone(), transform1.clone()],
@@ -1109,6 +1661,9 @@ mod tests {
 
         // Test chained transform
         let transform2 = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "Transform 2".to_string(),
             node_type: "transform".to_string(),
             children: vec![],
@@ -1138,6 +1693,9 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root_chained = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "root".to_string(),
             node_type: "node".to_string(),
             children: vec![sphere, transform1, transform2.clone()],
@@ -1156,6 +1714,9 @@ mod tests {
 
         // Test loop detection
         let transform_loop = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "Transform Loop".to_string(),
             node_type: "transform".to_string(),
             children: vec![],
@@ -1185,6 +1746,9 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root_loop = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "root".to_string(),
             node_type: "node".to_string(),
             children: vec![transform_loop.clone()],
@@ -1205,6 +1769,9 @@ mod tests {
         }
 
         let sphere = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "Sphere 1".to_string(),
             node_type: "sphere".to_string(),
             children: vec![],
@@ -1225,6 +1792,9 @@ mod tests {
         };
 
         let opencl_node = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "OpenCL 1".to_string(),
             node_type: "opencl".to_string(),
             children: vec![],
@@ -1262,6 +1832,9 @@ mod tests {
         };
 
         let root = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
             name: "root".to_string(),
             node_type: "node".to_string(),
             children: vec![sphere, opencl_node.clone()],
@@ -1279,6 +1852,108 @@ mod tests {
         // The sphere should be translated up by 2.0 on the y axis compared to the standard sphere (which centers around y=0.55 for index 0)
         let avg_y = geom.vertices.iter().map(|v| v.pos[1]).sum::<f32>() / geom.vertices.len() as f32;
         assert!((avg_y - 2.55).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_scatter_node() {
+        let sphere = FsNode {
+            id: "sphere1".to_string(),
+            inputs: 1,
+            outputs: 1,
+            name: "Sphere 1".to_string(),
+            node_type: "sphere".to_string(),
+            children: vec![],
+            params: vec![
+                ParamDef {
+                    name: "Radius".to_string(),
+                    label: String::new(),
+                    param_type: "slider".to_string(),
+                    default: "0.5".to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                }
+            ],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+        };
+
+        let scatter = FsNode {
+            id: "scatter1".to_string(),
+            inputs: 1,
+            outputs: 1,
+            name: "Scatter 1".to_string(),
+            node_type: "scatter".to_string(),
+            children: vec![],
+            params: vec![
+                ParamDef {
+                    name: "Input".to_string(),
+                    label: String::new(),
+                    param_type: "text".to_string(),
+                    default: "Sphere 1".to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                },
+                ParamDef {
+                    name: "Points".to_string(),
+                    label: String::new(),
+                    param_type: "spinbox".to_string(),
+                    default: "15".to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                },
+                ParamDef {
+                    name: "Radius".to_string(),
+                    label: String::new(),
+                    param_type: "slider".to_string(),
+                    default: "0.02".to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                }
+            ],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+        };
+
+        let root = FsNode {
+            id: String::new(),
+            inputs: 1,
+            outputs: 1,
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![sphere, scatter.clone()],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+        };
+
+        let mut visited = Vec::new();
+        let geom = resolve_scatter_geometry(&root, &scatter, &mut visited).unwrap();
+
+        // 15 scattered spheres. Each sphere with lat_steps=6, lon_steps=8 has:
+        // 6 * 8 = 48 quads. Each quad has 6 vertices. 48 * 6 = 288 vertices.
+        // 15 * 288 = 4320 vertices.
+        assert_eq!(geom.vertices.len(), 15 * 288);
+
+        // Center of sphere at idx 0 is Vec3::new(-1.875, 0.55, 0.0). Radius = 0.5.
+        // Let's check that each scattered sphere's center is indeed inside the parent sphere.
+        let center = Vec3::new(-1.875, 0.55, 0.0);
+        for chunk in geom.vertices.chunks_exact(288) {
+            let mut sum = Vec3::ZERO;
+            for v in chunk {
+                sum += Vec3::from_array(v.pos);
+            }
+            let avg = sum / 288.0;
+            let dist = avg.distance(center);
+            assert!(dist <= 0.5, "Scattered point center {:?} (distance {}) is outside the sphere of radius 0.5", avg, dist);
+        }
     }
 }
 

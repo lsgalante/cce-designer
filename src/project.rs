@@ -71,6 +71,7 @@ impl State {
         self.recent_files.truncate(10);
         Self::save_recent_files(&self.recent_files);
         self.rebuild_recent_buttons();
+        self.ensure_menubar_subnets();
         self.update_paginator();
     }
 
@@ -162,18 +163,9 @@ impl State {
 
             self.sync_grid_settings();
             self.sync_nodes();
-
-            let params = if !self.is_detached_network {
-                self.graph().selected_node().and_then(|sel_idx| {
-                    let dir = self.current_dir();
-                    if sel_idx < dir.children.len() {
-                        Some(param_display(&dir.children[sel_idx].params))
-                    } else { None }
-                }).unwrap_or_default()
-            } else {
-                vec![]
-            };
-            self.param_mut().set_display_params(&params);
+            self.sync_cursor_and_selection_from_loaded();
+            self.sync_cursor_and_selection();
+            self.sync_parameters_pane();
 
             self.rebuild_scene_geometry();
             self.rebuild_positions();
@@ -225,19 +217,10 @@ impl State {
 
         self.sync_grid_settings();
         self.sync_nodes();
-
-        // Sync Parameters pane with selected node
-        let params = if !self.is_detached_network {
-            self.graph().selected_node().and_then(|sel_idx| {
-                let dir = self.current_dir();
-                if sel_idx < dir.children.len() {
-                    Some(param_display(&dir.children[sel_idx].params))
-                } else { None }
-            }).unwrap_or_default()
-        } else {
-            vec![]
-        };
-        self.param_mut().set_display_params(&params);
+        self.sync_cursor_and_selection_from_loaded();
+        self.sync_cursor_and_selection();
+        self.add_recent_file(project_dir.clone());
+        self.sync_parameters_pane();
 
         self.rebuild_scene_geometry();
         self.rebuild_positions();
@@ -260,6 +243,8 @@ impl State {
             params: vec![],
             geometry_visible: true,
             position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
         };
         self.ensure_menubar_subnets();
         self.apply_settings_from_menubar_subnets();
@@ -283,6 +268,8 @@ impl State {
 
         self.sync_grid_settings();
         self.sync_nodes();
+        self.sync_cursor_and_selection();
+        self.sync_parameters_pane();
         self.rebuild_scene_geometry();
         self.rebuild_positions();
         self.apply_layout();
@@ -302,9 +289,16 @@ impl State {
         camera_options.extend(camera_nodes);
         let camera_options_refs: Vec<&str> = camera_options.iter().map(|s| s.as_str()).collect();
 
-        fn find_or_create_subnet<'a>(parent: &'a mut FsNode, name: &str, pos: (f32, f32)) -> &'a mut FsNode {
+        let mut recent_options = vec!["- Select -".to_string()];
+        for path in &self.recent_files {
+            recent_options.push(path.to_string_lossy().to_string());
+        }
+        let recent_options_refs: Vec<&str> = recent_options.iter().map(|s| s.as_str()).collect();
+
+        fn find_or_create_subnet<'a>(parent: &'a mut FsNode, name: &str, node_type: &str, pos: (f32, f32)) -> &'a mut FsNode {
             if let Some(idx) = parent.children.iter().position(|c| c.name == name) {
                 let node = &mut parent.children[idx];
+                node.node_type = node_type.to_string();
                 if node.position == (0.0, 0.0) {
                     node.position = pos;
                 }
@@ -313,11 +307,13 @@ impl State {
                 let new_node = FsNode {
                     id: crate::app::generate_node_id(),
                     name: name.to_string(),
-                    node_type: "node".to_string(),
+                    node_type: node_type.to_string(),
                     children: vec![],
                     params: vec![],
                     geometry_visible: true,
                     position: pos,
+                    inputs: 1,
+                    outputs: 1,
                 };
                 parent.children.push(new_node);
                 parent.children.last_mut().unwrap()
@@ -340,216 +336,172 @@ impl State {
         }
 
         // 1. Main subnet
-        let main_node = find_or_create_subnet(&mut self.fs_root, "Main", (0.0, 0.0));
-        
-        let file_node = find_or_create_subnet(main_node, "File", (0.0, 0.0));
-        ensure_param(file_node, "New Project", "button", "", &[], None, None, None);
-        ensure_param(file_node, "Open", "button", "", &[], None, None, None);
-        ensure_param(file_node, "Save", "button", "", &[], None, None, None);
-        ensure_param(file_node, "Save As", "button", "", &[], None, None, None);
-        ensure_param(file_node, "Exit", "button", "", &[], None, None, None);
+        let main_node = find_or_create_subnet(&mut self.fs_root, "Main", "utility", (0.0, 0.0));
+        main_node.children.clear();
 
-        let edit_node = find_or_create_subnet(main_node, "Edit", (2.0, 0.0));
-        ensure_param(edit_node, "Undo", "button", "", &[], None, None, None);
-        ensure_param(edit_node, "Redo", "button", "", &[], None, None, None);
+        ensure_param(main_node, "File", "section", "", &[], None, None, None);
+        ensure_param(main_node, "New Project", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Open", "button", "", &[], None, None, None);
 
-        let view_node = find_or_create_subnet(main_node, "View", (4.0, 0.0));
-        ensure_param(view_node, "Zoom In", "button", "", &[], None, None, None);
-        ensure_param(view_node, "Zoom Out", "button", "", &[], None, None, None);
-        ensure_param(view_node, "Reset Zoom", "button", "", &[], None, None, None);
-        ensure_param(view_node, "Detach Circular Window", "button", "", &[], None, None, None);
-        ensure_param(view_node, "Show Network Pane", "button", "", &[], None, None, None);
-        ensure_param(view_node, "Show Viewport Pane", "button", "", &[], None, None, None);
-        ensure_param(view_node, "Show Parameters Pane", "button", "", &[], None, None, None);
-        ensure_param(view_node, "Show Spreadsheet Pane", "button", "", &[], None, None, None);
+        if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Open Recent") {
+            p.options = recent_options.clone();
+            if !p.options.contains(&p.default) {
+                p.default = "- Select -".to_string();
+            }
+        } else {
+            ensure_param(main_node, "Open Recent", "choice", "- Select -", &recent_options_refs, None, None, None);
+        }
 
-        let help_node = find_or_create_subnet(main_node, "Help", (6.0, 0.0));
-        ensure_param(help_node, "About", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Save", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Save As", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Exit", "button", "", &[], None, None, None);
+
+        ensure_param(main_node, "Edit", "section", "", &[], None, None, None);
+        ensure_param(main_node, "Undo", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Redo", "button", "", &[], None, None, None);
+
+        ensure_param(main_node, "View", "section", "", &[], None, None, None);
+        ensure_param(main_node, "Zoom In", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Zoom Out", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Reset Zoom", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Detach Circular Window", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Show Network Pane", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Show Viewport Pane", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Show Parameters Pane", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Show Spreadsheet Pane", "button", "", &[], None, None, None);
+
+        ensure_param(main_node, "Help", "section", "", &[], None, None, None);
+        ensure_param(main_node, "About", "button", "", &[], None, None, None);
 
         // 2. Network subnet
-        let net_node = find_or_create_subnet(&mut self.fs_root, "Network", (2.0, 0.0));
+        let net_node = find_or_create_subnet(&mut self.fs_root, "Network", "utility", (2.0, 0.0));
+        net_node.children.clear();
 
-        let net_file_node = find_or_create_subnet(net_node, "File", (0.0, 0.0));
-        ensure_param(net_file_node, "New", "button", "", &[], None, None, None);
-        ensure_param(net_file_node, "Open", "button", "", &[], None, None, None);
-        ensure_param(net_file_node, "Save", "button", "", &[], None, None, None);
-        ensure_param(net_file_node, "Save As", "button", "", &[], None, None, None);
+        ensure_param(net_node, "File", "section", "", &[], None, None, None);
+        ensure_param(net_node, "New", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Open", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Save", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Save As", "button", "", &[], None, None, None);
 
-        let net_edit_node = find_or_create_subnet(net_node, "Edit", (2.0, 0.0));
-        ensure_param(net_edit_node, "Undo", "button", "", &[], None, None, None);
-        ensure_param(net_edit_node, "Redo", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Edit", "section", "", &[], None, None, None);
+        ensure_param(net_node, "Undo", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Redo", "button", "", &[], None, None, None);
 
-        let net_view_node = find_or_create_subnet(net_node, "View", (4.0, 0.0));
-        ensure_param(net_view_node, "Zoom In", "button", "", &[], None, None, None);
-        ensure_param(net_view_node, "Zoom Out", "button", "", &[], None, None, None);
-        ensure_param(net_view_node, "Circular Pane", "choice", if self.circular_network_pane { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(net_view_node, "Detach Pane", "button", "", &[], None, None, None);
-        ensure_param(net_view_node, "Close Pane", "button", "", &[], None, None, None);
+        ensure_param(net_node, "View", "section", "", &[], None, None, None);
+        ensure_param(net_node, "Zoom In", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Zoom Out", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Circular Pane", "choice", if self.circular_network_pane { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(net_node, "Detach Pane", "button", "", &[], None, None, None);
+        ensure_param(net_node, "Close Pane", "button", "", &[], None, None, None);
 
-        let net_settings_node = find_or_create_subnet(net_node, "Settings", (6.0, 0.0));
-        ensure_param(net_settings_node, "Snap to Grid", "choice", if self.grid_snap_enabled { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(net_settings_node, "Grid Visible", "choice", if self.network_grid_visible { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(net_settings_node, "Uniform Background", "choice", if self.uniform_background { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(net_settings_node, "Opacity", "slider", &format!("{:.2}", self.network_opacity), &[], Some(0.0), Some(1.0), None);
-        ensure_param(net_settings_node, "Node Color R", "spinbox", &((self.node_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Node Color G", "spinbox", &((self.node_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Node Color B", "spinbox", &((self.node_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Cell Color R", "spinbox", &((self.cell_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Cell Color G", "spinbox", &((self.cell_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Cell Color B", "spinbox", &((self.cell_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Gap Color R", "spinbox", &((self.gap_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Gap Color G", "spinbox", &((self.gap_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(net_settings_node, "Gap Color B", "spinbox", &((self.gap_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(net_node, "Settings", "section", "", &[], None, None, None);
+        ensure_param(net_node, "Node Color R", "spinbox", &((self.node_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(net_node, "Node Color G", "spinbox", &((self.node_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(net_node, "Node Color B", "spinbox", &((self.node_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
 
         // 3. Viewport subnet
-        let vp_node = find_or_create_subnet(&mut self.fs_root, "Viewport", (4.0, 0.0));
+        let vp_node = find_or_create_subnet(&mut self.fs_root, "Viewport", "utility", (4.0, 0.0));
+        vp_node.children.clear();
 
-        // Camera node - dynamically build options
-        let camera_node = find_or_create_subnet(vp_node, "Camera", (0.0, 0.0));
-        if let Some(p) = camera_node.params.iter_mut().find(|p| p.name == "Active Camera") {
+        ensure_param(vp_node, "Camera", "section", "", &[], None, None, None);
+        if let Some(p) = vp_node.params.iter_mut().find(|p| p.name == "Active Camera") {
             p.options = camera_options.clone();
             if !p.options.contains(&p.default) {
                 p.default = "Default Camera".to_string();
             }
         } else {
-            ensure_param(camera_node, "Active Camera", "choice", &self.active_camera, &camera_options_refs, None, None, None);
+            ensure_param(vp_node, "Active Camera", "choice", &self.active_camera, &camera_options_refs, None, None, None);
         }
 
-        let display_node = find_or_create_subnet(vp_node, "Display", (2.0, 0.0));
-        ensure_param(display_node, "Square Aspect", "choice", if self.square_viewport { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Display", "section", "", &[], None, None, None);
+        ensure_param(vp_node, "Square Aspect", "choice", if self.square_viewport { "true" } else { "false" }, &["false", "true"], None, None, None);
 
-        let guides_node = find_or_create_subnet(vp_node, "Guides", (4.0, 0.0));
-        ensure_param(guides_node, "Show Grid", "choice", if self.show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(guides_node, "Cube", "choice", if self.show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(guides_node, "Origin", "choice", if self.show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(guides_node, "Camera Pivot", "choice", if self.show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Guides", "section", "", &[], None, None, None);
+        ensure_param(vp_node, "Show Grid", "choice", if self.show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Cube", "choice", if self.show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Origin", "choice", if self.show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Camera Pivot", "choice", if self.show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
 
-        let vp_view_node = find_or_create_subnet(vp_node, "View", (6.0, 0.0));
-        ensure_param(vp_view_node, "Close Pane", "button", "", &[], None, None, None);
+        ensure_param(vp_node, "View", "section", "", &[], None, None, None);
+        ensure_param(vp_node, "Close Pane", "button", "", &[], None, None, None);
 
-        let vp_settings_node = find_or_create_subnet(vp_node, "Settings", (8.0, 0.0));
-        ensure_param(vp_settings_node, "Show Grid Guide", "choice", if self.show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_settings_node, "Show Reference Cube", "choice", if self.show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_settings_node, "Show Origin Axes", "choice", if self.show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_settings_node, "Show Camera Pivot", "choice", if self.show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_settings_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
-        ensure_param(vp_settings_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
-        ensure_param(vp_settings_node, "Camera Pivot Size", "spinbox", &((self.camera_pivot_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
-        ensure_param(vp_settings_node, "BG Color R", "spinbox", &((self.viewport_bg_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(vp_settings_node, "BG Color G", "spinbox", &((self.viewport_bg_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(vp_settings_node, "BG Color B", "spinbox", &((self.viewport_bg_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(vp_settings_node, "Grid Color R", "spinbox", &((self.grid_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(vp_settings_node, "Grid Color G", "spinbox", &((self.grid_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(vp_settings_node, "Grid Color B", "spinbox", &((self.grid_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(vp_node, "Settings", "section", "", &[], None, None, None);
+        ensure_param(vp_node, "Show Grid Guide", "choice", if self.show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Reference Cube", "choice", if self.show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Origin Axes", "choice", if self.show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Camera Pivot", "choice", if self.show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
+        ensure_param(vp_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
+        ensure_param(vp_node, "Camera Pivot Size", "spinbox", &((self.camera_pivot_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
+        ensure_param(vp_node, "BG Color R", "spinbox", &((self.viewport_bg_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(vp_node, "BG Color G", "spinbox", &((self.viewport_bg_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(vp_node, "BG Color B", "spinbox", &((self.viewport_bg_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(vp_node, "Grid Color R", "spinbox", &((self.grid_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(vp_node, "Grid Color G", "spinbox", &((self.grid_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        ensure_param(vp_node, "Grid Color B", "spinbox", &((self.grid_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
 
         // 4. Parameters subnet
-        let param_node = find_or_create_subnet(&mut self.fs_root, "Parameters", (6.0, 0.0));
+        let param_node = find_or_create_subnet(&mut self.fs_root, "Parameters", "utility", (6.0, 0.0));
+        param_node.children.clear();
 
-        let preset_node = find_or_create_subnet(param_node, "Preset", (0.0, 0.0));
-        ensure_param(preset_node, "Default", "button", "", &[], None, None, None);
-        ensure_param(preset_node, "Custom", "button", "", &[], None, None, None);
+        ensure_param(param_node, "Preset", "section", "", &[], None, None, None);
+        ensure_param(param_node, "Default", "button", "", &[], None, None, None);
+        ensure_param(param_node, "Custom", "button", "", &[], None, None, None);
 
-        let reset_node = find_or_create_subnet(param_node, "Reset", (2.0, 0.0));
-        ensure_param(reset_node, "All", "button", "", &[], None, None, None);
+        ensure_param(param_node, "Reset", "section", "", &[], None, None, None);
+        ensure_param(param_node, "All", "button", "", &[], None, None, None);
 
-        let param_view_node = find_or_create_subnet(param_node, "View", (4.0, 0.0));
-        ensure_param(param_view_node, "Close Pane", "button", "", &[], None, None, None);
+        ensure_param(param_node, "View", "section", "", &[], None, None, None);
+        ensure_param(param_node, "Close Pane", "button", "", &[], None, None, None);
 
         // 5. Spreadsheet subnet
-        let ss_node = find_or_create_subnet(&mut self.fs_root, "Spreadsheet", (8.0, 0.0));
+        let ss_node = find_or_create_subnet(&mut self.fs_root, "Spreadsheet", "utility", (8.0, 0.0));
+        ss_node.children.clear();
 
-        let ss_view_node = find_or_create_subnet(ss_node, "View", (0.0, 0.0));
-        ensure_param(ss_view_node, "Close Pane", "button", "", &[], None, None, None);
+        ensure_param(ss_node, "View", "section", "", &[], None, None, None);
+        ensure_param(ss_node, "Close Pane", "button", "", &[], None, None, None);
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {
         // Read Settings from Network subnet
         if let Some(net_idx) = self.fs_root.children.iter().position(|c| c.name == "Network") {
-            let subnet = &self.fs_root.children[net_idx];
-            if let Some(settings_idx) = subnet.children.iter().position(|c| c.name == "Settings") {
-                let node = &subnet.children[settings_idx];
-                for p in &node.params {
-                    match p.name.as_str() {
-                        "Snap to Grid" => if let Ok(val) = p.default.parse::<bool>() { self.grid_snap_enabled = val; }
-                        "Grid Visible" => if let Ok(val) = p.default.parse::<bool>() { self.network_grid_visible = val; }
-                        "Uniform Background" => if let Ok(val) = p.default.parse::<bool>() { self.uniform_background = val; }
-                        "Opacity" => if let Ok(val) = p.default.parse::<f32>() { self.network_opacity = val; }
-                        "Node Color R" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[0] = val / 255.0; }
-                        "Node Color G" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[1] = val / 255.0; }
-                        "Node Color B" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[2] = val / 255.0; }
-                        "Cell Color R" => if let Ok(val) = p.default.parse::<f32>() { self.cell_color[0] = val / 255.0; }
-                        "Cell Color G" => if let Ok(val) = p.default.parse::<f32>() { self.cell_color[1] = val / 255.0; }
-                        "Cell Color B" => if let Ok(val) = p.default.parse::<f32>() { self.cell_color[2] = val / 255.0; }
-                        "Gap Color R" => if let Ok(val) = p.default.parse::<f32>() { self.gap_color[0] = val / 255.0; }
-                        "Gap Color G" => if let Ok(val) = p.default.parse::<f32>() { self.gap_color[1] = val / 255.0; }
-                        "Gap Color B" => if let Ok(val) = p.default.parse::<f32>() { self.gap_color[2] = val / 255.0; }
-                        _ => {}
-                    }
-                }
-            }
-            if let Some(view_idx) = subnet.children.iter().position(|c| c.name == "View") {
-                let node = &subnet.children[view_idx];
-                for p in &node.params {
-                    match p.name.as_str() {
-                        "Circular Pane" => if let Ok(val) = p.default.parse::<bool>() { self.circular_network_pane = val; }
-                        _ => {}
-                    }
+            let node = &self.fs_root.children[net_idx];
+            for p in &node.params {
+                match p.name.as_str() {
+                    "Node Color R" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[0] = val / 255.0; }
+                    "Node Color G" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[1] = val / 255.0; }
+                    "Node Color B" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[2] = val / 255.0; }
+                    "Circular Pane" => if let Ok(val) = p.default.parse::<bool>() { self.circular_network_pane = val; }
+                    _ => {}
                 }
             }
         }
 
         // Read Settings from Viewport subnet
         if let Some(vp_idx) = self.fs_root.children.iter().position(|c| c.name == "Viewport") {
-            let subnet = &self.fs_root.children[vp_idx];
-            if let Some(settings_idx) = subnet.children.iter().position(|c| c.name == "Settings") {
-                let node = &subnet.children[settings_idx];
-                for p in &node.params {
-                    match p.name.as_str() {
-                        "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.show_grid = val; }
-                        "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.show_cube = val; }
-                        "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.show_origin = val; }
-                        "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.show_camera_pivot = val; }
-                        "Grid Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.grid_thickness = val / 1000.0; }
-                        "Origin Guide Size" => if let Ok(val) = p.default.parse::<f32>() { self.origin_size = val / 10.0; }
-                        "Camera Pivot Size" => if let Ok(val) = p.default.parse::<f32>() { self.camera_pivot_size = val / 10.0; }
-                        "BG Color R" => if let Ok(val) = p.default.parse::<f32>() { self.viewport_bg_color[0] = val / 255.0; }
-                        "BG Color G" => if let Ok(val) = p.default.parse::<f32>() { self.viewport_bg_color[1] = val / 255.0; }
-                        "BG Color B" => if let Ok(val) = p.default.parse::<f32>() { self.viewport_bg_color[2] = val / 255.0; }
-                        "Grid Color R" => if let Ok(val) = p.default.parse::<f32>() { self.grid_color[0] = val / 255.0; }
-                        "Grid Color G" => if let Ok(val) = p.default.parse::<f32>() { self.grid_color[1] = val / 255.0; }
-                        "Grid Color B" => if let Ok(val) = p.default.parse::<f32>() { self.grid_color[2] = val / 255.0; }
-                        _ => {}
-                    }
-                }
-            }
-            if let Some(disp_idx) = subnet.children.iter().position(|c| c.name == "Display") {
-                let node = &subnet.children[disp_idx];
-                for p in &node.params {
-                    match p.name.as_str() {
-                        "Square Aspect" => if let Ok(val) = p.default.parse::<bool>() { self.square_viewport = val; }
-                        _ => {}
-                    }
-                }
-            }
-            if let Some(guides_idx) = subnet.children.iter().position(|c| c.name == "Guides") {
-                let node = &subnet.children[guides_idx];
-                for p in &node.params {
-                    match p.name.as_str() {
-                        "Show Grid" => if let Ok(val) = p.default.parse::<bool>() { self.show_grid = val; }
-                        "Cube" => if let Ok(val) = p.default.parse::<bool>() { self.show_cube = val; }
-                        "Origin" => if let Ok(val) = p.default.parse::<bool>() { self.show_origin = val; }
-                        "Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.show_camera_pivot = val; }
-                        _ => {}
-                    }
-                }
-            }
-            if let Some(camera_idx) = subnet.children.iter().position(|c| c.name == "Camera") {
-                let node = &subnet.children[camera_idx];
-                for p in &node.params {
-                    match p.name.as_str() {
-                        "Active Camera" => self.active_camera = p.default.clone(),
-                        _ => {}
-                    }
+            let node = &self.fs_root.children[vp_idx];
+            for p in &node.params {
+                match p.name.as_str() {
+                    "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.show_grid = val; }
+                    "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.show_cube = val; }
+                    "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.show_origin = val; }
+                    "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.show_camera_pivot = val; }
+                    "Grid Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.grid_thickness = val / 1000.0; }
+                    "Origin Guide Size" => if let Ok(val) = p.default.parse::<f32>() { self.origin_size = val / 10.0; }
+                    "Camera Pivot Size" => if let Ok(val) = p.default.parse::<f32>() { self.camera_pivot_size = val / 10.0; }
+                    "BG Color R" => if let Ok(val) = p.default.parse::<f32>() { self.viewport_bg_color[0] = val / 255.0; }
+                    "BG Color G" => if let Ok(val) = p.default.parse::<f32>() { self.viewport_bg_color[1] = val / 255.0; }
+                    "BG Color B" => if let Ok(val) = p.default.parse::<f32>() { self.viewport_bg_color[2] = val / 255.0; }
+                    "Grid Color R" => if let Ok(val) = p.default.parse::<f32>() { self.grid_color[0] = val / 255.0; }
+                    "Grid Color G" => if let Ok(val) = p.default.parse::<f32>() { self.grid_color[1] = val / 255.0; }
+                    "Grid Color B" => if let Ok(val) = p.default.parse::<f32>() { self.grid_color[2] = val / 255.0; }
+                    "Square Aspect" => if let Ok(val) = p.default.parse::<bool>() { self.square_viewport = val; }
+                    "Show Grid" => if let Ok(val) = p.default.parse::<bool>() { self.show_grid = val; }
+                    "Cube" => if let Ok(val) = p.default.parse::<bool>() { self.show_cube = val; }
+                    "Origin" => if let Ok(val) = p.default.parse::<bool>() { self.show_origin = val; }
+                    "Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.show_camera_pivot = val; }
+                    "Active Camera" => self.active_camera = p.default.clone(),
+                    _ => {}
                 }
             }
         }
