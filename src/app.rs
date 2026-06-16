@@ -2673,7 +2673,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         let mut paginator = Paginator::new(56.0, vec![])
             .with_sidebar_mode(true)
-            .with_column_layout(true)
             .with_tabs_rotated(false)
             .with_context_options(context_opts.clone(), 0);
         paginator.set_page_hidden(true);
