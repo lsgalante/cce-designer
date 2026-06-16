@@ -1,5 +1,3 @@
-use std::time::Instant;
-use std::path::Path;
 
 use glyphon::{Buffer, Resolution, TextArea, TextBounds};
 use clear_ui::widget::TextLabel;
@@ -7,12 +5,12 @@ use clear_ui::colors;
 use clear_ui::widget::Element;
 
 use crate::app::{
-    State, FsNode, CustomEvent,
+    State, FsNode,
     make_text_buffer, make_text_buffer_with_font,
     CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX, PARAM_PLATE_IDX,
     BREADCRUMB_IDX, STATUS_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
-    SPREADSHEET_MENUBAR_IDX, SPLITTER1_IDX, SPLITTER2_IDX,
-    MENUBAR_H, STATUS_H, HEADER_H, SPLITTER_W,
+    SPREADSHEET_MENUBAR_IDX,
+    MENUBAR_H, STATUS_H,
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX,
     push_circle_vertices, push_circle_border_vertices,
 };
@@ -985,23 +983,4 @@ impl State {
 
 }
 
-fn push_widget_popover_vertices(px: f32, py: f32, pw: f32, ph: f32, sw: f32, sh: f32, verts: &mut Vec<Vertex>) {
-    let color = [0.12, 0.12, 0.15, 0.95];
-    let ndc_x = (px / sw) * 2.0 - 1.0;
-    let ndc_y = 1.0 - (py / sh) * 2.0;
-    let ndc_w = (pw / sw) * 2.0;
-    let ndc_h = (ph / sh) * 2.0;
 
-    let v_tl = Vertex { position: [ndc_x, ndc_y], color, clip_circle: [0.0, 0.0, 0.0] };
-    let v_tr = Vertex { position: [ndc_x + ndc_w, ndc_y], color, clip_circle: [0.0, 0.0, 0.0] };
-    let v_bl = Vertex { position: [ndc_x, ndc_y - ndc_h], color, clip_circle: [0.0, 0.0, 0.0] };
-    let v_br = Vertex { position: [ndc_x + ndc_w, ndc_y - ndc_h], color, clip_circle: [0.0, 0.0, 0.0] };
-
-    verts.push(v_tl);
-    verts.push(v_tr);
-    verts.push(v_bl);
-
-    verts.push(v_tr);
-    verts.push(v_br);
-    verts.push(v_bl);
-}

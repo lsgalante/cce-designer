@@ -878,7 +878,7 @@ fn init_opencl() -> Option<OpenClCache> {
     let device_id = device_id?;
     let device = Device::new(device_id);
     let context = Context::from_device(&device).ok()?;
-    let queue = unsafe { CommandQueue::create(&context, device_id, 0) }.ok()?;
+    let queue = unsafe { CommandQueue::create_with_properties(&context, device_id, 0, 0) }.ok()?;
     Some(OpenClCache {
         device,
         context,

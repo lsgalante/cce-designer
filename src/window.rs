@@ -2,7 +2,7 @@ use std::time::Instant;
 use std::fs;
 use std::path::Path;
 use std::net::TcpListener;
-use std::io::{BufRead, BufReader, Read, Write};
+
 
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ use smithay_client_toolkit::{
             window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
             XdgShell,
         },
-        WaylandSurface,
+
     },
     shm::{Shm, ShmHandler},
 };
@@ -273,7 +273,6 @@ impl PointerHandler for AppState {
         use smithay_client_toolkit::seat::pointer::PointerEventKind;
         for event in events {
             if let Some(st) = &mut self.state {
-                let (cx, cy) = clear_ui::wayland::scale_pointer_pos(event.position, st.scale);
                 st.cursor_x = event.position.0 as f32;
                 st.cursor_y = event.position.1 as f32;
                 match &event.kind {

@@ -2,7 +2,7 @@ use std::time::Instant;
 use std::fs;
 use std::path::Path;
 use std::net::TcpListener;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::BufReader;
 
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,7 @@ use smithay_client_toolkit::{
     },
     shell::{
         xdg::{
-            window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+            window::{Window as XdgWindow, WindowConfigure, WindowDecorations},
             XdgShell,
         },
         WaylandSurface,
@@ -331,10 +331,7 @@ fn default_show_camera_pivot() -> bool { false }
 fn default_camera_pivot_size() -> f32 { 1.0 }
 fn default_node_color() -> [f32; 3] { [0.10, 0.45, 0.70] }
 fn default_grid_color() -> [f32; 3] { [0.35, 0.35, 0.40] }
-fn default_uniform_background() -> bool { false }
-fn default_network_opacity() -> f32 { 0.95 }
-fn default_cell_opacity() -> f32 { 0.95 }
-fn default_gap_opacity() -> f32 { 0.95 }
+
 fn default_cell_color() -> [f32; 3] { [0.13, 0.13, 0.16] }
 fn default_gap_color() -> [f32; 3] { [0.07, 0.07, 0.09] }
 
@@ -647,27 +644,10 @@ pub fn push_circle_border_vertices(
     }
 }
 
-fn push_quad_vertices_clipped(
-    x: f32, y: f32, w: f32, h: f32,
-    surface_w: f32, surface_h: f32,
-    color: [f32; 4],
-    clip: (f32, f32, f32, f32),
-    clip_circle: [f32; 3],
-    out: &mut Vec<Vertex>,
-) {
-    let (cx0, cy0, cx1, cy1) = clip;
-    let ix0 = x.max(cx0);
-    let iy0 = y.max(cy0);
-    let ix1 = (x + w).min(cx1);
-    let iy1 = (y + h).min(cy1);
-    if ix1 <= ix0 || iy1 <= iy0 {
-        return;
-    }
-    out.extend_from_slice(&quad_vertices_with_clip(ix0, iy0, ix1 - ix0, iy1 - iy0, surface_w, surface_h, color, clip_circle));
-}
+
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct ResizeDirection {
+pub struct ResizeDirection {
     pub left: bool,
     pub right: bool,
     pub top: bool,
@@ -2201,7 +2181,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         let device = &wgpu_adapter.device;
         let queue = &wgpu_adapter.queue;
-        let surface = &wgpu_adapter.surface;
+
         let config = &wgpu_adapter.config;
 
         let backdrop_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3403,8 +3383,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 let mut vp_y = 0.0;
                 let mut vp_h = 0.0;
-                let mut sp_menub_y = 0.0;
-                let mut sp_menub_h = 0.0;
                 let mut sp_y = 0.0;
                 let mut sp_h = 0.0;
 
@@ -3414,16 +3392,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         let spreadsheet_h = body_h - viewport_h;
                         vp_y = 0.0;
                         vp_h = viewport_h;
-                        sp_menub_y = 0.0;
-                        sp_menub_h = 0.0;
                         sp_y = viewport_h;
                         sp_h = spreadsheet_h;
                     } else if viewport_visible {
                         vp_y = 0.0;
                         vp_h = body_h;
                     } else if spreadsheet_visible {
-                        sp_menub_y = 0.0;
-                        sp_menub_h = 0.0;
                         sp_y = 0.0;
                         sp_h = body_h;
                     }
@@ -5788,13 +5762,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         // Copy backdrop to output swapchain texture
         if !self.is_detached_network {
             encoder.copy_texture_to_texture(
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     texture: &self.backdrop_texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     texture: &output.texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,

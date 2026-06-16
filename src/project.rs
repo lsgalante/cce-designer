@@ -1,9 +1,8 @@
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::path::Path;
 
-use clear_ui::widget::{Button, Element};
-use crate::app::{State, Project, FsNode, ProjectViewState, param_display, CONTENT_IDX, ParamDef};
+use clear_ui::widget::Button;
+use crate::app::{State, Project, FsNode, ProjectViewState, CONTENT_IDX, ParamDef};
 
 impl State {
 
