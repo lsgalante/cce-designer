@@ -1,8 +1,8 @@
 
 use glyphon::{Buffer, Resolution, TextArea, TextBounds};
-use clear_ui::widget::TextLabel;
-use clear_ui::colors;
-use clear_ui::widget::Element;
+use cce_ui::widget::TextLabel;
+use cce_ui::colors;
+use cce_ui::widget::Element;
 
 use crate::app::{
     State, FsNode,
@@ -15,11 +15,11 @@ use crate::app::{
     push_circle_vertices, push_circle_border_vertices,
 };
 use crate::graphics::TexturedVertex;
-use clear_ui::engine::Vertex;
+use cce_ui::engine::Vertex;
 use crate::geometry::{
     network_sphere_vertices_with_errors,
 };
-use clear_ui::engine::{
+use cce_ui::engine::{
     push_widget_vertices, push_extra_quad_vertices,
     push_extra_quad_vertices_clipped, push_arc_background_vertices,
 };
@@ -262,7 +262,7 @@ impl State {
 
         // Dropdown popover
         if w.visible() && (self.focused_widget == Some(idx) || idx == PARAM_IDX) {
-            let mut popover_pc = clear_ui::layout::PopoverCollector::new();
+            let mut popover_pc = cce_ui::layout::PopoverCollector::new();
             w.render_popover(&mut popover_pc);
             for (color, px, py, pw, ph) in popover_pc.rects {
                 let ndc_x = (px / sw) * 2.0 - 1.0;
@@ -384,7 +384,7 @@ impl State {
             fn collect_popovers(
                 w: &dyn Element,
                 popovers: &mut Vec<(f32, f32, f32, f32)>,
-                ctx: &clear_ui::context::UiContext,
+                ctx: &cce_ui::context::UiContext,
             ) {
                 if let Some(rect) = w.popover_rect() {
                     popovers.push(rect);
@@ -448,7 +448,7 @@ impl State {
             ..
         } = self;
 
-        let clear_ui::backend::WgpuAdapter {
+        let cce_ui::backend::WgpuAdapter {
             ref device,
             ref queue,
             ref mut font_system,
@@ -515,7 +515,7 @@ impl State {
                 continue;
             }
             if self.focused_widget == Some(i) || i == PARAM_IDX {
-                let mut popover_pc = clear_ui::layout::PopoverCollector::new();
+                let mut popover_pc = cce_ui::layout::PopoverCollector::new();
                 w.render_popover(&mut popover_pc);
                 for (t, size, _x, _y, _tc, font_opt, _bounds) in popover_pc.texts {
                     let key = (t.clone(), (size * 100.0) as u32, font_opt.clone());
@@ -535,7 +535,7 @@ impl State {
         fn collect_popovers(
             w: &dyn Element,
             popovers: &mut Vec<(f32, f32, f32, f32)>,
-            ctx: &clear_ui::context::UiContext,
+            ctx: &cce_ui::context::UiContext,
         ) {
             if let Some(rect) = w.popover_rect() {
                 popovers.push(rect);
@@ -758,7 +758,7 @@ impl State {
                 continue;
             }
             if self.focused_widget == Some(i) || i == PARAM_IDX {
-                let mut popover_pc = clear_ui::layout::PopoverCollector::new();
+                let mut popover_pc = cce_ui::layout::PopoverCollector::new();
                 w.render_popover(&mut popover_pc);
                 for (t, size, x, y, tc, font_opt, label_bounds) in popover_pc.texts {
                     let key = (t.clone(), (size * 100.0) as u32, font_opt.clone());

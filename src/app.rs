@@ -6,7 +6,7 @@ use std::io::BufReader;
 
 use serde::{Deserialize, Serialize};
 
-use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
+use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -36,9 +36,9 @@ use wayland_client::{
 use calloop_wayland_source::WaylandSource;
 
 use wgpu::util::DeviceExt;
-use clear_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
-use clear_ui::colors;
-use clear_ui::engine::quad_vertices_with_clip;
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
+use cce_ui::colors;
+use cce_ui::engine::quad_vertices_with_clip;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
 
@@ -47,7 +47,7 @@ use crate::project::*;
 use crate::render::*;
 use crate::shortcut::{Shortcut, ShortcutManager, Action};
 use crate::graphics::TexturedVertex;
-use clear_ui::engine::Vertex;
+use cce_ui::engine::Vertex;
 use crate::window::{AppState, WindowEvent, LocalPosition};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,7 +450,7 @@ impl Element for NodePalette {
     fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
     fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
     fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
-    fn hit_test(&self, px: f32, py: f32, ctx: &clear_ui::context::UiContext) -> bool {
+    fn hit_test(&self, px: f32, py: f32, ctx: &cce_ui::context::UiContext) -> bool {
         if ctx.is_coordinate_covered(self as *const Self as *const () as usize, px, py) {
             return false;
         }
@@ -526,10 +526,10 @@ pub fn make_text_buffer_with_font(font_system: &mut FontSystem, text: &str, size
     let metrics = Metrics::new(size, size * 1.4);
     let mut buffer = Buffer::new(font_system, metrics);
     let mut attrs = Attrs::new();
-    let family_name = font.map(|f| clear_ui::layout::parse_font_string(f).0);
+    let family_name = font.map(|f| cce_ui::layout::parse_font_string(f).0);
     if let Some(ref name) = family_name {
         let family = match name.as_str() {
-            "monospace" => glyphon::Family::Name(clear_ui::layout::get_system_monospace_font()),
+            "monospace" => glyphon::Family::Name(cce_ui::layout::get_system_monospace_font()),
             "sans-serif" => glyphon::Family::SansSerif,
             "serif" => glyphon::Family::Serif,
             _ => glyphon::Family::Name(name),
@@ -655,7 +655,7 @@ pub struct ResizeDirection {
 }
 
 pub struct State {
-    pub wgpu_adapter: clear_ui::backend::WgpuAdapter,
+    pub wgpu_adapter: cce_ui::backend::WgpuAdapter,
     pub render_pipeline: wgpu::RenderPipeline,
     pub vertex_buffer: wgpu::Buffer,
     pub window: XdgWindow,
@@ -722,7 +722,7 @@ pub struct State {
 
     pub widgets: Vec<Box<dyn Element>>,
     pub positions: Vec<(f32, f32, f32, f32)>,
-    pub splitter_layout: clear_ui::layout::SplitterLayout,
+    pub splitter_layout: cce_ui::layout::SplitterLayout,
     pub node_palette_visible: bool,
     pub node_palette_query: String,
     pub node_palette_filtered: Vec<usize>,
@@ -797,13 +797,14 @@ pub struct State {
     pub scroll_speed: f32,
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
-    pub circular_network_layout: clear_ui::layout::CircularPaneLayout,
+    pub circular_network_layout: cce_ui::layout::CircularPaneLayout,
     pub is_detached_network: bool,
     pub detached_circular_network: bool,
     pub last_project_mod_time: Option<std::time::SystemTime>,
     pub last_project_check: std::time::Instant,
     pub last_inspector_check: std::time::Instant,
     pub last_inspector_update: std::time::Instant,
+    pub last_serialized: String,
     pub needs_autosave: bool,
     pub last_autosave_time: std::time::Instant,
     pub window_x: i32,
@@ -855,7 +856,7 @@ pub struct State {
     pub last_viewport_height: u32,
     pub last_viewport_active_camera: String,
     pub last_viewport_show_viewport: bool,
-    pub ui_context: clear_ui::context::UiContext,
+    pub ui_context: cce_ui::context::UiContext,
 }
 
 impl State {
@@ -904,51 +905,51 @@ impl State {
         self.widgets[NODE_PALETTE_IDX].as_any_mut().downcast_mut::<NodePalette>().expect("not a NodePalette")
     }
 
-    pub fn menu(&self, idx: usize) -> &dyn clear_ui::widget::MenuController {
+    pub fn menu(&self, idx: usize) -> &dyn cce_ui::widget::MenuController {
         self.widgets[idx].as_menu_controller().expect("not a MenuController")
     }
 
-    pub fn menu_mut(&mut self, idx: usize) -> &mut dyn clear_ui::widget::MenuController {
+    pub fn menu_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::MenuController {
         self.widgets[idx].as_menu_controller_mut().expect("not a MenuController")
     }
 
-    pub fn graph(&self) -> &dyn clear_ui::widget::GraphController {
+    pub fn graph(&self) -> &dyn cce_ui::widget::GraphController {
         self.widgets[CONTENT_IDX].as_graph_controller().expect("not a GraphController")
     }
 
-    pub fn graph_mut(&mut self) -> &mut dyn clear_ui::widget::GraphController {
+    pub fn graph_mut(&mut self) -> &mut dyn cce_ui::widget::GraphController {
         self.widgets[CONTENT_IDX].as_graph_controller_mut().expect("not a GraphController")
     }
 
-    pub fn page_selector(&self, idx: usize) -> &dyn clear_ui::widget::PageSelector {
+    pub fn page_selector(&self, idx: usize) -> &dyn cce_ui::widget::PageSelector {
         self.widgets[idx].as_page_selector().expect("not a PageSelector")
     }
 
-    pub fn page_selector_mut(&mut self, idx: usize) -> &mut dyn clear_ui::widget::PageSelector {
+    pub fn page_selector_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::PageSelector {
         self.widgets[idx].as_page_selector_mut().expect("not a PageSelector")
     }
 
-    pub fn param(&self) -> &dyn clear_ui::widget::ParamController {
+    pub fn param(&self) -> &dyn cce_ui::widget::ParamController {
         self.widgets[PARAM_IDX].as_param_controller().expect("not a ParamController")
     }
 
-    pub fn param_mut(&mut self) -> &mut dyn clear_ui::widget::ParamController {
+    pub fn param_mut(&mut self) -> &mut dyn cce_ui::widget::ParamController {
         self.widgets[PARAM_IDX].as_param_controller_mut().expect("not a ParamController")
     }
 
-    pub fn spreadsheet_mut(&mut self) -> &mut dyn clear_ui::widget::SpreadsheetController {
+    pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController {
         self.widgets[SPREADSHEET_IDX].as_spreadsheet_controller_mut().expect("not a SpreadsheetController")
     }
 
-    pub fn path_mut(&mut self) -> &mut dyn clear_ui::widget::PathController {
+    pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController {
         self.widgets[BREADCRUMB_IDX].as_path_controller_mut().expect("not a PathController")
     }
 
-    pub fn geom_mut(&mut self, idx: usize) -> &mut dyn clear_ui::widget::GeomController {
+    pub fn geom_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::GeomController {
         self.widgets[idx].as_geom_controller_mut().expect("not a GeomController")
     }
 
-    pub fn scroll_mut(&mut self, idx: usize) -> &mut dyn clear_ui::widget::ScrollController {
+    pub fn scroll_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::ScrollController {
         self.widgets[idx].as_scroll_controller_mut().expect("not a ScrollController")
     }
 
@@ -2155,7 +2156,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         scale: f64,
         is_detached_network: bool,
     ) -> Self {
-        clear_ui::scale::set_scale_factor(scale as f32);
+        cce_ui::scale::set_scale_factor(scale as f32);
         let settings = DesignSettings::load();
         let lw = pw as f32 / scale as f32;
         let lh = ph as f32 / scale as f32;
@@ -2177,7 +2178,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         let display_ptr = conn.backend().display_id().as_ptr() as *mut std::ffi::c_void;
         let surface_ptr = wl_surface.id().as_ptr() as *mut std::ffi::c_void;
-        let wgpu_adapter = clear_ui::backend::WgpuAdapter::new(display_ptr, surface_ptr, pw, ph).await;
+        let wgpu_adapter = cce_ui::backend::WgpuAdapter::new(display_ptr, surface_ptr, pw, ph).await;
 
         let device = &wgpu_adapter.device;
         let queue = &wgpu_adapter.queue;
@@ -2576,7 +2577,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         });
 
 
-        let splitter_layout = clear_ui::layout::SplitterLayout::new(sw, SPLITTER_W, MIN_COLUMN);
+        let splitter_layout = cce_ui::layout::SplitterLayout::new(sw, SPLITTER_W, MIN_COLUMN);
         let (depth_texture, depth_texture_view) = {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Depth Texture"),
@@ -2843,7 +2844,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             scroll_speed: 1.0,
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network,
-            circular_network_layout: clear_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
+            circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
             is_detached_network,
             detached_circular_network: false,
             last_project_mod_time: {
@@ -2852,7 +2853,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             },
             last_project_check: std::time::Instant::now(),
             last_inspector_check: std::time::Instant::now(),
-            last_inspector_update: std::time::Instant::now(),
+            last_inspector_update: std::time::Instant::now() - std::time::Duration::from_secs(1),
+            last_serialized: String::new(),
             needs_autosave: false,
             last_autosave_time: std::time::Instant::now(),
             window_x: 0,
@@ -2922,7 +2924,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_height: 0,
             last_viewport_active_camera: String::new(),
             last_viewport_show_viewport: false,
-            ui_context: clear_ui::context::UiContext::new(),
+            ui_context: cce_ui::context::UiContext::new(),
         };
 
         state.update_inertial_settings();
@@ -2990,20 +2992,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         graph.set_skipped_sizes(skipped_row_h, skipped_col_w);
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
-        if let Some(graph) = self.widgets[CONTENT_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Graph>() {
+        if let Some(graph) = self.widgets[CONTENT_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
             graph.set_uniform_background(self.uniform_background);
             graph.set_cell_opacity(self.cell_opacity);
             graph.set_gap_opacity(self.gap_opacity);
             graph.set_cell_color(self.cell_color);
             graph.set_gap_color(self.gap_color);
         }
-        if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+        if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
             menubar.set_network_opacity(self.network_opacity);
         }
-        if let Some(breadcrumb) = self.widgets[BREADCRUMB_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Breadcrumb>() {
+        if let Some(breadcrumb) = self.widgets[BREADCRUMB_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
             breadcrumb.set_network_opacity(self.network_opacity);
         }
-        if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+        if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
             plate.set_network_opacity(self.network_opacity);
         }
     }
@@ -3223,14 +3225,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
             self.positions[0] = (0.0, 0.0, 0.0, 0.0);
             self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-            if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+            if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                 menubar.set_curved_circle(None);
             }
             self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
             self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
             self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
             self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-            if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+            if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
                 plate.set_curved_circle(Some((cx, cy, r)));
             }
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -3427,14 +3429,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 let cy = self.circular_network_layout.y;
 
                 self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
                 }
                 self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
                 self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
                 self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
                 self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
                     plate.set_curved_circle(Some((cx, cy, r)));
                 }
                 self.widgets[NETWORK_PANEL_IDX].set_drag_bounds(0.0, 0.0, self.width, self.height);
@@ -3515,7 +3517,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     (0.0, 0.0, 0.0, 0.0)
                 };
 
-                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<clear_ui::widget::MenuBar>() {
+                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
                 }
                 
@@ -3526,7 +3528,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[CONTENT_IDX] = (px, py + mb_h + bc_h, pw, content_h);
                 self.positions[NETWORK_PANEL_IDX] = (px, py, pw, ph);
                 self.widgets[NETWORK_PANEL_IDX].set_rect(px, py, pw, ph);
-                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<clear_ui::widget::Plate>() {
+                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
                     plate.set_curved_circle(None);
                 }
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -5276,7 +5278,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
             if current_mod_time != self.last_config_mod_time {
                 self.last_config_mod_time = current_mod_time;
-                clear_ui::layout::reload_config();
+                cce_ui::layout::reload_config();
                 self.update_inertial_settings();
                 self.update_graph_settings_from_config();
                 self.rebuild_positions();
@@ -5380,7 +5382,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 tick_changed = true;
             }
         }
-        if clear_ui::widget::hover_animation::tick(dt) {
+        if cce_ui::widget::hover_animation::tick(dt) {
             tick_changed = true;
         }
         self.update_recent_files_layout();

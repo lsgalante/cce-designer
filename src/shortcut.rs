@@ -1,4 +1,4 @@
-use clear_ui::widget::{Key, NamedKey};
+use cce_ui::widget::{Key, NamedKey};
 use crate::ModifiersState;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

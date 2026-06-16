@@ -6,7 +6,7 @@ use std::net::TcpListener;
 
 use serde::{Deserialize, Serialize};
 
-use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
+use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -36,8 +36,8 @@ use wayland_client::{
 use calloop_wayland_source::WaylandSource;
 
 use wgpu::util::DeviceExt;
-use clear_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
-use clear_ui::colors;
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
+use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
 
@@ -46,7 +46,7 @@ use crate::project::*;
 use crate::render::*;
 use crate::shortcut::{Shortcut, ShortcutManager, Action};
 use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, DesignSettings, param_display, NodePalette, NODE_PALETTE_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, PAGINATOR_IDX, get_next_visible_pane, Project, ProjectViewState, ParamDef};
-use clear_ui::engine::Vertex;
+use cce_ui::engine::Vertex;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalPosition {
@@ -55,23 +55,23 @@ pub struct LocalPosition {
 }
 
 pub enum WindowEvent {
-    MouseWheel { delta: clear_ui::widget::MouseScrollDelta, phase: TouchPhase },
+    MouseWheel { delta: cce_ui::widget::MouseScrollDelta, phase: TouchPhase },
     PinchGesture { delta: f64 },
     CursorMoved { position: LocalPosition },
-    MouseInput { state: clear_ui::widget::ElementState, button: clear_ui::widget::MouseButton },
+    MouseInput { state: cce_ui::widget::ElementState, button: cce_ui::widget::MouseButton },
     ModifiersChanged(ModifiersState),
-    KeyboardInput { event: clear_ui::widget::KeyEvent },
+    KeyboardInput { event: cce_ui::widget::KeyEvent },
 }
 
 pub struct PressedKey {
-    pub logical_key: clear_ui::widget::Key,
+    pub logical_key: cce_ui::widget::Key,
     pub text: Option<String>,
     pub first_pressed: std::time::Instant,
     pub last_repeated: std::time::Instant,
 }
 
-pub fn is_repeatable_key(key: &clear_ui::widget::Key) -> bool {
-    use clear_ui::widget::{Key, NamedKey};
+pub fn is_repeatable_key(key: &cce_ui::widget::Key) -> bool {
+    use cce_ui::widget::{Key, NamedKey};
     match key {
         Key::Named(NamedKey::Backspace) |
         Key::Named(NamedKey::Delete) |
@@ -113,7 +113,7 @@ pub struct AppState {
     pub exit: bool,
     pub redraw: bool,
     pub pressed_key: Option<PressedKey>,
-    pub inspector: Option<clear_ui::protocol::zclear_inspector_v1::ZclearInspectorV1>,
+    pub inspector: Option<cce_ui::protocol::zclear_inspector_v1::ZclearInspectorV1>,
     pub pending_resize: Option<PendingResize>,
     pub _sender: calloop::channel::Sender<CustomEvent>,
 }
@@ -129,7 +129,7 @@ impl CompositorHandler for AppState {
         _surface.set_buffer_scale(scale_factor);
         if let Some(state) = &mut self.state {
             state.scale = scale_factor as f64;
-            clear_ui::scale::set_scale_factor(scale_factor as f32);
+            cce_ui::scale::set_scale_factor(scale_factor as f32);
             let pw = (state.width as f64 * state.scale) as u32;
             let ph = (state.height as f64 * state.scale) as u32;
             state.resize(pw, ph);
@@ -354,15 +354,15 @@ impl PointerHandler for AppState {
                     }
                     PointerEventKind::Press { button, serial, .. } => {
                         let btn = match *button {
-                            272 => clear_ui::widget::MouseButton::Left,
-                            273 => clear_ui::widget::MouseButton::Right,
-                            274 => clear_ui::widget::MouseButton::Middle,
+                            272 => cce_ui::widget::MouseButton::Left,
+                            273 => cce_ui::widget::MouseButton::Right,
+                            274 => cce_ui::widget::MouseButton::Middle,
                             _ => continue,
                         };
                         // eprintln!("DEBUG MOUSE PRESS: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
 
                         if let Some(ref st) = self.state {
-                            if st.is_detached_network && btn == clear_ui::widget::MouseButton::Left {
+                            if st.is_detached_network && btn == cce_ui::widget::MouseButton::Left {
                                 let lx = event.position.0 as f32;
                                 let ly = event.position.1 as f32;
                                 let dx = lx - st.circular_network_layout.x;
@@ -433,24 +433,24 @@ impl PointerHandler for AppState {
                         }
 
                         let ev = WindowEvent::MouseInput {
-                            state: clear_ui::widget::ElementState::Pressed,
+                            state: cce_ui::widget::ElementState::Pressed,
                             button: btn,
                         };
                         self.process_event(ev);
                     }
                     PointerEventKind::Release { button, .. } => {
                         let btn = match *button {
-                            272 => clear_ui::widget::MouseButton::Left,
-                            273 => clear_ui::widget::MouseButton::Right,
-                            274 => clear_ui::widget::MouseButton::Middle,
+                            272 => cce_ui::widget::MouseButton::Left,
+                            273 => cce_ui::widget::MouseButton::Right,
+                            274 => cce_ui::widget::MouseButton::Middle,
                             _ => continue,
                         };
                         // eprintln!("DEBUG MOUSE RELEASE: button={:?}, pos={:?}, local=({}, {})", btn, event.position, cx, cy);
-                        if btn == clear_ui::widget::MouseButton::Left {
+                        if btn == cce_ui::widget::MouseButton::Left {
                             self.pending_resize = None;
                         }
                         let ev = WindowEvent::MouseInput {
-                            state: clear_ui::widget::ElementState::Released,
+                            state: cce_ui::widget::ElementState::Released,
                             button: btn,
                         };
                         self.process_event(ev);
@@ -460,7 +460,7 @@ impl PointerHandler for AppState {
                         let v_val = vertical.absolute as f32;
                         // eprintln!("DEBUG AXIS EVENT: horizontal={:?}, vertical={:?}, scale={}", horizontal, vertical, st.scale);
                         let ev = WindowEvent::MouseWheel {
-                            delta: clear_ui::widget::MouseScrollDelta::LineDelta(-h_val / 10.0, -v_val / 10.0),
+                            delta: cce_ui::widget::MouseScrollDelta::LineDelta(-h_val / 10.0, -v_val / 10.0),
                             phase: TouchPhase::Moved,
                         };
                         self.process_event(ev);
@@ -512,7 +512,7 @@ impl KeyboardHandler for AppState {
         _serial: u32,
         event: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        self.handle_key(event, clear_ui::widget::ElementState::Pressed);
+        self.handle_key(event, cce_ui::widget::ElementState::Pressed);
     }
 
     fn release_key(
@@ -523,7 +523,7 @@ impl KeyboardHandler for AppState {
         _serial: u32,
         event: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        self.handle_key(event, clear_ui::widget::ElementState::Released);
+        self.handle_key(event, cce_ui::widget::ElementState::Released);
     }
 
     fn update_modifiers(
@@ -595,17 +595,17 @@ impl ProvidesRegistryState for AppState {
     ) {}
 }
 
-impl wayland_client::Dispatch<clear_ui::protocol::zclear_inspector_v1::ZclearInspectorV1, ()> for AppState {
+impl wayland_client::Dispatch<cce_ui::protocol::zclear_inspector_v1::ZclearInspectorV1, ()> for AppState {
     fn event(
         state: &mut Self,
-        _proxy: &clear_ui::protocol::zclear_inspector_v1::ZclearInspectorV1,
-        event: clear_ui::protocol::zclear_inspector_v1::Event,
+        _proxy: &cce_ui::protocol::zclear_inspector_v1::ZclearInspectorV1,
+        event: cce_ui::protocol::zclear_inspector_v1::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
         match event {
-            clear_ui::protocol::zclear_inspector_v1::Event::InspectedSurface { app_id, x, y, .. } => {
+            cce_ui::protocol::zclear_inspector_v1::Event::InspectedSurface { app_id, x, y, .. } => {
                 if let Some(ref mut st) = state.state {
                     let expected_id = if st.is_detached_network {
                         "circular-network-pane"
@@ -634,8 +634,8 @@ delegate_registry!(AppState);
 delegate_output!(AppState);
 
 impl AppState {
-    fn handle_key(&mut self, event: smithay_client_toolkit::seat::keyboard::KeyEvent, state: clear_ui::widget::ElementState) {
-        use clear_ui::widget::{Key, KeyEvent, NamedKey};
+    fn handle_key(&mut self, event: smithay_client_toolkit::seat::keyboard::KeyEvent, state: cce_ui::widget::ElementState) {
+        use cce_ui::widget::{Key, KeyEvent, NamedKey};
         let logical_key = match event.keysym {
             xkeysym::Keysym::Escape => Key::Named(NamedKey::Escape),
             xkeysym::Keysym::Return => Key::Named(NamedKey::Enter),
@@ -678,16 +678,16 @@ impl AppState {
         if let Some(st) = &mut self.state {
             match event.keysym {
                 xkeysym::Keysym::Control_L | xkeysym::Keysym::Control_R => {
-                    st.modifiers.ctrl = state == clear_ui::widget::ElementState::Pressed;
+                    st.modifiers.ctrl = state == cce_ui::widget::ElementState::Pressed;
                 }
                 xkeysym::Keysym::Alt_L | xkeysym::Keysym::Alt_R => {
-                    st.modifiers.alt = state == clear_ui::widget::ElementState::Pressed;
+                    st.modifiers.alt = state == cce_ui::widget::ElementState::Pressed;
                 }
                 xkeysym::Keysym::Shift_L | xkeysym::Keysym::Shift_R => {
-                    st.modifiers.shift = state == clear_ui::widget::ElementState::Pressed;
+                    st.modifiers.shift = state == cce_ui::widget::ElementState::Pressed;
                 }
                 xkeysym::Keysym::Super_L | xkeysym::Keysym::Super_R => {
-                    st.modifiers.logo = state == clear_ui::widget::ElementState::Pressed;
+                    st.modifiers.logo = state == cce_ui::widget::ElementState::Pressed;
                 }
                 _ => {}
             }
@@ -701,7 +701,7 @@ impl AppState {
                 shift: st.modifiers.shift,
             };
 
-            if state == clear_ui::widget::ElementState::Pressed {
+            if state == cce_ui::widget::ElementState::Pressed {
                 if is_repeatable_key(&custom_event.logical_key) {
                     self.pressed_key = Some(PressedKey {
                         logical_key: custom_event.logical_key.clone(),
@@ -712,7 +712,7 @@ impl AppState {
                 } else {
                     self.pressed_key = None;
                 }
-            } else if state == clear_ui::widget::ElementState::Released {
+            } else if state == cce_ui::widget::ElementState::Released {
                 if let Some(ref pk) = self.pressed_key {
                     if pk.logical_key == custom_event.logical_key {
                         self.pressed_key = None;

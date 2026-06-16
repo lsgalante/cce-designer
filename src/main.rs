@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use clear_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
+use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -32,7 +32,7 @@ use wayland_client::{
 };
 use calloop_wayland_source::WaylandSource;
 
-use clear_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, ViewportBg, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, ViewportBg, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
 use wgpu::util::DeviceExt;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -90,7 +90,7 @@ fn main() {
     // Perform a roundtrip to populate output_state with active output scales
     event_queue.roundtrip(&mut app).unwrap();
 
-    let scale = clear_ui::wayland::detect_scale_factor(&app.output_state);
+    let scale = cce_ui::wayland::detect_scale_factor(&app.output_state);
 
     let (pw, ph) = if is_detached_network {
         ((400.0 * scale) as u32, (400.0 * scale) as u32)
@@ -206,8 +206,8 @@ fn main() {
                 if now.duration_since(pk.last_repeated) >= KEY_REPEAT_INTERVAL {
                     pk.last_repeated = now;
                     if let Some(st) = &mut app.state {
-                        let custom_event = clear_ui::widget::KeyEvent {
-                            state: clear_ui::widget::ElementState::Pressed,
+                        let custom_event = cce_ui::widget::KeyEvent {
+                            state: cce_ui::widget::ElementState::Pressed,
                             logical_key: pk.logical_key.clone(),
                             text: pk.text.clone(),
                             repeat: true,
@@ -245,14 +245,19 @@ fn create_memfd_with_data(name: &str, data: &[u8]) -> std::io::Result<std::os::u
                 }
                 if let Some(ref inspector) = app.inspector {
                     if let Some(ref surface) = app.surface {
-                        let now = std::time::Instant::now();
-                        if now.duration_since(state.last_inspector_update) >= std::time::Duration::from_millis(100) {
-                            state.last_inspector_update = now;
-                            let json = clear_ui::widget::serialize_widgets(&state.widgets);
-                            if let Ok(raw_fd) = create_memfd_with_data("clear_ui_state", json.as_bytes()) {
-                                use std::os::unix::io::{FromRawFd, AsFd};
-                                let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
-                                inspector.update_state(surface, file.as_fd(), json.len() as u32);
+                        let json = cce_ui::widget::serialize_widgets(&state.widgets);
+                        if json != state.last_serialized {
+                            let now = std::time::Instant::now();
+                            if now.duration_since(state.last_inspector_update) >= std::time::Duration::from_millis(100) {
+                                state.last_serialized = json.clone();
+                                state.last_inspector_update = now;
+                                if let Ok(raw_fd) = create_memfd_with_data("cce_ui_state", json.as_bytes()) {
+                                    use std::os::unix::io::{FromRawFd, AsFd};
+                                    let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+                                    inspector.update_state(surface, file.as_fd(), json.len() as u32);
+                                }
+                            } else {
+                                app.redraw = true;
                             }
                         }
                     }
