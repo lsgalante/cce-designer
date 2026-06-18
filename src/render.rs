@@ -642,21 +642,7 @@ impl State {
                             continue;
                         }
                     }
-                    // Overlap check
-                    let mut overlaps = false;
-                    let tw = buf.layout_runs().next().map(|r| r.line_w).unwrap_or(0.0) / s;
-                    let th = (buf.layout_runs().count() as f32 * 14.0).max(14.0);
-                    for &(px, py, pw, ph) in &popovers {
-                        let x_overlap = x <= px + pw && (x + tw) >= px;
-                        let y_overlap = y <= py + ph && (y + th) >= py;
-                        if x_overlap && y_overlap {
-                            overlaps = true;
-                            break;
-                        }
-                    }
-                    if overlaps {
-                        continue;
-                    }
+
                     areas.push(TextArea {
                         buffer: buf,
                         left: (x * s).round(),
@@ -707,25 +693,6 @@ impl State {
                         }
                         let key = (label.text.clone(), (label.font_size * 100.0) as u32, font_opt.clone());
                         let buf_ref = text_buffer_cache.get(&key).unwrap();
-
-                        // Overlap check
-                        let mut overlaps = false;
-                        let tw = buf_ref.layout_runs().next().map(|r| r.line_w).unwrap_or(0.0) / s;
-                        let th = label.font_size * 1.4;
-                        for &(px, py, pw, ph) in &popovers {
-                            let x_overlap = label.x <= px + pw && (label.x + tw) >= px;
-                            let y_overlap = label.y <= py + ph && (label.y + th) >= py;
-                            if x_overlap && y_overlap {
-                                overlaps = true;
-                                break;
-                            }
-                        }
-                        if label.text.contains("Save") {
-                            println!("DEBUG SAVE OVERLAP: i={}, label_text={:?}, label.x={}, label.y={}, tw={}, th={}, popovers={:?}, overlaps={}", i, label.text, label.x, label.y, tw, th, popovers, overlaps);
-                        }
-                        if overlaps {
-                            continue;
-                        }
 
                         legacy_buffers.push(buf_ref);
                         legacy_labels.push(label);
