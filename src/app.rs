@@ -3011,33 +3011,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
     pub fn update_inertial_settings(&mut self) {
         self.last_config_read = Instant::now();
-        let config_path = "/home/lsgalante/.config/cce/config.toml";
+        let config_path = "/home/lsgalante/.config/cce/config.json";
         
         let mut enabled = true;
         let mut friction = 0.90;
         let mut speed = 1.0;
 
         if let Ok(content) = std::fs::read_to_string(config_path) {
-            #[derive(serde::Deserialize)]
-            struct InertialSection {
-                pub inertial_scroll: Option<bool>,
-                pub scroll_friction: Option<u16>,
-                pub scroll_speed: Option<f32>,
-            }
-            #[derive(serde::Deserialize)]
-            struct Config {
-                pub inertial: Option<InertialSection>,
-            }
-            if let Ok(cfg) = toml::from_str::<Config>(&content) {
-                if let Some(inertial) = cfg.inertial {
-                    if let Some(val) = inertial.inertial_scroll {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(inertial) = val.get("inertial") {
+                    if let Some(val) = inertial.get("inertial_scroll").and_then(|v| v.as_bool()) {
                         enabled = val;
                     }
-                    if let Some(friction_val) = inertial.scroll_friction {
+                    if let Some(friction_val) = inertial.get("scroll_friction").and_then(|v| v.as_i64()) {
                         friction = (friction_val as f32 / 1000.0).clamp(0.1, 0.999);
                     }
-                    if let Some(speed_val) = inertial.scroll_speed {
-                        speed = speed_val.clamp(0.01, 10.0);
+                    if let Some(speed_val) = inertial.get("scroll_speed").and_then(|v| v.as_f64()) {
+                        speed = speed_val as f32;
                     }
                 }
             }
@@ -3050,8 +3040,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
     pub fn update_graph_settings_from_config(&mut self) {
         let config_paths = [
-            "/home/lsgalante/.config/cce/config.toml",
-            "/home/lsgalante/.config/ccec/config.toml",
+            "/home/lsgalante/.config/cce/config.json",
+            "/home/lsgalante/.config/ccec/config.json",
         ];
         
         let mut show_grid = None;
@@ -3063,27 +3053,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         for path in &config_paths {
             if let Ok(content) = std::fs::read_to_string(path) {
-                #[derive(serde::Deserialize)]
-                struct Layout {
-                    pub graph_show_grid: Option<bool>,
-                    pub graph_snap_enabled: Option<bool>,
-                    pub graph_uniform_background: Option<bool>,
-                    pub graph_network_opacity: Option<f32>,
-                    pub graph_cell_opacity: Option<f32>,
-                    pub graph_gap_opacity: Option<f32>,
-                }
-                #[derive(serde::Deserialize)]
-                struct Config {
-                    pub layout: Option<Layout>,
-                }
-                if let Ok(cfg) = toml::from_str::<Config>(&content) {
-                    if let Some(layout) = cfg.layout {
-                        show_grid = layout.graph_show_grid;
-                        snap_enabled = layout.graph_snap_enabled;
-                        uniform_background = layout.graph_uniform_background;
-                        network_opacity = layout.graph_network_opacity;
-                        cell_opacity = layout.graph_cell_opacity.or(layout.graph_network_opacity);
-                        gap_opacity = layout.graph_gap_opacity.or(layout.graph_network_opacity);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(layout) = val.get("layout") {
+                        show_grid = layout.get("graph_show_grid").and_then(|v| v.as_bool());
+                        snap_enabled = layout.get("graph_snap_enabled").and_then(|v| v.as_bool());
+                        uniform_background = layout.get("graph_uniform_background").and_then(|v| v.as_bool());
+                        network_opacity = layout.get("graph_network_opacity").and_then(|v| v.as_f64()).map(|n| n as f32);
+                        cell_opacity = layout.get("graph_cell_opacity").and_then(|v| v.as_f64()).map(|n| n as f32).or(network_opacity);
+                        gap_opacity = layout.get("graph_gap_opacity").and_then(|v| v.as_f64()).map(|n| n as f32).or(network_opacity);
                         break;
                     }
                 }
@@ -5263,8 +5240,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if now.duration_since(self.last_config_read).as_secs_f32() > 2.0 {
             self.last_config_read = now;
             let config_paths = [
-                "/home/lsgalante/.config/cce/config.toml",
-                "/home/lsgalante/.config/ccec/config.toml",
+                "/home/lsgalante/.config/cce/config.json",
+                "/home/lsgalante/.config/ccec/config.json",
             ];
             let mut current_mod_time = None;
             for path in &config_paths {
