@@ -113,7 +113,7 @@ pub struct AppState {
     pub exit: bool,
     pub redraw: bool,
     pub pressed_key: Option<PressedKey>,
-    pub inspector: Option<cce_ui::protocol::zclear_inspector_v1::ZclearInspectorV1>,
+    pub inspector: Option<cce_ui::protocol::zcce_inspector_v1::ZcceInspectorV1>,
     pub pending_resize: Option<PendingResize>,
     pub _sender: calloop::channel::Sender<CustomEvent>,
 }
@@ -595,17 +595,17 @@ impl ProvidesRegistryState for AppState {
     ) {}
 }
 
-impl wayland_client::Dispatch<cce_ui::protocol::zclear_inspector_v1::ZclearInspectorV1, ()> for AppState {
+impl wayland_client::Dispatch<cce_ui::protocol::zcce_inspector_v1::ZcceInspectorV1, ()> for AppState {
     fn event(
         state: &mut Self,
-        _proxy: &cce_ui::protocol::zclear_inspector_v1::ZclearInspectorV1,
-        event: cce_ui::protocol::zclear_inspector_v1::Event,
+        _proxy: &cce_ui::protocol::zcce_inspector_v1::ZcceInspectorV1,
+        event: cce_ui::protocol::zcce_inspector_v1::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
         match event {
-            cce_ui::protocol::zclear_inspector_v1::Event::InspectedSurface { app_id, x, y, .. } => {
+            cce_ui::protocol::zcce_inspector_v1::Event::InspectedSurface { app_id, x, y, .. } => {
                 if let Some(ref mut st) = state.state {
                     let expected_id = if st.is_detached_network {
                         "circular-network-pane"
