@@ -1,4 +1,3 @@
-use cce_ui::engine::Vertex;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

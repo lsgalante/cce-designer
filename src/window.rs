@@ -1,12 +1,5 @@
-use std::time::Instant;
-use std::fs;
+#![allow(unused_imports)]
 use std::path::Path;
-use std::net::TcpListener;
-
-
-use serde::{Deserialize, Serialize};
-
-use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -21,32 +14,20 @@ use smithay_client_toolkit::{
     },
     shell::{
         xdg::{
-            window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+            window::{Window as XdgWindow, WindowConfigure, WindowHandler},
             XdgShell,
         },
-
     },
     shm::{Shm, ShmHandler},
 };
 use wayland_client::{
-    globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
-    Connection, QueueHandle, Proxy,
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    Connection, QueueHandle,
 };
-use calloop_wayland_source::WaylandSource;
 
-use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
-use cce_ui::colors;
-use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
-use glam::{Mat4, Vec3};
-
-use crate::geometry::*;
-use crate::project::*;
-use crate::render::*;
-use crate::shortcut::{Shortcut, ShortcutManager, Action};
-use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, DesignSettings, param_display, NodePalette, NODE_PALETTE_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, PAGINATOR_IDX, get_next_visible_pane, Project, ProjectViewState, ParamDef};
-use cce_ui::engine::Vertex;
+use cce_ui::widget::Element;
+use crate::shortcut::Action;
+use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, PAGINATOR_IDX, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalPosition {

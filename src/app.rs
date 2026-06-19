@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::time::Instant;
 use std::fs;
 use std::path::Path;
@@ -29,26 +30,21 @@ use smithay_client_toolkit::{
     shm::{Shm, ShmHandler},
 };
 use wayland_client::{
-    globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+    protocol::wl_surface,
     Connection, QueueHandle, Proxy,
 };
-use calloop_wayland_source::WaylandSource;
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, ScrollingList, Label};
 use cce_ui::colors;
-use cce_ui::engine::quad_vertices_with_clip;
-use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
+use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
 
 use crate::geometry::*;
-use crate::project::*;
-use crate::render::*;
-use crate::shortcut::{Shortcut, ShortcutManager, Action};
+use crate::shortcut::{ShortcutManager, Action};
 use crate::graphics::TexturedVertex;
 use cce_ui::engine::Vertex;
-use crate::window::{AppState, WindowEvent, LocalPosition};
+use crate::window::{AppState, WindowEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TouchPhase {

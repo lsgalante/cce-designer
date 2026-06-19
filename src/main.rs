@@ -1,10 +1,16 @@
+#![allow(unused_imports)]
 use std::time::Instant;
+#[cfg(test)]
 use std::fs;
+#[cfg(test)]
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
+#[cfg(test)]
+use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent};
+#[cfg(test)]
+use cce_ui::widget::{Key, NamedKey};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -19,7 +25,7 @@ use smithay_client_toolkit::{
     },
     shell::{
         xdg::{
-            window::{Window as XdgWindow, WindowConfigure, WindowHandler, WindowDecorations},
+            window::{Window as XdgWindow, WindowConfigure, WindowDecorations},
             XdgShell,
         },
     },
@@ -27,14 +33,11 @@ use smithay_client_toolkit::{
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
-    Connection, QueueHandle, Proxy,
+    Connection,
 };
 use calloop_wayland_source::WaylandSource;
 
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, ViewportBg, GraphNode, Graph, Paginator, Button, Checkbox, Slider, Spinbox, ScrollingList, Label, ColorSelector, Switcher};
-use wgpu::util::DeviceExt;
-use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport};
+#[cfg(test)]
 use glam::{Mat4, Vec3};
 
 pub mod app;
@@ -270,7 +273,7 @@ fn create_memfd_with_data(name: &str, data: &[u8]) -> std::io::Result<std::os::u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{get_next_visible_pane, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, DesignSettings, param_display, FsNode, Project, ProjectViewState, ParamDef, TouchPhase};
+    use crate::app::{get_next_visible_pane, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, DesignSettings, FsNode, Project, ProjectViewState};
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
 
