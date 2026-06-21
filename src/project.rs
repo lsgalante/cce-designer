@@ -91,7 +91,6 @@ impl State {
         Self::save_recent_files(&self.recent_files);
         self.rebuild_recent_buttons();
         self.ensure_menubar_subnets();
-        self.update_paginator();
     }
 
     pub(crate) fn rebuild_recent_buttons(&mut self) {

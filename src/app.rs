@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Paginator, Button, Checkbox, ScrollingList, Label};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Button, Checkbox, ScrollingList, Label};
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -87,7 +87,6 @@ pub const NODE_PALETTE_IDX: usize = 13;
 pub const SPREADSHEET_IDX: usize = 14;
 pub const SPREADSHEET_MENUBAR_IDX: usize = 15;
 pub const NETWORK_PANEL_IDX: usize = 16;
-pub const PAGINATOR_IDX: usize = 17;
 
 
 pub const HEADER_H: f32 = 0.0;
@@ -204,7 +203,6 @@ pub enum HttpAction {
     ToggleCircularPane,
     MenuClick { widget_idx: usize, menu_idx: usize, item_idx: usize },
     MenuClosed { widget_idx: usize, menu_idx: usize },
-    SelectPage { page: usize },
 }
 
 #[derive(Debug)]
@@ -823,8 +821,6 @@ pub struct State {
     pub floating_spreadsheet_height: f32,
     pub is_resizing_spreadsheet: bool,
     pub drag_start_spreadsheet_h: f32,
-    pub paginator_page_widgets: Vec<Vec<Box<dyn Element>>>,
-    pub last_paginator_menubar: Option<usize>,
     pub loaded_project_path: Option<std::path::PathBuf>,
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
@@ -961,50 +957,7 @@ impl State {
 
 
 
-    pub fn update_recent_files_layout(&mut self) {
-        let active_menubar = self.focused_pane;
-        let menu_names = self.menu(active_menubar).menu_names();
-        let file_page_idx = match menu_names.iter().position(|name| name == "File") {
-            Some(idx) => idx,
-            None => return,
-        };
-
-        if file_page_idx >= self.paginator_page_widgets.len() {
-            return;
-        }
-
-        let menu_items = self.menu(active_menubar).menu_items_list();
-        if file_page_idx >= menu_items.len() {
-            return;
-        }
-        let num_base_items = menu_items[file_page_idx].len();
-        let list_idx = num_base_items + 1;
-
-        let page = &mut self.paginator_page_widgets[file_page_idx];
-        if list_idx >= page.len() {
-            return;
-        }
-
-        let (list_x, list_y, list_w, list_h) = page[list_idx].rect();
-        if list_h <= 0.0 {
-            return;
-        }
-
-        let count = self.recent_files.len();
-        page[list_idx].as_scroll_controller_mut().expect("not a ScrollController").update_bounds(count, list_y, list_h);
-
-        let btn_h = 22.0;
-        let inner_x = list_x + 4.0;
-        let inner_w = list_w - 16.0;
-
-        for (idx, btn) in self.recent_files_buttons.iter_mut().enumerate() {
-            if let Some(draw_y) = page[list_idx].as_scroll_controller().expect("not a ScrollController").get_item_draw_y(idx, 0.0) {
-                btn.set_rect(inner_x, draw_y, inner_w, btn_h);
-            } else {
-                btn.set_rect(-9999.0, -9999.0, 0.0, 0.0);
-            }
-        }
-    }
+    pub fn update_recent_files_layout(&mut self) {}
 
     pub fn save_settings(&mut self) {
         let settings = DesignSettings {
@@ -2667,15 +2620,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let network_panel = Plate::new(0.0, 0.0, 0.0, 0.0).with_color([0.10, 0.10, 0.13, 0.95]);
         widgets.push(Box::new(network_panel));
 
-        let mut paginator = Paginator::new(56.0, vec![])
-            .with_sidebar_mode(true)
-            .with_tabs_rotated(false)
-            .with_context_options(context_opts.clone(), 0);
-        paginator.set_page_hidden(true);
-        widgets.push(Box::new(paginator));
-
-        let mut positions = Vec::with_capacity(PAGINATOR_IDX + 1);
-        positions.resize_with(PAGINATOR_IDX + 1, || (0.0, 0.0, 0.0, 0.0));
+        let mut positions = Vec::with_capacity(widgets.len());
+        positions.resize_with(widgets.len(), || (0.0, 0.0, 0.0, 0.0));
 
         let recent_files = Self::load_recent_files();
         let recent_files_list = ScrollingList::new(22.0, 2.0);
@@ -2890,8 +2836,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             floating_spreadsheet_height: 250.0,
             is_resizing_spreadsheet: false,
             drag_start_spreadsheet_h: 0.0,
-            paginator_page_widgets: Vec::new(),
-            last_paginator_menubar: None,
             loaded_project_path: None,
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
             recent_files,
@@ -3427,9 +3371,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-                self.positions[PAGINATOR_IDX] = (0.0, 0.0, paginator_w, self.height - STATUS_H);
-                self.widgets[PAGINATOR_IDX].set_rect(0.0, 0.0, paginator_w, self.height - STATUS_H);
-
                 self.widgets[0].set_visible(false);
                 self.widgets[STATUS_IDX].set_visible(false);
                 self.widgets[CONTENT_IDX].set_visible(self.show_network);
@@ -3444,7 +3385,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
                 self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
                 self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
-                self.widgets[PAGINATOR_IDX].set_visible(false);
             } else {
                 if !self.circular_network_pane && self.widgets[NETWORK_PANEL_IDX].is_dragging() {
                     let (px, py, _pw, _ph) = self.widgets[NETWORK_PANEL_IDX].rect();
@@ -3528,9 +3468,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-                self.positions[PAGINATOR_IDX] = (0.0, 0.0, paginator_w, self.height - STATUS_H);
-                self.widgets[PAGINATOR_IDX].set_rect(0.0, 0.0, paginator_w, self.height - STATUS_H);
-
                 self.widgets[0].set_visible(false);
                 self.widgets[STATUS_IDX].set_visible(false);
                 self.widgets[CONTENT_IDX].set_visible(self.show_network);
@@ -3545,7 +3482,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
                 self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
                 self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
-                self.widgets[PAGINATOR_IDX].set_visible(false);
             }
         }
 
@@ -3601,90 +3537,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         // Unbounded 2D canvas - no clamping
     }
 
-    pub fn update_paginator(&mut self) {
-        let active_menubar = self.focused_pane;
-        let title = self.widgets[active_menubar].label().unwrap_or_default();
-        let mut label_name = if let Some(colon_idx) = title.find(':') {
-            title.split_at(colon_idx + 1).1.trim().to_uppercase()
-        } else {
-            title.to_uppercase()
-        };
-        if label_name.ends_with(" MENU BAR") {
-            label_name = label_name.replace(" MENU BAR", "");
-        }
-        self.page_selector_mut(PAGINATOR_IDX).set_sidebar_label(Some(label_name));
 
-        let menu_names = self.menu(active_menubar).menu_names();
-        let menu_items = self.menu(active_menubar).menu_items_list();
-        let menu_checked = self.menu(active_menubar).menu_checked_list();
-
-        let num_pages = menu_names.len();
-        self.page_selector_mut(PAGINATOR_IDX).set_pages_with_items(menu_names.clone(), menu_items.clone());
-
-        // Check if we need to rebuild paginator page widgets.
-        let need_rebuild = self.last_paginator_menubar != Some(active_menubar)
-            || self.paginator_page_widgets.len() != num_pages;
-
-        if need_rebuild {
-            self.last_paginator_menubar = Some(active_menubar);
-            self.paginator_page_widgets.clear();
-            self.paginator_page_widgets.resize_with(num_pages, Vec::new);
-
-            for (page_idx, page_name) in menu_names.iter().enumerate() {
-                let items = &menu_items[page_idx];
-                let checked_list = menu_checked.get(page_idx);
-                for (item_idx, item_name) in items.iter().enumerate() {
-                    let is_checked = checked_list.and_then(|l| l.get(item_idx).copied().flatten());
-                    if let Some(checked_val) = is_checked {
-                        let mut cb = Checkbox::new().with_label(item_name);
-                        cb.set_checked(checked_val);
-                        self.paginator_page_widgets[page_idx].push(Box::new(cb));
-                    } else {
-                        let btn = Button::new(0.0, 0.0, 150.0, 24.0).with_label(item_name);
-                        self.paginator_page_widgets[page_idx].push(Box::new(btn));
-                    }
-                }
-
-                if page_name == "File" {
-                    let mut recent_lbl = Label::new("Recent Files").with_font_size(11.0).with_color([0xd4, 0xd4, 0xd4]);
-                    recent_lbl.set_rect(0.0, 0.0, 150.0, 16.0);
-                    self.paginator_page_widgets[page_idx].push(Box::new(recent_lbl));
-
-                    let mut recent_list = ScrollingList::new(22.0, 2.0);
-                    recent_list.set_rect(0.0, 0.0, 150.0, 100.0);
-                    self.paginator_page_widgets[page_idx].push(Box::new(recent_list));
-                }
-            }
-
-            // Page widgets rebuild completed.
-        }
-
-        let sel_page = self.page_selector(PAGINATOR_IDX).selected_page();
-        self.widgets[PARAM_IDX].clear_children(&mut self.ui_context);
-        if !self.page_selector(PAGINATOR_IDX).is_page_hidden() {
-            if sel_page < self.paginator_page_widgets.len() {
-                for widget in &self.paginator_page_widgets[sel_page] {
-                    let ptr = &**widget as *const (dyn Element + 'static) as *mut (dyn Element + 'static);
-                    self.widgets[PARAM_IDX].add_child(ptr, &mut self.ui_context);
-                }
-                if menu_names.get(sel_page).map(|s| s.as_str()) == Some("File") {
-                    for btn in &mut self.recent_files_buttons {
-                        let ptr = btn as *mut Button as *mut (dyn Element + 'static);
-                        self.widgets[PARAM_IDX].add_child(ptr, &mut self.ui_context);
-                    }
-                }
-            }
-        }
-
-        let (px, py, pw, ph) = self.positions[PAGINATOR_IDX];
-        self.widgets[PAGINATOR_IDX].set_rect(px, py, pw, ph);
-
-        // Layout the parameters plate with the new children immediately.
-        let (ppx, ppy, ppw, pph) = self.positions[PARAM_IDX];
-        self.widgets[PARAM_IDX].set_rect(ppx, ppy, ppw, pph);
-
-        self.update_recent_files_layout();
-    }
 
     pub fn sync_context_dropdowns(&mut self) {
         let selected_idx = match self.focused_pane {
@@ -3695,7 +3548,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             HEADER_IDX => 4,
             _ => return,
         };
-        for &widget_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, PAGINATOR_IDX] {
+        for &widget_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
             self.menu_mut(widget_idx).set_context_selected(selected_idx);
         }
     }
@@ -3709,7 +3562,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.sync_parameters_to_project();
         }
         self.sync_context_dropdowns();
-        self.update_paginator();
     }
 
     pub fn sync_layout(&mut self) {
@@ -3769,9 +3621,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     LEFT_MENUBAR_IDX
                 };
                 self.focused_pane = target_pane;
-                self.page_selector_mut(PAGINATOR_IDX).set_page_hidden(false);
-                let page_idx = if target_pane == LEFT_MENUBAR_IDX { 3 } else { 4 };
-                self.page_selector_mut(PAGINATOR_IDX).set_selected_page(page_idx);
                 self.sync_pane_focus();
                 self.rebuild_positions();
                 self.apply_layout();
@@ -4427,7 +4276,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if *button != MouseButton::Left && *button != MouseButton::Right { return false; }
                 let mut changed = false;
                 let old_focus = self.focused_widget;
-                let was_page_hidden = self.page_selector(PAGINATOR_IDX).is_page_hidden();
 
                 let hits_widget = |state: &State, i: usize, x: f32, y: f32| -> bool {
                     if state.circular_network_pane && (i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX) {
@@ -4723,17 +4571,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
                                 }
-                                if i == PAGINATOR_IDX {
-                                    self.update_paginator();
-                                    self.rebuild_positions();
-                                    self.apply_layout();
-                                }
-                            } else if i == PAGINATOR_IDX {
-                                if *button == MouseButton::Left {
-                                    self.focused_pane = HEADER_IDX;
-                                    self.sync_pane_focus();
-                                    changed = true;
-                                }
                             }
                             if self.widgets[i].draggable() {
                                 self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
@@ -4824,7 +4661,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             changed = true;
                         }
                         let mut sync_params = false;
-                        let mut sync_paginator = false;
                         {
                             let ctx = &mut self.ui_context;
                             for (i, w) in self.widgets.iter_mut().enumerate() {
@@ -4834,19 +4670,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     if i == PARAM_IDX {
                                         sync_params = true;
                                     }
-                                    if i == PAGINATOR_IDX {
-                                        sync_paginator = true;
-                                    }
                                 }
                             }
                         }
                         if sync_params {
                             self.sync_parameters_to_project();
-                        }
-                        if sync_paginator {
-                            self.update_paginator();
-                            self.rebuild_positions();
-                            self.apply_layout();
                         }
                     }
                 }
@@ -4872,13 +4700,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                 }
 
-                if self.page_selector(PAGINATOR_IDX).is_page_hidden() != was_page_hidden {
-                    self.rebuild_positions();
-                    self.apply_layout();
-                    self.sync_pane_focus();
-                    self.sync_nodes();
-                    changed = true;
-                }
+
 
                 if self.focused_widget != old_focus {
                     changed = true;

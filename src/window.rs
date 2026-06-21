@@ -27,7 +27,7 @@ use wayland_client::{
 
 use cce_ui::widget::Element;
 use crate::shortcut::Action;
-use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, PAGINATOR_IDX, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
+use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalPosition {
@@ -740,30 +740,6 @@ impl AppState {
                 changed = true;
             }
 
-            // Poll Paginator Clicks
-            let mut paginator_click = None;
-            let active_menubar = state.focused_pane;
-            let menu_names = state.menu(active_menubar).menu_names();
-            for (page_idx, page) in state.paginator_page_widgets.iter_mut().enumerate() {
-                if page_idx < menu_names.len() && menu_names[page_idx] == "Settings" {
-                    continue;
-                }
-                for (item_idx, widget) in page.iter_mut().enumerate() {
-                    if widget.take_click() {
-                        paginator_click = Some((page_idx, item_idx));
-                        break;
-                    }
-                }
-                if paginator_click.is_some() {
-                    break;
-                }
-            }
-
-            if let Some((menu_idx, item_idx)) = paginator_click {
-                state.menu_mut(state.focused_pane).trigger_menu_click(menu_idx, item_idx);
-                changed = true;
-            }
-
             // Check recent files buttons clicks
             let mut clicked_file = None;
             for (i, btn) in state.recent_files_buttons.iter_mut().enumerate() {
@@ -782,7 +758,7 @@ impl AppState {
             }
 
             // Check context switcher dropdown changes
-            for &widget_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, PAGINATOR_IDX] {
+            for &widget_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
                 if let Some(new_sel) = state.menu_mut(widget_idx).take_context_change() {
                     let target_pane = match new_sel {
                         0 => LEFT_MENUBAR_IDX,
@@ -1267,7 +1243,6 @@ impl AppState {
                     vec![]
                 };
                 state.param_mut().set_display_params(&params);
-                state.update_paginator();
 
                 state.upload_vertices();
             }
@@ -1530,16 +1505,7 @@ impl AppState {
                             }
                             Ok("Menu closed".to_string())
                         }
-                        HttpAction::SelectPage { page } => {
-                            state.page_selector_mut(PAGINATOR_IDX).set_page_hidden(false);
-                            state.page_selector_mut(PAGINATOR_IDX).set_selected_page(page);
-                            state.update_paginator();
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.upload_vertices();
-                            needs_redraw = true;
-                            Ok("Page selected".to_string())
-                        }
+
                     };
                     let _ = tx.send(res);
                 }

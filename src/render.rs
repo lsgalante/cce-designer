@@ -603,7 +603,7 @@ impl State {
 
             let is_menu_related = w.type_name() == "MenuBar" || w.type_name() == "Menu";
 
-            let mut parent_plate_rect = if !is_menu_related && (w.is_plate() || w.type_name() == "Paginator") {
+            let mut parent_plate_rect = if !is_menu_related && w.is_plate() {
                 Some(w.rect())
             } else {
                 None
