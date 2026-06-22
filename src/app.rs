@@ -648,6 +648,15 @@ pub struct ResizeDirection {
     pub bottom: bool,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ViewportUniforms {
+    pub mvp: [[f32; 4]; 4],
+    pub window_size: [f32; 2],
+    pub window_radius: f32,
+    pub _padding: f32,
+}
+
 pub struct State {
     pub wgpu_adapter: cce_ui::backend::WgpuAdapter,
     pub render_pipeline: wgpu::RenderPipeline,
@@ -678,6 +687,7 @@ pub struct State {
     pub backdrop_sampler: wgpu::Sampler,
     pub backdrop_bind_group_layout: wgpu::BindGroupLayout,
     pub backdrop_bind_group: wgpu::BindGroup,
+    pub window_info_buffer: wgpu::Buffer,
     pub rotation_y: f32,
     pub rotation_x: f32,
     pub is_rotating_viewport: bool,
@@ -2154,6 +2164,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -2180,6 +2200,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         });
         let backdrop_texture_view = backdrop_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let window_info_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Window Info Buffer"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let window_info_data = [
+            pw as f32,
+            ph as f32,
+            cce_ui::color::window_corner_radius() * scale as f32,
+            0.0,
+        ];
+        queue.write_buffer(&window_info_buffer, 0, bytemuck::cast_slice(&window_info_data));
+
         let backdrop_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Backdrop Bind Group"),
             layout: &backdrop_bind_group_layout,
@@ -2191,6 +2226,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&backdrop_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: window_info_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -2248,7 +2287,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: 64,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2257,11 +2296,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             label: Some("3D Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(64),
+                    min_binding_size: wgpu::BufferSize::new(80),
                 },
                 count: None,
             }],
@@ -2281,14 +2320,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uniform_buffer,
                     offset: 0,
-                    size: wgpu::BufferSize::new(64),
+                    size: wgpu::BufferSize::new(80),
                 }),
             }],
         });
 
         let uniform_buffer_grid = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Grid Uniform Buffer"),
-            size: 64,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2301,14 +2340,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uniform_buffer_grid,
                     offset: 0,
-                    size: wgpu::BufferSize::new(64),
+                    size: wgpu::BufferSize::new(80),
                 }),
             }],
         });
 
         let uniform_buffer_pivot = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Pivot Uniform Buffer"),
-            size: 64,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2321,7 +2360,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uniform_buffer_pivot,
                     offset: 0,
-                    size: wgpu::BufferSize::new(64),
+                    size: wgpu::BufferSize::new(80),
                 }),
             }],
         });
@@ -2680,6 +2719,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             backdrop_sampler,
             backdrop_bind_group_layout,
             backdrop_bind_group,
+            window_info_buffer,
             rotation_y: 0.0,
             rotation_x: 0.0,
             is_rotating_viewport: false,
@@ -3795,6 +3835,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.backdrop_texture = b_tex;
             self.backdrop_texture_view = b_view;
 
+            let window_info_data = [
+                width as f32,
+                height as f32,
+                cce_ui::color::window_corner_radius() * self.scale as f32,
+                0.0,
+            ];
+            self.wgpu_adapter.queue.write_buffer(&self.window_info_buffer, 0, bytemuck::cast_slice(&window_info_data));
+
             self.backdrop_bind_group = self.wgpu_adapter.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Backdrop Bind Group"),
                 layout: &self.backdrop_bind_group_layout,
@@ -3806,6 +3854,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::Sampler(&self.backdrop_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.window_info_buffer.as_entire_binding(),
                     },
                 ],
             });
@@ -5430,10 +5482,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     let view_mat = Mat4::from_rotation_z(rz.to_radians()) * Mat4::look_at_rh(camera_world_pos, pivot, camera_up);
                     let model = Mat4::from_rotation_y(self.rotation_y) * Mat4::from_rotation_x(self.rotation_x);
                     let mvp = proj * view_mat * model;
-                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[mvp.to_cols_array_2d()]));
+                    let window_size = [self.physical_width as f32, self.physical_height as f32];
+                    let window_radius = cce_ui::color::window_corner_radius() * self.scale as f32;
+
+                    let uniforms = ViewportUniforms {
+                        mvp: mvp.to_cols_array_2d(),
+                        window_size,
+                        window_radius,
+                        _padding: 0.0,
+                    };
+                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
                     let mvp_grid = proj * view_mat * model;
-                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_grid, 0, bytemuck::cast_slice(&[mvp_grid.to_cols_array_2d()]));
+                    let uniforms_grid = ViewportUniforms {
+                        mvp: mvp_grid.to_cols_array_2d(),
+                        window_size,
+                        window_radius,
+                        _padding: 0.0,
+                    };
+                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_grid, 0, bytemuck::cast_slice(&[uniforms_grid]));
 
                     let cam_angle_y = camera_pos.x.atan2(camera_pos.z);
                     let rot_angle = if self.active_camera != "Default Camera" {
@@ -5443,7 +5510,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     };
                     let model_pivot = Mat4::from_translation(pivot) * Mat4::from_rotation_y(rot_angle);
                     let mvp_pivot = proj * view_mat * model_pivot;
-                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_pivot, 0, bytemuck::cast_slice(&[mvp_pivot.to_cols_array_2d()]));
+                    let uniforms_pivot = ViewportUniforms {
+                        mvp: mvp_pivot.to_cols_array_2d(),
+                        window_size,
+                        window_radius,
+                        _padding: 0.0,
+                    };
+                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_pivot, 0, bytemuck::cast_slice(&[uniforms_pivot]));
 
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("3D Render Pass"),
