@@ -110,7 +110,7 @@ impl State {
 
         let mut visited = vec![false; self.widgets.len()];
         self.draw_element_recursive(
-            &self.root_window,
+            self.root_window.as_ref(),
             verts,
             sw,
             sh,

@@ -713,7 +713,7 @@ pub struct State {
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
-    pub root_window: cce_ui::widget::Window,
+    pub root_window: Box<cce_ui::widget::Window>,
     pub fs_root: FsNode,
     pub node_templates: Vec<NodeTemplate>,
     pub current_path: Vec<usize>,
@@ -2753,9 +2753,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             shortcut_manager,
             pending_action: None,
             exit_requested: false,
-            root_window: cce_ui::widget::Window::new(0.0, 0.0, lw, lh)
-                .with_background([0.0, 0.0, 0.0, 0.0])
-                .with_border([0.0, 0.0, 0.0, 0.0], 0.0),
+            root_window: Box::new(
+                cce_ui::widget::Window::new(0.0, 0.0, lw, lh)
+                    .with_background([0.0, 0.0, 0.0, 0.0])
+                    .with_border([0.0, 0.0, 0.0, 0.0], 0.0)
+            ),
             widgets,
             positions,
             splitter_layout,
