@@ -55,7 +55,7 @@ impl State {
         (tex, view)
     }
 
-    pub(crate) fn collect_vertices(&self, verts: &mut Vec<Vertex>) {
+    pub(crate) fn collect_vertices(&mut self, verts: &mut Vec<Vertex>) {
         verts.clear();
         let sw = self.width;
         let sh = self.height;
@@ -100,19 +100,27 @@ impl State {
             (self.has_any_open_menu(i), base_key)
         });
 
-        let mut visited = vec![false; self.widgets.len()];
+        self.ui_context.clear_hierarchy();
+        self.root_window.clear_children(&mut self.ui_context);
         for &i in &draw_order {
-            let w = &self.widgets[i];
-            if !w.visible() {
-                continue;
+            if self.widgets[i].visible() {
+                self.root_window.add_child(self.widgets[i].as_ptr_mut(), &mut self.ui_context);
             }
-            if let Some(parent_ptr) = w.parent(&self.ui_context) {
-                if self.find_widget_index(parent_ptr).is_some() {
-                    continue;
-                }
-            }
-            self.draw_widget_recursive(i, verts, sw, sh, clip, clip_circle_val, show_cursor, node_area_y, &mut visited);
         }
+
+        let mut visited = vec![false; self.widgets.len()];
+        self.draw_element_recursive(
+            &self.root_window,
+            verts,
+            sw,
+            sh,
+            [0.0, 0.0, 0.0],
+            show_cursor,
+            node_area_y,
+            &mut visited,
+            clip,
+            clip_circle_val,
+        );
     }
 
     pub(crate) fn draw_widget_recursive(
@@ -255,7 +263,18 @@ impl State {
                 self.draw_widget_recursive(child_idx, verts, sw, sh, clip, clip_circle_val, show_cursor, node_area_y, visited);
             } else {
                 unsafe {
-                    self.draw_element_recursive(&*child_ptr, verts, sw, sh, active_clip_circle);
+                    self.draw_element_recursive(
+                        &*child_ptr,
+                        verts,
+                        sw,
+                        sh,
+                        active_clip_circle,
+                        show_cursor,
+                        node_area_y,
+                        visited,
+                        clip,
+                        clip_circle_val,
+                    );
                 }
             }
         }
@@ -293,8 +312,18 @@ impl State {
         sw: f32,
         sh: f32,
         active_clip_circle: [f32; 3],
+        show_cursor: bool,
+        node_area_y: f32,
+        visited: &mut [bool],
+        clip: (f32, f32, f32, f32),
+        clip_circle_val: [f32; 3],
     ) {
         if !element.visible() {
+            return;
+        }
+
+        if let Some(idx) = self.find_widget_index(element.as_ptr()) {
+            self.draw_widget_recursive(idx, verts, sw, sh, clip, clip_circle_val, show_cursor, node_area_y, visited);
             return;
         }
 
@@ -306,7 +335,18 @@ impl State {
 
         for child_ptr in element.children(&self.ui_context) {
             unsafe {
-                self.draw_element_recursive(&*child_ptr, verts, sw, sh, active_clip_circle);
+                self.draw_element_recursive(
+                    &*child_ptr,
+                    verts,
+                    sw,
+                    sh,
+                    active_clip_circle,
+                    show_cursor,
+                    node_area_y,
+                    visited,
+                    clip,
+                    clip_circle_val,
+                );
             }
         }
     }

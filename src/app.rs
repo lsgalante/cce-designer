@@ -703,6 +703,7 @@ pub struct State {
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
+    pub root_window: cce_ui::widget::Window,
     pub fs_root: FsNode,
     pub node_templates: Vec<NodeTemplate>,
     pub current_path: Vec<usize>,
@@ -2712,6 +2713,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             shortcut_manager,
             pending_action: None,
             exit_requested: false,
+            root_window: cce_ui::widget::Window::new(0.0, 0.0, lw, lh)
+                .with_background([0.0, 0.0, 0.0, 0.0])
+                .with_border([0.0, 0.0, 0.0, 0.0], 0.0),
             widgets,
             positions,
             splitter_layout,
@@ -2910,6 +2914,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.upload_vertices();
         state.sync_cursor_and_selection();
         state.sync_parameters_pane();
+        for w in &mut state.widgets {
+            state.root_window.add_child(w.as_ptr_mut(), &mut state.ui_context);
+        }
         state
     }
 
@@ -3777,6 +3784,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.physical_height = height;
             self.width = width as f32 / self.scale as f32;
             self.height = height as f32 / self.scale as f32;
+            self.root_window.set_rect(0.0, 0.0, self.width, self.height);
             self.wgpu_adapter.resize(width, height);
 
             let (tex, view) = self.create_depth_texture();
