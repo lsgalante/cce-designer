@@ -713,7 +713,7 @@ pub struct State {
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
-    pub root_window: Box<cce_ui::widget::Window>,
+    pub root_window: Box<cce_ui::widget::Backplate>,
     pub fs_root: FsNode,
     pub node_templates: Vec<NodeTemplate>,
     pub current_path: Vec<usize>,
@@ -2210,7 +2210,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let window_info_data = [
             pw as f32,
             ph as f32,
-            cce_ui::color::window_corner_radius() * scale as f32,
+            cce_ui::color::backplate_corner_radius() * scale as f32,
             0.0,
         ];
         queue.write_buffer(&window_info_buffer, 0, bytemuck::cast_slice(&window_info_data));
@@ -2754,7 +2754,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             pending_action: None,
             exit_requested: false,
             root_window: Box::new(
-                cce_ui::widget::Window::new(0.0, 0.0, lw, lh)
+                cce_ui::widget::Backplate::new(0.0, 0.0, lw, lh)
                     .with_background([0.0, 0.0, 0.0, 0.0])
                     .with_border([0.0, 0.0, 0.0, 0.0], 0.0)
             ),
@@ -3840,7 +3840,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             let window_info_data = [
                 width as f32,
                 height as f32,
-                cce_ui::color::window_corner_radius() * self.scale as f32,
+                cce_ui::color::backplate_corner_radius() * self.scale as f32,
                 0.0,
             ];
             self.wgpu_adapter.queue.write_buffer(&self.window_info_buffer, 0, bytemuck::cast_slice(&window_info_data));
@@ -5485,7 +5485,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     let model = Mat4::from_rotation_y(self.rotation_y) * Mat4::from_rotation_x(self.rotation_x);
                     let mvp = proj * view_mat * model;
                     let window_size = [self.physical_width as f32, self.physical_height as f32];
-                    let window_radius = cce_ui::color::window_corner_radius() * self.scale as f32;
+                    let window_radius = cce_ui::color::backplate_corner_radius() * self.scale as f32;
 
                     let uniforms = ViewportUniforms {
                         mvp: mvp.to_cols_array_2d(),
