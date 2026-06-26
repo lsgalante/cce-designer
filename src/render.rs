@@ -188,6 +188,12 @@ impl State {
                 push_extra_quad_vertices_clipped(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle, verts);
             }
 
+            for (cx, cy, cr, cc) in w.extra_circles() {
+                if cx >= clip.0 && cx <= clip.2 && cy >= clip.1 && cy <= clip.3 {
+                    push_circle_vertices(cx, cy, cr, sw, sh, cc, 16, active_clip_circle, verts);
+                }
+            }
+
             if show_cursor {
                 let px = self.positions[CONTENT_IDX].0;
                 let py = self.positions[CONTENT_IDX].1;
@@ -237,6 +243,9 @@ impl State {
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
                 push_extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
             }
+            for (cx, cy, cr, cc) in w.extra_circles() {
+                push_circle_vertices(cx, cy, cr, sw, sh, cc, 16, active_clip_circle, verts);
+            }
             for (acx, acy, ar, ath, a_start, a_end, acolor) in w.extra_arcs() {
                 push_arc_background_vertices(
                     acx, acy, ar,
@@ -254,6 +263,9 @@ impl State {
 
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
                 push_extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
+            }
+            for (cx, cy, cr, cc) in w.extra_circles() {
+                push_circle_vertices(cx, cy, cr, sw, sh, cc, 16, active_clip_circle, verts);
             }
         }
 
@@ -331,6 +343,9 @@ impl State {
 
         for (qx, qy, qw, qh, qc) in element.extra_quads() {
             push_extra_quad_vertices(element, qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
+        }
+        for (cx, cy, cr, cc) in element.extra_circles() {
+            push_circle_vertices(cx, cy, cr, sw, sh, cc, 16, active_clip_circle, verts);
         }
 
         for child_ptr in element.children(&self.ui_context) {
