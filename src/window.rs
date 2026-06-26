@@ -300,6 +300,36 @@ impl PointerHandler for AppState {
                                     let _ = themed_pointer.set_cursor(_conn, CursorIcon::Default);
                                 }
                             }
+                        } else {
+                            let lx = event.position.0 as f32;
+                            let ly = event.position.1 as f32;
+                            let border = 8.0f32;
+                            let mut cursor = CursorIcon::Default;
+                            if ly < border {
+                                if lx < border {
+                                    cursor = CursorIcon::NwResize;
+                                } else if lx > st.width - border {
+                                    cursor = CursorIcon::NeResize;
+                                } else {
+                                    cursor = CursorIcon::NResize;
+                                }
+                            } else if ly > st.height - border {
+                                if lx < border {
+                                    cursor = CursorIcon::SwResize;
+                                } else if lx > st.width - border {
+                                    cursor = CursorIcon::SeResize;
+                                } else {
+                                    cursor = CursorIcon::SResize;
+                                }
+                            } else if lx < border {
+                                cursor = CursorIcon::WResize;
+                            } else if lx > st.width - border {
+                                cursor = CursorIcon::EResize;
+                            }
+
+                            if let Some(ref themed_pointer) = self.pointer {
+                                let _ = themed_pointer.set_cursor(_conn, cursor);
+                            }
                         }
 
                         if let Some(ref pending) = self.pending_resize {
@@ -409,6 +439,44 @@ impl PointerHandler for AppState {
                                             }
                                         }
                                     }
+                                }
+                            } else if !st.is_detached_network && btn == cce_ui::widget::MouseButton::Left {
+                                let lx = event.position.0 as f32;
+                                let ly = event.position.1 as f32;
+                                let border = 8.0f32;
+                                use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge;
+                                let mut edge = ResizeEdge::None;
+                                if ly < border {
+                                    if lx < border {
+                                        edge = ResizeEdge::TopLeft;
+                                    } else if lx > st.width - border {
+                                        edge = ResizeEdge::TopRight;
+                                    } else {
+                                        edge = ResizeEdge::Top;
+                                    }
+                                } else if ly > st.height - border {
+                                    if lx < border {
+                                        edge = ResizeEdge::BottomLeft;
+                                    } else if lx > st.width - border {
+                                        edge = ResizeEdge::BottomRight;
+                                    } else {
+                                        edge = ResizeEdge::Bottom;
+                                    }
+                                } else if lx < border {
+                                    edge = ResizeEdge::Left;
+                                } else if lx > st.width - border {
+                                    edge = ResizeEdge::Right;
+                                }
+
+                                if edge != ResizeEdge::None {
+                                    self.pending_resize = Some(PendingResize {
+                                        serial: *serial,
+                                        edge,
+                                        start_x: lx,
+                                        start_y: ly,
+                                        is_move: false,
+                                    });
+                                    continue;
                                 }
                             }
                         }
