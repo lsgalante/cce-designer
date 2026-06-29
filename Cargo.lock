@@ -155,7 +155,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cce-design-interface"
+name = "cce-designer"
 version = "0.1.0"
 dependencies = [
  "bytemuck",

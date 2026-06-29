@@ -659,7 +659,7 @@ impl wayland_client::Dispatch<cce_ui::protocol::zcce_inspector_v1::ZcceInspector
                     let expected_id = if st.is_detached_network {
                         "circular-network-pane"
                     } else {
-                        "cce-design-interface"
+                        "cce-designer"
                     };
                     if app_id == expected_id {
                         st.window_x = x;

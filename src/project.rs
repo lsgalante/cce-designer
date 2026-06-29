@@ -54,7 +54,8 @@ impl State {
         std::env::var("HOME").ok().map(|h| {
             let mut path = std::path::PathBuf::from(h);
             path.push(".config");
-            path.push("cce-design-interface");
+            path.push("cce");
+            path.push("cce-designer");
             path.push("recent_files.json");
             path
         })
