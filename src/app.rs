@@ -4045,6 +4045,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 let mut needs_sync_grid = false;
                 if !dialog_open && !self.modifiers.control_key() {
                     let ctx = &mut self.ui_context;
+                    let now = std::time::Instant::now();
+                    let elapsed_ms = match ctx.last_scroll_time {
+                        None => 999999,
+                        Some(last) => now.duration_since(last).as_millis(),
+                    };
+                    if elapsed_ms >= 5 {
+                        let is_new_gesture = elapsed_ms > 250;
+                        if is_new_gesture {
+                            ctx.scroll_initiate_widget_id = None;
+                            ctx.scroll_gesture_new = true;
+                        } else {
+                            ctx.scroll_gesture_new = false;
+                        }
+                        ctx.last_scroll_time = Some(now);
+                    }
                     for (i, w) in self.widgets.iter_mut().enumerate() {
                         if w.mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
                             handled = true;
