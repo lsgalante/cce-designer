@@ -332,6 +332,9 @@ pub struct ViewportSettings {
     pub square: bool,
     pub show_camera_pivot_enabled: bool,
     pub camera_pivot_size: f32,
+    pub scroll_speed: Option<f32>,
+    pub inertial_scroll: Option<bool>,
+    pub scroll_friction: Option<f32>,
 }
 
 impl Default for ViewportSettings {
@@ -341,8 +344,18 @@ impl Default for ViewportSettings {
             square: false,
             show_camera_pivot_enabled: false,
             camera_pivot_size: 1.0,
+            scroll_speed: None,
+            inertial_scroll: None,
+            scroll_friction: None,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct GraphSettings {
+    pub scroll_speed: Option<f32>,
+    pub inertial_scroll: Option<bool>,
+    pub scroll_friction: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -361,14 +374,8 @@ pub struct DesignSettings {
     pub grid_color: [f32; 3],
     #[serde(default)]
     pub viewport: ViewportSettings,
-
-    pub graph_scroll_speed: Option<f32>,
-    pub graph_inertial_scroll: Option<bool>,
-    pub graph_scroll_friction: Option<f32>,
-
-    pub viewport_scroll_speed: Option<f32>,
-    pub viewport_inertial_scroll: Option<bool>,
-    pub viewport_scroll_friction: Option<f32>,
+    #[serde(default)]
+    pub graph: GraphSettings,
 }
 
 impl Default for DesignSettings {
@@ -385,12 +392,7 @@ impl Default for DesignSettings {
             grid_thickness: default_grid_thickness(),
             grid_color: default_grid_color(),
             viewport: ViewportSettings::default(),
-            graph_scroll_speed: None,
-            graph_inertial_scroll: None,
-            graph_scroll_friction: None,
-            viewport_scroll_speed: None,
-            viewport_inertial_scroll: None,
-            viewport_scroll_friction: None,
+            graph: GraphSettings::default(),
         }
     }
 }
@@ -1097,13 +1099,15 @@ impl State {
                 square: self.square_viewport,
                 show_camera_pivot_enabled: self.show_camera_pivot,
                 camera_pivot_size: self.camera_pivot_size,
+                scroll_speed: Some(self.viewport_scroll_speed),
+                inertial_scroll: Some(self.viewport_inertial_scroll),
+                scroll_friction: Some(self.viewport_scroll_friction),
             },
-            graph_scroll_speed: Some(self.graph_scroll_speed),
-            graph_inertial_scroll: Some(self.graph_inertial_scroll),
-            graph_scroll_friction: Some(self.graph_scroll_friction),
-            viewport_scroll_speed: Some(self.viewport_scroll_speed),
-            viewport_inertial_scroll: Some(self.viewport_inertial_scroll),
-            viewport_scroll_friction: Some(self.viewport_scroll_friction),
+            graph: GraphSettings {
+                scroll_speed: Some(self.graph_scroll_speed),
+                inertial_scroll: Some(self.graph_inertial_scroll),
+                scroll_friction: Some(self.graph_scroll_friction),
+            },
         };
         settings.save();
         self.last_design_mod_time = {
@@ -2980,12 +2984,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             zoom_velocity: 0.0,
             grid_thickness: settings.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
-            graph_scroll_speed: settings.graph_scroll_speed.unwrap_or(1.0),
-            graph_inertial_scroll: settings.graph_inertial_scroll.unwrap_or(true),
-            graph_scroll_friction: settings.graph_scroll_friction.unwrap_or(0.90),
-            viewport_scroll_speed: settings.viewport_scroll_speed.unwrap_or(1.0),
-            viewport_inertial_scroll: settings.viewport_inertial_scroll.unwrap_or(true),
-            viewport_scroll_friction: settings.viewport_scroll_friction.unwrap_or(0.90),
+            graph_scroll_speed: settings.graph.scroll_speed.unwrap_or(1.0),
+            graph_inertial_scroll: settings.graph.inertial_scroll.unwrap_or(true),
+            graph_scroll_friction: settings.graph.scroll_friction.unwrap_or(0.90),
+            viewport_scroll_speed: settings.viewport.scroll_speed.unwrap_or(1.0),
+            viewport_inertial_scroll: settings.viewport.inertial_scroll.unwrap_or(true),
+            viewport_scroll_friction: settings.viewport.scroll_friction.unwrap_or(0.90),
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network,
             circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
@@ -3178,12 +3182,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
         
         let settings = DesignSettings::load();
-        self.graph_scroll_speed = settings.graph_scroll_speed.unwrap_or(speed);
-        self.graph_inertial_scroll = settings.graph_inertial_scroll.unwrap_or(enabled);
-        self.graph_scroll_friction = settings.graph_scroll_friction.unwrap_or(friction);
-        self.viewport_scroll_speed = settings.viewport_scroll_speed.unwrap_or(speed);
-        self.viewport_inertial_scroll = settings.viewport_inertial_scroll.unwrap_or(enabled);
-        self.viewport_scroll_friction = settings.viewport_scroll_friction.unwrap_or(friction);
+        self.graph_scroll_speed = settings.graph.scroll_speed.unwrap_or(speed);
+        self.graph_inertial_scroll = settings.graph.inertial_scroll.unwrap_or(enabled);
+        self.graph_scroll_friction = settings.graph.scroll_friction.unwrap_or(friction);
+        self.viewport_scroll_speed = settings.viewport.scroll_speed.unwrap_or(speed);
+        self.viewport_inertial_scroll = settings.viewport.inertial_scroll.unwrap_or(enabled);
+        self.viewport_scroll_friction = settings.viewport.scroll_friction.unwrap_or(friction);
     }
 
     pub fn update_graph_settings_from_config(&mut self) {
@@ -5308,12 +5312,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
                          self.cell_color = cce_ui::color::graph_cell_color();
                          self.gap_color = cce_ui::color::graph_gap_color();
-                          if let Some(val) = settings.graph_scroll_speed { self.graph_scroll_speed = val; }
-                          if let Some(val) = settings.graph_inertial_scroll { self.graph_inertial_scroll = val; }
-                          if let Some(val) = settings.graph_scroll_friction { self.graph_scroll_friction = val; }
-                          if let Some(val) = settings.viewport_scroll_speed { self.viewport_scroll_speed = val; }
-                          if let Some(val) = settings.viewport_inertial_scroll { self.viewport_inertial_scroll = val; }
-                          if let Some(val) = settings.viewport_scroll_friction { self.viewport_scroll_friction = val; }
+                          if let Some(val) = settings.graph.scroll_speed { self.graph_scroll_speed = val; }
+                          if let Some(val) = settings.graph.inertial_scroll { self.graph_inertial_scroll = val; }
+                          if let Some(val) = settings.graph.scroll_friction { self.graph_scroll_friction = val; }
+                          if let Some(val) = settings.viewport.scroll_speed { self.viewport_scroll_speed = val; }
+                          if let Some(val) = settings.viewport.inertial_scroll { self.viewport_inertial_scroll = val; }
+                          if let Some(val) = settings.viewport.scroll_friction { self.viewport_scroll_friction = val; }
 
                         colors::set_node_color([self.node_color[0], self.node_color[1], self.node_color[2], 1.0]);
 
