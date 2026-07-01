@@ -630,32 +630,37 @@ mod tests {
     fn test_design_settings_serialization_roundtrip() {
         let json_without_pivot = r#"
         {
-            "grid_snap_enabled": true,
-            "network_grid_enabled": true,
-            "grid_size_x": 80.0,
-            "grid_size_y": 40.0,
-            "skipped_row_h": 20.0,
-            "skipped_col_w": 20.0,
-            "show_grid_enabled": true,
-            "show_cube_enabled": false,
-            "show_origin_enabled": true,
-            "origin_size": 1.0,
-            "viewport_bg_color": [0.05, 0.05, 0.10],
-            "square_viewport": false,
-            "grid_thickness": 0.03
+            "viewport": {
+                "bg_color": [0.05, 0.05, 0.10],
+                "square": false,
+                "show_camera_pivot_enabled": false,
+                "camera_pivot_size": 1.0,
+                "show_grid_enabled": true,
+                "show_cube_enabled": false,
+                "show_origin_enabled": true,
+                "origin_size": 1.0,
+                "grid_thickness": 0.03,
+                "grid_color": [0.35, 0.35, 0.40]
+            },
+            "graph": {
+                "grid_size_x": 80.0,
+                "grid_size_y": 40.0,
+                "skipped_row_h": 20.0,
+                "skipped_col_w": 20.0
+            }
         }
         "#;
         
         let settings: DesignSettings = serde_json::from_str(json_without_pivot).unwrap();
         assert_eq!(settings.viewport.show_camera_pivot_enabled, false);
         assert_eq!(settings.viewport.camera_pivot_size, 1.0);
-        assert_eq!(settings.grid_color, [0.35, 0.35, 0.40]);
+        assert_eq!(settings.viewport.grid_color, [0.35, 0.35, 0.40]);
         
         let serialized = serde_json::to_string(&settings).unwrap();
         let settings_roundtrip: DesignSettings = serde_json::from_str(&serialized).unwrap();
         assert_eq!(settings_roundtrip.viewport.show_camera_pivot_enabled, false);
         assert_eq!(settings_roundtrip.viewport.camera_pivot_size, 1.0);
-        assert_eq!(settings_roundtrip.grid_color, [0.35, 0.35, 0.40]);
+        assert_eq!(settings_roundtrip.viewport.grid_color, [0.35, 0.35, 0.40]);
     }
 
     #[test]

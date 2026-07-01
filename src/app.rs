@@ -335,6 +335,14 @@ pub struct ViewportSettings {
     pub scroll_speed: Option<f32>,
     pub inertial_scroll: Option<bool>,
     pub scroll_friction: Option<f32>,
+    pub show_grid_enabled: bool,
+    pub show_cube_enabled: bool,
+    pub show_origin_enabled: bool,
+    pub origin_size: f32,
+    #[serde(default = "default_grid_thickness")]
+    pub grid_thickness: f32,
+    #[serde(default = "default_grid_color")]
+    pub grid_color: [f32; 3],
 }
 
 impl Default for ViewportSettings {
@@ -347,54 +355,47 @@ impl Default for ViewportSettings {
             scroll_speed: None,
             inertial_scroll: None,
             scroll_friction: None,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct GraphSettings {
-    pub scroll_speed: Option<f32>,
-    pub inertial_scroll: Option<bool>,
-    pub scroll_friction: Option<f32>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct DesignSettings {
-    pub grid_size_x: f32,
-    pub grid_size_y: f32,
-    pub skipped_row_h: f32,
-    pub skipped_col_w: f32,
-    pub show_grid_enabled: bool,
-    pub show_cube_enabled: bool,
-    pub show_origin_enabled: bool,
-    pub origin_size: f32,
-    #[serde(default = "default_grid_thickness")]
-    pub grid_thickness: f32,
-    #[serde(default = "default_grid_color")]
-    pub grid_color: [f32; 3],
-    #[serde(default)]
-    pub viewport: ViewportSettings,
-    #[serde(default)]
-    pub graph: GraphSettings,
-}
-
-impl Default for DesignSettings {
-    fn default() -> Self {
-        Self {
-            grid_size_x: 80.0,
-            grid_size_y: 40.0,
-            skipped_row_h: 20.0,
-            skipped_col_w: 20.0,
             show_grid_enabled: true,
             show_cube_enabled: false,
             show_origin_enabled: true,
             origin_size: 1.0,
             grid_thickness: default_grid_thickness(),
             grid_color: default_grid_color(),
-            viewport: ViewportSettings::default(),
-            graph: GraphSettings::default(),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GraphSettings {
+    pub grid_size_x: f32,
+    pub grid_size_y: f32,
+    pub skipped_row_h: f32,
+    pub skipped_col_w: f32,
+    pub scroll_speed: Option<f32>,
+    pub inertial_scroll: Option<bool>,
+    pub scroll_friction: Option<f32>,
+}
+
+impl Default for GraphSettings {
+    fn default() -> Self {
+        Self {
+            grid_size_x: 80.0,
+            grid_size_y: 40.0,
+            skipped_row_h: 20.0,
+            skipped_col_w: 20.0,
+            scroll_speed: None,
+            inertial_scroll: None,
+            scroll_friction: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DesignSettings {
+    #[serde(default)]
+    pub viewport: ViewportSettings,
+    #[serde(default)]
+    pub graph: GraphSettings,
 }
 
 fn float_array_to_hex(rgb: &[f32; 3]) -> String {
@@ -442,11 +443,11 @@ impl DesignSettings {
                                 }
                             }
                         }
-                    }
-                    if let Some(serde_json::Value::String(hex_str)) = obj.get("grid_color") {
-                        if let Some(arr) = hex_to_float_array(hex_str) {
-                            if let Ok(arr_val) = serde_json::to_value(arr) {
-                                obj.insert("grid_color".to_string(), arr_val);
+                        if let Some(serde_json::Value::String(hex_str)) = viewport.get("grid_color") {
+                            if let Some(arr) = hex_to_float_array(hex_str) {
+                                if let Ok(arr_val) = serde_json::to_value(arr) {
+                                    viewport.insert("grid_color".to_string(), arr_val);
+                                }
                             }
                         }
                     }
@@ -485,11 +486,11 @@ impl DesignSettings {
                             viewport.insert("bg_color".to_string(), serde_json::Value::String(hex_str));
                         }
                     }
-                }
-                if let Some(val) = obj.get("grid_color") {
-                    if let Ok(arr) = serde_json::from_value::<[f32; 3]>(val.clone()) {
-                        let hex_str = float_array_to_hex(&arr);
-                        obj.insert("grid_color".to_string(), serde_json::Value::String(hex_str));
+                    if let Some(val) = viewport.get("grid_color") {
+                        if let Ok(arr) = serde_json::from_value::<[f32; 3]>(val.clone()) {
+                            let hex_str = float_array_to_hex(&arr);
+                            viewport.insert("grid_color".to_string(), serde_json::Value::String(hex_str));
+                        }
                     }
                 }
             }
@@ -1084,16 +1085,6 @@ impl State {
 
     pub fn save_settings(&mut self) {
         let settings = DesignSettings {
-            grid_size_x: self.grid_size_x,
-            grid_size_y: self.grid_size_y,
-            skipped_row_h: self.skipped_row_h,
-            skipped_col_w: self.skipped_col_w,
-            show_grid_enabled: self.show_grid,
-            show_cube_enabled: self.show_cube,
-            show_origin_enabled: self.show_origin,
-            origin_size: self.origin_size,
-            grid_color: self.grid_color,
-            grid_thickness: self.grid_thickness,
             viewport: ViewportSettings {
                 bg_color: self.viewport_bg_color,
                 square: self.square_viewport,
@@ -1102,8 +1093,18 @@ impl State {
                 scroll_speed: Some(self.viewport_scroll_speed),
                 inertial_scroll: Some(self.viewport_inertial_scroll),
                 scroll_friction: Some(self.viewport_scroll_friction),
+                show_grid_enabled: self.show_grid,
+                show_cube_enabled: self.show_cube,
+                show_origin_enabled: self.show_origin,
+                origin_size: self.origin_size,
+                grid_thickness: self.grid_thickness,
+                grid_color: self.grid_color,
             },
             graph: GraphSettings {
+                grid_size_x: self.grid_size_x,
+                grid_size_y: self.grid_size_y,
+                skipped_row_h: self.skipped_row_h,
+                skipped_col_w: self.skipped_col_w,
                 scroll_speed: Some(self.graph_scroll_speed),
                 inertial_scroll: Some(self.graph_inertial_scroll),
                 scroll_friction: Some(self.graph_scroll_friction),
@@ -2514,8 +2515,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             mapped_at_creation: false,
         });
 
-        let linear_grid_color = cce_ui::colors::to_linear_rgb(settings.grid_color);
-        let grid_verts = grid_vertices(settings.grid_thickness, linear_grid_color);
+        let linear_grid_color = cce_ui::colors::to_linear_rgb(settings.viewport.grid_color);
+        let grid_verts = grid_vertices(settings.viewport.grid_thickness, linear_grid_color);
         let vertex_count_grid = grid_verts.len() as u32;
         let vertex_buffer_grid = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Grid Vertex Buffer"),
@@ -2523,7 +2524,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
-        let origin_verts = origin_vectors_vertices(settings.origin_size);
+        let origin_verts = origin_vectors_vertices(settings.viewport.origin_size);
         let vertex_count_origin = origin_verts.len() as u32;
         let vertex_buffer_origin = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Origin Vectors Vertex Buffer"),
@@ -2884,23 +2885,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             rotate_accum_pitch: 0.0,
             rotate_velocity_yaw: 0.0,
             rotate_velocity_pitch: 0.0,
-            show_grid: settings.show_grid_enabled,
-            show_cube: settings.show_cube_enabled,
-            show_origin: settings.show_origin_enabled,
+            show_grid: settings.viewport.show_grid_enabled,
+            show_cube: settings.viewport.show_cube_enabled,
+            show_origin: settings.viewport.show_origin_enabled,
             show_camera_pivot: settings.viewport.show_camera_pivot_enabled,
             viewport_bg_color: settings.viewport.bg_color,
             node_color: {
                 let nc = cce_ui::color::graph_node_color();
                 [nc[0], nc[1], nc[2]]
             },
-            grid_color: settings.grid_color,
+            grid_color: settings.viewport.grid_color,
             cell_color: cce_ui::color::graph_cell_color(),
             gap_color: cce_ui::color::graph_gap_color(),
             vertex_buffer_origin,
             vertex_count_origin,
             vertex_buffer_pivot,
             vertex_count_pivot,
-            origin_size: settings.origin_size,
+            origin_size: settings.viewport.origin_size,
             camera_pivot_size: settings.viewport.camera_pivot_size,
             fs_root: fs_root.clone(),
             node_templates,
@@ -2949,11 +2950,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
             network_grid_visible: true,
-            grid_size_x: settings.grid_size_x,
-            grid_size_y: settings.grid_size_y,
-            skipped_row_h: settings.skipped_row_h,
-            skipped_col_w: settings.skipped_col_w,
-
+            grid_size_x: settings.graph.grid_size_x,
+            grid_size_y: settings.graph.grid_size_y,
+            skipped_row_h: settings.graph.skipped_row_h,
+            skipped_col_w: settings.graph.skipped_col_w,
             pan_x,
             pan_y,
             pan_velocity_x: 0.0,
@@ -2982,7 +2982,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_zoom_time: Instant::now(),
             zoom_accum: 0.0,
             zoom_velocity: 0.0,
-            grid_thickness: settings.grid_thickness,
+            grid_thickness: settings.viewport.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
             graph_scroll_speed: settings.graph.scroll_speed.unwrap_or(1.0),
             graph_inertial_scroll: settings.graph.inertial_scroll.unwrap_or(true),
@@ -5295,20 +5295,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         self.last_design_mod_time = Some(mod_time);
                          let settings = DesignSettings::load();
                          self.square_viewport = settings.viewport.square;
-                         self.grid_size_x = settings.grid_size_x;
-                         self.grid_size_y = settings.grid_size_y;
-                         self.skipped_row_h = settings.skipped_row_h;
-                         self.skipped_col_w = settings.skipped_col_w;
-                         self.grid_thickness = settings.grid_thickness;
-                         self.show_grid = settings.show_grid_enabled;
-                         self.show_cube = settings.show_cube_enabled;
-                         self.show_origin = settings.show_origin_enabled;
+                         self.grid_size_x = settings.graph.grid_size_x;
+                         self.grid_size_y = settings.graph.grid_size_y;
+                         self.skipped_row_h = settings.graph.skipped_row_h;
+                         self.skipped_col_w = settings.graph.skipped_col_w;
+                         self.grid_thickness = settings.viewport.grid_thickness;
+                         self.show_grid = settings.viewport.show_grid_enabled;
+                         self.show_cube = settings.viewport.show_cube_enabled;
+                         self.show_origin = settings.viewport.show_origin_enabled;
                          self.show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
                          self.viewport_bg_color = settings.viewport.bg_color;
                          let node_c = cce_ui::color::graph_node_color();
                          self.node_color = [node_c[0], node_c[1], node_c[2]];
-                         self.grid_color = settings.grid_color;
-                         self.origin_size = settings.origin_size;
+                         self.grid_color = settings.viewport.grid_color;
+                         self.origin_size = settings.viewport.origin_size;
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
                          self.cell_color = cce_ui::color::graph_cell_color();
                          self.gap_color = cce_ui::color::graph_gap_color();
