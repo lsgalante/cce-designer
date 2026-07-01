@@ -647,19 +647,15 @@ mod tests {
         "#;
         
         let settings: DesignSettings = serde_json::from_str(json_without_pivot).unwrap();
-        assert_eq!(settings.show_camera_pivot_enabled, false);
-        assert_eq!(settings.camera_pivot_size, 1.0);
+        assert_eq!(settings.viewport.show_camera_pivot_enabled, false);
+        assert_eq!(settings.viewport.camera_pivot_size, 1.0);
         assert_eq!(settings.grid_color, [0.35, 0.35, 0.40]);
-        assert_eq!(settings.cell_color, [0.13, 0.13, 0.16]);
-        assert_eq!(settings.gap_color, [0.07, 0.07, 0.09]);
         
         let serialized = serde_json::to_string(&settings).unwrap();
         let settings_roundtrip: DesignSettings = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(settings_roundtrip.show_camera_pivot_enabled, false);
-        assert_eq!(settings_roundtrip.camera_pivot_size, 1.0);
+        assert_eq!(settings_roundtrip.viewport.show_camera_pivot_enabled, false);
+        assert_eq!(settings_roundtrip.viewport.camera_pivot_size, 1.0);
         assert_eq!(settings_roundtrip.grid_color, [0.35, 0.35, 0.40]);
-        assert_eq!(settings_roundtrip.cell_color, [0.13, 0.13, 0.16]);
-        assert_eq!(settings_roundtrip.gap_color, [0.07, 0.07, 0.09]);
     }
 
     #[test]

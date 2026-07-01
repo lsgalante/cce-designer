@@ -359,6 +359,7 @@ pub struct DesignSettings {
     pub grid_thickness: f32,
     #[serde(default = "default_grid_color")]
     pub grid_color: [f32; 3],
+    #[serde(default)]
     pub viewport: ViewportSettings,
 
     pub graph_scroll_speed: Option<f32>,
