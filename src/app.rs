@@ -360,6 +360,14 @@ pub struct DesignSettings {
     #[serde(default = "default_grid_color")]
     pub grid_color: [f32; 3],
     pub viewport: ViewportSettings,
+
+    pub graph_scroll_speed: Option<f32>,
+    pub graph_inertial_scroll: Option<bool>,
+    pub graph_scroll_friction: Option<f32>,
+
+    pub viewport_scroll_speed: Option<f32>,
+    pub viewport_inertial_scroll: Option<bool>,
+    pub viewport_scroll_friction: Option<f32>,
 }
 
 impl Default for DesignSettings {
@@ -376,6 +384,12 @@ impl Default for DesignSettings {
             grid_thickness: default_grid_thickness(),
             grid_color: default_grid_color(),
             viewport: ViewportSettings::default(),
+            graph_scroll_speed: None,
+            graph_inertial_scroll: None,
+            graph_scroll_friction: None,
+            viewport_scroll_speed: None,
+            viewport_inertial_scroll: None,
+            viewport_scroll_friction: None,
         }
     }
 }
@@ -875,9 +889,12 @@ pub struct State {
     pub zoom_velocity: f32,
     pub grid_thickness: f32,
     pub focused_pane: usize,
-    pub inertial_scroll_enabled: bool,
-    pub inertial_scroll_friction: f32,
-    pub scroll_speed: f32,
+    pub graph_scroll_speed: f32,
+    pub graph_inertial_scroll: bool,
+    pub graph_scroll_friction: f32,
+    pub viewport_scroll_speed: f32,
+    pub viewport_inertial_scroll: bool,
+    pub viewport_scroll_friction: f32,
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
     pub circular_network_layout: cce_ui::layout::CircularPaneLayout,
@@ -1080,6 +1097,12 @@ impl State {
                 show_camera_pivot_enabled: self.show_camera_pivot,
                 camera_pivot_size: self.camera_pivot_size,
             },
+            graph_scroll_speed: Some(self.graph_scroll_speed),
+            graph_inertial_scroll: Some(self.graph_inertial_scroll),
+            graph_scroll_friction: Some(self.graph_scroll_friction),
+            viewport_scroll_speed: Some(self.viewport_scroll_speed),
+            viewport_inertial_scroll: Some(self.viewport_inertial_scroll),
+            viewport_scroll_friction: Some(self.viewport_scroll_friction),
         };
         settings.save();
         self.last_design_mod_time = {
@@ -2956,9 +2979,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             zoom_velocity: 0.0,
             grid_thickness: settings.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
-            inertial_scroll_enabled: true,
-            inertial_scroll_friction: 0.90,
-            scroll_speed: 1.0,
+            graph_scroll_speed: settings.graph_scroll_speed.unwrap_or(1.0),
+            graph_inertial_scroll: settings.graph_inertial_scroll.unwrap_or(true),
+            graph_scroll_friction: settings.graph_scroll_friction.unwrap_or(0.90),
+            viewport_scroll_speed: settings.viewport_scroll_speed.unwrap_or(1.0),
+            viewport_inertial_scroll: settings.viewport_inertial_scroll.unwrap_or(true),
+            viewport_scroll_friction: settings.viewport_scroll_friction.unwrap_or(0.90),
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network,
             circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
@@ -3150,9 +3176,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
         }
         
-        self.inertial_scroll_enabled = enabled;
-        self.inertial_scroll_friction = friction;
-        self.scroll_speed = speed;
+        let settings = DesignSettings::load();
+        self.graph_scroll_speed = settings.graph_scroll_speed.unwrap_or(speed);
+        self.graph_inertial_scroll = settings.graph_inertial_scroll.unwrap_or(enabled);
+        self.graph_scroll_friction = settings.graph_scroll_friction.unwrap_or(friction);
+        self.viewport_scroll_speed = settings.viewport_scroll_speed.unwrap_or(speed);
+        self.viewport_inertial_scroll = settings.viewport_inertial_scroll.unwrap_or(enabled);
+        self.viewport_scroll_friction = settings.viewport_scroll_friction.unwrap_or(friction);
     }
 
     pub fn update_graph_settings_from_config(&mut self) {
@@ -4087,8 +4117,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     } else {
                         match delta {
                             MouseScrollDelta::LineDelta(x, y) => {
-                                let dx = *x * 30.0 * self.scroll_speed;
-                                let dy = *y * 30.0 * self.scroll_speed;
+                                let dx = *x * 30.0 * self.graph_scroll_speed;
+                                let dy = *y * 30.0 * self.graph_scroll_speed;
                                 self.pan_x -= dx;
                                 self.pan_y -= dy;
                                 self.is_scrolling_trackpad = false;
@@ -4101,8 +4131,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 true
                             }
                             MouseScrollDelta::PixelDelta(pos) => {
-                                let dx = (pos.x as f32 / self.scale as f32) * self.scroll_speed;
-                                let dy = (pos.y as f32 / self.scale as f32) * self.scroll_speed;
+                                let dx = (pos.x as f32 / self.scale as f32) * self.graph_scroll_speed;
+                                let dy = (pos.y as f32 / self.scale as f32) * self.graph_scroll_speed;
                                 self.pan_x -= dx;
                                 self.pan_y -= dy;
                                 self.is_scrolling_trackpad = match phase {
@@ -4121,7 +4151,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     if self.modifiers.control_key() {
                         match delta {
                             MouseScrollDelta::LineDelta(_x, y) => {
-                                let dy = *y * 0.15;
+                                let dy = *y * 0.15 * self.viewport_scroll_speed;
                                 self.viewport_zoom *= (-dy).exp();
                                 self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
 
@@ -4133,7 +4163,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 true
                             }
                             MouseScrollDelta::PixelDelta(pos) => {
-                                let dy = (pos.y as f32 / self.scale as f32) * 0.005;
+                                let dy = (pos.y as f32 / self.scale as f32) * 0.005 * self.viewport_scroll_speed;
                                 self.viewport_zoom *= (-dy).exp();
                                 self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
 
@@ -4151,8 +4181,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         match delta {
                             MouseScrollDelta::LineDelta(x, y) => {
                                 self.scroll_lock = 0;
-                                let dx = *x * 0.05;
-                                let dy = *y * 0.05;
+                                let dx = *x * 0.05 * self.viewport_scroll_speed;
+                                let dy = *y * 0.05 * self.viewport_scroll_speed;
                                 if self.active_camera != "Default Camera" {
                                     self.update_active_camera_rotation(dx, -dy);
                                 } else {
@@ -4170,8 +4200,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 true
                             }
                             MouseScrollDelta::PixelDelta(pos) => {
-                                let mut dx = (pos.x as f32 / self.scale as f32) * 0.005;
-                                let mut dy = (pos.y as f32 / self.scale as f32) * 0.005;
+                                let mut dx = (pos.x as f32 / self.scale as f32) * 0.005 * self.viewport_scroll_speed;
+                                let mut dy = (pos.y as f32 / self.scale as f32) * 0.005 * self.viewport_scroll_speed;
 
                                 if *phase == TouchPhase::Started {
                                     self.scroll_lock = 0;
@@ -5262,6 +5292,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
                          self.cell_color = cce_ui::color::graph_cell_color();
                          self.gap_color = cce_ui::color::graph_gap_color();
+                          if let Some(val) = settings.graph_scroll_speed { self.graph_scroll_speed = val; }
+                          if let Some(val) = settings.graph_inertial_scroll { self.graph_inertial_scroll = val; }
+                          if let Some(val) = settings.graph_scroll_friction { self.graph_scroll_friction = val; }
+                          if let Some(val) = settings.viewport_scroll_speed { self.viewport_scroll_speed = val; }
+                          if let Some(val) = settings.viewport_inertial_scroll { self.viewport_inertial_scroll = val; }
+                          if let Some(val) = settings.viewport_scroll_friction { self.viewport_scroll_friction = val; }
 
                         colors::set_node_color([self.node_color[0], self.node_color[1], self.node_color[2], 1.0]);
 
@@ -5342,7 +5378,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         // Panning kinetic slide
         if !self.is_panning && !self.is_scrolling_trackpad && (self.pan_velocity_x.abs() > 0.01 || self.pan_velocity_y.abs() > 0.01) {
-            if !self.inertial_scroll_enabled {
+            if !self.graph_inertial_scroll {
                 self.pan_velocity_x = 0.0;
                 self.pan_velocity_y = 0.0;
             } else {
@@ -5350,7 +5386,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.pan_y += self.pan_velocity_y * dt;
 
                 // Apply dynamic friction decay
-                let decay = self.inertial_scroll_friction.powf(dt * 60.0);
+                let decay = self.graph_scroll_friction.powf(dt * 60.0);
                 self.pan_velocity_x *= decay;
                 self.pan_velocity_y *= decay;
 
@@ -5370,41 +5406,48 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         // Viewport rotation kinetic slide
         if !self.is_rotating_viewport && (self.rotate_velocity_yaw.abs() > 0.001 || self.rotate_velocity_pitch.abs() > 0.001) {
-            let dx = self.rotate_velocity_yaw * dt;
-            let dy = self.rotate_velocity_pitch * dt;
-            if self.active_camera != "Default Camera" {
-                self.update_active_camera_rotation(dx, dy);
+            if !self.viewport_inertial_scroll {
+                self.rotate_velocity_yaw = 0.0;
+                self.rotate_velocity_pitch = 0.0;
             } else {
-                self.rotation_y += dx;
-                self.rotation_x += dy;
+                let dx = self.rotate_velocity_yaw * dt;
+                let dy = self.rotate_velocity_pitch * dt;
+                if self.active_camera != "Default Camera" {
+                    self.update_active_camera_rotation(dx, dy);
+                } else {
+                    self.rotation_y += dx;
+                    self.rotation_x += dy;
+                }
+
+                // Apply dynamic friction decay
+                let decay = self.viewport_scroll_friction.powf(dt * 60.0);
+                self.rotate_velocity_yaw *= decay;
+                self.rotate_velocity_pitch *= decay;
+
+                if self.rotate_velocity_yaw.abs() < 0.01 { self.rotate_velocity_yaw = 0.0; }
+                if self.rotate_velocity_pitch.abs() < 0.01 { self.rotate_velocity_pitch = 0.0; }
+                tick_changed = true;
             }
-
-            // Apply friction decay
-            let friction = 5.0_f32;
-            let decay = (-friction * dt).exp();
-            self.rotate_velocity_yaw *= decay;
-            self.rotate_velocity_pitch *= decay;
-
-            if self.rotate_velocity_yaw.abs() < 0.01 { self.rotate_velocity_yaw = 0.0; }
-            if self.rotate_velocity_pitch.abs() < 0.01 { self.rotate_velocity_pitch = 0.0; }
-            tick_changed = true;
         }
 
         // Viewport zoom kinetic slide
         if !self.is_zooming_viewport && self.zoom_velocity.abs() > 0.001 {
-            let d_zoom = self.zoom_velocity * dt;
-            self.viewport_zoom *= (-d_zoom).exp();
-            self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
-
-            // Apply friction decay
-            let friction = 5.0_f32;
-            let decay = (-friction * dt).exp();
-            self.zoom_velocity *= decay;
-
-            if self.zoom_velocity.abs() < 0.01 {
+            if !self.viewport_inertial_scroll {
                 self.zoom_velocity = 0.0;
+            } else {
+                let d_zoom = self.zoom_velocity * dt;
+                self.viewport_zoom *= (-d_zoom).exp();
+                self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
+
+                // Apply dynamic friction decay
+                let decay = self.viewport_scroll_friction.powf(dt * 60.0);
+                self.zoom_velocity *= decay;
+
+                if self.zoom_velocity.abs() < 0.01 {
+                    self.zoom_velocity = 0.0;
+                }
+                tick_changed = true;
             }
-            tick_changed = true;
         }
 
         if tick_changed {
