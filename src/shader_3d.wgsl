@@ -54,7 +54,11 @@ fn vs_main(
     @location(1) color: vec3f,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.position = uniforms.mvp * vec4f(position, 1.0);
+    if (abs(position.z - 9.99) < 0.01) {
+        out.position = vec4f(position.xy, 0.9999, 1.0);
+    } else {
+        out.position = uniforms.mvp * vec4f(position, 1.0);
+    }
     out.color = color;
     return out;
 }

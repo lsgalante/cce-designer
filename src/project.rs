@@ -31,7 +31,7 @@ impl State {
         let base_title = if self.is_detached_network {
             "Network Pane"
         } else {
-            "Clear Design Interface"
+            "Designer"
         };
         
         let mut title = base_title.to_string();
@@ -312,7 +312,9 @@ impl State {
         for path in &self.recent_files {
             recent_options.push(path.to_string_lossy().to_string());
         }
+        recent_options.push("Other".to_string());
         let recent_options_refs: Vec<&str> = recent_options.iter().map(|s| s.as_str()).collect();
+
 
         fn find_or_create_subnet<'a>(parent: &'a mut FsNode, name: &str, node_type: &str, pos: (f32, f32)) -> &'a mut FsNode {
             if let Some(idx) = parent.children.iter().position(|c| c.name == name) {
@@ -360,15 +362,14 @@ impl State {
 
         ensure_param(main_node, "File", "section", "", &[], None, None, None);
         ensure_param(main_node, "New Project", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Open", "button", "", &[], None, None, None);
 
-        if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Open Recent") {
+        if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Open") {
             p.options = recent_options.clone();
             if !p.options.contains(&p.default) {
                 p.default = "- Select -".to_string();
             }
         } else {
-            ensure_param(main_node, "Open Recent", "choice", "- Select -", &recent_options_refs, None, None, None);
+            ensure_param(main_node, "Open", "choice", "- Select -", &recent_options_refs, None, None, None);
         }
 
         ensure_param(main_node, "Save", "button", "", &[], None, None, None);

@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Button, Checkbox, ScrollingList, Label};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Button, Checkbox, ScrollingList, Label, Dropdown};
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -87,6 +87,7 @@ pub const NODE_PALETTE_IDX: usize = 13;
 pub const SPREADSHEET_IDX: usize = 14;
 pub const SPREADSHEET_MENUBAR_IDX: usize = 15;
 pub const NETWORK_PANEL_IDX: usize = 16;
+
 
 
 pub const HEADER_H: f32 = 0.0;
@@ -320,14 +321,29 @@ pub fn load_fs_tree() -> FsNode {
     }
 }
 
+
+
 fn default_grid_thickness() -> f32 { 0.03 }
-fn default_show_camera_pivot() -> bool { false }
-fn default_camera_pivot_size() -> f32 { 1.0 }
-fn default_node_color() -> [f32; 3] { [0.10, 0.45, 0.70] }
 fn default_grid_color() -> [f32; 3] { [0.35, 0.35, 0.40] }
 
-fn default_cell_color() -> [f32; 3] { [0.13, 0.13, 0.16] }
-fn default_gap_color() -> [f32; 3] { [0.07, 0.07, 0.09] }
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ViewportSettings {
+    pub bg_color: [f32; 3],
+    pub square: bool,
+    pub show_camera_pivot_enabled: bool,
+    pub camera_pivot_size: f32,
+}
+
+impl Default for ViewportSettings {
+    fn default() -> Self {
+        Self {
+            bg_color: [0.05, 0.05, 0.10],
+            square: false,
+            show_camera_pivot_enabled: false,
+            camera_pivot_size: 1.0,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DesignSettings {
@@ -339,22 +355,11 @@ pub struct DesignSettings {
     pub show_cube_enabled: bool,
     pub show_origin_enabled: bool,
     pub origin_size: f32,
-    pub viewport_bg_color: [f32; 3],
-    pub square_viewport: bool,
     #[serde(default = "default_grid_thickness")]
     pub grid_thickness: f32,
-    #[serde(default = "default_show_camera_pivot")]
-    pub show_camera_pivot_enabled: bool,
-    #[serde(default = "default_camera_pivot_size")]
-    pub camera_pivot_size: f32,
-    #[serde(default = "default_node_color")]
-    pub node_color: [f32; 3],
     #[serde(default = "default_grid_color")]
     pub grid_color: [f32; 3],
-    #[serde(default = "default_cell_color")]
-    pub cell_color: [f32; 3],
-    #[serde(default = "default_gap_color")]
-    pub gap_color: [f32; 3],
+    pub viewport: ViewportSettings,
 }
 
 impl Default for DesignSettings {
@@ -368,16 +373,29 @@ impl Default for DesignSettings {
             show_cube_enabled: false,
             show_origin_enabled: true,
             origin_size: 1.0,
-            viewport_bg_color: [0.05, 0.05, 0.10],
-            square_viewport: false,
-            grid_thickness: 0.03,
-            show_camera_pivot_enabled: false,
-            camera_pivot_size: 1.0,
-            node_color: default_node_color(),
+            grid_thickness: default_grid_thickness(),
             grid_color: default_grid_color(),
-            cell_color: default_cell_color(),
-            gap_color: default_gap_color(),
+            viewport: ViewportSettings::default(),
         }
+    }
+}
+
+fn float_array_to_hex(rgb: &[f32; 3]) -> String {
+    let r = (rgb[0] * 255.0).clamp(0.0, 255.0).round() as u8;
+    let g = (rgb[1] * 255.0).clamp(0.0, 255.0).round() as u8;
+    let b = (rgb[2] * 255.0).clamp(0.0, 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", r, g, b)
+}
+
+fn hex_to_float_array(hex: &str) -> Option<[f32; 3]> {
+    let s = hex.trim_start_matches('#');
+    if s.len() == 6 {
+        let r = u8::from_str_radix(&s[0..2], 16).ok()? as f32 / 255.0;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()? as f32 / 255.0;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()? as f32 / 255.0;
+        Some([r, g, b])
+    } else {
+        None
     }
 }
 
@@ -387,17 +405,52 @@ impl DesignSettings {
         let mut path = std::path::PathBuf::from(home);
         path.push(".config");
         path.push("cce");
-        path.push("design.json");
+        path.push("cce-designer");
+        path.push("design.kdl");
         path
     }
 
     fn load() -> Self {
         let path = Self::file_path();
-        if let Ok(content) = fs::read_to_string(&path) {
-            serde_json::from_str::<Self>(&content).unwrap_or_else(|_| Self::default())
-        } else {
-            Self::default()
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                let mut json_val = cce_ui::config::parse_kdl_to_json(&content);
+                // Convert hex strings back to color arrays
+                if let Some(obj) = json_val.as_object_mut() {
+                    if let Some(viewport) = obj.get_mut("viewport").and_then(|v| v.as_object_mut()) {
+                        if let Some(serde_json::Value::String(hex_str)) = viewport.get("bg_color") {
+                            if let Some(arr) = hex_to_float_array(hex_str) {
+                                if let Ok(arr_val) = serde_json::to_value(arr) {
+                                    viewport.insert("bg_color".to_string(), arr_val);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(serde_json::Value::String(hex_str)) = obj.get("grid_color") {
+                        if let Some(arr) = hex_to_float_array(hex_str) {
+                            if let Ok(arr_val) = serde_json::to_value(arr) {
+                                obj.insert("grid_color".to_string(), arr_val);
+                            }
+                        }
+                    }
+                }
+                return serde_json::from_value::<Self>(json_val).unwrap_or_else(|_| Self::default());
+            }
         }
+        
+        // Migration fallback: load from design.json, save to design.kdl, and delete the old JSON
+        let mut old_path = path.clone();
+        old_path.set_extension("json");
+        if old_path.exists() {
+            if let Ok(content) = fs::read_to_string(&old_path) {
+                if let Ok(settings) = serde_json::from_str::<Self>(&content) {
+                    settings.save();
+                    let _ = fs::remove_file(old_path);
+                    return settings;
+                }
+            }
+        }
+        Self::default()
     }
 
     fn save(&self) {
@@ -405,8 +458,26 @@ impl DesignSettings {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if let Ok(content) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(path, content);
+        if let Ok(mut json_val) = serde_json::to_value(self) {
+            // Convert color arrays to hex strings
+            if let Some(obj) = json_val.as_object_mut() {
+                if let Some(viewport) = obj.get_mut("viewport").and_then(|v| v.as_object_mut()) {
+                    if let Some(val) = viewport.get("bg_color") {
+                        if let Ok(arr) = serde_json::from_value::<[f32; 3]>(val.clone()) {
+                            let hex_str = float_array_to_hex(&arr);
+                            viewport.insert("bg_color".to_string(), serde_json::Value::String(hex_str));
+                        }
+                    }
+                }
+                if let Some(val) = obj.get("grid_color") {
+                    if let Ok(arr) = serde_json::from_value::<[f32; 3]>(val.clone()) {
+                        let hex_str = float_array_to_hex(&arr);
+                        obj.insert("grid_color".to_string(), serde_json::Value::String(hex_str));
+                    }
+                }
+            }
+            let kdl_str = cce_ui::config::json_to_kdl_string(&json_val);
+            let _ = fs::write(path, kdl_str);
         }
     }
 }
@@ -441,6 +512,12 @@ impl NodePalette {
 impl Element for NodePalette {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_ptr(&self) -> *mut (dyn Element + 'static) {
+        self as *const Self as *mut Self as *mut (dyn Element + 'static)
+    }
+    fn as_ptr_mut(&mut self) -> *mut (dyn Element + 'static) {
+        self as *mut Self as *mut (dyn Element + 'static)
+    }
     fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
     fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
     fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
@@ -460,7 +537,7 @@ impl Element for NodePalette {
         let mut quads = Vec::new();
         quads.push((self.x, self.y, self.w, self.h, [0.0, 0.0, 0.0, 0.45]));
         let (px, py, pw, ph) = self.panel_rect();
-        quads.push((px, py, pw, ph, colors::PANEL_MENU_BG));
+        quads.push((px, py, pw, ph, colors::popover_bg_color()));
         quads.push((px + 16.0, py + 48.0, pw - 32.0, 32.0, [0.10, 0.10, 0.14, 1.0]));
         let list_y = py + 92.0;
         let row_h = 24.0;
@@ -675,6 +752,7 @@ pub struct State {
     pub bind_group_pivot: wgpu::BindGroup,
     pub uniform_buffer_pivot: wgpu::Buffer,
     pub vertex_buffer_3d: wgpu::Buffer,
+    pub vertex_buffer_viewport_bg: wgpu::Buffer,
     pub vertex_count_3d: u32,
     pub vertex_buffer_spheres: wgpu::Buffer,
     pub vertex_count_spheres: u32,
@@ -818,8 +896,6 @@ pub struct State {
     pub active_menu_cloud_idx: Option<(usize, usize)>,
     pub uniform_background: bool,
     pub network_opacity: f32,
-    pub cell_opacity: f32,
-    pub gap_opacity: f32,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     pub floating_network_layout: (f32, f32, f32, f32),
@@ -968,7 +1044,23 @@ impl State {
 
 
 
-    pub fn update_recent_files_layout(&mut self) {}
+    pub fn update_recent_files_layout(&mut self) {
+        let mut opts = vec!["- Select -".to_string()];
+        for path in &self.recent_files {
+            opts.push(path.to_string_lossy().to_string());
+        }
+        opts.push("Other".to_string());
+
+        if let Some(main_node) = self.fs_root.children.iter_mut().find(|c| c.name == "Main") {
+            if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Open") {
+                p.options = opts;
+                if !p.options.contains(&p.default) {
+                    p.default = "- Select -".to_string();
+                }
+            }
+        }
+        self.sync_parameters_pane();
+    }
 
     pub fn save_settings(&mut self) {
         let settings = DesignSettings {
@@ -980,15 +1072,14 @@ impl State {
             show_cube_enabled: self.show_cube,
             show_origin_enabled: self.show_origin,
             origin_size: self.origin_size,
-            viewport_bg_color: self.viewport_bg_color,
-            node_color: self.node_color,
             grid_color: self.grid_color,
-            cell_color: self.cell_color,
-            gap_color: self.gap_color,
-            square_viewport: self.square_viewport,
             grid_thickness: self.grid_thickness,
-            show_camera_pivot_enabled: self.show_camera_pivot,
-            camera_pivot_size: self.camera_pivot_size,
+            viewport: ViewportSettings {
+                bg_color: self.viewport_bg_color,
+                square: self.square_viewport,
+                show_camera_pivot_enabled: self.show_camera_pivot,
+                camera_pivot_size: self.camera_pivot_size,
+            },
         };
         settings.save();
         self.last_design_mod_time = {
@@ -1000,7 +1091,8 @@ impl State {
 
 
     pub fn update_grid_geometry(&mut self) {
-        let grid_verts = grid_vertices(self.grid_thickness, self.grid_color);
+        let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
+        let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
         self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_grid, 0, bytemuck::cast_slice(&grid_verts));
         self.viewport_dirty = true;
     }
@@ -1014,6 +1106,21 @@ impl State {
     pub fn update_pivot_geometry(&mut self) {
         let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
         self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_pivot, 0, bytemuck::cast_slice(&pivot_verts));
+        self.viewport_dirty = true;
+    }
+
+    pub fn update_viewport_bg_geometry(&mut self) {
+        let bg_color = cce_ui::colors::to_linear_rgb(self.viewport_bg_color);
+        let bg_verts = [
+            Vertex3D { position: [-1.0, -1.0, 9.99], color: bg_color }, // Bottom-left
+            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
+            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
+
+            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
+            Vertex3D { position: [ 1.0,  1.0, 9.99], color: bg_color }, // Top-right
+            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
+        ];
+        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_viewport_bg, 0, bytemuck::cast_slice(&bg_verts));
         self.viewport_dirty = true;
     }
 
@@ -1126,10 +1233,10 @@ impl State {
     }
 
     pub fn sync_parameters_to_project(&mut self) {
+        let mut file_to_open = None;
         if !self.is_detached_network {
             if let Some(slot_idx) = self.graph().selected_node() {
                 let updated_params = self.param().node_params();
-                let mut recent_file_to_open = None;
                 let dir = self.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot_idx) {
                     let mut param_changed = false;
@@ -1143,24 +1250,20 @@ impl State {
                                     triggered_buttons.push(p.name.clone());
                                     p.default = "".to_string();
                                 }
-                                if p.name == "Open Recent" && p.default != "- Select -" && !p.default.is_empty() {
-                                    recent_file_to_open = Some(p.default.clone());
+                                if p.name == "Open" && p.default != "- Select -" && !p.default.is_empty() {
+                                    file_to_open = Some(p.default.clone());
                                     p.default = "- Select -".to_string();
+                                    triggered_buttons.push("Open".to_string());
                                 }
                             }
                         }
                     }
 
-                    if !triggered_buttons.is_empty() || recent_file_to_open.is_some() {
+                    if !triggered_buttons.is_empty() {
                         let mut disp_params = self.param().node_params();
                         for btn_name in &triggered_buttons {
                             if let Some(pos) = disp_params.iter().position(|p| p.0 == *btn_name) {
-                                disp_params[pos].1 = "".to_string();
-                            }
-                        }
-                        if recent_file_to_open.is_some() {
-                            if let Some(pos) = disp_params.iter().position(|p| p.0 == "Open Recent") {
-                                disp_params[pos].1 = "- Select -".to_string();
+                                disp_params[pos].1 = if btn_name == "Open" { "- Select -".to_string() } else { "".to_string() };
                             }
                         }
                         self.param_mut().set_display_params(&disp_params);
@@ -1423,15 +1526,20 @@ impl State {
                     }
                 }
 
-                if let Some(path_str) = recent_file_to_open {
-                    let path = std::path::PathBuf::from(path_str);
-                    if let Err(e) = self.load_from_file(&path) {
-                        eprintln!("Failed to load recent file: {:?}", e);
-                        self.update_status_text(&format!("Failed to load: {:?}", e));
-                    } else {
-                        self.update_status_text(&format!("Loaded project from {}", path.display()));
-                        self.add_recent_file(path);
-                    }
+
+            }
+        }
+        if let Some(option_text) = file_to_open {
+            if option_text == "Other" {
+                self.open_file_chooser();
+            } else {
+                let path = std::path::PathBuf::from(option_text);
+                if let Err(e) = self.load_from_file(&path) {
+                    eprintln!("Failed to load recent file: {:?}", e);
+                    self.update_status_text(&format!("Failed to load: {:?}", e));
+                } else {
+                    self.update_status_text(&format!("Loaded project from {}", path.display()));
+                    self.add_recent_file(path);
                 }
             }
         }
@@ -2130,7 +2238,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             window.set_app_id("circular-network-pane");
             window.set_min_size(Some((200, 200)));
         } else {
-            window.set_title("Clear Design Interface");
+            window.set_title("Designer");
             window.set_app_id("cce-designer");
             window.set_min_size(Some((480, 320)));
         }
@@ -2378,7 +2486,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             mapped_at_creation: false,
         });
 
-        let grid_verts = grid_vertices(settings.grid_thickness, settings.grid_color);
+        let linear_grid_color = cce_ui::colors::to_linear_rgb(settings.grid_color);
+        let grid_verts = grid_vertices(settings.grid_thickness, linear_grid_color);
         let vertex_count_grid = grid_verts.len() as u32;
         let vertex_buffer_grid = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Grid Vertex Buffer"),
@@ -2394,11 +2503,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
-        let pivot_verts = camera_pivot_vertices(settings.camera_pivot_size);
+        let pivot_verts = camera_pivot_vertices(settings.viewport.camera_pivot_size);
         let vertex_count_pivot = pivot_verts.len() as u32;
         let vertex_buffer_pivot = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Pivot Vertex Buffer"),
             contents: bytemuck::cast_slice(&pivot_verts),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let bg_color = cce_ui::colors::to_linear_rgb(settings.viewport.bg_color);
+        let bg_verts = [
+            Vertex3D { position: [-1.0, -1.0, 9.99], color: bg_color }, // Bottom-left
+            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
+            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
+
+            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
+            Vertex3D { position: [ 1.0,  1.0, 9.99], color: bg_color }, // Top-right
+            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
+        ];
+        let vertex_buffer_viewport_bg = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Viewport BG Vertex Buffer"),
+            contents: bytemuck::cast_slice(&bg_verts),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -2636,7 +2761,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             "Main Menu".to_string(),
         ];
         let mut widgets: Vec<Box<dyn Element>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Clear Design Interface").with_label("Main Menu Bar").with_item("File", &["New Project", "Open", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
             Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(ViewportBg::new()),
@@ -2644,7 +2769,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             Box::new(Plate::new(0.0, 0.0, 0.0, 0.0).with_color(colors::PARAM_BG).with_blur(true)),
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Open", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0)),
+            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0)),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1)),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2)),
             Box::new(StatusBar::new().with_text("Ready")),
@@ -2653,6 +2778,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             Box::new(Spreadsheet::new()),
         ];
         
+        let recent_files = Self::load_recent_files();
+
         let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 3);
         spreadsheet_menubar.set_visible(false);
         widgets.push(Box::new(spreadsheet_menubar));
@@ -2663,7 +2790,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let mut positions = Vec::with_capacity(widgets.len());
         positions.resize_with(widgets.len(), || (0.0, 0.0, 0.0, 0.0));
 
-        let recent_files = Self::load_recent_files();
         let recent_files_list = ScrollingList::new(22.0, 2.0);
         let mut recent_files_buttons = Vec::new();
         for file in &recent_files {
@@ -2707,6 +2833,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             bind_group_pivot,
             uniform_buffer_pivot,
             vertex_buffer_3d,
+            vertex_buffer_viewport_bg,
             vertex_count_3d: cube_vertices().len() as u32,
             vertex_buffer_spheres,
             vertex_count_spheres: 0,
@@ -2732,18 +2859,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             show_grid: settings.show_grid_enabled,
             show_cube: settings.show_cube_enabled,
             show_origin: settings.show_origin_enabled,
-            show_camera_pivot: settings.show_camera_pivot_enabled,
-            viewport_bg_color: settings.viewport_bg_color,
-            node_color: settings.node_color,
+            show_camera_pivot: settings.viewport.show_camera_pivot_enabled,
+            viewport_bg_color: settings.viewport.bg_color,
+            node_color: {
+                let nc = cce_ui::color::graph_node_color();
+                [nc[0], nc[1], nc[2]]
+            },
             grid_color: settings.grid_color,
-            cell_color: settings.cell_color,
-            gap_color: settings.gap_color,
+            cell_color: cce_ui::color::graph_cell_color(),
+            gap_color: cce_ui::color::graph_gap_color(),
             vertex_buffer_origin,
             vertex_count_origin,
             vertex_buffer_pivot,
             vertex_count_pivot,
             origin_size: settings.origin_size,
-            camera_pivot_size: settings.camera_pivot_size,
+            camera_pivot_size: settings.viewport.camera_pivot_size,
             fs_root: fs_root.clone(),
             node_templates,
             current_path,
@@ -2788,7 +2918,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             physical_width: pw,
             physical_height: ph,
             scale,
-            square_viewport: settings.square_viewport,
+            square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
             network_grid_visible: true,
             grid_size_x: settings.grid_size_x,
@@ -2850,8 +2980,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             active_menu_cloud_idx: None,
             uniform_background: false,
             network_opacity: 0.95,
-            cell_opacity: 0.95,
-            gap_opacity: 0.95,
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -2916,9 +3044,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.update_graph_settings_from_config();
         state.update_window_title();
         colors::set_node_color([
-            settings.node_color[0],
-            settings.node_color[1],
-            settings.node_color[2],
+            state.node_color[0],
+            state.node_color[1],
+            state.node_color[2],
             1.0,
         ]);
         state.ensure_menubar_subnets();
@@ -2982,8 +3110,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         graph.set_grid_snap_enabled(grid_snap_enabled);
         if let Some(graph) = self.widgets[CONTENT_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
             graph.set_uniform_background(self.uniform_background);
-            graph.set_cell_opacity(self.cell_opacity);
-            graph.set_gap_opacity(self.gap_opacity);
+            graph.set_network_opacity(self.network_opacity);
             graph.set_cell_color(self.cell_color);
             graph.set_gap_color(self.gap_color);
         }
@@ -3008,15 +3135,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         if let Ok(content) = std::fs::read_to_string(config_path) {
             let val = cce_ui::config::parse_kdl_to_json(&content);
-            if let Some(inertial) = val.get("inertial") {
-                if let Some(val) = inertial.get("inertial_scroll").and_then(|v| v.as_bool()) {
-                    enabled = val;
-                }
-                if let Some(friction_val) = inertial.get("scroll_friction").and_then(|v| v.as_i64()) {
-                    friction = (friction_val as f32 / 1000.0).clamp(0.1, 0.999);
-                }
-                if let Some(speed_val) = inertial.get("scroll_speed").and_then(|v| v.as_f64()) {
-                    speed = speed_val as f32;
+            if let Some(input) = val.get("input") {
+                if let Some(inertial) = input.get("inertial") {
+                    if let Some(val) = inertial.get("inertial_scroll").and_then(|v| v.as_bool()) {
+                        enabled = val;
+                    }
+                    if let Some(friction_val) = inertial.get("scroll_friction").and_then(|v| v.as_i64()) {
+                        friction = (friction_val as f32 / 1000.0).clamp(0.1, 0.999);
+                    }
+                    if let Some(speed_val) = inertial.get("scroll_speed").and_then(|v| v.as_f64()) {
+                        speed = speed_val as f32;
+                    }
                 }
             }
         }
@@ -3027,70 +3156,37 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     }
 
     pub fn update_graph_settings_from_config(&mut self) {
-        let config_paths = [
-            "/home/lsgalante/.config/cce/config.kdl",
-            "/home/lsgalante/.config/ccec/config.kdl",
-        ];
+        cce_ui::layout::reload_config();
         
-        let mut show_grid = None;
-        let mut snap_enabled = None;
-        let mut uniform_background = None;
-        let mut cell_opacity = None;
-        let mut gap_opacity = None;
-        let mut network_opacity = None;
-
-        for path in &config_paths {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                let val = cce_ui::config::parse_kdl_to_json(&content);
-                if let Some(layout) = val.get("layout") {
-                    show_grid = layout.get("graph_show_grid").and_then(|v| v.as_bool());
-                    snap_enabled = layout.get("graph_snap_enabled").and_then(|v| v.as_bool());
-                    uniform_background = layout.get("graph_uniform_background").and_then(|v| v.as_bool());
-                    network_opacity = layout.get("graph_network_opacity").and_then(|v| v.as_f64()).map(|n| n as f32);
-                    cell_opacity = layout.get("graph_cell_opacity").and_then(|v| v.as_f64()).map(|n| n as f32).or(network_opacity);
-                    gap_opacity = layout.get("graph_gap_opacity").and_then(|v| v.as_f64()).map(|n| n as f32).or(network_opacity);
-                    break;
-                }
-            }
-        }
-
+        let opacity = cce_ui::color::graph_opacity();
+        let cell_color = cce_ui::color::graph_cell_color();
+        let gap_color = cce_ui::color::graph_gap_color();
+        let snap_enabled = cce_ui::layout::graph_grid_snap();
+        let node_c = cce_ui::color::graph_node_color();
+        let node_color = [node_c[0], node_c[1], node_c[2]];
+        
         let mut changed = false;
-        if let Some(val) = show_grid {
-            if self.show_grid != val {
-                self.show_grid = val;
-                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, val);
-                changed = true;
-            }
+        
+        if (self.network_opacity - opacity).abs() > 0.001 {
+            self.network_opacity = opacity;
+            changed = true;
         }
-        if let Some(val) = snap_enabled {
-            if self.grid_snap_enabled != val {
-                self.grid_snap_enabled = val;
-                changed = true;
-            }
+        if self.cell_color != cell_color {
+            self.cell_color = cell_color;
+            changed = true;
         }
-        if let Some(val) = uniform_background {
-            if self.uniform_background != val {
-                self.uniform_background = val;
-                changed = true;
-            }
+        if self.gap_color != gap_color {
+            self.gap_color = gap_color;
+            changed = true;
         }
-        if let Some(val) = network_opacity {
-            if (self.network_opacity - val).abs() > 0.001 {
-                self.network_opacity = val;
-                changed = true;
-            }
+        if self.node_color != node_color {
+            self.node_color = node_color;
+            colors::set_node_color([node_color[0], node_color[1], node_color[2], 1.0]);
+            changed = true;
         }
-        if let Some(val) = cell_opacity {
-            if (self.cell_opacity - val).abs() > 0.001 {
-                self.cell_opacity = val;
-                changed = true;
-            }
-        }
-        if let Some(val) = gap_opacity {
-            if (self.gap_opacity - val).abs() > 0.001 {
-                self.gap_opacity = val;
-                changed = true;
-            }
+        if self.grid_snap_enabled != snap_enabled {
+            self.grid_snap_enabled = snap_enabled;
+            changed = true;
         }
         
         if changed {
@@ -4631,6 +4727,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
                                 }
+
                             }
                             if self.widgets[i].draggable() {
                                 self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
@@ -5147,7 +5244,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     if Some(mod_time) != self.last_design_mod_time {
                         self.last_design_mod_time = Some(mod_time);
                          let settings = DesignSettings::load();
-                         self.square_viewport = settings.square_viewport;
+                         self.square_viewport = settings.viewport.square;
                          self.grid_size_x = settings.grid_size_x;
                          self.grid_size_y = settings.grid_size_y;
                          self.skipped_row_h = settings.skipped_row_h;
@@ -5156,20 +5253,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                          self.show_grid = settings.show_grid_enabled;
                          self.show_cube = settings.show_cube_enabled;
                          self.show_origin = settings.show_origin_enabled;
-                         self.show_camera_pivot = settings.show_camera_pivot_enabled;
-                         self.viewport_bg_color = settings.viewport_bg_color;
-                         self.node_color = settings.node_color;
+                         self.show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
+                         self.viewport_bg_color = settings.viewport.bg_color;
+                         let node_c = cce_ui::color::graph_node_color();
+                         self.node_color = [node_c[0], node_c[1], node_c[2]];
                          self.grid_color = settings.grid_color;
                          self.origin_size = settings.origin_size;
-                         self.camera_pivot_size = settings.camera_pivot_size;
-                         self.cell_color = settings.cell_color;
-                         self.gap_color = settings.gap_color;
+                         self.camera_pivot_size = settings.viewport.camera_pivot_size;
+                         self.cell_color = cce_ui::color::graph_cell_color();
+                         self.gap_color = cce_ui::color::graph_gap_color();
 
                         colors::set_node_color([self.node_color[0], self.node_color[1], self.node_color[2], 1.0]);
 
                         self.update_origin_geometry();
                         self.update_grid_geometry();
                         self.update_pivot_geometry();
+                        self.update_viewport_bg_geometry();
                         self.sync_grid_settings();
                         self.upload_vertices();
                     }
@@ -5525,10 +5624,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: self.viewport_bg_color[0] as f64,
-                                    g: self.viewport_bg_color[1] as f64,
-                                    b: self.viewport_bg_color[2] as f64,
-                                    a: 1.0,
+                                    r: 0.0,
+                                    g: 0.0,
+                                    b: 0.0,
+                                    a: 0.0,
                                 }),
                                 store: wgpu::StoreOp::Store,
                             },
@@ -5547,6 +5646,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                     pass.set_scissor_rect(sx, sy, cw, ch);
                     pass.set_pipeline(&self.pipeline_3d);
+
+                    // Draw viewport background quad (rounds corners via shader)
+                    pass.set_bind_group(0, &self.bind_group_3d, &[]);
+                    pass.set_vertex_buffer(0, self.vertex_buffer_viewport_bg.slice(..));
+                    pass.draw(0..6, 0..1);
 
                     if self.show_grid {
                         pass.set_bind_group(0, &self.bind_group_grid, &[]);
@@ -5605,11 +5709,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         view: &self.backdrop_texture_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: self.viewport_bg_color[0] as f64,
-                                g: self.viewport_bg_color[1] as f64,
-                                b: self.viewport_bg_color[2] as f64,
-                                a: 1.0,
+                            load: wgpu::LoadOp::Clear({
+                                let linear_bg = cce_ui::colors::to_linear_rgb(self.viewport_bg_color);
+                                wgpu::Color {
+                                    r: linear_bg[0] as f64,
+                                    g: linear_bg[1] as f64,
+                                    b: linear_bg[2] as f64,
+                                    a: 1.0,
+                                }
                             }),
                             store: wgpu::StoreOp::Store,
                         },

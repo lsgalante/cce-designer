@@ -22,6 +22,7 @@ use crate::geometry::{
 use cce_ui::engine::{
     push_widget_vertices, push_extra_quad_vertices,
     push_extra_quad_vertices_clipped, push_arc_background_vertices,
+    push_plate_solid_border_vertices,
 };
 
 impl State {
@@ -204,10 +205,24 @@ impl State {
                 let thickness = 2.0;
                 let mut color = colors::highlight_primary_color();
                 color[3] = 0.9;
-                push_extra_quad_vertices_clipped(w.as_ref(), cx, cy, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
-                push_extra_quad_vertices_clipped(w.as_ref(), cx, cy + ch - thickness, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
-                push_extra_quad_vertices_clipped(w.as_ref(), cx, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
-                push_extra_quad_vertices_clipped(w.as_ref(), cx + cw - thickness, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
+                if self.graph().is_node_rect(cx, cy, cw, ch) {
+                    let r = cce_ui::layout::graph_node_corner_radius();
+                    let radii = cce_ui::widget::CornerRadii::new(r, r, r, r);
+                    push_plate_solid_border_vertices(
+                        cx, cy, cw, ch,
+                        radii,
+                        thickness,
+                        sw, sh,
+                        color,
+                        active_clip_circle,
+                        verts,
+                    );
+                } else {
+                    push_extra_quad_vertices_clipped(w.as_ref(), cx, cy, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
+                    push_extra_quad_vertices_clipped(w.as_ref(), cx, cy + ch - thickness, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
+                    push_extra_quad_vertices_clipped(w.as_ref(), cx, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
+                    push_extra_quad_vertices_clipped(w.as_ref(), cx + cw - thickness, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
+                }
             }
         } else if idx == LEFT_MENUBAR_IDX && self.circular_network_pane {
             let cx = self.circular_network_layout.x;
@@ -479,8 +494,6 @@ impl State {
         }
 
         // 2. Destructure self
-        let splitter1_x = self.splitter_layout.splitter1_x;
-        let height = self.height;
         let sw = self.width;
         let sh = self.height;
         let circular_network_pane = self.circular_network_pane;
@@ -616,6 +629,7 @@ impl State {
         let mut legacy_buffers: Vec<&Buffer> = Vec::new();
         let mut legacy_labels: Vec<TextLabel> = Vec::new();
         let mut legacy_bounds: Vec<TextBounds> = Vec::new();
+        let mut legacy_is_network: Vec<bool> = Vec::new();
 
         let mut curved_labels = Vec::new();
 
@@ -631,7 +645,6 @@ impl State {
             let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
 
             let mut bounds = if is_node {
-                let node_area_y = self.positions[CONTENT_IDX].1;
                 if circular_network_pane {
                     TextBounds {
                         left: ((network_circle_x - network_circle_radius) * s) as i32,
@@ -640,11 +653,12 @@ impl State {
                         bottom: (((network_circle_y + network_circle_radius) * s) as i32).max(0),
                     }
                 } else {
+                    let (gx, gy, gw, gh) = self.positions[CONTENT_IDX];
                     TextBounds {
-                        left: 0,
-                        top: (node_area_y * s) as i32,
-                        right: (splitter1_x * s) as i32,
-                        bottom: (((height - STATUS_H) * s) as i32).max(0),
+                        left: (gx * s) as i32,
+                        top: (gy * s) as i32,
+                        right: ((gx + gw) * s) as i32,
+                        bottom: (((gy + gh) * s) as i32).max(0),
                     }
                 }
             } else {
@@ -698,13 +712,24 @@ impl State {
                         }
                     }
 
+                    let mut final_color = color;
+                    if is_network_part {
+                        let val = color.0;
+                        let a = (val >> 24) & 0xFF;
+                        let r = (val >> 16) & 0xFF;
+                        let g = (val >> 8) & 0xFF;
+                        let b = val & 0xFF;
+                        let new_a = (a as f32 * self.network_opacity).clamp(0.0, 255.0) as u8;
+                        final_color = glyphon::Color::rgba(r as u8, g as u8, b as u8, new_a);
+                    }
+
                     areas.push(TextArea {
                         buffer: buf,
                         left: (x * s).round(),
                         top: (y * s).round(),
                         scale: s,
                         bounds,
-                        default_color: color,
+                        default_color: final_color,
                         custom_glyphs: &[],
                     });
                 }
@@ -752,20 +777,26 @@ impl State {
                         legacy_buffers.push(buf_ref);
                         legacy_labels.push(label);
                         legacy_bounds.push(item_bounds);
+                        legacy_is_network.push(is_network_part);
                     }
                 }
             }
         }
 
         // Add the legacy buffered items
-        for ((buf, label), bounds) in legacy_buffers.iter().zip(legacy_labels.iter()).zip(legacy_bounds.iter()) {
+        for (((buf, label), bounds), is_net) in legacy_buffers.iter()
+            .zip(legacy_labels.iter())
+            .zip(legacy_bounds.iter())
+            .zip(legacy_is_network.iter())
+        {
+            let alpha = if *is_net { (self.network_opacity * 255.0).clamp(0.0, 255.0) as u8 } else { 255 };
             areas.push(TextArea {
                 buffer: *buf,
                 left: (label.x * s).round(),
                 top: (label.y * s).round(),
                 scale: s,
                 bounds: *bounds,
-                default_color: glyphon::Color::rgb(label.color[0], label.color[1], label.color[2]),
+                default_color: glyphon::Color::rgba(label.color[0], label.color[1], label.color[2], alpha),
                 custom_glyphs: &[],
             });
         }
