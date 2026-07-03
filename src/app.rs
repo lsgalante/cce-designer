@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Button, Checkbox, ScrollingList, Label, Dropdown};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Button, Checkbox, List, Label, Dropdown};
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -932,7 +932,7 @@ pub struct State {
     pub loaded_project_path: Option<std::path::PathBuf>,
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
-    pub recent_files_list: ScrollingList,
+    pub recent_files_list: List,
     pub recent_files_buttons: Vec<Button>,
     pub text_buffer_cache: std::collections::HashMap<(String, u32, Option<String>), Buffer>,
     pub viewport_dirty: bool,
@@ -2819,7 +2819,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let mut positions = Vec::with_capacity(widgets.len());
         positions.resize_with(widgets.len(), || (0.0, 0.0, 0.0, 0.0));
 
-        let recent_files_list = ScrollingList::new(22.0, 2.0);
+        let recent_files_list = List::new(22.0, 2.0);
         let mut recent_files_buttons = Vec::new();
         for file in &recent_files {
             let label = file.file_name()
