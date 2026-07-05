@@ -50,38 +50,16 @@ impl State {
         self.window.set_title(&title);
     }
 
-    fn get_recent_files_path() -> Option<std::path::PathBuf> {
-        std::env::var("HOME").ok().map(|h| {
-            let mut path = std::path::PathBuf::from(h);
-            path.push(".config");
-            path.push("cce");
-            path.push("cce-designer");
-            path.push("recent_files.json");
-            path
-        })
-    }
-
     pub(crate) fn load_recent_files() -> Vec<std::path::PathBuf> {
-        if let Some(path) = Self::get_recent_files_path() {
-            if let Ok(file) = std::fs::File::open(path) {
-                if let Ok(list) = serde_json::from_reader::<_, Vec<String>>(file) {
-                    return list.into_iter().map(std::path::PathBuf::from).collect();
-                }
-            }
-        }
-        Vec::new()
+        cce_ui::config::load_recent_files()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect()
     }
 
     fn save_recent_files(files: &[std::path::PathBuf]) {
-        if let Some(path) = Self::get_recent_files_path() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(file) = std::fs::File::create(path) {
-                let list: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
-                let _ = serde_json::to_writer_pretty(file, &list);
-            }
-        }
+        let string_files: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        cce_ui::config::save_recent_files(&string_files);
     }
 
     pub(crate) fn add_recent_file(&mut self, path: std::path::PathBuf) {
