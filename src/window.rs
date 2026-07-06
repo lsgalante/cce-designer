@@ -1390,16 +1390,11 @@ impl AppState {
                             if state.active_camera != "Default Camera" {
                                 state.update_active_camera_rotation_reset();
                             } else {
-                                state.rotation_y = 0.0;
-                                state.rotation_x = 0.0;
+                                state.viewport_mut().rotation_y = 0.0;
+                                state.viewport_mut().rotation_x = 0.0;
                             }
-                            state.viewport_zoom = 1.0;
-                            state.rotate_velocity_yaw = 0.0;
-                            state.rotate_velocity_pitch = 0.0;
-                            state.zoom_velocity = 0.0;
-                            state.is_rotating_viewport = false;
-                            state.is_zooming_viewport = false;
-                            state.scroll_lock = 0;
+                            state.viewport_mut().zoom = 1.0;
+                            state.viewport_mut().reset_velocity();
                             needs_redraw = true;
                             Ok("Camera reset".to_string())
                         }

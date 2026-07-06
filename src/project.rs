@@ -398,6 +398,13 @@ impl State {
         ensure_param(net_node, "Node Color B", "spinbox", &((self.node_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
 
         // 3. Viewport subnet
+        let vp_show_grid = self.viewport().show_grid;
+        let vp_show_cube = self.viewport().show_cube;
+        let vp_show_origin = self.viewport().show_origin;
+        let vp_show_camera_pivot = self.viewport().show_camera_pivot;
+        let vp_bg_color = self.viewport().bg_color;
+        let vp_grid_color = self.viewport().grid_color;
+
         let vp_node = find_or_create_subnet(&mut self.fs_root, "Viewport", "utility", (4.0, 0.0));
         vp_node.children.clear();
 
@@ -415,24 +422,24 @@ impl State {
         ensure_param(vp_node, "Square Aspect", "choice", if self.square_viewport { "true" } else { "false" }, &["false", "true"], None, None, None);
 
         ensure_param(vp_node, "Guides", "section", "", &[], None, None, None);
-        ensure_param(vp_node, "Show Grid", "choice", if self.show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_node, "Cube", "choice", if self.show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_node, "Origin", "choice", if self.show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_node, "Camera Pivot", "choice", if self.show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Grid", "choice", if vp_show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Cube", "choice", if vp_show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Origin", "choice", if vp_show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Camera Pivot", "choice", if vp_show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
 
         ensure_param(vp_node, "View", "section", "", &[], None, None, None);
         ensure_param(vp_node, "Close Pane", "button", "", &[], None, None, None);
 
         ensure_param(vp_node, "Settings", "section", "", &[], None, None, None);
-        ensure_param(vp_node, "Show Grid Guide", "choice", if self.show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_node, "Show Reference Cube", "choice", if self.show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_node, "Show Origin Axes", "choice", if self.show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(vp_node, "Show Camera Pivot", "choice", if self.show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Grid Guide", "choice", if vp_show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Reference Cube", "choice", if vp_show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Origin Axes", "choice", if vp_show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(vp_node, "Show Camera Pivot", "choice", if vp_show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
         ensure_param(vp_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
         ensure_param(vp_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
         ensure_param(vp_node, "Camera Pivot Size", "spinbox", &((self.camera_pivot_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
-        ensure_param(vp_node, "Background Color", "color", &color_to_hex(self.viewport_bg_color), &[], None, None, None);
-        ensure_param(vp_node, "Grid Color", "color", &color_to_hex(self.grid_color), &[], None, None, None);
+        ensure_param(vp_node, "Background Color", "color", &color_to_hex(vp_bg_color), &[], None, None, None);
+        ensure_param(vp_node, "Grid Color", "color", &color_to_hex(vp_grid_color), &[], None, None, None);
 
         // 4. Parameters subnet
         let param_node = find_or_create_subnet(&mut self.fs_root, "Parameters", "utility", (6.0, 0.0));
@@ -473,24 +480,28 @@ impl State {
 
         // Read Settings from Viewport subnet
         if let Some(vp_idx) = self.fs_root.children.iter().position(|c| c.name == "Viewport") {
-            let node = &self.fs_root.children[vp_idx];
-            for p in &node.params {
+            let params = self.fs_root.children[vp_idx].params.clone();
+            for p in &params {
                 match p.name.as_str() {
-                    "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.show_grid = val; }
-                    "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.show_cube = val; }
-                    "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.show_origin = val; }
-                    "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.show_camera_pivot = val; }
+                    "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
+                    "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_cube = val; }
+                    "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_origin = val; }
+                    "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_camera_pivot = val; }
                     "Grid Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.grid_thickness = val / 1000.0; }
                     "Origin Guide Size" => if let Ok(val) = p.default.parse::<f32>() { self.origin_size = val / 10.0; }
                     "Camera Pivot Size" => if let Ok(val) = p.default.parse::<f32>() { self.camera_pivot_size = val / 10.0; }
-                    "Background Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_bg_color = col; }
-                    "Grid Color" => if let Some(col) = hex_to_color(&p.default) { self.grid_color = col; }
+                    "Background Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_mut().bg_color = col; }
+                    "Grid Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_mut().grid_color = col; }
                     "Square Aspect" => if let Ok(val) = p.default.parse::<bool>() { self.square_viewport = val; }
-                    "Show Grid" => if let Ok(val) = p.default.parse::<bool>() { self.show_grid = val; }
-                    "Cube" => if let Ok(val) = p.default.parse::<bool>() { self.show_cube = val; }
-                    "Origin" => if let Ok(val) = p.default.parse::<bool>() { self.show_origin = val; }
-                    "Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.show_camera_pivot = val; }
-                    "Active Camera" => self.active_camera = p.default.clone(),
+                    "Show Grid" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
+                    "Cube" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_cube = val; }
+                    "Origin" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_origin = val; }
+                    "Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_camera_pivot = val; }
+                    "Active Camera" => {
+                        let cam = p.default.clone();
+                        self.active_camera = cam.clone();
+                        self.viewport_mut().active_camera = cam;
+                    }
                     _ => {}
                 }
             }

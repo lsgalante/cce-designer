@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, ViewportBg, Element, GraphNode, Graph, Button, Checkbox, List, Label, Dropdown};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, List, Label, Dropdown};
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -784,20 +784,6 @@ pub struct State {
     pub backdrop_bind_group_layout: wgpu::BindGroupLayout,
     pub backdrop_bind_group: wgpu::BindGroup,
     pub window_info_buffer: wgpu::Buffer,
-    pub rotation_y: f32,
-    pub rotation_x: f32,
-    pub is_rotating_viewport: bool,
-    pub scroll_lock: u8, // 0 = None, 1 = Horizontal, 2 = Vertical
-    pub last_rotate_time: Instant,
-    pub rotate_accum_yaw: f32,
-    pub rotate_accum_pitch: f32,
-    pub rotate_velocity_yaw: f32,
-    pub rotate_velocity_pitch: f32,
-    pub show_grid: bool,
-    pub show_cube: bool,
-    pub show_origin: bool,
-    pub show_camera_pivot: bool,
-    pub viewport_bg_color: [f32; 3],
     pub node_color: [f32; 3],
     pub grid_color: [f32; 3],
     pub cell_color: [f32; 3],
@@ -886,19 +872,11 @@ pub struct State {
     pub scroll_accum_y: f32,
     pub last_spreadsheet_node_name: Option<String>,
     pub last_spreadsheet_node_params: Option<Vec<(String, String)>>,
-    pub viewport_zoom: f32,
-    pub is_zooming_viewport: bool,
-    pub last_zoom_time: Instant,
-    pub zoom_accum: f32,
-    pub zoom_velocity: f32,
     pub grid_thickness: f32,
     pub focused_pane: usize,
     pub graph_scroll_speed: f32,
     pub graph_inertial_scroll: bool,
     pub graph_scroll_friction: f32,
-    pub viewport_scroll_speed: f32,
-    pub viewport_inertial_scroll: bool,
-    pub viewport_scroll_friction: f32,
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
     pub circular_network_layout: cce_ui::layout::CircularPaneLayout,
@@ -960,6 +938,20 @@ pub struct State {
 }
 
 impl State {
+    pub fn viewport(&self) -> &Viewport3D {
+        self.widgets[VIEWPORT_IDX]
+            .as_any()
+            .downcast_ref::<Viewport3D>()
+            .expect("VIEWPORT_IDX must be a Viewport3D")
+    }
+
+    pub fn viewport_mut(&mut self) -> &mut Viewport3D {
+        self.widgets[VIEWPORT_IDX]
+            .as_any_mut()
+            .downcast_mut::<Viewport3D>()
+            .expect("VIEWPORT_IDX must be a Viewport3D")
+    }
+
     pub fn find_widget_index(&self, child_ptr: *mut (dyn Element + 'static)) -> Option<usize> {
         let target_addr = child_ptr as *const ();
         self.widgets.iter().position(|w| {
@@ -1086,19 +1078,19 @@ impl State {
     pub fn save_settings(&mut self) {
         let settings = DesignSettings {
             viewport: ViewportSettings {
-                bg_color: self.viewport_bg_color,
+                bg_color: self.viewport().bg_color,
                 square: self.square_viewport,
-                show_camera_pivot_enabled: self.show_camera_pivot,
+                show_camera_pivot_enabled: self.viewport().show_camera_pivot,
                 camera_pivot_size: self.camera_pivot_size,
-                scroll_speed: Some(self.viewport_scroll_speed),
-                inertial_scroll: Some(self.viewport_inertial_scroll),
-                scroll_friction: Some(self.viewport_scroll_friction),
-                show_grid_enabled: self.show_grid,
-                show_cube_enabled: self.show_cube,
-                show_origin_enabled: self.show_origin,
+                scroll_speed: Some(self.viewport().scroll_speed),
+                inertial_scroll: Some(self.viewport().inertial_scroll),
+                scroll_friction: Some(self.viewport().scroll_friction),
+                show_grid_enabled: self.viewport().show_grid,
+                show_cube_enabled: self.viewport().show_cube,
+                show_origin_enabled: self.viewport().show_origin,
                 origin_size: self.origin_size,
                 grid_thickness: self.grid_thickness,
-                grid_color: self.grid_color,
+                grid_color: self.viewport().grid_color,
             },
             graph: GraphSettings {
                 grid_size_x: self.grid_size_x,
@@ -1139,7 +1131,7 @@ impl State {
     }
 
     pub fn update_viewport_bg_geometry(&mut self) {
-        let bg_color = cce_ui::colors::to_linear_rgb(self.viewport_bg_color);
+        let bg_color = cce_ui::colors::to_linear_rgb(self.viewport().bg_color);
         let bg_verts = [
             Vertex3D { position: [-1.0, -1.0, 9.99], color: bg_color }, // Bottom-left
             Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
@@ -2793,7 +2785,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
             Box::new(Graph::new()),
             Box::new(Splitter::new(SPLITTER_W)),
-            Box::new(ViewportBg::new()),
+            Box::new(Viewport3D::new()),
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(Plate::new(0.0, 0.0, 0.0, 0.0).with_color(colors::PARAM_BG).with_blur(true)),
             Box::new(ParametersBg::new()),
@@ -2806,6 +2798,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             Box::new(NodePalette::new()),
             Box::new(Spreadsheet::new()),
         ];
+        
+        if let Some(viewport) = widgets[VIEWPORT_IDX].as_any_mut().downcast_mut::<Viewport3D>() {
+            viewport.show_grid = settings.viewport.show_grid_enabled;
+            viewport.show_cube = settings.viewport.show_cube_enabled;
+            viewport.show_origin = settings.viewport.show_origin_enabled;
+            viewport.show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
+            viewport.bg_color = settings.viewport.bg_color;
+            viewport.grid_color = settings.viewport.grid_color;
+            viewport.active_camera = active_camera.clone();
+        }
         
         let recent_files = Self::load_recent_files();
 
@@ -2876,20 +2878,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             backdrop_bind_group_layout,
             backdrop_bind_group,
             window_info_buffer,
-            rotation_y: 0.0,
-            rotation_x: 0.0,
-            is_rotating_viewport: false,
-            scroll_lock: 0,
-            last_rotate_time: Instant::now(),
-            rotate_accum_yaw: 0.0,
-            rotate_accum_pitch: 0.0,
-            rotate_velocity_yaw: 0.0,
-            rotate_velocity_pitch: 0.0,
-            show_grid: settings.viewport.show_grid_enabled,
-            show_cube: settings.viewport.show_cube_enabled,
-            show_origin: settings.viewport.show_origin_enabled,
-            show_camera_pivot: settings.viewport.show_camera_pivot_enabled,
-            viewport_bg_color: settings.viewport.bg_color,
             node_color: {
                 let nc = cce_ui::color::graph_node_color();
                 [nc[0], nc[1], nc[2]]
@@ -2977,19 +2965,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             scroll_accum_y: 0.0,
             last_spreadsheet_node_name: None,
             last_spreadsheet_node_params: None,
-            viewport_zoom: 1.0,
-            is_zooming_viewport: false,
-            last_zoom_time: Instant::now(),
-            zoom_accum: 0.0,
-            zoom_velocity: 0.0,
             grid_thickness: settings.viewport.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
             graph_scroll_speed: settings.graph.scroll_speed.unwrap_or(1.0),
             graph_inertial_scroll: settings.graph.inertial_scroll.unwrap_or(true),
             graph_scroll_friction: settings.graph.scroll_friction.unwrap_or(0.90),
-            viewport_scroll_speed: settings.viewport.scroll_speed.unwrap_or(1.0),
-            viewport_inertial_scroll: settings.viewport.inertial_scroll.unwrap_or(true),
-            viewport_scroll_friction: settings.viewport.scroll_friction.unwrap_or(0.90),
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network,
             circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
@@ -3085,10 +3065,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.sync_nodes();
         state.rebuild_scene_geometry();
         state.sync_grid_settings();
-        let sg = state.show_grid;
-        let sc = state.show_cube;
-        let so = state.show_origin;
-        let cp = state.show_camera_pivot;
+        let sg = state.viewport().show_grid;
+        let sc = state.viewport().show_cube;
+        let so = state.viewport().show_origin;
+        let cp = state.viewport().show_camera_pivot;
         let cnp = state.circular_network_pane;
         let dcn = state.detached_circular_network;
         let sn = state.show_network;
@@ -3185,9 +3165,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         self.graph_scroll_speed = settings.graph.scroll_speed.unwrap_or(speed);
         self.graph_inertial_scroll = settings.graph.inertial_scroll.unwrap_or(enabled);
         self.graph_scroll_friction = settings.graph.scroll_friction.unwrap_or(friction);
-        self.viewport_scroll_speed = settings.viewport.scroll_speed.unwrap_or(speed);
-        self.viewport_inertial_scroll = settings.viewport.inertial_scroll.unwrap_or(enabled);
-        self.viewport_scroll_friction = settings.viewport.scroll_friction.unwrap_or(friction);
+        self.viewport_mut().scroll_speed = settings.viewport.scroll_speed.unwrap_or(speed);
+        self.viewport_mut().inertial_scroll = settings.viewport.inertial_scroll.unwrap_or(enabled);
+        self.viewport_mut().scroll_friction = settings.viewport.scroll_friction.unwrap_or(friction);
     }
 
     pub fn update_graph_settings_from_config(&mut self) {
@@ -3763,26 +3743,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let mut settings_changed = false;
         match action {
             Action::ToggleGrid => {
-                self.show_grid = !self.show_grid;
-                let val = self.show_grid;
+                let val = !self.viewport().show_grid;
+                self.viewport_mut().show_grid = val;
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, val);
                 settings_changed = true;
             }
             Action::ToggleCube => {
-                self.show_cube = !self.show_cube;
-                let val = self.show_cube;
+                let val = !self.viewport().show_cube;
+                self.viewport_mut().show_cube = val;
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 1, val);
                 settings_changed = true;
             }
             Action::ToggleOrigin => {
-                self.show_origin = !self.show_origin;
-                let val = self.show_origin;
+                let val = !self.viewport().show_origin;
+                self.viewport_mut().show_origin = val;
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 settings_changed = true;
             }
             Action::ToggleCameraPivot => {
-                self.show_camera_pivot = !self.show_camera_pivot;
-                let val = self.show_camera_pivot;
+                let val = !self.viewport().show_camera_pivot;
+                self.viewport_mut().show_camera_pivot = val;
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 3, val);
                 settings_changed = true;
             }
@@ -4167,108 +4147,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             }
                         }
                     }
-                } else if !dialog_open && in_viewport {
-                    if self.modifiers.control_key() {
-                        match delta {
-                            MouseScrollDelta::LineDelta(_x, y) => {
-                                let dy = *y * 0.15 * self.viewport_scroll_speed;
-                                self.viewport_zoom *= (-dy).exp();
-                                self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
-
-                                self.is_zooming_viewport = false;
-                                let dt_scroll = Instant::now().duration_since(self.last_frame).as_secs_f32().min(0.1);
-                                let vel_zoom = if dt_scroll > 1e-4 { dy / dt_scroll } else { dy * 60.0 };
-                                self.zoom_velocity = self.zoom_velocity * 0.4 + vel_zoom * 0.6;
-
-                                true
-                            }
-                            MouseScrollDelta::PixelDelta(pos) => {
-                                let dy = (pos.y as f32 / self.scale as f32) * 0.005 * self.viewport_scroll_speed;
-                                self.viewport_zoom *= (-dy).exp();
-                                self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
-
-                                self.is_zooming_viewport = match phase {
-                                    TouchPhase::Started | TouchPhase::Moved => true,
-                                    TouchPhase::Ended | TouchPhase::Cancelled => false,
-                                };
-                                self.last_zoom_time = Instant::now();
-                                self.zoom_accum += dy;
-
-                                true
-                            }
-                        }
-                    } else {
-                        match delta {
-                            MouseScrollDelta::LineDelta(x, y) => {
-                                self.scroll_lock = 0;
-                                let dx = *x * 0.05 * self.viewport_scroll_speed;
-                                let dy = *y * 0.05 * self.viewport_scroll_speed;
-                                if self.active_camera != "Default Camera" {
-                                    self.update_active_camera_rotation(dx, -dy);
-                                } else {
-                                    self.rotation_y += dx;
-                                    self.rotation_x -= dy;
-                                }
-
-                                self.is_rotating_viewport = false;
-                                let dt_scroll = Instant::now().duration_since(self.last_frame).as_secs_f32().min(0.1);
-                                let vel_yaw = if dt_scroll > 1e-4 { dx / dt_scroll } else { dx * 60.0 };
-                                let vel_pitch = if dt_scroll > 1e-4 { -dy / dt_scroll } else { -dy * 60.0 };
-                                self.rotate_velocity_yaw = self.rotate_velocity_yaw * 0.4 + vel_yaw * 0.6;
-                                self.rotate_velocity_pitch = self.rotate_velocity_pitch * 0.4 + vel_pitch * 0.6;
-
-                                true
-                            }
-                            MouseScrollDelta::PixelDelta(pos) => {
-                                let mut dx = (pos.x as f32 / self.scale as f32) * 0.005 * self.viewport_scroll_speed;
-                                let mut dy = (pos.y as f32 / self.scale as f32) * 0.005 * self.viewport_scroll_speed;
-
-                                if *phase == TouchPhase::Started {
-                                    self.scroll_lock = 0;
-                                    self.rotate_accum_yaw = 0.0;
-                                    self.rotate_accum_pitch = 0.0;
-                                }
-
-                                if self.scroll_lock == 0 {
-                                    self.rotate_accum_yaw += dx;
-                                    self.rotate_accum_pitch -= dy;
-                                    if self.rotate_accum_yaw.abs() > 0.002 || self.rotate_accum_pitch.abs() > 0.002 {
-                                        if self.rotate_accum_pitch.abs() > 1.2 * self.rotate_accum_yaw.abs() {
-                                            self.scroll_lock = 2; // lock vertical
-                                        } else if self.rotate_accum_yaw.abs() > 1.2 * self.rotate_accum_pitch.abs() {
-                                            self.scroll_lock = 1; // lock horizontal
-                                        }
-                                    }
-                                } else {
-                                    if self.scroll_lock == 1 {
-                                        dy = 0.0;
-                                        self.rotate_accum_yaw += dx;
-                                    } else {
-                                        dx = 0.0;
-                                        self.rotate_accum_pitch -= dy;
-                                    }
-                                }
-
-                                if self.active_camera != "Default Camera" {
-                                    self.update_active_camera_rotation(dx, -dy);
-                                } else {
-                                    self.rotation_y += dx;
-                                    self.rotation_x -= dy;
-                                }
-
-                                self.is_rotating_viewport = match phase {
-                                    TouchPhase::Started | TouchPhase::Moved => true,
-                                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                                        self.scroll_lock = 0;
-                                        false
-                                    }
-                                };
-                                self.last_rotate_time = Instant::now();
-
-                                true
-                            }
-                        }
-                    }
                 } else {
                     false
                 };
@@ -4414,16 +4292,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.scroll_accum_x = 0.0;
                     self.scroll_accum_y = 0.0;
 
-                    self.rotate_velocity_yaw = 0.0;
-                    self.rotate_velocity_pitch = 0.0;
-                    self.is_rotating_viewport = false;
-                    self.scroll_lock = 0;
-                    self.rotate_accum_yaw = 0.0;
-                    self.rotate_accum_pitch = 0.0;
-
-                    self.zoom_velocity = 0.0;
-                    self.is_zooming_viewport = false;
-                    self.zoom_accum = 0.0;
+                    self.viewport_mut().reset_velocity();
                 }
                 if self.node_palette_visible {
                     if *btn_state == ElementState::Pressed {
@@ -5055,16 +4924,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                                 if self.active_camera != "Default Camera" {
                                                     self.update_active_camera_rotation_reset();
                                                 } else {
-                                                    self.rotation_y = 0.0;
-                                                    self.rotation_x = 0.0;
+                                                    self.viewport_mut().rotation_y = 0.0;
+                                                    self.viewport_mut().rotation_x = 0.0;
                                                 }
-                                                self.viewport_zoom = 1.0;
-                                                self.rotate_velocity_yaw = 0.0;
-                                                self.rotate_velocity_pitch = 0.0;
-                                                self.zoom_velocity = 0.0;
-                                                self.is_rotating_viewport = false;
-                                                self.is_zooming_viewport = false;
-                                                self.scroll_lock = 0;
+                                                self.viewport_mut().zoom = 1.0;
+                                                self.viewport_mut().reset_velocity();
                                                 changed = true;
                                             }
                                         }
@@ -5300,14 +5164,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                          self.skipped_row_h = settings.graph.skipped_row_h;
                          self.skipped_col_w = settings.graph.skipped_col_w;
                          self.grid_thickness = settings.viewport.grid_thickness;
-                         self.show_grid = settings.viewport.show_grid_enabled;
-                         self.show_cube = settings.viewport.show_cube_enabled;
-                         self.show_origin = settings.viewport.show_origin_enabled;
-                         self.show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
-                         self.viewport_bg_color = settings.viewport.bg_color;
+                         self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;
+                         self.viewport_mut().show_cube = settings.viewport.show_cube_enabled;
+                         self.viewport_mut().show_origin = settings.viewport.show_origin_enabled;
+                         self.viewport_mut().show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
+                         self.viewport_mut().bg_color = settings.viewport.bg_color;
                          let node_c = cce_ui::color::graph_node_color();
                          self.node_color = [node_c[0], node_c[1], node_c[2]];
-                         self.grid_color = settings.viewport.grid_color;
+                         self.viewport_mut().grid_color = settings.viewport.grid_color;
                          self.origin_size = settings.viewport.origin_size;
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
                          self.cell_color = cce_ui::color::graph_cell_color();
@@ -5315,9 +5179,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                           if let Some(val) = settings.graph.scroll_speed { self.graph_scroll_speed = val; }
                           if let Some(val) = settings.graph.inertial_scroll { self.graph_inertial_scroll = val; }
                           if let Some(val) = settings.graph.scroll_friction { self.graph_scroll_friction = val; }
-                          if let Some(val) = settings.viewport.scroll_speed { self.viewport_scroll_speed = val; }
-                          if let Some(val) = settings.viewport.inertial_scroll { self.viewport_inertial_scroll = val; }
-                          if let Some(val) = settings.viewport.scroll_friction { self.viewport_scroll_friction = val; }
+                          if let Some(val) = settings.viewport.scroll_speed { self.viewport_mut().scroll_speed = val; }
+                          if let Some(val) = settings.viewport.inertial_scroll { self.viewport_mut().inertial_scroll = val; }
+                          if let Some(val) = settings.viewport.scroll_friction { self.viewport_mut().scroll_friction = val; }
 
                         colors::set_node_color([self.node_color[0], self.node_color[1], self.node_color[2], 1.0]);
 
@@ -5358,32 +5222,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.scroll_accum_y = 0.0;
         }
 
-        // Viewport rotation velocity tracking & timeout detection
-        if self.is_rotating_viewport {
-            if now.duration_since(self.last_rotate_time).as_secs_f32() > 0.05 {
-                self.is_rotating_viewport = false;
-                self.scroll_lock = 0;
-            } else if dt > 1e-5 {
-                let vel_yaw = self.rotate_accum_yaw / dt;
-                let vel_pitch = self.rotate_accum_pitch / dt;
-                self.rotate_velocity_yaw = self.rotate_velocity_yaw * 0.4 + vel_yaw * 0.6;
-                self.rotate_velocity_pitch = self.rotate_velocity_pitch * 0.4 + vel_pitch * 0.6;
-            }
-            self.rotate_accum_yaw = 0.0;
-            self.rotate_accum_pitch = 0.0;
-        }
-
-        // Viewport zoom velocity tracking & timeout detection
-        if self.is_zooming_viewport {
-            if now.duration_since(self.last_zoom_time).as_secs_f32() > 0.05 {
-                self.is_zooming_viewport = false;
-            } else if dt > 1e-5 {
-                let vel_zoom = self.zoom_accum / dt;
-                self.zoom_velocity = self.zoom_velocity * 0.4 + vel_zoom * 0.6;
-            }
-            self.zoom_accum = 0.0;
-        }
-
         let mut tick_changed = false;
         let ctx = &mut self.ui_context;
         for w in &mut self.widgets {
@@ -5394,6 +5232,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if cce_ui::widget::hover_animation::tick(dt) {
             tick_changed = true;
         }
+
+        let py = self.viewport().pending_yaw;
+        let pp = self.viewport().pending_pitch;
+        if py != 0.0 || pp != 0.0 {
+            if self.update_active_camera_rotation(py, pp) {
+                tick_changed = true;
+            }
+            self.viewport_mut().pending_yaw = 0.0;
+            self.viewport_mut().pending_pitch = 0.0;
+        }
+
         self.update_recent_files_layout();
 
         // Panning kinetic slide
@@ -5424,51 +5273,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
         }
 
-        // Viewport rotation kinetic slide
-        if !self.is_rotating_viewport && (self.rotate_velocity_yaw.abs() > 0.001 || self.rotate_velocity_pitch.abs() > 0.001) {
-            if !self.viewport_inertial_scroll {
-                self.rotate_velocity_yaw = 0.0;
-                self.rotate_velocity_pitch = 0.0;
-            } else {
-                let dx = self.rotate_velocity_yaw * dt;
-                let dy = self.rotate_velocity_pitch * dt;
-                if self.active_camera != "Default Camera" {
-                    self.update_active_camera_rotation(dx, dy);
-                } else {
-                    self.rotation_y += dx;
-                    self.rotation_x += dy;
-                }
 
-                // Apply dynamic friction decay
-                let decay = self.viewport_scroll_friction.powf(dt * 60.0);
-                self.rotate_velocity_yaw *= decay;
-                self.rotate_velocity_pitch *= decay;
-
-                if self.rotate_velocity_yaw.abs() < 0.01 { self.rotate_velocity_yaw = 0.0; }
-                if self.rotate_velocity_pitch.abs() < 0.01 { self.rotate_velocity_pitch = 0.0; }
-                tick_changed = true;
-            }
-        }
-
-        // Viewport zoom kinetic slide
-        if !self.is_zooming_viewport && self.zoom_velocity.abs() > 0.001 {
-            if !self.viewport_inertial_scroll {
-                self.zoom_velocity = 0.0;
-            } else {
-                let d_zoom = self.zoom_velocity * dt;
-                self.viewport_zoom *= (-d_zoom).exp();
-                self.viewport_zoom = self.viewport_zoom.clamp(0.05, 20.0);
-
-                // Apply dynamic friction decay
-                let decay = self.viewport_scroll_friction.powf(dt * 60.0);
-                self.zoom_velocity *= decay;
-
-                if self.zoom_velocity.abs() < 0.01 {
-                    self.zoom_velocity = 0.0;
-                }
-                tick_changed = true;
-            }
-        }
 
         if tick_changed {
             self.upload_vertices();
@@ -5556,9 +5361,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
 
             if cw > 0 && ch > 0 {
-                let aspect = cw as f32 / ch as f32;
 
-                let proj = Mat4::perspective_rh(0.9, aspect, 0.1, 100.0);
                 let mut camera_pos = Vec3::new(2.5, 1.8, 2.5);
                 let mut rx = 0.0f32;
                 let mut ry = 0.0f32;
@@ -5616,33 +5419,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     || self.last_viewport_camera_ry != ry
                     || self.last_viewport_camera_rz != rz
                     || self.last_viewport_pivot != pivot
-                    || self.last_viewport_zoom != self.viewport_zoom
-                    || self.last_viewport_rotation_x != self.rotation_x
-                    || self.last_viewport_rotation_y != self.rotation_y
-                    || self.last_viewport_bg_color != self.viewport_bg_color
-                    || self.last_viewport_show_grid != self.show_grid
-                    || self.last_viewport_show_cube != self.show_cube
-                    || self.last_viewport_show_origin != self.show_origin
-                    || self.last_viewport_show_camera_pivot != self.show_camera_pivot
+                    || self.last_viewport_zoom != self.viewport().zoom
+                    || self.last_viewport_rotation_x != self.viewport().rotation_x
+                    || self.last_viewport_rotation_y != self.viewport().rotation_y
+                    || self.last_viewport_bg_color != self.viewport().bg_color
+                    || self.last_viewport_show_grid != self.viewport().show_grid
+                    || self.last_viewport_show_cube != self.viewport().show_cube
+                    || self.last_viewport_show_origin != self.viewport().show_origin
+                    || self.last_viewport_show_camera_pivot != self.viewport().show_camera_pivot
                     || self.last_viewport_width != cw
                     || self.last_viewport_height != ch
                     || self.last_viewport_active_camera != self.active_camera
                     || self.last_viewport_show_viewport != self.show_viewport;
 
                 if viewport_changed {
-                    let base_offset = camera_pos - pivot;
-                    let distance = base_offset.length();
-                    let yaw0 = base_offset.x.atan2(base_offset.z);
-                    let pitch0 = (base_offset.y / distance.max(1e-5)).asin();
-
-                    let total_ry = ry.to_radians() + yaw0;
-                    let total_rx = rx.to_radians() + pitch0;
-
-                    let view_rot_pos = Mat4::from_rotation_y(total_ry) * Mat4::from_rotation_x(-total_rx);
-                    let camera_up = view_rot_pos.transform_vector3(Vec3::Y);
-                    let camera_world_pos = pivot + view_rot_pos.transform_vector3(Vec3::new(0.0, 0.0, distance) * self.viewport_zoom);
-                    let view_mat = Mat4::from_rotation_z(rz.to_radians()) * Mat4::look_at_rh(camera_world_pos, pivot, camera_up);
-                    let model = Mat4::from_rotation_y(self.rotation_y) * Mat4::from_rotation_x(self.rotation_x);
+                    let aspect = cw as f32 / ch as f32;
+                    let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
                     let mvp = proj * view_mat * model;
                     let window_size = [self.physical_width as f32, self.physical_height as f32];
                     let window_radius = cce_ui::color::backplate_corner_radius() * self.scale as f32;
@@ -5666,9 +5458,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                     let cam_angle_y = camera_pos.x.atan2(camera_pos.z);
                     let rot_angle = if self.active_camera != "Default Camera" {
-                        total_ry
+                        let base_offset = camera_pos - pivot;
+                        let yaw0 = base_offset.x.atan2(base_offset.z);
+                        ry.to_radians() + yaw0
                     } else {
-                        self.rotation_y + cam_angle_y
+                        self.viewport().rotation_y + cam_angle_y
                     };
                     let model_pivot = Mat4::from_translation(pivot) * Mat4::from_rotation_y(rot_angle);
                     let mvp_pivot = proj * view_mat * model_pivot;
@@ -5715,19 +5509,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     pass.set_vertex_buffer(0, self.vertex_buffer_viewport_bg.slice(..));
                     pass.draw(0..6, 0..1);
 
-                    if self.show_grid {
+                    if self.viewport().show_grid {
                         pass.set_bind_group(0, &self.bind_group_grid, &[]);
                         pass.set_vertex_buffer(0, self.vertex_buffer_grid.slice(..));
                         pass.draw(0..self.vertex_count_grid, 0..1);
                     }
 
-                    if self.show_origin {
+                    if self.viewport().show_origin {
                         pass.set_bind_group(0, &self.bind_group_3d, &[]);
                         pass.set_vertex_buffer(0, self.vertex_buffer_origin.slice(..));
                         pass.draw(0..self.vertex_count_origin, 0..1);
                     }
 
-                    if self.show_camera_pivot {
+                    if self.viewport().show_camera_pivot {
                         pass.set_bind_group(0, &self.bind_group_pivot, &[]);
                         pass.set_vertex_buffer(0, self.vertex_buffer_pivot.slice(..));
                         pass.draw(0..self.vertex_count_pivot, 0..1);
@@ -5735,7 +5529,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                     pass.set_bind_group(0, &self.bind_group_3d, &[]);
 
-                    if self.show_cube {
+                    if self.viewport().show_cube {
                         pass.set_vertex_buffer(0, self.vertex_buffer_3d.slice(..));
                         pass.draw(0..self.vertex_count_3d, 0..1);
                     }
@@ -5751,14 +5545,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_camera_ry = ry;
                     self.last_viewport_camera_rz = rz;
                     self.last_viewport_pivot = pivot;
-                    self.last_viewport_zoom = self.viewport_zoom;
-                    self.last_viewport_rotation_x = self.rotation_x;
-                    self.last_viewport_rotation_y = self.rotation_y;
-                    self.last_viewport_bg_color = self.viewport_bg_color;
-                    self.last_viewport_show_grid = self.show_grid;
-                    self.last_viewport_show_cube = self.show_cube;
-                    self.last_viewport_show_origin = self.show_origin;
-                    self.last_viewport_show_camera_pivot = self.show_camera_pivot;
+                    self.last_viewport_zoom = self.viewport().zoom;
+                    self.last_viewport_rotation_x = self.viewport().rotation_x;
+                    self.last_viewport_rotation_y = self.viewport().rotation_y;
+                    self.last_viewport_bg_color = self.viewport().bg_color;
+                    self.last_viewport_show_grid = self.viewport().show_grid;
+                    self.last_viewport_show_cube = self.viewport().show_cube;
+                    self.last_viewport_show_origin = self.viewport().show_origin;
+                    self.last_viewport_show_camera_pivot = self.viewport().show_camera_pivot;
                     self.last_viewport_width = cw;
                     self.last_viewport_height = ch;
                     self.last_viewport_active_camera = self.active_camera.clone();
@@ -5773,7 +5567,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear({
-                                let linear_bg = cce_ui::colors::to_linear_rgb(self.viewport_bg_color);
+                                let linear_bg = cce_ui::colors::to_linear_rgb(self.viewport().bg_color);
                                 wgpu::Color {
                                     r: linear_bg[0] as f64,
                                     g: linear_bg[1] as f64,
