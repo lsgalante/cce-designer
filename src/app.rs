@@ -4045,6 +4045,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         ctx.last_scroll_time = Some(now);
                     }
                     for (i, w) in self.widgets.iter_mut().enumerate() {
+                        if i == VIEWPORT_IDX {
+                            continue;
+                        }
                         if w.mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
                             handled = true;
                             if i == CONTENT_IDX {
@@ -4079,6 +4082,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 }
                                 needs_sync_grid = true;
                             }
+                            break;
+                        }
+                    }
+                    if !handled {
+                        if self.widgets[VIEWPORT_IDX].mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
+                            handled = true;
                         }
                     }
                 }
