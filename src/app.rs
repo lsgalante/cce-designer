@@ -2997,8 +2997,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             },
             last_config_mod_time: {
                 let paths = [
-                    "/home/lsgalante/.config/cce/config.toml",
-                    "/home/lsgalante/.config/ccec/config.toml",
+                    cce_ui::config::cce_config_dir().join("config.toml"),
+                    cce_ui::config::config_home().join("ccec").join("config.toml"),
                 ];
                 let mut mod_time = None;
                 for path in &paths {
@@ -3138,13 +3138,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
     pub fn update_inertial_settings(&mut self) {
         self.last_config_read = Instant::now();
-        let config_path = "/home/lsgalante/.config/cce/config.kdl";
-        
+        let config_path = cce_ui::config::get_config_path();
+
         let mut enabled = true;
         let mut friction = 0.90;
         let mut speed = 1.0;
 
-        if let Ok(content) = std::fs::read_to_string(config_path) {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
             let val = cce_ui::config::parse_kdl_to_json(&content);
             if let Some(input) = val.get("input") {
                 if let Some(inertial) = input.get("inertial") {
@@ -5138,8 +5138,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if now.duration_since(self.last_config_read).as_secs_f32() > 2.0 {
             self.last_config_read = now;
             let config_paths = [
-                "/home/lsgalante/.config/cce/config.kdl",
-                "/home/lsgalante/.config/ccec/config.kdl",
+                cce_ui::config::get_config_path(),
+                cce_ui::config::config_home().join("ccec").join("config.kdl"),
             ];
             let mut current_mod_time = None;
             for path in &config_paths {
