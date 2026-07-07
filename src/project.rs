@@ -13,15 +13,7 @@ fn color_to_hex(rgb: [f32; 3]) -> String {
 }
 
 fn hex_to_color(hex: &str) -> Option<[f32; 3]> {
-    let s = hex.trim().strip_prefix('#').unwrap_or(hex.trim());
-    if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()? as f32 / 255.0;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()? as f32 / 255.0;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()? as f32 / 255.0;
-        Some([r, g, b])
-    } else {
-        None
-    }
+    cce_ui::color::parse_hex_rgb(hex)
 }
 
 impl State {
