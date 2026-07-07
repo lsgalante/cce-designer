@@ -419,7 +419,7 @@ fn hex_to_float_array(hex: &str) -> Option<[f32; 3]> {
 
 impl DesignSettings {
     fn file_path() -> std::path::PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
+        let home = std::env::var("HOME").unwrap_or_default();
         let mut path = std::path::PathBuf::from(home);
         path.push(".config");
         path.push("cce");
