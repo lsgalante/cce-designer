@@ -1033,10 +1033,6 @@ impl State {
         self.widgets[idx].as_geom_controller_mut().expect("not a GeomController")
     }
 
-    pub fn scroll_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::ScrollController {
-        self.widgets[idx].as_scroll_controller_mut().expect("not a ScrollController")
-    }
-
     pub fn has_unsaved_changes(&self) -> bool {
         if let Ok(current_json) = serde_json::to_string(&self.fs_root) {
             current_json != self.last_saved_root_json
