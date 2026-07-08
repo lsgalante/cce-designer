@@ -903,7 +903,7 @@ pub struct State {
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
     pub recent_files_list: List,
-    pub recent_files_buttons: Vec<Button>,
+    pub recent_files_buttons: Vec<cce_ui::widget::Adapted<cce_ui::widget::Button>>,
     pub text_buffer_cache: std::collections::HashMap<(String, u32, Option<String>), Buffer>,
     pub viewport_dirty: bool,
     pub text_dirty: bool,
