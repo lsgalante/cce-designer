@@ -2255,7 +2255,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         let display_ptr = conn.backend().display_id().as_ptr() as *mut std::ffi::c_void;
         let surface_ptr = wl_surface.id().as_ptr() as *mut std::ffi::c_void;
-        let wgpu_adapter = cce_ui::backend::WgpuAdapter::new(display_ptr, surface_ptr, pw, ph).await;
+        // Bundled fonts only (the 5th param opts into system fonts in the render
+        // FontSystem — Phase 6k; the designer's UI uses bundled families).
+        let wgpu_adapter = cce_ui::backend::WgpuAdapter::new(display_ptr, surface_ptr, pw, ph, false).await;
 
         let device = &wgpu_adapter.device;
         let queue = &wgpu_adapter.queue;
