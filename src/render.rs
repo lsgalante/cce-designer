@@ -532,42 +532,59 @@ impl State {
             text_buffer_cache.clear();
         }
 
-        // Pass 1: Populate text_buffer_cache with shaped buffers
+        // Walk-derived widget text (RFC Phase 6ap): each non-menubar widget's subtree text
+        // as prims — (text, x, y, size, color, font, clip bounds), the walk's per-widget
+        // content font and container clips composed in — replacing the legacy
+        // get_text_items / text_labels_with_font_and_bounds getters. Shaping stays
+        // app-side in text_buffer_cache (same size*1.4 metrics as before).
+        let mut widget_text: Vec<Vec<(String, f32, f32, f32, [u8; 3], Option<String>, Option<[f32; 4]>)>> =
+            Vec::with_capacity(widgets.len());
         for (i, w) in widgets.iter().enumerate() {
-            if !w.visible() {
-                continue;
-            }
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
-            if is_menubar {
+            if !w.visible() || is_menubar {
+                widget_text.push(Vec::new());
                 continue;
             }
-            let cached_items = w.get_text_items();
-            let has_cached_items = !cached_items.is_empty();
-            if !has_cached_items || (circular_network_pane && i == LEFT_MENUBAR_IDX) {
-                let labels = w.text_labels_with_font_and_bounds(ui_context);
-                for (label, font_opt, _) in labels {
-                    let mut is_curved = false;
-                    if circular_network_pane && i == LEFT_MENUBAR_IDX && label.text.chars().count() == 1 {
-                        let dx = label.x - network_circle_x;
-                        let dy = label.y - network_circle_y;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist >= network_circle_radius - 35.0 && dist <= network_circle_radius + 5.0 {
-                            is_curved = true;
-                        }
-                    }
+            let mut scratch = cce_ui::scene::paint::PaintCtx::new();
+            cce_ui::scene::painter::append_widget_text(ui_context, w.as_ref(), &mut scratch);
+            widget_text.push(
+                scratch
+                    .finish()
+                    .items
+                    .into_iter()
+                    .filter_map(|item| match item.prim {
+                        cce_ui::scene::paint::Prim::Text { text, x, y, font_size, color, font, bounds, .. } =>
+                            Some((text, x, y, font_size, color, font, bounds)),
+                        _ => None,
+                    })
+                    .collect(),
+            );
+        }
 
-                    if is_curved {
-                        let key = (label.text.clone(), (12.0 * 100.0) as u32, None);
-                        if !text_buffer_cache.contains_key(&key) {
-                            let buf = make_text_buffer(font_system, &label.text, 12.0);
-                            text_buffer_cache.insert(key, buf);
-                        }
-                    } else {
-                        let key = (label.text.clone(), (label.font_size * 100.0) as u32, font_opt.clone());
-                        if !text_buffer_cache.contains_key(&key) {
-                            let buf = make_text_buffer_with_font(font_system, &label.text, label.font_size, font_opt.as_deref());
-                            text_buffer_cache.insert(key, buf);
-                        }
+        // Pass 1: Populate text_buffer_cache with shaped buffers
+        for (i, texts) in widget_text.iter().enumerate() {
+            for (text, x, y, font_size, _color, font, _bounds) in texts {
+                let mut is_curved = false;
+                if circular_network_pane && i == LEFT_MENUBAR_IDX && text.chars().count() == 1 {
+                    let dx = x - network_circle_x;
+                    let dy = y - network_circle_y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist >= network_circle_radius - 35.0 && dist <= network_circle_radius + 5.0 {
+                        is_curved = true;
+                    }
+                }
+
+                if is_curved {
+                    let key = (text.clone(), (12.0 * 100.0) as u32, None);
+                    if !text_buffer_cache.contains_key(&key) {
+                        let buf = make_text_buffer(font_system, text, 12.0);
+                        text_buffer_cache.insert(key, buf);
+                    }
+                } else {
+                    let key = (text.clone(), (font_size * 100.0) as u32, font.clone());
+                    if !text_buffer_cache.contains_key(&key) {
+                        let buf = make_text_buffer_with_font(font_system, text, *font_size, font.as_deref());
+                        text_buffer_cache.insert(key, buf);
                     }
                 }
             }
@@ -699,10 +716,20 @@ impl State {
                 };
             }
 
-            let cached_items = w.get_text_items();
-            let has_cached_items = !cached_items.is_empty();
-            if has_cached_items && !(circular_network_pane && i == LEFT_MENUBAR_IDX) {
-                for (buf, x, y, color) in cached_items {
+            for (text, x, y, font_size, color, font, label_bounds) in &widget_text[i] {
+                let mut is_curved = false;
+                if circular_network_pane && i == LEFT_MENUBAR_IDX && text.chars().count() == 1 {
+                    let dx = x - network_circle_x;
+                    let dy = y - network_circle_y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist >= network_circle_radius - 35.0 && dist <= network_circle_radius + 5.0 {
+                        is_curved = true;
+                    }
+                }
+
+                if is_curved {
+                    curved_labels.push(TextLabel { text: text.clone(), x: *x, y: *y, font_size: *font_size, color: *color });
+                } else {
                     if circular_network_pane && is_network_part && i != LEFT_MENUBAR_IDX {
                         let dx = x - network_circle_x;
                         let dy = y - network_circle_y;
@@ -711,74 +738,26 @@ impl State {
                             continue;
                         }
                     }
-
-                    let mut final_color = color;
-                    if is_network_part {
-                        let val = color.0;
-                        let a = (val >> 24) & 0xFF;
-                        let r = (val >> 16) & 0xFF;
-                        let g = (val >> 8) & 0xFF;
-                        let b = val & 0xFF;
-                        let new_a = (a as f32 * self.network_opacity).clamp(0.0, 255.0) as u8;
-                        final_color = glyphon::Color::rgba(r as u8, g as u8, b as u8, new_a);
+                    let mut item_bounds = bounds;
+                    if let Some([l, t, r, b]) = label_bounds {
+                        let pl = (l * s).round() as i32;
+                        let pt = (t * s).round() as i32;
+                        let pr = (r * s).round() as i32;
+                        let pb = (b * s).round() as i32;
+                        item_bounds = TextBounds {
+                            left: item_bounds.left.max(pl),
+                            top: item_bounds.top.max(pt),
+                            right: item_bounds.right.min(pr),
+                            bottom: item_bounds.bottom.min(pb),
+                        };
                     }
+                    let key = (text.clone(), (font_size * 100.0) as u32, font.clone());
+                    let buf_ref = text_buffer_cache.get(&key).unwrap();
 
-                    areas.push(TextArea {
-                        buffer: buf,
-                        left: (x * s).round(),
-                        top: (y * s).round(),
-                        scale: s,
-                        bounds,
-                        default_color: final_color,
-                        custom_glyphs: &[],
-                    });
-                }
-            }
-            if !has_cached_items || (circular_network_pane && i == LEFT_MENUBAR_IDX) {
-                let labels = w.text_labels_with_font_and_bounds(ui_context);
-                for (label, font_opt, label_bounds) in labels {
-                    let mut is_curved = false;
-                    if circular_network_pane && i == LEFT_MENUBAR_IDX && label.text.chars().count() == 1 {
-                        let dx = label.x - network_circle_x;
-                        let dy = label.y - network_circle_y;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist >= network_circle_radius - 35.0 && dist <= network_circle_radius + 5.0 {
-                            is_curved = true;
-                        }
-                    }
-
-                    if is_curved {
-                        curved_labels.push(label);
-                    } else {
-                        if circular_network_pane && is_network_part && i != LEFT_MENUBAR_IDX {
-                            let dx = label.x - network_circle_x;
-                            let dy = label.y - network_circle_y;
-                            let dist_sq = dx * dx + dy * dy;
-                            if dist_sq > network_circle_radius * network_circle_radius {
-                                continue;
-                            }
-                        }
-                        let mut item_bounds = bounds;
-                        if let Some([l, t, r, b]) = label_bounds {
-                            let pl = (l * s).round() as i32;
-                            let pt = (t * s).round() as i32;
-                            let pr = (r * s).round() as i32;
-                            let pb = (b * s).round() as i32;
-                            item_bounds = TextBounds {
-                                left: item_bounds.left.max(pl),
-                                top: item_bounds.top.max(pt),
-                                right: item_bounds.right.min(pr),
-                                bottom: item_bounds.bottom.min(pb),
-                            };
-                        }
-                        let key = (label.text.clone(), (label.font_size * 100.0) as u32, font_opt.clone());
-                        let buf_ref = text_buffer_cache.get(&key).unwrap();
-
-                        legacy_buffers.push(buf_ref);
-                        legacy_labels.push(label);
-                        legacy_bounds.push(item_bounds);
-                        legacy_is_network.push(is_network_part);
-                    }
+                    legacy_buffers.push(buf_ref);
+                    legacy_labels.push(TextLabel { text: text.clone(), x: *x, y: *y, font_size: *font_size, color: *color });
+                    legacy_bounds.push(item_bounds);
+                    legacy_is_network.push(is_network_part);
                 }
             }
         }
