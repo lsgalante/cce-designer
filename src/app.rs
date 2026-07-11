@@ -520,6 +520,15 @@ impl NodePalette {
 }
 
 impl Element for NodePalette {
+    // Leaf legacy widget: own labels via paint_self (cce-ui's default no longer drains
+    // the text getters; the render loop's walk text reads it).
+    fn paint_self(&self, ui: &cce_ui::context::UiContext, ctx: &mut cce_ui::scene::paint::PaintCtx) {
+        cce_ui::scene::painter::paint_legacy_leaf(
+            self, ui, ctx,
+            cce_ui::scene::painter::fonted_leaf_labels(self, ui, self.own_labels()),
+        );
+    }
+
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn as_ptr(&self) -> *mut (dyn Element + 'static) {
@@ -561,33 +570,6 @@ impl Element for NodePalette {
         quads
     }
 
-    fn text_labels(&self) -> Vec<TextLabel> {
-        if !self.visible { return Vec::new(); }
-        let (px, py, _pw, ph) = self.panel_rect();
-        let mut labels = Vec::new();
-        labels.push(TextLabel { text: "Add Node".into(), x: px + 16.0, y: py + 14.0, font_size: 15.0, color: [0xdd, 0xdd, 0xe6] });
-        labels.push(TextLabel { text: "Type to search, Enter to place, Esc to close".into(), x: px + 100.0, y: py + 17.0, font_size: 11.0, color: [0x88, 0x88, 0x99] });
-        let query = if self.query.is_empty() { "Search nodes...".to_string() } else { self.query.clone() };
-        let query_color = if self.query.is_empty() { [0x66, 0x66, 0x77] } else { [0xdd, 0xdd, 0xe6] };
-        labels.push(TextLabel { text: query, x: px + 28.0, y: py + 57.0, font_size: 13.0, color: query_color });
-        let row_h = 24.0;
-        let visible_rows = ((ph - 120.0) / row_h).floor().max(0.0) as usize;
-        if self.items.is_empty() {
-            labels.push(TextLabel { text: "No matching nodes".into(), x: px + 28.0, y: py + 100.0, font_size: 12.0, color: [0xaa, 0xaa, 0xbb] });
-        } else {
-            let start = self.selected.saturating_sub(visible_rows.saturating_sub(1));
-            for (row, item_idx) in (start..self.items.len().min(start + visible_rows)).enumerate() {
-                labels.push(TextLabel {
-                    text: self.items[item_idx].clone(),
-                    x: px + 28.0,
-                    y: py + 98.0 + row as f32 * row_h,
-                    font_size: 12.0,
-                    color: if item_idx == self.selected { [0xff, 0xff, 0xdd] } else { [0xcc, 0xcc, 0xd8] },
-                });
-            }
-        }
-        labels
-    }
 
     fn z_index(&self) -> i32 {
         200
@@ -5668,3 +5650,32 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     }
 }
 
+impl NodePalette {
+    fn own_labels(&self) -> Vec<TextLabel> {
+        if !self.visible { return Vec::new(); }
+        let (px, py, _pw, ph) = self.panel_rect();
+        let mut labels = Vec::new();
+        labels.push(TextLabel { text: "Add Node".into(), x: px + 16.0, y: py + 14.0, font_size: 15.0, color: [0xdd, 0xdd, 0xe6] });
+        labels.push(TextLabel { text: "Type to search, Enter to place, Esc to close".into(), x: px + 100.0, y: py + 17.0, font_size: 11.0, color: [0x88, 0x88, 0x99] });
+        let query = if self.query.is_empty() { "Search nodes...".to_string() } else { self.query.clone() };
+        let query_color = if self.query.is_empty() { [0x66, 0x66, 0x77] } else { [0xdd, 0xdd, 0xe6] };
+        labels.push(TextLabel { text: query, x: px + 28.0, y: py + 57.0, font_size: 13.0, color: query_color });
+        let row_h = 24.0;
+        let visible_rows = ((ph - 120.0) / row_h).floor().max(0.0) as usize;
+        if self.items.is_empty() {
+            labels.push(TextLabel { text: "No matching nodes".into(), x: px + 28.0, y: py + 100.0, font_size: 12.0, color: [0xaa, 0xaa, 0xbb] });
+        } else {
+            let start = self.selected.saturating_sub(visible_rows.saturating_sub(1));
+            for (row, item_idx) in (start..self.items.len().min(start + visible_rows)).enumerate() {
+                labels.push(TextLabel {
+                    text: self.items[item_idx].clone(),
+                    x: px + 28.0,
+                    y: py + 98.0 + row as f32 * row_h,
+                    font_size: 12.0,
+                    color: if item_idx == self.selected { [0xff, 0xff, 0xdd] } else { [0xcc, 0xcc, 0xd8] },
+                });
+            }
+        }
+        labels
+    }
+}
