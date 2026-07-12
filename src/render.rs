@@ -677,7 +677,7 @@ impl State {
             let is_node = i == CONTENT_IDX;
             let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
 
-            let mut bounds = if is_node {
+            let bounds = if is_node {
                 if circular_network_pane {
                     TextBounds {
                         left: ((network_circle_x - network_circle_radius) * s) as i32,
@@ -702,35 +702,6 @@ impl State {
                     bottom: *physical_height as i32,
                 }
             };
-
-            let is_menu_related = w.type_name() == "MenuBar" || w.type_name() == "Menu";
-
-            let mut parent_plate_rect = if !is_menu_related && w.is_plate() {
-                Some(w.rect())
-            } else {
-                None
-            };
-            if !is_menu_related && parent_plate_rect.is_none() {
-                let mut curr_ptr = w.as_ref() as *const dyn Element as *mut dyn Element;
-                unsafe {
-                    while let Some(parent_ptr) = (*curr_ptr).parent(ui_context) {
-                        if (*parent_ptr).is_plate() {
-                            parent_plate_rect = Some((*parent_ptr).rect());
-                            break;
-                        }
-                        curr_ptr = parent_ptr;
-                    }
-                }
-            }
-
-            if let Some((px, py, pw, ph)) = parent_plate_rect {
-                bounds = TextBounds {
-                    left: bounds.left.max((px * s).round() as i32),
-                    top: bounds.top.max((py * s).round() as i32),
-                    right: bounds.right.min(((px + pw) * s).round() as i32),
-                    bottom: bounds.bottom.min(((py + ph) * s).round() as i32),
-                };
-            }
 
             for (text, x, y, font_size, color, font, label_bounds) in &widget_text[i] {
                 let mut is_curved = false;
