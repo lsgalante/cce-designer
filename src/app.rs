@@ -35,7 +35,9 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
+use cce_ui::widget::{Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
+use cce_ui::widget::UiContext;
+use crate::viewport_3d::Viewport3D;
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -608,6 +610,33 @@ impl cce_ui::widget::Element for PassivePlate {
         let (x, y, w, h) = self.rect();
         px >= x && px < x + w && py >= y && py < y + h
     }
+}
+
+
+/// App-owned copy of the dissolved cce-ui `Canvas` (Phase 6ay part 2): the transparent
+/// hit-through pane behind the network area. Verbatim; dies with the machinery retype.
+pub struct Canvas {
+    x: f32, y: f32, w: f32, h: f32,
+    hovered: bool,
+}
+
+impl Canvas {
+    pub fn new() -> Self { Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0, hovered: false } }
+}
+
+impl Element for Canvas {
+    fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
+    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
+    fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
+    fn as_ptr(&self) -> *mut (dyn Element + 'static) {
+        self as *const Self as *mut Self as *mut (dyn Element + 'static)
+    }
+    fn as_ptr_mut(&mut self) -> *mut (dyn Element + 'static) {
+        self as *mut Self as *mut (dyn Element + 'static)
+    }
+    fn set_hovered(&mut self, v: bool) { self.hovered = v; }
+    fn hovered(&self) -> bool { self.hovered }
+    fn hit_test(&self, _px: f32, _py: f32, _ctx: &UiContext) -> bool { false }
 }
 
 impl Element for NodePalette {
