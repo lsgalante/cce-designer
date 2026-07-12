@@ -1,6 +1,7 @@
 //! App-owned copy of the dissolved cce-ui `Viewport3D` (Phase 6ay part 2): the designer
-//! is the only consumer — the 3D preview pane of the roster. Verbatim from cce-ui; the
-//! `Element` impl dies with the machinery retype.
+//! is the only consumer — the 3D preview pane of the roster, on the narrow traits
+//! wrapped in `Adapted<Viewport3D>` (Phase 6az). The roster keeps it as
+//! `Box<dyn Element>`; `as_any` downcasts reach this model.
 
 use cce_ui::colors;
 use cce_ui::widget::*;
@@ -8,7 +9,6 @@ use glam::{Mat4, Vec3};
 
 #[derive(Debug, Clone)]
 pub struct Viewport3D {
-    base: Widget,
     pub rotation_x: f32,
     pub rotation_y: f32,
     pub zoom: f32,
@@ -47,10 +47,8 @@ pub struct Viewport3D {
 }
 
 impl Viewport3D {
-    pub fn new() -> Self {
-        let base = Widget::new();
-        Self {
-            base,
+    pub fn new() -> Adapted<Viewport3D> {
+        Adapted::new(Self {
             rotation_x: 0.0,
             rotation_y: 0.0,
             zoom: 1.0,
@@ -80,7 +78,7 @@ impl Viewport3D {
             scroll_speed: 1.0,
             inertial_scroll: true,
             scroll_friction: 0.90,
-        }
+        })
     }
 
     pub fn with_scroll_speed(mut self, speed: f32) -> Self {
@@ -135,28 +133,26 @@ impl Viewport3D {
     }
 }
 
-impl Element for Viewport3D {
-    cce_ui::impl_widget_base!(Viewport3D);
+impl cce_ui::widget::Layout for Viewport3D {}
 
+impl cce_ui::widget::Paint for Viewport3D {
     fn color(&self) -> [f32; 4] {
         colors::VIEWPORT_BG
     }
+}
 
+impl cce_ui::widget::Input for Viewport3D {
     fn set_modifiers(&mut self, ctrl: bool, shift: bool, alt: bool) {
         self.ctrl_pressed = ctrl;
         self.shift_pressed = shift;
         self.alt_pressed = alt;
     }
 
-    fn hit_test(&self, px: f32, py: f32, _ctx: &UiContext) -> bool {
-        let (x, y, w, h) = self.rect();
-        px >= x && px <= x + w && py >= y && py <= y + h
-    }
+    fn on_event(&mut self, event: &Event, _ectx: &mut cce_ui::widget::EventCtx) -> bool {
+        // Wheel arrives hit-gated to the pane rect (the adapter's gate replaces the old
+        // leading self.hit_test); the rotate/zoom handling is the legacy body verbatim.
+        let Event::MouseWheel { delta, .. } = event else { return false };
 
-    fn mouse_wheel(&mut self, delta: &MouseScrollDelta, px: f32, py: f32, ctx: &mut UiContext) -> bool {
-        if !self.hit_test(px, py, ctx) {
-            return false;
-        }
         let scale = cce_ui::scale::scale_factor();
         if self.ctrl_pressed {
             match delta {
@@ -237,9 +233,11 @@ impl Element for Viewport3D {
                 }
             }
         }
+    
     }
 
-    fn tick(&mut self, dt: f32, _ctx: &mut UiContext) -> bool {
+    fn tick(&mut self, dt: f32, _rect: cce_ui::scene::layout::Rect) -> bool {
+
         let now = std::time::Instant::now();
         let mut changed = false;
 
@@ -309,5 +307,6 @@ impl Element for Viewport3D {
         }
 
         changed
+    
     }
 }

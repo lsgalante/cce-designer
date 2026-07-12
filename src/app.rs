@@ -503,8 +503,8 @@ pub struct NodePalette {
 }
 
 impl NodePalette {
-    fn new() -> Self {
-        Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0, visible: false, query: String::new(), items: Vec::new(), selected: 0 }
+    fn new() -> cce_ui::widget::Adapted<NodePalette> {
+        cce_ui::widget::Adapted::new(Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0, visible: false, query: String::new(), items: Vec::new(), selected: 0 })
     }
 
     fn panel_rect(&self) -> (f32, f32, f32, f32) {
@@ -526,8 +526,6 @@ impl NodePalette {
 /// at `plate_opacity` times the network fade, alpha negated when blur is on (the
 /// scenefx blur marker) — with no children and no events.
 pub struct PassivePlate {
-    base: cce_ui::widget::Widget,
-    visible: bool,
     color: [f32; 4],
     blur: bool,
     pub network_opacity: f32,
@@ -536,15 +534,13 @@ pub struct PassivePlate {
 }
 
 impl PassivePlate {
-    pub fn new(color: [f32; 4], blur: bool) -> Self {
-        Self {
-            base: cce_ui::widget::Widget::new(),
-            visible: true,
+    pub fn new(color: [f32; 4], blur: bool) -> cce_ui::widget::Adapted<PassivePlate> {
+        cce_ui::widget::Adapted::new(Self {
             color,
             blur,
             network_opacity: 1.0,
             curved_circle: None,
-        }
+        })
     }
 
     pub fn set_network_opacity(&mut self, opacity: f32) {
@@ -556,17 +552,9 @@ impl PassivePlate {
     }
 }
 
-impl cce_ui::widget::Element for PassivePlate {
-    cce_ui::impl_widget_base!(PassivePlate);
+impl cce_ui::widget::Layout for PassivePlate {}
 
-    fn visible(&self) -> bool {
-        self.visible
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
-    }
-
+impl cce_ui::widget::Paint for PassivePlate {
     fn color(&self) -> [f32; 4] {
         let mut c = self.color;
         c[3] *= cce_ui::layout::plate_opacity();
@@ -577,17 +565,10 @@ impl cce_ui::widget::Element for PassivePlate {
         c
     }
 
-    fn rounded_corners(&self) -> (bool, bool, bool, bool) {
+    fn corner_style(&self, _rect: cce_ui::scene::layout::Rect) -> Option<(f32, (bool, bool, bool, bool))> {
         let r = cce_ui::layout::plate_corner_radius();
-        if r > 0.0 {
-            (true, true, true, true)
-        } else {
-            (false, false, false, false)
-        }
-    }
-
-    fn corner_radius(&self) -> f32 {
-        cce_ui::layout::plate_corner_radius()
+        let on = r > 0.0;
+        Some((r, (on, on, on, on)))
     }
 
     fn solid_border(&self) -> Option<([f32; 4], f32)> {
@@ -597,87 +578,68 @@ impl cce_ui::widget::Element for PassivePlate {
             None
         }
     }
+}
 
-    fn hit_test(&self, px: f32, py: f32, ctx: &cce_ui::context::UiContext) -> bool {
-        if ctx.is_coordinate_covered(self as *const Self as *const () as usize, px, py) {
-            return false;
-        }
+impl cce_ui::widget::Input for PassivePlate {
+    fn hit(&self, rect: cce_ui::scene::layout::Rect, x: f32, y: f32) -> bool {
         if let Some((cx, cy, r)) = self.curved_circle {
-            let dx = px - cx;
-            let dy = py - cy;
+            let dx = x - cx;
+            let dy = y - cy;
             return dx * dx + dy * dy <= r * r;
         }
-        let (x, y, w, h) = self.rect();
-        px >= x && px < x + w && py >= y && py < y + h
+        // Exclusive right/bottom edges, like the legacy Plate hit test.
+        x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
     }
 }
 
 
 /// App-owned copy of the dissolved cce-ui `Canvas` (Phase 6ay part 2): the transparent
 /// hit-through pane behind the network area. Verbatim; dies with the machinery retype.
-pub struct Canvas {
-    x: f32, y: f32, w: f32, h: f32,
-    hovered: bool,
-}
+pub struct Canvas;
 
 impl Canvas {
-    pub fn new() -> Self { Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0, hovered: false } }
+    pub fn new() -> cce_ui::widget::Adapted<Canvas> { cce_ui::widget::Adapted::new(Canvas) }
 }
 
-impl Element for Canvas {
-    fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
-    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
+impl cce_ui::widget::Layout for Canvas {}
+
+impl cce_ui::widget::Paint for Canvas {
     fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
-    fn as_ptr(&self) -> *mut (dyn Element + 'static) {
-        self as *const Self as *mut Self as *mut (dyn Element + 'static)
-    }
-    fn as_ptr_mut(&mut self) -> *mut (dyn Element + 'static) {
-        self as *mut Self as *mut (dyn Element + 'static)
-    }
-    fn set_hovered(&mut self, v: bool) { self.hovered = v; }
-    fn hovered(&self) -> bool { self.hovered }
-    fn hit_test(&self, _px: f32, _py: f32, _ctx: &UiContext) -> bool { false }
 }
 
-impl Element for NodePalette {
-    // Leaf legacy widget: own labels via paint_self (cce-ui's default no longer drains
-    // the text getters; the render loop's walk text reads it).
-    fn paint_self(&self, ui: &cce_ui::context::UiContext, ctx: &mut cce_ui::scene::paint::PaintCtx) {
-        cce_ui::scene::painter::paint_legacy_leaf(
-            self, ui, ctx,
-            cce_ui::scene::painter::fonted_leaf_labels(self, ui, self.own_labels()),
-        );
+impl cce_ui::widget::Input for Canvas {
+    // Hit-through: the pane never claims the pointer (the graph decides its own hits).
+    fn hit(&self, _rect: cce_ui::scene::layout::Rect, _x: f32, _y: f32) -> bool { false }
+}
+
+impl cce_ui::widget::Layout for NodePalette {
+    // The model mirrors the landed rect (panel_rect/labels read it between events).
+    fn rect_assigned(&mut self, rect: cce_ui::scene::layout::Rect) {
+        self.x = rect.x;
+        self.y = rect.y;
+        self.w = rect.width;
+        self.h = rect.height;
     }
 
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    fn as_ptr(&self) -> *mut (dyn Element + 'static) {
-        self as *const Self as *mut Self as *mut (dyn Element + 'static)
+    fn z_order(&self) -> i32 {
+        200
     }
-    fn as_ptr_mut(&mut self) -> *mut (dyn Element + 'static) {
-        self as *mut Self as *mut (dyn Element + 'static)
-    }
-    fn rect(&self) -> (f32, f32, f32, f32) { (self.x, self.y, self.w, self.h) }
-    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) { self.x = x; self.y = y; self.w = w; self.h = h; }
+}
+
+impl cce_ui::widget::Paint for NodePalette {
     fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
-    fn hit_test(&self, px: f32, py: f32, ctx: &cce_ui::context::UiContext) -> bool {
-        if ctx.is_coordinate_covered(self as *const Self as *const () as usize, px, py) {
-            return false;
+
+    fn paint(&self, _rect: cce_ui::scene::layout::Rect, pc: &mut cce_ui::scene::paint::PaintCtx) {
+        use cce_ui::scene::layout::Rect;
+        // Visibility is model-owned (set through set_palette_state on the downcast model,
+        // not Element::set_visible on the wrapper), so the paint gate lives here.
+        if !self.visible {
+            return;
         }
-        self.visible && px >= self.x && px <= self.x + self.w && py >= self.y && py <= self.y + self.h
-    }
-    fn set_visible(&mut self, visible: bool) { self.visible = visible; }
-    fn visible(&self) -> bool { self.visible }
-    fn take_click(&mut self) -> bool { self.visible }
-
-
-    fn extra_quads(&self) -> Vec<(f32, f32, f32, f32, [f32; 4])> {
-        if !self.visible { return Vec::new(); }
-        let mut quads = Vec::new();
-        quads.push((self.x, self.y, self.w, self.h, [0.0, 0.0, 0.0, 0.45]));
+        pc.quad(Rect { x: self.x, y: self.y, width: self.w, height: self.h }, [0.0, 0.0, 0.0, 0.45]);
         let (px, py, pw, ph) = self.panel_rect();
-        quads.push((px, py, pw, ph, colors::popover_bg_color()));
-        quads.push((px + 16.0, py + 48.0, pw - 32.0, 32.0, [0.10, 0.10, 0.14, 1.0]));
+        pc.quad(Rect { x: px, y: py, width: pw, height: ph }, colors::popover_bg_color());
+        pc.quad(Rect { x: px + 16.0, y: py + 48.0, width: pw - 32.0, height: 32.0 }, [0.10, 0.10, 0.14, 1.0]);
         let list_y = py + 92.0;
         let row_h = 24.0;
         let visible_rows = ((ph - 120.0) / row_h).floor().max(0.0) as usize;
@@ -685,14 +647,21 @@ impl Element for NodePalette {
         for (row, item_idx) in (start..self.items.len().min(start + visible_rows)).enumerate() {
             let y = list_y + row as f32 * row_h;
             let bg = if item_idx == self.selected { [0.24, 0.33, 0.55, 0.85] } else { [0.14, 0.14, 0.19, 0.55] };
-            quads.push((px + 16.0, y, pw - 32.0, row_h - 2.0, bg));
+            pc.quad(Rect { x: px + 16.0, y, width: pw - 32.0, height: row_h - 2.0 }, bg);
         }
-        quads
+        for l in self.own_labels() {
+            pc.text(l.text, l.x, l.y, l.font_size, l.color);
+        }
+    }
+}
+
+impl cce_ui::widget::Input for NodePalette {
+    fn hit(&self, rect: cce_ui::scene::layout::Rect, x: f32, y: f32) -> bool {
+        self.visible && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
     }
 
-
-    fn z_index(&self) -> i32 {
-        200
+    fn take_click(&mut self) -> bool {
+        self.visible
     }
 }
 
