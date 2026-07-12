@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -519,6 +519,97 @@ impl NodePalette {
     }
 }
 
+
+/// Dissolved cce-ui `Plate` (Phase 6as): a passive translucent panel — configured color
+/// at `plate_opacity` times the network fade, alpha negated when blur is on (the
+/// scenefx blur marker) — with no children and no events.
+pub struct PassivePlate {
+    base: cce_ui::widget::Widget,
+    visible: bool,
+    color: [f32; 4],
+    blur: bool,
+    pub network_opacity: f32,
+    /// Circular hit shape while the network pane is round (the legacy Plate marker).
+    curved_circle: Option<(f32, f32, f32)>,
+}
+
+impl PassivePlate {
+    pub fn new(color: [f32; 4], blur: bool) -> Self {
+        Self {
+            base: cce_ui::widget::Widget::new(),
+            visible: true,
+            color,
+            blur,
+            network_opacity: 1.0,
+            curved_circle: None,
+        }
+    }
+
+    pub fn set_network_opacity(&mut self, opacity: f32) {
+        self.network_opacity = opacity;
+    }
+
+    pub fn set_curved_circle(&mut self, circle: Option<(f32, f32, f32)>) {
+        self.curved_circle = circle;
+    }
+}
+
+impl cce_ui::widget::Element for PassivePlate {
+    cce_ui::impl_widget_base!(PassivePlate);
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    fn color(&self) -> [f32; 4] {
+        let mut c = self.color;
+        c[3] *= cce_ui::layout::plate_opacity();
+        c[3] *= self.network_opacity;
+        if self.blur && cce_ui::colors::plate_blur() {
+            c[3] = -c[3].abs();
+        }
+        c
+    }
+
+    fn rounded_corners(&self) -> (bool, bool, bool, bool) {
+        let r = cce_ui::layout::plate_corner_radius();
+        if r > 0.0 {
+            (true, true, true, true)
+        } else {
+            (false, false, false, false)
+        }
+    }
+
+    fn corner_radius(&self) -> f32 {
+        cce_ui::layout::plate_corner_radius()
+    }
+
+    fn solid_border(&self) -> Option<([f32; 4], f32)> {
+        if let Some(bc) = cce_ui::colors::plate_border_color() {
+            Some((bc, cce_ui::colors::plate_border_thickness()))
+        } else {
+            None
+        }
+    }
+
+    fn hit_test(&self, px: f32, py: f32, ctx: &cce_ui::context::UiContext) -> bool {
+        if ctx.is_coordinate_covered(self as *const Self as *const () as usize, px, py) {
+            return false;
+        }
+        if let Some((cx, cy, r)) = self.curved_circle {
+            let dx = px - cx;
+            let dy = py - cy;
+            return dx * dx + dy * dy <= r * r;
+        }
+        let (x, y, w, h) = self.rect();
+        px >= x && px < x + w && py >= y && py < y + h
+    }
+}
+
 impl Element for NodePalette {
     // Leaf legacy widget: own labels via paint_self (cce-ui's default no longer drains
     // the text getters; the render loop's walk text reads it).
@@ -769,7 +860,6 @@ pub struct State {
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
-    pub root_window: Box<cce_ui::widget::Backplate>,
     pub fs_root: FsNode,
     pub node_templates: Vec<NodeTemplate>,
     pub current_path: Vec<usize>,
@@ -2757,7 +2847,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             Box::new(Splitter::new(SPLITTER_W)),
             Box::new(Viewport3D::new()),
             Box::new(Splitter::new(SPLITTER_W)),
-            Box::new(Plate::new(0.0, 0.0, 0.0, 0.0).with_color(colors::PARAM_BG).with_blur(true)),
+            Box::new(PassivePlate::new(colors::PARAM_BG, true)),
             Box::new(ParametersBg::new()),
             Box::new(Canvas::new()),
             Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0)),
@@ -2785,7 +2875,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         spreadsheet_menubar.set_visible(false);
         widgets.push(Box::new(spreadsheet_menubar));
 
-        let network_panel = Plate::new(0.0, 0.0, 0.0, 0.0).with_color([0.10, 0.10, 0.13, 0.95]);
+        let network_panel = PassivePlate::new([0.10, 0.10, 0.13, 0.95], false);
         widgets.push(Box::new(network_panel));
 
         let mut positions = Vec::with_capacity(widgets.len());
@@ -2861,11 +2951,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             shortcut_manager,
             pending_action: None,
             exit_requested: false,
-            root_window: Box::new(
-                cce_ui::widget::Backplate::new(0.0, 0.0, lw, lh)
-                    .with_background([0.0, 0.0, 0.0, 0.0])
-                    .with_border([0.0, 0.0, 0.0, 0.0], 0.0)
-            ),
             widgets,
             positions,
             splitter_layout,
@@ -3055,7 +3140,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.sync_cursor_and_selection();
         state.sync_parameters_pane();
         for w in &mut state.widgets {
-            state.root_window.add_child(w.as_ptr_mut(), &mut state.ui_context);
+            if let Some(b) = w.base() {
+                let id = b.id();
+                let ptr = w.as_ptr_mut();
+                state.ui_context.register_widget(id, ptr);
+            }
         }
         state
     }
@@ -3090,7 +3179,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if let Some(breadcrumb) = self.widgets[BREADCRUMB_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
             breadcrumb.set_network_opacity(self.network_opacity);
         }
-        if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
+        if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
             plate.set_network_opacity(self.network_opacity);
         }
     }
@@ -3265,7 +3354,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
             self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
             self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-            if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
+            if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
                 plate.set_curved_circle(Some((cx, cy, r)));
             }
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -3469,7 +3558,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
                 self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
                 self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
+                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
                     plate.set_curved_circle(Some((cx, cy, r)));
                 }
                 self.widgets[NETWORK_PANEL_IDX].set_drag_bounds(0.0, 0.0, self.width, self.height);
@@ -3557,7 +3646,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[CONTENT_IDX] = (px, py + mb_h + bc_h, pw, content_h);
                 self.positions[NETWORK_PANEL_IDX] = (px, py, pw, ph);
                 self.widgets[NETWORK_PANEL_IDX].set_rect(px, py, pw, ph);
-                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Plate>() {
+                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
                     plate.set_curved_circle(None);
                 }
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -3894,7 +3983,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.physical_height = height;
             self.width = width as f32 / self.scale as f32;
             self.height = height as f32 / self.scale as f32;
-            self.root_window.set_rect(0.0, 0.0, self.width, self.height);
             self.wgpu_adapter.resize(width, height);
 
             let (tex, view) = self.create_depth_texture();

@@ -101,27 +101,43 @@ impl State {
             (self.has_any_open_menu(i), base_key)
         });
 
+        // Root Backplate DISSOLVED (Phase 6as): it was a transparent draw-order shim —
+        // register the visible widgets (registry consumers: coverage/parent walks) and
+        // draw each top-level widget directly in the sorted order.
         self.ui_context.clear_hierarchy();
-        self.root_window.clear_children(&mut self.ui_context);
+        let widget_ptrs: Vec<*mut (dyn Element + 'static)> = self
+            .widgets
+            .iter()
+            .map(|w| w.as_ptr())
+            .collect();
         for &i in &draw_order {
             if self.widgets[i].visible() {
-                self.root_window.add_child(self.widgets[i].as_ptr_mut(), &mut self.ui_context);
+                if let Some(b) = self.widgets[i].base() {
+                    self.ui_context.register_widget(b.id(), self.widgets[i].as_ptr());
+                }
             }
         }
 
         let mut visited = vec![false; self.widgets.len()];
-        self.draw_element_recursive(
-            self.root_window.as_ref(),
-            verts,
-            sw,
-            sh,
-            [0.0, 0.0, 0.0],
-            show_cursor,
-            node_area_y,
-            &mut visited,
-            clip,
-            clip_circle_val,
-        );
+        for &i in &draw_order {
+            if !self.widgets[i].visible() {
+                continue;
+            }
+            unsafe {
+                self.draw_element_recursive(
+                    &*widget_ptrs[i],
+                    verts,
+                    sw,
+                    sh,
+                    [0.0, 0.0, 0.0],
+                    show_cursor,
+                    node_area_y,
+                    &mut visited,
+                    clip,
+                    clip_circle_val,
+                );
+            }
+        }
     }
 
     pub(crate) fn draw_widget_recursive(
