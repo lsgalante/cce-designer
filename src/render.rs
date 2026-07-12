@@ -2,7 +2,7 @@
 use glyphon::{Buffer, Resolution, TextArea, TextBounds};
 use cce_ui::widget::TextLabel;
 use cce_ui::colors;
-use cce_ui::widget::Element;
+use cce_ui::widget::WidgetHost;
 
 use crate::app::{
     State, FsNode, WIDGET_COUNT,
@@ -105,7 +105,7 @@ impl State {
         // register the visible widgets (registry consumers: coverage/parent walks) and
         // draw each top-level widget directly in the sorted order.
         self.ui_context.clear_hierarchy();
-        let widget_ptrs: Vec<*mut (dyn Element + 'static)> = (0..WIDGET_COUNT)
+        let widget_ptrs: Vec<*mut (dyn WidgetHost + 'static)> = (0..WIDGET_COUNT)
             .map(|i| self.slots.get_dyn(i).as_ptr())
             .collect();
         for &i in &draw_order {
@@ -347,7 +347,7 @@ impl State {
 
     fn draw_element_recursive(
         &self,
-        element: &dyn Element,
+        element: &dyn WidgetHost,
         verts: &mut Vec<Vertex>,
         sw: f32,
         sh: f32,
@@ -465,7 +465,7 @@ impl State {
         let mut current_popovers = Vec::new();
         {
             fn collect_popovers(
-                w: &dyn Element,
+                w: &dyn WidgetHost,
                 popovers: &mut Vec<(f32, f32, f32, f32)>,
                 ctx: &cce_ui::context::UiContext,
             ) {
@@ -634,7 +634,7 @@ impl State {
 
         let mut popovers = Vec::new();
         fn collect_popovers(
-            w: &dyn Element,
+            w: &dyn WidgetHost,
             popovers: &mut Vec<(f32, f32, f32, f32)>,
             ctx: &cce_ui::context::UiContext,
         ) {

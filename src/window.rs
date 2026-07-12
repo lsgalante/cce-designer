@@ -25,7 +25,7 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
-use cce_ui::widget::Element;
+use cce_ui::widget::WidgetHost;
 use crate::shortcut::Action;
 use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
 

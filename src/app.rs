@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
+use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
 use cce_ui::widget::UiContext;
 use crate::viewport_3d::Viewport3D;
 use cce_ui::colors;
@@ -93,7 +93,7 @@ pub const NETWORK_PANEL_IDX: usize = 16;
 pub const WIDGET_COUNT: usize = 17;
 
 /// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
-/// old `Vec<Box<dyn Element>>` erased that and pinned `Element`'s full surface through the
+/// old `Vec<Box<dyn WidgetHost>>` erased that and pinned `WidgetHost`'s full surface through the
 /// broadcast loops. Boxed as a whole so registered widget pointers stay stable while the
 /// containing `State` moves. The `*_IDX` constants keep addressing the same slots through
 /// `get_dyn`/`get_dyn_mut` for the genuinely index-driven paths (draw order, focus cycling,
@@ -119,7 +119,7 @@ pub struct WidgetSlots {
 }
 
 impl WidgetSlots {
-    pub fn get_dyn(&self, idx: usize) -> &(dyn Element + 'static) {
+    pub fn get_dyn(&self, idx: usize) -> &(dyn WidgetHost + 'static) {
         match idx {
             HEADER_IDX => &self.header,
             CONTENT_IDX => &self.content,
@@ -142,7 +142,7 @@ impl WidgetSlots {
         }
     }
 
-    pub fn get_dyn_mut(&mut self, idx: usize) -> &mut (dyn Element + 'static) {
+    pub fn get_dyn_mut(&mut self, idx: usize) -> &mut (dyn WidgetHost + 'static) {
         match idx {
             HEADER_IDX => &mut self.header,
             CONTENT_IDX => &mut self.content,
@@ -166,7 +166,7 @@ impl WidgetSlots {
     }
 
     /// Per-slot dyn view in index order (the serialize path's input).
-    pub fn dyn_refs(&self) -> [&dyn Element; WIDGET_COUNT] {
+    pub fn dyn_refs(&self) -> [&dyn WidgetHost; WIDGET_COUNT] {
         [&self.header, &self.content, &self.splitter1, &self.viewport, &self.splitter2, &self.param_plate, &self.param, &self.canvas, &self.left_menubar, &self.right_menubar, &self.param_menubar, &self.status, &self.breadcrumb, &self.node_palette, &self.spreadsheet, &self.spreadsheet_menubar, &self.network_panel]
     }
 }
@@ -713,7 +713,7 @@ impl cce_ui::widget::Paint for NodePalette {
     fn paint(&self, _rect: cce_ui::scene::layout::Rect, pc: &mut cce_ui::scene::paint::PaintCtx) {
         use cce_ui::scene::layout::Rect;
         // Visibility is model-owned (set through set_palette_state on the downcast model,
-        // not Element::set_visible on the wrapper), so the paint gate lives here.
+        // not WidgetHost::set_visible on the wrapper), so the paint gate lives here.
         if !self.visible {
             return;
         }
@@ -1093,10 +1093,10 @@ impl State {
             .expect("VIEWPORT_IDX must be a Viewport3D")
     }
 
-    pub fn find_widget_index(&self, child_ptr: *mut (dyn Element + 'static)) -> Option<usize> {
+    pub fn find_widget_index(&self, child_ptr: *mut (dyn WidgetHost + 'static)) -> Option<usize> {
         let target_addr = child_ptr as *const ();
         (0..WIDGET_COUNT).position(|i| {
-            let w_ptr = self.slots.get_dyn(i) as *const dyn Element as *const ();
+            let w_ptr = self.slots.get_dyn(i) as *const dyn WidgetHost as *const ();
             w_ptr == target_addr
         })
     }
@@ -1115,7 +1115,7 @@ impl State {
         }
         visited[idx] = true;
         // Concrete roster typing (Phase 6aw): the only menu-capable roster entries are the
-        // Adapted<MenuBar> bars — Element's capability-discovery hooks are gone.
+        // Adapted<MenuBar> bars — WidgetHost's capability-discovery hooks are gone.
         if let Some(mb) = self.menubar_at(idx) {
             if mb.is_menu_open() {
                 return true;
@@ -1149,7 +1149,7 @@ impl State {
 
     // Roster accessors on CONCRETE types (Phase 6aw, controller decision option 2): each
     // index's type is known statically, so the capability traits are reached by downcast +
-    // Deref instead of Element's deleted as_*_controller discovery hooks. Signatures keep
+    // Deref instead of WidgetHost's deleted as_*_controller discovery hooks. Signatures keep
     // returning the narrow trait objects so the ~40 call sites stay unchanged. The dynamic
     // `idx` of menu()/menu_mut() only ever receives the five menubar indexes.
     pub fn menu(&self, idx: usize) -> &dyn cce_ui::widget::MenuController {

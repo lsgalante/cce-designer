@@ -1,7 +1,7 @@
 //! App-owned copy of the dissolved cce-ui `Viewport3D` (Phase 6ay part 2): the designer
 //! is the only consumer — the 3D preview pane of the roster, on the narrow traits
 //! wrapped in `Adapted<Viewport3D>` (Phase 6az). The roster keeps it as
-//! `Box<dyn Element>`; `as_any` downcasts reach this model.
+//! `Box<dyn WidgetHost>`; `as_any` downcasts reach this model.
 
 use cce_ui::colors;
 use cce_ui::widget::*;
