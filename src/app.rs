@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -1035,8 +1035,10 @@ impl State {
             return false;
         }
         visited[idx] = true;
-        if let Some(menu) = self.widgets[idx].as_menu_controller() {
-            if menu.is_menu_open() {
+        // Concrete roster typing (Phase 6aw): the only menu-capable roster entries are the
+        // Adapted<MenuBar> bars — Element's capability-discovery hooks are gone.
+        if let Some(mb) = self.menubar_at(idx) {
+            if mb.is_menu_open() {
                 return true;
             }
         }
@@ -1051,6 +1053,13 @@ impl State {
         false
     }
 
+    /// The menu-capable roster entries are exactly the `Adapted<MenuBar>` bars (Phase 6aw
+    /// concrete typing); `None` for everything else.
+    pub fn menubar_at(&self, idx: usize) -> Option<&MenuBar> {
+        // Adapted::as_any exposes the INNER widget, so the downcast targets MenuBar itself.
+        self.widgets[idx].as_any().downcast_ref::<MenuBar>()
+    }
+
     pub fn palette(&self) -> &NodePalette {
         self.widgets[NODE_PALETTE_IDX].as_any().downcast_ref::<NodePalette>().expect("not a NodePalette")
     }
@@ -1059,48 +1068,41 @@ impl State {
         self.widgets[NODE_PALETTE_IDX].as_any_mut().downcast_mut::<NodePalette>().expect("not a NodePalette")
     }
 
+    // Roster accessors on CONCRETE types (Phase 6aw, controller decision option 2): each
+    // index's type is known statically, so the capability traits are reached by downcast +
+    // Deref instead of Element's deleted as_*_controller discovery hooks. Signatures keep
+    // returning the narrow trait objects so the ~40 call sites stay unchanged. The dynamic
+    // `idx` of menu()/menu_mut() only ever receives the five menubar indexes.
     pub fn menu(&self, idx: usize) -> &dyn cce_ui::widget::MenuController {
-        self.widgets[idx].as_menu_controller().expect("not a MenuController")
+        self.widgets[idx].as_any().downcast_ref::<MenuBar>().expect("not a MenuBar")
     }
 
     pub fn menu_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::MenuController {
-        self.widgets[idx].as_menu_controller_mut().expect("not a MenuController")
+        self.widgets[idx].as_any_mut().downcast_mut::<MenuBar>().expect("not a MenuBar")
     }
 
     pub fn graph(&self) -> &dyn cce_ui::widget::GraphController {
-        self.widgets[CONTENT_IDX].as_graph_controller().expect("not a GraphController")
+        self.widgets[CONTENT_IDX].as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph")
     }
 
     pub fn graph_mut(&mut self) -> &mut dyn cce_ui::widget::GraphController {
-        self.widgets[CONTENT_IDX].as_graph_controller_mut().expect("not a GraphController")
-    }
-
-    pub fn page_selector(&self, idx: usize) -> &dyn cce_ui::widget::PageSelector {
-        self.widgets[idx].as_page_selector().expect("not a PageSelector")
-    }
-
-    pub fn page_selector_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::PageSelector {
-        self.widgets[idx].as_page_selector_mut().expect("not a PageSelector")
+        self.widgets[CONTENT_IDX].as_any_mut().downcast_mut::<Graph>().expect("CONTENT_IDX must be a Graph")
     }
 
     pub fn param(&self) -> &dyn cce_ui::widget::ParamController {
-        self.widgets[PARAM_IDX].as_param_controller().expect("not a ParamController")
+        self.widgets[PARAM_IDX].as_any().downcast_ref::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
     pub fn param_mut(&mut self) -> &mut dyn cce_ui::widget::ParamController {
-        self.widgets[PARAM_IDX].as_param_controller_mut().expect("not a ParamController")
+        self.widgets[PARAM_IDX].as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
     pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController {
-        self.widgets[SPREADSHEET_IDX].as_spreadsheet_controller_mut().expect("not a SpreadsheetController")
+        self.widgets[SPREADSHEET_IDX].as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
     }
 
     pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController {
-        self.widgets[BREADCRUMB_IDX].as_path_controller_mut().expect("not a PathController")
-    }
-
-    pub fn geom_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::GeomController {
-        self.widgets[idx].as_geom_controller_mut().expect("not a GeomController")
+        self.widgets[BREADCRUMB_IDX].as_any_mut().downcast_mut::<Breadcrumb>().expect("BREADCRUMB_IDX must be a Breadcrumb")
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -4100,7 +4102,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             if i == CONTENT_IDX {
                                 let active_node_area_y = self.positions[CONTENT_IDX].1;
                                 let active_node_area_x = self.positions[CONTENT_IDX].0;
-                                let (gx, gy) = w.as_graph_controller().expect("not a GraphController").grid_origin();
+                                let (gx, gy) = cce_ui::widget::GraphController::grid_origin(
+                                    w.as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph"),
+                                );
                                 let prev_pan_x = self.pan_x;
                                 let prev_pan_y = self.pan_y;
                                 self.pan_x = gx - active_node_area_x;
@@ -4434,7 +4438,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     ElementState::Pressed => {
                         let hits_any_menu = (0..self.widgets.len()).any(|i| {
                             hits_widget(self, i, self.cursor_x, self.cursor_y)
-                                && self.widgets[i].as_menu_controller().and_then(|m| m.get_menu_items_at(self.cursor_x, self.cursor_y)).is_some()
+                                && self.menubar_at(i).and_then(|m| m.get_menu_items_at(self.cursor_x, self.cursor_y)).is_some()
                         });
 
                         if !hits_any_menu {
@@ -4602,7 +4606,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                         let mut click_target = None;
                         for i in 0..self.widgets.len() {
-                            if self.widgets[i].as_menu_controller().map(|m| m.is_menu_open()).unwrap_or(false)
+                            if self.menubar_at(i).map(|m| m.is_menu_open()).unwrap_or(false)
                                 && hits_widget(self, i, self.cursor_x, self.cursor_y)
                             {
                                 click_target = Some(i);
@@ -4712,7 +4716,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             if i != PARAM_IDX {
                                 self.widgets[i].focus();
                                 self.focused_widget = Some(i);
-                                if self.widgets[i].as_menu_controller().map(|m| m.is_menu_bar()).unwrap_or(false)
+                                if self.menubar_at(i).map(|m| m.is_menu_bar()).unwrap_or(false)
                                     && !self.widgets[i].focused(&self.ui_context)
                                 {
                                     self.widgets[i].unfocus();
