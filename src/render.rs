@@ -111,9 +111,7 @@ impl State {
         for &i in &draw_order {
             let w = self.slots.get_dyn(i);
             if w.visible() {
-                if let Some(b) = w.base() {
-                    self.ui_context.register_widget(b.id(), w.as_ptr());
-                }
+                self.ui_context.register_widget(w.base().id(), w.as_ptr());
             }
         }
 

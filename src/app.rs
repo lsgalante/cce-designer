@@ -3221,11 +3221,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.sync_parameters_pane();
         for i in 0..WIDGET_COUNT {
             let w = state.slots.get_dyn_mut(i);
-            if let Some(b) = w.base() {
-                let id = b.id();
-                let ptr = w.as_ptr_mut();
-                state.ui_context.register_widget(id, ptr);
-            }
+            let id = w.base().id();
+            let ptr = w.as_ptr_mut();
+            state.ui_context.register_widget(id, ptr);
         }
         state
     }
