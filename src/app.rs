@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, List, Label, Dropdown};
+use cce_ui::widget::{Breadcrumb, Canvas, MenuBar, Plate, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Viewport3D, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
 use cce_ui::colors;
 use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
 use glam::{Mat4, Vec3};
@@ -884,8 +884,6 @@ pub struct State {
     pub loaded_project_path: Option<std::path::PathBuf>,
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
-    pub recent_files_list: List,
-    pub recent_files_buttons: Vec<cce_ui::widget::Adapted<cce_ui::widget::Button>>,
     pub text_buffer_cache: std::collections::HashMap<(String, u32, Option<String>), Buffer>,
     pub viewport_dirty: bool,
     pub text_dirty: bool,
@@ -2793,15 +2791,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let mut positions = Vec::with_capacity(widgets.len());
         positions.resize_with(widgets.len(), || (0.0, 0.0, 0.0, 0.0));
 
-        let recent_files_list = List::new(22.0, 2.0);
-        let mut recent_files_buttons = Vec::new();
-        for file in &recent_files {
-            let label = file.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| file.to_string_lossy().to_string());
-            let btn = Button::new_list_row(0.0, 0.0, 0.0, 0.0).with_label(&label);
-            recent_files_buttons.push(btn);
-        }
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"),
@@ -2996,8 +2985,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             loaded_project_path: None,
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
             recent_files,
-            recent_files_list,
-            recent_files_buttons,
             text_buffer_cache: std::collections::HashMap::new(),
             viewport_dirty: true,
             text_dirty: true,

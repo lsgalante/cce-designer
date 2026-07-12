@@ -60,20 +60,9 @@ impl State {
         self.recent_files.insert(0, abs_path);
         self.recent_files.truncate(10);
         Self::save_recent_files(&self.recent_files);
-        self.rebuild_recent_buttons();
         self.ensure_menubar_subnets();
     }
 
-    pub(crate) fn rebuild_recent_buttons(&mut self) {
-        self.recent_files_buttons.clear();
-        for file in &self.recent_files {
-            let label = file.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| file.to_string_lossy().to_string());
-            let btn = Button::new_list_row(0.0, 0.0, 0.0, 0.0).with_label(&label);
-            self.recent_files_buttons.push(btn);
-        }
-    }
 
 
     pub(crate) fn save_to_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {

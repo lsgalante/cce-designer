@@ -808,22 +808,6 @@ impl AppState {
                 changed = true;
             }
 
-            // Check recent files buttons clicks
-            let mut clicked_file = None;
-            for (i, btn) in state.recent_files_buttons.iter_mut().enumerate() {
-                if btn.take_click() {
-                    clicked_file = Some(state.recent_files[i].clone());
-                }
-            }
-            if let Some(path) = clicked_file {
-                if let Err(e) = state.load_from_file(&path) {
-                    eprintln!("Failed to load recent project: {:?}", e);
-                    state.update_status_text(&format!("Failed to load: {:?}", e));
-                } else {
-                    state.update_status_text(&format!("Loaded project from {}", path.display()));
-                }
-                changed = true;
-            }
 
             // Check context switcher dropdown changes
             for &widget_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
