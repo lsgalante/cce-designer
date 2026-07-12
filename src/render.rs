@@ -5,7 +5,7 @@ use cce_ui::colors;
 use cce_ui::widget::Element;
 
 use crate::app::{
-    State, FsNode,
+    State, FsNode, WIDGET_COUNT,
     make_text_buffer, make_text_buffer_with_font,
     CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX, PARAM_PLATE_IDX,
     BREADCRUMB_IDX, STATUS_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
@@ -82,7 +82,7 @@ impl State {
             [0.0, 0.0, 0.0]
         };
 
-        let mut draw_order: Vec<usize> = (0..self.widgets.len()).collect();
+        let mut draw_order: Vec<usize> = (0..WIDGET_COUNT).collect();
         draw_order.sort_by_key(|&i| {
             let base_key = if i == VIEWPORT_IDX || i == PARAM_PLATE_IDX || i == NETWORK_PANEL_IDX {
                 -5
@@ -96,7 +96,7 @@ impl State {
             {
                 -3
             } else {
-                self.widgets[i].z_index()
+                self.slots.get_dyn_mut(i).z_index()
             };
             (self.has_any_open_menu(i), base_key)
         });
@@ -105,22 +105,21 @@ impl State {
         // register the visible widgets (registry consumers: coverage/parent walks) and
         // draw each top-level widget directly in the sorted order.
         self.ui_context.clear_hierarchy();
-        let widget_ptrs: Vec<*mut (dyn Element + 'static)> = self
-            .widgets
-            .iter()
-            .map(|w| w.as_ptr())
+        let widget_ptrs: Vec<*mut (dyn Element + 'static)> = (0..WIDGET_COUNT)
+            .map(|i| self.slots.get_dyn(i).as_ptr())
             .collect();
         for &i in &draw_order {
-            if self.widgets[i].visible() {
-                if let Some(b) = self.widgets[i].base() {
-                    self.ui_context.register_widget(b.id(), self.widgets[i].as_ptr());
+            let w = self.slots.get_dyn(i);
+            if w.visible() {
+                if let Some(b) = w.base() {
+                    self.ui_context.register_widget(b.id(), w.as_ptr());
                 }
             }
         }
 
-        let mut visited = vec![false; self.widgets.len()];
+        let mut visited = vec![false; WIDGET_COUNT];
         for &i in &draw_order {
-            if !self.widgets[i].visible() {
+            if !self.slots.get_dyn_mut(i).visible() {
                 continue;
             }
             unsafe {
@@ -160,7 +159,7 @@ impl State {
         }
         visited[idx] = true;
 
-        let w = &self.widgets[idx];
+        let w = self.slots.get_dyn(idx);
         if !w.visible() {
             return;
         }
@@ -194,15 +193,15 @@ impl State {
                     verts,
                 );
             } else {
-                push_widget_vertices(w.as_ref(), sw, sh, active_clip_circle, verts);
+                push_widget_vertices(w, sw, sh, active_clip_circle, verts);
             }
         } else if idx == CONTENT_IDX {
             if !self.circular_network_pane {
-                push_widget_vertices(w.as_ref(), sw, sh, active_clip_circle, verts);
+                push_widget_vertices(w, sw, sh, active_clip_circle, verts);
             }
 
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                push_extra_quad_vertices_clipped(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle, verts);
+                push_extra_quad_vertices_clipped(w, qx, qy, qw, qh, sw, sh, qc, clip, active_clip_circle, verts);
             }
 
             for (cx, cy, cr, cc) in w.extra_circles() {
@@ -234,10 +233,10 @@ impl State {
                         verts,
                     );
                 } else {
-                    push_extra_quad_vertices_clipped(w.as_ref(), cx, cy, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
-                    push_extra_quad_vertices_clipped(w.as_ref(), cx, cy + ch - thickness, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
-                    push_extra_quad_vertices_clipped(w.as_ref(), cx, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
-                    push_extra_quad_vertices_clipped(w.as_ref(), cx + cw - thickness, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
+                    push_extra_quad_vertices_clipped(w, cx, cy, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
+                    push_extra_quad_vertices_clipped(w, cx, cy + ch - thickness, cw, thickness, sw, sh, color, clip, active_clip_circle, verts);
+                    push_extra_quad_vertices_clipped(w, cx, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
+                    push_extra_quad_vertices_clipped(w, cx + cw - thickness, cy + thickness, thickness, ch - thickness * 2.0, sw, sh, color, clip, active_clip_circle, verts);
                 }
             }
         } else if idx == LEFT_MENUBAR_IDX && self.circular_network_pane {
@@ -272,7 +271,7 @@ impl State {
             );
             
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                push_extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
+                push_extra_quad_vertices(w, qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
             }
             for (cx, cy, cr, cc) in w.extra_circles() {
                 push_circle_vertices(cx, cy, cr, sw, sh, cc, 16, active_clip_circle, verts);
@@ -290,10 +289,10 @@ impl State {
                 );
             }
         } else {
-            push_widget_vertices(w.as_ref(), sw, sh, active_clip_circle, verts);
+            push_widget_vertices(w, sw, sh, active_clip_circle, verts);
 
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                push_extra_quad_vertices(w.as_ref(), qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
+                push_extra_quad_vertices(w, qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
             }
             for (cx, cy, cr, cc) in w.extra_circles() {
                 push_circle_vertices(cx, cy, cr, sw, sh, cc, 16, active_clip_circle, verts);
@@ -459,7 +458,7 @@ impl State {
     pub(crate) fn update_status_text(&mut self, text: &str) {
         if self.last_status_text != text {
             self.last_status_text = text.to_string();
-            self.widgets[STATUS_IDX].set_text(text);
+            self.slots.status.set_text(text);
             self.text_dirty = true;
         }
     }
@@ -484,9 +483,10 @@ impl State {
                 }
             }
 
-            for w in &self.widgets {
+            for i in 0..WIDGET_COUNT {
+                let w = self.slots.get_dyn(i);
                 if w.visible() {
-                    collect_popovers(w.as_ref(), &mut current_popovers, &self.ui_context);
+                    collect_popovers(w, &mut current_popovers, &self.ui_context);
                 }
             }
         }
@@ -502,10 +502,10 @@ impl State {
         self.text_dirty = false;
 
         // 1. Prepare text on all widgets using self.wgpu_adapter.font_system
-        for (i, w) in self.widgets.iter_mut().enumerate() {
+        for i in 0..WIDGET_COUNT {
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
             if !is_menubar {
-                w.prepare_text(&mut self.wgpu_adapter.font_system);
+                self.slots.get_dyn_mut(i).prepare_text(&mut self.wgpu_adapter.font_system);
             }
         }
 
@@ -520,7 +520,7 @@ impl State {
         let Self {
             ref mut wgpu_adapter,
             physical_width, physical_height, scale,
-            ref widgets,
+            ref slots,
             ref curved_text_texture,
             ref mut curved_text_atlas,
             ref mut curved_text_renderer,
@@ -554,15 +554,16 @@ impl State {
         // get_text_items / text_labels_with_font_and_bounds getters. Shaping stays
         // app-side in text_buffer_cache (same size*1.4 metrics as before).
         let mut widget_text: Vec<Vec<(String, f32, f32, f32, [u8; 3], Option<String>, Option<[f32; 4]>)>> =
-            Vec::with_capacity(widgets.len());
-        for (i, w) in widgets.iter().enumerate() {
+            Vec::with_capacity(WIDGET_COUNT);
+        for i in 0..WIDGET_COUNT {
+            let w = slots.get_dyn(i);
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
             if !w.visible() || is_menubar {
                 widget_text.push(Vec::new());
                 continue;
             }
             let mut scratch = cce_ui::scene::paint::PaintCtx::new();
-            cce_ui::scene::painter::append_widget_text(ui_context, w.as_ref(), &mut scratch);
+            cce_ui::scene::painter::append_widget_text(ui_context, w, &mut scratch);
             widget_text.push(
                 scratch
                     .finish()
@@ -607,7 +608,8 @@ impl State {
         }
 
         // Pass 1b: Populate text_buffer_cache with popover texts
-        for (i, w) in widgets.iter().enumerate() {
+        for i in 0..WIDGET_COUNT {
+            let w = slots.get_dyn(i);
             if !w.visible() {
                 continue;
             }
@@ -650,9 +652,10 @@ impl State {
             }
         }
 
-        for w in widgets {
+        for i in 0..WIDGET_COUNT {
+            let w = slots.get_dyn(i);
             if w.visible() {
-                collect_popovers(w.as_ref(), &mut popovers, ui_context);
+                collect_popovers(w, &mut popovers, ui_context);
             }
         }
 
@@ -666,7 +669,8 @@ impl State {
 
         let mut curved_labels = Vec::new();
 
-        for (i, w) in widgets.iter().enumerate() {
+        for i in 0..WIDGET_COUNT {
+            let w = slots.get_dyn(i);
             if !w.visible() {
                 continue;
             }
@@ -768,7 +772,8 @@ impl State {
         }
 
         // Add popover text areas
-        for (i, w) in widgets.iter().enumerate() {
+        for i in 0..WIDGET_COUNT {
+            let w = slots.get_dyn(i);
             if !w.visible() {
                 continue;
             }

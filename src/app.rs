@@ -35,7 +35,7 @@ use wayland_client::{
 };
 
 use wgpu::util::DeviceExt;
-use cce_ui::widget::{Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
+use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, Element, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
 use cce_ui::widget::UiContext;
 use crate::viewport_3d::Viewport3D;
 use cce_ui::colors;
@@ -89,6 +89,87 @@ pub const NODE_PALETTE_IDX: usize = 13;
 pub const SPREADSHEET_IDX: usize = 14;
 pub const SPREADSHEET_MENUBAR_IDX: usize = 15;
 pub const NETWORK_PANEL_IDX: usize = 16;
+
+pub const WIDGET_COUNT: usize = 17;
+
+/// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
+/// old `Vec<Box<dyn Element>>` erased that and pinned `Element`'s full surface through the
+/// broadcast loops. Boxed as a whole so registered widget pointers stay stable while the
+/// containing `State` moves. The `*_IDX` constants keep addressing the same slots through
+/// `get_dyn`/`get_dyn_mut` for the genuinely index-driven paths (draw order, focus cycling,
+/// broadcast loops); everything else reaches the concrete field.
+pub struct WidgetSlots {
+    pub header: Adapted<MenuBar>,
+    pub content: Adapted<Graph>,
+    pub splitter1: Adapted<Splitter>,
+    pub viewport: Adapted<Viewport3D>,
+    pub splitter2: Adapted<Splitter>,
+    pub param_plate: Adapted<PassivePlate>,
+    pub param: Adapted<ParametersBg>,
+    pub canvas: Adapted<Canvas>,
+    pub left_menubar: Adapted<MenuBar>,
+    pub right_menubar: Adapted<MenuBar>,
+    pub param_menubar: Adapted<MenuBar>,
+    pub status: Adapted<StatusBar>,
+    pub breadcrumb: Adapted<Breadcrumb>,
+    pub node_palette: Adapted<NodePalette>,
+    pub spreadsheet: Adapted<Spreadsheet>,
+    pub spreadsheet_menubar: Adapted<MenuBar>,
+    pub network_panel: Adapted<PassivePlate>,
+}
+
+impl WidgetSlots {
+    pub fn get_dyn(&self, idx: usize) -> &(dyn Element + 'static) {
+        match idx {
+            HEADER_IDX => &self.header,
+            CONTENT_IDX => &self.content,
+            SPLITTER1_IDX => &self.splitter1,
+            VIEWPORT_IDX => &self.viewport,
+            SPLITTER2_IDX => &self.splitter2,
+            PARAM_PLATE_IDX => &self.param_plate,
+            PARAM_IDX => &self.param,
+            CANVAS_IDX => &self.canvas,
+            LEFT_MENUBAR_IDX => &self.left_menubar,
+            RIGHT_MENUBAR_IDX => &self.right_menubar,
+            PARAM_MENUBAR_IDX => &self.param_menubar,
+            STATUS_IDX => &self.status,
+            BREADCRUMB_IDX => &self.breadcrumb,
+            NODE_PALETTE_IDX => &self.node_palette,
+            SPREADSHEET_IDX => &self.spreadsheet,
+            SPREADSHEET_MENUBAR_IDX => &self.spreadsheet_menubar,
+            NETWORK_PANEL_IDX => &self.network_panel,
+            _ => panic!("widget slot index out of range: {idx}"),
+        }
+    }
+
+    pub fn get_dyn_mut(&mut self, idx: usize) -> &mut (dyn Element + 'static) {
+        match idx {
+            HEADER_IDX => &mut self.header,
+            CONTENT_IDX => &mut self.content,
+            SPLITTER1_IDX => &mut self.splitter1,
+            VIEWPORT_IDX => &mut self.viewport,
+            SPLITTER2_IDX => &mut self.splitter2,
+            PARAM_PLATE_IDX => &mut self.param_plate,
+            PARAM_IDX => &mut self.param,
+            CANVAS_IDX => &mut self.canvas,
+            LEFT_MENUBAR_IDX => &mut self.left_menubar,
+            RIGHT_MENUBAR_IDX => &mut self.right_menubar,
+            PARAM_MENUBAR_IDX => &mut self.param_menubar,
+            STATUS_IDX => &mut self.status,
+            BREADCRUMB_IDX => &mut self.breadcrumb,
+            NODE_PALETTE_IDX => &mut self.node_palette,
+            SPREADSHEET_IDX => &mut self.spreadsheet,
+            SPREADSHEET_MENUBAR_IDX => &mut self.spreadsheet_menubar,
+            NETWORK_PANEL_IDX => &mut self.network_panel,
+            _ => panic!("widget slot index out of range: {idx}"),
+        }
+    }
+
+    /// Per-slot dyn view in index order (the serialize path's input).
+    pub fn dyn_refs(&self) -> [&dyn Element; WIDGET_COUNT] {
+        [&self.header, &self.content, &self.splitter1, &self.viewport, &self.splitter2, &self.param_plate, &self.param, &self.canvas, &self.left_menubar, &self.right_menubar, &self.param_menubar, &self.status, &self.breadcrumb, &self.node_palette, &self.spreadsheet, &self.spreadsheet_menubar, &self.network_panel]
+    }
+}
 
 
 
@@ -869,7 +950,7 @@ pub struct State {
     pub pending_action: Option<Action>,
     pub exit_requested: bool,
 
-    pub widgets: Vec<Box<dyn Element>>,
+    pub slots: Box<WidgetSlots>,
     pub positions: Vec<(f32, f32, f32, f32)>,
     pub splitter_layout: cce_ui::layout::SplitterLayout,
     pub node_palette_visible: bool,
@@ -999,14 +1080,14 @@ pub struct State {
 
 impl State {
     pub fn viewport(&self) -> &Viewport3D {
-        self.widgets[VIEWPORT_IDX]
+        self.slots.viewport
             .as_any()
             .downcast_ref::<Viewport3D>()
             .expect("VIEWPORT_IDX must be a Viewport3D")
     }
 
     pub fn viewport_mut(&mut self) -> &mut Viewport3D {
-        self.widgets[VIEWPORT_IDX]
+        self.slots.viewport
             .as_any_mut()
             .downcast_mut::<Viewport3D>()
             .expect("VIEWPORT_IDX must be a Viewport3D")
@@ -1014,19 +1095,19 @@ impl State {
 
     pub fn find_widget_index(&self, child_ptr: *mut (dyn Element + 'static)) -> Option<usize> {
         let target_addr = child_ptr as *const ();
-        self.widgets.iter().position(|w| {
-            let w_ptr = w.as_ref() as *const dyn Element as *const ();
+        (0..WIDGET_COUNT).position(|i| {
+            let w_ptr = self.slots.get_dyn(i) as *const dyn Element as *const ();
             w_ptr == target_addr
         })
     }
 
     pub fn has_any_open_menu(&self, idx: usize) -> bool {
-        let mut visited = vec![false; self.widgets.len()];
+        let mut visited = vec![false; WIDGET_COUNT];
         self.has_any_open_menu_impl(idx, &mut visited)
     }
 
     pub fn has_any_open_menu_impl(&self, idx: usize, visited: &mut [bool]) -> bool {
-        if idx >= self.widgets.len() {
+        if idx >= WIDGET_COUNT {
             return false;
         }
         if visited[idx] {
@@ -1040,7 +1121,7 @@ impl State {
                 return true;
             }
         }
-        let child_ptrs = self.widgets[idx].children(&self.ui_context);
+        let child_ptrs = self.slots.get_dyn(idx).children(&self.ui_context);
         for child_ptr in child_ptrs {
             if let Some(child_idx) = self.find_widget_index(child_ptr) {
                 if self.has_any_open_menu_impl(child_idx, visited) {
@@ -1055,15 +1136,15 @@ impl State {
     /// concrete typing); `None` for everything else.
     pub fn menubar_at(&self, idx: usize) -> Option<&MenuBar> {
         // Adapted::as_any exposes the INNER widget, so the downcast targets MenuBar itself.
-        self.widgets[idx].as_any().downcast_ref::<MenuBar>()
+        self.slots.get_dyn(idx).as_any().downcast_ref::<MenuBar>()
     }
 
     pub fn palette(&self) -> &NodePalette {
-        self.widgets[NODE_PALETTE_IDX].as_any().downcast_ref::<NodePalette>().expect("not a NodePalette")
+        self.slots.node_palette.as_any().downcast_ref::<NodePalette>().expect("not a NodePalette")
     }
 
     pub fn palette_mut(&mut self) -> &mut NodePalette {
-        self.widgets[NODE_PALETTE_IDX].as_any_mut().downcast_mut::<NodePalette>().expect("not a NodePalette")
+        self.slots.node_palette.as_any_mut().downcast_mut::<NodePalette>().expect("not a NodePalette")
     }
 
     // Roster accessors on CONCRETE types (Phase 6aw, controller decision option 2): each
@@ -1072,35 +1153,35 @@ impl State {
     // returning the narrow trait objects so the ~40 call sites stay unchanged. The dynamic
     // `idx` of menu()/menu_mut() only ever receives the five menubar indexes.
     pub fn menu(&self, idx: usize) -> &dyn cce_ui::widget::MenuController {
-        self.widgets[idx].as_any().downcast_ref::<MenuBar>().expect("not a MenuBar")
+        self.slots.get_dyn(idx).as_any().downcast_ref::<MenuBar>().expect("not a MenuBar")
     }
 
     pub fn menu_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::MenuController {
-        self.widgets[idx].as_any_mut().downcast_mut::<MenuBar>().expect("not a MenuBar")
+        self.slots.get_dyn_mut(idx).as_any_mut().downcast_mut::<MenuBar>().expect("not a MenuBar")
     }
 
     pub fn graph(&self) -> &dyn cce_ui::widget::GraphController {
-        self.widgets[CONTENT_IDX].as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph")
+        self.slots.content.as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph")
     }
 
     pub fn graph_mut(&mut self) -> &mut dyn cce_ui::widget::GraphController {
-        self.widgets[CONTENT_IDX].as_any_mut().downcast_mut::<Graph>().expect("CONTENT_IDX must be a Graph")
+        self.slots.content.as_any_mut().downcast_mut::<Graph>().expect("CONTENT_IDX must be a Graph")
     }
 
     pub fn param(&self) -> &dyn cce_ui::widget::ParamController {
-        self.widgets[PARAM_IDX].as_any().downcast_ref::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
+        self.slots.param.as_any().downcast_ref::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
     pub fn param_mut(&mut self) -> &mut dyn cce_ui::widget::ParamController {
-        self.widgets[PARAM_IDX].as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
+        self.slots.param.as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
     pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController {
-        self.widgets[SPREADSHEET_IDX].as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
+        self.slots.spreadsheet.as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
     }
 
     pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController {
-        self.widgets[BREADCRUMB_IDX].as_any_mut().downcast_mut::<Breadcrumb>().expect("BREADCRUMB_IDX must be a Breadcrumb")
+        self.slots.breadcrumb.as_any_mut().downcast_mut::<Breadcrumb>().expect("BREADCRUMB_IDX must be a Breadcrumb")
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -1431,9 +1512,9 @@ impl State {
                                 }
                                 "Show Network Pane" => {
                                     self.show_network = !self.show_network;
-                                    self.widgets[CONTENT_IDX].set_visible(self.show_network);
-                                    self.widgets[LEFT_MENUBAR_IDX].set_visible(self.show_network);
-                                    self.widgets[BREADCRUMB_IDX].set_visible(self.show_network);
+                                    self.slots.content.set_visible(self.show_network);
+                                    self.slots.left_menubar.set_visible(self.show_network);
+                                    self.slots.breadcrumb.set_visible(self.show_network);
                                     let val = self.show_network;
                                     self.menu_mut(HEADER_IDX).set_item_checked(2, 4, val);
                                     if !self.show_network && self.focused_pane == LEFT_MENUBAR_IDX {
@@ -1452,8 +1533,8 @@ impl State {
                                 }
                                 "Show Viewport Pane" => {
                                     self.show_viewport = !self.show_viewport;
-                                    self.widgets[VIEWPORT_IDX].set_visible(self.show_viewport);
-                                    self.widgets[RIGHT_MENUBAR_IDX].set_visible(self.show_viewport);
+                                    self.slots.viewport.set_visible(self.show_viewport);
+                                    self.slots.right_menubar.set_visible(self.show_viewport);
                                     let val = self.show_viewport;
                                     self.menu_mut(HEADER_IDX).set_item_checked(2, 5, val);
                                     if !self.show_viewport && self.focused_pane == RIGHT_MENUBAR_IDX {
@@ -1472,8 +1553,8 @@ impl State {
                                 }
                                 "Show Parameters Pane" => {
                                     self.show_parameters = !self.show_parameters;
-                                    self.widgets[PARAM_IDX].set_visible(self.show_parameters);
-                                    self.widgets[PARAM_MENUBAR_IDX].set_visible(self.show_parameters);
+                                    self.slots.param.set_visible(self.show_parameters);
+                                    self.slots.param_menubar.set_visible(self.show_parameters);
                                     let val = self.show_parameters;
                                     self.menu_mut(HEADER_IDX).set_item_checked(2, 6, val);
                                     if !self.show_parameters && self.focused_pane == PARAM_MENUBAR_IDX {
@@ -1492,8 +1573,8 @@ impl State {
                                 }
                                 "Show Spreadsheet Pane" => {
                                     self.show_spreadsheet = !self.show_spreadsheet;
-                                    self.widgets[SPREADSHEET_IDX].set_visible(self.show_spreadsheet);
-                                    self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(self.show_spreadsheet);
+                                    self.slots.spreadsheet.set_visible(self.show_spreadsheet);
+                                    self.slots.spreadsheet_menubar.set_visible(self.show_spreadsheet);
                                     let val = self.show_spreadsheet;
                                     self.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
                                     if !self.show_spreadsheet && self.focused_pane == SPREADSHEET_MENUBAR_IDX {
@@ -1521,9 +1602,9 @@ impl State {
                                     match parent_name {
                                         "Network" => {
                                             self.show_network = false;
-                                            self.widgets[CONTENT_IDX].set_visible(false);
-                                            self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
-                                            self.widgets[BREADCRUMB_IDX].set_visible(false);
+                                            self.slots.content.set_visible(false);
+                                            self.slots.left_menubar.set_visible(false);
+                                            self.slots.breadcrumb.set_visible(false);
                                             self.menu_mut(HEADER_IDX).set_item_checked(2, 4, false);
                                             if self.focused_pane == LEFT_MENUBAR_IDX {
                                                 self.focused_pane = get_next_visible_pane(
@@ -1541,8 +1622,8 @@ impl State {
                                         }
                                         "Viewport" => {
                                             self.show_viewport = false;
-                                            self.widgets[VIEWPORT_IDX].set_visible(false);
-                                            self.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
+                                            self.slots.viewport.set_visible(false);
+                                            self.slots.right_menubar.set_visible(false);
                                             self.menu_mut(HEADER_IDX).set_item_checked(2, 5, false);
                                             if self.focused_pane == RIGHT_MENUBAR_IDX {
                                                 self.focused_pane = get_next_visible_pane(
@@ -1560,8 +1641,8 @@ impl State {
                                         }
                                         "Parameters" => {
                                             self.show_parameters = false;
-                                            self.widgets[PARAM_IDX].set_visible(false);
-                                            self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
+                                            self.slots.param.set_visible(false);
+                                            self.slots.param_menubar.set_visible(false);
                                             self.menu_mut(HEADER_IDX).set_item_checked(2, 6, false);
                                             if self.focused_pane == PARAM_MENUBAR_IDX {
                                                 self.focused_pane = get_next_visible_pane(
@@ -1579,8 +1660,8 @@ impl State {
                                         }
                                         "Spreadsheet" => {
                                             self.show_spreadsheet = false;
-                                            self.widgets[SPREADSHEET_IDX].set_visible(false);
-                                            self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+                                            self.slots.spreadsheet.set_visible(false);
+                                            self.slots.spreadsheet_menubar.set_visible(false);
                                             self.menu_mut(HEADER_IDX).set_item_checked(2, 7, false);
                                             if self.focused_pane == SPREADSHEET_MENUBAR_IDX {
                                                 self.focused_pane = get_next_visible_pane(
@@ -2841,25 +2922,31 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             "3: Spreadsheet".to_string(),
             "Main Menu".to_string(),
         ];
-        let mut widgets: Vec<Box<dyn Element>> = vec![
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
-            Box::new(Graph::new()),
-            Box::new(Splitter::new(SPLITTER_W)),
-            Box::new(Viewport3D::new()),
-            Box::new(Splitter::new(SPLITTER_W)),
-            Box::new(PassivePlate::new(colors::PARAM_BG, true)),
-            Box::new(ParametersBg::new()),
-            Box::new(Canvas::new()),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0)),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1)),
-            Box::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2)),
-            Box::new(StatusBar::new().with_text("Ready")),
-            Box::new(Breadcrumb::new()),
-            Box::new(NodePalette::new()),
-            Box::new(Spreadsheet::new()),
-        ];
-        
-        if let Some(viewport) = widgets[VIEWPORT_IDX].as_any_mut().downcast_mut::<Viewport3D>() {
+        let mut slots = Box::new(WidgetSlots {
+            header: MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4),
+            content: Graph::new(),
+            splitter1: Splitter::new(SPLITTER_W),
+            viewport: Viewport3D::new(),
+            splitter2: Splitter::new(SPLITTER_W),
+            param_plate: PassivePlate::new(colors::PARAM_BG, true),
+            param: ParametersBg::new(),
+            canvas: Canvas::new(),
+            left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
+            right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
+            param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
+            status: StatusBar::new().with_text("Ready"),
+            breadcrumb: Breadcrumb::new(),
+            node_palette: NodePalette::new(),
+            spreadsheet: Spreadsheet::new(),
+            spreadsheet_menubar: {
+                let mut mb = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 3);
+                mb.set_visible(false);
+                mb
+            },
+            network_panel: PassivePlate::new([0.10, 0.10, 0.13, 0.95], false),
+        });
+
+        if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
             viewport.show_grid = settings.viewport.show_grid_enabled;
             viewport.show_cube = settings.viewport.show_cube_enabled;
             viewport.show_origin = settings.viewport.show_origin_enabled;
@@ -2868,18 +2955,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             viewport.grid_color = settings.viewport.grid_color;
             viewport.active_camera = active_camera.clone();
         }
-        
+
         let recent_files = Self::load_recent_files();
 
-        let mut spreadsheet_menubar = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 3);
-        spreadsheet_menubar.set_visible(false);
-        widgets.push(Box::new(spreadsheet_menubar));
-
-        let network_panel = PassivePlate::new([0.10, 0.10, 0.13, 0.95], false);
-        widgets.push(Box::new(network_panel));
-
-        let mut positions = Vec::with_capacity(widgets.len());
-        positions.resize_with(widgets.len(), || (0.0, 0.0, 0.0, 0.0));
+        let mut positions = Vec::with_capacity(WIDGET_COUNT);
+        positions.resize_with(WIDGET_COUNT, || (0.0, 0.0, 0.0, 0.0));
 
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -2951,7 +3031,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             shortcut_manager,
             pending_action: None,
             exit_requested: false,
-            widgets,
+            slots,
             positions,
             splitter_layout,
             node_palette_visible: false,
@@ -3139,7 +3219,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.upload_vertices();
         state.sync_cursor_and_selection();
         state.sync_parameters_pane();
-        for w in &mut state.widgets {
+        for i in 0..WIDGET_COUNT {
+            let w = state.slots.get_dyn_mut(i);
             if let Some(b) = w.base() {
                 let id = b.id();
                 let ptr = w.as_ptr_mut();
@@ -3167,19 +3248,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         graph.set_skipped_sizes(skipped_row_h, skipped_col_w);
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
-        if let Some(graph) = self.widgets[CONTENT_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
+        if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
             graph.set_uniform_background(self.uniform_background);
             graph.set_network_opacity(self.network_opacity);
             graph.set_cell_color(self.cell_color);
             graph.set_gap_color(self.gap_color);
         }
-        if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+        if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
             menubar.set_network_opacity(self.network_opacity);
         }
-        if let Some(breadcrumb) = self.widgets[BREADCRUMB_IDX].as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
+        if let Some(breadcrumb) = self.slots.breadcrumb.as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
             breadcrumb.set_network_opacity(self.network_opacity);
         }
-        if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
+        if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
             plate.set_network_opacity(self.network_opacity);
         }
     }
@@ -3347,14 +3428,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
             self.positions[0] = (0.0, 0.0, 0.0, 0.0);
             self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-            if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+            if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                 menubar.set_curved_circle(None);
             }
             self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
             self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
             self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
-            self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-            if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
+            self.slots.network_panel.set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
+            if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
                 plate.set_curved_circle(Some((cx, cy, r)));
             }
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -3369,20 +3450,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[STATUS_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-            self.widgets[0].set_visible(false);
-            self.widgets[STATUS_IDX].set_visible(false);
-            self.widgets[CONTENT_IDX].set_visible(true);
-            self.widgets[NETWORK_PANEL_IDX].set_visible(true);
-            self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
-            self.widgets[BREADCRUMB_IDX].set_visible(true);
-            self.widgets[SPLITTER1_IDX].set_visible(false);
-            self.widgets[SPLITTER2_IDX].set_visible(false);
-            self.widgets[VIEWPORT_IDX].set_visible(false);
-            self.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
-            self.widgets[PARAM_IDX].set_visible(false);
-            self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
-            self.widgets[SPREADSHEET_IDX].set_visible(false);
-            self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+            self.slots.header.set_visible(false);
+            self.slots.status.set_visible(false);
+            self.slots.content.set_visible(true);
+            self.slots.network_panel.set_visible(true);
+            self.slots.left_menubar.set_visible(false);
+            self.slots.breadcrumb.set_visible(true);
+            self.slots.splitter1.set_visible(false);
+            self.slots.splitter2.set_visible(false);
+            self.slots.viewport.set_visible(false);
+            self.slots.right_menubar.set_visible(false);
+            self.slots.param.set_visible(false);
+            self.slots.param_menubar.set_visible(false);
+            self.slots.spreadsheet.set_visible(false);
+            self.slots.spreadsheet_menubar.set_visible(false);
         } else if self.detached_circular_network {
             // Parent process: Network pane is detached (hidden from main window)
             let left_visible = false;
@@ -3444,7 +3525,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[BREADCRUMB_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[CONTENT_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[NETWORK_PANEL_IDX] = (0.0, 0.0, 0.0, 0.0);
-            self.widgets[NETWORK_PANEL_IDX].set_rect(0.0, 0.0, 0.0, 0.0);
+            self.slots.network_panel.set_rect(0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
             self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
@@ -3460,20 +3541,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-            self.widgets[0].set_visible(true);
-            self.widgets[STATUS_IDX].set_visible(false);
-            self.widgets[CONTENT_IDX].set_visible(false);
-            self.widgets[NETWORK_PANEL_IDX].set_visible(false);
-            self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
-            self.widgets[BREADCRUMB_IDX].set_visible(false);
-            self.widgets[SPLITTER1_IDX].set_visible(false);
-            self.widgets[SPLITTER2_IDX].set_visible(s2_w > 0.0);
-            self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
-            self.widgets[RIGHT_MENUBAR_IDX].set_visible(viewport_visible);
-            self.widgets[PARAM_IDX].set_visible(right_visible);
-            self.widgets[PARAM_MENUBAR_IDX].set_visible(right_visible);
-            self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
-            self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(spreadsheet_visible);
+            self.slots.header.set_visible(true);
+            self.slots.status.set_visible(false);
+            self.slots.content.set_visible(false);
+            self.slots.network_panel.set_visible(false);
+            self.slots.left_menubar.set_visible(false);
+            self.slots.breadcrumb.set_visible(false);
+            self.slots.splitter1.set_visible(false);
+            self.slots.splitter2.set_visible(s2_w > 0.0);
+            self.slots.viewport.set_visible(viewport_visible);
+            self.slots.right_menubar.set_visible(viewport_visible);
+            self.slots.param.set_visible(right_visible);
+            self.slots.param_menubar.set_visible(right_visible);
+            self.slots.spreadsheet.set_visible(spreadsheet_visible);
+            self.slots.spreadsheet_menubar.set_visible(spreadsheet_visible);
         } else {
             let paginator_w = 0.0;
             let body_h = self.height - STATUS_H;
@@ -3527,8 +3608,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                 }
 
-                if self.widgets[NETWORK_PANEL_IDX].is_dragging() {
-                    let (px, py, _pw, _ph) = self.widgets[NETWORK_PANEL_IDX].rect();
+                if self.slots.network_panel.is_dragging() {
+                    let (px, py, _pw, _ph) = self.slots.network_panel.rect();
                     let r = self.circular_network_layout.r;
                     self.circular_network_layout.x = px + r;
                     self.circular_network_layout.y = py + r;
@@ -3551,17 +3632,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 let cy = self.circular_network_layout.y;
 
                 self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+                if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
                 }
                 self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
                 self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
                 self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
-                self.widgets[NETWORK_PANEL_IDX].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
+                self.slots.network_panel.set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
+                if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
                     plate.set_curved_circle(Some((cx, cy, r)));
                 }
-                self.widgets[NETWORK_PANEL_IDX].set_drag_bounds(0.0, 0.0, self.width, self.height);
+                self.slots.network_panel.set_drag_bounds(0.0, 0.0, self.width, self.height);
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[SPLITTER2_IDX] = (s2_x, 0.0, s2_w, body_h);
                 self.positions[PARAM_IDX] = (col_r_x, 0.0, col_r_w, body_h);
@@ -3577,23 +3658,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-                self.widgets[0].set_visible(false);
-                self.widgets[STATUS_IDX].set_visible(false);
-                self.widgets[CONTENT_IDX].set_visible(self.show_network);
-                self.widgets[NETWORK_PANEL_IDX].set_visible(self.show_network);
-                self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
-                self.widgets[BREADCRUMB_IDX].set_visible(self.show_network);
-                self.widgets[SPLITTER1_IDX].set_visible(false);
-                self.widgets[SPLITTER2_IDX].set_visible(s2_w > 0.0);
-                self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
-                self.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
-                self.widgets[PARAM_IDX].set_visible(right_visible);
-                self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
-                self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
-                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+                self.slots.header.set_visible(false);
+                self.slots.status.set_visible(false);
+                self.slots.content.set_visible(self.show_network);
+                self.slots.network_panel.set_visible(self.show_network);
+                self.slots.left_menubar.set_visible(false);
+                self.slots.breadcrumb.set_visible(self.show_network);
+                self.slots.splitter1.set_visible(false);
+                self.slots.splitter2.set_visible(s2_w > 0.0);
+                self.slots.viewport.set_visible(viewport_visible);
+                self.slots.right_menubar.set_visible(false);
+                self.slots.param.set_visible(right_visible);
+                self.slots.param_menubar.set_visible(false);
+                self.slots.spreadsheet.set_visible(spreadsheet_visible);
+                self.slots.spreadsheet_menubar.set_visible(false);
             } else {
-                if !self.circular_network_pane && self.widgets[NETWORK_PANEL_IDX].is_dragging() {
-                    let (px, py, _pw, _ph) = self.widgets[NETWORK_PANEL_IDX].rect();
+                if !self.circular_network_pane && self.slots.network_panel.is_dragging() {
+                    let (px, py, _pw, _ph) = self.slots.network_panel.rect();
                     self.floating_network_layout.0 = px;
                     self.floating_network_layout.1 = py;
                 }
@@ -3635,7 +3716,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     (0.0, 0.0, 0.0, 0.0)
                 };
 
-                if let Some(menubar) = self.widgets[LEFT_MENUBAR_IDX].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+                if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
                 }
                 
@@ -3645,15 +3726,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 self.positions[CONTENT_IDX] = (px, py + mb_h + bc_h, pw, content_h);
                 self.positions[NETWORK_PANEL_IDX] = (px, py, pw, ph);
-                self.widgets[NETWORK_PANEL_IDX].set_rect(px, py, pw, ph);
-                if let Some(plate) = self.widgets[NETWORK_PANEL_IDX].as_any_mut().downcast_mut::<PassivePlate>() {
+                self.slots.network_panel.set_rect(px, py, pw, ph);
+                if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
                     plate.set_curved_circle(None);
                 }
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[SPLITTER2_IDX] = (0.0, 0.0, 0.0, 0.0);
                 let p_rect = if self.show_parameters { (param_x, param_y, param_w, param_h) } else { (0.0, 0.0, 0.0, 0.0) };
                 self.positions[PARAM_IDX] = p_rect;
-                self.widgets[PARAM_IDX].set_rect(p_rect.0, p_rect.1, p_rect.2, p_rect.3);
+                self.slots.param.set_rect(p_rect.0, p_rect.1, p_rect.2, p_rect.3);
 
                 self.positions[VIEWPORT_IDX] = (col_c_x, vp_y, col_c_w, vp_h);
                 self.positions[RIGHT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -3662,7 +3743,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[SPREADSHEET_IDX] = if spreadsheet_visible { (ss_x, ss_y, ss_w, ss_h) } else { (0.0, 0.0, 0.0, 0.0) };
-                self.widgets[SPREADSHEET_IDX].set_rect(
+                self.slots.spreadsheet.set_rect(
                     self.positions[SPREADSHEET_IDX].0,
                     self.positions[SPREADSHEET_IDX].1,
                     self.positions[SPREADSHEET_IDX].2,
@@ -3674,20 +3755,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
 
-                self.widgets[0].set_visible(false);
-                self.widgets[STATUS_IDX].set_visible(false);
-                self.widgets[CONTENT_IDX].set_visible(self.show_network);
-                self.widgets[NETWORK_PANEL_IDX].set_visible(self.show_network);
-                self.widgets[LEFT_MENUBAR_IDX].set_visible(false);
-                self.widgets[BREADCRUMB_IDX].set_visible(self.show_network);
-                self.widgets[SPLITTER1_IDX].set_visible(false);
-                self.widgets[SPLITTER2_IDX].set_visible(false);
-                self.widgets[VIEWPORT_IDX].set_visible(viewport_visible);
-                self.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
-                self.widgets[PARAM_IDX].set_visible(right_visible);
-                self.widgets[PARAM_MENUBAR_IDX].set_visible(false);
-                self.widgets[SPREADSHEET_IDX].set_visible(spreadsheet_visible);
-                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+                self.slots.header.set_visible(false);
+                self.slots.status.set_visible(false);
+                self.slots.content.set_visible(self.show_network);
+                self.slots.network_panel.set_visible(self.show_network);
+                self.slots.left_menubar.set_visible(false);
+                self.slots.breadcrumb.set_visible(self.show_network);
+                self.slots.splitter1.set_visible(false);
+                self.slots.splitter2.set_visible(false);
+                self.slots.viewport.set_visible(viewport_visible);
+                self.slots.right_menubar.set_visible(false);
+                self.slots.param.set_visible(right_visible);
+                self.slots.param_menubar.set_visible(false);
+                self.slots.spreadsheet.set_visible(spreadsheet_visible);
+                self.slots.spreadsheet_menubar.set_visible(false);
             }
         }
 
@@ -3719,18 +3800,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             ];
             for &idx in &menubars {
                 self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
-                self.widgets[idx].set_visible(false);
+                self.slots.get_dyn_mut(idx).set_visible(false);
             }
         }
         self.positions[PARAM_PLATE_IDX] = self.positions[PARAM_IDX];
-        let p_visible = self.widgets[PARAM_IDX].visible();
-        self.widgets[PARAM_PLATE_IDX].set_visible(p_visible);
+        let p_visible = self.slots.param.visible();
+        self.slots.param_plate.set_visible(p_visible);
     }
 
 
     pub fn apply_layout(&mut self) {
         for (i, pos) in self.positions.iter().enumerate() {
-            if let Some(widget) = self.widgets.get_mut(i) {
+            if i < WIDGET_COUNT {
+                let widget = self.slots.get_dyn_mut(i);
                 if widget.is_dragging() { continue; }
                 let (x, y, w, h) = *pos;
                 widget.set_rect(x, y, w, h);
@@ -3761,10 +3843,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
     pub fn sync_pane_focus(&mut self) {
         for &menubar_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
-            self.widgets[menubar_idx].set_selected(menubar_idx == self.focused_pane);
+            self.slots.get_dyn_mut(menubar_idx).set_selected(menubar_idx == self.focused_pane);
         }
         if self.focused_pane != PARAM_MENUBAR_IDX {
-            self.widgets[PARAM_IDX].unfocus();
+            self.slots.param.unfocus();
             self.sync_parameters_to_project();
         }
         self.sync_context_dropdowns();
@@ -3775,11 +3857,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let center_visible = self.show_viewport || self.show_spreadsheet;
         let right_visible = self.show_parameters;
 
-        if left_visible && center_visible && self.widgets[SPLITTER1_IDX].visible() && self.widgets[SPLITTER1_IDX].rect().2 > 0.0 {
-            self.splitter_layout.splitter1_x = self.widgets[SPLITTER1_IDX].rect().0;
+        if left_visible && center_visible && self.slots.splitter1.visible() && self.slots.splitter1.rect().2 > 0.0 {
+            self.splitter_layout.splitter1_x = self.slots.splitter1.rect().0;
         }
-        if right_visible && (center_visible || left_visible) && self.widgets[SPLITTER2_IDX].visible() && self.widgets[SPLITTER2_IDX].rect().2 > 0.0 {
-            self.splitter_layout.splitter2_x = self.widgets[SPLITTER2_IDX].rect().0;
+        if right_visible && (center_visible || left_visible) && self.slots.splitter2.visible() && self.slots.splitter2.rect().2 > 0.0 {
+            self.splitter_layout.splitter2_x = self.slots.splitter2.rect().0;
         }
         self.rebuild_positions();
         self.apply_layout();
@@ -3835,8 +3917,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
             Action::ToggleSpreadsheet => {
                 self.show_spreadsheet = !self.show_spreadsheet;
-                self.widgets[SPREADSHEET_IDX].set_visible(self.show_spreadsheet);
-                self.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(self.show_spreadsheet);
+                self.slots.spreadsheet.set_visible(self.show_spreadsheet);
+                self.slots.spreadsheet_menubar.set_visible(self.show_spreadsheet);
                 let val = self.show_spreadsheet;
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
                 if !self.show_spreadsheet && self.focused_pane == SPREADSHEET_MENUBAR_IDX {
@@ -4024,8 +4106,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 let r = self.width / old_width;
                 self.splitter_layout.scale(r);
                 let body_h = self.body_h();
-                self.widgets[SPLITTER1_IDX].set_rect(self.splitter_layout.splitter1_x, HEADER_H, SPLITTER_W, body_h);
-                self.widgets[SPLITTER2_IDX].set_rect(self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
+                self.slots.splitter1.set_rect(self.splitter_layout.splitter1_x, HEADER_H, SPLITTER_W, body_h);
+                self.slots.splitter2.set_rect(self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
             }
 
             self.sync_layout();
@@ -4091,10 +4173,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                         ctx.last_scroll_time = Some(now);
                     }
-                    for (i, w) in self.widgets.iter_mut().enumerate() {
+                    for i in 0..WIDGET_COUNT {
                         if i == VIEWPORT_IDX {
                             continue;
                         }
+                        let w = self.slots.get_dyn_mut(i);
                         if w.mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
                             handled = true;
                             if i == CONTENT_IDX {
@@ -4135,7 +4218,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                     }
                     if !handled {
-                        if self.widgets[VIEWPORT_IDX].mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
+                        if self.slots.viewport.mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
                             handled = true;
                         }
                     }
@@ -4300,8 +4383,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             self.apply_layout();
                             changed = true;
                         } else {
-                            self.widgets[idx].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if self.widgets[idx].drag_update(self.cursor_x, self.cursor_y) {
+                            self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                            if self.slots.get_dyn_mut(idx).drag_update(self.cursor_x, self.cursor_y) {
                                 changed = true;
                                 if idx == NETWORK_PANEL_IDX {
                                     self.sync_grid_settings();
@@ -4314,7 +4397,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
 
                     if self.drag_widget.is_none() {
-                        for i in 0..self.widgets.len() {
+                        for i in 0..WIDGET_COUNT {
                             let (cx, cy) = (self.cursor_x, self.cursor_y);
                             let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
                             let inside = if self.circular_network_pane && is_network_part {
@@ -4325,15 +4408,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 } else if i == BREADCRUMB_IDX {
                                     self.circular_network_layout.hit_test_breadcrumb(cx, cy, 0.0, BREADCRUMB_H)
                                 } else if i == NETWORK_PANEL_IDX {
-                                    self.widgets[NETWORK_PANEL_IDX].hit_test(cx, cy, &self.ui_context)
+                                    self.slots.network_panel.hit_test(cx, cy, &self.ui_context)
                                 } else {
                                     false
                                 }
                             } else {
-                                self.widgets[i].hit_test(cx, cy, &self.ui_context)
+                                self.slots.get_dyn_mut(i).hit_test(cx, cy, &self.ui_context)
                             };
                             let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
-                            if self.widgets[i].cursor_moved(tx, ty, &mut self.ui_context) {
+                            if self.slots.get_dyn_mut(i).cursor_moved(tx, ty, &mut self.ui_context) {
                                 changed = true;
                             }
                         }
@@ -4422,7 +4505,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             false
                         }
                     } else {
-                        state.widgets[i].hit_test(x, y, &state.ui_context)
+                        state.slots.get_dyn(i).hit_test(x, y, &state.ui_context)
                     }
                 };
 
@@ -4434,7 +4517,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 match btn_state {
                     ElementState::Pressed => {
-                        let hits_any_menu = (0..self.widgets.len()).any(|i| {
+                        let hits_any_menu = (0..WIDGET_COUNT).any(|i| {
                             hits_widget(self, i, self.cursor_x, self.cursor_y)
                                 && self.menubar_at(i).and_then(|m| m.get_menu_items_at(self.cursor_x, self.cursor_y)).is_some()
                         });
@@ -4460,22 +4543,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             if hit_menubar {
                                 if self.menu(LEFT_MENUBAR_IDX).get_menu_items_at(self.cursor_x, self.cursor_y).is_some() {
                                     self.focused_pane = LEFT_MENUBAR_IDX;
-                                    self.widgets[LEFT_MENUBAR_IDX].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                    if self.widgets[LEFT_MENUBAR_IDX].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
+                                    self.slots.left_menubar.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                                    if self.slots.left_menubar.mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
                                         changed = true;
                                     }
                                 }
                             }
                             if on_border || hit_menubar {
                                 self.drag_widget = Some(NETWORK_PANEL_IDX);
-                                self.widgets[NETWORK_PANEL_IDX].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                self.widgets[NETWORK_PANEL_IDX].drag_begin(self.cursor_x, self.cursor_y);
+                                self.slots.network_panel.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                                self.slots.network_panel.drag_begin(self.cursor_x, self.cursor_y);
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.widgets[old].unfocus();
+                                    self.slots.get_dyn_mut(old).unfocus();
                                     self.focused_widget = None;
                                 }
-                                self.widgets[PARAM_IDX].unfocus();
+                                self.slots.param.unfocus();
                                 self.sync_parameters_to_project();
                                 return true;
                             }
@@ -4504,26 +4587,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.drag_start_mouse = (cx, cy);
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.widgets[old].unfocus();
+                                    self.slots.get_dyn_mut(old).unfocus();
                                     self.focused_widget = None;
                                 }
-                                self.widgets[PARAM_IDX].unfocus();
+                                self.slots.param.unfocus();
                                 self.sync_parameters_to_project();
                                 return true;
                             } else if cx >= fx && cx < fx + fw && cy >= fy && cy < fy + (if self.show_network { BREADCRUMB_H } else { 0.0 }) {
-                                if self.widgets[BREADCRUMB_IDX].mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context) {
+                                if self.slots.breadcrumb.mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context) {
                                     return true;
                                 }
                                 self.is_resizing_network = None;
                                 self.drag_widget = Some(NETWORK_PANEL_IDX);
-                                self.widgets[NETWORK_PANEL_IDX].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                self.widgets[NETWORK_PANEL_IDX].drag_begin(cx, cy);
+                                self.slots.network_panel.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                                self.slots.network_panel.drag_begin(cx, cy);
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.widgets[old].unfocus();
+                                    self.slots.get_dyn_mut(old).unfocus();
                                     self.focused_widget = None;
                                 }
-                                self.widgets[PARAM_IDX].unfocus();
+                                self.slots.param.unfocus();
                                 self.sync_parameters_to_project();
                                 return true;
                             }
@@ -4548,7 +4631,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.drag_start_mouse = (cx, cy);
                                 self.focused_pane = PARAM_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.widgets[old].unfocus();
+                                    self.slots.get_dyn_mut(old).unfocus();
                                     self.focused_widget = None;
                                 }
                                 return true;
@@ -4584,7 +4667,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.drag_start_mouse = (cx, cy);
                                 self.focused_pane = SPREADSHEET_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.widgets[old].unfocus();
+                                    self.slots.get_dyn_mut(old).unfocus();
                                     self.focused_widget = None;
                                 }
                                 return true;
@@ -4603,7 +4686,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             return false;
                         }
                         let mut click_target = None;
-                        for i in 0..self.widgets.len() {
+                        for i in 0..WIDGET_COUNT {
                             if self.menubar_at(i).map(|m| m.is_menu_open()).unwrap_or(false)
                                 && hits_widget(self, i, self.cursor_x, self.cursor_y)
                             {
@@ -4612,14 +4695,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             }
                         }
                         if click_target.is_none() {
-                            let mut hit_order: Vec<usize> = (0..self.widgets.len()).collect();
+                            let mut hit_order: Vec<usize> = (0..WIDGET_COUNT).collect();
                             hit_order.sort_by_key(|&i| {
                                 let z = if i == NETWORK_PANEL_IDX || i == PARAM_PLATE_IDX {
                                     -5
                                 } else if i == VIEWPORT_IDX || i == PARAM_IDX {
                                     -4
                                 } else {
-                                    self.widgets[i].z_index()
+                                    self.slots.get_dyn_mut(i).z_index()
                                 };
                                 -z
                             });
@@ -4682,12 +4765,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                         if let Some(old) = self.focused_widget {
                             if click_target != Some(old) && click_target != Some(PARAM_IDX) {
-                                self.widgets[old].unfocus();
+                                self.slots.get_dyn_mut(old).unfocus();
                                 self.focused_widget = None;
                             }
                         }
                         if click_target != Some(PARAM_IDX) {
-                            self.widgets[PARAM_IDX].unfocus();
+                            self.slots.param.unfocus();
                             self.sync_parameters_to_project();
                         }
                         if click_target.is_none() && !dialog_open && in_circle_network_pane {
@@ -4698,26 +4781,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             changed = true;
                         }
                         if let Some(i) = click_target {
-                            self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if self.widgets[i].mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
+                            self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                            if self.slots.get_dyn_mut(i).mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
                                 changed = true;
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
                                 }
 
                             }
-                            if self.widgets[i].draggable() {
-                                self.widgets[i].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                self.widgets[i].drag_begin(self.cursor_x, self.cursor_y);
+                            if self.slots.get_dyn_mut(i).draggable() {
+                                self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                                self.slots.get_dyn_mut(i).drag_begin(self.cursor_x, self.cursor_y);
                                 self.drag_widget = Some(i);
                             }
                             if i != PARAM_IDX {
-                                self.widgets[i].focus();
+                                self.slots.get_dyn_mut(i).focus();
                                 self.focused_widget = Some(i);
                                 if self.menubar_at(i).map(|m| m.is_menu_bar()).unwrap_or(false)
-                                    && !self.widgets[i].focused(&self.ui_context)
+                                    && !self.slots.get_dyn_mut(i).focused(&self.ui_context)
                                 {
-                                    self.widgets[i].unfocus();
+                                    self.slots.get_dyn_mut(i).unfocus();
                                     self.focused_widget = None;
                                 }
                             }
@@ -4754,23 +4837,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if self.drag_widget.is_some() {
                             let idx = self.drag_widget.unwrap();
                             if idx == NETWORK_PANEL_IDX {
-                                self.widgets[idx].drag_end();
+                                self.slots.get_dyn_mut(idx).drag_end();
                                 self.is_resizing_network = None;
                                 self.sync_layout();
                                 self.read_panel_offsets();
                                 self.upload_vertices();
                             } else if idx == PARAM_IDX {
-                                self.widgets[idx].drag_end();
+                                self.slots.get_dyn_mut(idx).drag_end();
                                 self.is_resizing_param = false;
                                 self.sync_layout();
                                 self.upload_vertices();
                             } else if idx == SPREADSHEET_IDX {
-                                self.widgets[idx].drag_end();
+                                self.slots.get_dyn_mut(idx).drag_end();
                                 self.is_resizing_spreadsheet = false;
                                 self.sync_layout();
                                 self.upload_vertices();
                             } else if idx == CONTENT_IDX {
-                                self.widgets[idx].drag_end();
+                                self.slots.get_dyn_mut(idx).drag_end();
                                 let updated_nodes = self.graph().get_nodes();
                                 let dir = self.current_dir_mut();
                                 for (i, node) in updated_nodes.iter().enumerate() {
@@ -4789,7 +4872,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.update_panel_bounds();
                                 self.upload_vertices();
                             } else {
-                                self.widgets[idx].drag_end();
+                                self.slots.get_dyn_mut(idx).drag_end();
                             }
                             self.drag_widget = None;
                             changed = true;
@@ -4797,7 +4880,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         let mut sync_params = false;
                         {
                             let ctx = &mut self.ui_context;
-                            for (i, w) in self.widgets.iter_mut().enumerate() {
+                            for i in 0..WIDGET_COUNT {
+                                let w = self.slots.get_dyn_mut(i);
                                 w.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                                 if w.mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, ctx) {
                                     changed = true;
@@ -4865,7 +4949,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                 }
 
-                if self.widgets[PARAM_IDX].keyboard_input(event, &mut self.ui_context) {
+                if self.slots.param.keyboard_input(event, &mut self.ui_context) {
                     self.sync_parameters_to_project();
                     return true;
                 }
@@ -5173,7 +5257,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if changed {
                     true
                 } else if let Some(idx) = self.focused_widget {
-                    self.widgets[idx].keyboard_input(event, &mut self.ui_context)
+                    self.slots.get_dyn_mut(idx).keyboard_input(event, &mut self.ui_context)
                 } else { false }
             }
         }
@@ -5282,8 +5366,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         let mut tick_changed = false;
         let ctx = &mut self.ui_context;
-        for w in &mut self.widgets {
-            if w.tick(dt, ctx) {
+        for i in 0..WIDGET_COUNT {
+            if self.slots.get_dyn_mut(i).tick(dt, ctx) {
                 tick_changed = true;
             }
         }
@@ -5374,8 +5458,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.scroll_accum_y = 0.0;
             self.sync_grid_settings();
             if let Some(idx) = self.drag_widget {
-                self.widgets[idx].set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                self.widgets[idx].drag_update(self.cursor_x, self.cursor_y);
+                self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                self.slots.get_dyn_mut(idx).drag_update(self.cursor_x, self.cursor_y);
             }
             self.sync_layout();
             self.read_panel_offsets();

@@ -827,33 +827,33 @@ impl AppState {
                             LEFT_MENUBAR_IDX => {
                                 if !state.show_network {
                                     state.show_network = true;
-                                    state.widgets[CONTENT_IDX].set_visible(true);
-                                    state.widgets[LEFT_MENUBAR_IDX].set_visible(true);
-                                    state.widgets[BREADCRUMB_IDX].set_visible(true);
+                                    state.slots.content.set_visible(true);
+                                    state.slots.left_menubar.set_visible(true);
+                                    state.slots.breadcrumb.set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 4, true);
                                 }
                             }
                             RIGHT_MENUBAR_IDX => {
                                 if !state.show_viewport {
                                     state.show_viewport = true;
-                                    state.widgets[VIEWPORT_IDX].set_visible(true);
-                                    state.widgets[RIGHT_MENUBAR_IDX].set_visible(true);
+                                    state.slots.viewport.set_visible(true);
+                                    state.slots.right_menubar.set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 5, true);
                                 }
                             }
                             PARAM_MENUBAR_IDX => {
                                 if !state.show_parameters {
                                     state.show_parameters = true;
-                                    state.widgets[PARAM_IDX].set_visible(true);
-                                    state.widgets[PARAM_MENUBAR_IDX].set_visible(true);
+                                    state.slots.param.set_visible(true);
+                                    state.slots.param_menubar.set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 6, true);
                                 }
                             }
                             SPREADSHEET_MENUBAR_IDX => {
                                 if !state.show_spreadsheet {
                                     state.show_spreadsheet = true;
-                                    state.widgets[SPREADSHEET_IDX].set_visible(true);
-                                    state.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(true);
+                                    state.slots.spreadsheet.set_visible(true);
+                                    state.slots.spreadsheet_menubar.set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 7, true);
                                 }
                             }
@@ -927,9 +927,9 @@ impl AppState {
                         }
                         4 => { // Show Network Pane
                             state.show_network = !state.show_network;
-                            state.widgets[CONTENT_IDX].set_visible(state.show_network);
-                            state.widgets[LEFT_MENUBAR_IDX].set_visible(state.show_network);
-                            state.widgets[BREADCRUMB_IDX].set_visible(state.show_network);
+                            state.slots.content.set_visible(state.show_network);
+                            state.slots.left_menubar.set_visible(state.show_network);
+                            state.slots.breadcrumb.set_visible(state.show_network);
                             let val = state.show_network;
                             state.menu_mut(HEADER_IDX).set_item_checked(2, 4, val);
                             if !state.show_network && state.focused_pane == LEFT_MENUBAR_IDX {
@@ -950,8 +950,8 @@ impl AppState {
                         }
                         5 => { // Show Viewport Pane
                             state.show_viewport = !state.show_viewport;
-                            state.widgets[VIEWPORT_IDX].set_visible(state.show_viewport);
-                            state.widgets[RIGHT_MENUBAR_IDX].set_visible(state.show_viewport);
+                            state.slots.viewport.set_visible(state.show_viewport);
+                            state.slots.right_menubar.set_visible(state.show_viewport);
                             let val = state.show_viewport;
                             state.menu_mut(HEADER_IDX).set_item_checked(2, 5, val);
                             if !state.show_viewport && state.focused_pane == RIGHT_MENUBAR_IDX {
@@ -972,8 +972,8 @@ impl AppState {
                         }
                         6 => { // Show Parameters Pane
                             state.show_parameters = !state.show_parameters;
-                            state.widgets[PARAM_IDX].set_visible(state.show_parameters);
-                            state.widgets[PARAM_MENUBAR_IDX].set_visible(state.show_parameters);
+                            state.slots.param.set_visible(state.show_parameters);
+                            state.slots.param_menubar.set_visible(state.show_parameters);
                             let val = state.show_parameters;
                             state.menu_mut(HEADER_IDX).set_item_checked(2, 6, val);
                             if !state.show_parameters && state.focused_pane == PARAM_MENUBAR_IDX {
@@ -994,8 +994,8 @@ impl AppState {
                         }
                         7 => { // Show Spreadsheet Pane
                             state.show_spreadsheet = !state.show_spreadsheet;
-                            state.widgets[SPREADSHEET_IDX].set_visible(state.show_spreadsheet);
-                            state.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(state.show_spreadsheet);
+                            state.slots.spreadsheet.set_visible(state.show_spreadsheet);
+                            state.slots.spreadsheet_menubar.set_visible(state.show_spreadsheet);
                             let val = state.show_spreadsheet;
                             state.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
                             if !state.show_spreadsheet && state.focused_pane == SPREADSHEET_MENUBAR_IDX {
@@ -1076,9 +1076,9 @@ impl AppState {
                         }
                         4 => { // Close Pane
                             state.show_network = false;
-                            state.widgets[CONTENT_IDX].set_visible(false);
-                            state.widgets[LEFT_MENUBAR_IDX].set_visible(false);
-                            state.widgets[BREADCRUMB_IDX].set_visible(false);
+                            state.slots.content.set_visible(false);
+                            state.slots.left_menubar.set_visible(false);
+                            state.slots.breadcrumb.set_visible(false);
                             state.menu_mut(HEADER_IDX).set_item_checked(2, 4, false);
                             if state.focused_pane == LEFT_MENUBAR_IDX {
                                 state.focused_pane = get_next_visible_pane(
@@ -1120,8 +1120,8 @@ impl AppState {
                 } else if menu_idx == 3 { // View
                     if item_idx == 0 { // Close Pane
                         state.show_viewport = false;
-                        state.widgets[VIEWPORT_IDX].set_visible(false);
-                        state.widgets[RIGHT_MENUBAR_IDX].set_visible(false);
+                        state.slots.viewport.set_visible(false);
+                        state.slots.right_menubar.set_visible(false);
                         state.menu_mut(HEADER_IDX).set_item_checked(2, 5, false);
                         if state.focused_pane == RIGHT_MENUBAR_IDX {
                             state.focused_pane = get_next_visible_pane(
@@ -1224,8 +1224,8 @@ impl AppState {
                 } else if menu_idx == 2 { // View
                     if item_idx == 0 { // Close Pane
                         state.show_parameters = false;
-                        state.widgets[PARAM_IDX].set_visible(false);
-                        state.widgets[PARAM_MENUBAR_IDX].set_visible(false);
+                        state.slots.param.set_visible(false);
+                        state.slots.param_menubar.set_visible(false);
                         state.menu_mut(HEADER_IDX).set_item_checked(2, 6, false);
                         if state.focused_pane == PARAM_MENUBAR_IDX {
                             state.focused_pane = get_next_visible_pane(
@@ -1250,8 +1250,8 @@ impl AppState {
                 if menu_idx == 0 { // View
                     if item_idx == 0 { // Close Pane
                         state.show_spreadsheet = false;
-                        state.widgets[SPREADSHEET_IDX].set_visible(false);
-                        state.widgets[SPREADSHEET_MENUBAR_IDX].set_visible(false);
+                        state.slots.spreadsheet.set_visible(false);
+                        state.slots.spreadsheet_menubar.set_visible(false);
                         state.menu_mut(HEADER_IDX).set_item_checked(2, 7, false);
                         if state.focused_pane == SPREADSHEET_MENUBAR_IDX {
                             state.focused_pane = get_next_visible_pane(
@@ -1277,7 +1277,7 @@ impl AppState {
                 state.read_panel_offsets();
                 state.sync_cursor_and_selection();
 
-                if state.drag_widget == Some(PARAM_IDX) && state.widgets[PARAM_IDX].is_dragging() {
+                if state.drag_widget == Some(PARAM_IDX) && state.slots.param.is_dragging() {
                     state.sync_parameters_to_project();
                 }
 

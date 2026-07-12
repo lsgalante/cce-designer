@@ -249,7 +249,7 @@ fn create_memfd_with_data(name: &str, data: &[u8]) -> std::io::Result<std::os::u
                 }
                 if let Some(ref inspector) = app.inspector {
                     if let Some(ref surface) = app.surface {
-                        let json = cce_ui::widget::serialize_widgets(&state.widgets);
+                        let json = cce_ui::widget::serialize_widgets(&state.slots.dyn_refs());
                         if json != state.last_serialized {
                             let now = std::time::Instant::now();
                             if now.duration_since(state.last_inspector_update) >= std::time::Duration::from_millis(100) {
