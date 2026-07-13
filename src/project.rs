@@ -137,6 +137,7 @@ impl State {
                 self.focused_widget = None;
             }
             self.drag_widget = None;
+            self.app_drag = None;
             self.last_click = None;
 
             self.sync_grid_settings();
@@ -191,6 +192,7 @@ impl State {
             self.focused_widget = None;
         }
         self.drag_widget = None;
+        self.app_drag = None;
         self.last_click = None;
 
         self.sync_grid_settings();
@@ -242,6 +244,7 @@ impl State {
 
         self.focused_widget = None;
         self.drag_widget = None;
+        self.app_drag = None;
         self.last_click = None;
 
         self.sync_grid_settings();

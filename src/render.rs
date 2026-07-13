@@ -62,7 +62,7 @@ impl State {
         let sh = self.height;
 
         let node_area_y = self.positions[CONTENT_IDX].1;
-        let show_cursor = self.drag_widget.is_none();
+        let show_cursor = self.drag_widget.is_none() && self.app_drag.is_none();
 
         let clip = if self.circular_network_pane {
             (

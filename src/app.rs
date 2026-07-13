@@ -887,6 +887,20 @@ pub struct ResizeDirection {
     pub bottom: bool,
 }
 
+/// An app-mode drag: one of the designer's own windowing gestures (floating-pane edge
+/// resizes), carrying its whole gesture state. The event-layer redesign splits this out
+/// of `drag_widget`, which previously doubled as widget-drag index AND app-mode-drag
+/// marker (via three `is_resizing_*` flags keyed against pane indices) — `drag_widget`
+/// now ONLY ever names a widget drag (a slot whose `Input` drag hooks are driving:
+/// panel move, graph node drag, param slider, spreadsheet scroll). Exactly one of
+/// `app_drag`/`drag_widget` is armed per press.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AppDrag {
+    NetworkResize { dir: ResizeDirection, start_rect: (f32, f32, f32, f32), start_mouse: (f32, f32) },
+    ParamResize { start_w: f32, start_mouse_x: f32 },
+    SpreadsheetResize { start_h: f32, start_mouse_y: f32 },
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ViewportUniforms {
@@ -1041,15 +1055,10 @@ pub struct State {
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     pub floating_network_layout: (f32, f32, f32, f32),
-    pub is_resizing_network: Option<ResizeDirection>,
-    pub drag_start_rect: (f32, f32, f32, f32),
-    pub drag_start_mouse: (f32, f32),
+    /// The active app-mode drag (pane edge resize), if any. See [`AppDrag`].
+    pub app_drag: Option<AppDrag>,
     pub floating_param_width: f32,
-    pub is_resizing_param: bool,
-    pub drag_start_param_w: f32,
     pub floating_spreadsheet_height: f32,
-    pub is_resizing_spreadsheet: bool,
-    pub drag_start_spreadsheet_h: f32,
     pub loaded_project_path: Option<std::path::PathBuf>,
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
@@ -2193,6 +2202,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     pub fn on_path_changed(&mut self) {
         self.graph_mut().set_selected_node(None);
         self.drag_widget = None;
+        self.app_drag = None;
         self.focused_widget = None;
         self.pan_x = 0.0;
         self.pan_y = 0.0;
@@ -3139,15 +3149,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 mod_time
             },
             floating_network_layout: (18.0, 44.0, 400.0, 710.0),
-            is_resizing_network: None,
-            drag_start_rect: (0.0, 0.0, 0.0, 0.0),
-            drag_start_mouse: (0.0, 0.0),
+            app_drag: None,
             floating_param_width: 300.0,
-            is_resizing_param: false,
-            drag_start_param_w: 0.0,
             floating_spreadsheet_height: 250.0,
-            is_resizing_spreadsheet: false,
-            drag_start_spreadsheet_h: 0.0,
             loaded_project_path: None,
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
             recent_files,
@@ -4334,74 +4338,76 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.update_panel_bounds();
                     changed = true;
                 } else {
-                    if let Some(idx) = self.drag_widget {
-                        if idx == NETWORK_PANEL_IDX && self.is_resizing_network.is_some() {
-                            let dir = self.is_resizing_network.unwrap();
-                            let dx = self.cursor_x - self.drag_start_mouse.0;
-                            let dy = self.cursor_y - self.drag_start_mouse.1;
-                            let (sx, sy, sw, sh) = self.drag_start_rect;
+                    if let Some(drag) = self.app_drag {
+                        match drag {
+                            AppDrag::NetworkResize { dir, start_rect, start_mouse } => {
+                                let dx = self.cursor_x - start_mouse.0;
+                                let dy = self.cursor_y - start_mouse.1;
+                                let (sx, sy, sw, sh) = start_rect;
 
-                            let mut fx = sx;
-                            let mut fy = sy;
-                            let mut fw = sw;
-                            let mut fh = sh;
+                                let mut fx = sx;
+                                let mut fy = sy;
+                                let mut fw = sw;
+                                let mut fh = sh;
 
-                            if dir.left {
-                                let new_w = (sw - dx).max(150.0);
-                                fx = sx + sw - new_w;
-                                fw = new_w;
-                            } else if dir.right {
-                                fw = (sw + dx).max(150.0);
-                            }
+                                if dir.left {
+                                    let new_w = (sw - dx).max(150.0);
+                                    fx = sx + sw - new_w;
+                                    fw = new_w;
+                                } else if dir.right {
+                                    fw = (sw + dx).max(150.0);
+                                }
 
-                            if dir.top {
-                                let new_h = (sh - dy).max(100.0);
-                                fy = sy + sh - new_h;
-                                fh = new_h;
-                            } else if dir.bottom {
-                                fh = (sh + dy).max(100.0);
-                            }
+                                if dir.top {
+                                    let new_h = (sh - dy).max(100.0);
+                                    fy = sy + sh - new_h;
+                                    fh = new_h;
+                                } else if dir.bottom {
+                                    fh = (sh + dy).max(100.0);
+                                }
 
-                            self.floating_network_layout = (fx, fy, fw, fh);
-                            self.rebuild_positions();
-                            self.apply_layout();
-                            self.sync_grid_settings();
-                            changed = true;
-                        } else if idx == PARAM_IDX && self.is_resizing_param {
-                            let dx = self.cursor_x - self.drag_start_mouse.0;
-                            let sw = self.drag_start_param_w;
-                            let new_w = (sw - dx).max(150.0);
-                            self.floating_param_width = new_w;
-                            self.rebuild_positions();
-                            self.apply_layout();
-                            changed = true;
-                        } else if idx == SPREADSHEET_IDX && self.is_resizing_spreadsheet {
-                            let dy = self.cursor_y - self.drag_start_mouse.1;
-                            let sh = self.drag_start_spreadsheet_h;
-                            let new_h = (sh - dy).max(100.0);
-                            self.floating_spreadsheet_height = new_h;
-                            self.rebuild_positions();
-                            self.apply_layout();
-                            changed = true;
-                        } else {
-                            self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if {
-                                let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
-                                unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
-                            } {
+                                self.floating_network_layout = (fx, fy, fw, fh);
+                                self.rebuild_positions();
+                                self.apply_layout();
+                                self.sync_grid_settings();
                                 changed = true;
-                                if idx == NETWORK_PANEL_IDX {
-                                    self.sync_grid_settings();
-                                }
-                                if idx == PARAM_IDX {
-                                    self.sync_parameters_to_project();
-                                }
+                            }
+                            AppDrag::ParamResize { start_w, start_mouse_x } => {
+                                let dx = self.cursor_x - start_mouse_x;
+                                let new_w = (start_w - dx).max(150.0);
+                                self.floating_param_width = new_w;
+                                self.rebuild_positions();
+                                self.apply_layout();
+                                changed = true;
+                            }
+                            AppDrag::SpreadsheetResize { start_h, start_mouse_y } => {
+                                let dy = self.cursor_y - start_mouse_y;
+                                let new_h = (start_h - dy).max(100.0);
+                                self.floating_spreadsheet_height = new_h;
+                                self.rebuild_positions();
+                                self.apply_layout();
+                                changed = true;
+                            }
+                        }
+                    } else if let Some(idx) = self.drag_widget {
+                        // A widget drag: the slot's own Input drag hooks are driving.
+                        self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                        if {
+                            let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
+                            let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                            unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
+                        } {
+                            changed = true;
+                            if idx == NETWORK_PANEL_IDX {
+                                self.sync_grid_settings();
+                            }
+                            if idx == PARAM_IDX {
+                                self.sync_parameters_to_project();
                             }
                         }
                     }
 
-                    if self.drag_widget.is_none() {
+                    if self.drag_widget.is_none() && self.app_drag.is_none() {
                         for i in 0..WIDGET_COUNT {
                             let (cx, cy) = (self.cursor_x, self.cursor_y);
                             let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
@@ -4431,15 +4437,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 }
                 changed
             }
-            // ROUTED-EVENTS DEFERRAL (6bd): the press/move/keyboard cascade below stays on
-            // direct dispatch deliberately. `drag_widget` doubles as widget-drag AND
-            // app-mode-drag (floating-pane edge resizes, cross-widget panel drags started
-            // from menubar/breadcrumb presses, circular-border hits) — policy the router
-            // cannot own; running its drag tracker alongside would deliver DragUpdates at
-            // this loop's substituted (-9999) coords. Converting means redesigning the
-            // designer's event layer (its own z-ordered windowing), not a call-form swap.
+            // THE DESIGNER'S EVENT LAYER IS ITS OWN WINDOWING SYSTEM (the event redesign,
+            // closing the 6bd deferral): presses resolve a z-ordered click target through
+            // app-owned hit shapes (circular-pane overrides, hardcoded pane z), derive pane
+            // focus, run the unfocus rituals, and deliver through `handle_event` directly —
+            // the UiContext router's hit-gating/descent/drag tracker cannot own that policy,
+            // so it is deliberately not used here (mixing the two would double-run drag
+            // state machines). Drags are split: `app_drag` is the app-mode gesture state
+            // machine (floating-pane edge resizes, each variant carrying its whole gesture),
+            // `drag_widget` only ever names a widget drag driven through the slot's Input
+            // drag hooks. Exactly one of the two is armed per press.
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
-                println!("DEBUG: MouseInput state={:?} button={:?} cursor=({}, {})", btn_state, button, self.cursor_x, self.cursor_y);
                 if *btn_state == ElementState::Pressed {
                     self.pan_velocity_x = 0.0;
                     self.pan_velocity_y = 0.0;
@@ -4590,15 +4598,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             let on_bottom = false;
 
                             if on_left || on_right || on_top || on_bottom {
-                                self.is_resizing_network = Some(ResizeDirection {
-                                    left: on_left,
-                                    right: on_right,
-                                    top: on_top,
-                                    bottom: on_bottom,
+                                self.app_drag = Some(AppDrag::NetworkResize {
+                                    dir: ResizeDirection {
+                                        left: on_left,
+                                        right: on_right,
+                                        top: on_top,
+                                        bottom: on_bottom,
+                                    },
+                                    start_rect: self.floating_network_layout,
+                                    start_mouse: (cx, cy),
                                 });
-                                self.drag_widget = Some(NETWORK_PANEL_IDX);
-                                self.drag_start_rect = self.floating_network_layout;
-                                self.drag_start_mouse = (cx, cy);
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
                                     self.slots.get_dyn_mut(old).unfocus();
@@ -4611,7 +4620,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 if self.slots.breadcrumb.mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context) {
                                     return true;
                                 }
-                                self.is_resizing_network = None;
                                 self.drag_widget = Some(NETWORK_PANEL_IDX);
                                 self.slots.network_panel.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                                 self.slots.network_panel.drag_begin(cx, cy);
@@ -4639,10 +4647,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             let on_left = cx >= param_x - margin && cx <= param_x + margin && cy >= param_y - margin && cy <= param_y + param_h + margin;
 
                             if on_left {
-                                self.is_resizing_param = true;
-                                self.drag_widget = Some(PARAM_IDX);
-                                self.drag_start_param_w = param_w;
-                                self.drag_start_mouse = (cx, cy);
+                                self.app_drag = Some(AppDrag::ParamResize {
+                                    start_w: param_w,
+                                    start_mouse_x: cx,
+                                });
                                 self.focused_pane = PARAM_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
                                     self.slots.get_dyn_mut(old).unfocus();
@@ -4675,10 +4683,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             let on_top = cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin;
                             
                             if on_top {
-                                self.is_resizing_spreadsheet = true;
-                                self.drag_widget = Some(SPREADSHEET_IDX);
-                                self.drag_start_spreadsheet_h = ss_h;
-                                self.drag_start_mouse = (cx, cy);
+                                self.app_drag = Some(AppDrag::SpreadsheetResize {
+                                    start_h: ss_h,
+                                    start_mouse_y: cy,
+                                });
                                 self.focused_pane = SPREADSHEET_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
                                     self.slots.get_dyn_mut(old).unfocus();
@@ -4856,6 +4864,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
+                        if let Some(drag) = self.app_drag.take() {
+                            // App-mode drag teardown. The DragEnd send is kept from the old
+                            // shared teardown for faithfulness — the pane widget never began
+                            // a drag in resize mode, so its commit/cancel hook is a no-op.
+                            let idx = match drag {
+                                AppDrag::NetworkResize { .. } => NETWORK_PANEL_IDX,
+                                AppDrag::ParamResize { .. } => PARAM_IDX,
+                                AppDrag::SpreadsheetResize { .. } => SPREADSHEET_IDX,
+                            };
+                            {
+                                let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                            }
+                            self.sync_layout();
+                            if matches!(drag, AppDrag::NetworkResize { .. }) {
+                                self.read_panel_offsets();
+                            }
+                            self.upload_vertices();
+                            changed = true;
+                        }
                         if self.drag_widget.is_some() {
                             let idx = self.drag_widget.unwrap();
                             if idx == NETWORK_PANEL_IDX {
@@ -4863,7 +4891,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
-                                self.is_resizing_network = None;
                                 self.sync_layout();
                                 self.read_panel_offsets();
                                 self.upload_vertices();
@@ -4872,7 +4899,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
-                                self.is_resizing_param = false;
                                 self.sync_layout();
                                 self.upload_vertices();
                             } else if idx == SPREADSHEET_IDX {
@@ -4880,7 +4906,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
-                                self.is_resizing_spreadsheet = false;
                                 self.sync_layout();
                                 self.upload_vertices();
                             } else if idx == CONTENT_IDX {
