@@ -4379,7 +4379,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             changed = true;
                         } else {
                             self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if self.slots.get_dyn_mut(idx).drag_update(self.cursor_x, self.cursor_y) {
+                            if {
+                                let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
+                                let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
+                            } {
                                 changed = true;
                                 if idx == NETWORK_PANEL_IDX {
                                     self.sync_grid_settings();
@@ -4411,7 +4415,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.slots.get_dyn_mut(i).hit_test(cx, cy, &self.ui_context)
                             };
                             let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
-                            if self.slots.get_dyn_mut(i).cursor_moved(tx, ty, &mut self.ui_context) {
+                            let mv = cce_ui::widget::Event::PointerMove { x: tx, y: ty, local_x: tx, local_y: ty };
+                            let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
+                            if unsafe { (*ptr).handle_event(&mv, &mut self.ui_context) } {
                                 changed = true;
                             }
                         }
@@ -4784,7 +4790,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                         if let Some(i) = click_target {
                             self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if self.slots.get_dyn_mut(i).mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
+                            if {
+                                let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
+                                let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
+                                unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
+                            } {
                                 changed = true;
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
@@ -4793,7 +4803,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             }
                             if self.slots.get_dyn_mut(i).draggable() {
                                 self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                self.slots.get_dyn_mut(i).drag_begin(self.cursor_x, self.cursor_y);
+                                {
+                                    let ev = cce_ui::widget::Event::DragStart { start_x: self.cursor_x, start_y: self.cursor_y };
+                                    let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
+                                    unsafe { (*ptr).handle_event(&ev, &mut self.ui_context); }
+                                }
                                 self.drag_widget = Some(i);
                             }
                             if i != PARAM_IDX {
@@ -4839,23 +4853,35 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if self.drag_widget.is_some() {
                             let idx = self.drag_widget.unwrap();
                             if idx == NETWORK_PANEL_IDX {
-                                self.slots.get_dyn_mut(idx).drag_end();
+                                {
+                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                }
                                 self.is_resizing_network = None;
                                 self.sync_layout();
                                 self.read_panel_offsets();
                                 self.upload_vertices();
                             } else if idx == PARAM_IDX {
-                                self.slots.get_dyn_mut(idx).drag_end();
+                                {
+                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                }
                                 self.is_resizing_param = false;
                                 self.sync_layout();
                                 self.upload_vertices();
                             } else if idx == SPREADSHEET_IDX {
-                                self.slots.get_dyn_mut(idx).drag_end();
+                                {
+                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                }
                                 self.is_resizing_spreadsheet = false;
                                 self.sync_layout();
                                 self.upload_vertices();
                             } else if idx == CONTENT_IDX {
-                                self.slots.get_dyn_mut(idx).drag_end();
+                                {
+                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                }
                                 let updated_nodes = self.graph().get_nodes();
                                 let dir = self.current_dir_mut();
                                 for (i, node) in updated_nodes.iter().enumerate() {
@@ -4874,7 +4900,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.update_panel_bounds();
                                 self.upload_vertices();
                             } else {
-                                self.slots.get_dyn_mut(idx).drag_end();
+                                {
+                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                }
                             }
                             self.drag_widget = None;
                             changed = true;
@@ -4885,7 +4914,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             for i in 0..WIDGET_COUNT {
                                 let w = self.slots.get_dyn_mut(i);
                                 w.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                if w.mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, ctx) {
+                                let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
+                                if w.handle_event(&ev, ctx) {
                                     changed = true;
                                     if i == PARAM_IDX {
                                         sync_params = true;
@@ -5259,7 +5289,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if changed {
                     true
                 } else if let Some(idx) = self.focused_widget {
-                    self.slots.get_dyn_mut(idx).keyboard_input(event, &mut self.ui_context)
+                    {
+                    let kev = cce_ui::widget::Event::KeyInput(event.clone());
+                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                    unsafe { (*ptr).handle_event(&kev, &mut self.ui_context) }
+                }
                 } else { false }
             }
         }
@@ -5461,7 +5495,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.sync_grid_settings();
             if let Some(idx) = self.drag_widget {
                 self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                self.slots.get_dyn_mut(idx).drag_update(self.cursor_x, self.cursor_y);
+                {
+                                let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
+                                let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
+                            };
             }
             self.sync_layout();
             self.read_panel_offsets();
