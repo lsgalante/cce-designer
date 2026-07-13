@@ -3673,13 +3673,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                 }
 
-                if self.slots.network_panel.is_dragging() {
-                    let (px, py, _pw, _ph) = self.slots.network_panel.rect();
-                    let r = self.circular_network_layout.r;
-                    self.circular_network_layout.x = px + r;
-                    self.circular_network_layout.y = py + r;
-                }
-
                 let gap = 18.0;
                 let max_r = ((self.width - paginator_w - 2.0 * gap).min(self.height - STATUS_H - 2.0 * gap) / 2.0).max(50.0);
                 self.circular_network_layout.r = self.circular_network_layout.r.clamp(50.0, max_r);
@@ -3738,12 +3731,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.slots.spreadsheet.set_visible(spreadsheet_visible);
                 self.slots.spreadsheet_menubar.set_visible(false);
             } else {
-                if !self.circular_network_pane && self.slots.network_panel.is_dragging() {
-                    let (px, py, _pw, _ph) = self.slots.network_panel.rect();
-                    self.floating_network_layout.0 = px;
-                    self.floating_network_layout.1 = py;
-                }
-
                 let gap = 18.0_f32;
                 let (mut _fx, mut _fy, mut fw, mut _fh) = self.floating_network_layout;
                 fw = fw.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
@@ -4460,9 +4447,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                         } {
                             changed = true;
-                            if idx == NETWORK_PANEL_IDX {
-                                self.sync_grid_settings();
-                            }
                             if idx == PARAM_IDX {
                                 self.sync_parameters_to_project();
                             }
@@ -4622,21 +4606,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
 
                         if *button == MouseButton::Left && self.circular_network_pane {
+                            // A border press focuses the pane and consumes. It used to also arm
+                            // a NETWORK_PANEL_IDX widget drag, but PassivePlate has no drag
+                            // hooks (the panel move died with the 6as Plate dissolution), so
+                            // the drag scaffolding is gone.
                             let on_border = self.circular_network_layout.hit_test_border(self.cursor_x, self.cursor_y, 12.0);
-                            let hit_menubar = false;
-                            if hit_menubar {
-                                if self.menu(LEFT_MENUBAR_IDX).get_menu_items_at(self.cursor_x, self.cursor_y).is_some() {
-                                    self.focused_pane = LEFT_MENUBAR_IDX;
-                                    self.slots.left_menubar.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                    if self.slots.left_menubar.mouse_input(*button, *btn_state, self.cursor_x, self.cursor_y, &mut self.ui_context) {
-                                        changed = true;
-                                    }
-                                }
-                            }
-                            if on_border || hit_menubar {
-                                self.drag_widget = Some(NETWORK_PANEL_IDX);
-                                self.slots.network_panel.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                self.slots.network_panel.drag_begin(self.cursor_x, self.cursor_y);
+                            if on_border {
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
                                     self.slots.get_dyn_mut(old).unfocus();
@@ -4682,9 +4657,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 if self.slots.breadcrumb.mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context) {
                                     return true;
                                 }
-                                self.drag_widget = Some(NETWORK_PANEL_IDX);
-                                self.slots.network_panel.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                self.slots.network_panel.drag_begin(cx, cy);
+                                // A strip press off the crumbs focuses the pane and consumes.
+                                // The NETWORK_PANEL_IDX drag it used to arm was inert (see the
+                                // circular-border note above).
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
                                     self.slots.get_dyn_mut(old).unfocus();
@@ -4953,15 +4928,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                         if self.drag_widget.is_some() {
                             let idx = self.drag_widget.unwrap();
-                            if idx == NETWORK_PANEL_IDX {
-                                {
-                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
-                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
-                                }
-                                self.sync_layout();
-                                self.read_panel_offsets();
-                                self.upload_vertices();
-                            } else if idx == PARAM_IDX {
+                            if idx == PARAM_IDX {
                                 {
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
