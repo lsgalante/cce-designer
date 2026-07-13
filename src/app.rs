@@ -4175,8 +4175,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if i == VIEWPORT_IDX {
                             continue;
                         }
-                        let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
-                        if self.ui_context.propagate_event(&wheel_ev, ptr) {
+                        let root = self.slots.get_dyn_mut(i).base().id();
+                        if self.ui_context.propagate_event(&wheel_ev, root) {
                             handled = true;
                             if i == CONTENT_IDX {
                                 let active_node_area_y = self.positions[CONTENT_IDX].1;
@@ -4217,7 +4217,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                     }
                     if !handled {
-                        let vp = self.slots.viewport.as_ptr_mut();
+                        let vp = self.slots.viewport.id();
                         if self.ui_context.propagate_event(&wheel_ev, vp) {
                             handled = true;
                         }

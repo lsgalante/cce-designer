@@ -108,11 +108,13 @@ impl State {
         let widget_ptrs: Vec<*mut (dyn WidgetHost + 'static)> = (0..WIDGET_COUNT)
             .map(|i| self.slots.get_dyn(i).as_ptr())
             .collect();
-        for &i in &draw_order {
+        // Register ALL slots, visible or not (id-rooted router): the wheel loop and the
+        // hidden-widget broadcasts dispatch by id over the whole roster, and visibility
+        // gates behavior inside the widget — an unregistered hidden root would drop the
+        // event before that gate.
+        for i in 0..WIDGET_COUNT {
             let w = self.slots.get_dyn(i);
-            if w.visible() {
-                self.ui_context.register_widget(w.base().id(), w.as_ptr());
-            }
+            self.ui_context.register_widget(w.base().id(), w.as_ptr());
         }
 
         let mut visited = vec![false; WIDGET_COUNT];
