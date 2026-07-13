@@ -1574,6 +1574,17 @@ impl AppState {
                                 Err(e) => Err(e),
                             }
                         }
+                        HttpAction::MenuAction { label } => {
+                            if state.execute_menu_action(&label) {
+                                // The arms relayout themselves but render() draws the last
+                                // uploaded buffer (same ritual as ToggleCircularPane).
+                                state.upload_vertices();
+                                needs_redraw = true;
+                                Ok(format!("Menu action executed: {}", label.replace(['"', '\\'], "'")))
+                            } else {
+                                Err(format!("unknown menu action label: {}", label.replace(['"', '\\'], "'")))
+                            }
+                        }
                         HttpAction::MenuClosed { widget_idx, menu_idx } => {
                             if state.active_menu_cloud_idx == Some((widget_idx, menu_idx)) {
                                 state.active_menu_cloud_pid = None;

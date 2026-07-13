@@ -337,6 +337,9 @@ pub enum HttpAction {
     ToggleCircularPane,
     MenuClick { widget_idx: usize, menu_idx: usize, item_idx: usize },
     MenuClosed { widget_idx: usize, menu_idx: usize },
+    /// Execute a label-matched menu-pane action ("Show Spreadsheet Pane", "Save", ...)
+    /// — the items `menu_click`'s index-matched menubar dispatch cannot reach.
+    MenuAction { label: String },
 }
 
 #[derive(Debug)]
@@ -1496,252 +1499,7 @@ impl State {
                         self.sync_nodes();
 
                         for btn_name in triggered_buttons {
-                            match btn_name.as_str() {
-                                "Update Parameters" => {
-                                    if let Some(slot_idx) = self.graph().selected_node() {
-                                        let dir = self.current_dir_mut();
-                                        if let Some(child) = dir.children.get_mut(slot_idx) {
-                                            if child.node_type == "opencl" {
-                                                let code_val = child.params.iter()
-                                                    .find(|p| p.name == "Code")
-                                                    .map(|p| p.default.clone())
-                                                    .unwrap_or_default();
-                                                let parsed_params = crate::geometry::parse_dynamic_params(&code_val);
-                                                let mut new_params = Vec::new();
-                                                for base_name in &["Input", "Code", "Update Parameters"] {
-                                                    if let Some(p) = child.params.iter().find(|p| p.name == *base_name) {
-                                                        new_params.push(p.clone());
-                                                    }
-                                                }
-                                                for mut parsed in parsed_params {
-                                                    if let Some(existing) = child.params.iter().find(|p| p.name == parsed.name) {
-                                                        parsed.default = existing.default.clone();
-                                                    }
-                                                    new_params.push(parsed);
-                                                }
-                                                child.params = new_params;
-                                                let updated_disp = param_display(&child.params);
-                                                self.param_mut().set_display_params(&updated_disp);
-                                                self.rebuild_scene_geometry();
-                                                self.sync_nodes();
-                                            }
-                                        }
-                                    }
-                                }
-                                "New Project" | "New" => {
-                                    self.new_project();
-                                }
-                                "Open" => {
-                                    self.open_file_chooser();
-                                }
-                                "Save" => {
-                                    let path_opt = self.loaded_project_path.clone();
-                                    if let Some(path) = path_opt {
-                                        if let Err(e) = self.save_to_file(&path) {
-                                            eprintln!("Failed to save project: {:?}", e);
-                                            self.update_status_text(&format!("Failed to save: {:?}", e));
-                                        } else {
-                                            self.update_status_text(&format!("Project saved to {}", path.display()));
-                                            self.add_recent_file(path);
-                                        }
-                                    } else {
-                                        self.save_file_chooser();
-                                    }
-                                }
-                                "Save As" => {
-                                    self.save_file_chooser();
-                                }
-                                "Exit" => {
-                                    self.exit_requested = true;
-                                }
-                                "Zoom In" => {
-                                    self.zoom(1.15, None);
-                                }
-                                "Zoom Out" => {
-                                    self.zoom(1.0 / 1.15, None);
-                                }
-                                "Reset Zoom" => {
-                                    self.grid_size_x = 150.0;
-                                    self.grid_size_y = 75.0;
-                                    self.skipped_col_w = 37.5;
-                                    self.skipped_row_h = 37.5;
-                                    self.sync_grid_settings();
-                                }
-                                "Detach Circular Window" | "Detach Pane" => {
-                                    self.execute_action(Action::DetachCircularWindow);
-                                }
-                                "Show Network Pane" => {
-                                    self.show_network = !self.show_network;
-                                    self.slots.content.set_visible(self.show_network);
-                                    self.slots.left_menubar.set_visible(self.show_network);
-                                    self.slots.breadcrumb.set_visible(self.show_network);
-                                    let val = self.show_network;
-                                    self.menu_mut(HEADER_IDX).set_item_checked(2, 4, val);
-                                    if !self.show_network && self.focused_pane == LEFT_MENUBAR_IDX {
-                                        self.focused_pane = get_next_visible_pane(
-                                            self.focused_pane,
-                                            self.show_network,
-                                            self.show_viewport,
-                                            self.show_parameters,
-                                            self.show_spreadsheet,
-                                            false,
-                                        );
-                                    }
-                                    self.rebuild_positions();
-                                    self.apply_layout();
-                                    self.sync_pane_focus();
-                                }
-                                "Show Viewport Pane" => {
-                                    self.show_viewport = !self.show_viewport;
-                                    self.slots.viewport.set_visible(self.show_viewport);
-                                    self.slots.right_menubar.set_visible(self.show_viewport);
-                                    let val = self.show_viewport;
-                                    self.menu_mut(HEADER_IDX).set_item_checked(2, 5, val);
-                                    if !self.show_viewport && self.focused_pane == RIGHT_MENUBAR_IDX {
-                                        self.focused_pane = get_next_visible_pane(
-                                            self.focused_pane,
-                                            self.show_network,
-                                            self.show_viewport,
-                                            self.show_parameters,
-                                            self.show_spreadsheet,
-                                            false,
-                                        );
-                                    }
-                                    self.rebuild_positions();
-                                    self.apply_layout();
-                                    self.sync_pane_focus();
-                                }
-                                "Show Parameters Pane" => {
-                                    self.show_parameters = !self.show_parameters;
-                                    self.slots.param.set_visible(self.show_parameters);
-                                    self.slots.param_menubar.set_visible(self.show_parameters);
-                                    let val = self.show_parameters;
-                                    self.menu_mut(HEADER_IDX).set_item_checked(2, 6, val);
-                                    if !self.show_parameters && self.focused_pane == PARAM_MENUBAR_IDX {
-                                        self.focused_pane = get_next_visible_pane(
-                                            self.focused_pane,
-                                            self.show_network,
-                                            self.show_viewport,
-                                            self.show_parameters,
-                                            self.show_spreadsheet,
-                                            false,
-                                        );
-                                    }
-                                    self.rebuild_positions();
-                                    self.apply_layout();
-                                    self.sync_pane_focus();
-                                }
-                                "Show Spreadsheet Pane" => {
-                                    self.show_spreadsheet = !self.show_spreadsheet;
-                                    self.slots.spreadsheet.set_visible(self.show_spreadsheet);
-                                    self.slots.spreadsheet_menubar.set_visible(self.show_spreadsheet);
-                                    let val = self.show_spreadsheet;
-                                    self.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
-                                    if !self.show_spreadsheet && self.focused_pane == SPREADSHEET_MENUBAR_IDX {
-                                        self.focused_pane = get_next_visible_pane(
-                                            self.focused_pane,
-                                            self.show_network,
-                                            self.show_viewport,
-                                            self.show_parameters,
-                                            self.show_spreadsheet,
-                                            false,
-                                        );
-                                    }
-                                    self.rebuild_positions();
-                                    self.apply_layout();
-                                    self.sync_pane_focus();
-                                }
-                                "Close Pane" => {
-                                    let mut parent_name = "";
-                                    if self.current_path.len() >= 1 {
-                                        let root_idx = self.current_path[0];
-                                        if let Some(r_node) = self.fs_root.children.get(root_idx) {
-                                            parent_name = r_node.name.as_str();
-                                        }
-                                    }
-                                    match parent_name {
-                                        "Network" => {
-                                            self.show_network = false;
-                                            self.slots.content.set_visible(false);
-                                            self.slots.left_menubar.set_visible(false);
-                                            self.slots.breadcrumb.set_visible(false);
-                                            self.menu_mut(HEADER_IDX).set_item_checked(2, 4, false);
-                                            if self.focused_pane == LEFT_MENUBAR_IDX {
-                                                self.focused_pane = get_next_visible_pane(
-                                                    self.focused_pane,
-                                                    self.show_network,
-                                                    self.show_viewport,
-                                                    self.show_parameters,
-                                                    self.show_spreadsheet,
-                                                    false,
-                                                );
-                                            }
-                                            self.rebuild_positions();
-                                            self.apply_layout();
-                                            self.sync_pane_focus();
-                                        }
-                                        "Viewport" => {
-                                            self.show_viewport = false;
-                                            self.slots.viewport.set_visible(false);
-                                            self.slots.right_menubar.set_visible(false);
-                                            self.menu_mut(HEADER_IDX).set_item_checked(2, 5, false);
-                                            if self.focused_pane == RIGHT_MENUBAR_IDX {
-                                                self.focused_pane = get_next_visible_pane(
-                                                    self.focused_pane,
-                                                    self.show_network,
-                                                    self.show_viewport,
-                                                    self.show_parameters,
-                                                    self.show_spreadsheet,
-                                                    false,
-                                                );
-                                            }
-                                            self.rebuild_positions();
-                                            self.apply_layout();
-                                            self.sync_pane_focus();
-                                        }
-                                        "Parameters" => {
-                                            self.show_parameters = false;
-                                            self.slots.param.set_visible(false);
-                                            self.slots.param_menubar.set_visible(false);
-                                            self.menu_mut(HEADER_IDX).set_item_checked(2, 6, false);
-                                            if self.focused_pane == PARAM_MENUBAR_IDX {
-                                                self.focused_pane = get_next_visible_pane(
-                                                    self.focused_pane,
-                                                    self.show_network,
-                                                    self.show_viewport,
-                                                    self.show_parameters,
-                                                    self.show_spreadsheet,
-                                                    false,
-                                                );
-                                            }
-                                            self.rebuild_positions();
-                                            self.apply_layout();
-                                            self.sync_pane_focus();
-                                        }
-                                        "Spreadsheet" => {
-                                            self.show_spreadsheet = false;
-                                            self.slots.spreadsheet.set_visible(false);
-                                            self.slots.spreadsheet_menubar.set_visible(false);
-                                            self.menu_mut(HEADER_IDX).set_item_checked(2, 7, false);
-                                            if self.focused_pane == SPREADSHEET_MENUBAR_IDX {
-                                                self.focused_pane = get_next_visible_pane(
-                                                    self.focused_pane,
-                                                    self.show_network,
-                                                    self.show_viewport,
-                                                    self.show_parameters,
-                                                    self.show_spreadsheet,
-                                                    false,
-                                                );
-                                            }
-                                            self.rebuild_positions();
-                                            self.apply_layout();
-                                            self.sync_pane_focus();
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                _ => {}
-                            }
+                            self.execute_menu_action(&btn_name);
                         }
                     }
                 }
@@ -1763,6 +1521,260 @@ impl State {
                 }
             }
         }
+    }
+
+    /// One label-matched menu action: the button-param menu pane's items, drained
+    /// per triggered button by `sync_parameters_to_project`, and reachable directly
+    /// through the HTTP API's `menu_action` (the index-matched `menu_click` cannot
+    /// reach these). Returns false for an unrecognized label.
+    pub fn execute_menu_action(&mut self, label: &str) -> bool {
+        match label {
+            "Update Parameters" => {
+                if let Some(slot_idx) = self.graph().selected_node() {
+                    let dir = self.current_dir_mut();
+                    if let Some(child) = dir.children.get_mut(slot_idx) {
+                        if child.node_type == "opencl" {
+                            let code_val = child.params.iter()
+                                .find(|p| p.name == "Code")
+                                .map(|p| p.default.clone())
+                                .unwrap_or_default();
+                            let parsed_params = crate::geometry::parse_dynamic_params(&code_val);
+                            let mut new_params = Vec::new();
+                            for base_name in &["Input", "Code", "Update Parameters"] {
+                                if let Some(p) = child.params.iter().find(|p| p.name == *base_name) {
+                                    new_params.push(p.clone());
+                                }
+                            }
+                            for mut parsed in parsed_params {
+                                if let Some(existing) = child.params.iter().find(|p| p.name == parsed.name) {
+                                    parsed.default = existing.default.clone();
+                                }
+                                new_params.push(parsed);
+                            }
+                            child.params = new_params;
+                            let updated_disp = param_display(&child.params);
+                            self.param_mut().set_display_params(&updated_disp);
+                            self.rebuild_scene_geometry();
+                            self.sync_nodes();
+                        }
+                    }
+                }
+            }
+            "New Project" | "New" => {
+                self.new_project();
+            }
+            "Open" => {
+                self.open_file_chooser();
+            }
+            "Save" => {
+                let path_opt = self.loaded_project_path.clone();
+                if let Some(path) = path_opt {
+                    if let Err(e) = self.save_to_file(&path) {
+                        eprintln!("Failed to save project: {:?}", e);
+                        self.update_status_text(&format!("Failed to save: {:?}", e));
+                    } else {
+                        self.update_status_text(&format!("Project saved to {}", path.display()));
+                        self.add_recent_file(path);
+                    }
+                } else {
+                    self.save_file_chooser();
+                }
+            }
+            "Save As" => {
+                self.save_file_chooser();
+            }
+            "Exit" => {
+                self.exit_requested = true;
+            }
+            "Zoom In" => {
+                self.zoom(1.15, None);
+            }
+            "Zoom Out" => {
+                self.zoom(1.0 / 1.15, None);
+            }
+            "Reset Zoom" => {
+                self.grid_size_x = 150.0;
+                self.grid_size_y = 75.0;
+                self.skipped_col_w = 37.5;
+                self.skipped_row_h = 37.5;
+                self.sync_grid_settings();
+            }
+            "Detach Circular Window" | "Detach Pane" => {
+                self.execute_action(Action::DetachCircularWindow);
+            }
+            "Show Network Pane" => {
+                self.show_network = !self.show_network;
+                self.slots.content.set_visible(self.show_network);
+                self.slots.left_menubar.set_visible(self.show_network);
+                self.slots.breadcrumb.set_visible(self.show_network);
+                let val = self.show_network;
+                self.menu_mut(HEADER_IDX).set_item_checked(2, 4, val);
+                if !self.show_network && self.focused_pane == LEFT_MENUBAR_IDX {
+                    self.focused_pane = get_next_visible_pane(
+                        self.focused_pane,
+                        self.show_network,
+                        self.show_viewport,
+                        self.show_parameters,
+                        self.show_spreadsheet,
+                        false,
+                    );
+                }
+                self.rebuild_positions();
+                self.apply_layout();
+                self.sync_pane_focus();
+            }
+            "Show Viewport Pane" => {
+                self.show_viewport = !self.show_viewport;
+                self.slots.viewport.set_visible(self.show_viewport);
+                self.slots.right_menubar.set_visible(self.show_viewport);
+                let val = self.show_viewport;
+                self.menu_mut(HEADER_IDX).set_item_checked(2, 5, val);
+                if !self.show_viewport && self.focused_pane == RIGHT_MENUBAR_IDX {
+                    self.focused_pane = get_next_visible_pane(
+                        self.focused_pane,
+                        self.show_network,
+                        self.show_viewport,
+                        self.show_parameters,
+                        self.show_spreadsheet,
+                        false,
+                    );
+                }
+                self.rebuild_positions();
+                self.apply_layout();
+                self.sync_pane_focus();
+            }
+            "Show Parameters Pane" => {
+                self.show_parameters = !self.show_parameters;
+                self.slots.param.set_visible(self.show_parameters);
+                self.slots.param_menubar.set_visible(self.show_parameters);
+                let val = self.show_parameters;
+                self.menu_mut(HEADER_IDX).set_item_checked(2, 6, val);
+                if !self.show_parameters && self.focused_pane == PARAM_MENUBAR_IDX {
+                    self.focused_pane = get_next_visible_pane(
+                        self.focused_pane,
+                        self.show_network,
+                        self.show_viewport,
+                        self.show_parameters,
+                        self.show_spreadsheet,
+                        false,
+                    );
+                }
+                self.rebuild_positions();
+                self.apply_layout();
+                self.sync_pane_focus();
+            }
+            "Show Spreadsheet Pane" => {
+                self.show_spreadsheet = !self.show_spreadsheet;
+                self.slots.spreadsheet.set_visible(self.show_spreadsheet);
+                self.slots.spreadsheet_menubar.set_visible(self.show_spreadsheet);
+                let val = self.show_spreadsheet;
+                self.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
+                if !self.show_spreadsheet && self.focused_pane == SPREADSHEET_MENUBAR_IDX {
+                    self.focused_pane = get_next_visible_pane(
+                        self.focused_pane,
+                        self.show_network,
+                        self.show_viewport,
+                        self.show_parameters,
+                        self.show_spreadsheet,
+                        false,
+                    );
+                }
+                self.rebuild_positions();
+                self.apply_layout();
+                self.sync_pane_focus();
+            }
+            "Close Pane" => {
+                let mut parent_name = "";
+                if self.current_path.len() >= 1 {
+                    let root_idx = self.current_path[0];
+                    if let Some(r_node) = self.fs_root.children.get(root_idx) {
+                        parent_name = r_node.name.as_str();
+                    }
+                }
+                match parent_name {
+                    "Network" => {
+                        self.show_network = false;
+                        self.slots.content.set_visible(false);
+                        self.slots.left_menubar.set_visible(false);
+                        self.slots.breadcrumb.set_visible(false);
+                        self.menu_mut(HEADER_IDX).set_item_checked(2, 4, false);
+                        if self.focused_pane == LEFT_MENUBAR_IDX {
+                            self.focused_pane = get_next_visible_pane(
+                                self.focused_pane,
+                                self.show_network,
+                                self.show_viewport,
+                                self.show_parameters,
+                                self.show_spreadsheet,
+                                false,
+                            );
+                        }
+                        self.rebuild_positions();
+                        self.apply_layout();
+                        self.sync_pane_focus();
+                    }
+                    "Viewport" => {
+                        self.show_viewport = false;
+                        self.slots.viewport.set_visible(false);
+                        self.slots.right_menubar.set_visible(false);
+                        self.menu_mut(HEADER_IDX).set_item_checked(2, 5, false);
+                        if self.focused_pane == RIGHT_MENUBAR_IDX {
+                            self.focused_pane = get_next_visible_pane(
+                                self.focused_pane,
+                                self.show_network,
+                                self.show_viewport,
+                                self.show_parameters,
+                                self.show_spreadsheet,
+                                false,
+                            );
+                        }
+                        self.rebuild_positions();
+                        self.apply_layout();
+                        self.sync_pane_focus();
+                    }
+                    "Parameters" => {
+                        self.show_parameters = false;
+                        self.slots.param.set_visible(false);
+                        self.slots.param_menubar.set_visible(false);
+                        self.menu_mut(HEADER_IDX).set_item_checked(2, 6, false);
+                        if self.focused_pane == PARAM_MENUBAR_IDX {
+                            self.focused_pane = get_next_visible_pane(
+                                self.focused_pane,
+                                self.show_network,
+                                self.show_viewport,
+                                self.show_parameters,
+                                self.show_spreadsheet,
+                                false,
+                            );
+                        }
+                        self.rebuild_positions();
+                        self.apply_layout();
+                        self.sync_pane_focus();
+                    }
+                    "Spreadsheet" => {
+                        self.show_spreadsheet = false;
+                        self.slots.spreadsheet.set_visible(false);
+                        self.slots.spreadsheet_menubar.set_visible(false);
+                        self.menu_mut(HEADER_IDX).set_item_checked(2, 7, false);
+                        if self.focused_pane == SPREADSHEET_MENUBAR_IDX {
+                            self.focused_pane = get_next_visible_pane(
+                                self.focused_pane,
+                                self.show_network,
+                                self.show_viewport,
+                                self.show_parameters,
+                                self.show_spreadsheet,
+                                false,
+                            );
+                        }
+                        self.rebuild_positions();
+                        self.apply_layout();
+                        self.sync_pane_focus();
+                    }
+                    _ => {}
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     pub fn sync_parameters_pane(&mut self) {
