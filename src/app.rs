@@ -1093,8 +1093,9 @@ impl State {
             .expect("VIEWPORT_IDX must be a Viewport3D")
     }
 
-    pub fn find_widget_index(&self, child_ptr: *mut (dyn WidgetHost + 'static)) -> Option<usize> {
-        let target_addr = child_ptr as *const ();
+    /// Roster index of the slot at `target_addr` (a thin widget address — the comparison
+    /// never dereferences; callers pass `ptr as *const ()`).
+    pub fn find_widget_index(&self, target_addr: *const ()) -> Option<usize> {
         (0..WIDGET_COUNT).position(|i| {
             let w_ptr = self.slots.get_dyn(i) as *const dyn WidgetHost as *const ();
             w_ptr == target_addr
@@ -1123,7 +1124,7 @@ impl State {
         }
         let child_ptrs = self.ui_context.tree.children_ptrs(self.slots.get_dyn(idx).base().id());
         for child_ptr in child_ptrs {
-            if let Some(child_idx) = self.find_widget_index(child_ptr) {
+            if let Some(child_idx) = self.find_widget_index(child_ptr as *const ()) {
                 if self.has_any_open_menu_impl(child_idx, visited) {
                     return true;
                 }
@@ -3222,7 +3223,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         for i in 0..WIDGET_COUNT {
             let w = state.slots.get_dyn_mut(i);
             let id = w.base().id();
-            let ptr = w.as_ptr_mut();
+            let ptr = w as *mut (dyn WidgetHost + 'static);
             state.ui_context.register_widget(id, ptr);
         }
         state
@@ -4386,7 +4387,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                             if {
                                 let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                             } {
                                 changed = true;
@@ -4421,7 +4422,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             };
                             let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
                             let mv = cce_ui::widget::Event::PointerMove { x: tx, y: ty, local_x: tx, local_y: ty };
-                            let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
+                            let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
                             if unsafe { (*ptr).handle_event(&mv, &mut self.ui_context) } {
                                 changed = true;
                             }
@@ -4797,7 +4798,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                             if {
                                 let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
+                                let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                             } {
                                 changed = true;
@@ -4810,7 +4811,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                                 {
                                     let ev = cce_ui::widget::Event::DragStart { start_x: self.cursor_x, start_y: self.cursor_y };
-                                    let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
+                                    let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&ev, &mut self.ui_context); }
                                 }
                                 self.drag_widget = Some(i);
@@ -4859,7 +4860,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             let idx = self.drag_widget.unwrap();
                             if idx == NETWORK_PANEL_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 self.is_resizing_network = None;
@@ -4868,7 +4869,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.upload_vertices();
                             } else if idx == PARAM_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 self.is_resizing_param = false;
@@ -4876,7 +4877,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.upload_vertices();
                             } else if idx == SPREADSHEET_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 self.is_resizing_spreadsheet = false;
@@ -4884,7 +4885,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.upload_vertices();
                             } else if idx == CONTENT_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 let updated_nodes = self.graph().get_nodes();
@@ -4906,7 +4907,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.upload_vertices();
                             } else {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                             }
@@ -5296,7 +5297,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 } else if let Some(idx) = self.focused_widget {
                     {
                     let kev = cce_ui::widget::Event::KeyInput(event.clone());
-                    let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                     unsafe { (*ptr).handle_event(&kev, &mut self.ui_context) }
                 }
                 } else { false }
@@ -5502,7 +5503,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                 {
                                 let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(idx).as_ptr_mut();
+                                let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                             };
             }

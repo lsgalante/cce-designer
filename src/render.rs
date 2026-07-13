@@ -106,7 +106,7 @@ impl State {
         // draw each top-level widget directly in the sorted order.
         self.ui_context.clear_hierarchy();
         let widget_ptrs: Vec<*mut (dyn WidgetHost + 'static)> = (0..WIDGET_COUNT)
-            .map(|i| self.slots.get_dyn(i).as_ptr())
+            .map(|i| self.slots.get_dyn(i) as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static))
             .collect();
         // Register ALL slots, visible or not (id-rooted router): the wheel loop and the
         // hidden-widget broadcasts dispatch by id over the whole roster, and visibility
@@ -114,7 +114,7 @@ impl State {
         // event before that gate.
         for i in 0..WIDGET_COUNT {
             let w = self.slots.get_dyn(i);
-            self.ui_context.register_widget(w.base().id(), w.as_ptr());
+            self.ui_context.register_widget(w.base().id(), w as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static));
         }
 
         let mut visited = vec![false; WIDGET_COUNT];
@@ -301,7 +301,7 @@ impl State {
 
         // Draw child elements recursively
         for child_ptr in self.ui_context.tree.children_ptrs(w.base().id()) {
-            if let Some(child_idx) = self.find_widget_index(child_ptr) {
+            if let Some(child_idx) = self.find_widget_index(child_ptr as *const ()) {
                 self.draw_widget_recursive(child_idx, verts, sw, sh, clip, clip_circle_val, show_cursor, node_area_y, visited);
             } else {
                 unsafe {
@@ -364,7 +364,7 @@ impl State {
             return;
         }
 
-        if let Some(idx) = self.find_widget_index(element.as_ptr()) {
+        if let Some(idx) = self.find_widget_index(element as *const dyn WidgetHost as *const ()) {
             self.draw_widget_recursive(idx, verts, sw, sh, clip, clip_circle_val, show_cursor, node_area_y, visited);
             return;
         }
