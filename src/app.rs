@@ -119,6 +119,56 @@ pub struct WidgetSlots {
 }
 
 impl WidgetSlots {
+
+    // Per-slot drag queries (the ControlPanel endgame took `draggable`/`is_dragging`
+    // off `WidgetHost`): the roster routes an index to the concrete slot's inherent
+    // `Adapted` read, like the other value drains.
+    pub fn draggable(&self, idx: usize) -> bool {
+        match idx {
+            HEADER_IDX => self.header.draggable(),
+            CONTENT_IDX => self.content.draggable(),
+            SPLITTER1_IDX => self.splitter1.draggable(),
+            VIEWPORT_IDX => self.viewport.draggable(),
+            SPLITTER2_IDX => self.splitter2.draggable(),
+            PARAM_PLATE_IDX => self.param_plate.draggable(),
+            PARAM_IDX => self.param.draggable(),
+            CANVAS_IDX => self.canvas.draggable(),
+            LEFT_MENUBAR_IDX => self.left_menubar.draggable(),
+            RIGHT_MENUBAR_IDX => self.right_menubar.draggable(),
+            PARAM_MENUBAR_IDX => self.param_menubar.draggable(),
+            STATUS_IDX => self.status.draggable(),
+            BREADCRUMB_IDX => self.breadcrumb.draggable(),
+            NODE_PALETTE_IDX => self.node_palette.draggable(),
+            SPREADSHEET_IDX => self.spreadsheet.draggable(),
+            SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.draggable(),
+            NETWORK_PANEL_IDX => self.network_panel.draggable(),
+            _ => panic!("widget slot index out of range: {idx}"),
+        }
+    }
+
+    pub fn is_dragging(&self, idx: usize) -> bool {
+        match idx {
+            HEADER_IDX => self.header.is_dragging(),
+            CONTENT_IDX => self.content.is_dragging(),
+            SPLITTER1_IDX => self.splitter1.is_dragging(),
+            VIEWPORT_IDX => self.viewport.is_dragging(),
+            SPLITTER2_IDX => self.splitter2.is_dragging(),
+            PARAM_PLATE_IDX => self.param_plate.is_dragging(),
+            PARAM_IDX => self.param.is_dragging(),
+            CANVAS_IDX => self.canvas.is_dragging(),
+            LEFT_MENUBAR_IDX => self.left_menubar.is_dragging(),
+            RIGHT_MENUBAR_IDX => self.right_menubar.is_dragging(),
+            PARAM_MENUBAR_IDX => self.param_menubar.is_dragging(),
+            STATUS_IDX => self.status.is_dragging(),
+            BREADCRUMB_IDX => self.breadcrumb.is_dragging(),
+            NODE_PALETTE_IDX => self.node_palette.is_dragging(),
+            SPREADSHEET_IDX => self.spreadsheet.is_dragging(),
+            SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.is_dragging(),
+            NETWORK_PANEL_IDX => self.network_panel.is_dragging(),
+            _ => panic!("widget slot index out of range: {idx}"),
+        }
+    }
+
     pub fn get_dyn(&self, idx: usize) -> &(dyn WidgetHost + 'static) {
         match idx {
             HEADER_IDX => &self.header,
@@ -3815,8 +3865,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     pub fn apply_layout(&mut self) {
         for (i, pos) in self.positions.iter().enumerate() {
             if i < WIDGET_COUNT {
+                if self.slots.is_dragging(i) { continue; }
                 let widget = self.slots.get_dyn_mut(i);
-                if widget.is_dragging() { continue; }
                 let (x, y, w, h) = *pos;
                 widget.set_rect(x, y, w, h);
             }
@@ -4815,7 +4865,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 }
 
                             }
-                            if self.slots.get_dyn_mut(i).draggable() {
+                            if self.slots.draggable(i) {
                                 self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                                 {
                                     let ev = cce_ui::widget::Event::DragStart { start_x: self.cursor_x, start_y: self.cursor_y };
