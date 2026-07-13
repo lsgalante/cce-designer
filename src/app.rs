@@ -4771,8 +4771,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             hit_order.sort_by_key(|&i| {
                                 let z = if i == NETWORK_PANEL_IDX || i == PARAM_PLATE_IDX {
                                     -5
-                                } else if i == VIEWPORT_IDX || i == PARAM_IDX {
+                                } else if i == VIEWPORT_IDX {
+                                    // Below PARAM_IDX: the params pane floats over the viewport,
+                                    // and the old shared -4 tier let the stable sort's index order
+                                    // hand every press over the pane to the viewport instead.
                                     -4
+                                } else if i == PARAM_IDX {
+                                    -3
                                 } else {
                                     self.slots.get_dyn_mut(i).z_index()
                                 };
