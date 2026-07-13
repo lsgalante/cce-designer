@@ -300,7 +300,7 @@ impl State {
         }
 
         // Draw child elements recursively
-        for child_ptr in w.children(&self.ui_context) {
+        for child_ptr in self.ui_context.tree.children_ptrs(w.base().id()) {
             if let Some(child_idx) = self.find_widget_index(child_ptr) {
                 self.draw_widget_recursive(child_idx, verts, sw, sh, clip, clip_circle_val, show_cursor, node_area_y, visited);
             } else {
@@ -378,7 +378,7 @@ impl State {
             push_circle_vertices(cx, cy, cr, sw, sh, cc, 16, active_clip_circle, verts);
         }
 
-        for child_ptr in element.children(&self.ui_context) {
+        for child_ptr in self.ui_context.tree.children_ptrs(element.base().id()) {
             unsafe {
                 self.draw_element_recursive(
                     &*child_ptr,
@@ -474,7 +474,7 @@ impl State {
                 if let Some(rect) = w.popover_rect() {
                     popovers.push(rect);
                 }
-                for child_ptr in w.children(ctx) {
+                for child_ptr in ctx.tree.children_ptrs(w.base().id()) {
                     unsafe {
                         if let Some(child) = child_ptr.as_ref() {
                             collect_popovers(child, popovers, ctx);
@@ -643,7 +643,7 @@ impl State {
             if let Some(rect) = w.popover_rect() {
                 popovers.push(rect);
             }
-            for child_ptr in w.children(ctx) {
+            for child_ptr in ctx.tree.children_ptrs(w.base().id()) {
                 unsafe {
                     if let Some(child) = child_ptr.as_ref() {
                         collect_popovers(child, popovers, ctx);

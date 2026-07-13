@@ -1121,7 +1121,7 @@ impl State {
                 return true;
             }
         }
-        let child_ptrs = self.slots.get_dyn(idx).children(&self.ui_context);
+        let child_ptrs = self.ui_context.tree.children_ptrs(self.slots.get_dyn(idx).base().id());
         for child_ptr in child_ptrs {
             if let Some(child_idx) = self.find_widget_index(child_ptr) {
                 if self.has_any_open_menu_impl(child_idx, visited) {
