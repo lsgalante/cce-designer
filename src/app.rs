@@ -4155,32 +4155,28 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 let mut handled = false;
                 let mut needs_sync_grid = false;
                 if !dialog_open && !self.modifiers.control_key() {
-                    let ctx = &mut self.ui_context;
-                    let now = std::time::Instant::now();
-                    let elapsed_ms = match ctx.last_scroll_time {
-                        None => 999999,
-                        Some(last) => now.duration_since(last).as_millis(),
+                    // Routed (6bd shrink): propagate_event owns the scroll-gesture
+                    // bookkeeping this loop used to hand-roll. The wheel is the only
+                    // designer surface routed so far — the press/move cascade stays
+                    // app-sovereign (see the routed-events deferral note below).
+                    let wheel_ev = cce_ui::widget::Event::MouseWheel {
+                        delta: *delta,
+                        x: self.cursor_x,
+                        y: self.cursor_y,
+                        local_x: self.cursor_x,
+                        local_y: self.cursor_y,
                     };
-                    if elapsed_ms >= 5 {
-                        let is_new_gesture = elapsed_ms > 250;
-                        if is_new_gesture {
-                            ctx.scroll_initiate_widget_id = None;
-                            ctx.scroll_gesture_new = true;
-                        } else {
-                            ctx.scroll_gesture_new = false;
-                        }
-                        ctx.last_scroll_time = Some(now);
-                    }
                     for i in 0..WIDGET_COUNT {
                         if i == VIEWPORT_IDX {
                             continue;
                         }
-                        let w = self.slots.get_dyn_mut(i);
-                        if w.mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
+                        let ptr = self.slots.get_dyn_mut(i).as_ptr_mut();
+                        if self.ui_context.propagate_event(&wheel_ev, ptr) {
                             handled = true;
                             if i == CONTENT_IDX {
                                 let active_node_area_y = self.positions[CONTENT_IDX].1;
                                 let active_node_area_x = self.positions[CONTENT_IDX].0;
+                                let w = self.slots.get_dyn(i);
                                 let (gx, gy) = cce_ui::widget::GraphController::grid_origin(
                                     w.as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph"),
                                 );
@@ -4216,7 +4212,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                     }
                     if !handled {
-                        if self.slots.viewport.mouse_wheel(delta, self.cursor_x, self.cursor_y, ctx) {
+                        let vp = self.slots.viewport.as_ptr_mut();
+                        if self.ui_context.propagate_event(&wheel_ev, vp) {
                             handled = true;
                         }
                     }
@@ -4422,6 +4419,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 }
                 changed
             }
+            // ROUTED-EVENTS DEFERRAL (6bd): the press/move/keyboard cascade below stays on
+            // direct dispatch deliberately. `drag_widget` doubles as widget-drag AND
+            // app-mode-drag (floating-pane edge resizes, cross-widget panel drags started
+            // from menubar/breadcrumb presses, circular-border hits) — policy the router
+            // cannot own; running its drag tracker alongside would deliver DragUpdates at
+            // this loop's substituted (-9999) coords. Converting means redesigning the
+            // designer's event layer (its own z-ordered windowing), not a call-form swap.
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
                 println!("DEBUG: MouseInput state={:?} button={:?} cursor=({}, {})", btn_state, button, self.cursor_x, self.cursor_y);
                 if *btn_state == ElementState::Pressed {
