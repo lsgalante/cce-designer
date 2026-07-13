@@ -27,7 +27,7 @@ use wayland_client::{
 
 use cce_ui::widget::WidgetHost;
 use crate::shortcut::Action;
-use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
+use crate::app::{State, CustomEvent, HttpAction, ModifiersState, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, CONTENT_IDX, BREADCRUMB_IDX, VIEWPORT_IDX, PARAM_IDX, SPREADSHEET_IDX, WIDGET_COUNT, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalPosition {
@@ -1540,10 +1540,39 @@ impl AppState {
                             Ok(format!("Circular pane: {}", state.circular_network_pane))
                         }
                         HttpAction::MenuClick { widget_idx, menu_idx, item_idx } => {
-                            state.menu_mut(widget_idx).trigger_menu_click(menu_idx, item_idx);
-                            self.process_event(WindowEvent::CursorMoved { position: LocalPosition { x: -9999.0, y: -9999.0 } });
-                            needs_redraw = true;
-                            Ok("Menu clicked".to_string())
+                            // Validate before touching menu_mut(): a non-menubar widget_idx
+                            // panics its MenuBar downcast, and out-of-range menu/item indices
+                            // used to reply "Menu clicked" while dispatching nowhere. NB the
+                            // pane-toggle items ("Show Spreadsheet Pane", ...) are NOT in these
+                            // menubars — they are button params in the menu pane, drained by
+                            // sync_parameters_to_project's label match, unreachable from here.
+                            let validated: Result<String, String> = if widget_idx >= WIDGET_COUNT {
+                                Err(format!("widget_idx {widget_idx} out of range (widget slots: 0..{WIDGET_COUNT})"))
+                            } else if let Some(menubar) = state.menubar_at(widget_idx) {
+                                match menubar.menu_dropdowns.get(menu_idx) {
+                                    None => Err(format!(
+                                        "menu_idx {menu_idx} out of range: menubar {widget_idx} has {} menus",
+                                        menubar.menu_dropdowns.len()
+                                    )),
+                                    // The reply body is interpolated into JSON unescaped, so
+                                    // keep these messages free of quotes/backslashes.
+                                    Some(items) => items.get(item_idx).cloned().ok_or_else(|| format!(
+                                        "item_idx {item_idx} out of range: menu {menu_idx} has {} items: [{}]",
+                                        items.len(), items.join(", ")
+                                    )),
+                                }
+                            } else {
+                                Err(format!("widget_idx {widget_idx} is not a menubar"))
+                            };
+                            match validated {
+                                Ok(label) => {
+                                    state.menu_mut(widget_idx).trigger_menu_click(menu_idx, item_idx);
+                                    self.process_event(WindowEvent::CursorMoved { position: LocalPosition { x: -9999.0, y: -9999.0 } });
+                                    needs_redraw = true;
+                                    Ok(format!("Menu clicked: {label}"))
+                                }
+                                Err(e) => Err(e),
+                            }
                         }
                         HttpAction::MenuClosed { widget_idx, menu_idx } => {
                             if state.active_menu_cloud_idx == Some((widget_idx, menu_idx)) {
