@@ -3840,9 +3840,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     }
 
     pub fn sync_pane_focus(&mut self) {
-        for &menubar_idx in &[HEADER_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX] {
-            self.slots.get_dyn_mut(menubar_idx).set_selected(menubar_idx == self.focused_pane);
-        }
+        // 6bd value shrink: `set_selected` left `WidgetHost` — the five menubar slots are
+        // concrete `Adapted<MenuBar>` fields, selected-state sync goes to them directly.
+        let f = self.focused_pane;
+        self.slots.header.set_selected(HEADER_IDX == f);
+        self.slots.left_menubar.set_selected(LEFT_MENUBAR_IDX == f);
+        self.slots.right_menubar.set_selected(RIGHT_MENUBAR_IDX == f);
+        self.slots.param_menubar.set_selected(PARAM_MENUBAR_IDX == f);
+        self.slots.spreadsheet_menubar.set_selected(SPREADSHEET_MENUBAR_IDX == f);
         if self.focused_pane != PARAM_MENUBAR_IDX {
             self.slots.param.unfocus();
             self.sync_parameters_to_project();
