@@ -71,7 +71,11 @@ fn main() {
             .and_then(|w| w[1].parse::<u32>().ok())
             .unwrap_or(256)
             .clamp(16, 2048);
-        match thumbnail::run(std::path::Path::new(project), std::path::Path::new(out), size) {
+        let samples = args
+            .windows(2)
+            .find(|w| w[0] == "--samples")
+            .and_then(|w| w[1].parse::<u32>().ok());
+        match thumbnail::run(std::path::Path::new(project), std::path::Path::new(out), size, samples) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 eprintln!("cce-designer --thumbnail: {e}");

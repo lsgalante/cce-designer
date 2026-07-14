@@ -18,8 +18,8 @@ use crate::geometry::{network_sphere_vertices_with_errors, rt_scene_from_verts};
 const SAMPLES: u32 = 96;
 
 /// Render `project` (a project directory or a `state.json` path) to a square
-/// `size`×`size` PNG at `out`.
-pub fn run(project: &Path, out: &Path, size: u32) -> Result<(), String> {
+/// `size`×`size` PNG at `out`, with `samples` paths per pixel (None = 96).
+pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>) -> Result<(), String> {
     let state_file = if project.is_dir() { project.join("state.json") } else { project.to_path_buf() };
     let content = std::fs::read_to_string(&state_file)
         .map_err(|e| format!("read {}: {e}", state_file.display()))?;
@@ -50,7 +50,7 @@ pub fn run(project: &Path, out: &Path, size: u32) -> Result<(), String> {
 
     let mut off = cce_ui::vk::RtOffscreen::new();
     off.set_scene(&tris, &mats);
-    let pixels = off.render(camera, size, size, SAMPLES);
+    let pixels = off.render(camera, size, size, samples.unwrap_or(SAMPLES));
 
     let file = std::fs::File::create(out).map_err(|e| format!("create {}: {e}", out.display()))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size, size);
