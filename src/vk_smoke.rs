@@ -32,9 +32,10 @@ use wayland_client::{
 use calloop_wayland_source::WaylandSource;
 
 use cce_ui::engine::{quad_vertices, Vertex};
+use glam::{Mat4, Vec3};
 use glyphon::cosmic_text::{Attrs, Buffer as TextBuffer, Family, Metrics, Shaping};
 use glyphon::{FontSystem, SwashCache};
-use vk::{TextSpan, VkRenderer};
+use vk::{SceneDraw, TextSpan, Vertex3D, VkRenderer};
 
 struct SmokeApp {
     registry_state: RegistryState,
@@ -167,52 +168,78 @@ fn make_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> TextBuffe
     buffer
 }
 
-/// Designer-style test scene in logical coordinates.
+fn quad3(v: &mut Vec<Vertex3D>, a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3], col: [f32; 3]) {
+    for p in [a, b, c, a, c, d] {
+        v.push(Vertex3D { position: p, color: col });
+    }
+}
+
+/// Colored cube, CCW-from-outside winding (the 3D pipeline culls back faces).
+fn cube_verts() -> Vec<Vertex3D> {
+    let s = 0.5;
+    let mut v = Vec::new();
+    quad3(&mut v, [-s, -s, s], [s, -s, s], [s, s, s], [-s, s, s], [0.85, 0.35, 0.30]);
+    quad3(&mut v, [s, -s, -s], [-s, -s, -s], [-s, s, -s], [s, s, -s], [0.30, 0.55, 0.90]);
+    quad3(&mut v, [s, -s, s], [s, -s, -s], [s, s, -s], [s, s, s], [0.90, 0.75, 0.25]);
+    quad3(&mut v, [-s, -s, -s], [-s, -s, s], [-s, s, s], [-s, s, -s], [0.35, 0.80, 0.45]);
+    quad3(&mut v, [-s, s, s], [s, s, s], [s, s, -s], [-s, s, -s], [0.80, 0.80, 0.85]);
+    quad3(&mut v, [-s, -s, -s], [s, -s, -s], [s, -s, s], [-s, -s, s], [0.45, 0.40, 0.60]);
+    v
+}
+
+/// Floor grid on the XZ plane, both windings (visible from above and below).
+fn grid_verts() -> Vec<Vertex3D> {
+    let col = [0.22, 0.22, 0.28];
+    let (half, t) = (2.0, 0.01);
+    let mut v = Vec::new();
+    for i in -4i32..=4 {
+        let p = i as f32 * 0.5;
+        quad3(&mut v, [-half, 0.0, p - t], [half, 0.0, p - t], [half, 0.0, p + t], [-half, 0.0, p + t], col);
+        quad3(&mut v, [-half, 0.0, p + t], [half, 0.0, p + t], [half, 0.0, p - t], [-half, 0.0, p - t], col);
+        quad3(&mut v, [p - t, 0.0, -half], [p + t, 0.0, -half], [p + t, 0.0, half], [p - t, 0.0, half], col);
+        quad3(&mut v, [p + t, 0.0, -half], [p - t, 0.0, -half], [p - t, 0.0, half], [p + t, 0.0, half], col);
+    }
+    v
+}
+
+/// The designer's viewport-background quad: z=9.99 triggers the shader's
+/// far-plane special case, filling the scissor with the (linear) bg color.
+fn viewport_bg_verts() -> Vec<Vertex3D> {
+    let color = cce_ui::colors::to_linear_rgb([0.10, 0.10, 0.13]);
+    let mut v = Vec::new();
+    quad3(&mut v, [-1.0, -1.0, 9.99], [1.0, -1.0, 9.99], [1.0, 1.0, 9.99], [-1.0, 1.0, 9.99], color);
+    v
+}
+
+/// Designer-style 2D chrome in logical coordinates. No full-window background —
+/// the 3D viewport (copied in as the backdrop) shows through everywhere the UI
+/// doesn't paint, exactly like the app.
 fn build_scene(lw: f32, lh: f32, scale: f32, t: f32) -> Vec<Vertex> {
     let mut verts: Vec<Vertex> = Vec::new();
 
-    // Window background (full-surface quad; the shader rounds the window corners).
-    verts.extend(quad_vertices(0.0, 0.0, lw, lh, lw, lh, [0.09, 0.09, 0.11, 1.0]));
-
-    // A header bar and a side panel, like the app's chrome.
+    // Header bar + side panel chrome.
     verts.extend(quad_vertices(0.0, 0.0, lw, 36.0, lw, lh, [0.13, 0.13, 0.17, 1.0]));
     verts.extend(quad_vertices(0.0, 36.0, 56.0, lh - 36.0, lw, lh, [0.11, 0.11, 0.145, 1.0]));
 
-    // A row of alpha-blended quads.
-    let palette = [
-        [0.90, 0.35, 0.30, 0.9],
-        [0.95, 0.75, 0.25, 0.9],
-        [0.35, 0.80, 0.45, 0.9],
-        [0.30, 0.55, 0.95, 0.9],
-    ];
+    // Floating alpha-blended quads over the 3D scene.
+    let palette = [[0.90, 0.35, 0.30, 0.9], [0.95, 0.75, 0.25, 0.9], [0.35, 0.80, 0.45, 0.9]];
     for (i, color) in palette.iter().enumerate() {
-        let x = 90.0 + i as f32 * 90.0;
-        verts.extend(quad_vertices(x, 70.0, 70.0, 70.0, lw, lh, *color));
+        verts.extend(quad_vertices(70.0 + i as f32 * 50.0, 46.0, 40.0, 40.0, lw, lh, *color));
     }
 
-    // Animated quad: hue-cycled color proves per-frame uploads and presentation.
+    // Animated quad: hue-cycled color proves per-frame uploads.
     let pulse = |phase: f32| 0.5 + 0.5 * (t * 2.0 + phase).sin();
-    verts.extend(quad_vertices(
-        90.0,
-        170.0,
-        160.0,
-        90.0,
-        lw,
-        lh,
-        [pulse(0.0), pulse(2.1), pulse(4.2), 1.0],
-    ));
+    verts.extend(quad_vertices(70.0, 96.0, 80.0, 30.0, lw, lh, [pulse(0.0), pulse(2.1), pulse(4.2), 1.0]));
 
-    // Circle-clipped quad: exercises the clip_circle fragment path. The clip
-    // center/radius are in physical pixels (the shader tests clip_position).
-    let (ccx, ccy, ccr) = (420.0f32, 215.0f32, 45.0f32);
+    // Circle-clipped quad (clip center/radius in physical pixels).
+    let (ccx, ccy, ccr) = (320.0f32, 90.0f32, 26.0f32);
     let clip = [ccx * scale, ccy * scale, ccr * scale];
-    for v in quad_vertices(ccx - 60.0, ccy - 60.0, 120.0, 120.0, lw, lh, [0.85, 0.45, 0.85, 1.0]) {
+    for v in quad_vertices(ccx - 30.0, ccy - 30.0, 60.0, 60.0, lw, lh, [0.85, 0.45, 0.85, 1.0]) {
         verts.push(Vertex { clip_circle: clip, ..v });
     }
 
-    // Blur-behind plate (negative alpha): mixes with the backdrop texture — a 1x1
-    // placeholder for now, so it reads as a darkened plate.
-    verts.extend(quad_vertices(90.0, 290.0, 375.0, 80.0, lw, lh, [0.45, 0.55, 0.95, -0.55]));
+    // Blur-behind plate (negative alpha): blurs the real 3D backdrop beneath it.
+    verts.extend(quad_vertices(110.0, 140.0, 200.0, 70.0, lw, lh, [0.45, 0.55, 0.95, -0.55]));
 
     verts
 }
@@ -276,6 +303,16 @@ fn main() {
         Some(unsafe { VkRenderer::new(display_ptr, surface_ptr, pw, ph, radius) });
     log::info!("vk-smoke: renderer up at {pw}x{ph} (scale {})", app.scale);
 
+    // 3D meshes for the viewport scene.
+    let (bg_mesh, grid_mesh, cube_mesh) = {
+        let r = app.renderer.as_mut().unwrap();
+        (
+            r.create_mesh(&viewport_bg_verts()),
+            r.create_mesh(&grid_verts()),
+            r.create_mesh(&cube_verts()),
+        )
+    };
+
     // Text stack: same bundled fonts as the app, shaped once up front.
     let mut font_system = cce_ui::create_font_system();
     let mut swash_cache = SwashCache::new();
@@ -315,8 +352,8 @@ fn main() {
             },
             TextSpan {
                 buffer: &body_buf,
-                left: 66.0 * s,
-                top: 44.0 * s,
+                left: 120.0 * s,
+                top: 158.0 * s,
                 scale: s,
                 bounds: None,
                 // Animated color: proves per-frame vertex rebuilds.
@@ -325,18 +362,39 @@ fn main() {
             TextSpan {
                 buffer: &clipped_buf,
                 left: 66.0 * s,
-                top: 148.0 * s,
+                top: 215.0 * s,
                 scale: s,
                 bounds: Some([
                     (66.0 * s) as i32,
-                    (148.0 * s) as i32,
+                    (215.0 * s) as i32,
                     (260.0 * s) as i32,
-                    (166.0 * s) as i32,
+                    (233.0 * s) as i32,
                 ]),
                 default_color: [0.70, 0.85, 1.00, 1.0],
             },
         ];
         if let Some(renderer) = &mut app.renderer {
+            // 3D pane: right of the side panel, below the header (physical px).
+            // Full-frame NDC scissored to the pane, exactly like the app.
+            let pane = (
+                (56.0 * s) as u32,
+                (36.0 * s) as u32,
+                ((lw - 56.0) * s) as u32,
+                ((lh - 36.0) * s) as u32,
+            );
+            let aspect = (lw - 56.0) / (lh - 36.0);
+            let proj = Mat4::perspective_rh(0.9, aspect, 0.1, 100.0);
+            let view = Mat4::look_at_rh(Vec3::new(2.5, 1.8, 2.5), Vec3::ZERO, Vec3::Y);
+            let model = Mat4::from_rotation_y(t * 0.8);
+            let mvp = (proj * view * model).to_cols_array_2d();
+            renderer.stage_scene(
+                pane,
+                vec![
+                    SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d() },
+                    SceneDraw { mesh: grid_mesh, mvp },
+                    SceneDraw { mesh: cube_mesh, mvp },
+                ],
+            );
             renderer.prepare_text(&mut font_system, &mut swash_cache, &spans);
             // FIFO present paces this loop to the display's refresh rate.
             renderer.draw_frame(&verts);

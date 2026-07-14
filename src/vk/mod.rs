@@ -10,7 +10,10 @@
 //! `vk-smoke` is the standalone proof of this renderer.
 
 mod renderer;
+mod scene;
 mod text;
 
 pub use renderer::VkRenderer;
+#[allow(unused_imports)] // MeshId is cutover API; smoke uses ids via inference
+pub use scene::{MeshId, SceneDraw, Vertex3D};
 pub use text::TextSpan;

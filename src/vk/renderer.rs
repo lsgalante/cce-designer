@@ -15,6 +15,7 @@ use gpu_allocator::MemoryLocation;
 
 use cce_ui::engine::Vertex;
 
+use super::scene::{MeshId, SceneDraw, SceneStage, Vertex3D};
 use super::text::{TextSpan, TextStage};
 
 const FRAMES_IN_FLIGHT: usize = 2;
@@ -112,6 +113,7 @@ pub struct VkRenderer {
     swapchain: vk::SwapchainKHR,
     surface_format: vk::SurfaceFormatKHR,
     extent: vk::Extent2D,
+    swapchain_images: Vec<vk::Image>,
     swapchain_views: Vec<vk::ImageView>,
     framebuffers: Vec<vk::Framebuffer>,
     // One per swapchain image (not per frame in flight): present waits on the
@@ -119,6 +121,9 @@ pub struct VkRenderer {
     render_finished: Vec<vk::Semaphore>,
 
     render_pass: vk::RenderPass,
+    /// UI pass over a backdrop copy: loadOp LOAD, initial layout TRANSFER_DST.
+    /// Framebuffers are shared with `render_pass` (compatible attachments).
+    render_pass_load: vk::RenderPass,
     descriptor_set_layout: vk::DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
@@ -126,9 +131,6 @@ pub struct VkRenderer {
 
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
-    backdrop_image: vk::Image,
-    backdrop_view: vk::ImageView,
-    backdrop_allocation: Option<Allocation>,
     backdrop_sampler: vk::Sampler,
     window_info: AllocatedBuffer,
 
@@ -136,15 +138,17 @@ pub struct VkRenderer {
     frames: Vec<Frame>,
     frame_index: usize,
     text: TextStage,
+    scene: SceneStage,
 
     desired_extent: vk::Extent2D,
     corner_radius_px: f32,
     swapchain_dirty: bool,
 }
 
-/// Compile WGSL to SPIR-V with the same coordinate-space adjustment wgpu applies
-/// (wgpu NDC is Y-up; ADJUST_COORDINATE_SPACE emits the Vulkan Y-flip), so the
-/// existing NDC math in the app carries over unchanged.
+/// Compile WGSL to SPIR-V. The Y-flip between wgpu NDC (Y-up) and Vulkan NDC
+/// (Y-down) is handled with a negative-height viewport (like wgpu-hal), NOT in
+/// the shader — flipping in the shader would reverse screen-space winding and
+/// break the 3D pipeline's back-face culling.
 pub(crate) fn compile_wgsl(source: &str) -> Vec<u32> {
     let module = naga::front::wgsl::parse_str(source).expect("WGSL parse failed");
     let info = naga::valid::Validator::new(
@@ -155,11 +159,106 @@ pub(crate) fn compile_wgsl(source: &str) -> Vec<u32> {
     .expect("WGSL validation failed");
     let options = naga::back::spv::Options {
         lang_version: (1, 0),
-        flags: naga::back::spv::WriterFlags::ADJUST_COORDINATE_SPACE
-            | naga::back::spv::WriterFlags::LABEL_VARYINGS,
+        flags: naga::back::spv::WriterFlags::LABEL_VARYINGS,
         ..Default::default()
     };
     naga::back::spv::write_vec(&module, &info, &options, None).expect("SPIR-V write failed")
+}
+
+const COLOR_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+    aspect_mask: vk::ImageAspectFlags::COLOR,
+    base_mip_level: 0,
+    level_count: 1,
+    base_array_layer: 0,
+    layer_count: 1,
+};
+
+/// One-time submit: clear a color image and leave it in SHADER_READ_ONLY, so a
+/// freshly created backdrop is always legal to sample.
+pub(crate) fn clear_image_to_shader_read(
+    device: &ash::Device,
+    queue: vk::Queue,
+    command_pool: vk::CommandPool,
+    image: vk::Image,
+) {
+    unsafe {
+        let cmd = device
+            .allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(command_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+            .expect("Failed to allocate init command buffer")[0];
+        device
+            .begin_command_buffer(
+                cmd,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+            .unwrap();
+        device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(COLOR_RANGE)],
+        );
+        device.cmd_clear_color_image(
+            cmd,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 0.0] },
+            &[COLOR_RANGE],
+        );
+        device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(COLOR_RANGE)],
+        );
+        device.end_command_buffer(cmd).unwrap();
+        let cmds = [cmd];
+        let submit = vk::SubmitInfo::default().command_buffers(&cmds);
+        device
+            .queue_submit(queue, &[submit], vk::Fence::null())
+            .expect("Init submit failed");
+        device.queue_wait_idle(queue).expect("Init wait failed");
+        device.free_command_buffers(command_pool, &cmds);
+    }
+}
+
+/// The wgpu-convention viewport: Y flipped via negative height (Vulkan >= 1.1).
+pub(crate) fn flipped_viewport(extent: vk::Extent2D) -> vk::Viewport {
+    vk::Viewport {
+        x: 0.0,
+        y: extent.height as f32,
+        width: extent.width as f32,
+        height: -(extent.height as f32),
+        min_depth: 0.0,
+        max_depth: 1.0,
+    }
 }
 
 unsafe extern "system" fn debug_callback(
@@ -381,13 +480,22 @@ impl VkRenderer {
         let subpasses = [vk::SubpassDescription::default()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .color_attachments(&color_refs)];
+        // One dependency shared VERBATIM by both UI pass variants: framebuffer
+        // compatibility requires identical dependencies (only load/store ops and
+        // image layouts may differ), so this unions the clear case (previous
+        // frame's color output) with the load case (the backdrop copy's write).
         let dependencies = [vk::SubpassDependency::default()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .src_access_mask(vk::AccessFlags::empty())
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::TRANSFER,
+            )
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)];
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            )];
         let render_pass = device
             .create_render_pass(
                 &vk::RenderPassCreateInfo::default()
@@ -397,6 +505,27 @@ impl VkRenderer {
                 None,
             )
             .expect("Failed to create render pass");
+
+        // Variant used when a backdrop copy precedes the UI pass: keep the copied
+        // pixels (LOAD) and take the image from the copy's TRANSFER_DST layout.
+        let attachments_load = [vk::AttachmentDescription::default()
+            .format(surface_format.format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::LOAD)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)];
+        let render_pass_load = device
+            .create_render_pass(
+                &vk::RenderPassCreateInfo::default()
+                    .attachments(&attachments_load)
+                    .subpasses(&subpasses)
+                    .dependencies(&dependencies),
+                None,
+            )
+            .expect("Failed to create load render pass");
 
         // Descriptor set layout mirroring shader.wgsl @group(0): naga maps WGSL
         // texture/sampler/uniform bindings 1:1 onto set 0 descriptor bindings.
@@ -531,127 +660,22 @@ impl VkRenderer {
             )
             .expect("Failed to create command pool");
 
-        // Backdrop placeholder: 1x1 black, cleared + transitioned once at startup.
-        let backdrop_image = device
-            .create_image(
-                &vk::ImageCreateInfo::default()
-                    .image_type(vk::ImageType::TYPE_2D)
-                    .format(vk::Format::R8G8B8A8_UNORM)
-                    .extent(vk::Extent3D { width: 1, height: 1, depth: 1 })
-                    .mip_levels(1)
-                    .array_layers(1)
-                    .samples(vk::SampleCountFlags::TYPE_1)
-                    .tiling(vk::ImageTiling::OPTIMAL)
-                    .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
-                    .initial_layout(vk::ImageLayout::UNDEFINED),
-                None,
-            )
-            .expect("Failed to create backdrop image");
-        let backdrop_requirements = device.get_image_memory_requirements(backdrop_image);
-        let backdrop_allocation = allocator
-            .allocate(&AllocationCreateDesc {
-                name: "backdrop",
-                requirements: backdrop_requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: false,
-                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            })
-            .expect("Failed to allocate backdrop memory");
-        device
-            .bind_image_memory(
-                backdrop_image,
-                backdrop_allocation.memory(),
-                backdrop_allocation.offset(),
-            )
-            .expect("Failed to bind backdrop memory");
-
-        let subresource_range = vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_mip_level(0)
-            .level_count(1)
-            .base_array_layer(0)
-            .layer_count(1);
-
-        // One-time init: clear the backdrop and move it to SHADER_READ_ONLY.
-        {
-            let cmd = device
-                .allocate_command_buffers(
-                    &vk::CommandBufferAllocateInfo::default()
-                        .command_pool(command_pool)
-                        .level(vk::CommandBufferLevel::PRIMARY)
-                        .command_buffer_count(1),
-                )
-                .expect("Failed to allocate init command buffer")[0];
-            device
-                .begin_command_buffer(
-                    cmd,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .unwrap();
-            let to_transfer = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(backdrop_image)
-                .subresource_range(subresource_range);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[to_transfer],
-            );
-            device.cmd_clear_color_image(
-                cmd,
-                backdrop_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 0.0] },
-                &[subresource_range],
-            );
-            let to_sampled = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(backdrop_image)
-                .subresource_range(subresource_range);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[to_sampled],
-            );
-            device.end_command_buffer(cmd).unwrap();
-            let cmds = [cmd];
-            let submit = vk::SubmitInfo::default().command_buffers(&cmds);
-            device
-                .queue_submit(queue, &[submit], vk::Fence::null())
-                .expect("Init submit failed");
-            device.queue_wait_idle(queue).expect("Init wait failed");
-            device.free_command_buffers(command_pool, &cmds);
-        }
-
-        let backdrop_view = device
-            .create_image_view(
-                &vk::ImageViewCreateInfo::default()
-                    .image(backdrop_image)
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(vk::Format::R8G8B8A8_UNORM)
-                    .subresource_range(subresource_range),
-                None,
-            )
-            .expect("Failed to create backdrop view");
+        // Full-size backdrop + depth live in the scene stage: the 3D pass renders
+        // into the backdrop, and the UI pass samples it for blur-behind plates.
+        let min_uniform_align = instance
+            .get_physical_device_properties(physical_device)
+            .limits
+            .min_uniform_buffer_offset_alignment;
+        let initial_extent = vk::Extent2D { width: width.max(1), height: height.max(1) };
+        let scene = SceneStage::new(
+            &device,
+            &mut allocator,
+            surface_format.format,
+            initial_extent,
+            FRAMES_IN_FLIGHT,
+            min_uniform_align,
+        );
+        clear_image_to_shader_read(&device, queue, command_pool, scene.backdrop_image);
 
         // Matches the wgpu backdrop sampler: linear, clamp-to-edge.
         let backdrop_sampler = device
@@ -703,7 +727,7 @@ impl VkRenderer {
             .expect("Failed to allocate descriptor set")[0];
 
         let image_infos = [vk::DescriptorImageInfo::default()
-            .image_view(backdrop_view)
+            .image_view(scene.backdrop_view)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
         let sampler_infos = [vk::DescriptorImageInfo::default().sampler(backdrop_sampler)];
         let buffer_infos = [vk::DescriptorBufferInfo::default()
@@ -779,33 +803,36 @@ impl VkRenderer {
             allocator: Some(allocator),
             swapchain_loader,
             swapchain: vk::SwapchainKHR::null(),
+            swapchain_images: Vec::new(),
             surface_format,
             extent: vk::Extent2D { width: width.max(1), height: height.max(1) },
             swapchain_views: Vec::new(),
             framebuffers: Vec::new(),
             render_finished: Vec::new(),
             render_pass,
+            render_pass_load,
             descriptor_set_layout,
             pipeline_layout,
             pipeline,
             shader_module,
             descriptor_pool,
             descriptor_set,
-            backdrop_image,
-            backdrop_view,
-            backdrop_allocation: Some(backdrop_allocation),
             backdrop_sampler,
             window_info,
             command_pool,
             frames,
             frame_index: 0,
             text,
+            scene,
             desired_extent: vk::Extent2D { width: width.max(1), height: height.max(1) },
             corner_radius_px,
             swapchain_dirty: false,
         };
         renderer.create_swapchain();
         renderer.write_window_info();
+        // The swapchain may have settled on a different extent than requested;
+        // keep the backdrop targets in lockstep.
+        renderer.sync_backdrop_targets();
         renderer
     }
 
@@ -830,6 +857,7 @@ impl VkRenderer {
             for view in self.swapchain_views.drain(..) {
                 self.device.destroy_image_view(view, None);
             }
+            self.swapchain_images.clear();
             for sem in self.render_finished.drain(..) {
                 self.device.destroy_semaphore(sem, None);
             }
@@ -888,7 +916,10 @@ impl VkRenderer {
                         .image_color_space(self.surface_format.color_space)
                         .image_extent(extent)
                         .image_array_layers(1)
-                        .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+                        .image_usage(
+                            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                                | vk::ImageUsageFlags::TRANSFER_DST,
+                        )
                         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                         .pre_transform(caps.current_transform)
                         .composite_alpha(composite_alpha)
@@ -907,6 +938,7 @@ impl VkRenderer {
                 .swapchain_loader
                 .get_swapchain_images(self.swapchain)
                 .expect("Failed to get swapchain images");
+            self.swapchain_images = images.clone();
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                 .base_mip_level(0)
@@ -956,6 +988,64 @@ impl VkRenderer {
         self.destroy_swapchain_resources();
         self.create_swapchain();
         self.write_window_info();
+        self.sync_backdrop_targets();
+    }
+
+    /// Recreate backdrop + depth at the surface size (device must be idle),
+    /// re-point the UI descriptor at the new view, and make the fresh image
+    /// legal to sample.
+    fn sync_backdrop_targets(&mut self) {
+        self.scene.resize(
+            &self.device,
+            self.allocator.as_mut().unwrap(),
+            self.extent,
+        );
+        clear_image_to_shader_read(
+            &self.device,
+            self.queue,
+            self.command_pool,
+            self.scene.backdrop_image,
+        );
+        let image_infos = [vk::DescriptorImageInfo::default()
+            .image_view(self.scene.backdrop_view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        unsafe {
+            self.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&image_infos)],
+                &[],
+            );
+        }
+    }
+
+    /// Upload a 3D mesh (Vertex3D: position + color); the id is stable for the
+    /// renderer's lifetime.
+    pub fn create_mesh(&mut self, verts: &[Vertex3D]) -> MeshId {
+        self.scene
+            .create_mesh(&self.device, self.allocator.as_mut().unwrap(), verts)
+    }
+
+    /// Replace a mesh's vertices. Waits for the GPU to go idle first — geometry
+    /// updates are rare (settings changes, graph rebuilds), matching the app.
+    #[allow(dead_code)] // cutover API: the app's rebuild_scene_geometry path
+    pub fn update_mesh(&mut self, id: MeshId, verts: &[Vertex3D]) {
+        unsafe {
+            let _ = self.device.device_wait_idle();
+        }
+        self.scene
+            .update_mesh(&self.device, self.allocator.as_mut().unwrap(), id, verts);
+    }
+
+    /// Stage the 3D scene for the next `draw_frame`. Draws render into the
+    /// backdrop image (scissored to the viewport pane, physical pixels), which
+    /// is copied beneath the UI and doubles as the blur-behind source. Frames
+    /// with no staged scene reuse the previous backdrop — the ash equivalent of
+    /// the app's viewport-changed cache.
+    pub fn stage_scene(&mut self, scissor: (u32, u32, u32, u32), draws: Vec<SceneDraw>) {
+        self.scene.stage(scissor, draws);
     }
 
     /// Request a new physical size (from xdg configure / scale changes). Applied
@@ -1065,41 +1155,127 @@ impl VkRenderer {
                 self.allocator.as_mut().unwrap(),
                 frame_index,
             );
+            self.scene.write_frame_uniforms(
+                &self.device,
+                self.allocator.as_mut().unwrap(),
+                frame_index,
+                self.corner_radius_px,
+            );
 
             // Record.
-            let frame = &self.frames[frame_index];
-            let cmd = frame.cmd;
+            let cmd = self.frames[frame_index].cmd;
             self.device
                 .begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())
                 .unwrap();
             self.text.record_upload(&self.device, cmd, frame_index);
+
+            // Offscreen 3D pass (only when a scene was staged); leaves the
+            // backdrop in TRANSFER_SRC.
+            let scene_recorded = self.scene.record(&self.device, cmd, frame_index);
+
+            // With a valid backdrop, replay it under the UI: copy it into the
+            // swapchain image and open the UI pass with LOAD instead of CLEAR.
+            let use_backdrop = self.scene.backdrop_valid;
+            if use_backdrop {
+                if !scene_recorded {
+                    // Reused backdrop is in SHADER_READ_ONLY from last frame.
+                    self.device.cmd_pipeline_barrier(
+                        cmd,
+                        vk::PipelineStageFlags::FRAGMENT_SHADER,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::SHADER_READ)
+                            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+                            .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .image(self.scene.backdrop_image)
+                            .subresource_range(COLOR_RANGE)],
+                    );
+                }
+                let swapchain_image = self.swapchain_images[image_index as usize];
+                self.device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::empty())
+                        .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                        .old_layout(vk::ImageLayout::UNDEFINED)
+                        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(swapchain_image)
+                        .subresource_range(COLOR_RANGE)],
+                );
+                let subresource = vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .layer_count(1);
+                self.device.cmd_copy_image(
+                    cmd,
+                    self.scene.backdrop_image,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    swapchain_image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[vk::ImageCopy::default()
+                        .src_subresource(subresource)
+                        .dst_subresource(subresource)
+                        .extent(vk::Extent3D {
+                            width: self.extent.width,
+                            height: self.extent.height,
+                            depth: 1,
+                        })],
+                );
+                // Backdrop back to sampleable for the UI pass's blur plates.
+                self.device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                        .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(self.scene.backdrop_image)
+                        .subresource_range(COLOR_RANGE)],
+                );
+            }
+
+            let frame = &self.frames[frame_index];
             let clear_values = [vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 0.0] },
             }];
+            let (ui_pass, ui_clear_values): (vk::RenderPass, &[vk::ClearValue]) = if use_backdrop {
+                (self.render_pass_load, &[])
+            } else {
+                (self.render_pass, &clear_values)
+            };
             self.device.cmd_begin_render_pass(
                 cmd,
                 &vk::RenderPassBeginInfo::default()
-                    .render_pass(self.render_pass)
+                    .render_pass(ui_pass)
                     .framebuffer(self.framebuffers[image_index as usize])
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D { x: 0, y: 0 },
                         extent: self.extent,
                     })
-                    .clear_values(&clear_values),
+                    .clear_values(ui_clear_values),
                 vk::SubpassContents::INLINE,
             );
-            self.device.cmd_set_viewport(
-                cmd,
-                0,
-                &[vk::Viewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: self.extent.width as f32,
-                    height: self.extent.height as f32,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                }],
-            );
+            self.device
+                .cmd_set_viewport(cmd, 0, &[flipped_viewport(self.extent)]);
             self.device.cmd_set_scissor(
                 cmd,
                 0,
@@ -1127,9 +1303,11 @@ impl VkRenderer {
             self.device.cmd_end_render_pass(cmd);
             self.device.end_command_buffer(cmd).unwrap();
 
-            // Submit + present.
+            // Submit + present. The acquire semaphore gates the swapchain image's
+            // first use: the backdrop copy (TRANSFER) or the UI pass (COLOR).
             let wait_semaphores = [image_available];
-            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::TRANSFER];
             let cmds = [cmd];
             let signal_semaphores = [self.render_finished[image_index as usize]];
             let submit = vk::SubmitInfo::default()
@@ -1190,12 +1368,8 @@ impl Drop for VkRenderer {
             }
 
             self.device.destroy_sampler(self.backdrop_sampler, None);
-            self.device.destroy_image_view(self.backdrop_view, None);
-            self.device.destroy_image(self.backdrop_image, None);
-            if let (Some(allocator), Some(allocation)) =
-                (self.allocator.as_mut(), self.backdrop_allocation.take())
-            {
-                let _ = allocator.free(allocation);
+            if let Some(allocator) = self.allocator.as_mut() {
+                self.scene.destroy(&self.device, allocator);
             }
             let mut window_info = std::mem::replace(&mut self.window_info, AllocatedBuffer::null());
             if let Some(allocator) = self.allocator.as_mut() {
@@ -1209,6 +1383,7 @@ impl Drop for VkRenderer {
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_shader_module(self.shader_module, None);
             self.device.destroy_render_pass(self.render_pass, None);
+            self.device.destroy_render_pass(self.render_pass_load, None);
             self.device.destroy_command_pool(self.command_pool, None);
 
             // The allocator must go before the device it allocates from.
