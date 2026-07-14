@@ -1,5 +1,4 @@
 
-use glyphon::{Buffer, Resolution, TextArea, TextBounds};
 use cce_ui::widget::TextLabel;
 use cce_ui::colors;
 use cce_ui::widget::WidgetHost;
@@ -14,11 +13,11 @@ use crate::app::{
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX,
     push_circle_vertices, push_circle_border_vertices,
 };
-use crate::graphics::TexturedVertex;
 use cce_ui::engine::Vertex;
 use crate::geometry::{
     network_sphere_vertices_with_errors,
 };
+use crate::vk::TextSpan;
 use cce_ui::engine::{
     push_widget_vertices, push_extra_quad_vertices,
     push_extra_quad_vertices_clipped, push_arc_background_vertices,
@@ -26,36 +25,6 @@ use cce_ui::engine::{
 };
 
 impl State {
-    pub(crate) fn create_depth_texture(&self) -> (wgpu::Texture, wgpu::TextureView) {
-        let tex = self.wgpu_adapter.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Depth Texture"),
-            size: wgpu::Extent3d { width: self.physical_width.max(1), height: self.physical_height.max(1), depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        (tex, view)
-    }
-
-    pub(crate) fn create_backdrop_texture(&self) -> (wgpu::Texture, wgpu::TextureView) {
-        let tex = self.wgpu_adapter.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Backdrop Texture"),
-            size: wgpu::Extent3d { width: self.physical_width.max(1), height: self.physical_height.max(1), depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.wgpu_adapter.config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        (tex, view)
-    }
-
     pub(crate) fn collect_vertices(&mut self, verts: &mut Vec<Vertex>) {
         verts.clear();
         let sw = self.width;
@@ -243,7 +212,7 @@ impl State {
             let cx = self.circular_network_layout.x;
             let cy = self.circular_network_layout.y;
             let r = self.circular_network_layout.r;
-            
+
             let bg_color = w.color();
             push_arc_background_vertices(
                 cx, cy, r,
@@ -256,7 +225,7 @@ impl State {
                 active_clip_circle,
                 verts,
             );
-            
+
             let border_color = [0.22, 0.22, 0.28, 0.90 * self.network_opacity];
             push_arc_background_vertices(
                 cx, cy, r - MENUBAR_H,
@@ -269,7 +238,7 @@ impl State {
                 active_clip_circle,
                 verts,
             );
-            
+
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
                 push_extra_quad_vertices(w, qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
             }
@@ -396,22 +365,12 @@ impl State {
         }
     }
 
+    /// Rebuild the 2D vertex stream. The actual GPU upload happens in
+    /// `VkRenderer::draw_frame`, which consumes `vertex_data` every frame.
     pub(crate) fn upload_vertices(&mut self) {
         self.text_dirty = true;
         let mut verts = std::mem::take(&mut self.vertex_data);
         self.collect_vertices(&mut verts);
-        self.vertex_count = verts.len() as u32;
-        let data = bytemuck::cast_slice(&verts);
-        let needed = data.len() as wgpu::BufferAddress;
-        if needed > self.vertex_buffer.size() {
-            self.vertex_buffer = self.wgpu_adapter.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Vertex Buffer"),
-                size: needed,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer, 0, data);
         self.vertex_data = verts;
     }
 
@@ -441,17 +400,7 @@ impl State {
 
         let verts = geom.to_vertex3d_vec();
         self.vertex_count_spheres = verts.len() as u32;
-        let data = bytemuck::cast_slice(&verts);
-        let needed = data.len() as wgpu::BufferAddress;
-        if needed > self.vertex_buffer_spheres.size() {
-            self.vertex_buffer_spheres = self.wgpu_adapter.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Vertex Buffer Spheres"),
-                size: needed,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_spheres, 0, data);
+        self.renderer.update_mesh(self.mesh_spheres, bytemuck::cast_slice(&verts));
         self.viewport_dirty = true;
     }
 
@@ -501,11 +450,11 @@ impl State {
         }
         self.text_dirty = false;
 
-        // 1. Prepare text on all widgets using self.wgpu_adapter.font_system
+        // 1. Prepare text on all widgets using self.font_system
         for i in 0..WIDGET_COUNT {
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
             if !is_menubar {
-                self.slots.get_dyn_mut(i).prepare_text(&mut self.wgpu_adapter.font_system);
+                self.slots.get_dyn_mut(i).prepare_text(&mut self.font_system);
             }
         }
 
@@ -516,32 +465,22 @@ impl State {
         let network_circle_x = self.circular_network_layout.x;
         let network_circle_y = self.circular_network_layout.y;
         let network_circle_radius = self.circular_network_layout.r;
+        let network_opacity = self.network_opacity;
+        let focused_widget = self.focused_widget;
+        let _ = sw;
+        let _ = sh;
 
         let Self {
-            ref mut wgpu_adapter,
+            ref mut renderer,
+            ref mut font_system,
+            ref mut swash_cache,
             physical_width, physical_height, scale,
             ref slots,
-            ref curved_text_texture,
-            ref mut curved_text_atlas,
-            ref mut curved_text_renderer,
-            ref mut curved_text_viewport,
-            ref mut textured_vertex_buffer,
-            ref mut textured_vertex_count,
             ref mut text_buffer_cache,
             ref ui_context,
+            ref positions,
             ..
-        } = self;
-
-        let cce_ui::backend::WgpuAdapter {
-            ref device,
-            ref queue,
-            ref mut font_system,
-            ref mut text_atlas,
-            ref mut text_viewport,
-            ref mut text_renderer,
-            ref mut swash_cache,
-            ..
-        } = wgpu_adapter;
+        } = *self;
 
         // Clear cache if too large to prevent unbounded memory growth
         if text_buffer_cache.len() > 500 {
@@ -617,7 +556,7 @@ impl State {
             if is_menubar {
                 continue;
             }
-            if self.focused_widget == Some(i) || i == PARAM_IDX {
+            if focused_widget == Some(i) || i == PARAM_IDX {
                 let mut popover_pc = cce_ui::layout::PopoverCollector::new();
                 w.render_popover(&mut popover_pc);
                 for (t, size, _x, _y, _tc, font_opt, _bounds) in popover_pc.texts {
@@ -630,44 +569,12 @@ impl State {
             }
         }
 
-        let viewport = Resolution { width: *physical_width, height: *physical_height };
-        text_viewport.update(queue, viewport);
-        let s = *scale as f32;
+        let s = scale as f32;
 
-        let mut popovers = Vec::new();
-        fn collect_popovers(
-            w: &dyn WidgetHost,
-            popovers: &mut Vec<(f32, f32, f32, f32)>,
-            ctx: &cce_ui::context::UiContext,
-        ) {
-            if let Some(rect) = w.popover_rect() {
-                popovers.push(rect);
-            }
-            for child_ptr in ctx.tree.children_ptrs(w.base().id()) {
-                unsafe {
-                    if let Some(child) = child_ptr.as_ref() {
-                        collect_popovers(child, popovers, ctx);
-                    }
-                }
-            }
-        }
-
-        for i in 0..WIDGET_COUNT {
-            let w = slots.get_dyn(i);
-            if w.visible() {
-                collect_popovers(w, &mut popovers, ui_context);
-            }
-        }
-
-        let mut areas: Vec<TextArea> = Vec::new();
-
-        // Temporary storage for legacy buffers generated during this frame
-        let mut legacy_buffers: Vec<&Buffer> = Vec::new();
-        let mut legacy_labels: Vec<TextLabel> = Vec::new();
-        let mut legacy_bounds: Vec<TextBounds> = Vec::new();
-        let mut legacy_is_network: Vec<bool> = Vec::new();
-
-        let mut curved_labels = Vec::new();
+        // Build the frame's spans against the shaped cache. From here the cache
+        // is only read (`get`), so the borrows stay immutable for the spans.
+        let text_buffer_cache = &*text_buffer_cache;
+        let mut spans: Vec<TextSpan> = Vec::new();
 
         for i in 0..WIDGET_COUNT {
             let w = slots.get_dyn(i);
@@ -681,30 +588,26 @@ impl State {
             let is_node = i == CONTENT_IDX;
             let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
 
+            // Widget-level clip bounds (physical px), matching the old TextBounds.
             let bounds = if is_node {
                 if circular_network_pane {
-                    TextBounds {
-                        left: ((network_circle_x - network_circle_radius) * s) as i32,
-                        top: ((network_circle_y - network_circle_radius) * s) as i32,
-                        right: ((network_circle_x + network_circle_radius) * s) as i32,
-                        bottom: (((network_circle_y + network_circle_radius) * s) as i32).max(0),
-                    }
+                    [
+                        ((network_circle_x - network_circle_radius) * s) as i32,
+                        ((network_circle_y - network_circle_radius) * s) as i32,
+                        ((network_circle_x + network_circle_radius) * s) as i32,
+                        (((network_circle_y + network_circle_radius) * s) as i32).max(0),
+                    ]
                 } else {
-                    let (gx, gy, gw, gh) = self.positions[CONTENT_IDX];
-                    TextBounds {
-                        left: (gx * s) as i32,
-                        top: (gy * s) as i32,
-                        right: ((gx + gw) * s) as i32,
-                        bottom: (((gy + gh) * s) as i32).max(0),
-                    }
+                    let (gx, gy, gw, gh) = positions[CONTENT_IDX];
+                    [
+                        (gx * s) as i32,
+                        (gy * s) as i32,
+                        ((gx + gw) * s) as i32,
+                        (((gy + gh) * s) as i32).max(0),
+                    ]
                 }
             } else {
-                TextBounds {
-                    left: 0,
-                    top: 0,
-                    right: *physical_width as i32,
-                    bottom: *physical_height as i32,
-                }
+                [0, 0, physical_width as i32, physical_height as i32]
             };
 
             for (text, x, y, font_size, color, font, label_bounds) in &widget_text[i] {
@@ -719,7 +622,38 @@ impl State {
                 }
 
                 if is_curved {
-                    curved_labels.push(TextLabel { text: text.clone(), x: *x, y: *y, font_size: *font_size, color: *color });
+                    // Curved rim label: rotate the glyph quad about its center to
+                    // face outward, clipped to the circular pane — the ash port of
+                    // the old render-to-texture + TexturedVertex path.
+                    let font_size = 12.0;
+                    let tw = TextLabel::estimate_width(text, font_size);
+                    let th = font_size;
+                    let cx = x + tw / 2.0;
+                    let cy = y + th / 2.0;
+                    let theta = (cy - network_circle_y).atan2(cx - network_circle_x);
+                    let angle = theta + std::f32::consts::FRAC_PI_2;
+                    let key = (text.clone(), (font_size * 100.0) as u32, None);
+                    if let Some(buf) = text_buffer_cache.get(&key) {
+                        spans.push(TextSpan {
+                            buffer: buf,
+                            left: (x * s).round(),
+                            top: (y * s).round(),
+                            scale: s,
+                            bounds: None,
+                            default_color: [
+                                color[0] as f32 / 255.0,
+                                color[1] as f32 / 255.0,
+                                color[2] as f32 / 255.0,
+                                1.0,
+                            ],
+                            rotation: Some((angle, cx * s, cy * s)),
+                            clip_circle: [
+                                network_circle_x * s,
+                                network_circle_y * s,
+                                network_circle_radius * s,
+                            ],
+                        });
+                    }
                 } else {
                     if circular_network_pane && is_network_part && i != LEFT_MENUBAR_IDX {
                         let dx = x - network_circle_x;
@@ -735,43 +669,36 @@ impl State {
                         let pt = (t * s).round() as i32;
                         let pr = (r * s).round() as i32;
                         let pb = (b * s).round() as i32;
-                        item_bounds = TextBounds {
-                            left: item_bounds.left.max(pl),
-                            top: item_bounds.top.max(pt),
-                            right: item_bounds.right.min(pr),
-                            bottom: item_bounds.bottom.min(pb),
-                        };
+                        item_bounds = [
+                            item_bounds[0].max(pl),
+                            item_bounds[1].max(pt),
+                            item_bounds[2].min(pr),
+                            item_bounds[3].min(pb),
+                        ];
                     }
                     let key = (text.clone(), (font_size * 100.0) as u32, font.clone());
-                    let buf_ref = text_buffer_cache.get(&key).unwrap();
-
-                    legacy_buffers.push(buf_ref);
-                    legacy_labels.push(TextLabel { text: text.clone(), x: *x, y: *y, font_size: *font_size, color: *color });
-                    legacy_bounds.push(item_bounds);
-                    legacy_is_network.push(is_network_part);
+                    let Some(buf) = text_buffer_cache.get(&key) else { continue };
+                    let alpha = if is_network_part { network_opacity.clamp(0.0, 1.0) } else { 1.0 };
+                    spans.push(TextSpan {
+                        buffer: buf,
+                        left: (x * s).round(),
+                        top: (y * s).round(),
+                        scale: s,
+                        bounds: Some(item_bounds),
+                        default_color: [
+                            color[0] as f32 / 255.0,
+                            color[1] as f32 / 255.0,
+                            color[2] as f32 / 255.0,
+                            alpha,
+                        ],
+                        rotation: None,
+                        clip_circle: [0.0; 3],
+                    });
                 }
             }
         }
 
-        // Add the legacy buffered items
-        for (((buf, label), bounds), is_net) in legacy_buffers.iter()
-            .zip(legacy_labels.iter())
-            .zip(legacy_bounds.iter())
-            .zip(legacy_is_network.iter())
-        {
-            let alpha = if *is_net { (self.network_opacity * 255.0).clamp(0.0, 255.0) as u8 } else { 255 };
-            areas.push(TextArea {
-                buffer: *buf,
-                left: (label.x * s).round(),
-                top: (label.y * s).round(),
-                scale: s,
-                bounds: *bounds,
-                default_color: glyphon::Color::rgba(label.color[0], label.color[1], label.color[2], alpha),
-                custom_glyphs: &[],
-            });
-        }
-
-        // Add popover text areas
+        // Popover text spans
         for i in 0..WIDGET_COUNT {
             let w = slots.get_dyn(i);
             if !w.visible() {
@@ -781,230 +708,41 @@ impl State {
             if is_menubar {
                 continue;
             }
-            if self.focused_widget == Some(i) || i == PARAM_IDX {
+            if focused_widget == Some(i) || i == PARAM_IDX {
                 let mut popover_pc = cce_ui::layout::PopoverCollector::new();
                 w.render_popover(&mut popover_pc);
                 for (t, size, x, y, tc, font_opt, label_bounds) in popover_pc.texts {
                     let key = (t.clone(), (size * 100.0) as u32, font_opt.clone());
-                    if let Some(buf_ref) = text_buffer_cache.get(&key) {
-                        let mut item_bounds = TextBounds {
-                            left: 0,
-                            top: 0,
-                            right: *physical_width as i32,
-                            bottom: *physical_height as i32,
-                        };
+                    if let Some(buf) = text_buffer_cache.get(&key) {
+                        let mut item_bounds = [0, 0, physical_width as i32, physical_height as i32];
                         if let Some([l, t_bound, r, b]) = label_bounds {
                             let pl = (l * s).round() as i32;
                             let pt = (t_bound * s).round() as i32;
                             let pr = (r * s).round() as i32;
                             let pb = (b * s).round() as i32;
-                            item_bounds = TextBounds {
-                                left: item_bounds.left.max(pl),
-                                top: item_bounds.top.max(pt),
-                                right: item_bounds.right.min(pr),
-                                bottom: item_bounds.bottom.min(pb),
-                            };
+                            item_bounds = [
+                                item_bounds[0].max(pl),
+                                item_bounds[1].max(pt),
+                                item_bounds[2].min(pr),
+                                item_bounds[3].min(pb),
+                            ];
                         }
-                        areas.push(TextArea {
-                            buffer: buf_ref,
+                        spans.push(TextSpan {
+                            buffer: buf,
                             left: (x * s).round(),
                             top: (y * s).round(),
                             scale: s,
-                            bounds: item_bounds,
-                            default_color: glyphon::Color::rgb(
-                                (tc[0] * 255.0) as u8,
-                                (tc[1] * 255.0) as u8,
-                                (tc[2] * 255.0) as u8,
-                            ),
-                            custom_glyphs: &[],
+                            bounds: Some(item_bounds),
+                            default_color: [tc[0], tc[1], tc[2], 1.0],
+                            rotation: None,
+                            clip_circle: [0.0; 3],
                         });
                     }
                 }
             }
         }
 
-        if !popovers.is_empty() {
-            for (idx, area) in areas.iter().enumerate() {
-                for run in area.buffer.layout_runs() {
-                    println!("DEBUG: Area {}, text={:?}, x={}, y={}", idx, run.text, area.left, area.top);
-                }
-            }
-        }
-
-        text_renderer.prepare(device, queue, font_system, text_atlas, text_viewport, areas, swash_cache).unwrap();
-
-        // Process curved labels
-        let mut textured_verts = Vec::new();
-
-        if !curved_labels.is_empty() {
-            struct CurvedDrawInfo<'a> {
-                label: TextLabel,
-                tx: f32,
-                ty: f32,
-                tw: f32,
-                th: f32,
-                buffer: &'a Buffer,
-            }
-
-            let mut curved_draws = Vec::new();
-            let mut current_x = 4.0;
-            let mut current_y = 4.0;
-            let font_size = 12.0;
-            let row_height = (font_size + 8.0) * s;
-
-            for label in curved_labels {
-                let char_w = TextLabel::estimate_width(&label.text, font_size);
-                let physical_w = char_w * s;
-                if current_x + physical_w + 4.0 > 1024.0 {
-                    current_x = 4.0;
-                    current_y += row_height;
-                }
-                let key = (label.text.clone(), (font_size * 100.0) as u32, None);
-                let buf = text_buffer_cache.get(&key).unwrap();
-                curved_draws.push(CurvedDrawInfo {
-                    label: label.clone(),
-                    tx: current_x,
-                    ty: current_y,
-                    tw: char_w,
-                    th: font_size,
-                    buffer: buf,
-                });
-                current_x += physical_w + 8.0 * s;
-            }
-
-            let mut curved_areas = Vec::new();
-            for draw in &curved_draws {
-                curved_areas.push(TextArea {
-                    buffer: draw.buffer,
-                    left: draw.tx.round(),
-                    top: draw.ty.round(),
-                    scale: s,
-                    bounds: TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: 1024,
-                        bottom: 1024,
-                    },
-                    default_color: glyphon::Color::rgb(255, 255, 255),
-                    custom_glyphs: &[],
-                });
-            }
-
-            curved_text_renderer.prepare(
-                device,
-                queue,
-                font_system,
-                curved_text_atlas,
-                curved_text_viewport,
-                curved_areas,
-                swash_cache,
-            ).unwrap();
-
-            let mut texture_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Curved Text Texture Encoder"),
-            });
-            {
-                let view_for_pass = curved_text_texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let mut pass = texture_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Curved Text Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view_for_pass,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-                curved_text_renderer.render(curved_text_atlas, curved_text_viewport, &mut pass).unwrap();
-            }
-            queue.submit(std::iter::once(texture_encoder.finish()));
-
-            let clip_circle_val = if circular_network_pane {
-                [network_circle_x * s, network_circle_y * s, network_circle_radius * s]
-            } else {
-                [0.0, 0.0, 0.0]
-            };
-
-            for draw in curved_draws {
-                let dx = (draw.label.x + draw.tw / 2.0) - network_circle_x;
-                let dy = (draw.label.y + draw.th / 2.0) - network_circle_y;
-                let theta = dy.atan2(dx);
-                let angle = theta + std::f32::consts::FRAC_PI_2;
-
-                let cx = draw.label.x + draw.tw / 2.0;
-                let cy = draw.label.y + draw.th / 2.0;
-                let w_half = draw.tw / 2.0;
-                let h_half = draw.th / 2.0;
-
-                let cos_a = angle.cos();
-                let sin_a = angle.sin();
-
-                let local_pts = [
-                    [-w_half, -h_half],
-                    [w_half, -h_half],
-                    [-w_half, h_half],
-                    [w_half, h_half],
-                ];
-
-                let mut screen_pts = [[0.0; 2]; 4];
-                for (k, pt) in local_pts.iter().enumerate() {
-                    let rx = pt[0] * cos_a - pt[1] * sin_a;
-                    let ry = pt[0] * sin_a + pt[1] * cos_a;
-                    screen_pts[k] = [cx + rx, cy + ry];
-                }
-
-                let ndc_pts = screen_pts.map(|pt| [
-                    (pt[0] / sw) * 2.0 - 1.0,
-                    1.0 - (pt[1] / sh) * 2.0,
-                ]);
-
-                let u0 = draw.tx / 1024.0;
-                let v0 = draw.ty / 1024.0;
-                let u1 = (draw.tx + draw.tw * s) / 1024.0;
-                let v1 = (draw.ty + draw.th * s) / 1024.0;
-
-                let c = [
-                    draw.label.color[0] as f32 / 255.0,
-                    draw.label.color[1] as f32 / 255.0,
-                    draw.label.color[2] as f32 / 255.0,
-                    1.0,
-                ];
-
-                let v_tl = TexturedVertex { position: ndc_pts[0], tex_coords: [u0, v0], color: c, clip_circle: clip_circle_val };
-                let v_tr = TexturedVertex { position: ndc_pts[1], tex_coords: [u1, v0], color: c, clip_circle: clip_circle_val };
-                let v_bl = TexturedVertex { position: ndc_pts[2], tex_coords: [u0, v1], color: c, clip_circle: clip_circle_val };
-                let v_br = TexturedVertex { position: ndc_pts[3], tex_coords: [u1, v1], color: c, clip_circle: clip_circle_val };
-
-                textured_verts.push(v_tl);
-                textured_verts.push(v_tr);
-                textured_verts.push(v_bl);
-
-                textured_verts.push(v_tr);
-                textured_verts.push(v_br);
-                textured_verts.push(v_bl);
-            }
-        }
-
-        *textured_vertex_count = textured_verts.len() as u32;
-        if *textured_vertex_count > 0 {
-            let data = bytemuck::cast_slice(&textured_verts);
-            let needed = data.len() as wgpu::BufferAddress;
-            if needed > textured_vertex_buffer.size() {
-                *textured_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Textured Vertex Buffer"),
-                    size: needed,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            queue.write_buffer(textured_vertex_buffer, 0, data);
-        }
+        renderer.prepare_text(font_system, swash_cache, &spans);
     }
 
 }
-
-

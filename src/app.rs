@@ -34,17 +34,16 @@ use wayland_client::{
     Connection, QueueHandle, Proxy,
 };
 
-use wgpu::util::DeviceExt;
 use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
 use cce_ui::widget::UiContext;
 use crate::viewport_3d::Viewport3D;
 use cce_ui::colors;
-use glyphon::{Attrs, Buffer, Cache, FontSystem, Metrics, Resolution, TextAtlas, TextRenderer, Viewport};
+use glyphon::{Attrs, Buffer, FontSystem, Metrics};
 use glam::{Mat4, Vec3};
 
 use crate::geometry::*;
 use crate::shortcut::{ShortcutManager, Action};
-use crate::graphics::TexturedVertex;
+use crate::vk::{SceneDraw, TextSpan};
 use cce_ui::engine::Vertex;
 use crate::window::{AppState, WindowEvent};
 
@@ -964,45 +963,24 @@ pub struct ViewportUniforms {
 }
 
 pub struct State {
-    pub wgpu_adapter: cce_ui::backend::WgpuAdapter,
-    pub render_pipeline: wgpu::RenderPipeline,
-    pub vertex_buffer: wgpu::Buffer,
+    pub renderer: crate::vk::VkRenderer,
+    pub font_system: FontSystem,
+    pub swash_cache: glyphon::SwashCache,
     pub window: XdgWindow,
     pub wl_surface: wl_surface::WlSurface,
-    pub vertex_count: u32,
     pub vertex_data: Vec<Vertex>,
 
-    pub pipeline_3d: wgpu::RenderPipeline,
-    pub bind_group_3d: wgpu::BindGroup,
-    pub bind_group_layout_3d: wgpu::BindGroupLayout,
-    pub uniform_buffer: wgpu::Buffer,
-    pub bind_group_grid: wgpu::BindGroup,
-    pub uniform_buffer_grid: wgpu::Buffer,
-    pub bind_group_pivot: wgpu::BindGroup,
-    pub uniform_buffer_pivot: wgpu::Buffer,
-    pub vertex_buffer_3d: wgpu::Buffer,
-    pub vertex_buffer_viewport_bg: wgpu::Buffer,
-    pub vertex_count_3d: u32,
-    pub vertex_buffer_spheres: wgpu::Buffer,
+    pub mesh_cube: crate::vk::MeshId,
+    pub mesh_viewport_bg: crate::vk::MeshId,
+    pub mesh_spheres: crate::vk::MeshId,
+    pub mesh_grid: crate::vk::MeshId,
+    pub mesh_origin: crate::vk::MeshId,
+    pub mesh_pivot: crate::vk::MeshId,
     pub vertex_count_spheres: u32,
-    pub vertex_buffer_grid: wgpu::Buffer,
-    pub vertex_count_grid: u32,
-    pub depth_texture: wgpu::Texture,
-    pub depth_texture_view: wgpu::TextureView,
-    pub backdrop_texture: wgpu::Texture,
-    pub backdrop_texture_view: wgpu::TextureView,
-    pub backdrop_sampler: wgpu::Sampler,
-    pub backdrop_bind_group_layout: wgpu::BindGroupLayout,
-    pub backdrop_bind_group: wgpu::BindGroup,
-    pub window_info_buffer: wgpu::Buffer,
     pub node_color: [f32; 3],
     pub grid_color: [f32; 3],
     pub cell_color: [f32; 3],
     pub gap_color: [f32; 3],
-    pub vertex_buffer_origin: wgpu::Buffer,
-    pub vertex_count_origin: u32,
-    pub vertex_buffer_pivot: wgpu::Buffer,
-    pub vertex_count_pivot: u32,
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
@@ -1024,18 +1002,6 @@ pub struct State {
     pub node_palette_query: String,
     pub node_palette_filtered: Vec<usize>,
     pub node_palette_selected: usize,
-
-    pub curved_text_texture: wgpu::Texture,
-    pub curved_text_texture_view: wgpu::TextureView,
-    pub curved_text_sampler: wgpu::Sampler,
-    pub curved_text_bind_group: wgpu::BindGroup,
-    pub curved_text_pipeline: wgpu::RenderPipeline,
-    pub curved_text_atlas: TextAtlas,
-    pub curved_text_renderer: TextRenderer,
-    pub curved_text_viewport: Viewport,
-    pub textured_vertex_buffer: wgpu::Buffer,
-    pub textured_vertex_count: u32,
-
 
     pub drag_widget: Option<usize>,
     pub focused_widget: Option<usize>,
@@ -1316,19 +1282,19 @@ impl State {
     pub fn update_grid_geometry(&mut self) {
         let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
         let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
-        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_grid, 0, bytemuck::cast_slice(&grid_verts));
+        self.renderer.update_mesh(self.mesh_grid, bytemuck::cast_slice(&grid_verts));
         self.viewport_dirty = true;
     }
 
     pub fn update_origin_geometry(&mut self) {
         let origin_verts = origin_vectors_vertices(self.origin_size);
-        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_origin, 0, bytemuck::cast_slice(&origin_verts));
+        self.renderer.update_mesh(self.mesh_origin, bytemuck::cast_slice(&origin_verts));
         self.viewport_dirty = true;
     }
 
     pub fn update_pivot_geometry(&mut self) {
         let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
-        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_pivot, 0, bytemuck::cast_slice(&pivot_verts));
+        self.renderer.update_mesh(self.mesh_pivot, bytemuck::cast_slice(&pivot_verts));
         self.viewport_dirty = true;
     }
 
@@ -1343,7 +1309,7 @@ impl State {
             Vertex3D { position: [ 1.0,  1.0, 9.99], color: bg_color }, // Top-right
             Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
         ];
-        self.wgpu_adapter.queue.write_buffer(&self.vertex_buffer_viewport_bg, 0, bytemuck::cast_slice(&bg_verts));
+        self.renderer.update_mesh(self.mesh_viewport_bg, bytemuck::cast_slice(&bg_verts));
         self.viewport_dirty = true;
     }
 
@@ -2447,7 +2413,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
 
 
-    pub async fn new(
+    pub fn new(
         conn: &Connection,
         qh: &QueueHandle<AppState>,
         compositor_state: &CompositorState,
@@ -2479,469 +2445,38 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         let display_ptr = conn.backend().display_id().as_ptr() as *mut std::ffi::c_void;
         let surface_ptr = wl_surface.id().as_ptr() as *mut std::ffi::c_void;
-        // Bundled fonts only (the 5th param opts into system fonts in the render
-        // FontSystem — Phase 6k; the designer's UI uses bundled families).
-        let wgpu_adapter = cce_ui::backend::WgpuAdapter::new(display_ptr, surface_ptr, pw, ph, false).await;
+        let corner_radius = cce_ui::color::backplate_corner_radius() * scale as f32;
+        let mut renderer = unsafe {
+            crate::vk::VkRenderer::new(display_ptr, surface_ptr, pw, ph, corner_radius)
+        };
+        // Bundled fonts only (the designer's UI uses bundled families).
+        let font_system = cce_ui::create_font_system();
+        let swash_cache = glyphon::SwashCache::new();
 
-        let device = &wgpu_adapter.device;
-        let queue = &wgpu_adapter.queue;
-
-        let config = &wgpu_adapter.config;
-
-        let backdrop_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Backdrop Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(16),
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let backdrop_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Backdrop Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let backdrop_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Backdrop Texture"),
-            size: wgpu::Extent3d { width: pw.max(1), height: ph.max(1), depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let backdrop_texture_view = backdrop_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let window_info_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Window Info Buffer"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let window_info_data = [
-            pw as f32,
-            ph as f32,
-            cce_ui::color::backplate_corner_radius() * scale as f32,
-            0.0,
-        ];
-        queue.write_buffer(&window_info_buffer, 0, bytemuck::cast_slice(&window_info_data));
-
-        let backdrop_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Backdrop Bind Group"),
-            layout: &backdrop_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&backdrop_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&backdrop_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: window_info_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Pipeline Layout"),
-            bind_group_layouts: &[&backdrop_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
-            multiview: None,
-            cache: None,
-        });
-
-        // 3D pipeline
-        let shader_3d = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader 3D"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader_3d.wgsl").into()),
-        });
-
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Uniform Buffer"),
-            size: 80,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let bind_group_layout_3d = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("3D Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(80),
-                },
-                count: None,
-            }],
-        });
-
-        let pipeline_layout_3d = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("3D Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout_3d],
-            push_constant_ranges: &[],
-        });
-
-        let bind_group_3d = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("3D Bind Group"),
-            layout: &bind_group_layout_3d,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(80),
-                }),
-            }],
-        });
-
-        let uniform_buffer_grid = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Grid Uniform Buffer"),
-            size: 80,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let bind_group_grid = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Grid 3D Bind Group"),
-            layout: &bind_group_layout_3d,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer_grid,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(80),
-                }),
-            }],
-        });
-
-        let uniform_buffer_pivot = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Pivot Uniform Buffer"),
-            size: 80,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let bind_group_pivot = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Pivot Bind Group"),
-            layout: &bind_group_layout_3d,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer_pivot,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(80),
-                }),
-            }],
-        });
-
-        let vertex_buffer_3d = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cube Vertex Buffer"),
-            contents: bytemuck::cast_slice(&cube_vertices()),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let vertex_buffer_spheres = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Sphere Node Vertex Buffer"),
-            size: 1,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
+        // Static 3D meshes; the spheres mesh starts empty and is rebuilt from
+        // the node graph (rebuild_scene_geometry).
+        let cube_verts = cube_vertices();
+        let mesh_cube = renderer.create_mesh(bytemuck::cast_slice(&cube_verts));
         let linear_grid_color = cce_ui::colors::to_linear_rgb(settings.viewport.grid_color);
         let grid_verts = grid_vertices(settings.viewport.grid_thickness, linear_grid_color);
-        let vertex_count_grid = grid_verts.len() as u32;
-        let vertex_buffer_grid = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Grid Vertex Buffer"),
-            contents: bytemuck::cast_slice(&grid_verts),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
+        let mesh_grid = renderer.create_mesh(bytemuck::cast_slice(&grid_verts));
         let origin_verts = origin_vectors_vertices(settings.viewport.origin_size);
-        let vertex_count_origin = origin_verts.len() as u32;
-        let vertex_buffer_origin = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Origin Vectors Vertex Buffer"),
-            contents: bytemuck::cast_slice(&origin_verts),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
+        let mesh_origin = renderer.create_mesh(bytemuck::cast_slice(&origin_verts));
         let pivot_verts = camera_pivot_vertices(settings.viewport.camera_pivot_size);
-        let vertex_count_pivot = pivot_verts.len() as u32;
-        let vertex_buffer_pivot = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Pivot Vertex Buffer"),
-            contents: bytemuck::cast_slice(&pivot_verts),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
+        let mesh_pivot = renderer.create_mesh(bytemuck::cast_slice(&pivot_verts));
         let bg_color = cce_ui::colors::to_linear_rgb(settings.viewport.bg_color);
         let bg_verts = [
             Vertex3D { position: [-1.0, -1.0, 9.99], color: bg_color }, // Bottom-left
             Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
             Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
-
             Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
             Vertex3D { position: [ 1.0,  1.0, 9.99], color: bg_color }, // Top-right
             Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
         ];
-        let vertex_buffer_viewport_bg = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Viewport BG Vertex Buffer"),
-            contents: bytemuck::cast_slice(&bg_verts),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let pipeline_3d = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("3D Pipeline"),
-            layout: Some(&pipeline_layout_3d),
-            vertex: wgpu::VertexState {
-                module: &shader_3d,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex3D::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader_3d,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
-            multiview: None,
-            cache: None,
-        });
-
-        let cache = Cache::new(device);
-
-        let shader_textured = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Textured Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader_textured.wgsl").into()),
-        });
-
-        let textured_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Textured Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let textured_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Textured Pipeline Layout"),
-            bind_group_layouts: &[&textured_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let curved_text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Textured Render Pipeline"),
-            layout: Some(&textured_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader_textured,
-                entry_point: Some("vs_main"),
-                buffers: &[TexturedVertex::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader_textured,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let curved_text_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Curved Text Texture"),
-            size: wgpu::Extent3d {
-                width: 1024,
-                height: 1024,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let curved_text_texture_view = curved_text_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let curved_text_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Curved Text Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let curved_text_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Curved Text Bind Group"),
-            layout: &textured_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&curved_text_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&curved_text_sampler),
-                },
-            ],
-        });
-
-        let mut curved_text_atlas = TextAtlas::new(&device, &queue, &cache, config.format);
-        let curved_text_renderer = TextRenderer::new(&mut curved_text_atlas, &device, wgpu::MultisampleState::default(), None);
-        let mut curved_text_viewport = Viewport::new(&device, &cache);
-        curved_text_viewport.update(&queue, Resolution { width: 1024, height: 1024 });
-
-        let textured_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Textured Vertex Buffer"),
-            size: 1,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
+        let mesh_viewport_bg = renderer.create_mesh(bytemuck::cast_slice(&bg_verts));
+        let mesh_spheres = renderer.create_mesh(&[]);
 
         let splitter_layout = cce_ui::layout::SplitterLayout::new(sw, SPLITTER_W, MIN_COLUMN);
-        let (depth_texture, depth_texture_view) = {
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Depth Texture"),
-                size: wgpu::Extent3d { width: pw.max(1), height: ph.max(1), depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            (tex, view)
-        };
-
         let templates_root = load_fs_tree();
         let node_templates = flatten_node_templates(&templates_root);
 
@@ -3035,13 +2570,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         positions.resize_with(WIDGET_COUNT, || (0.0, 0.0, 0.0, 0.0));
 
 
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Vertex Buffer"),
-            size: 1,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         let mut shortcut_manager = ShortcutManager::new();
         shortcut_manager.register("Ctrl+g", Action::ToggleGrid).unwrap();
         shortcut_manager.register("Ctrl+e", Action::ToggleCube).unwrap();
@@ -3054,34 +2582,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let mut state = Self {
             window,
             wl_surface,
-            wgpu_adapter,
-            render_pipeline,
-            vertex_buffer,
-            vertex_count: 0,
+            renderer,
+            font_system,
+            swash_cache,
             vertex_data: Vec::with_capacity(4096),
-            pipeline_3d,
-            bind_group_3d,
-            bind_group_layout_3d,
-            uniform_buffer,
-            bind_group_grid,
-            uniform_buffer_grid,
-            bind_group_pivot,
-            uniform_buffer_pivot,
-            vertex_buffer_3d,
-            vertex_buffer_viewport_bg,
-            vertex_count_3d: cube_vertices().len() as u32,
-            vertex_buffer_spheres,
+            mesh_cube,
+            mesh_viewport_bg,
+            mesh_spheres,
+            mesh_grid,
+            mesh_origin,
+            mesh_pivot,
             vertex_count_spheres: 0,
-            vertex_buffer_grid,
-            vertex_count_grid,
-            depth_texture,
-            depth_texture_view,
-            backdrop_texture,
-            backdrop_texture_view,
-            backdrop_sampler,
-            backdrop_bind_group_layout,
-            backdrop_bind_group,
-            window_info_buffer,
             node_color: {
                 let nc = cce_ui::color::graph_node_color();
                 [nc[0], nc[1], nc[2]]
@@ -3089,10 +2600,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             grid_color: settings.viewport.grid_color,
             cell_color: cce_ui::color::graph_cell_color(),
             gap_color: cce_ui::color::graph_gap_color(),
-            vertex_buffer_origin,
-            vertex_count_origin,
-            vertex_buffer_pivot,
-            vertex_count_pivot,
             origin_size: settings.viewport.origin_size,
             camera_pivot_size: settings.viewport.camera_pivot_size,
             fs_root: fs_root.clone(),
@@ -3111,17 +2618,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             node_palette_query: String::new(),
             node_palette_filtered: Vec::new(),
             node_palette_selected: 0,
-            curved_text_texture,
-            curved_text_texture_view,
-            curved_text_sampler,
-            curved_text_bind_group,
-            curved_text_pipeline,
-            curved_text_atlas,
-            curved_text_renderer,
-            curved_text_viewport,
-            textured_vertex_buffer,
-            textured_vertex_count: 0,
-
             drag_widget: None,
             focused_widget: None,
             cursor_x: 0.0,
@@ -4122,42 +3618,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.physical_height = height;
             self.width = width as f32 / self.scale as f32;
             self.height = height as f32 / self.scale as f32;
-            self.wgpu_adapter.resize(width, height);
-
-            let (tex, view) = self.create_depth_texture();
-            self.depth_texture = tex;
-            self.depth_texture_view = view;
-
-            let (b_tex, b_view) = self.create_backdrop_texture();
-            self.backdrop_texture = b_tex;
-            self.backdrop_texture_view = b_view;
-
-            let window_info_data = [
-                width as f32,
-                height as f32,
-                cce_ui::color::backplate_corner_radius() * self.scale as f32,
-                0.0,
-            ];
-            self.wgpu_adapter.queue.write_buffer(&self.window_info_buffer, 0, bytemuck::cast_slice(&window_info_data));
-
-            self.backdrop_bind_group = self.wgpu_adapter.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Backdrop Bind Group"),
-                layout: &self.backdrop_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.backdrop_texture_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.backdrop_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.window_info_buffer.as_entire_binding(),
-                    },
-                ],
-            });
+            self.renderer
+                .set_corner_radius(cce_ui::color::backplate_corner_radius() * self.scale as f32);
+            self.renderer.resize(width, height);
 
             if old_width > 0.0 {
                 let r = self.width / old_width;
@@ -5573,22 +5036,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         self.prepare_text();
 
-        let output = match self.wgpu_adapter.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                self.wgpu_adapter.surface.configure(&self.wgpu_adapter.device, &self.wgpu_adapter.config);
-                return false;
-            }
-            Err(wgpu::SurfaceError::Timeout) => return false,
-            Err(e) => { eprintln!("Surface error: {e:?}"); return false; }
-        };
-
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.wgpu_adapter.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Encoder"),
-        });
-
-        // 3D canvas render pass (background layer)
+        // 3D canvas: stage the scene into the renderer's backdrop when the
+        // viewport is visible and its inputs changed; unstaged frames reuse the
+        // previous backdrop (the renderer's equivalent of the old cached pass).
         if !self.is_detached_network && self.show_viewport {
             let cx_logical = 0.0;
             let cy_logical = HEADER_H;
@@ -5608,7 +5058,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
 
             if cw > 0 && ch > 0 {
-
                 let mut camera_pos = Vec3::new(2.5, 1.8, 2.5);
                 let mut rx = 0.0f32;
                 let mut ry = 0.0f32;
@@ -5682,26 +5131,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if viewport_changed {
                     let aspect = cw as f32 / ch as f32;
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
-                    let mvp = proj * view_mat * model;
-                    let window_size = [self.physical_width as f32, self.physical_height as f32];
-                    let window_radius = cce_ui::color::backplate_corner_radius() * self.scale as f32;
-
-                    let uniforms = ViewportUniforms {
-                        mvp: mvp.to_cols_array_2d(),
-                        window_size,
-                        window_radius,
-                        _padding: 0.0,
-                    };
-                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
-
-                    let mvp_grid = proj * view_mat * model;
-                    let uniforms_grid = ViewportUniforms {
-                        mvp: mvp_grid.to_cols_array_2d(),
-                        window_size,
-                        window_radius,
-                        _padding: 0.0,
-                    };
-                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_grid, 0, bytemuck::cast_slice(&[uniforms_grid]));
+                    let mvp = (proj * view_mat * model).to_cols_array_2d();
 
                     let cam_angle_y = camera_pos.x.atan2(camera_pos.z);
                     let rot_angle = if self.active_camera != "Default Camera" {
@@ -5712,79 +5142,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         self.viewport().rotation_y + cam_angle_y
                     };
                     let model_pivot = Mat4::from_translation(pivot) * Mat4::from_rotation_y(rot_angle);
-                    let mvp_pivot = proj * view_mat * model_pivot;
-                    let uniforms_pivot = ViewportUniforms {
-                        mvp: mvp_pivot.to_cols_array_2d(),
-                        window_size,
-                        window_radius,
-                        _padding: 0.0,
-                    };
-                    self.wgpu_adapter.queue.write_buffer(&self.uniform_buffer_pivot, 0, bytemuck::cast_slice(&[uniforms_pivot]));
+                    let mvp_pivot = (proj * view_mat * model_pivot).to_cols_array_2d();
 
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("3D Render Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &self.backdrop_texture_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.0,
-                                    g: 0.0,
-                                    b: 0.0,
-                                    a: 0.0,
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.depth_texture_view,
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.0),
-                                store: wgpu::StoreOp::Discard,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
-
-                    pass.set_scissor_rect(sx, sy, cw, ch);
-                    pass.set_pipeline(&self.pipeline_3d);
-
-                    // Draw viewport background quad (rounds corners via shader)
-                    pass.set_bind_group(0, &self.bind_group_3d, &[]);
-                    pass.set_vertex_buffer(0, self.vertex_buffer_viewport_bg.slice(..));
-                    pass.draw(0..6, 0..1);
-
+                    // Same draw order as the wgpu pass: bg quad, grid, origin,
+                    // pivot, cube, spheres.
+                    let mut draws = vec![SceneDraw { mesh: self.mesh_viewport_bg, mvp }];
                     if self.viewport().show_grid {
-                        pass.set_bind_group(0, &self.bind_group_grid, &[]);
-                        pass.set_vertex_buffer(0, self.vertex_buffer_grid.slice(..));
-                        pass.draw(0..self.vertex_count_grid, 0..1);
+                        draws.push(SceneDraw { mesh: self.mesh_grid, mvp });
                     }
-
                     if self.viewport().show_origin {
-                        pass.set_bind_group(0, &self.bind_group_3d, &[]);
-                        pass.set_vertex_buffer(0, self.vertex_buffer_origin.slice(..));
-                        pass.draw(0..self.vertex_count_origin, 0..1);
+                        draws.push(SceneDraw { mesh: self.mesh_origin, mvp });
                     }
-
                     if self.viewport().show_camera_pivot {
-                        pass.set_bind_group(0, &self.bind_group_pivot, &[]);
-                        pass.set_vertex_buffer(0, self.vertex_buffer_pivot.slice(..));
-                        pass.draw(0..self.vertex_count_pivot, 0..1);
+                        draws.push(SceneDraw { mesh: self.mesh_pivot, mvp: mvp_pivot });
                     }
-
-                    pass.set_bind_group(0, &self.bind_group_3d, &[]);
-
                     if self.viewport().show_cube {
-                        pass.set_vertex_buffer(0, self.vertex_buffer_3d.slice(..));
-                        pass.draw(0..self.vertex_count_3d, 0..1);
+                        draws.push(SceneDraw { mesh: self.mesh_cube, mvp });
                     }
-
                     if self.vertex_count_spheres > 0 {
-                        pass.set_vertex_buffer(0, self.vertex_buffer_spheres.slice(..));
-                        pass.draw(0..self.vertex_count_spheres, 0..1);
+                        draws.push(SceneDraw { mesh: self.mesh_spheres, mvp });
                     }
+                    self.renderer.stage_scene((sx, sy, cw, ch), draws);
 
                     // Update viewport cache
                     self.last_viewport_camera_pos = camera_pos;
@@ -5806,112 +5184,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_show_viewport = self.show_viewport;
                     self.viewport_dirty = false;
                 }
-            } else {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Backdrop Clear Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.backdrop_texture_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear({
-                                let linear_bg = cce_ui::colors::to_linear_rgb(self.viewport().bg_color);
-                                wgpu::Color {
-                                    r: linear_bg[0] as f64,
-                                    g: linear_bg[1] as f64,
-                                    b: linear_bg[2] as f64,
-                                    a: 1.0,
-                                }
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
+            } else if self.viewport_dirty {
+                // Zero-area pane: clear the backdrop once.
+                self.renderer
+                    .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
+                self.last_viewport_show_viewport = false;
+                self.viewport_dirty = false;
             }
-        } else {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Backdrop Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.backdrop_texture_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+        } else if !self.is_detached_network && self.viewport_dirty {
+            // Viewport hidden: clear the backdrop (the old path's clear pass),
+            // and force a re-stage when it comes back.
+            self.renderer
+                .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
+            self.last_viewport_show_viewport = false;
+            self.viewport_dirty = false;
         }
 
-        // Copy backdrop to output swapchain texture
-        if !self.is_detached_network {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.backdrop_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &output.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: self.physical_width,
-                    height: self.physical_height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-
-        // UI render pass (foreground layer)
-        {
-            let load_op = if self.is_detached_network {
-                wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 })
-            } else {
-                wgpu::LoadOp::Load
-            };
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("UI Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            pass.set_pipeline(&self.render_pipeline);
-            pass.set_bind_group(0, &self.backdrop_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..self.vertex_count, 0..1);
-
-            if self.textured_vertex_count > 0 {
-                // eprintln!("DEBUG_RENDER: textured_vertex_count={}", self.textured_vertex_count);
-                pass.set_pipeline(&self.curved_text_pipeline);
-                pass.set_bind_group(0, &self.curved_text_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.textured_vertex_buffer.slice(..));
-                pass.draw(0..self.textured_vertex_count, 0..1);
-            }
-
-            self.wgpu_adapter.text_renderer.render(&self.wgpu_adapter.text_atlas, &self.wgpu_adapter.text_viewport, &mut pass).unwrap();
-
-        }
-
-        self.wgpu_adapter.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        let _ = self.renderer.draw_frame(&self.vertex_data);
         tick_changed || panned
     }
 }

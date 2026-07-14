@@ -349,6 +349,8 @@ fn main() {
                 scale: s,
                 bounds: None,
                 default_color: [0.92, 0.92, 0.95, 1.0],
+                rotation: None,
+                clip_circle: [0.0; 3],
             },
             TextSpan {
                 buffer: &body_buf,
@@ -358,6 +360,8 @@ fn main() {
                 bounds: None,
                 // Animated color: proves per-frame vertex rebuilds.
                 default_color: [pulse, 0.80, 0.55, 1.0],
+                rotation: None,
+                clip_circle: [0.0; 3],
             },
             TextSpan {
                 buffer: &clipped_buf,
@@ -371,6 +375,8 @@ fn main() {
                     (233.0 * s) as i32,
                 ]),
                 default_color: [0.70, 0.85, 1.00, 1.0],
+                rotation: None,
+                clip_circle: [0.0; 3],
             },
         ];
         if let Some(renderer) = &mut app.renderer {

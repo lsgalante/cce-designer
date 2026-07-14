@@ -42,7 +42,7 @@ use glam::{Mat4, Vec3};
 
 pub mod app;
 pub mod viewport_3d;
-pub mod graphics;
+pub mod vk;
 pub mod api;
 pub mod window;
 pub mod geometry;
@@ -102,7 +102,7 @@ fn main() {
         ((1280.0 * scale) as u32, (800.0 * scale) as u32)
     };
 
-    let state = pollster::block_on(State::new(
+    let state = State::new(
         &conn,
         &qh,
         &app.compositor_state,
@@ -110,7 +110,7 @@ fn main() {
         pw, ph,
         scale,
         is_detached_network,
-    ));
+    );
 
     app.window = Some(state.window.clone());
     app.surface = Some(state.wl_surface.clone());

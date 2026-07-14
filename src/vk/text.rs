@@ -42,6 +42,12 @@ pub struct TextSpan<'a> {
     pub bounds: Option<[i32; 4]>,
     /// 0..=1 sRGB + alpha, applied to glyphs without their own color.
     pub default_color: [f32; 4],
+    /// Rotate the span's glyph quads by (radians, center_x, center_y) in
+    /// physical pixels — the circular network pane's curved rim labels.
+    pub rotation: Option<(f32, f32, f32)>,
+    /// Fragment circle clip (center_x, center_y, radius) in physical pixels;
+    /// zero radius disables (matches shader.wgsl's clip_circle).
+    pub clip_circle: [f32; 3],
 }
 
 #[repr(C)]
@@ -50,6 +56,7 @@ struct GlyphVertex {
     position: [f32; 2],
     uv: [f32; 2],
     color: [f32; 4],
+    clip_circle: [f32; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -198,6 +205,11 @@ impl TextStage {
                     .binding(0)
                     .format(vk::Format::R32G32B32A32_SFLOAT)
                     .offset(16),
+                vk::VertexInputAttributeDescription::default()
+                    .location(3)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32_SFLOAT)
+                    .offset(32),
             ];
             let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&vertex_bindings)
@@ -556,14 +568,28 @@ impl TextStage {
                         span.default_color
                     };
 
-                    let ndc = |px: f32, py: f32| {
-                        [(px / sw) * 2.0 - 1.0, 1.0 - (py / sh) * 2.0]
+                    // Corner positions, optionally rotated about the span's center
+                    // (physical px) before the NDC mapping.
+                    let corners = match span.rotation {
+                        None => [[x0, y0], [x1, y0], [x0, y1], [x1, y1]],
+                        Some((angle, cx, cy)) => {
+                            let (sin_a, cos_a) = angle.sin_cos();
+                            let rot = |px: f32, py: f32| {
+                                let (dx, dy) = (px - cx, py - cy);
+                                [cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a]
+                            };
+                            [rot(x0, y0), rot(x1, y0), rot(x0, y1), rot(x1, y1)]
+                        }
+                    };
+                    let ndc = |p: [f32; 2]| {
+                        [(p[0] / sw) * 2.0 - 1.0, 1.0 - (p[1] / sh) * 2.0]
                     };
                     let uv = |u: f32, v: f32| [u / ATLAS_SIZE as f32, v / ATLAS_SIZE as f32];
-                    let tl = GlyphVertex { position: ndc(x0, y0), uv: uv(u0, v0), color };
-                    let tr = GlyphVertex { position: ndc(x1, y0), uv: uv(u1, v0), color };
-                    let bl = GlyphVertex { position: ndc(x0, y1), uv: uv(u0, v1), color };
-                    let br = GlyphVertex { position: ndc(x1, y1), uv: uv(u1, v1), color };
+                    let clip_circle = span.clip_circle;
+                    let tl = GlyphVertex { position: ndc(corners[0]), uv: uv(u0, v0), color, clip_circle };
+                    let tr = GlyphVertex { position: ndc(corners[1]), uv: uv(u1, v0), color, clip_circle };
+                    let bl = GlyphVertex { position: ndc(corners[2]), uv: uv(u0, v1), color, clip_circle };
+                    let br = GlyphVertex { position: ndc(corners[3]), uv: uv(u1, v1), color, clip_circle };
                     self.pending_vertices.extend([tl, tr, bl, tr, br, bl]);
                 }
             }
