@@ -60,6 +60,7 @@ fn main() {
     // Headless thumbnail mode: no Wayland, no window — render and exit.
     //   cce-designer --thumbnail <project-dir-or-state.json> <out.png> [--size N]
     if let Some(i) = args.iter().position(|a| a == "--thumbnail") {
+        let _ = env_logger::try_init();
         let (Some(project), Some(out)) = (args.get(i + 1), args.get(i + 2)) else {
             eprintln!("usage: cce-designer --thumbnail <project> <out.png> [--size N]");
             std::process::exit(2);
