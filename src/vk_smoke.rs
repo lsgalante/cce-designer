@@ -6,8 +6,7 @@
 //! Run inside a Wayland session:
 //!   cargo run -p cce-designer --bin vk-smoke
 
-#[path = "vk/mod.rs"]
-mod vk;
+use cce_ui::vk;
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},

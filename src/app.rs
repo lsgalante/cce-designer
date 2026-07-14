@@ -43,7 +43,7 @@ use glam::{Mat4, Vec3};
 
 use crate::geometry::*;
 use crate::shortcut::{ShortcutManager, Action};
-use crate::vk::{SceneDraw, TextSpan};
+use cce_ui::vk::{SceneDraw, TextSpan};
 use cce_ui::engine::Vertex;
 use crate::window::{AppState, WindowEvent};
 
@@ -963,19 +963,19 @@ pub struct ViewportUniforms {
 }
 
 pub struct State {
-    pub renderer: crate::vk::VkRenderer,
+    pub renderer: cce_ui::vk::VkRenderer,
     pub font_system: FontSystem,
     pub swash_cache: glyphon::SwashCache,
     pub window: XdgWindow,
     pub wl_surface: wl_surface::WlSurface,
     pub vertex_data: Vec<Vertex>,
 
-    pub mesh_cube: crate::vk::MeshId,
-    pub mesh_viewport_bg: crate::vk::MeshId,
-    pub mesh_spheres: crate::vk::MeshId,
-    pub mesh_grid: crate::vk::MeshId,
-    pub mesh_origin: crate::vk::MeshId,
-    pub mesh_pivot: crate::vk::MeshId,
+    pub mesh_cube: cce_ui::vk::MeshId,
+    pub mesh_viewport_bg: cce_ui::vk::MeshId,
+    pub mesh_spheres: cce_ui::vk::MeshId,
+    pub mesh_grid: cce_ui::vk::MeshId,
+    pub mesh_origin: cce_ui::vk::MeshId,
+    pub mesh_pivot: cce_ui::vk::MeshId,
     pub vertex_count_spheres: u32,
     pub node_color: [f32; 3],
     pub grid_color: [f32; 3],
@@ -2447,7 +2447,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let surface_ptr = wl_surface.id().as_ptr() as *mut std::ffi::c_void;
         let corner_radius = cce_ui::color::backplate_corner_radius() * scale as f32;
         let mut renderer = unsafe {
-            crate::vk::VkRenderer::new(display_ptr, surface_ptr, pw, ph, corner_radius)
+            cce_ui::vk::VkRenderer::new(display_ptr, surface_ptr, pw, ph, corner_radius)
         };
         // Bundled fonts only (the designer's UI uses bundled families).
         let font_system = cce_ui::create_font_system();

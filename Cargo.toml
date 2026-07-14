@@ -24,11 +24,6 @@ opencl3 = "0.9"
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
-# Raw-Vulkan migration (versions match what wgpu 24 already pulls in, so the
-# dependency tree gains no duplicate builds while both stacks coexist).
-ash = "0.38"
-gpu-allocator = { version = "0.27", default-features = false, features = ["vulkan"] }
-naga = { version = "24", features = ["wgsl-in", "spv-out"] }
 
 [[bin]]
 name = "cce-designer"

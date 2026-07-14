@@ -17,7 +17,7 @@ use cce_ui::engine::Vertex;
 use crate::geometry::{
     network_sphere_vertices_with_errors,
 };
-use crate::vk::TextSpan;
+use cce_ui::vk::TextSpan;
 use cce_ui::engine::{
     push_widget_vertices, push_extra_quad_vertices,
     push_extra_quad_vertices_clipped, push_arc_background_vertices,

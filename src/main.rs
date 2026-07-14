@@ -42,7 +42,6 @@ use glam::{Mat4, Vec3};
 
 pub mod app;
 pub mod viewport_3d;
-pub mod vk;
 pub mod api;
 pub mod window;
 pub mod geometry;
