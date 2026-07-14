@@ -1358,6 +1358,11 @@ impl AppState {
                             if let Some(child) = dir.children.get_mut(slot) {
                                 if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
                                     p.default = value;
+                                    // Same sequence as the interactive param-pane
+                                    // path, so settings params (viewport flags,
+                                    // grid) actually take effect over HTTP.
+                                    state.apply_settings_from_menubar_subnets();
+                                    state.sync_grid_settings();
                                     state.sync_nodes();
                                     state.rebuild_scene_geometry();
                                     state.upload_vertices();
