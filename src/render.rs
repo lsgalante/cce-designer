@@ -415,42 +415,11 @@ impl State {
     pub(crate) fn collect_rt_scene(
         &self,
     ) -> (Vec<cce_ui::vk::RtTriangle>, Vec<cce_ui::vk::RtMaterial>) {
-        let mut tris: Vec<cce_ui::vk::RtTriangle> = Vec::new();
-        let mut mats: Vec<cce_ui::vk::RtMaterial> = Vec::new();
-        // Dedupe on 8-bit-quantized color: procedural (OpenCL) geometry can
-        // carry per-vertex gradients, and exact-match dedup would mint one
-        // material per triangle.
-        let mut by_color: std::collections::HashMap<[u8; 3], u32> =
-            std::collections::HashMap::new();
-        let mut push_verts = |tris: &mut Vec<cce_ui::vk::RtTriangle>,
-                              mats: &mut Vec<cce_ui::vk::RtMaterial>,
-                              verts: &[crate::geometry::Vertex3D]| {
-            for tri in verts.chunks_exact(3) {
-                let key = [
-                    (tri[0].color[0].clamp(0.0, 1.0) * 255.0) as u8,
-                    (tri[0].color[1].clamp(0.0, 1.0) * 255.0) as u8,
-                    (tri[0].color[2].clamp(0.0, 1.0) * 255.0) as u8,
-                ];
-                let material = *by_color.entry(key).or_insert_with(|| {
-                    mats.push(cce_ui::vk::RtMaterial {
-                        albedo: tri[0].color,
-                        emission: [0.0; 3],
-                    });
-                    (mats.len() - 1) as u32
-                });
-                tris.push(cce_ui::vk::RtTriangle {
-                    p0: tri[0].position,
-                    p1: tri[1].position,
-                    p2: tri[2].position,
-                    material,
-                });
-            }
-        };
-        push_verts(&mut tris, &mut mats, &self.rt_sphere_verts);
+        let mut verts = self.rt_sphere_verts.clone();
         if self.viewport().show_cube {
-            push_verts(&mut tris, &mut mats, &crate::geometry::cube_vertices());
+            verts.extend(crate::geometry::cube_vertices());
         }
-        (tris, mats)
+        crate::geometry::rt_scene_from_verts(&verts)
     }
 
     pub(crate) fn update_status_text(&mut self, text: &str) {

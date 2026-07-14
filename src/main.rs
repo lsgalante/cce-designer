@@ -48,6 +48,7 @@ pub mod geometry;
 pub mod project;
 pub mod render;
 pub mod shortcut;
+pub mod thumbnail;
 
 use app::{State, CustomEvent, HttpAction, ModifiersState};
 use window::{AppState, WindowEvent};
@@ -55,6 +56,29 @@ use api::start_http_server;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Headless thumbnail mode: no Wayland, no window — render and exit.
+    //   cce-designer --thumbnail <project-dir-or-state.json> <out.png> [--size N]
+    if let Some(i) = args.iter().position(|a| a == "--thumbnail") {
+        let (Some(project), Some(out)) = (args.get(i + 1), args.get(i + 2)) else {
+            eprintln!("usage: cce-designer --thumbnail <project> <out.png> [--size N]");
+            std::process::exit(2);
+        };
+        let size = args
+            .windows(2)
+            .find(|w| w[0] == "--size")
+            .and_then(|w| w[1].parse::<u32>().ok())
+            .unwrap_or(256)
+            .clamp(16, 2048);
+        match thumbnail::run(std::path::Path::new(project), std::path::Path::new(out), size) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("cce-designer --thumbnail: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let is_detached_network = args.iter().any(|arg| arg == "--detached-network");
 
     let conn = Connection::connect_to_env().unwrap();

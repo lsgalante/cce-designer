@@ -111,6 +111,35 @@ pub struct Vertex3D {
     pub color: [f32; 3],
 }
 
+/// Colored triangles → the path tracer's scene schema, one Lambertian
+/// material per distinct (8-bit-quantized) vertex color. Shared by the
+/// viewport's RT mode and the `--thumbnail` renderer.
+pub fn rt_scene_from_verts(
+    verts: &[Vertex3D],
+) -> (Vec<cce_ui::vk::RtTriangle>, Vec<cce_ui::vk::RtMaterial>) {
+    let mut tris: Vec<cce_ui::vk::RtTriangle> = Vec::new();
+    let mut mats: Vec<cce_ui::vk::RtMaterial> = Vec::new();
+    let mut by_color: std::collections::HashMap<[u8; 3], u32> = std::collections::HashMap::new();
+    for tri in verts.chunks_exact(3) {
+        let key = [
+            (tri[0].color[0].clamp(0.0, 1.0) * 255.0) as u8,
+            (tri[0].color[1].clamp(0.0, 1.0) * 255.0) as u8,
+            (tri[0].color[2].clamp(0.0, 1.0) * 255.0) as u8,
+        ];
+        let material = *by_color.entry(key).or_insert_with(|| {
+            mats.push(cce_ui::vk::RtMaterial { albedo: tri[0].color, emission: [0.0; 3] });
+            (mats.len() - 1) as u32
+        });
+        tris.push(cce_ui::vk::RtTriangle {
+            p0: tri[0].position,
+            p1: tri[1].position,
+            p2: tri[2].position,
+            material,
+        });
+    }
+    (tris, mats)
+}
+
 pub fn cube_vertices() -> Vec<Vertex3D> {
     let s = 0.5;
     let data: &[([f32; 3], [f32; 3])] = &[
