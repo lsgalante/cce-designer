@@ -1103,6 +1103,15 @@ pub struct State {
     pub last_viewport_height: u32,
     pub last_viewport_active_camera: String,
     pub last_viewport_show_viewport: bool,
+    pub last_viewport_rt_mode: bool,
+    /// Sphere-geometry cache for the path tracer (a copy of the last
+    /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
+    /// the node graph / OpenCL kernels).
+    pub rt_sphere_verts: Vec<Vertex3D>,
+    /// Bumped by `rebuild_scene_geometry`; part of the RT-scene cache key.
+    pub rt_geometry_version: u64,
+    /// (show_cube, rt_geometry_version) the RT scene was last built from.
+    pub last_rt_scene_key: Option<(bool, u64)>,
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -2735,6 +2744,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_height: 0,
             last_viewport_active_camera: String::new(),
             last_viewport_show_viewport: false,
+            last_viewport_rt_mode: false,
+            rt_sphere_verts: Vec::new(),
+            rt_geometry_version: 0,
+            last_rt_scene_key: None,
             ui_context: cce_ui::context::UiContext::new(),
         };
 
@@ -5109,7 +5122,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                 }
 
+                let rt_mode = self.viewport().rt_mode;
                 let viewport_changed = self.viewport_dirty
+                    || self.last_viewport_rt_mode != rt_mode
                     || self.last_viewport_camera_pos != camera_pos
                     || self.last_viewport_camera_rx != rx
                     || self.last_viewport_camera_ry != ry
@@ -5129,6 +5144,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     || self.last_viewport_show_viewport != self.show_viewport;
 
                 if viewport_changed {
+                    if !rt_mode {
                     let aspect = cw as f32 / ch as f32;
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
                     let mvp = (proj * view_mat * model).to_cols_array_2d();
@@ -5163,6 +5179,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         draws.push(SceneDraw { mesh: self.mesh_spheres, mvp });
                     }
                     self.renderer.stage_scene((sx, sy, cw, ch), draws);
+                    }
 
                     // Update viewport cache
                     self.last_viewport_camera_pos = camera_pos;
@@ -5182,7 +5199,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_height = ch;
                     self.last_viewport_active_camera = self.active_camera.clone();
                     self.last_viewport_show_viewport = self.show_viewport;
+                    self.last_viewport_rt_mode = rt_mode;
                     self.viewport_dirty = false;
+                }
+
+                // Path-traced mode: staged EVERY frame (each one adds a
+                // sample); the renderer resets the accumulation itself when
+                // the camera/pane changes, so camera drags stay interactive
+                // (1-spp noise) and stillness converges.
+                if rt_mode {
+                    let key = (self.viewport().show_cube, self.rt_geometry_version);
+                    if self.last_rt_scene_key != Some(key) {
+                        let (rt_tris, rt_mats) = self.collect_rt_scene();
+                        self.renderer.set_rt_scene(&rt_tris, &rt_mats);
+                        self.last_rt_scene_key = Some(key);
+                    }
+                    let aspect = cw as f32 / ch as f32;
+                    let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
+                    let inv_mvp = (proj * view_mat * model).inverse().to_cols_array_2d();
+                    self.renderer.stage_rt((sx, sy, cw, ch), cce_ui::vk::RtCamera { inv_mvp });
                 }
             } else if self.viewport_dirty {
                 // Zero-area pane: clear the backdrop once.
@@ -5201,7 +5236,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
 
         let _ = self.renderer.draw_frame(&self.vertex_data);
-        tick_changed || panned
+        // Keep frames coming while the path tracer is still refining.
+        let rt_refining = !self.is_detached_network
+            && self.show_viewport
+            && self.viewport().rt_mode
+            && self.renderer.rt_accumulating();
+        tick_changed || panned || rt_refining
     }
 }
 

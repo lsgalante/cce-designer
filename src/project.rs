@@ -268,6 +268,7 @@ impl State {
         let vp_show_camera_pivot = self.viewport().show_camera_pivot;
         let vp_bg_color = self.viewport().bg_color;
         let vp_grid_color = self.viewport().grid_color;
+        let vp_rt_mode = self.viewport().rt_mode;
 
         let camera_nodes: Vec<String> = self.current_dir().children.iter()
             .filter(|c| c.node_type == "camera")
@@ -387,6 +388,7 @@ impl State {
         ensure_param(main_node, "Show Reference Cube", "choice", if vp_show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
         ensure_param(main_node, "Show Origin Axes", "choice", if vp_show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
         ensure_param(main_node, "Show Camera Pivot", "choice", if vp_show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(main_node, "Ray Traced Preview", "choice", if vp_rt_mode { "true" } else { "false" }, &["false", "true"], None, None, None);
         ensure_param(main_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
         ensure_param(main_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
         ensure_param(main_node, "Camera Pivot Size", "spinbox", &((self.camera_pivot_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
@@ -413,6 +415,7 @@ impl State {
                     "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_cube = val; }
                     "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_origin = val; }
                     "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_camera_pivot = val; }
+                    "Ray Traced Preview" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().rt_mode = val; }
                     "Grid Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.grid_thickness = val / 1000.0; }
                     "Origin Guide Size" => if let Ok(val) = p.default.parse::<f32>() { self.origin_size = val / 10.0; }
                     "Camera Pivot Size" => if let Ok(val) = p.default.parse::<f32>() { self.camera_pivot_size = val / 10.0; }

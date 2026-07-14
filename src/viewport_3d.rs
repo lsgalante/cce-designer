@@ -19,6 +19,9 @@ pub struct Viewport3D {
     pub show_cube: bool,
     pub show_origin: bool,
     pub show_camera_pivot: bool,
+    /// Path-traced preview: the pane renders through `cce_ui::vk`'s compute
+    /// tracer instead of the raster 3D pass.
+    pub rt_mode: bool,
 
     // Pending rotation to be consumed by the application when not using the default camera
     pub pending_yaw: f32,
@@ -59,6 +62,7 @@ impl Viewport3D {
             show_cube: true,
             show_origin: true,
             show_camera_pivot: true,
+            rt_mode: false,
             pending_yaw: 0.0,
             pending_pitch: 0.0,
             ctrl_pressed: false,

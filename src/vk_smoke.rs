@@ -34,7 +34,7 @@ use cce_ui::engine::{quad_vertices, Vertex};
 use glam::{Mat4, Vec3};
 use glyphon::cosmic_text::{Attrs, Buffer as TextBuffer, Family, Metrics, Shaping};
 use glyphon::{FontSystem, SwashCache};
-use vk::{Frame2D, ImageQuad, SceneDraw, TextSpan, Vertex3D, VkRenderer};
+use vk::{Frame2D, ImageQuad, RtCamera, RtMaterial, RtTriangle, SceneDraw, TextSpan, Vertex3D, VkRenderer};
 
 struct SmokeApp {
     registry_state: RegistryState,
@@ -210,6 +210,47 @@ fn viewport_bg_verts() -> Vec<Vertex3D> {
     v
 }
 
+/// The RT-mode demo scene (`CCE_VK_SMOKE_RT=1`): the reference cube on a gray
+/// floor beneath an emissive panel — enough for visible indirect light, color
+/// bleed, and soft shadows once the accumulation converges.
+fn rt_demo_scene() -> (Vec<RtTriangle>, Vec<RtMaterial>) {
+    let mut tris: Vec<RtTriangle> = Vec::new();
+    let mut mats: Vec<RtMaterial> = Vec::new();
+    let mat = |mats: &mut Vec<RtMaterial>, albedo: [f32; 3], emission: [f32; 3]| -> u32 {
+        let m = RtMaterial { albedo, emission };
+        if let Some(i) = mats.iter().position(|x| *x == m) {
+            i as u32
+        } else {
+            mats.push(m);
+            (mats.len() - 1) as u32
+        }
+    };
+
+    // The cube, from the same triangle list the raster pass draws.
+    for tri in cube_verts().chunks_exact(3) {
+        let material = mat(&mut mats, tri[0].color, [0.0; 3]);
+        tris.push(RtTriangle { p0: tri[0].position, p1: tri[1].position, p2: tri[2].position, material });
+    }
+
+    let quad = |tris: &mut Vec<RtTriangle>, c: [[f32; 3]; 4], material: u32| {
+        tris.push(RtTriangle { p0: c[0], p1: c[1], p2: c[2], material });
+        tris.push(RtTriangle { p0: c[0], p1: c[2], p2: c[3], material });
+    };
+    let floor = mat(&mut mats, [0.55, 0.55, 0.58], [0.0; 3]);
+    quad(
+        &mut tris,
+        [[-6.0, -0.5, -6.0], [6.0, -0.5, -6.0], [6.0, -0.5, 6.0], [-6.0, -0.5, 6.0]],
+        floor,
+    );
+    let panel = mat(&mut mats, [0.0; 3], [6.0, 5.6, 5.0]);
+    quad(
+        &mut tris,
+        [[-1.0, 2.2, -1.0], [1.0, 2.2, -1.0], [1.0, 2.2, 1.0], [-1.0, 2.2, 1.0]],
+        panel,
+    );
+    (tris, mats)
+}
+
 /// Designer-style 2D chrome in logical coordinates. No full-window background —
 /// the 3D viewport (copied in as the backdrop) shows through everywhere the UI
 /// doesn't paint, exactly like the app.
@@ -339,6 +380,16 @@ fn main() {
     }
     let checker = vk::upload_rgba(px, 64, 64);
 
+    // RT mode: the pane runs the phase-2 compute path tracer instead of the
+    // raster 3D pass. Static camera, so progressive accumulation visibly
+    // converges from noise to a clean render.
+    let rt_mode = std::env::var_os("CCE_VK_SMOKE_RT").is_some();
+    if rt_mode {
+        let (tris, mats) = rt_demo_scene();
+        log::info!("vk-smoke: RT mode — {} triangles, {} materials", tris.len(), mats.len());
+        app.renderer.as_mut().unwrap().set_rt_scene(&tris, &mats);
+    }
+
     let start = std::time::Instant::now();
     while !app.exit {
         event_loop
@@ -411,16 +462,21 @@ fn main() {
             let aspect = (lw - 56.0) / (lh - 36.0);
             let proj = Mat4::perspective_rh(0.9, aspect, 0.1, 100.0);
             let view = Mat4::look_at_rh(Vec3::new(2.5, 1.8, 2.5), Vec3::ZERO, Vec3::Y);
-            let model = Mat4::from_rotation_y(t * 0.8);
-            let mvp = (proj * view * model).to_cols_array_2d();
-            renderer.stage_scene(
-                pane,
-                vec![
-                    SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d() },
-                    SceneDraw { mesh: grid_mesh, mvp },
-                    SceneDraw { mesh: cube_mesh, mvp },
-                ],
-            );
+            if rt_mode {
+                let inv_mvp = (proj * view).inverse().to_cols_array_2d();
+                renderer.stage_rt(pane, RtCamera { inv_mvp });
+            } else {
+                let model = Mat4::from_rotation_y(t * 0.8);
+                let mvp = (proj * view * model).to_cols_array_2d();
+                renderer.stage_scene(
+                    pane,
+                    vec![
+                        SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d() },
+                        SceneDraw { mesh: grid_mesh, mvp },
+                        SceneDraw { mesh: cube_mesh, mvp },
+                    ],
+                );
+            }
             renderer.prepare_text(&mut font_system, &mut swash_cache, &spans);
             // FIFO present paces this loop to the display's refresh rate.
             renderer.draw_frame_2d(Frame2D {
