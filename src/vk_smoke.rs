@@ -34,7 +34,7 @@ use cce_ui::engine::{quad_vertices, Vertex};
 use glam::{Mat4, Vec3};
 use glyphon::cosmic_text::{Attrs, Buffer as TextBuffer, Family, Metrics, Shaping};
 use glyphon::{FontSystem, SwashCache};
-use vk::{SceneDraw, TextSpan, Vertex3D, VkRenderer};
+use vk::{Frame2D, ImageQuad, SceneDraw, TextSpan, Vertex3D, VkRenderer};
 
 struct SmokeApp {
     registry_state: RegistryState,
@@ -327,6 +327,18 @@ fn main() {
         13.0,
     );
 
+    // User image: a checkerboard drawn between the animated quad (under) and
+    // the blur plate (over) via z_before.
+    let mut px = vec![0u8; 64 * 64 * 4];
+    for y in 0..64usize {
+        for x in 0..64usize {
+            let on = ((x / 8) + (y / 8)) % 2 == 0;
+            let i = (y * 64 + x) * 4;
+            px[i..i + 4].copy_from_slice(if on { &[240, 90, 60, 255] } else { &[40, 200, 220, 255] });
+        }
+    }
+    let checker = vk::upload_rgba(px, 64, 64);
+
     let start = std::time::Instant::now();
     while !app.exit {
         event_loop
@@ -378,6 +390,15 @@ fn main() {
                 clip_circle: [0.0; 3],
             },
         ];
+        // build_scene vertex layout: blur plate is the last 6 verts; the image
+        // sorts just before it (above everything else, beneath the plate).
+        let image_quads = [ImageQuad {
+            image: checker,
+            rect: (250.0 * s, 115.0 * s, 90.0 * s, 90.0 * s),
+            alpha: 1.0,
+            z_before: (verts.len() as u32).saturating_sub(6),
+            clip: None,
+        }];
         if let Some(renderer) = &mut app.renderer {
             // 3D pane: right of the side panel, below the header (physical px).
             // Full-frame NDC scissored to the pane, exactly like the app.
@@ -402,7 +423,13 @@ fn main() {
             );
             renderer.prepare_text(&mut font_system, &mut swash_cache, &spans);
             // FIFO present paces this loop to the display's refresh rate.
-            renderer.draw_frame(&verts);
+            renderer.draw_frame_2d(Frame2D {
+                verts: &verts,
+                batches: &[],
+                overlay_verts: &[],
+                images: &image_quads,
+                clear_color: [0.0; 4],
+            });
         }
     }
 
