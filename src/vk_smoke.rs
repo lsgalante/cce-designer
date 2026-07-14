@@ -32,7 +32,9 @@ use wayland_client::{
 use calloop_wayland_source::WaylandSource;
 
 use cce_ui::engine::{quad_vertices, Vertex};
-use vk::VkRenderer;
+use glyphon::cosmic_text::{Attrs, Buffer as TextBuffer, Family, Metrics, Shaping};
+use glyphon::{FontSystem, SwashCache};
+use vk::{TextSpan, VkRenderer};
 
 struct SmokeApp {
     registry_state: RegistryState,
@@ -150,6 +152,21 @@ delegate_xdg_shell!(SmokeApp);
 delegate_xdg_window!(SmokeApp);
 delegate_registry!(SmokeApp);
 
+/// Shape a line the same way the app does (bundled control-label font).
+fn make_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> TextBuffer {
+    let mut buffer = TextBuffer::new(font_system, Metrics::new(size, size * 1.4));
+    let family = cce_ui::layout::control_label_font_parsed().0;
+    buffer.set_size(font_system, Some(2000.0), Some(200.0));
+    buffer.set_text(
+        font_system,
+        text,
+        Attrs::new().family(Family::Name(&family)),
+        Shaping::Advanced,
+    );
+    buffer.shape_until_scroll(font_system, true);
+    buffer
+}
+
 /// Designer-style test scene in logical coordinates.
 fn build_scene(lw: f32, lh: f32, scale: f32, t: f32) -> Vec<Vertex> {
     let mut verts: Vec<Vertex> = Vec::new();
@@ -259,6 +276,21 @@ fn main() {
         Some(unsafe { VkRenderer::new(display_ptr, surface_ptr, pw, ph, radius) });
     log::info!("vk-smoke: renderer up at {pw}x{ph} (scale {})", app.scale);
 
+    // Text stack: same bundled fonts as the app, shaped once up front.
+    let mut font_system = cce_ui::create_font_system();
+    let mut swash_cache = SwashCache::new();
+    let title_buf = make_buffer(&mut font_system, "vk-smoke — ash text stage", 14.0);
+    let body_buf = make_buffer(
+        &mut font_system,
+        "cosmic-text shaping → swash raster → vulkan glyph atlas",
+        13.0,
+    );
+    let clipped_buf = make_buffer(
+        &mut font_system,
+        "this line is clipped mid-glyph by span bounds ###########",
+        13.0,
+    );
+
     let start = std::time::Instant::now();
     while !app.exit {
         event_loop
@@ -268,8 +300,44 @@ fn main() {
             break;
         }
         let (lw, lh) = (app.logical_size.0 as f32, app.logical_size.1 as f32);
-        let verts = build_scene(lw, lh, app.scale as f32, start.elapsed().as_secs_f32());
+        let t = start.elapsed().as_secs_f32();
+        let s = app.scale as f32;
+        let verts = build_scene(lw, lh, s, t);
+        let pulse = 0.75 + 0.25 * (t * 3.0).sin();
+        let spans = [
+            TextSpan {
+                buffer: &title_buf,
+                left: 12.0 * s,
+                top: 9.0 * s,
+                scale: s,
+                bounds: None,
+                default_color: [0.92, 0.92, 0.95, 1.0],
+            },
+            TextSpan {
+                buffer: &body_buf,
+                left: 66.0 * s,
+                top: 44.0 * s,
+                scale: s,
+                bounds: None,
+                // Animated color: proves per-frame vertex rebuilds.
+                default_color: [pulse, 0.80, 0.55, 1.0],
+            },
+            TextSpan {
+                buffer: &clipped_buf,
+                left: 66.0 * s,
+                top: 148.0 * s,
+                scale: s,
+                bounds: Some([
+                    (66.0 * s) as i32,
+                    (148.0 * s) as i32,
+                    (260.0 * s) as i32,
+                    (166.0 * s) as i32,
+                ]),
+                default_color: [0.70, 0.85, 1.00, 1.0],
+            },
+        ];
         if let Some(renderer) = &mut app.renderer {
+            renderer.prepare_text(&mut font_system, &mut swash_cache, &spans);
             // FIFO present paces this loop to the display's refresh rate.
             renderer.draw_frame(&verts);
         }

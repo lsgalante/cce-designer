@@ -10,5 +10,7 @@
 //! `vk-smoke` is the standalone proof of this renderer.
 
 mod renderer;
+mod text;
 
 pub use renderer::VkRenderer;
+pub use text::TextSpan;

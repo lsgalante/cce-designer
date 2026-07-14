@@ -15,13 +15,78 @@ use gpu_allocator::MemoryLocation;
 
 use cce_ui::engine::Vertex;
 
+use super::text::{TextSpan, TextStage};
+
 const FRAMES_IN_FLIGHT: usize = 2;
 const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
 
-struct AllocatedBuffer {
-    buffer: vk::Buffer,
-    allocation: Option<Allocation>,
+pub(crate) struct AllocatedBuffer {
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) allocation: Option<Allocation>,
+    pub(crate) size: vk::DeviceSize,
+}
+
+impl AllocatedBuffer {
+    pub(crate) fn null() -> Self {
+        AllocatedBuffer { buffer: vk::Buffer::null(), allocation: None, size: 0 }
+    }
+}
+
+/// Create a host-visible buffer bound to gpu-allocator memory.
+pub(crate) fn create_cpu_buffer(
+    device: &ash::Device,
+    allocator: &mut Allocator,
     size: vk::DeviceSize,
+    usage: vk::BufferUsageFlags,
+    name: &str,
+) -> AllocatedBuffer {
+    unsafe {
+        let buffer = device
+            .create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(size)
+                    .usage(usage)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                None,
+            )
+            .expect("Failed to create buffer");
+        let requirements = device.get_buffer_memory_requirements(buffer);
+        let allocation = allocator
+            .allocate(&AllocationCreateDesc {
+                name,
+                requirements,
+                location: MemoryLocation::CpuToGpu,
+                linear: true,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            })
+            .expect("Failed to allocate buffer memory");
+        device
+            .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+            .expect("Failed to bind buffer memory");
+        AllocatedBuffer { buffer, allocation: Some(allocation), size }
+    }
+}
+
+/// Destroy a buffer and return its memory to the allocator.
+pub(crate) fn destroy_cpu_buffer(
+    device: &ash::Device,
+    allocator: &mut Allocator,
+    buf: &mut AllocatedBuffer,
+) {
+    unsafe {
+        self::destroy_buffer_handle(device, buf.buffer);
+    }
+    if let Some(allocation) = buf.allocation.take() {
+        let _ = allocator.free(allocation);
+    }
+    buf.buffer = vk::Buffer::null();
+    buf.size = 0;
+}
+
+unsafe fn destroy_buffer_handle(device: &ash::Device, buffer: vk::Buffer) {
+    if buffer != vk::Buffer::null() {
+        device.destroy_buffer(buffer, None);
+    }
 }
 
 struct Frame {
@@ -70,6 +135,7 @@ pub struct VkRenderer {
     command_pool: vk::CommandPool,
     frames: Vec<Frame>,
     frame_index: usize,
+    text: TextStage,
 
     desired_extent: vk::Extent2D,
     corner_radius_px: f32,
@@ -79,7 +145,7 @@ pub struct VkRenderer {
 /// Compile WGSL to SPIR-V with the same coordinate-space adjustment wgpu applies
 /// (wgpu NDC is Y-up; ADJUST_COORDINATE_SPACE emits the Vulkan Y-flip), so the
 /// existing NDC math in the app carries over unchanged.
-fn compile_wgsl(source: &str) -> Vec<u32> {
+pub(crate) fn compile_wgsl(source: &str) -> Vec<u32> {
     let module = naga::front::wgsl::parse_str(source).expect("WGSL parse failed");
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -601,7 +667,7 @@ impl VkRenderer {
             )
             .expect("Failed to create sampler");
 
-        let window_info = Self::create_cpu_buffer(
+        let window_info = create_cpu_buffer(
             &device,
             &mut allocator,
             16,
@@ -687,7 +753,7 @@ impl VkRenderer {
                         None,
                     )
                     .unwrap(),
-                vertex: Self::create_cpu_buffer(
+                vertex: create_cpu_buffer(
                     &device,
                     &mut allocator,
                     64 * 1024,
@@ -697,6 +763,8 @@ impl VkRenderer {
                 vertex_count: 0,
             })
             .collect();
+
+        let text = TextStage::new(&device, &mut allocator, render_pass, FRAMES_IN_FLIGHT);
 
         let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
         let mut renderer = Self {
@@ -731,6 +799,7 @@ impl VkRenderer {
             command_pool,
             frames,
             frame_index: 0,
+            text,
             desired_extent: vk::Extent2D { width: width.max(1), height: height.max(1) },
             corner_radius_px,
             swapchain_dirty: false,
@@ -738,53 +807,6 @@ impl VkRenderer {
         renderer.create_swapchain();
         renderer.write_window_info();
         renderer
-    }
-
-    fn create_cpu_buffer(
-        device: &ash::Device,
-        allocator: &mut Allocator,
-        size: vk::DeviceSize,
-        usage: vk::BufferUsageFlags,
-        name: &str,
-    ) -> AllocatedBuffer {
-        unsafe {
-            let buffer = device
-                .create_buffer(
-                    &vk::BufferCreateInfo::default()
-                        .size(size)
-                        .usage(usage)
-                        .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                    None,
-                )
-                .expect("Failed to create buffer");
-            let requirements = device.get_buffer_memory_requirements(buffer);
-            let allocation = allocator
-                .allocate(&AllocationCreateDesc {
-                    name,
-                    requirements,
-                    location: MemoryLocation::CpuToGpu,
-                    linear: true,
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-                })
-                .expect("Failed to allocate buffer memory");
-            device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-                .expect("Failed to bind buffer memory");
-            AllocatedBuffer { buffer, allocation: Some(allocation), size }
-        }
-    }
-
-    fn destroy_buffer(&mut self, buf: &mut AllocatedBuffer) {
-        unsafe {
-            self.device.destroy_buffer(buf.buffer, None);
-        }
-        if let (Some(allocator), Some(allocation)) =
-            (self.allocator.as_mut(), buf.allocation.take())
-        {
-            let _ = allocator.free(allocation);
-        }
-        buf.buffer = vk::Buffer::null();
-        buf.size = 0;
     }
 
     fn write_window_info(&mut self) {
@@ -955,8 +977,21 @@ impl VkRenderer {
         self.swapchain_dirty = true;
     }
 
-    /// Render one frame of 2D geometry. Returns false if the frame was skipped
-    /// (swapchain rebuild); the caller just draws again next tick.
+    /// Stage text for the next `draw_frame`: shape-cache misses are rasterized
+    /// into the glyph atlas and vertices are built against the current extent.
+    /// Mirrors `glyphon::TextRenderer::prepare`.
+    pub fn prepare_text(
+        &mut self,
+        font_system: &mut glyphon::FontSystem,
+        swash_cache: &mut glyphon::SwashCache,
+        spans: &[TextSpan<'_>],
+    ) {
+        self.text.prepare(font_system, swash_cache, spans, self.extent);
+    }
+
+    /// Render one frame: 2D geometry, then any text staged via `prepare_text`.
+    /// Returns false if the frame was skipped (swapchain rebuild); the caller
+    /// just draws again next tick.
     pub fn draw_frame(&mut self, verts: &[Vertex]) -> bool {
         if self.swapchain_dirty {
             self.swapchain_dirty = false;
@@ -1002,23 +1037,17 @@ impl VkRenderer {
             let bytes: &[u8] = bytemuck::cast_slice(verts);
             let needed = bytes.len() as vk::DeviceSize;
             if needed > self.frames[frame_index].vertex.size {
-                let mut old = std::mem::replace(
-                    &mut self.frames[frame_index].vertex,
-                    AllocatedBuffer {
-                        buffer: vk::Buffer::null(),
-                        allocation: None,
-                        size: 0,
-                    },
-                );
-                self.destroy_buffer(&mut old);
-                let new_buf = Self::create_cpu_buffer(
+                let mut old =
+                    std::mem::replace(&mut self.frames[frame_index].vertex, AllocatedBuffer::null());
+                let allocator = self.allocator.as_mut().unwrap();
+                destroy_cpu_buffer(&self.device, allocator, &mut old);
+                self.frames[frame_index].vertex = create_cpu_buffer(
                     &self.device,
-                    self.allocator.as_mut().unwrap(),
+                    allocator,
                     needed.next_power_of_two(),
                     vk::BufferUsageFlags::VERTEX_BUFFER,
                     "vertices",
                 );
-                self.frames[frame_index].vertex = new_buf;
             }
             if !bytes.is_empty() {
                 self.frames[frame_index]
@@ -1031,6 +1060,11 @@ impl VkRenderer {
                     .copy_from_slice(bytes);
             }
             self.frames[frame_index].vertex_count = verts.len() as u32;
+            self.text.write_frame_buffers(
+                &self.device,
+                self.allocator.as_mut().unwrap(),
+                frame_index,
+            );
 
             // Record.
             let frame = &self.frames[frame_index];
@@ -1038,6 +1072,7 @@ impl VkRenderer {
             self.device
                 .begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())
                 .unwrap();
+            self.text.record_upload(&self.device, cmd, frame_index);
             let clear_values = [vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 0.0] },
             }];
@@ -1088,6 +1123,7 @@ impl VkRenderer {
                     .cmd_bind_vertex_buffers(cmd, 0, &[frame.vertex.buffer], &[0]);
                 self.device.cmd_draw(cmd, frame.vertex_count, 1, 0, 0);
             }
+            self.text.record_draw(&self.device, cmd, frame_index);
             self.device.cmd_end_render_pass(cmd);
             self.device.end_command_buffer(cmd).unwrap();
 
@@ -1138,16 +1174,19 @@ impl Drop for VkRenderer {
             for frame in &mut frames {
                 self.device.destroy_semaphore(frame.image_available, None);
                 self.device.destroy_fence(frame.in_flight, None);
-                let mut vertex = std::mem::replace(
-                    &mut frame.vertex,
-                    AllocatedBuffer { buffer: vk::Buffer::null(), allocation: None, size: 0 },
-                );
-                self.destroy_buffer(&mut vertex);
+                let mut vertex = std::mem::replace(&mut frame.vertex, AllocatedBuffer::null());
+                if let Some(allocator) = self.allocator.as_mut() {
+                    destroy_cpu_buffer(&self.device, allocator, &mut vertex);
+                }
             }
 
             self.destroy_swapchain_resources();
             if self.swapchain != vk::SwapchainKHR::null() {
                 self.swapchain_loader.destroy_swapchain(self.swapchain, None);
+            }
+
+            if let Some(allocator) = self.allocator.as_mut() {
+                self.text.destroy(&self.device, allocator);
             }
 
             self.device.destroy_sampler(self.backdrop_sampler, None);
@@ -1158,11 +1197,10 @@ impl Drop for VkRenderer {
             {
                 let _ = allocator.free(allocation);
             }
-            let mut window_info = std::mem::replace(
-                &mut self.window_info,
-                AllocatedBuffer { buffer: vk::Buffer::null(), allocation: None, size: 0 },
-            );
-            self.destroy_buffer(&mut window_info);
+            let mut window_info = std::mem::replace(&mut self.window_info, AllocatedBuffer::null());
+            if let Some(allocator) = self.allocator.as_mut() {
+                destroy_cpu_buffer(&self.device, allocator, &mut window_info);
+            }
 
             self.device.destroy_descriptor_pool(self.descriptor_pool, None);
             self.device
