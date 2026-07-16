@@ -21,7 +21,7 @@ use cce_ui::vk::TextSpan;
 use cce_ui::engine::{
     push_widget_vertices, push_extra_quad_vertices,
     push_extra_quad_vertices_clipped, push_arc_background_vertices,
-    push_plate_solid_border_vertices,
+    push_plate_solid_border_vertices, push_rounded_rect_vertices_corners,
 };
 
 impl State {
@@ -340,6 +340,38 @@ impl State {
             }
         } else {
             push_widget_vertices(w, sw, sh, active_clip_circle, verts);
+
+            // The params pane serves its chrome through the legacy plain-quad view,
+            // which carries flat quads only — the controls' rounded-rect backgrounds
+            // (textbox/dropdown/button/checkbox/color) come from the rounded view,
+            // drawn under the flat chrome and clipped to the pane's scroll viewport.
+            if idx == PARAM_IDX {
+                let (px, py, pw, ph) = self.positions[PARAM_IDX];
+                let view = (px, py + 4.0, px + pw, py + ph - 4.0);
+                let param_bg = self
+                    .slots
+                    .param
+                    .as_any()
+                    .downcast_ref::<cce_ui::widget::ParametersBg>()
+                    .expect("PARAM_IDX must be a ParametersBg");
+                for (qx, qy, qw, qh, qr, qc, corners) in param_bg.rounded_quads(&self.ui_context) {
+                    let radii = cce_ui::widget::CornerRadii::new(
+                        if corners.0 { qr } else { 0.0 },
+                        if corners.1 { qr } else { 0.0 },
+                        if corners.2 { qr } else { 0.0 },
+                        if corners.3 { qr } else { 0.0 },
+                    );
+                    push_rounded_rect_vertices_corners(
+                        qx, qy, qw, qh,
+                        radii,
+                        sw, sh,
+                        qc,
+                        active_clip_circle,
+                        Some(view),
+                        verts,
+                    );
+                }
+            }
 
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
                 push_extra_quad_vertices(w, qx, qy, qw, qh, sw, sh, qc, active_clip_circle, verts);
