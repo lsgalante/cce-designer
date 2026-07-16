@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use cce_ui::engine::{
     xdg_toplevel::ResizeEdge, Application, CursorIcon, EngineState, LogicalPosition, LogicalSize,
-    Vertex, WindowAction, WindowSettings,
+    WindowAction, WindowSettings,
 };
 use cce_ui::vk::VkRenderer;
 use cce_ui::widget::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
@@ -287,8 +287,15 @@ impl Application for State {
         None
     }
 
-    fn custom_vertices(&mut self, verts: &mut Vec<Vertex>, _size: LogicalSize, _scale: f64) {
-        verts.extend_from_slice(&self.vertex_data);
+    fn display_list(&mut self, _size: LogicalSize, _scale: f64) -> Option<cce_ui::scene::paint::DisplayList> {
+        // The single paint path: the whole 2D frame — geometry and text — rebuilt
+        // every drawn frame (the engine only draws on demand). The 3D scene / RT
+        // panes stay in stage_renderer.
+        Some(self.collect_display_list())
+    }
+
+    fn display_list_text(&self) -> bool {
+        true
     }
 
     fn renderer_init(&mut self, renderer: &mut VkRenderer) {

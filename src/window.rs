@@ -53,7 +53,6 @@ impl State {
                             state.grid_cursor_col = pos_x as i32;
                             state.grid_cursor_row = pos_y as i32;
                             state.sync_cursor_and_selection();
-                            state.upload_vertices();
                         }
                     }
                     changed = true;
@@ -454,7 +453,6 @@ impl State {
                             }
                             state.sync_nodes();
                             state.rebuild_scene_geometry();
-                            state.upload_vertices();
                             changed = true;
                         }
                     }
@@ -473,7 +471,6 @@ impl State {
                                 }
                                 state.sync_nodes();
                                 state.rebuild_scene_geometry();
-                                state.upload_vertices();
                                 changed = true;
                             }
                         }
@@ -553,7 +550,6 @@ impl State {
                 };
                 state.param_mut().set_display_params(&params);
 
-                state.upload_vertices();
             }
 
             state.update_status_text(&format!(
@@ -626,7 +622,6 @@ impl State {
                                     state.sync_grid_settings();
                                     state.sync_nodes();
                                     state.rebuild_scene_geometry();
-                                    state.upload_vertices();
                                     needs_redraw = true;
                                     Ok("Parameter updated".to_string())
                                 } else {
@@ -714,7 +709,6 @@ impl State {
                                     state.apply_layout();
                                     state.update_panel_bounds();
                                     state.rebuild_scene_geometry();
-                                    state.upload_vertices();
                                     needs_redraw = true;
                                     Ok("Node added".to_string())
                                 }
@@ -750,7 +744,6 @@ impl State {
                                 state.rebuild_positions();
                                 state.apply_layout();
                                 state.update_panel_bounds();
-                                state.upload_vertices();
                                 needs_redraw = true;
                                 Ok("Node moved".to_string())
                             } else {
@@ -801,7 +794,6 @@ impl State {
                             state.rebuild_positions();
                             state.apply_layout();
                             state.sync_grid_settings();
-                            state.upload_vertices();
                             needs_redraw = true;
                             Ok(format!("Circular pane: {}", state.circular_network_pane))
                         }
@@ -844,7 +836,6 @@ impl State {
                             if state.execute_menu_action(&label) {
                                 // The arms relayout themselves but render() draws the last
                                 // uploaded buffer (same ritual as ToggleCircularPane).
-                                state.upload_vertices();
                                 needs_redraw = true;
                                 Ok(format!("Menu action executed: {}", label.replace(['"', '\\'], "'")))
                             } else {

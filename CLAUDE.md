@@ -54,12 +54,13 @@ The designer runs on cce-ui's standard `Application` trait / `engine::run` patte
 loop, and the `VkRenderer`). Because it draws a 3D scene and shapes its own text, it
 uses the engine's extended hooks — it is the reference consumer for them:
 `renderer_init` (create persistent meshes), `stage_renderer` (flush pending mesh
-updates, prepare app-shaped text spans, stage the raster scene / RT pane; returns
-true while the path tracer refines), `custom_vertices` (the cached 2D vertex list),
-`handle_resize`, and `standard_csd` / `cursor_icon` / `take_window_action` (the
-detached circular window's radial border resize + top-arc move). `glyphon` is a
-dependency only for cosmic-text/swash (shaping + rasterization); with
-`display_list_text` off, the engine never touches the renderer's text state.
+updates, stage the raster scene / RT pane; returns true while the path tracer
+refines), `handle_resize`, and `standard_csd` / `cursor_icon` / `take_window_action`
+(the detached circular window's radial border resize + top-arc move). The 2D frame —
+geometry AND text — is the engine's single paint path: `display_list` returns
+`State::collect_display_list()` and `display_list_text` opts the text into the
+engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its own;
+`glyphon` remains a dependency only for the standalone `vk-smoke` bin).
 
 - `src/app.rs` (~5k lines) — the heart: `State` (the entire app model), `HttpAction` /
   `CustomEvent`, node-template loading, pane layout. Top-level widgets live in fixed
@@ -74,10 +75,11 @@ dependency only for cosmic-text/swash (shaping + rasterization); with
 - `src/window.rs` — `WindowEvent` plus the post-event side-effect pass
   (`process_window_event`: menu clicks, pane toggles) and HTTP-action application
   (`apply_custom_event`).
-- `src/render.rs` — `State::collect_vertices`: builds the frame's vertex batches,
-  hand-maintained draw order over the widget slots, circular-pane clipping;
-  `prepare_text` shapes spans against the app's own `FontSystem` (created with
-  `create_font_system()`, matching the engine's — fontdb IDs must line up).
+- `src/render.rs` — `State::collect_display_list`: the frame's 2D content as one
+  `cce_ui::scene::paint::DisplayList` (prims + `Prim::Text`), hand-maintained draw
+  order over the widget slots, circular-pane clipping via `PaintItem::clip_circle`,
+  network fade via text alpha. Rebuilt every drawn frame; the engine tessellates,
+  shapes, and draws it.
 - `src/geometry.rs` — node-graph evaluation. Each OpenCL node's kernel code is
   preprocessed: `chf("name", default)` / `chi` / `chv` calls are parsed into dynamic
   UI parameters (`parse_dynamic_params`) and rewritten to `param_values[i]` reads

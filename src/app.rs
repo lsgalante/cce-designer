@@ -38,7 +38,6 @@ use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg,
 use cce_ui::widget::UiContext;
 use crate::viewport_3d::Viewport3D;
 use cce_ui::colors;
-use glyphon::{Attrs, Buffer, FontSystem, Metrics};
 use glam::{Mat4, Vec3};
 
 use crate::geometry::*;
@@ -803,42 +802,6 @@ impl cce_ui::widget::Input for NodePalette {
 }
 
 
-/// Line box for a shaped buffer. Single-line labels use `size * 1.0`, matching the
-/// engine's shaping and the `cce_ui::layout::center_text_y` family (`line_height`
-/// multiplier 1.0) that widget paint code positions labels with — a taller box makes
-/// every label render below its intended center. Multi-line text (the code editor)
-/// keeps the historical `1.4` spacing its hand-drawn cursor math is tuned against.
-fn buffer_line_height(text: &str, size: f32) -> f32 {
-    if text.contains('\n') { size * 1.4 } else { size }
-}
-
-pub fn make_text_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> Buffer {
-    let metrics = Metrics::new(size, buffer_line_height(text, size));
-    let mut buffer = Buffer::new(font_system, metrics);
-    buffer.set_text(font_system, text, Attrs::new(), glyphon::Shaping::Advanced);
-    buffer.shape_until_scroll(font_system, true);
-    buffer
-}
-
-pub fn make_text_buffer_with_font(font_system: &mut FontSystem, text: &str, size: f32, font: Option<&str>) -> Buffer {
-    let metrics = Metrics::new(size, buffer_line_height(text, size));
-    let mut buffer = Buffer::new(font_system, metrics);
-    let mut attrs = Attrs::new();
-    let family_name = font.map(|f| cce_ui::layout::parse_font_string(f).0);
-    if let Some(ref name) = family_name {
-        let family = match name.as_str() {
-            "monospace" => glyphon::Family::Name(cce_ui::layout::get_system_monospace_font()),
-            "sans-serif" => glyphon::Family::SansSerif,
-            "serif" => glyphon::Family::Serif,
-            _ => glyphon::Family::Name(name),
-        };
-        attrs = attrs.family(family);
-    }
-    buffer.set_text(font_system, text, attrs, glyphon::Shaping::Advanced);
-    buffer.shape_until_scroll(font_system, true);
-    buffer
-}
-
 pub fn get_next_visible_pane(
     current_pane: usize,
     show_network: bool,
@@ -872,77 +835,6 @@ pub fn get_next_visible_pane(
     };
     visible_panes[next_pos]
 }
-
-pub fn push_circle_vertices(
-    cx: f32, cy: f32, r: f32,
-    sw: f32, sh: f32,
-    color: [f32; 4],
-    segments: usize,
-    clip_circle: [f32; 3],
-    out: &mut Vec<Vertex>,
-) {
-    for i in 0..segments {
-        let theta1 = (i as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
-        let theta2 = ((i + 1) as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
-        let x0 = cx;
-        let y0 = cy;
-        let x1 = cx + r * theta1.cos();
-        let y1 = cy + r * theta1.sin();
-        let x2 = cx + r * theta2.cos();
-        let y2 = cy + r * theta2.sin();
-        
-        let ndc_x0 = (x0 / sw) * 2.0 - 1.0;
-        let ndc_y0 = 1.0 - (y0 / sh) * 2.0;
-        let ndc_x1 = (x1 / sw) * 2.0 - 1.0;
-        let ndc_y1 = 1.0 - (y1 / sh) * 2.0;
-        let ndc_x2 = (x2 / sw) * 2.0 - 1.0;
-        let ndc_y2 = 1.0 - (y2 / sh) * 2.0;
-        
-        out.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
-        out.push(Vertex { position: [ndc_x1, ndc_y1], color, clip_circle });
-        out.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
-    }
-}
-
-pub fn push_circle_border_vertices(
-    cx: f32, cy: f32, r: f32,
-    thickness: f32,
-    sw: f32, sh: f32,
-    color: [f32; 4],
-    segments: usize,
-    clip_circle: [f32; 3],
-    out: &mut Vec<Vertex>,
-) {
-    for i in 0..segments {
-        let theta1 = (i as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
-        let theta2 = ((i + 1) as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
-        
-        let x0 = cx + (r - thickness) * theta1.cos();
-        let y0 = cy + (r - thickness) * theta1.sin();
-        let x1 = cx + r * theta1.cos();
-        let y1 = cy + r * theta1.sin();
-        
-        let x2 = cx + r * theta2.cos();
-        let y2 = cy + r * theta2.sin();
-        let x3 = cx + (r - thickness) * theta2.cos();
-        let y3 = cy + (r - thickness) * theta2.sin();
-        
-        let ndc_x0 = (x0 / sw) * 2.0 - 1.0; let ndc_y0 = 1.0 - (y0 / sh) * 2.0;
-        let ndc_x1 = (x1 / sw) * 2.0 - 1.0; let ndc_y1 = 1.0 - (y1 / sh) * 2.0;
-        let ndc_x2 = (x2 / sw) * 2.0 - 1.0; let ndc_y2 = 1.0 - (y2 / sh) * 2.0;
-        let ndc_x3 = (x3 / sw) * 2.0 - 1.0; let ndc_y3 = 1.0 - (y3 / sh) * 2.0;
-        
-        out.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
-        out.push(Vertex { position: [ndc_x1, ndc_y1], color, clip_circle });
-        out.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
-        
-        out.push(Vertex { position: [ndc_x0, ndc_y0], color, clip_circle });
-        out.push(Vertex { position: [ndc_x2, ndc_y2], color, clip_circle });
-        out.push(Vertex { position: [ndc_x3, ndc_y3], color, clip_circle });
-    }
-}
-
-
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResizeDirection {
@@ -998,11 +890,8 @@ pub struct PendingWindowDrag {
 }
 
 pub struct State {
-    pub font_system: FontSystem,
-    pub swash_cache: glyphon::SwashCache,
     /// Window title; the engine polls `Application::settings` and applies it.
     pub title: String,
-    pub vertex_data: Vec<Vertex>,
 
     /// GPU meshes — `None` until `renderer_init`.
     pub meshes: Option<SceneMeshes>,
@@ -1117,10 +1006,7 @@ pub struct State {
     pub loaded_project_path: Option<std::path::PathBuf>,
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
-    pub text_buffer_cache: std::collections::HashMap<(String, u32, Option<String>), Buffer>,
     pub viewport_dirty: bool,
-    pub text_dirty: bool,
-    pub last_popover_rects: Vec<(f32, f32, f32, f32)>,
     pub last_status_text: String,
     pub last_viewport_camera_pos: Vec3,
     pub last_viewport_camera_rx: f32,
@@ -2016,13 +1902,11 @@ impl State {
         self.node_palette_query = String::new();
         self.node_palette_selected = 0;
         self.refresh_node_palette();
-        self.upload_vertices();
     }
 
     pub fn close_node_palette(&mut self) {
         self.node_palette_visible = false;
         self.refresh_node_palette();
-        self.upload_vertices();
     }
 
 
@@ -2047,7 +1931,6 @@ impl State {
         self.apply_layout();
         self.update_panel_bounds();
         self.rebuild_scene_geometry();
-        self.upload_vertices();
         true
     }
 
@@ -2064,7 +1947,6 @@ impl State {
                 if !self.node_palette_filtered.is_empty() {
                     self.node_palette_selected = (self.node_palette_selected + 1).min(self.node_palette_filtered.len() - 1);
                     self.refresh_node_palette();
-                    self.upload_vertices();
                 }
                 true
             }
@@ -2072,14 +1954,12 @@ impl State {
                 if self.node_palette_selected > 0 {
                     self.node_palette_selected -= 1;
                     self.refresh_node_palette();
-                    self.upload_vertices();
                 }
                 true
             }
             Key::Named(NamedKey::Backspace) => {
                 self.node_palette_query.pop();
                 self.refresh_node_palette();
-                self.upload_vertices();
                 true
             }
             Key::Named(NamedKey::Tab) => {
@@ -2092,7 +1972,6 @@ impl State {
                         self.node_palette_query.push(ch);
                     }
                     self.refresh_node_palette();
-                    self.upload_vertices();
                     true
                 } else {
                     false
@@ -2297,7 +2176,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
-        self.upload_vertices();
         self.sync_cursor_and_selection();
     }
 
@@ -2318,7 +2196,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.grid_cursor_col = pos_x as i32;
                     self.grid_cursor_row = pos_y as i32;
                     self.sync_cursor_and_selection();
-                    self.upload_vertices();
                 }
             }
             true
@@ -2364,7 +2241,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.apply_layout();
             self.update_panel_bounds();
             self.rebuild_scene_geometry();
-            self.upload_vertices();
             self.viewport_dirty = true;
             true
         } else {
@@ -2475,8 +2351,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let sw = lw;
 
         // Bundled fonts only (the designer's UI uses bundled families).
-        let font_system = cce_ui::create_font_system();
-        let swash_cache = glyphon::SwashCache::new();
 
         let splitter_layout = cce_ui::layout::SplitterLayout::new(sw, SPLITTER_W, MIN_COLUMN);
         let templates_root = load_fs_tree();
@@ -2596,10 +2470,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
 
         let mut state = Self {
-            font_system,
-            swash_cache,
             title: String::new(),
-            vertex_data: Vec::with_capacity(4096),
             meshes: None,
             pending_grid: None,
             pending_origin: None,
@@ -2725,10 +2596,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             loaded_project_path: None,
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
             recent_files,
-            text_buffer_cache: std::collections::HashMap::new(),
             viewport_dirty: true,
-            text_dirty: true,
-            last_popover_rects: Vec::new(),
             last_status_text: String::new(),
             last_viewport_camera_pos: Vec3::ZERO,
             last_viewport_camera_rx: 0.0,
@@ -2795,7 +2663,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.apply_layout();
         state.update_panel_bounds();
         state.sync_pane_focus();
-        state.upload_vertices();
         state.sync_cursor_and_selection();
         state.sync_parameters_pane();
         for i in 0..WIDGET_COUNT {
@@ -3481,7 +3348,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.sync_pane_focus();
                 self.rebuild_positions();
                 self.apply_layout();
-                self.upload_vertices();
                 return;
             }
             Action::ToggleSpreadsheet => {
@@ -3663,7 +3529,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.sync_layout();
             self.read_panel_offsets();
             self.keep_cursor_in_view();
-            self.upload_vertices();
             self.viewport_dirty = true;
         }
     }
@@ -3783,7 +3648,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                     self.sync_layout();
                     self.read_panel_offsets();
-                    self.upload_vertices();
                     true
                 } else if !dialog_open && in_network_pane {
                     if self.modifiers.control_key() {
@@ -3842,7 +3706,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if focus_changed {
                     self.sync_layout();
                     self.read_panel_offsets();
-                    self.upload_vertices();
                     true
                 } else {
                     result
@@ -3987,7 +3850,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             self.close_node_palette();
                         }
                     }
-                    self.upload_vertices();
                     return true;
                 }
                 let dialog_open = self.node_palette_visible;
@@ -4019,7 +3881,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.is_panning = false;
                                 self.sync_layout();
                                 self.read_panel_offsets();
-                                self.upload_vertices();
                                 return true;
                             }
                         }
@@ -4030,7 +3891,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.is_panning = false;
                     self.sync_layout();
                     self.read_panel_offsets();
-                    self.upload_vertices();
                     return true;
                 }
 
@@ -4400,7 +4260,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             if matches!(drag, AppDrag::NetworkResize { .. }) {
                                 self.read_panel_offsets();
                             }
-                            self.upload_vertices();
                             changed = true;
                         }
                         if self.drag_widget.is_some() {
@@ -4411,14 +4270,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 self.sync_layout();
-                                self.upload_vertices();
                             } else if idx == SPREADSHEET_IDX {
                                 {
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 self.sync_layout();
-                                self.upload_vertices();
                             } else if idx == CONTENT_IDX {
                                 {
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
@@ -4440,7 +4297,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 self.update_panel_bounds();
-                                self.upload_vertices();
                             } else {
                                 {
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
@@ -4485,7 +4341,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             p.default = output_node_name;
                             self.sync_nodes();
                             self.rebuild_scene_geometry();
-                            self.upload_vertices();
                             self.sync_parameters_pane();
                             changed = true;
                         }
@@ -4526,7 +4381,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) {
                     self.graph_mut().cancel_connecting();
-                    self.upload_vertices();
                     return true;
                 }
                 let mut changed = false;
@@ -4587,7 +4441,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     self.current_dir_mut().children[idx].position = (new_x, new_y);
                                     self.sync_nodes();
                                     self.sync_layout();
-                                    self.upload_vertices();
                                 }
                             }
                             self.grid_cursor_col += dc;
@@ -4745,7 +4598,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                                 self.rebuild_positions();
                                                 self.apply_layout();
                                                 self.update_panel_bounds();
-                                                self.upload_vertices();
                                                 changed = true;
                                             }
                                         }
@@ -4794,7 +4646,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                                 self.apply_layout();
                                                 self.update_panel_bounds();
                                                 self.rebuild_scene_geometry();
-                                                self.upload_vertices();
                                                 self.viewport_dirty = true;
                                                 changed = true;
                                             }
@@ -4862,7 +4713,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.update_graph_settings_from_config();
                 self.rebuild_positions();
                 self.apply_layout();
-                self.upload_vertices();
             } else {
                 self.update_inertial_settings();
             }
@@ -4904,7 +4754,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         self.update_pivot_geometry();
                         self.update_viewport_bg_geometry();
                         self.sync_grid_settings();
-                        self.upload_vertices();
                     }
                 }
             }
@@ -4990,7 +4839,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
 
         if tick_changed {
-            self.upload_vertices();
         }
 
         let mut panned = false;
@@ -5039,7 +4887,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
             self.sync_layout();
             self.read_panel_offsets();
-            self.upload_vertices();
         }
 
         tick_changed || panned
@@ -5101,7 +4948,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             renderer.set_corner_radius(radius);
         }
         self.flush_pending_meshes(renderer);
-        self.prepare_text(renderer);
         let meshes = self.meshes.expect("stage_frame before renderer_init");
 
         // 3D canvas: stage the scene into the renderer's backdrop when the

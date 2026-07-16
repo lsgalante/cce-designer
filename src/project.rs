@@ -110,7 +110,6 @@ impl State {
     }
 
     pub(crate) fn load_from_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.text_buffer_cache.clear();
         if path.file_name().map_or(false, |n| n == "default_project.json") {
             let content = fs::read_to_string(path)?;
             let proj: Project = serde_json::from_str(&content)?;
@@ -150,7 +149,6 @@ impl State {
             self.rebuild_positions();
             self.apply_layout();
             self.update_panel_bounds();
-            self.upload_vertices();
             self.loaded_project_path = None;
             self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
             self.update_window_title();
@@ -206,7 +204,6 @@ impl State {
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
-        self.upload_vertices();
         self.loaded_project_path = Some(project_dir);
         self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
         self.update_window_title();
@@ -214,7 +211,6 @@ impl State {
     }
 
     pub(crate) fn new_project(&mut self) {
-        self.text_buffer_cache.clear();
         self.fs_root = FsNode {
             id: "root".to_string(),
             name: "root".to_string(),
@@ -255,7 +251,6 @@ impl State {
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
-        self.upload_vertices();
         self.loaded_project_path = None;
         self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
         self.update_window_title();
