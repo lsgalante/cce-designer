@@ -361,9 +361,9 @@ impl State {
         // Network Settings
         ensure_param(main_node, "Network Settings", "section", "", &[], None, None, None);
         ensure_param(main_node, "Circular Pane", "choice", if self.circular_network_pane { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(main_node, "Node Color R", "spinbox", &((self.node_color[0] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(main_node, "Node Color G", "spinbox", &((self.node_color[1] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
-        ensure_param(main_node, "Node Color B", "spinbox", &((self.node_color[2] * 255.0) as i32).to_string(), &[], Some(0.0), Some(255.0), Some(1.0));
+        // Node color is config-owned (style.surface.graph.node.color in
+        // config.kdl) — drop the retired per-project params from older saves.
+        main_node.params.retain(|p| !matches!(p.name.as_str(), "Node Color R" | "Node Color G" | "Node Color B"));
 
         // Viewport Settings
 
@@ -400,9 +400,6 @@ impl State {
             for p in &params {
                 match p.name.as_str() {
                     // Network Settings
-                    "Node Color R" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[0] = val / 255.0; }
-                    "Node Color G" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[1] = val / 255.0; }
-                    "Node Color B" => if let Ok(val) = p.default.parse::<f32>() { self.node_color[2] = val / 255.0; }
                     "Circular Pane" => if let Ok(val) = p.default.parse::<bool>() { self.circular_network_pane = val; }
 
                     // Viewport Settings
