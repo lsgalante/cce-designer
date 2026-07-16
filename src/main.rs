@@ -730,6 +730,15 @@ mod tests {
         let mods_none = ModifiersState::default();
         let key_tick = Key::Character("`".to_string());
         assert_eq!(mgr.match_action(&mods_none, &key_tick), Some(Action::ToggleSpreadsheet));
+
+        // Context cycling chords: exact modifier match separates next from previous
+        mgr.register("Ctrl+Tab", Action::NextContext).unwrap();
+        mgr.register("Ctrl+Shift+Tab", Action::PrevContext).unwrap();
+        let key_tab = Key::Named(NamedKey::Tab);
+        let mods_ctrl_shift = ModifiersState { ctrl: true, alt: false, shift: true, logo: false };
+        assert_eq!(mgr.match_action(&mods_ctrl, &key_tab), Some(Action::NextContext));
+        assert_eq!(mgr.match_action(&mods_ctrl_shift, &key_tab), Some(Action::PrevContext));
+        assert_eq!(mgr.match_action(&mods_none, &key_tab), None);
     }
 }
 

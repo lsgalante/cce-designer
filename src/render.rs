@@ -8,7 +8,7 @@ use crate::app::{
     make_text_buffer, make_text_buffer_with_font,
     CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX, PARAM_PLATE_IDX,
     BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
-    SPREADSHEET_MENUBAR_IDX,
+    SPREADSHEET_MENUBAR_IDX, SPREADSHEET_IDX,
     MENUBAR_H,
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX,
     push_circle_vertices, push_circle_border_vertices,
@@ -106,6 +106,87 @@ impl State {
                 );
             }
         }
+
+        self.push_context_border(verts, sw, sh, clip_circle_val);
+    }
+
+    /// Highlight border around the focused context's pane. The per-pane
+    /// menubars are hidden in the floating layout, so this border is the
+    /// only visual indicator of `focused_pane`.
+    fn push_context_border(
+        &self,
+        verts: &mut Vec<Vertex>,
+        sw: f32,
+        sh: f32,
+        clip_circle_val: [f32; 3],
+    ) {
+        if self.is_detached_network {
+            return;
+        }
+
+        let thickness = 2.0;
+        let mut color = colors::highlight_primary_color();
+        color[3] = 0.9;
+
+        let (x, y, w, h) = match self.focused_pane {
+            LEFT_MENUBAR_IDX => {
+                if !self.show_network || self.detached_circular_network {
+                    return;
+                }
+                if self.circular_network_pane {
+                    color[3] *= self.network_opacity;
+                    push_circle_border_vertices(
+                        self.circular_network_layout.x,
+                        self.circular_network_layout.y,
+                        self.circular_network_layout.r,
+                        3.0,
+                        sw,
+                        sh,
+                        color,
+                        64,
+                        clip_circle_val,
+                        verts,
+                    );
+                    return;
+                }
+                color[3] *= self.network_opacity;
+                self.positions[NETWORK_PANEL_IDX]
+            }
+            RIGHT_MENUBAR_IDX => {
+                if !self.show_viewport {
+                    return;
+                }
+                self.positions[VIEWPORT_IDX]
+            }
+            PARAM_MENUBAR_IDX => {
+                if !self.show_parameters {
+                    return;
+                }
+                self.positions[PARAM_IDX]
+            }
+            SPREADSHEET_MENUBAR_IDX => {
+                if !self.show_spreadsheet {
+                    return;
+                }
+                self.positions[SPREADSHEET_IDX]
+            }
+            _ => return,
+        };
+
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let r = cce_ui::layout::plate_corner_radius();
+        let radii = cce_ui::widget::CornerRadii::new(r, r, r, r);
+        push_plate_solid_border_vertices(
+            x, y, w, h,
+            radii,
+            thickness,
+            sw, sh,
+            color,
+            [0.0, 0.0, 0.0],
+            verts,
+        );
     }
 
     pub(crate) fn draw_widget_recursive(

@@ -2582,6 +2582,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             register("toggle_spreadsheet", "`", Action::ToggleSpreadsheet);
             register("toggle_circular_pane", "Ctrl+d", Action::ToggleCircularPane);
             register("save_document", "Ctrl+s", Action::Save);
+            register("next_context", "Ctrl+Tab", Action::NextContext);
+            register("previous_context", "Ctrl+Shift+Tab", Action::PrevContext);
         }
 
         let mut state = Self {
@@ -3537,6 +3539,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.save_file_chooser();
                 }
             }
+            Action::NextContext | Action::PrevContext => {
+                self.focused_pane = get_next_visible_pane(
+                    self.focused_pane,
+                    self.show_network,
+                    self.show_viewport,
+                    self.show_parameters,
+                    self.show_spreadsheet,
+                    action == Action::PrevContext,
+                );
+                self.sync_pane_focus();
+            }
         }
         if settings_changed {
             self.save_settings();
@@ -4482,17 +4495,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.space_pressed = event.state == ElementState::Pressed;
                 }
 
+                // Context switching dispatches ahead of the widget key paths
+                // (param pane, node palette) so the chord works from any pane.
                 if event.state == ElementState::Pressed {
-                    if event.logical_key == Key::Named(NamedKey::Tab) && self.modifiers.control_key() && !self.modifiers.alt_key() && !self.modifiers.super_key() {
-                        self.focused_pane = get_next_visible_pane(
-                            self.focused_pane,
-                            self.show_network,
-                            self.show_viewport,
-                            self.show_parameters,
-                            self.show_spreadsheet,
-                            self.modifiers.shift_key(),
-                        );
-                        self.sync_pane_focus();
+                    if let Some(action @ (Action::NextContext | Action::PrevContext)) =
+                        self.shortcut_manager.match_action(&self.modifiers, &event.logical_key)
+                    {
+                        self.execute_action(action);
                         return true;
                     }
                 }

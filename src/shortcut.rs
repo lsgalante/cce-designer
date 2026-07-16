@@ -13,6 +13,8 @@ pub enum Action {
     ToggleCircularPane,
     DetachCircularWindow,
     Save,
+    NextContext,
+    PrevContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
