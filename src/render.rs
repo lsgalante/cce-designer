@@ -107,6 +107,7 @@ impl State {
 
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
+        self.append_popovers(&mut pc);
 
         pc.finish()
     }
@@ -223,14 +224,6 @@ impl State {
             }
         }
 
-        if w.visible() && (self.focused_widget == Some(idx) || idx == PARAM_IDX) {
-            let mut popover_pc = cce_ui::layout::PopoverCollector::new();
-            w.render_popover(&mut popover_pc);
-            for (color, px, py, pw, ph) in popover_pc.rects {
-                pc.quad(rect(px, py, pw, ph), color);
-            }
-        }
-
         if active_circle.is_some() {
             pc.pop_clip_circle();
         }
@@ -333,7 +326,8 @@ impl State {
     /// The frame's text, as `Prim::Text` items shaped and drawn by the engine
     /// (`display_list_text`): each non-menubar widget's walk-derived labels — the
     /// graph's clamped to the network pane (and distance-filtered against the circular
-    /// pane), network text fading with `network_opacity` — then the open popovers'.
+    /// pane), network text fading with `network_opacity`. Popovers follow in
+    /// `append_popovers`.
     fn append_frame_text(&self, pc: &mut PaintCtx) {
         let circular = self.circular_network_pane;
         let ncx = self.circular_network_layout.x;
@@ -381,7 +375,14 @@ impl State {
             }
         }
 
-        // Popover text, on top of (i.e. after) all widget labels.
+    }
+
+    /// Open popovers (the params pane's expanded dropdowns), background then
+    /// text per widget. Appended after `append_frame_text` so the popover
+    /// occludes the widget labels underneath it — the display list is drawn
+    /// strictly in order, so a popover background emitted in the geometry
+    /// pass would sit under every label.
+    fn append_popovers(&self, pc: &mut PaintCtx) {
         for i in 0..WIDGET_COUNT {
             let w = self.slots.get_dyn(i);
             if !w.visible() {
@@ -394,6 +395,9 @@ impl State {
             if self.focused_widget == Some(i) || i == PARAM_IDX {
                 let mut popover_pc = cce_ui::layout::PopoverCollector::new();
                 w.render_popover(&mut popover_pc);
+                for (color, px, py, pw, ph) in popover_pc.rects {
+                    pc.quad(rect(px, py, pw, ph), color);
+                }
                 for (t, size, x, y, tc, font_opt, label_bounds) in popover_pc.texts {
                     let color = [
                         (tc[0] * 255.0).round().clamp(0.0, 255.0) as u8,

@@ -742,6 +742,49 @@ mod tests {
     }
 
     #[test]
+    fn test_popover_draws_over_widget_labels() {
+        // Regression: the display list draws strictly in order, so an open
+        // dropdown's popover (background AND option text) must be appended
+        // after the widget-label text pass — popover rects emitted in the
+        // geometry pass sat under every label, and the labels of buttons
+        // beneath the params pane's "Open" dropdown bled through it.
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+        let main_idx = state.fs_root.children.iter().position(|c| c.name == "Main").expect("Main node");
+        state.graph_mut().set_selected_node(Some(main_idx));
+        state.sync_parameters_pane();
+
+        {
+            let dropdown = state
+                .slots
+                .param
+                .inner_mut()
+                .choices
+                .iter_mut()
+                .flatten()
+                .next()
+                .expect("Main's params include a dropdown (Open)");
+            dropdown.open = true;
+        }
+
+        let list = state.collect_display_list();
+        let text_pos = |needle: &str| {
+            list.items.iter().position(|item| {
+                matches!(&item.prim, cce_ui::scene::paint::Prim::Text { text, .. } if text == needle)
+            })
+        };
+        // "New Project" is a button label sitting under the open dropdown;
+        // "Other" only exists inside the popover's option list.
+        let label_idx = text_pos("New Project").expect("button label in display list");
+        let option_idx = text_pos("Other").expect("popover option text in display list");
+        assert!(option_idx > label_idx, "popover text must draw after widget labels");
+        let has_bg_between = list.items[label_idx..option_idx]
+            .iter()
+            .any(|item| matches!(item.prim, cce_ui::scene::paint::Prim::Quad { .. }));
+        assert!(has_bg_between, "popover background must draw after widget labels");
+    }
+
+    #[test]
     fn test_mcp_tools_map_to_actions() {
         // Every MCP tool except get_state must dispatch by injecting its name
         // as the McpAction serde tag; filling each schema property with a
