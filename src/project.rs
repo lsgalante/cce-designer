@@ -264,6 +264,11 @@ impl State {
         let vp_bg_color = self.viewport().bg_color;
         let vp_grid_color = self.viewport().grid_color;
         let vp_rt_mode = self.viewport().rt_mode;
+        let show_network = self.show_network;
+        let show_viewport = self.show_viewport;
+        let show_parameters = self.show_parameters;
+        let show_spreadsheet = self.show_spreadsheet;
+        let bool_str = |b: bool| if b { "true" } else { "false" };
 
         let camera_nodes: Vec<String> = self.current_dir().children.iter()
             .filter(|c| c.node_type == "camera")
@@ -321,6 +326,12 @@ impl State {
             }
         }
 
+        fn set_toggle(p: &mut ParamDef, on: bool) {
+            p.param_type = "toggle".to_string();
+            p.options.clear();
+            p.default = if on { "true" } else { "false" }.to_string();
+        }
+
         // Retain only the Main utility subnet, removing the rest
         self.fs_root.children.retain(|c| c.name != "Network" && c.name != "Viewport" && c.name != "Parameters" && c.name != "Spreadsheet");
 
@@ -353,14 +364,14 @@ impl State {
         ensure_param(main_node, "Zoom Out", "button", "", &[], None, None, None);
         ensure_param(main_node, "Reset Zoom", "button", "", &[], None, None, None);
         ensure_param(main_node, "Detach Circular Window", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Show Network Pane", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Show Viewport Pane", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Show Parameters Pane", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Show Spreadsheet Pane", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Show Network Pane", "toggle", bool_str(show_network), &[], None, None, None);
+        ensure_param(main_node, "Show Viewport Pane", "toggle", bool_str(show_viewport), &[], None, None, None);
+        ensure_param(main_node, "Show Parameters Pane", "toggle", bool_str(show_parameters), &[], None, None, None);
+        ensure_param(main_node, "Show Spreadsheet Pane", "toggle", bool_str(show_spreadsheet), &[], None, None, None);
 
         // Network Settings
         ensure_param(main_node, "Network Settings", "section", "", &[], None, None, None);
-        ensure_param(main_node, "Circular Pane", "choice", if self.circular_network_pane { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(main_node, "Circular Pane", "toggle", bool_str(self.circular_network_pane), &[], None, None, None);
         // Node color is config-owned (style.surface.graph.node.color in
         // config.kdl) — drop the retired per-project params from older saves.
         main_node.params.retain(|p| !matches!(p.name.as_str(), "Node Color R" | "Node Color G" | "Node Color B"));
@@ -378,12 +389,12 @@ impl State {
             ensure_param(main_node, "Active Camera", "choice", &self.active_camera, &camera_options_refs, None, None, None);
         }
 
-        ensure_param(main_node, "Square Aspect", "choice", if self.square_viewport { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(main_node, "Show Grid Guide", "choice", if vp_show_grid { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(main_node, "Show Reference Cube", "choice", if vp_show_cube { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(main_node, "Show Origin Axes", "choice", if vp_show_origin { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(main_node, "Show Camera Pivot", "choice", if vp_show_camera_pivot { "true" } else { "false" }, &["false", "true"], None, None, None);
-        ensure_param(main_node, "Ray Traced Preview", "choice", if vp_rt_mode { "true" } else { "false" }, &["false", "true"], None, None, None);
+        ensure_param(main_node, "Square Aspect", "toggle", bool_str(self.square_viewport), &[], None, None, None);
+        ensure_param(main_node, "Show Grid Guide", "toggle", bool_str(vp_show_grid), &[], None, None, None);
+        ensure_param(main_node, "Show Reference Cube", "toggle", bool_str(vp_show_cube), &[], None, None, None);
+        ensure_param(main_node, "Show Origin Axes", "toggle", bool_str(vp_show_origin), &[], None, None, None);
+        ensure_param(main_node, "Show Camera Pivot", "toggle", bool_str(vp_show_camera_pivot), &[], None, None, None);
+        ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
         ensure_param(main_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
         ensure_param(main_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
         ensure_param(main_node, "Camera Pivot Size", "spinbox", &((self.camera_pivot_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
@@ -392,6 +403,26 @@ impl State {
 
         ensure_param(main_node, "Help", "section", "", &[], None, None, None);
         ensure_param(main_node, "About", "button", "", &[], None, None, None);
+
+        // Boolean settings and pane-visibility items render as toggles. Older
+        // saves stored these as choice dropdowns / buttons; retype them and
+        // reflect live pane state so a reopened project shows real switches.
+        for p in main_node.params.iter_mut() {
+            match p.name.as_str() {
+                "Circular Pane" | "Square Aspect" | "Show Grid Guide"
+                | "Show Reference Cube" | "Show Origin Axes"
+                | "Show Camera Pivot" | "Ray Traced Preview" => {
+                    p.param_type = "toggle".to_string();
+                    p.options.clear();
+                    if p.default != "true" { p.default = "false".to_string(); }
+                }
+                "Show Network Pane" => set_toggle(p, show_network),
+                "Show Viewport Pane" => set_toggle(p, show_viewport),
+                "Show Parameters Pane" => set_toggle(p, show_parameters),
+                "Show Spreadsheet Pane" => set_toggle(p, show_spreadsheet),
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {

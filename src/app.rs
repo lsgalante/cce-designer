@@ -1357,10 +1357,14 @@ impl State {
         if !self.is_detached_network {
             if let Some(slot_idx) = self.graph().selected_node() {
                 let updated_params = self.param().node_params();
+                // Live pane state, so a pane toggle only fires the visibility
+                // action when it actually flips relative to what's on screen.
+                let cur_show = (self.show_network, self.show_viewport, self.show_parameters, self.show_spreadsheet);
                 let dir = self.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot_idx) {
                     let mut param_changed = false;
                     let mut triggered_buttons = Vec::new();
+                    let mut pane_actions = Vec::new();
                     for (u_name, u_val, _) in &updated_params {
                         if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
                             if p.default != *u_val {
@@ -1369,6 +1373,21 @@ impl State {
                                 if p.param_type == "button" && p.default == "clicked" {
                                     triggered_buttons.push(p.name.clone());
                                     p.default = "".to_string();
+                                }
+                                if p.param_type == "toggle" {
+                                    let desired = p.default == "true";
+                                    let cur = match p.name.as_str() {
+                                        "Show Network Pane" => Some(cur_show.0),
+                                        "Show Viewport Pane" => Some(cur_show.1),
+                                        "Show Parameters Pane" => Some(cur_show.2),
+                                        "Show Spreadsheet Pane" => Some(cur_show.3),
+                                        _ => None,
+                                    };
+                                    // execute_menu_action flips the pane, so only
+                                    // fire it when the target differs from now.
+                                    if cur == Some(!desired) {
+                                        pane_actions.push(p.name.clone());
+                                    }
                                 }
                                 if p.name == "Open" && p.default != "- Select -" && !p.default.is_empty() {
                                     file_to_open = Some(p.default.clone());
@@ -1397,6 +1416,9 @@ impl State {
 
                         for btn_name in triggered_buttons {
                             self.execute_menu_action(&btn_name);
+                        }
+                        for pane_name in pane_actions {
+                            self.execute_menu_action(&pane_name);
                         }
                     }
                 }
@@ -1674,7 +1696,39 @@ impl State {
         true
     }
 
+    /// Rewrite the Main node's setting toggles from live app state, so the
+    /// switches show the real value even after panes/settings were changed
+    /// through the menus or keyboard while another node was selected.
+    fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
+        let live: [(&str, bool); 11] = [
+            ("Show Network Pane", self.show_network),
+            ("Show Viewport Pane", self.show_viewport),
+            ("Show Parameters Pane", self.show_parameters),
+            ("Show Spreadsheet Pane", self.show_spreadsheet),
+            ("Circular Pane", self.circular_network_pane),
+            ("Square Aspect", self.square_viewport),
+            ("Show Grid Guide", self.viewport().show_grid),
+            ("Show Reference Cube", self.viewport().show_cube),
+            ("Show Origin Axes", self.viewport().show_origin),
+            ("Show Camera Pivot", self.viewport().show_camera_pivot),
+            ("Ray Traced Preview", self.viewport().rt_mode),
+        ];
+        let dir = self.current_dir_mut();
+        let Some(child) = dir.children.get_mut(slot_idx) else { return };
+        if child.name != "Main" { return; }
+        for (name, on) in live {
+            if let Some(p) = child.params.iter_mut().find(|p| p.name == name && p.param_type == "toggle") {
+                p.default = if on { "true" } else { "false" }.to_string();
+            }
+        }
+    }
+
     pub fn sync_parameters_pane(&mut self) {
+        if !self.is_detached_network {
+            if let Some(slot_idx) = self.graph().selected_node() {
+                self.refresh_main_node_live_toggles(slot_idx);
+            }
+        }
         let params = if !self.is_detached_network {
             if let Some(slot_idx) = self.graph().selected_node() {
                 let dir = self.current_dir();

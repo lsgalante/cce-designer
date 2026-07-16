@@ -859,7 +859,7 @@ impl State {
                 // panics its MenuBar downcast, and out-of-range menu/item indices
                 // used to reply "Menu clicked" while dispatching nowhere. NB the
                 // pane-toggle items ("Show Spreadsheet Pane", ...) are NOT in these
-                // menubars — they are button params in the menu pane, drained by
+                // menubars — they are toggle params in the menu pane, drained by
                 // sync_parameters_to_project's label match, unreachable from here.
                 let validated: Result<String, String> = if widget_idx >= WIDGET_COUNT {
                     Err(format!("widget_idx {widget_idx} out of range (widget slots: 0..{WIDGET_COUNT})"))
