@@ -2563,14 +2563,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         positions.resize_with(WIDGET_COUNT, || (0.0, 0.0, 0.0, 0.0));
 
 
+        // Chords from input.kdl (`cce-designer` domain → `cce-ui` domain),
+        // defaulting to the historical bindings; an invalid user chord logs
+        // and falls back to the default instead of panicking.
         let mut shortcut_manager = ShortcutManager::new();
-        shortcut_manager.register("Ctrl+g", Action::ToggleGrid).unwrap();
-        shortcut_manager.register("Ctrl+e", Action::ToggleCube).unwrap();
-        shortcut_manager.register("Ctrl+a", Action::ToggleSquareViewport).unwrap();
-        shortcut_manager.register("Ctrl+,", Action::ToggleConfigure).unwrap();
-        shortcut_manager.register("`", Action::ToggleSpreadsheet).unwrap();
-        shortcut_manager.register("Ctrl+d", Action::ToggleCircularPane).unwrap();
-        shortcut_manager.register("Ctrl+s", Action::Save).unwrap();
+        {
+            let mut register = |name: &str, default: &str, action: Action| {
+                let chord = cce_ui::input::app_chord(name, default);
+                if shortcut_manager.register(&chord, action).is_err() {
+                    eprintln!("[cce-designer] invalid chord {:?} for {}; using {:?}", chord, name, default);
+                    let _ = shortcut_manager.register(default, action);
+                }
+            };
+            register("toggle_grid", "Ctrl+g", Action::ToggleGrid);
+            register("toggle_cube", "Ctrl+e", Action::ToggleCube);
+            register("toggle_square_viewport", "Ctrl+a", Action::ToggleSquareViewport);
+            register("toggle_configure", "Ctrl+,", Action::ToggleConfigure);
+            register("toggle_spreadsheet", "`", Action::ToggleSpreadsheet);
+            register("toggle_circular_pane", "Ctrl+d", Action::ToggleCircularPane);
+            register("save_document", "Ctrl+s", Action::Save);
+        }
 
         let mut state = Self {
             font_system,
