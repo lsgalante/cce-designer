@@ -667,6 +667,18 @@ impl State {
                     Err("Not a valid subnet".to_string())
                 }
             }
+            McpAction::Select { slot } => {
+                if slot < state.current_dir().children.len() {
+                    // Same effect as clicking the node: it becomes the selected node and
+                    // its params populate the parameter pane.
+                    state.graph_mut().set_selected_node(Some(slot));
+                    state.sync_parameters_pane();
+                    needs_redraw = true;
+                    Ok("Node selected".to_string())
+                } else {
+                    Err("Slot index out of bounds".to_string())
+                }
+            }
             McpAction::SetParam { slot, name, value } => {
                 let dir = state.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot) {

@@ -75,20 +75,19 @@ pub const CONTENT_IDX: usize = 1;
 pub const SPLITTER1_IDX: usize = 2;
 pub const VIEWPORT_IDX: usize = 3;
 pub const SPLITTER2_IDX: usize = 4;
-pub const PARAM_PLATE_IDX: usize = 5;
-pub const PARAM_IDX: usize = 6;
-pub const CANVAS_IDX: usize = 7;
-pub const LEFT_MENUBAR_IDX: usize = 8;
-pub const RIGHT_MENUBAR_IDX: usize = 9;
-pub const PARAM_MENUBAR_IDX: usize = 10;
-pub const STATUS_IDX: usize = 11;
-pub const BREADCRUMB_IDX: usize = 12;
-pub const NODE_PALETTE_IDX: usize = 13;
-pub const SPREADSHEET_IDX: usize = 14;
-pub const SPREADSHEET_MENUBAR_IDX: usize = 15;
-pub const NETWORK_PANEL_IDX: usize = 16;
+pub const PARAM_IDX: usize = 5;
+pub const CANVAS_IDX: usize = 6;
+pub const LEFT_MENUBAR_IDX: usize = 7;
+pub const RIGHT_MENUBAR_IDX: usize = 8;
+pub const PARAM_MENUBAR_IDX: usize = 9;
+pub const STATUS_IDX: usize = 10;
+pub const BREADCRUMB_IDX: usize = 11;
+pub const NODE_PALETTE_IDX: usize = 12;
+pub const SPREADSHEET_IDX: usize = 13;
+pub const SPREADSHEET_MENUBAR_IDX: usize = 14;
+pub const NETWORK_PANEL_IDX: usize = 15;
 
-pub const WIDGET_COUNT: usize = 17;
+pub const WIDGET_COUNT: usize = 16;
 
 /// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
 /// old `Vec<Box<dyn WidgetHost>>` erased that and pinned `WidgetHost`'s full surface through the
@@ -102,7 +101,6 @@ pub struct WidgetSlots {
     pub splitter1: Adapted<Splitter>,
     pub viewport: Adapted<Viewport3D>,
     pub splitter2: Adapted<Splitter>,
-    pub param_plate: Adapted<PassivePlate>,
     pub param: Adapted<ParametersBg>,
     pub canvas: Adapted<Canvas>,
     pub left_menubar: Adapted<MenuBar>,
@@ -128,7 +126,6 @@ impl WidgetSlots {
             SPLITTER1_IDX => self.splitter1.draggable(),
             VIEWPORT_IDX => self.viewport.draggable(),
             SPLITTER2_IDX => self.splitter2.draggable(),
-            PARAM_PLATE_IDX => self.param_plate.draggable(),
             PARAM_IDX => self.param.draggable(),
             CANVAS_IDX => self.canvas.draggable(),
             LEFT_MENUBAR_IDX => self.left_menubar.draggable(),
@@ -151,7 +148,6 @@ impl WidgetSlots {
             SPLITTER1_IDX => self.splitter1.is_dragging(),
             VIEWPORT_IDX => self.viewport.is_dragging(),
             SPLITTER2_IDX => self.splitter2.is_dragging(),
-            PARAM_PLATE_IDX => self.param_plate.is_dragging(),
             PARAM_IDX => self.param.is_dragging(),
             CANVAS_IDX => self.canvas.is_dragging(),
             LEFT_MENUBAR_IDX => self.left_menubar.is_dragging(),
@@ -174,7 +170,6 @@ impl WidgetSlots {
             SPLITTER1_IDX => &self.splitter1,
             VIEWPORT_IDX => &self.viewport,
             SPLITTER2_IDX => &self.splitter2,
-            PARAM_PLATE_IDX => &self.param_plate,
             PARAM_IDX => &self.param,
             CANVAS_IDX => &self.canvas,
             LEFT_MENUBAR_IDX => &self.left_menubar,
@@ -197,7 +192,6 @@ impl WidgetSlots {
             SPLITTER1_IDX => &mut self.splitter1,
             VIEWPORT_IDX => &mut self.viewport,
             SPLITTER2_IDX => &mut self.splitter2,
-            PARAM_PLATE_IDX => &mut self.param_plate,
             PARAM_IDX => &mut self.param,
             CANVAS_IDX => &mut self.canvas,
             LEFT_MENUBAR_IDX => &mut self.left_menubar,
@@ -215,7 +209,7 @@ impl WidgetSlots {
 
     /// Per-slot dyn view in index order (the serialize path's input).
     pub fn dyn_refs(&self) -> [&dyn WidgetHost; WIDGET_COUNT] {
-        [&self.header, &self.content, &self.splitter1, &self.viewport, &self.splitter2, &self.param_plate, &self.param, &self.canvas, &self.left_menubar, &self.right_menubar, &self.param_menubar, &self.status, &self.breadcrumb, &self.node_palette, &self.spreadsheet, &self.spreadsheet_menubar, &self.network_panel]
+        [&self.header, &self.content, &self.splitter1, &self.viewport, &self.splitter2, &self.param, &self.canvas, &self.left_menubar, &self.right_menubar, &self.param_menubar, &self.status, &self.breadcrumb, &self.node_palette, &self.spreadsheet, &self.spreadsheet_menubar, &self.network_panel]
     }
 }
 
@@ -321,6 +315,7 @@ pub struct Project {
 pub enum McpAction {
     Up,
     Enter { slot: usize },
+    Select { slot: usize },
     SetParam { slot: usize, name: String, value: String },
     ResetCamera,
     Load { path: String },
@@ -2429,7 +2424,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             splitter1: Splitter::new(SPLITTER_W),
             viewport: Viewport3D::new(),
             splitter2: Splitter::new(SPLITTER_W),
-            param_plate: PassivePlate::new(colors::PARAM_BG, true),
             param: ParametersBg::new(),
             canvas: Canvas::new(),
             left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
@@ -3255,9 +3249,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.slots.get_dyn_mut(idx).set_visible(false);
             }
         }
-        self.positions[PARAM_PLATE_IDX] = self.positions[PARAM_IDX];
-        let p_visible = self.slots.param.visible();
-        self.slots.param_plate.set_visible(p_visible);
     }
 
 
@@ -4114,7 +4105,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if click_target.is_none() {
                             let mut hit_order: Vec<usize> = (0..WIDGET_COUNT).collect();
                             hit_order.sort_by_key(|&i| {
-                                let z = if i == NETWORK_PANEL_IDX || i == PARAM_PLATE_IDX {
+                                let z = if i == NETWORK_PANEL_IDX {
                                     -5
                                 } else if i == VIEWPORT_IDX {
                                     // Below PARAM_IDX: the params pane floats over the viewport,
@@ -4139,7 +4130,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 new_pane = Some(LEFT_MENUBAR_IDX);
                             } else if i == RIGHT_MENUBAR_IDX || i == VIEWPORT_IDX {
                                 new_pane = Some(RIGHT_MENUBAR_IDX);
-                            } else if i == PARAM_MENUBAR_IDX || i == PARAM_IDX || i == PARAM_PLATE_IDX {
+                            } else if i == PARAM_MENUBAR_IDX || i == PARAM_IDX {
                                 new_pane = Some(PARAM_MENUBAR_IDX);
                             } else if i == SPREADSHEET_MENUBAR_IDX || i == SPREADSHEET_IDX {
                                 new_pane = Some(SPREADSHEET_MENUBAR_IDX);

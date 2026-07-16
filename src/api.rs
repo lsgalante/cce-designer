@@ -50,6 +50,15 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
             }),
         ),
         tool(
+            "select",
+            "Select the node at the given slot in the current network level (like clicking it); its parameters populate the parameter pane.",
+            json!({
+                "type": "object",
+                "properties": { "slot": slot("Child index in the current network level") },
+                "required": ["slot"],
+            }),
+        ),
+        tool(
             "set_param",
             "Set a parameter on the node at the given slot. All values are strings (e.g. \"1.5\", \"0.2,0.4,1\").",
             json!({

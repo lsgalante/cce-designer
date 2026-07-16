@@ -4,7 +4,7 @@ use cce_ui::widget::WidgetHost;
 
 use crate::app::{
     State, FsNode, WIDGET_COUNT,
-    CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX, PARAM_PLATE_IDX,
+    CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX,
     BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
     SPREADSHEET_MENUBAR_IDX, SPREADSHEET_IDX,
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX,
@@ -62,7 +62,7 @@ impl State {
 
         let mut draw_order: Vec<usize> = (0..WIDGET_COUNT).collect();
         draw_order.sort_by_key(|&i| {
-            let base_key = if i == VIEWPORT_IDX || i == PARAM_PLATE_IDX || i == NETWORK_PANEL_IDX {
+            let base_key = if i == VIEWPORT_IDX || i == NETWORK_PANEL_IDX {
                 -5
             } else if i == CONTENT_IDX || i == PARAM_IDX {
                 -4
@@ -183,6 +183,33 @@ impl State {
                 }
             }
         } else {
+            // The params scrollbar sinks behind the pane plate when idle and rises above the
+            // pane content when active (dragged / recently scrolled / hovered). It straddles
+            // the plate here rather than riding the pane's `extra_quads`, so its depth can
+            // change without touching the rest of the pane chrome.
+            let param_scrollbar = if idx == PARAM_IDX {
+                let pb = self
+                    .slots
+                    .param
+                    .as_any()
+                    .downcast_ref::<cce_ui::widget::ParametersBg>()
+                    .expect("PARAM_IDX must be a ParametersBg");
+                if pb.scrollbar_visible() {
+                    Some((pb.scrollbar_quads(), pb.scrollbar_active()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Idle: draw the scrollbar first so the translucent pane plate settles over it.
+            if let Some((quads, false)) = &param_scrollbar {
+                for &(qx, qy, qw, qh, qc) in quads {
+                    pc.quad(rect(qx, qy, qw, qh), qc);
+                }
+            }
+
             append_widget_plate(w, pc);
 
             // The params pane serves its chrome through the legacy plain-quad view,
@@ -210,6 +237,13 @@ impl State {
             }
             for (cx, cy, cr, cc) in w.extra_circles() {
                 pc.circle(cx, cy, cr, cc);
+            }
+
+            // Active: draw the scrollbar last so it rides above the pane content and plate.
+            if let Some((quads, true)) = &param_scrollbar {
+                for &(qx, qy, qw, qh, qc) in quads {
+                    pc.quad(rect(qx, qy, qw, qh), qc);
+                }
             }
         }
 
