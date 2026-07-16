@@ -473,9 +473,6 @@ pub struct ViewportSettings {
     pub square: bool,
     pub show_camera_pivot_enabled: bool,
     pub camera_pivot_size: f32,
-    pub scroll_speed: Option<f32>,
-    pub inertial_scroll: Option<bool>,
-    pub scroll_friction: Option<f32>,
     pub show_grid_enabled: bool,
     pub show_cube_enabled: bool,
     pub show_origin_enabled: bool,
@@ -493,9 +490,6 @@ impl Default for ViewportSettings {
             square: false,
             show_camera_pivot_enabled: false,
             camera_pivot_size: 1.0,
-            scroll_speed: None,
-            inertial_scroll: None,
-            scroll_friction: None,
             show_grid_enabled: true,
             show_cube_enabled: false,
             show_origin_enabled: true,
@@ -512,9 +506,6 @@ pub struct GraphSettings {
     pub grid_size_y: f32,
     pub skipped_row_h: f32,
     pub skipped_col_w: f32,
-    pub scroll_speed: Option<f32>,
-    pub inertial_scroll: Option<bool>,
-    pub scroll_friction: Option<f32>,
 }
 
 impl Default for GraphSettings {
@@ -524,9 +515,6 @@ impl Default for GraphSettings {
             grid_size_y: 40.0,
             skipped_row_h: 20.0,
             skipped_col_w: 20.0,
-            scroll_speed: None,
-            inertial_scroll: None,
-            scroll_friction: None,
         }
     }
 }
@@ -557,48 +545,55 @@ impl DesignSettings {
         path.push(".config");
         path.push("cce");
         path.push("cce-designer");
-        path.push("design.kdl");
+        path.push("state.kdl");
         path
+    }
+
+    fn load_kdl(path: &std::path::Path) -> Option<Self> {
+        let content = fs::read_to_string(path).ok()?;
+        let mut json_val = cce_ui::config::parse_kdl_to_json(&content);
+        // Convert hex strings back to color arrays
+        if let Some(obj) = json_val.as_object_mut() {
+            if let Some(viewport) = obj.get_mut("viewport").and_then(|v| v.as_object_mut()) {
+                if let Some(serde_json::Value::String(hex_str)) = viewport.get("bg_color") {
+                    if let Some(arr) = hex_to_float_array(hex_str) {
+                        if let Ok(arr_val) = serde_json::to_value(arr) {
+                            viewport.insert("bg_color".to_string(), arr_val);
+                        }
+                    }
+                }
+                if let Some(serde_json::Value::String(hex_str)) = viewport.get("grid_color") {
+                    if let Some(arr) = hex_to_float_array(hex_str) {
+                        if let Ok(arr_val) = serde_json::to_value(arr) {
+                            viewport.insert("grid_color".to_string(), arr_val);
+                        }
+                    }
+                }
+            }
+        }
+        Some(serde_json::from_value::<Self>(json_val).unwrap_or_else(|_| Self::default()))
     }
 
     fn load() -> Self {
         let path = Self::file_path();
-        if path.exists() {
-            if let Ok(content) = fs::read_to_string(&path) {
-                let mut json_val = cce_ui::config::parse_kdl_to_json(&content);
-                // Convert hex strings back to color arrays
-                if let Some(obj) = json_val.as_object_mut() {
-                    if let Some(viewport) = obj.get_mut("viewport").and_then(|v| v.as_object_mut()) {
-                        if let Some(serde_json::Value::String(hex_str)) = viewport.get("bg_color") {
-                            if let Some(arr) = hex_to_float_array(hex_str) {
-                                if let Ok(arr_val) = serde_json::to_value(arr) {
-                                    viewport.insert("bg_color".to_string(), arr_val);
-                                }
-                            }
-                        }
-                        if let Some(serde_json::Value::String(hex_str)) = viewport.get("grid_color") {
-                            if let Some(arr) = hex_to_float_array(hex_str) {
-                                if let Ok(arr_val) = serde_json::to_value(arr) {
-                                    viewport.insert("grid_color".to_string(), arr_val);
-                                }
-                            }
-                        }
-                    }
-                }
-                return serde_json::from_value::<Self>(json_val).unwrap_or_else(|_| Self::default());
-            }
+        if let Some(settings) = Self::load_kdl(&path) {
+            return settings;
         }
-        
-        // Migration fallback: load from design.json, save to design.kdl, and delete the old JSON
-        let mut old_path = path.clone();
-        old_path.set_extension("json");
-        if old_path.exists() {
-            if let Ok(content) = fs::read_to_string(&old_path) {
-                if let Ok(settings) = serde_json::from_str::<Self>(&content) {
-                    settings.save();
-                    let _ = fs::remove_file(old_path);
-                    return settings;
-                }
+
+        // Migration fallback: the pre-rename design.kdl (same format), then
+        // the ancient design.json — load, re-save as state.kdl, delete the old.
+        let legacy_kdl = path.with_file_name("design.kdl");
+        if let Some(settings) = Self::load_kdl(&legacy_kdl) {
+            settings.save();
+            let _ = fs::remove_file(legacy_kdl);
+            return settings;
+        }
+        let legacy_json = path.with_file_name("design.json");
+        if let Ok(content) = fs::read_to_string(&legacy_json) {
+            if let Ok(settings) = serde_json::from_str::<Self>(&content) {
+                settings.save();
+                let _ = fs::remove_file(legacy_json);
+                return settings;
             }
         }
         Self::default()
@@ -1184,9 +1179,6 @@ impl State {
                 square: self.square_viewport,
                 show_camera_pivot_enabled: self.viewport().show_camera_pivot,
                 camera_pivot_size: self.camera_pivot_size,
-                scroll_speed: Some(self.viewport().scroll_speed),
-                inertial_scroll: Some(self.viewport().inertial_scroll),
-                scroll_friction: Some(self.viewport().scroll_friction),
                 show_grid_enabled: self.viewport().show_grid,
                 show_cube_enabled: self.viewport().show_cube,
                 show_origin_enabled: self.viewport().show_origin,
@@ -1199,9 +1191,6 @@ impl State {
                 grid_size_y: self.grid_size_y,
                 skipped_row_h: self.skipped_row_h,
                 skipped_col_w: self.skipped_col_w,
-                scroll_speed: Some(self.graph_scroll_speed),
-                inertial_scroll: Some(self.graph_inertial_scroll),
-                scroll_friction: Some(self.graph_scroll_friction),
             },
         };
         settings.save();
@@ -2553,9 +2542,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_spreadsheet_node_params: None,
             grid_thickness: settings.viewport.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
-            graph_scroll_speed: settings.graph.scroll_speed.unwrap_or(1.0),
-            graph_inertial_scroll: settings.graph.inertial_scroll.unwrap_or(true),
-            graph_scroll_friction: settings.graph.scroll_friction.unwrap_or(0.90),
+            // Config-owned; update_inertial_settings overwrites these from
+            // config.kdl's input.inertial right after construction.
+            graph_scroll_speed: 1.0,
+            graph_inertial_scroll: true,
+            graph_scroll_friction: 0.90,
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network,
             circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
@@ -2737,13 +2728,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
         }
         
-        let settings = DesignSettings::load();
-        self.graph_scroll_speed = settings.graph.scroll_speed.unwrap_or(speed);
-        self.graph_inertial_scroll = settings.graph.inertial_scroll.unwrap_or(enabled);
-        self.graph_scroll_friction = settings.graph.scroll_friction.unwrap_or(friction);
-        self.viewport_mut().scroll_speed = settings.viewport.scroll_speed.unwrap_or(speed);
-        self.viewport_mut().inertial_scroll = settings.viewport.inertial_scroll.unwrap_or(enabled);
-        self.viewport_mut().scroll_friction = settings.viewport.scroll_friction.unwrap_or(friction);
+        // Scroll behavior is config-owned (input.inertial in config.kdl) —
+        // state.kdl carries no copy, so config edits always take effect.
+        self.graph_scroll_speed = speed;
+        self.graph_inertial_scroll = enabled;
+        self.graph_scroll_friction = friction;
+        self.viewport_mut().scroll_speed = speed;
+        self.viewport_mut().inertial_scroll = enabled;
+        self.viewport_mut().scroll_friction = friction;
     }
 
     pub fn update_graph_settings_from_config(&mut self) {
@@ -4743,12 +4735,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
                          self.cell_color = cce_ui::color::graph_cell_color();
                          self.gap_color = cce_ui::color::graph_gap_color();
-                          if let Some(val) = settings.graph.scroll_speed { self.graph_scroll_speed = val; }
-                          if let Some(val) = settings.graph.inertial_scroll { self.graph_inertial_scroll = val; }
-                          if let Some(val) = settings.graph.scroll_friction { self.graph_scroll_friction = val; }
-                          if let Some(val) = settings.viewport.scroll_speed { self.viewport_mut().scroll_speed = val; }
-                          if let Some(val) = settings.viewport.inertial_scroll { self.viewport_mut().inertial_scroll = val; }
-                          if let Some(val) = settings.viewport.scroll_friction { self.viewport_mut().scroll_friction = val; }
 
                         colors::set_node_color([self.node_color[0], self.node_color[1], self.node_color[2], 1.0]);
 

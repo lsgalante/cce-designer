@@ -106,6 +106,16 @@ The `zcce_inspector_v1` integration (window-position tracking + widget-state
 streaming to cce-test-interface) was dropped in the engine migration; the HTTP API
 is the introspection surface.
 
+### App-written settings: `~/.config/cce/cce-designer/state.kdl`
+
+`DesignSettings` (viewport/graph display state the app rewrites itself:
+colors, grid sizes, show flags) persists to `state.kdl` — deliberately NOT
+`config.kdl`, which is the user-authored toolkit-config override slot that
+cce-ui auto-merges (see `../CLAUDE.md`). Legacy `design.kdl` / `design.json`
+files migrate on load. Scroll behavior (`scroll_speed`, `inertial_scroll`,
+`scroll_friction`) is intentionally absent: it is config-owned
+(`input.inertial` in config.kdl) and must not be shadowed by app state.
+
 ### Runtime paths point into the source tree
 
 Node templates (`nodes/*.json`) and `default_project.json` are located via
