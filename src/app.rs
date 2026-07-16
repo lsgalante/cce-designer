@@ -803,8 +803,17 @@ impl cce_ui::widget::Input for NodePalette {
 }
 
 
+/// Line box for a shaped buffer. Single-line labels use `size * 1.0`, matching the
+/// engine's shaping and the `cce_ui::layout::center_text_y` family (`line_height`
+/// multiplier 1.0) that widget paint code positions labels with — a taller box makes
+/// every label render below its intended center. Multi-line text (the code editor)
+/// keeps the historical `1.4` spacing its hand-drawn cursor math is tuned against.
+fn buffer_line_height(text: &str, size: f32) -> f32 {
+    if text.contains('\n') { size * 1.4 } else { size }
+}
+
 pub fn make_text_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> Buffer {
-    let metrics = Metrics::new(size, size * 1.4);
+    let metrics = Metrics::new(size, buffer_line_height(text, size));
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_text(font_system, text, Attrs::new(), glyphon::Shaping::Advanced);
     buffer.shape_until_scroll(font_system, true);
@@ -812,7 +821,7 @@ pub fn make_text_buffer(font_system: &mut FontSystem, text: &str, size: f32) -> 
 }
 
 pub fn make_text_buffer_with_font(font_system: &mut FontSystem, text: &str, size: f32, font: Option<&str>) -> Buffer {
-    let metrics = Metrics::new(size, size * 1.4);
+    let metrics = Metrics::new(size, buffer_line_height(text, size));
     let mut buffer = Buffer::new(font_system, metrics);
     let mut attrs = Attrs::new();
     let family_name = font.map(|f| cce_ui::layout::parse_font_string(f).0);

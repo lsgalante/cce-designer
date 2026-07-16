@@ -623,7 +623,7 @@ impl State {
         // as prims — (text, x, y, size, color, font, clip bounds), the walk's per-widget
         // content font and container clips composed in — replacing the legacy
         // get_text_items / text_labels_with_font_and_bounds getters. Shaping stays
-        // app-side in text_buffer_cache (same size*1.4 metrics as before).
+        // app-side in text_buffer_cache (engine-matched metrics — see buffer_line_height).
         let mut widget_text: Vec<Vec<(String, f32, f32, f32, [u8; 3], Option<String>, Option<[f32; 4]>)>> =
             Vec::with_capacity(WIDGET_COUNT);
         for i in 0..WIDGET_COUNT {
