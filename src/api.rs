@@ -4,14 +4,20 @@ use crate::{CustomEvent, HttpAction};
 
 pub fn start_http_server(server_sender: calloop::channel::Sender<CustomEvent>) {
     std::thread::spawn(move || {
-        let listener = match TcpListener::bind("127.0.0.1:3000") {
+        // CCE_DESIGNER_HTTP_PORT overrides the default so a second instance
+        // (tests, debugging) can run alongside one already holding 3000.
+        let port: u16 = std::env::var("CCE_DESIGNER_HTTP_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(3000);
+        let listener = match TcpListener::bind(("127.0.0.1", port)) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("Failed to bind HTTP server to port 3000: {:?}", e);
+                eprintln!("Failed to bind HTTP server to port {port}: {:?}", e);
                 return;
             }
         };
-        println!("Embedded HTTP Server listening on http://127.0.0.1:3000");
+        println!("Embedded HTTP Server listening on http://127.0.0.1:{port}");
 
         for stream in listener.incoming() {
             let stream = match stream {
