@@ -1,46 +1,10 @@
-#![allow(unused_imports)]
-use std::time::Instant;
-#[cfg(test)]
-use std::fs;
-#[cfg(test)]
-use std::path::Path;
-
-use serde::{Deserialize, Serialize};
-
-#[cfg(test)]
-use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent};
-#[cfg(test)]
-use cce_ui::widget::{Key, NamedKey};
-
-use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_keyboard, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window, delegate_output,
-    registry::{ProvidesRegistryState, RegistryState},
-    output::OutputState,
-    seat::{
-        keyboard::KeyboardHandler,
-        pointer::{PointerHandler, ThemedPointer, ThemeSpec, CursorIcon},
-        Capability, SeatHandler, SeatState,
-    },
-    shell::{
-        xdg::{
-            window::{Window as XdgWindow, WindowConfigure, WindowDecorations},
-            XdgShell,
-        },
-    },
-    shm::{Shm, ShmHandler},
-};
-use wayland_client::{
-    globals::registry_queue_init,
-    Connection,
-};
-use calloop_wayland_source::WaylandSource;
-
-#[cfg(test)]
-use glam::{Mat4, Vec3};
 
 pub mod app;
+pub mod application;
+
+// Root-level aliases some modules import via `crate::` paths.
+#[allow(unused_imports)]
+use app::{CustomEvent, HttpAction, ModifiersState};
 pub mod viewport_3d;
 pub mod api;
 pub mod window;
@@ -50,9 +14,14 @@ pub mod render;
 pub mod shortcut;
 pub mod thumbnail;
 
-use app::{State, CustomEvent, HttpAction, ModifiersState};
-use window::{AppState, WindowEvent};
-use api::start_http_server;
+#[cfg(test)]
+mod test_prelude {
+    pub use std::fs;
+    pub use std::path::Path;
+    pub use glam::{Mat4, Vec3};
+    pub use cce_ui::widget::{Key, NamedKey};
+    pub use crate::app::{State, HttpAction, ModifiersState};
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -84,224 +53,14 @@ fn main() {
         }
     }
 
-    let is_detached_network = args.iter().any(|arg| arg == "--detached-network");
-
-    let conn = Connection::connect_to_env().unwrap();
-    let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
-    let qh = event_queue.handle();
-
-    let compositor_state = CompositorState::bind(&globals, &qh).unwrap();
-    let xdg_shell_state = XdgShell::bind(&globals, &qh).unwrap();
-    let shm_state = Shm::bind(&globals, &qh).unwrap();
-    let seat_state = SeatState::new(&globals, &qh);
-    let output_state = OutputState::new(&globals, &qh);
-    let inspector = globals.bind(&qh, 1..=1, ()).ok();
-    let (sender, channel) = calloop::channel::channel::<CustomEvent>();
-
-    let mut app = AppState {
-        registry_state: RegistryState::new(&globals),
-        compositor_state,
-        xdg_shell_state,
-        shm_state,
-        seat_state,
-        output_state,
-        seats: Vec::new(),
-        pointer: None,
-        keyboard: None,
-        window: None,
-        surface: None,
-        state: None,
-        exit: false,
-        redraw: true,
-        pressed_key: None,
-        inspector,
-        pending_resize: None,
-        _sender: sender.clone(),
-    };
-
-    // Perform a roundtrip to populate output_state with active output scales
-    event_queue.roundtrip(&mut app).unwrap();
-
-    let scale = cce_ui::wayland::detect_scale_factor(&app.output_state);
-
-    let (pw, ph) = if is_detached_network {
-        ((400.0 * scale) as u32, (400.0 * scale) as u32)
-    } else {
-        ((1280.0 * scale) as u32, (800.0 * scale) as u32)
-    };
-
-    let state = State::new(
-        &conn,
-        &qh,
-        &app.compositor_state,
-        &app.xdg_shell_state,
-        pw, ph,
-        scale,
-        is_detached_network,
-    );
-
-    app.window = Some(state.window.clone());
-    app.surface = Some(state.wl_surface.clone());
-    app.state = Some(state);
-
-    if let Some(ref inspector) = app.inspector {
-        if let Some(ref surface) = app.surface {
-            inspector.register_client(surface);
-        }
-    }
-
-    if !is_detached_network {
-        start_http_server(sender.clone());
-    }
-
-    let mut event_loop = calloop::EventLoop::try_new().unwrap();
-    let loop_handle = event_loop.handle();
-
-    WaylandSource::new(conn, event_queue).insert(loop_handle.clone()).unwrap();
-
-    loop_handle.insert_source(channel, |event, _metadata, app_state: &mut AppState| {
-        if let calloop::channel::Event::Msg(msg) = event {
-            app_state.handle_user_event(msg);
-        }
-    }).unwrap();
-
-    const KEY_REPEAT_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
-    const KEY_REPEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
-
-    loop {
-        let timeout = if app.redraw {
-            std::time::Duration::ZERO
-        } else {
-            std::time::Duration::from_millis(16)
-        };
-        event_loop.dispatch(timeout, &mut app).unwrap();
-
-        if app.exit || app.state.as_ref().map(|s| s.exit_requested).unwrap_or(false) {
-            if let Some(state) = &mut app.state {
-                if state.needs_autosave && (state.is_detached_network || state.detached_circular_network) {
-                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
-                    let _ = state.save_to_file(&default_proj_path);
-                }
-            }
-            break;
-        }
-
-        if let Some(state) = &mut app.state {
-            if let Some(ref inspector) = app.inspector {
-                let now = std::time::Instant::now();
-                if now.duration_since(state.last_inspector_check) >= std::time::Duration::from_millis(250) {
-                    state.last_inspector_check = now;
-                    inspector.get_inspected_surfaces();
-                }
-            }
-
-            if state.needs_autosave && (state.is_detached_network || state.detached_circular_network) {
-                let now = std::time::Instant::now();
-                if now.duration_since(state.last_autosave_time) >= std::time::Duration::from_millis(200) {
-                    state.needs_autosave = false;
-                    state.last_autosave_time = now;
-                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
-                    if let Err(e) = state.save_to_file(&default_proj_path) {
-                        eprintln!("Failed to auto-save default project in main loop: {:?}", e);
-                    } else if let Ok(m) = std::fs::metadata(&default_proj_path) {
-                        if let Ok(mod_time) = m.modified() {
-                            state.last_project_mod_time = Some(mod_time);
-                        }
-                    }
-                }
-            }
-
-            if state.is_detached_network || state.detached_circular_network {
-                let now = std::time::Instant::now();
-                if now.duration_since(state.last_project_check) >= std::time::Duration::from_millis(100) {
-                    state.last_project_check = now;
-                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
-                    if let Ok(m) = std::fs::metadata(&default_proj_path) {
-                        if let Ok(mod_time) = m.modified() {
-                            if Some(mod_time) != state.last_project_mod_time {
-                                state.last_project_mod_time = Some(mod_time);
-                                if let Err(e) = state.load_from_file(&default_proj_path) {
-                                    eprintln!("Failed to auto-reload project: {:?}", e);
-                                } else {
-                                    app.redraw = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(ref mut pk) = app.pressed_key {
-            let now = std::time::Instant::now();
-            if now.duration_since(pk.first_pressed) >= KEY_REPEAT_DELAY {
-                if now.duration_since(pk.last_repeated) >= KEY_REPEAT_INTERVAL {
-                    pk.last_repeated = now;
-                    if let Some(st) = &mut app.state {
-                        let custom_event = cce_ui::widget::KeyEvent {
-                            state: cce_ui::widget::ElementState::Pressed,
-                            logical_key: pk.logical_key.clone(),
-                            text: pk.text.clone(),
-                            repeat: true,
-                            ctrl: st.modifiers.ctrl,
-                            shift: st.modifiers.shift,
-                        };
-                        let ev = WindowEvent::KeyboardInput { event: custom_event };
-                        app.process_event(ev);
-                    }
-                }
-            }
-        }
-
-fn create_memfd_with_data(name: &str, data: &[u8]) -> std::io::Result<std::os::unix::io::RawFd> {
-    use std::io::{Seek, Write};
-    use std::os::unix::io::FromRawFd;
-    use std::os::unix::io::IntoRawFd;
-
-    let c_name = std::ffi::CString::new(name).unwrap();
-    let fd = unsafe { libc::memfd_create(c_name.as_ptr(), libc::MFD_CLOEXEC) };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    file.write_all(data)?;
-    file.seek(std::io::SeekFrom::Start(0))?;
-    Ok(file.into_raw_fd())
-}
-
-        if app.redraw {
-            app.redraw = false;
-            if let Some(state) = &mut app.state {
-                if state.render() {
-                    app.redraw = true;
-                }
-                if let Some(ref inspector) = app.inspector {
-                    if let Some(ref surface) = app.surface {
-                        let json = cce_ui::widget::serialize_widgets(&state.slots.dyn_refs());
-                        if json != state.last_serialized {
-                            let now = std::time::Instant::now();
-                            if now.duration_since(state.last_inspector_update) >= std::time::Duration::from_millis(100) {
-                                state.last_serialized = json.clone();
-                                state.last_inspector_update = now;
-                                if let Ok(raw_fd) = create_memfd_with_data("cce_ui_state", json.as_bytes()) {
-                                    use std::os::unix::io::{FromRawFd, AsFd};
-                                    let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
-                                    inspector.update_state(surface, file.as_fd(), json.len() as u32);
-                                }
-                            } else {
-                                app.redraw = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Everything windowed runs on the cce-ui engine (application.rs holds the
+    // Application impl; --detached-network is read there).
+    cce_ui::engine::run::<app::State>();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::test_prelude::*;
     use crate::app::{get_next_visible_pane, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, DesignSettings, FsNode, Project, ProjectViewState};
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};

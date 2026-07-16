@@ -7,9 +7,9 @@ use crate::app::{
     State, FsNode, WIDGET_COUNT,
     make_text_buffer, make_text_buffer_with_font,
     CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX, PARAM_PLATE_IDX,
-    BREADCRUMB_IDX, STATUS_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
+    BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
     SPREADSHEET_MENUBAR_IDX,
-    MENUBAR_H, STATUS_H,
+    MENUBAR_H,
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX,
     push_circle_vertices, push_circle_border_vertices,
 };
@@ -400,10 +400,12 @@ impl State {
 
         let verts = geom.to_vertex3d_vec();
         self.vertex_count_spheres = verts.len() as u32;
-        self.renderer.update_mesh(self.mesh_spheres, bytemuck::cast_slice(&verts));
         // Cache for the path tracer, so RT mode never re-runs the node
         // graph / OpenCL kernels; the version bump invalidates its scene.
+        // The raster mesh uploads from this same cache on the next
+        // `stage_renderer` flush.
         self.rt_sphere_verts = verts;
+        self.spheres_dirty = true;
         self.rt_geometry_version += 1;
         self.viewport_dirty = true;
     }
@@ -430,7 +432,7 @@ impl State {
         }
     }
 
-    pub(crate) fn prepare_text(&mut self) {
+    pub(crate) fn prepare_text(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
         let mut current_popovers = Vec::new();
         {
             fn collect_popovers(
@@ -489,7 +491,6 @@ impl State {
         let _ = sh;
 
         let Self {
-            ref mut renderer,
             ref mut font_system,
             ref mut swash_cache,
             physical_width, physical_height, scale,

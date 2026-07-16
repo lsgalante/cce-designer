@@ -45,7 +45,7 @@ use crate::geometry::*;
 use crate::shortcut::{ShortcutManager, Action};
 use cce_ui::vk::{SceneDraw, TextSpan};
 use cce_ui::engine::Vertex;
-use crate::window::{AppState, WindowEvent};
+use crate::window::WindowEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TouchPhase {
@@ -317,7 +317,7 @@ pub struct Project {
     pub view_state: ProjectViewState,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum HttpAction {
     Up,
@@ -341,10 +341,14 @@ pub enum HttpAction {
     MenuAction { label: String },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CustomEvent {
     GetState(std::sync::mpsc::Sender<String>),
     PostAction(HttpAction, std::sync::mpsc::Sender<Result<String, String>>),
+    /// App-requested exit (menu File > Exit, HTTP menu_action): the engine's
+    /// update hook is the only place with exit access, so input handlers that
+    /// see `exit_requested` route it here.
+    Exit,
 }
 
 #[derive(Clone)]
@@ -962,20 +966,48 @@ pub struct ViewportUniforms {
     pub _padding: f32,
 }
 
+/// The designer's persistent 3D meshes, created in `renderer_init` once the
+/// engine's renderer exists.
+#[derive(Clone, Copy)]
+pub struct SceneMeshes {
+    pub cube: cce_ui::vk::MeshId,
+    pub viewport_bg: cce_ui::vk::MeshId,
+    pub spheres: cce_ui::vk::MeshId,
+    pub grid: cce_ui::vk::MeshId,
+    pub origin: cce_ui::vk::MeshId,
+    pub pivot: cce_ui::vk::MeshId,
+}
+
+/// A left-press on the detached circular window's chrome that becomes an
+/// interactive move/resize once the pointer travels past a small threshold
+/// (so a plain click doesn't start a compositor grab).
+#[derive(Clone, Copy, Debug)]
+pub struct PendingWindowDrag {
+    pub start_x: f32,
+    pub start_y: f32,
+    pub action: cce_ui::engine::WindowAction,
+}
+
 pub struct State {
-    pub renderer: cce_ui::vk::VkRenderer,
     pub font_system: FontSystem,
     pub swash_cache: glyphon::SwashCache,
-    pub window: XdgWindow,
-    pub wl_surface: wl_surface::WlSurface,
+    /// Window title; the engine polls `Application::settings` and applies it.
+    pub title: String,
     pub vertex_data: Vec<Vertex>,
 
-    pub mesh_cube: cce_ui::vk::MeshId,
-    pub mesh_viewport_bg: cce_ui::vk::MeshId,
-    pub mesh_spheres: cce_ui::vk::MeshId,
-    pub mesh_grid: cce_ui::vk::MeshId,
-    pub mesh_origin: cce_ui::vk::MeshId,
-    pub mesh_pivot: cce_ui::vk::MeshId,
+    /// GPU meshes — `None` until `renderer_init`.
+    pub meshes: Option<SceneMeshes>,
+    /// CPU-staged mesh updates, flushed in `stage_renderer`.
+    pub pending_grid: Option<Vec<Vertex3D>>,
+    pub pending_origin: Option<Vec<Vertex3D>>,
+    pub pending_pivot: Option<Vec<Vertex3D>>,
+    pub pending_viewport_bg: Option<Vec<Vertex3D>>,
+    /// The spheres mesh needs re-upload from `rt_sphere_verts`.
+    pub spheres_dirty: bool,
+    /// Renderer corner radius applied last frame (physical px); re-set on change.
+    pub last_corner_radius: f32,
+    pub pending_window_drag: Option<PendingWindowDrag>,
+    pub window_action: Option<cce_ui::engine::WindowAction>,
     pub vertex_count_spheres: u32,
     pub node_color: [f32; 3],
     pub grid_color: [f32; 3],
@@ -1060,13 +1092,8 @@ pub struct State {
     pub detached_circular_network: bool,
     pub last_project_mod_time: Option<std::time::SystemTime>,
     pub last_project_check: std::time::Instant,
-    pub last_inspector_check: std::time::Instant,
-    pub last_inspector_update: std::time::Instant,
-    pub last_serialized: String,
     pub needs_autosave: bool,
     pub last_autosave_time: std::time::Instant,
-    pub window_x: i32,
-    pub window_y: i32,
     pub active_menu_cloud_pid: Option<u32>,
     pub active_menu_cloud_idx: Option<(usize, usize)>,
     pub uniform_background: bool,
@@ -1288,28 +1315,33 @@ impl State {
 
 
 
+    // The engine owns the renderer, so geometry changes stage CPU-side here
+    // and flush to the GPU meshes in `stage_renderer`.
+
     pub fn update_grid_geometry(&mut self) {
         let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
-        let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
-        self.renderer.update_mesh(self.mesh_grid, bytemuck::cast_slice(&grid_verts));
+        self.pending_grid = Some(grid_vertices(self.grid_thickness, linear_grid_color));
         self.viewport_dirty = true;
     }
 
     pub fn update_origin_geometry(&mut self) {
-        let origin_verts = origin_vectors_vertices(self.origin_size);
-        self.renderer.update_mesh(self.mesh_origin, bytemuck::cast_slice(&origin_verts));
+        self.pending_origin = Some(origin_vectors_vertices(self.origin_size));
         self.viewport_dirty = true;
     }
 
     pub fn update_pivot_geometry(&mut self) {
-        let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
-        self.renderer.update_mesh(self.mesh_pivot, bytemuck::cast_slice(&pivot_verts));
+        self.pending_pivot = Some(camera_pivot_vertices(self.camera_pivot_size));
         self.viewport_dirty = true;
     }
 
     pub fn update_viewport_bg_geometry(&mut self) {
         let bg_color = cce_ui::colors::to_linear_rgb(self.viewport().bg_color);
-        let bg_verts = [
+        self.pending_viewport_bg = Some(Self::viewport_bg_vertices(bg_color));
+        self.viewport_dirty = true;
+    }
+
+    pub(crate) fn viewport_bg_vertices(bg_color: [f32; 3]) -> Vec<Vertex3D> {
+        vec![
             Vertex3D { position: [-1.0, -1.0, 9.99], color: bg_color }, // Bottom-left
             Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
             Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
@@ -1317,9 +1349,7 @@ impl State {
             Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
             Vertex3D { position: [ 1.0,  1.0, 9.99], color: bg_color }, // Top-right
             Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
-        ];
-        self.renderer.update_mesh(self.mesh_viewport_bg, bytemuck::cast_slice(&bg_verts));
-        self.viewport_dirty = true;
+        ]
     }
 
     pub fn body_h(&self) -> f32 { self.height - HEADER_H - STATUS_H }
@@ -2422,68 +2452,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
 
 
-    pub fn new(
-        conn: &Connection,
-        qh: &QueueHandle<AppState>,
-        compositor_state: &CompositorState,
-        xdg_shell_state: &XdgShell,
-        pw: u32,
-        ph: u32,
-        scale: f64,
-        is_detached_network: bool,
-    ) -> Self {
-        cce_ui::scale::set_scale_factor(scale as f32);
+    pub fn new(is_detached_network: bool) -> Self {
+        // The engine detected the output scale before constructing the app.
+        let scale = cce_ui::scale::scale_factor() as f64;
         let settings = DesignSettings::load();
-        let lw = pw as f32 / scale as f32;
-        let lh = ph as f32 / scale as f32;
+        let (lw, lh) = if is_detached_network {
+            (400.0f32, 400.0f32)
+        } else {
+            (1280.0f32, 800.0f32)
+        };
+        let pw = (lw as f64 * scale) as u32;
+        let ph = (lh as f64 * scale) as u32;
         let sw = lw;
 
-        let wl_surface = compositor_state.create_surface(qh);
-        wl_surface.set_buffer_scale(scale as i32);
-        let window = xdg_shell_state.create_window(wl_surface.clone(), WindowDecorations::None, qh);
-        if is_detached_network {
-            window.set_title("Network Pane");
-            window.set_app_id("circular-network-pane");
-            window.set_min_size(Some((200, 200)));
-        } else {
-            window.set_title("Designer");
-            window.set_app_id("cce-designer");
-            window.set_min_size(Some((480, 320)));
-        }
-        window.commit();
-
-        let display_ptr = conn.backend().display_id().as_ptr() as *mut std::ffi::c_void;
-        let surface_ptr = wl_surface.id().as_ptr() as *mut std::ffi::c_void;
-        let corner_radius = cce_ui::color::backplate_corner_radius() * scale as f32;
-        let mut renderer = unsafe {
-            cce_ui::vk::VkRenderer::new(display_ptr, surface_ptr, pw, ph, corner_radius)
-        };
         // Bundled fonts only (the designer's UI uses bundled families).
         let font_system = cce_ui::create_font_system();
         let swash_cache = glyphon::SwashCache::new();
-
-        // Static 3D meshes; the spheres mesh starts empty and is rebuilt from
-        // the node graph (rebuild_scene_geometry).
-        let cube_verts = cube_vertices();
-        let mesh_cube = renderer.create_mesh(bytemuck::cast_slice(&cube_verts));
-        let linear_grid_color = cce_ui::colors::to_linear_rgb(settings.viewport.grid_color);
-        let grid_verts = grid_vertices(settings.viewport.grid_thickness, linear_grid_color);
-        let mesh_grid = renderer.create_mesh(bytemuck::cast_slice(&grid_verts));
-        let origin_verts = origin_vectors_vertices(settings.viewport.origin_size);
-        let mesh_origin = renderer.create_mesh(bytemuck::cast_slice(&origin_verts));
-        let pivot_verts = camera_pivot_vertices(settings.viewport.camera_pivot_size);
-        let mesh_pivot = renderer.create_mesh(bytemuck::cast_slice(&pivot_verts));
-        let bg_color = cce_ui::colors::to_linear_rgb(settings.viewport.bg_color);
-        let bg_verts = [
-            Vertex3D { position: [-1.0, -1.0, 9.99], color: bg_color }, // Bottom-left
-            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
-            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
-            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
-            Vertex3D { position: [ 1.0,  1.0, 9.99], color: bg_color }, // Top-right
-            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
-        ];
-        let mesh_viewport_bg = renderer.create_mesh(bytemuck::cast_slice(&bg_verts));
-        let mesh_spheres = renderer.create_mesh(&[]);
 
         let splitter_layout = cce_ui::layout::SplitterLayout::new(sw, SPLITTER_W, MIN_COLUMN);
         let templates_root = load_fs_tree();
@@ -2589,18 +2573,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         shortcut_manager.register("Ctrl+s", Action::Save).unwrap();
 
         let mut state = Self {
-            window,
-            wl_surface,
-            renderer,
             font_system,
             swash_cache,
+            title: String::new(),
             vertex_data: Vec::with_capacity(4096),
-            mesh_cube,
-            mesh_viewport_bg,
-            mesh_spheres,
-            mesh_grid,
-            mesh_origin,
-            mesh_pivot,
+            meshes: None,
+            pending_grid: None,
+            pending_origin: None,
+            pending_pivot: None,
+            pending_viewport_bg: None,
+            spheres_dirty: false,
+            last_corner_radius: -1.0,
+            pending_window_drag: None,
+            window_action: None,
             vertex_count_spheres: 0,
             node_color: {
                 let nc = cce_ui::color::graph_node_color();
@@ -2684,13 +2669,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 std::fs::metadata(&default_proj_path).and_then(|m| m.modified()).ok()
             },
             last_project_check: std::time::Instant::now(),
-            last_inspector_check: std::time::Instant::now(),
-            last_inspector_update: std::time::Instant::now() - std::time::Duration::from_secs(1),
-            last_serialized: String::new(),
             needs_autosave: false,
             last_autosave_time: std::time::Instant::now(),
-            window_x: 0,
-            window_y: 0,
             active_menu_cloud_pid: None,
             active_menu_cloud_idx: None,
             uniform_background: false,
@@ -3624,16 +3604,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
 
 
-    pub fn resize(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
+    /// Logical size + scale, from the engine's `handle_resize` hook (the
+    /// engine has already resized the renderer; the corner radius re-applies
+    /// on the next `stage_renderer` flush).
+    pub fn resize(&mut self, width: f32, height: f32, scale: f64) {
+        if width > 0.0 && height > 0.0 {
             let old_width = self.width;
-            self.physical_width = width;
-            self.physical_height = height;
-            self.width = width as f32 / self.scale as f32;
-            self.height = height as f32 / self.scale as f32;
-            self.renderer
-                .set_corner_radius(cce_ui::color::backplate_corner_radius() * self.scale as f32);
-            self.renderer.resize(width, height);
+            self.scale = scale;
+            cce_ui::scale::set_scale_factor(scale as f32);
+            self.physical_width = (width as f64 * scale) as u32;
+            self.physical_height = (height as f64 * scale) as u32;
+            self.width = width;
+            self.height = height;
+            self.last_corner_radius = -1.0;
 
             if old_width > 0.0 {
                 let r = self.width / old_width;
@@ -3829,22 +3812,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     true
                 } else {
                     result
-                }
-            }
-            WindowEvent::PinchGesture { delta, .. } => {
-                let dialog_open = self.node_palette_visible;
-                let in_network_pane = self.in_network_pane();
-
-                if !dialog_open && in_network_pane {
-                    if delta.is_finite() && *delta != 0.0 {
-                        let factor = (1.0 + *delta as f32).clamp(0.8, 1.25);
-                        self.zoom(factor, Some((self.cursor_x, self.cursor_y)));
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -4498,10 +4465,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 }
                 changed
             }
-            WindowEvent::ModifiersChanged(mods) => {
-                self.modifiers = mods.state();
-                false
-            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.logical_key == Key::Named(NamedKey::Space) {
                     self.space_pressed = event.state == ElementState::Pressed;
@@ -4840,9 +4803,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
     }
 
-    pub fn render(&mut self) -> bool {
+    /// Per-tick simulation (engine `tick` hook): config polling, widget
+    /// ticks, inertia, drag edge-panning. Returns true when the frame needs
+    /// a rebuild. The render half lives in [`State::stage_frame`].
+    pub fn tick_frame(&mut self, dt: f32) -> bool {
         let now = Instant::now();
-        let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
 
         if now.duration_since(self.last_config_read).as_secs_f32() > 2.0 {
@@ -5047,7 +5012,67 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.upload_vertices();
         }
 
-        self.prepare_text();
+        tick_changed || panned
+    }
+
+    /// Flush CPU-staged mesh updates to the renderer's persistent meshes.
+    fn flush_pending_meshes(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
+        let Some(meshes) = self.meshes else { return };
+        if let Some(verts) = self.pending_grid.take() {
+            renderer.update_mesh(meshes.grid, bytemuck::cast_slice(&verts));
+        }
+        if let Some(verts) = self.pending_origin.take() {
+            renderer.update_mesh(meshes.origin, bytemuck::cast_slice(&verts));
+        }
+        if let Some(verts) = self.pending_pivot.take() {
+            renderer.update_mesh(meshes.pivot, bytemuck::cast_slice(&verts));
+        }
+        if let Some(verts) = self.pending_viewport_bg.take() {
+            renderer.update_mesh(meshes.viewport_bg, bytemuck::cast_slice(&verts));
+        }
+        if self.spheres_dirty {
+            self.spheres_dirty = false;
+            renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&self.rt_sphere_verts));
+        }
+    }
+
+    /// One-time renderer setup (engine `renderer_init` hook): the persistent
+    /// 3D meshes. The spheres mesh starts empty and fills from the node graph
+    /// via the pending-mesh flush.
+    pub fn init_renderer(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
+        let cube_verts = cube_vertices();
+        let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
+        let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
+        let origin_verts = origin_vectors_vertices(self.origin_size);
+        let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
+        let bg_verts =
+            Self::viewport_bg_vertices(cce_ui::colors::to_linear_rgb(self.viewport().bg_color));
+        self.meshes = Some(SceneMeshes {
+            cube: renderer.create_mesh(bytemuck::cast_slice(&cube_verts)),
+            viewport_bg: renderer.create_mesh(bytemuck::cast_slice(&bg_verts)),
+            spheres: renderer.create_mesh(&[]),
+            grid: renderer.create_mesh(bytemuck::cast_slice(&grid_verts)),
+            origin: renderer.create_mesh(bytemuck::cast_slice(&origin_verts)),
+            pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
+        });
+        // Scene geometry built during `State::new` (before the renderer
+        // existed) uploads on the first frame's flush.
+        self.spheres_dirty = !self.rt_sphere_verts.is_empty();
+        self.viewport_dirty = true;
+    }
+
+    /// Frame staging (engine `stage_renderer` hook): corner radius, pending
+    /// meshes, text, and the 3D scene / RT pane. Returns true while the path
+    /// tracer is still refining, to keep frames coming.
+    pub fn stage_frame(&mut self, renderer: &mut cce_ui::vk::VkRenderer) -> bool {
+        let radius = cce_ui::color::backplate_corner_radius() * self.scale as f32;
+        if radius != self.last_corner_radius {
+            self.last_corner_radius = radius;
+            renderer.set_corner_radius(radius);
+        }
+        self.flush_pending_meshes(renderer);
+        self.prepare_text(renderer);
+        let meshes = self.meshes.expect("stage_frame before renderer_init");
 
         // 3D canvas: stage the scene into the renderer's backdrop when the
         // viewport is visible and its inputs changed; unstaged frames reuse the
@@ -5162,23 +5187,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                     // Same draw order as the wgpu pass: bg quad, grid, origin,
                     // pivot, cube, spheres.
-                    let mut draws = vec![SceneDraw { mesh: self.mesh_viewport_bg, mvp }];
+                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp }];
                     if self.viewport().show_grid {
-                        draws.push(SceneDraw { mesh: self.mesh_grid, mvp });
+                        draws.push(SceneDraw { mesh: meshes.grid, mvp });
                     }
                     if self.viewport().show_origin {
-                        draws.push(SceneDraw { mesh: self.mesh_origin, mvp });
+                        draws.push(SceneDraw { mesh: meshes.origin, mvp });
                     }
                     if self.viewport().show_camera_pivot {
-                        draws.push(SceneDraw { mesh: self.mesh_pivot, mvp: mvp_pivot });
+                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot });
                     }
                     if self.viewport().show_cube {
-                        draws.push(SceneDraw { mesh: self.mesh_cube, mvp });
+                        draws.push(SceneDraw { mesh: meshes.cube, mvp });
                     }
                     if self.vertex_count_spheres > 0 {
-                        draws.push(SceneDraw { mesh: self.mesh_spheres, mvp });
+                        draws.push(SceneDraw { mesh: meshes.spheres, mvp });
                     }
-                    self.renderer.stage_scene((sx, sy, cw, ch), draws);
+                    renderer.stage_scene((sx, sy, cw, ch), draws);
                     }
 
                     // Update viewport cache
@@ -5211,17 +5236,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     let key = (self.viewport().show_cube, self.rt_geometry_version);
                     if self.last_rt_scene_key != Some(key) {
                         let (rt_tris, rt_mats) = self.collect_rt_scene();
-                        self.renderer.set_rt_scene(&rt_tris, &rt_mats);
+                        renderer.set_rt_scene(&rt_tris, &rt_mats);
                         self.last_rt_scene_key = Some(key);
                     }
                     let aspect = cw as f32 / ch as f32;
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
                     let inv_mvp = (proj * view_mat * model).inverse().to_cols_array_2d();
-                    self.renderer.stage_rt((sx, sy, cw, ch), cce_ui::vk::RtCamera { inv_mvp });
+                    renderer.stage_rt((sx, sy, cw, ch), cce_ui::vk::RtCamera { inv_mvp });
                 }
             } else if self.viewport_dirty {
                 // Zero-area pane: clear the backdrop once.
-                self.renderer
+                renderer
                     .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
                 self.last_viewport_show_viewport = false;
                 self.viewport_dirty = false;
@@ -5229,19 +5254,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         } else if !self.is_detached_network && self.viewport_dirty {
             // Viewport hidden: clear the backdrop (the old path's clear pass),
             // and force a re-stage when it comes back.
-            self.renderer
+            renderer
                 .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
             self.last_viewport_show_viewport = false;
             self.viewport_dirty = false;
         }
 
-        let _ = self.renderer.draw_frame(&self.vertex_data);
-        // Keep frames coming while the path tracer is still refining.
-        let rt_refining = !self.is_detached_network
+        // The engine draws the frame; keep frames coming while the path
+        // tracer is still refining.
+        !self.is_detached_network
             && self.show_viewport
             && self.viewport().rt_mode
-            && self.renderer.rt_accumulating();
-        tick_changed || panned || rt_refining
+            && renderer.rt_accumulating()
     }
 }
 

@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::Path;
 
-use cce_ui::widget::Button;
 use crate::app::{State, Project, FsNode, ProjectViewState, CONTENT_IDX, ParamDef};
 
 fn color_to_hex(rgb: [f32; 3]) -> String {
@@ -19,7 +18,7 @@ fn hex_to_color(hex: &str) -> Option<[f32; 3]> {
 impl State {
 
 
-    pub(crate) fn update_window_title(&self) {
+    pub(crate) fn update_window_title(&mut self) {
         let base_title = if self.is_detached_network {
             "Network Pane"
         } else {
@@ -38,8 +37,9 @@ impl State {
         if self.has_unsaved_changes() {
             title.push_str("*");
         }
-        
-        self.window.set_title(&title);
+
+        // The engine polls `Application::settings` and applies title changes.
+        self.title = title;
     }
 
     pub(crate) fn load_recent_files() -> Vec<std::path::PathBuf> {
