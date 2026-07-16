@@ -576,282 +576,16 @@ impl State {
             let state = &mut *self;
             match event {
                 CustomEvent::GetState(tx) => {
-                    let proj = Project {
-                        name: "Project".to_string(),
-                        root: state.fs_root.clone(),
-                        view_state: ProjectViewState {
-                            active_camera: state.active_camera.clone(),
-                            pan: (state.pan_x, state.pan_y),
-                            current_path: state.current_path.clone(),
-                            selected_node: state.graph().selected_node(),
-                        },
-                    };
-                    let json = serde_json::to_string_pretty(&proj).unwrap_or_default();
+                    let json = serde_json::to_string_pretty(&state.project_snapshot()).unwrap_or_default();
                     let _ = tx.send(json);
                 }
                 CustomEvent::PostAction(action, tx) => {
-                    let res = match action {
-                        HttpAction::Up => {
-                            if state.move_up() {
-                                needs_redraw = true;
-                                Ok("Moved up".to_string())
-                            } else {
-                                Err("Already at root".to_string())
-                            }
-                        }
-                        HttpAction::Enter { slot } => {
-                            let dir = state.current_dir();
-                            if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "utility" || !dir.children[slot].children.is_empty()) {
-                                state.current_path.push(slot);
-                                state.on_path_changed();
-                                needs_redraw = true;
-                                Ok("Entered subnet".to_string())
-                            } else {
-                                Err("Not a valid subnet".to_string())
-                            }
-                        }
-                        HttpAction::SetParam { slot, name, value } => {
-                            let dir = state.current_dir_mut();
-                            if let Some(child) = dir.children.get_mut(slot) {
-                                if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
-                                    p.default = value;
-                                    // Same sequence as the interactive param-pane
-                                    // path, so settings params (viewport flags,
-                                    // grid) actually take effect over HTTP.
-                                    state.apply_settings_from_menubar_subnets();
-                                    state.sync_grid_settings();
-                                    state.sync_nodes();
-                                    state.rebuild_scene_geometry();
-                                    needs_redraw = true;
-                                    Ok("Parameter updated".to_string())
-                                } else {
-                                    Err(format!("Parameter {} not found", name))
-                                }
-                            } else {
-                                Err("Slot index out of bounds".to_string())
-                            }
-                        }
-                        HttpAction::ResetCamera => {
-                            if state.active_camera != "Default Camera" {
-                                state.update_active_camera_rotation_reset();
-                            } else {
-                                state.viewport_mut().rotation_y = 0.0;
-                                state.viewport_mut().rotation_x = 0.0;
-                            }
-                            state.viewport_mut().zoom = 1.0;
-                            state.viewport_mut().reset_velocity();
-                            needs_redraw = true;
-                            Ok("Camera reset".to_string())
-                        }
-                        HttpAction::Load { path } => {
-                            if let Err(e) = state.load_from_file(Path::new(&path)) {
-                                Err(format!("Load failed: {:?}", e))
-                            } else {
-                                needs_redraw = true;
-                                Ok("Project loaded".to_string())
-                            }
-                        }
-                        HttpAction::Save { path } => {
-                            if let Err(e) = state.save_to_file(Path::new(&path)) {
-                                Err(format!("Save failed: {:?}", e))
-                            } else {
-                                let path_buf = Path::new(&path).to_path_buf();
-                                state.loaded_project_path = Some(path_buf.clone());
-                                state.add_recent_file(path_buf);
-                                needs_redraw = true;
-                                Ok("Project saved".to_string())
-                            }
-                        }
-                        HttpAction::ToggleGeometry { slot } => {
-                            let active_nodes = state.current_dir().children.len();
-                            if slot < active_nodes {
-                                if state.current_dir().children[slot].node_type == "utility" {
-                                    Err("Cannot toggle geometry visibility on utility nodes".to_string())
-                                } else {
-                                    let visible = !state.current_dir().children[slot].geometry_visible;
-                                    state.current_dir_mut().children[slot].geometry_visible = visible;
-                                    state.sync_nodes();
-                                    state.rebuild_scene_geometry();
-                                    needs_redraw = true;
-                                    Ok(format!("Geometry visible: {}", visible))
-                                }
-                            } else {
-                                Err("Slot out of bounds".to_string())
-                            }
-                        }
-                        HttpAction::AddNode { template_name, name, x, y } => {
-                            let template_idx = state.node_templates.iter().position(|t| {
-                                t.label.to_lowercase() == template_name.to_lowercase()
-                                    || t.node.name.to_lowercase() == template_name.to_lowercase()
-                            });
-                            if let Some(idx) = template_idx {
-                                let mut node = state.node_templates[idx].node.clone();
-                                let mut allowed = true;
-                                let is_in_utility = !state.current_path.is_empty() && state.fs_root.children[state.current_path[0]].node_type == "utility";
-                                if is_in_utility {
-                                    if crate::geometry::is_geometry_node_type(&node.node_type) {
-                                        allowed = false;
-                                    }
-                                }
-                                if !allowed {
-                                    Err("Utility nodes cannot contain geometry.".to_string())
-                                } else {
-                                    let (nx, ny) = state.find_empty_cell(x, y, None);
-                                    node.position = (nx, ny);
-                                    if let Some(n) = name {
-                                        node.name = n;
-                                    } else {
-                                        node.name = state.get_lowest_unused_name(&node.name);
-                                    }
-                                    state.current_dir_mut().children.push(node);
-                                    state.sync_nodes();
-                                    state.rebuild_positions();
-                                    state.apply_layout();
-                                    state.update_panel_bounds();
-                                    state.rebuild_scene_geometry();
-                                    needs_redraw = true;
-                                    Ok("Node added".to_string())
-                                }
-                            } else {
-                                Err(format!("Template '{}' not found", template_name))
-                            }
-                        }
-                        HttpAction::DeleteNode { slot } => {
-                            if state.delete_node(slot) {
-                                needs_redraw = true;
-                                Ok("Node deleted".to_string())
-                            } else {
-                                Err("Slot out of bounds".to_string())
-                            }
-                        }
-                        HttpAction::RenameNode { slot, new_name } => {
-                            let len = state.current_dir().children.len();
-                            if slot < len {
-                                state.current_dir_mut().children[slot].name = new_name;
-                                state.sync_nodes();
-                                needs_redraw = true;
-                                Ok("Node renamed".to_string())
-                            } else {
-                                Err("Slot out of bounds".to_string())
-                            }
-                        }
-                        HttpAction::MoveNode { slot, x, y } => {
-                            let len = state.current_dir().children.len();
-                            if slot < len {
-                                let (nx, ny) = state.find_empty_cell(x, y, Some(slot));
-                                state.current_dir_mut().children[slot].position = (nx, ny);
-                                state.sync_nodes();
-                                state.rebuild_positions();
-                                state.apply_layout();
-                                state.update_panel_bounds();
-                                needs_redraw = true;
-                                Ok("Node moved".to_string())
-                            } else {
-                                Err("Slot out of bounds".to_string())
-                            }
-                        }
-                        HttpAction::AddParam { slot, name, param_type, default } => {
-                            let len = state.current_dir().children.len();
-                            if slot < len {
-                                let param = ParamDef {
-                                    name,
-                                    label: String::new(),
-                                    param_type,
-                                    default,
-                                    options: vec![],
-                                    min: None,
-                                    max: None,
-                                    step: None,
-                                };
-                                state.current_dir_mut().children[slot].params.push(param);
-                                state.sync_nodes();
-                                needs_redraw = true;
-                                Ok("Parameter added".to_string())
-                            } else {
-                                Err("Slot out of bounds".to_string())
-                            }
-                        }
-                        HttpAction::DeleteParam { slot, name } => {
-                            let len = state.current_dir().children.len();
-                            if slot < len {
-                                let params = &mut state.current_dir_mut().children[slot].params;
-                                if let Some(pos) = params.iter().position(|p| p.name == name) {
-                                    params.remove(pos);
-                                    state.sync_nodes();
-                                    needs_redraw = true;
-                                    Ok("Parameter deleted".to_string())
-                                } else {
-                                    Err(format!("Parameter '{}' not found", name))
-                                }
-                            } else {
-                                Err("Slot out of bounds".to_string())
-                            }
-                        }
-                        HttpAction::ToggleCircularPane => {
-                            state.circular_network_pane = !state.circular_network_pane;
-                            let val = state.circular_network_pane;
-                            state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.sync_grid_settings();
-                            needs_redraw = true;
-                            Ok(format!("Circular pane: {}", state.circular_network_pane))
-                        }
-                        HttpAction::MenuClick { widget_idx, menu_idx, item_idx } => {
-                            // Validate before touching menu_mut(): a non-menubar widget_idx
-                            // panics its MenuBar downcast, and out-of-range menu/item indices
-                            // used to reply "Menu clicked" while dispatching nowhere. NB the
-                            // pane-toggle items ("Show Spreadsheet Pane", ...) are NOT in these
-                            // menubars — they are button params in the menu pane, drained by
-                            // sync_parameters_to_project's label match, unreachable from here.
-                            let validated: Result<String, String> = if widget_idx >= WIDGET_COUNT {
-                                Err(format!("widget_idx {widget_idx} out of range (widget slots: 0..{WIDGET_COUNT})"))
-                            } else if let Some(menubar) = state.menubar_at(widget_idx) {
-                                match menubar.menu_dropdowns.get(menu_idx) {
-                                    None => Err(format!(
-                                        "menu_idx {menu_idx} out of range: menubar {widget_idx} has {} menus",
-                                        menubar.menu_dropdowns.len()
-                                    )),
-                                    // The reply body is interpolated into JSON unescaped, so
-                                    // keep these messages free of quotes/backslashes.
-                                    Some(items) => items.get(item_idx).cloned().ok_or_else(|| format!(
-                                        "item_idx {item_idx} out of range: menu {menu_idx} has {} items: [{}]",
-                                        items.len(), items.join(", ")
-                                    )),
-                                }
-                            } else {
-                                Err(format!("widget_idx {widget_idx} is not a menubar"))
-                            };
-                            match validated {
-                                Ok(label) => {
-                                    state.menu_mut(widget_idx).trigger_menu_click(menu_idx, item_idx);
-                                    let _ = state.process_window_event(WindowEvent::CursorMoved { position: LocalPosition { x: -9999.0, y: -9999.0 } });
-                                    needs_redraw = true;
-                                    Ok(format!("Menu clicked: {label}"))
-                                }
-                                Err(e) => Err(e),
-                            }
-                        }
-                        HttpAction::MenuAction { label } => {
-                            if state.execute_menu_action(&label) {
-                                // The arms relayout themselves but render() draws the last
-                                // uploaded buffer (same ritual as ToggleCircularPane).
-                                needs_redraw = true;
-                                Ok(format!("Menu action executed: {}", label.replace(['"', '\\'], "'")))
-                            } else {
-                                Err(format!("unknown menu action label: {}", label.replace(['"', '\\'], "'")))
-                            }
-                        }
-                        HttpAction::MenuClosed { widget_idx, menu_idx } => {
-                            if state.active_menu_cloud_idx == Some((widget_idx, menu_idx)) {
-                                state.active_menu_cloud_pid = None;
-                                state.active_menu_cloud_idx = None;
-                            }
-                            Ok("Menu closed".to_string())
-                        }
-
-                    };
+                    let res = state.apply_http_action(action, &mut needs_redraw);
                     let _ = tx.send(res);
+                }
+                CustomEvent::McpCall(call) => {
+                    let res = state.apply_mcp_call(&call, &mut needs_redraw);
+                    let _ = call.reply.send(res);
                 }
                 // Exit is handled by the Application::update wrapper
                 // (autosave + engine exit) before this is reached.
@@ -865,6 +599,321 @@ impl State {
             }
         }
         needs_redraw
+    }
+
+    /// Snapshot the project (node tree + view state) for state queries.
+    fn project_snapshot(&self) -> Project {
+        Project {
+            name: "Project".to_string(),
+            root: self.fs_root.clone(),
+            view_state: ProjectViewState {
+                active_camera: self.active_camera.clone(),
+                pan: (self.pan_x, self.pan_y),
+                current_path: self.current_path.clone(),
+                selected_node: self.graph().selected_node(),
+            },
+        }
+    }
+
+    /// An MCP tool call: `get_state` returns the project snapshot; every
+    /// other tool name is an `HttpAction` tag — injected into the arguments
+    /// and run through the shared action path.
+    fn apply_mcp_call(
+        &mut self,
+        call: &cce_ui::mcp::McpToolCall,
+        needs_redraw: &mut bool,
+    ) -> Result<serde_json::Value, String> {
+        if call.name == "get_state" {
+            return serde_json::to_value(self.project_snapshot())
+                .map_err(|e| format!("failed to serialize state: {e}"));
+        }
+        let mut req = if call.arguments.is_object() {
+            call.arguments.clone()
+        } else {
+            serde_json::json!({})
+        };
+        req["action"] = serde_json::Value::String(call.name.clone());
+        match serde_json::from_value::<HttpAction>(req) {
+            Ok(action) => self
+                .apply_http_action(action, needs_redraw)
+                .map(serde_json::Value::String),
+            Err(e) => Err(format!("invalid arguments for '{}': {e}", call.name)),
+        }
+    }
+
+    /// Apply one automation action (HTTP `POST /action` or an MCP tool call).
+    pub(crate) fn apply_http_action(
+        &mut self,
+        action: HttpAction,
+        redraw: &mut bool,
+    ) -> Result<String, String> {
+        let mut needs_redraw = false;
+        let state = self;
+        let res = match action {
+            HttpAction::Up => {
+                if state.move_up() {
+                    needs_redraw = true;
+                    Ok("Moved up".to_string())
+                } else {
+                    Err("Already at root".to_string())
+                }
+            }
+            HttpAction::Enter { slot } => {
+                let dir = state.current_dir();
+                if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "utility" || !dir.children[slot].children.is_empty()) {
+                    state.current_path.push(slot);
+                    state.on_path_changed();
+                    needs_redraw = true;
+                    Ok("Entered subnet".to_string())
+                } else {
+                    Err("Not a valid subnet".to_string())
+                }
+            }
+            HttpAction::SetParam { slot, name, value } => {
+                let dir = state.current_dir_mut();
+                if let Some(child) = dir.children.get_mut(slot) {
+                    if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
+                        p.default = value;
+                        // Same sequence as the interactive param-pane
+                        // path, so settings params (viewport flags,
+                        // grid) actually take effect over HTTP.
+                        state.apply_settings_from_menubar_subnets();
+                        state.sync_grid_settings();
+                        state.sync_nodes();
+                        state.rebuild_scene_geometry();
+                        needs_redraw = true;
+                        Ok("Parameter updated".to_string())
+                    } else {
+                        Err(format!("Parameter {} not found", name))
+                    }
+                } else {
+                    Err("Slot index out of bounds".to_string())
+                }
+            }
+            HttpAction::ResetCamera => {
+                if state.active_camera != "Default Camera" {
+                    state.update_active_camera_rotation_reset();
+                } else {
+                    state.viewport_mut().rotation_y = 0.0;
+                    state.viewport_mut().rotation_x = 0.0;
+                }
+                state.viewport_mut().zoom = 1.0;
+                state.viewport_mut().reset_velocity();
+                needs_redraw = true;
+                Ok("Camera reset".to_string())
+            }
+            HttpAction::Load { path } => {
+                if let Err(e) = state.load_from_file(Path::new(&path)) {
+                    Err(format!("Load failed: {:?}", e))
+                } else {
+                    needs_redraw = true;
+                    Ok("Project loaded".to_string())
+                }
+            }
+            HttpAction::Save { path } => {
+                if let Err(e) = state.save_to_file(Path::new(&path)) {
+                    Err(format!("Save failed: {:?}", e))
+                } else {
+                    let path_buf = Path::new(&path).to_path_buf();
+                    state.loaded_project_path = Some(path_buf.clone());
+                    state.add_recent_file(path_buf);
+                    needs_redraw = true;
+                    Ok("Project saved".to_string())
+                }
+            }
+            HttpAction::ToggleGeometry { slot } => {
+                let active_nodes = state.current_dir().children.len();
+                if slot < active_nodes {
+                    if state.current_dir().children[slot].node_type == "utility" {
+                        Err("Cannot toggle geometry visibility on utility nodes".to_string())
+                    } else {
+                        let visible = !state.current_dir().children[slot].geometry_visible;
+                        state.current_dir_mut().children[slot].geometry_visible = visible;
+                        state.sync_nodes();
+                        state.rebuild_scene_geometry();
+                        needs_redraw = true;
+                        Ok(format!("Geometry visible: {}", visible))
+                    }
+                } else {
+                    Err("Slot out of bounds".to_string())
+                }
+            }
+            HttpAction::AddNode { template_name, name, x, y } => {
+                let template_idx = state.node_templates.iter().position(|t| {
+                    t.label.to_lowercase() == template_name.to_lowercase()
+                        || t.node.name.to_lowercase() == template_name.to_lowercase()
+                });
+                if let Some(idx) = template_idx {
+                    let mut node = state.node_templates[idx].node.clone();
+                    let mut allowed = true;
+                    let is_in_utility = !state.current_path.is_empty() && state.fs_root.children[state.current_path[0]].node_type == "utility";
+                    if is_in_utility {
+                        if crate::geometry::is_geometry_node_type(&node.node_type) {
+                            allowed = false;
+                        }
+                    }
+                    if !allowed {
+                        Err("Utility nodes cannot contain geometry.".to_string())
+                    } else {
+                        let (nx, ny) = state.find_empty_cell(x, y, None);
+                        node.position = (nx, ny);
+                        if let Some(n) = name {
+                            node.name = n;
+                        } else {
+                            node.name = state.get_lowest_unused_name(&node.name);
+                        }
+                        state.current_dir_mut().children.push(node);
+                        state.sync_nodes();
+                        state.rebuild_positions();
+                        state.apply_layout();
+                        state.update_panel_bounds();
+                        state.rebuild_scene_geometry();
+                        needs_redraw = true;
+                        Ok("Node added".to_string())
+                    }
+                } else {
+                    Err(format!("Template '{}' not found", template_name))
+                }
+            }
+            HttpAction::DeleteNode { slot } => {
+                if state.delete_node(slot) {
+                    needs_redraw = true;
+                    Ok("Node deleted".to_string())
+                } else {
+                    Err("Slot out of bounds".to_string())
+                }
+            }
+            HttpAction::RenameNode { slot, new_name } => {
+                let len = state.current_dir().children.len();
+                if slot < len {
+                    state.current_dir_mut().children[slot].name = new_name;
+                    state.sync_nodes();
+                    needs_redraw = true;
+                    Ok("Node renamed".to_string())
+                } else {
+                    Err("Slot out of bounds".to_string())
+                }
+            }
+            HttpAction::MoveNode { slot, x, y } => {
+                let len = state.current_dir().children.len();
+                if slot < len {
+                    let (nx, ny) = state.find_empty_cell(x, y, Some(slot));
+                    state.current_dir_mut().children[slot].position = (nx, ny);
+                    state.sync_nodes();
+                    state.rebuild_positions();
+                    state.apply_layout();
+                    state.update_panel_bounds();
+                    needs_redraw = true;
+                    Ok("Node moved".to_string())
+                } else {
+                    Err("Slot out of bounds".to_string())
+                }
+            }
+            HttpAction::AddParam { slot, name, param_type, default } => {
+                let len = state.current_dir().children.len();
+                if slot < len {
+                    let param = ParamDef {
+                        name,
+                        label: String::new(),
+                        param_type,
+                        default,
+                        options: vec![],
+                        min: None,
+                        max: None,
+                        step: None,
+                    };
+                    state.current_dir_mut().children[slot].params.push(param);
+                    state.sync_nodes();
+                    needs_redraw = true;
+                    Ok("Parameter added".to_string())
+                } else {
+                    Err("Slot out of bounds".to_string())
+                }
+            }
+            HttpAction::DeleteParam { slot, name } => {
+                let len = state.current_dir().children.len();
+                if slot < len {
+                    let params = &mut state.current_dir_mut().children[slot].params;
+                    if let Some(pos) = params.iter().position(|p| p.name == name) {
+                        params.remove(pos);
+                        state.sync_nodes();
+                        needs_redraw = true;
+                        Ok("Parameter deleted".to_string())
+                    } else {
+                        Err(format!("Parameter '{}' not found", name))
+                    }
+                } else {
+                    Err("Slot out of bounds".to_string())
+                }
+            }
+            HttpAction::ToggleCircularPane => {
+                state.circular_network_pane = !state.circular_network_pane;
+                let val = state.circular_network_pane;
+                state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
+                state.rebuild_positions();
+                state.apply_layout();
+                state.sync_grid_settings();
+                needs_redraw = true;
+                Ok(format!("Circular pane: {}", state.circular_network_pane))
+            }
+            HttpAction::MenuClick { widget_idx, menu_idx, item_idx } => {
+                // Validate before touching menu_mut(): a non-menubar widget_idx
+                // panics its MenuBar downcast, and out-of-range menu/item indices
+                // used to reply "Menu clicked" while dispatching nowhere. NB the
+                // pane-toggle items ("Show Spreadsheet Pane", ...) are NOT in these
+                // menubars — they are button params in the menu pane, drained by
+                // sync_parameters_to_project's label match, unreachable from here.
+                let validated: Result<String, String> = if widget_idx >= WIDGET_COUNT {
+                    Err(format!("widget_idx {widget_idx} out of range (widget slots: 0..{WIDGET_COUNT})"))
+                } else if let Some(menubar) = state.menubar_at(widget_idx) {
+                    match menubar.menu_dropdowns.get(menu_idx) {
+                        None => Err(format!(
+                            "menu_idx {menu_idx} out of range: menubar {widget_idx} has {} menus",
+                            menubar.menu_dropdowns.len()
+                        )),
+                        // The reply body is interpolated into JSON unescaped, so
+                        // keep these messages free of quotes/backslashes.
+                        Some(items) => items.get(item_idx).cloned().ok_or_else(|| format!(
+                            "item_idx {item_idx} out of range: menu {menu_idx} has {} items: [{}]",
+                            items.len(), items.join(", ")
+                        )),
+                    }
+                } else {
+                    Err(format!("widget_idx {widget_idx} is not a menubar"))
+                };
+                match validated {
+                    Ok(label) => {
+                        state.menu_mut(widget_idx).trigger_menu_click(menu_idx, item_idx);
+                        let _ = state.process_window_event(WindowEvent::CursorMoved { position: LocalPosition { x: -9999.0, y: -9999.0 } });
+                        needs_redraw = true;
+                        Ok(format!("Menu clicked: {label}"))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            HttpAction::MenuAction { label } => {
+                if state.execute_menu_action(&label) {
+                    // The arms relayout themselves but render() draws the last
+                    // uploaded buffer (same ritual as ToggleCircularPane).
+                    needs_redraw = true;
+                    Ok(format!("Menu action executed: {}", label.replace(['"', '\\'], "'")))
+                } else {
+                    Err(format!("unknown menu action label: {}", label.replace(['"', '\\'], "'")))
+                }
+            }
+            HttpAction::MenuClosed { widget_idx, menu_idx } => {
+                if state.active_menu_cloud_idx == Some((widget_idx, menu_idx)) {
+                    state.active_menu_cloud_pid = None;
+                    state.active_menu_cloud_idx = None;
+                }
+                Ok("Menu closed".to_string())
+            }
+
+        };
+        if needs_redraw {
+            *redraw = true;
+        }
+        res
     }
 }
 

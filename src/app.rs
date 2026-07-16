@@ -344,6 +344,9 @@ pub enum HttpAction {
 pub enum CustomEvent {
     GetState(std::sync::mpsc::Sender<String>),
     PostAction(HttpAction, std::sync::mpsc::Sender<Result<String, String>>),
+    /// An MCP `tools/call` from the embedded MCP server (carries its own
+    /// reply channel) — the tool name is an `HttpAction` tag, or `get_state`.
+    McpCall(cce_ui::mcp::McpToolCall),
     /// App-requested exit (menu File > Exit, HTTP menu_action): the engine's
     /// update hook is the only place with exit access, so input handlers that
     /// see `exit_requested` route it here.

@@ -740,5 +740,39 @@ mod tests {
         assert_eq!(mgr.match_action(&mods_ctrl_shift, &key_tab), Some(Action::PrevContext));
         assert_eq!(mgr.match_action(&mods_none, &key_tab), None);
     }
+
+    #[test]
+    fn test_mcp_tools_map_to_http_actions() {
+        // Every MCP tool except get_state must dispatch by injecting its name
+        // as the HttpAction serde tag; filling each schema property with a
+        // dummy of its declared type must yield a deserializable action, so
+        // this catches tool-name/field drift against the enum.
+        let tools = crate::api::mcp_tools();
+        assert!(tools.iter().any(|t| t.name == "get_state"));
+        let mut names = std::collections::HashSet::new();
+        for tool in &tools {
+            assert!(names.insert(tool.name.clone()), "duplicate tool name: {}", tool.name);
+            assert_eq!(tool.input_schema["type"], "object", "{}: schema must be an object", tool.name);
+            if tool.name == "get_state" {
+                continue;
+            }
+            let mut args = serde_json::Map::new();
+            if let Some(props) = tool.input_schema["properties"].as_object() {
+                for (key, prop) in props {
+                    let dummy = match prop["type"].as_str() {
+                        Some("integer") => serde_json::json!(0),
+                        Some("number") => serde_json::json!(0.0),
+                        Some("string") => serde_json::json!("x"),
+                        Some("boolean") => serde_json::json!(false),
+                        other => panic!("{}.{}: unhandled schema type {:?}", tool.name, key, other),
+                    };
+                    args.insert(key.clone(), dummy);
+                }
+            }
+            args.insert("action".to_string(), serde_json::json!(tool.name));
+            serde_json::from_value::<HttpAction>(serde_json::Value::Object(args))
+                .unwrap_or_else(|e| panic!("tool '{}' does not map to an HttpAction: {e}", tool.name));
+        }
+    }
 }
 

@@ -15,7 +15,7 @@ use cce_ui::vk::VkRenderer;
 use cce_ui::widget::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use wayland_client::QueueHandle;
 
-use crate::api::start_http_server;
+use crate::api::{start_http_server, start_mcp_server};
 use crate::app::{CustomEvent, PendingWindowDrag, State, TouchPhase, LEFT_MENUBAR_IDX};
 use crate::window::{LocalPosition, WindowEvent};
 
@@ -148,7 +148,8 @@ impl Application for State {
         let is_detached_network = std::env::args().any(|arg| arg == "--detached-network");
         let state = State::new(is_detached_network);
         if !is_detached_network {
-            start_http_server(sender);
+            start_http_server(sender.clone());
+            start_mcp_server(sender);
         }
         state
     }

@@ -39,13 +39,23 @@ kernels and need a working OpenCL runtime; they are not pure-CPU tests.
   with the main window by autosaving/polling `default_project.json` mtime (see the
   main loop in `src/main.rs`) — there is no socket between the two.
 
-### HTTP automation API
+### HTTP automation API + MCP server
 
 The main window runs an embedded HTTP server on `127.0.0.1:3000` (`src/api.rs`):
 `GET /state` returns the app state as JSON; `POST /action` takes an `HttpAction`
 JSON body (`add_node`, `set_param`, `menu_action`, `save`, `load`, …— see the enum
 in `src/app.rs`). This is the main way to drive/inspect the running app when
 debugging: `curl -X POST localhost:3000/action -d '{"action":"add_node","template_name":"Sphere","x":5,"y":3}'`.
+
+The same surface is exposed as an MCP server on `127.0.0.1:3001`
+(`CCE_DESIGNER_MCP_PORT` overrides; attach with
+`claude mcp add --transport http cce-designer http://127.0.0.1:3001/mcp`):
+one tool per `HttpAction` variant (tool name = the variant's serde tag,
+dispatched in `apply_mcp_call` in `src/window.rs`) plus `get_state`. The tool
+list lives in `mcp_tools()` in `src/api.rs`; the protocol layer is
+`cce_ui::mcp` (tools-only Streamable HTTP). Keep the enum, the tool list, and
+the schemas in sync — `test_mcp_tools_map_to_http_actions` enforces the
+mapping.
 
 ## Architecture
 
