@@ -4,7 +4,7 @@ pub mod application;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
-use app::{CustomEvent, HttpAction, ModifiersState};
+use app::{CustomEvent, McpAction, ModifiersState};
 pub mod viewport_3d;
 pub mod api;
 pub mod window;
@@ -20,7 +20,7 @@ mod test_prelude {
     pub use std::path::Path;
     pub use glam::{Mat4, Vec3};
     pub use cce_ui::widget::{Key, NamedKey};
-    pub use crate::app::{State, HttpAction, ModifiersState};
+    pub use crate::app::{State, McpAction, ModifiersState};
 }
 
 fn main() {
@@ -452,11 +452,11 @@ mod tests {
     }
 
     #[test]
-    fn test_http_action_parsing() {
+    fn test_mcp_action_parsing() {
         let json_str = "{\"action\": \"add_node\", \"template_name\": \"Sphere\", \"name\": \"MySphere\", \"x\": 5.0, \"y\": 3.0}";
-        let action: HttpAction = serde_json::from_str(json_str).unwrap();
+        let action: McpAction = serde_json::from_str(json_str).unwrap();
         match action {
-            HttpAction::AddNode { template_name, name, x, y } => {
+            McpAction::AddNode { template_name, name, x, y } => {
                 assert_eq!(template_name, "Sphere");
                 assert_eq!(name, Some("MySphere".to_string()));
                 assert_eq!(x, 5.0);
@@ -742,9 +742,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_tools_map_to_http_actions() {
+    fn test_mcp_tools_map_to_actions() {
         // Every MCP tool except get_state must dispatch by injecting its name
-        // as the HttpAction serde tag; filling each schema property with a
+        // as the McpAction serde tag; filling each schema property with a
         // dummy of its declared type must yield a deserializable action, so
         // this catches tool-name/field drift against the enum.
         let tools = crate::api::mcp_tools();
@@ -770,8 +770,8 @@ mod tests {
                 }
             }
             args.insert("action".to_string(), serde_json::json!(tool.name));
-            serde_json::from_value::<HttpAction>(serde_json::Value::Object(args))
-                .unwrap_or_else(|e| panic!("tool '{}' does not map to an HttpAction: {e}", tool.name));
+            serde_json::from_value::<McpAction>(serde_json::Value::Object(args))
+                .unwrap_or_else(|e| panic!("tool '{}' does not map to an McpAction: {e}", tool.name));
         }
     }
 }

@@ -15,7 +15,7 @@ use cce_ui::vk::VkRenderer;
 use cce_ui::widget::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use wayland_client::QueueHandle;
 
-use crate::api::{start_http_server, start_mcp_server};
+use crate::api::start_mcp_server;
 use crate::app::{CustomEvent, PendingWindowDrag, State, TouchPhase, LEFT_MENUBAR_IDX};
 use crate::window::{LocalPosition, WindowEvent};
 
@@ -146,9 +146,9 @@ impl Application for State {
         sender: calloop::channel::Sender<CustomEvent>,
     ) -> Self {
         let is_detached_network = std::env::args().any(|arg| arg == "--detached-network");
-        let state = State::new(is_detached_network);
+        let mut state = State::new(is_detached_network);
+        state.event_sender = Some(sender.clone());
         if !is_detached_network {
-            start_http_server(sender.clone());
             start_mcp_server(sender);
         }
         state
@@ -179,7 +179,7 @@ impl Application for State {
         if self.apply_custom_event(msg) {
             *needs_rebuild = true;
         }
-        // HTTP can reach File > Exit through menu_action.
+        // MCP can reach File > Exit through menu_action.
         if self.exit_requested {
             self.autosave_on_exit();
             *exit = true;

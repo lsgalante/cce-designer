@@ -4,13 +4,13 @@
 //! lives in cce-ui's window runner; the `Application` impl (application.rs)
 //! translates the runner's hooks into [`WindowEvent`]s. What remains here is
 //! app policy: the post-event side-effect pass (`process_window_event`) and
-//! HTTP-action application (`apply_custom_event`).
+//! MCP-action application (`apply_custom_event`).
 
 use std::path::Path;
 
 use cce_ui::widget::WidgetHost;
 use crate::shortcut::Action;
-use crate::app::{State, CustomEvent, HttpAction, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, PARAM_IDX, WIDGET_COUNT, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
+use crate::app::{State, CustomEvent, McpAction, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, PARAM_IDX, WIDGET_COUNT, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalPosition {
@@ -568,24 +568,21 @@ impl State {
         result
     }
 
-    /// Apply an HTTP/API event (the engine `update` hook). Returns true when
-    /// a redraw is needed.
+    /// Apply an automation event (the engine `update` hook). Returns true
+    /// when a redraw is needed.
     pub(crate) fn apply_custom_event(&mut self, event: CustomEvent) -> bool {
         let mut needs_redraw = false;
         {
             let state = &mut *self;
             match event {
-                CustomEvent::GetState(tx) => {
-                    let json = serde_json::to_string_pretty(&state.project_snapshot()).unwrap_or_default();
-                    let _ = tx.send(json);
-                }
-                CustomEvent::PostAction(action, tx) => {
-                    let res = state.apply_http_action(action, &mut needs_redraw);
-                    let _ = tx.send(res);
-                }
                 CustomEvent::McpCall(call) => {
                     let res = state.apply_mcp_call(&call, &mut needs_redraw);
                     let _ = call.reply.send(res);
+                }
+                CustomEvent::RunAction(action) => {
+                    if let Err(e) = state.apply_action(action, &mut needs_redraw) {
+                        eprintln!("Action failed: {e}");
+                    }
                 }
                 // Exit is handled by the Application::update wrapper
                 // (autosave + engine exit) before this is reached.
@@ -616,7 +613,7 @@ impl State {
     }
 
     /// An MCP tool call: `get_state` returns the project snapshot; every
-    /// other tool name is an `HttpAction` tag — injected into the arguments
+    /// other tool name is an `McpAction` tag — injected into the arguments
     /// and run through the shared action path.
     fn apply_mcp_call(
         &mut self,
@@ -633,24 +630,25 @@ impl State {
             serde_json::json!({})
         };
         req["action"] = serde_json::Value::String(call.name.clone());
-        match serde_json::from_value::<HttpAction>(req) {
+        match serde_json::from_value::<McpAction>(req) {
             Ok(action) => self
-                .apply_http_action(action, needs_redraw)
+                .apply_action(action, needs_redraw)
                 .map(serde_json::Value::String),
             Err(e) => Err(format!("invalid arguments for '{}': {e}", call.name)),
         }
     }
 
-    /// Apply one automation action (HTTP `POST /action` or an MCP tool call).
-    pub(crate) fn apply_http_action(
+    /// Apply one automation action (an MCP tool call, or an app-internal
+    /// fire-and-forget `RunAction`).
+    pub(crate) fn apply_action(
         &mut self,
-        action: HttpAction,
+        action: McpAction,
         redraw: &mut bool,
     ) -> Result<String, String> {
         let mut needs_redraw = false;
         let state = self;
         let res = match action {
-            HttpAction::Up => {
+            McpAction::Up => {
                 if state.move_up() {
                     needs_redraw = true;
                     Ok("Moved up".to_string())
@@ -658,7 +656,7 @@ impl State {
                     Err("Already at root".to_string())
                 }
             }
-            HttpAction::Enter { slot } => {
+            McpAction::Enter { slot } => {
                 let dir = state.current_dir();
                 if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "utility" || !dir.children[slot].children.is_empty()) {
                     state.current_path.push(slot);
@@ -669,14 +667,14 @@ impl State {
                     Err("Not a valid subnet".to_string())
                 }
             }
-            HttpAction::SetParam { slot, name, value } => {
+            McpAction::SetParam { slot, name, value } => {
                 let dir = state.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot) {
                     if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
                         p.default = value;
                         // Same sequence as the interactive param-pane
                         // path, so settings params (viewport flags,
-                        // grid) actually take effect over HTTP.
+                        // grid) actually take effect via automation.
                         state.apply_settings_from_menubar_subnets();
                         state.sync_grid_settings();
                         state.sync_nodes();
@@ -690,7 +688,7 @@ impl State {
                     Err("Slot index out of bounds".to_string())
                 }
             }
-            HttpAction::ResetCamera => {
+            McpAction::ResetCamera => {
                 if state.active_camera != "Default Camera" {
                     state.update_active_camera_rotation_reset();
                 } else {
@@ -702,7 +700,7 @@ impl State {
                 needs_redraw = true;
                 Ok("Camera reset".to_string())
             }
-            HttpAction::Load { path } => {
+            McpAction::Load { path } => {
                 if let Err(e) = state.load_from_file(Path::new(&path)) {
                     Err(format!("Load failed: {:?}", e))
                 } else {
@@ -710,7 +708,7 @@ impl State {
                     Ok("Project loaded".to_string())
                 }
             }
-            HttpAction::Save { path } => {
+            McpAction::Save { path } => {
                 if let Err(e) = state.save_to_file(Path::new(&path)) {
                     Err(format!("Save failed: {:?}", e))
                 } else {
@@ -721,7 +719,7 @@ impl State {
                     Ok("Project saved".to_string())
                 }
             }
-            HttpAction::ToggleGeometry { slot } => {
+            McpAction::ToggleGeometry { slot } => {
                 let active_nodes = state.current_dir().children.len();
                 if slot < active_nodes {
                     if state.current_dir().children[slot].node_type == "utility" {
@@ -738,7 +736,7 @@ impl State {
                     Err("Slot out of bounds".to_string())
                 }
             }
-            HttpAction::AddNode { template_name, name, x, y } => {
+            McpAction::AddNode { template_name, name, x, y } => {
                 let template_idx = state.node_templates.iter().position(|t| {
                     t.label.to_lowercase() == template_name.to_lowercase()
                         || t.node.name.to_lowercase() == template_name.to_lowercase()
@@ -775,7 +773,7 @@ impl State {
                     Err(format!("Template '{}' not found", template_name))
                 }
             }
-            HttpAction::DeleteNode { slot } => {
+            McpAction::DeleteNode { slot } => {
                 if state.delete_node(slot) {
                     needs_redraw = true;
                     Ok("Node deleted".to_string())
@@ -783,7 +781,7 @@ impl State {
                     Err("Slot out of bounds".to_string())
                 }
             }
-            HttpAction::RenameNode { slot, new_name } => {
+            McpAction::RenameNode { slot, new_name } => {
                 let len = state.current_dir().children.len();
                 if slot < len {
                     state.current_dir_mut().children[slot].name = new_name;
@@ -794,7 +792,7 @@ impl State {
                     Err("Slot out of bounds".to_string())
                 }
             }
-            HttpAction::MoveNode { slot, x, y } => {
+            McpAction::MoveNode { slot, x, y } => {
                 let len = state.current_dir().children.len();
                 if slot < len {
                     let (nx, ny) = state.find_empty_cell(x, y, Some(slot));
@@ -809,7 +807,7 @@ impl State {
                     Err("Slot out of bounds".to_string())
                 }
             }
-            HttpAction::AddParam { slot, name, param_type, default } => {
+            McpAction::AddParam { slot, name, param_type, default } => {
                 let len = state.current_dir().children.len();
                 if slot < len {
                     let param = ParamDef {
@@ -830,7 +828,7 @@ impl State {
                     Err("Slot out of bounds".to_string())
                 }
             }
-            HttpAction::DeleteParam { slot, name } => {
+            McpAction::DeleteParam { slot, name } => {
                 let len = state.current_dir().children.len();
                 if slot < len {
                     let params = &mut state.current_dir_mut().children[slot].params;
@@ -846,7 +844,7 @@ impl State {
                     Err("Slot out of bounds".to_string())
                 }
             }
-            HttpAction::ToggleCircularPane => {
+            McpAction::ToggleCircularPane => {
                 state.circular_network_pane = !state.circular_network_pane;
                 let val = state.circular_network_pane;
                 state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
@@ -856,7 +854,7 @@ impl State {
                 needs_redraw = true;
                 Ok(format!("Circular pane: {}", state.circular_network_pane))
             }
-            HttpAction::MenuClick { widget_idx, menu_idx, item_idx } => {
+            McpAction::MenuClick { widget_idx, menu_idx, item_idx } => {
                 // Validate before touching menu_mut(): a non-menubar widget_idx
                 // panics its MenuBar downcast, and out-of-range menu/item indices
                 // used to reply "Menu clicked" while dispatching nowhere. NB the
@@ -891,7 +889,7 @@ impl State {
                     Err(e) => Err(e),
                 }
             }
-            HttpAction::MenuAction { label } => {
+            McpAction::MenuAction { label } => {
                 if state.execute_menu_action(&label) {
                     // The arms relayout themselves but render() draws the last
                     // uploaded buffer (same ritual as ToggleCircularPane).
@@ -901,7 +899,7 @@ impl State {
                     Err(format!("unknown menu action label: {}", label.replace(['"', '\\'], "'")))
                 }
             }
-            HttpAction::MenuClosed { widget_idx, menu_idx } => {
+            McpAction::MenuClosed { widget_idx, menu_idx } => {
                 if state.active_menu_cloud_idx == Some((widget_idx, menu_idx)) {
                     state.active_menu_cloud_pid = None;
                     state.active_menu_cloud_idx = None;

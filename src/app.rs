@@ -318,7 +318,7 @@ pub struct Project {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
-pub enum HttpAction {
+pub enum McpAction {
     Up,
     Enter { slot: usize },
     SetParam { slot: usize, name: String, value: String },
@@ -342,12 +342,13 @@ pub enum HttpAction {
 
 #[derive(Debug, Clone)]
 pub enum CustomEvent {
-    GetState(std::sync::mpsc::Sender<String>),
-    PostAction(HttpAction, std::sync::mpsc::Sender<Result<String, String>>),
     /// An MCP `tools/call` from the embedded MCP server (carries its own
-    /// reply channel) — the tool name is an `HttpAction` tag, or `get_state`.
+    /// reply channel) — the tool name is an `McpAction` tag, or `get_state`.
     McpCall(cce_ui::mcp::McpToolCall),
-    /// App-requested exit (menu File > Exit, HTTP menu_action): the engine's
+    /// A fire-and-forget action from an app-internal thread (the cce-files
+    /// choosers deliver their picked path this way).
+    RunAction(McpAction),
+    /// App-requested exit (menu File > Exit, MCP menu_action): the engine's
     /// update hook is the only place with exit access, so input handlers that
     /// see `exit_requested` route it here.
     Exit,
@@ -922,6 +923,10 @@ pub struct State {
     pub shortcut_manager: ShortcutManager,
     pub pending_action: Option<Action>,
     pub exit_requested: bool,
+    /// Engine event-loop sender so app-spawned threads (the cce-files
+    /// choosers) can deliver results back as `CustomEvent`s; set once by
+    /// `Application::new`.
+    pub event_sender: Option<calloop::channel::Sender<CustomEvent>>,
 
     pub slots: Box<WidgetSlots>,
     pub positions: Vec<(f32, f32, f32, f32)>,
@@ -1417,7 +1422,7 @@ impl State {
 
     /// One label-matched menu action: the button-param menu pane's items, drained
     /// per triggered button by `sync_parameters_to_project`, and reachable directly
-    /// through the HTTP API's `menu_action` (the index-matched `menu_click` cannot
+    /// through the `menu_action` tool (the index-matched `menu_click` cannot
     /// reach these). Returns false for an unrecognized label.
     pub fn execute_menu_action(&mut self, label: &str) -> bool {
         match label {
@@ -1724,9 +1729,9 @@ impl State {
     }
 
     pub fn open_file_chooser(&self) {
+        let Some(sender) = self.event_sender.clone() else { return };
         std::thread::spawn(move || {
             use std::process::{Command, Stdio};
-            use std::io::Write;
 
             // Find executable path
             let exe_path = if let Ok(cur_exe) = std::env::current_exe() {
@@ -1783,33 +1788,16 @@ impl State {
             if output.status.success() {
                 let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !selected.is_empty() {
-                    let body = format!(
-                        "{{\"action\":\"load\",\"path\":\"{}\"}}",
-                        selected.replace('\\', "\\\\").replace('"', "\\\"")
-                    );
-                    let req = format!(
-                        "POST /action HTTP/1.1\r\n\
-                         Host: 127.0.0.1:3000\r\n\
-                         Content-Type: application/json\r\n\
-                         Content-Length: {}\r\n\
-                         Connection: close\r\n\r\n\
-                         {}",
-                        body.len(),
-                        body
-                    );
-                    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
-                        let _ = stream.write_all(req.as_bytes());
-                        let _ = stream.flush();
-                    }
+                    let _ = sender.send(CustomEvent::RunAction(McpAction::Load { path: selected }));
                 }
             }
         });
     }
 
     pub fn save_file_chooser(&self) {
+        let Some(sender) = self.event_sender.clone() else { return };
         std::thread::spawn(move || {
             use std::process::{Command, Stdio};
-            use std::io::Write;
 
             // Find executable path
             let exe_path = if let Ok(cur_exe) = std::env::current_exe() {
@@ -1866,24 +1854,7 @@ impl State {
             if output.status.success() {
                 let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !selected.is_empty() {
-                    let body = format!(
-                        "{{\"action\":\"save\",\"path\":\"{}\"}}",
-                        selected.replace('\\', "\\\\").replace('"', "\\\"")
-                    );
-                    let req = format!(
-                        "POST /action HTTP/1.1\r\n\
-                         Host: 127.0.0.1:3000\r\n\
-                         Content-Type: application/json\r\n\
-                         Content-Length: {}\r\n\
-                         Connection: close\r\n\r\n\
-                         {}",
-                        body.len(),
-                        body
-                    );
-                    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:3000") {
-                        let _ = stream.write_all(req.as_bytes());
-                        let _ = stream.flush();
-                    }
+                    let _ = sender.send(CustomEvent::RunAction(McpAction::Save { path: selected }));
                 }
             }
         });
@@ -2491,6 +2462,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             shortcut_manager,
             pending_action: None,
             exit_requested: false,
+            event_sender: None,
             slots,
             positions,
             splitter_layout,
