@@ -1312,6 +1312,93 @@ impl State {
         }
     }
 
+    // --- Pane edge-resize hotspots. Each is the single source of truth for its zone:
+    // the press handlers arm the matching `AppDrag` off it, and `pane_resize_cursor`
+    // shows the resize cursor over it, so the two can't drift apart.
+
+    /// The floating network pane's edge-resize hotspot at (cx, cy) — only the right
+    /// edge resizes. `None` while the pane is circular or hidden.
+    pub fn network_resize_edge_at(&self, cx: f32, cy: f32) -> Option<ResizeDirection> {
+        if self.circular_network_pane || !self.show_network {
+            return None;
+        }
+        let (fx, fy, fw, fh) = self.floating_network_layout;
+        let margin = 8.0_f32;
+        let on_right = cx >= fx + fw - margin && cx <= fx + fw + margin && cy >= fy - margin && cy <= fy + fh + margin;
+        if on_right {
+            Some(ResizeDirection { left: false, right: true, top: false, bottom: false })
+        } else {
+            None
+        }
+    }
+
+    /// Whether (cx, cy) is on the parameter pane's left edge-resize hotspot.
+    pub fn on_param_resize_edge(&self, cx: f32, cy: f32) -> bool {
+        if !self.show_parameters {
+            return false;
+        }
+        let gap = 18.0_f32;
+        let param_w = self.floating_param_width;
+        let param_x = self.width - gap - param_w;
+        let param_y = HEADER_H + gap;
+        let param_h = (self.height - HEADER_H - STATUS_H - 2.0 * gap).max(100.0);
+        let margin = 8.0_f32;
+        cx >= param_x - margin && cx <= param_x + margin && cy >= param_y - margin && cy <= param_y + param_h + margin
+    }
+
+    /// The floating spreadsheet pane's rect (same derivation as the layout pass).
+    pub fn floating_spreadsheet_rect(&self) -> (f32, f32, f32, f32) {
+        let gap = 18.0_f32;
+        let fx = gap;
+        let (_, _, mut fw, _) = self.floating_network_layout;
+        fw = fw.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
+        let param_w = self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
+        let param_x = self.width - gap - param_w;
+        let ss_x = if self.show_network { fx + fw + gap } else { gap };
+        let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
+        let ss_w = (ss_w_end - ss_x).max(150.0);
+        let ss_y_end = self.height - STATUS_H - gap;
+        let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - HEADER_H - gap).max(100.0));
+        let ss_y = ss_y_end - ss_h;
+        (ss_x, ss_y, ss_w, ss_h)
+    }
+
+    /// Whether (cx, cy) is on the spreadsheet pane's top edge-resize hotspot.
+    pub fn on_spreadsheet_resize_edge(&self, cx: f32, cy: f32) -> bool {
+        if !self.show_spreadsheet {
+            return false;
+        }
+        let (ss_x, ss_y, ss_w, _ss_h) = self.floating_spreadsheet_rect();
+        let margin = 8.0_f32;
+        cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin
+    }
+
+    /// The resize cursor for an active pane-edge drag, or for hovering one of the
+    /// hotspots above. `None` otherwise (the engine then falls back to its CSD cursors).
+    pub fn pane_resize_cursor(&self, cx: f32, cy: f32) -> Option<cce_ui::engine::CursorIcon> {
+        use cce_ui::engine::CursorIcon;
+        let dir_cursor = |dir: ResizeDirection| {
+            if dir.left || dir.right { CursorIcon::EwResize } else { CursorIcon::NsResize }
+        };
+        if let Some(drag) = self.app_drag {
+            return Some(match drag {
+                AppDrag::NetworkResize { dir, .. } => dir_cursor(dir),
+                AppDrag::ParamResize { .. } => CursorIcon::EwResize,
+                AppDrag::SpreadsheetResize { .. } => CursorIcon::NsResize,
+            });
+        }
+        if let Some(dir) = self.network_resize_edge_at(cx, cy) {
+            return Some(dir_cursor(dir));
+        }
+        if self.on_param_resize_edge(cx, cy) {
+            return Some(CursorIcon::EwResize);
+        }
+        if self.on_spreadsheet_resize_edge(cx, cy) {
+            return Some(CursorIcon::NsResize);
+        }
+        None
+    }
+
     pub fn clamp_splitters(&mut self) {
         if self.is_detached_network {
             return;
@@ -3973,24 +4060,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
 
                         if *button == MouseButton::Left && !self.circular_network_pane && self.show_network {
-                            let (fx, fy, fw, fh) = self.floating_network_layout;
+                            let (fx, fy, fw, _fh) = self.floating_network_layout;
                             let cx = self.cursor_x;
                             let cy = self.cursor_y;
 
-                            let margin = 8.0_f32;
-                            let on_left = false;
-                            let on_right = cx >= fx + fw - margin && cx <= fx + fw + margin && cy >= fy - margin && cy <= fy + fh + margin;
-                            let on_top = false;
-                            let on_bottom = false;
-
-                            if on_left || on_right || on_top || on_bottom {
+                            if let Some(dir) = self.network_resize_edge_at(cx, cy) {
                                 self.app_drag = Some(AppDrag::NetworkResize {
-                                    dir: ResizeDirection {
-                                        left: on_left,
-                                        right: on_right,
-                                        top: on_top,
-                                        bottom: on_bottom,
-                                    },
+                                    dir,
                                     start_rect: self.floating_network_layout,
                                     start_mouse: (cx, cy),
                                 });
@@ -4021,20 +4097,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
 
                         if *button == MouseButton::Left && self.show_parameters {
-                            let gap = 18.0_f32;
-                            let param_w = self.floating_param_width;
-                            let param_x = self.width - gap - param_w;
-                            let param_y = HEADER_H + gap;
-                            let param_h = (self.height - HEADER_H - STATUS_H - 2.0 * gap).max(100.0);
                             let cx = self.cursor_x;
                             let cy = self.cursor_y;
 
-                            let margin = 8.0_f32;
-                            let on_left = cx >= param_x - margin && cx <= param_x + margin && cy >= param_y - margin && cy <= param_y + param_h + margin;
-
-                            if on_left {
+                            if self.on_param_resize_edge(cx, cy) {
                                 self.app_drag = Some(AppDrag::ParamResize {
-                                    start_w: param_w,
+                                    start_w: self.floating_param_width,
                                     start_mouse_x: cx,
                                 });
                                 self.focused_pane = PARAM_MENUBAR_IDX;
@@ -4047,28 +4115,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
 
                         if *button == MouseButton::Left && self.show_spreadsheet {
-                            let gap = 18.0_f32;
-                            let fx = gap;
-                            let (mut _n_fx, mut _n_fy, mut fw, mut _n_fh) = self.floating_network_layout;
-                            fw = fw.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
-                            
-                            let param_w = self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
-                            let param_x = self.width - gap - param_w;
-                            
-                            let ss_x = if self.show_network { fx + fw + gap } else { gap };
-                            let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
-                            let ss_w = (ss_w_end - ss_x).max(150.0);
-                            
-                            let ss_y_end = self.height - STATUS_H - gap;
-                            let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - HEADER_H - gap).max(100.0));
-                            let ss_y = ss_y_end - ss_h;
-                            
                             let cx = self.cursor_x;
                             let cy = self.cursor_y;
-                            let margin = 8.0_f32;
-                            let on_top = cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin;
-                            
-                            if on_top {
+
+                            if self.on_spreadsheet_resize_edge(cx, cy) {
+                                let (_, _, _, ss_h) = self.floating_spreadsheet_rect();
                                 self.app_drag = Some(AppDrag::SpreadsheetResize {
                                     start_h: ss_h,
                                     start_mouse_y: cy,

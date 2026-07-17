@@ -318,7 +318,10 @@ impl Application for State {
 
     fn cursor_icon(&self, x: f32, y: f32) -> Option<CursorIcon> {
         if !self.is_detached_network {
-            return None;
+            // Main window: resize cursor over the pane edge-resize hotspots and
+            // for the duration of a pane-edge drag; `None` elsewhere so the
+            // engine's standard CSD edge cursors still apply.
+            return self.pane_resize_cursor(x, y);
         }
         Some(match self.circular_chrome_at(x, y) {
             Some(WindowAction::Resize(edge)) => match edge {
