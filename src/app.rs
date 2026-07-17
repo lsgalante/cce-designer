@@ -34,7 +34,7 @@ use wayland_client::{
     Connection, QueueHandle, Proxy,
 };
 
-use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Checkbox, Label, Dropdown};
+use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Label, Dropdown};
 use cce_ui::widget::UiContext;
 use crate::viewport_3d::Viewport3D;
 use cce_ui::colors;

@@ -245,8 +245,9 @@ impl State {
 
             // The params pane serves its chrome through the legacy plain-quad view,
             // which carries flat quads only — the controls' rounded-rect backgrounds
-            // (textbox/dropdown/button/checkbox/color) come from the rounded view,
-            // drawn under the flat chrome and clipped to the pane's scroll viewport.
+            // (textbox/dropdown/button/toggle/color) and the toggles' border corner
+            // arcs come from the rounded/arc views, drawn under the flat chrome and
+            // clipped to the pane's scroll viewport.
             if idx == PARAM_IDX {
                 let (px, py, pw, ph) = self.positions[PARAM_IDX];
                 let view = rect(px, py + 4.0, pw, (ph - 8.0).max(0.0));
@@ -259,6 +260,9 @@ impl State {
                 pc.clip(view, |pc| {
                     for (qx, qy, qw, qh, qr, qc, corners) in param_bg.rounded_quads(&self.ui_context) {
                         pc.rounded_rect(rect(qx, qy, qw, qh), qr, corners, qc);
+                    }
+                    for (acx, acy, ar, at, a0, a1, ac) in param_bg.arcs() {
+                        pc.arc(acx, acy, ar, at, a0, a1, ac);
                     }
                 });
             }
