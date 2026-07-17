@@ -316,6 +316,13 @@ impl Application for State {
         !self.is_detached_network
     }
 
+    /// No title bar to grab, so the window is not implicitly draggable. Moving it is reserved
+    /// for explicitly-declared drag handles (a title bar or panel), of which there are none
+    /// yet — see `is_movable_backplate_at` (left at its `false` default).
+    fn csd_titlebar_move(&self) -> bool {
+        false
+    }
+
     fn cursor_icon(&self, x: f32, y: f32) -> Option<CursorIcon> {
         if !self.is_detached_network {
             return None;
