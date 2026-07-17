@@ -30,6 +30,30 @@ fn merge_bounds(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
 }
 
 impl State {
+    /// The rounded-rect clip (plate rect + corner radius) a widget's content must stay
+    /// inside, so children of plates cut off at the plate's rounded corners: the network
+    /// plate for the network pane's parts (graph content, breadcrumb), the pane's own
+    /// plate for the params and spreadsheet panes. `None` with square corners, and for
+    /// the circular network pane (which clips by circle instead).
+    fn plate_rounded_clip(&self, idx: usize) -> Option<(Rect, f32)> {
+        let r = cce_ui::layout::plate_corner_radius();
+        if r <= 0.0 {
+            return None;
+        }
+        let (x, y, w, h) = match idx {
+            CONTENT_IDX | BREADCRUMB_IDX if !self.circular_network_pane => {
+                self.positions[NETWORK_PANEL_IDX]
+            }
+            PARAM_IDX => self.positions[PARAM_IDX],
+            SPREADSHEET_IDX => self.positions[SPREADSHEET_IDX],
+            _ => return None,
+        };
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        Some((rect(x, y, w, h), r))
+    }
+
     /// The frame's entire 2D content — geometry AND text — as one display list (the
     /// engine's single paint path; `Application::display_list_text` opts the designer's
     /// text into the engine's shaping/glyph pass, so the app-side FontSystem and buffer
@@ -135,6 +159,13 @@ impl State {
         let active_circle = if is_network_part { clip_circle } else { None };
         if let Some(c) = active_circle {
             pc.push_clip_circle(c);
+        }
+
+        // Children of plates cut off at the plate's rounded corners (the param pane's
+        // popovers escape this: they render later via `append_popovers`).
+        let rounded_clip = self.plate_rounded_clip(idx);
+        if let Some((rc, rr)) = rounded_clip {
+            pc.push_clip_rounded(rc, rr);
         }
 
         if idx == NETWORK_PANEL_IDX && self.circular_network_pane {
@@ -258,6 +289,9 @@ impl State {
             }
         }
 
+        if rounded_clip.is_some() {
+            pc.pop_clip_rounded();
+        }
         if active_circle.is_some() {
             pc.pop_clip_circle();
         }
@@ -392,6 +426,11 @@ impl State {
                 None
             };
 
+            // Labels are plate children too — clip them at the plate's rounded corners.
+            let rounded_clip = self.plate_rounded_clip(i);
+            if let Some((rc, rr)) = rounded_clip {
+                pc.push_clip_rounded(rc, rr);
+            }
             let mut scratch = PaintCtx::new();
             append_widget_text(&self.ui_context, w, &mut scratch);
             for item in scratch.finish().items {
@@ -406,6 +445,9 @@ impl State {
                     let alpha = if is_network_part { self.network_opacity.clamp(0.0, 1.0) } else { 1.0 };
                     pc.text_faded(text, x, y, font_size, color, alpha, font, merge_bounds(widget_bounds, label_bounds));
                 }
+            }
+            if rounded_clip.is_some() {
+                pc.pop_clip_rounded();
             }
         }
 

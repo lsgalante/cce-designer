@@ -413,6 +413,7 @@ fn main() {
                 default_color: [0.92, 0.92, 0.95, 1.0],
                 rotation: None,
                 clip_circle: [0.0; 3],
+                clip_extents: [0.0; 2],
             },
             TextSpan {
                 buffer: &body_buf,
@@ -424,6 +425,7 @@ fn main() {
                 default_color: [pulse, 0.80, 0.55, 1.0],
                 rotation: None,
                 clip_circle: [0.0; 3],
+                clip_extents: [0.0; 2],
             },
             TextSpan {
                 buffer: &clipped_buf,
@@ -439,6 +441,7 @@ fn main() {
                 default_color: [0.70, 0.85, 1.00, 1.0],
                 rotation: None,
                 clip_circle: [0.0; 3],
+                clip_extents: [0.0; 2],
             },
         ];
         // build_scene vertex layout: blur plate is the last 6 verts; the image
