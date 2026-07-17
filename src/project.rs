@@ -423,6 +423,20 @@ impl State {
                 _ => {}
             }
         }
+
+        // Display labels only — the `name` stays the dispatch identity used by
+        // execute_menu_action and the live-toggle refresh. The params pane keys
+        // off `label` when set (param_display), and sync_parameters_to_project
+        // resolves a click back to its param by that same display key.
+        for p in main_node.params.iter_mut() {
+            if p.name == "New Project" {
+                p.label = "New".to_string();
+            } else if p.param_type == "toggle" {
+                if let Some(rest) = p.name.strip_prefix("Show ") {
+                    p.label = rest.to_string();
+                }
+            }
+        }
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {

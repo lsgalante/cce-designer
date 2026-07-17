@@ -1448,7 +1448,13 @@ impl State {
                     let mut triggered_buttons = Vec::new();
                     let mut pane_actions = Vec::new();
                     for (u_name, u_val, _) in &updated_params {
-                        if let Some(p) = child.params.iter_mut().find(|p| p.name == *u_name) {
+                        // The params pane reports its display key (label when
+                        // set, else name), so resolve back to the param by that
+                        // key rather than by name alone.
+                        if let Some(p) = child.params.iter_mut().find(|p| {
+                            let key = if p.label.is_empty() { &p.name } else { &p.label };
+                            key == u_name
+                        }) {
                             if p.default != *u_val {
                                 p.default = u_val.clone();
                                 param_changed = true;

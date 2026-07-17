@@ -773,9 +773,9 @@ mod tests {
                 matches!(&item.prim, cce_ui::scene::paint::Prim::Text { text, .. } if text == needle)
             })
         };
-        // "New Project" is a button label sitting under the open dropdown;
+        // "New" is a button label sitting under the open dropdown;
         // "Other" only exists inside the popover's option list.
-        let label_idx = text_pos("New Project").expect("button label in display list");
+        let label_idx = text_pos("New").expect("button label in display list");
         let option_idx = text_pos("Other").expect("popover option text in display list");
         assert!(option_idx > label_idx, "popover text must draw after widget labels");
         let has_bg_between = list.items[label_idx..option_idx]
