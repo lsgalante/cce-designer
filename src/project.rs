@@ -401,8 +401,9 @@ impl State {
         ensure_param(main_node, "Background Color", "color", &color_to_hex(vp_bg_color), &[], None, None, None);
         ensure_param(main_node, "Grid Color", "color", &color_to_hex(vp_grid_color), &[], None, None, None);
 
-        ensure_param(main_node, "Help", "section", "", &[], None, None, None);
-        ensure_param(main_node, "About", "button", "", &[], None, None, None);
+        // The Help section is retired — its only row was an About button nothing
+        // dispatched. Drop it from older saves too.
+        main_node.params.retain(|p| !matches!(p.name.as_str(), "Help" | "About"));
 
         // Boolean settings and pane-visibility items render as toggles. Older
         // saves stored these as choice dropdowns / buttons; retype them and
