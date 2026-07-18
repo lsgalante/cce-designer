@@ -170,10 +170,11 @@ impl State {
                             changed = true;
                         }
                         2 => { // Reset Zoom
-                            state.grid_size_x = 150.0;
-                            state.grid_size_y = 75.0;
-                            state.gap_col_w = 37.5;
-                            state.gap_row_h = 37.5;
+                            let (gx, gy, gw, gh) = crate::app::configured_grid_geometry();
+                            state.grid_size_x = gx;
+                            state.grid_size_y = gy;
+                            state.gap_col_w = gw;
+                            state.gap_row_h = gh;
                             state.sync_grid_settings();
                             changed = true;
                         }

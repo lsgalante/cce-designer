@@ -444,27 +444,15 @@ mod tests {
         assert_eq!(settings.viewport.camera_pivot_size, 1.0);
         assert_eq!(settings.viewport.grid_color, [0.35, 0.35, 0.40]);
         
-        assert_eq!(settings.graph.gap_row_h, 20.0);
-        assert_eq!(settings.graph.gap_col_w, 20.0);
-
-        // A state.kdl written before the rename still loads: the gaps were skipped_row_h /
-        // skipped_col_w, and the aliases carry those onto the new fields.
-        let legacy = r#"
-        {
-            "graph": {
-                "grid_size_x": 71.0,
-                "grid_size_y": 31.0,
-                "skipped_row_h": 12.0,
-                "skipped_col_w": 14.0
-            }
-        }
-        "#;
-        let migrated: DesignSettings = serde_json::from_str(legacy).unwrap();
-        assert_eq!(migrated.graph.gap_row_h, 12.0);
-        assert_eq!(migrated.graph.gap_col_w, 14.0);
-        // ...and saving writes the new names back out.
-        let rewritten = serde_json::to_string(&migrated).unwrap();
-        assert!(rewritten.contains("gap_row_h") && !rewritten.contains("skipped_row_h"));
+        // Grid geometry is config-owned now: a state file still carrying the old graph block
+        // loads fine (the key is simply ignored) and never comes back out on save.
+        let mut with_stale_graph: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        with_stale_graph["graph"] = serde_json::json!({ "grid_size_x": 71.0, "gap_col_w": 14.0 });
+        let stale: DesignSettings = serde_json::from_value(with_stale_graph).unwrap();
+        assert_eq!(stale.viewport.grid_color, [0.35, 0.35, 0.40]);
+        let rewritten = serde_json::to_string(&stale).unwrap();
+        assert!(!rewritten.contains("graph"), "state must not carry graph settings: {rewritten}");
 
         let serialized = serde_json::to_string(&settings).unwrap();
         let settings_roundtrip: DesignSettings = serde_json::from_str(&serialized).unwrap();

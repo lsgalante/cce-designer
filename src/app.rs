@@ -496,38 +496,26 @@ impl Default for ViewportSettings {
     }
 }
 
-/// The node grid's cell size and the gap between cells. The step from one node slot to the
-/// next is the two added up — there is no separate key for it.
+/// The node grid's cell size and the gap between cells, as configured — `spacing_*` is the
+/// cell, `gap_*` the space after it, and one node slot to the next is the two added up.
 ///
-/// The gaps were `skipped_row_h`/`skipped_col_w`; the aliases keep state.kdl files written
-/// under the old names loading, and the next save rewrites them.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GraphSettings {
-    pub grid_size_x: f32,
-    pub grid_size_y: f32,
-    #[serde(alias = "skipped_row_h")]
-    pub gap_row_h: f32,
-    #[serde(alias = "skipped_col_w")]
-    pub gap_col_w: f32,
-}
-
-impl Default for GraphSettings {
-    fn default() -> Self {
-        Self {
-            grid_size_x: 80.0,
-            grid_size_y: 40.0,
-            gap_row_h: 20.0,
-            gap_col_w: 20.0,
-        }
-    }
+/// Config-owned (`style.surface.graph.*`), NOT state: it is user-authored, so the app reads
+/// it and never writes it back — the same split `../CLAUDE.md` describes for scroll
+/// behavior. Zoom scales these in memory; the configured values are the 100% baseline that
+/// Reset Zoom returns to.
+pub fn configured_grid_geometry() -> (f32, f32, f32, f32) {
+    (
+        cce_ui::layout::graph_spacing_x(),
+        cce_ui::layout::graph_spacing_y(),
+        cce_ui::layout::graph_gap_col_w(),
+        cce_ui::layout::graph_gap_row_h(),
+    )
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DesignSettings {
     #[serde(default)]
     pub viewport: ViewportSettings,
-    #[serde(default)]
-    pub graph: GraphSettings,
 }
 
 fn float_array_to_hex(rgb: &[f32; 3]) -> String {
@@ -1200,12 +1188,6 @@ impl State {
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
             },
-            graph: GraphSettings {
-                grid_size_x: self.grid_size_x,
-                grid_size_y: self.grid_size_y,
-                gap_row_h: self.gap_row_h,
-                gap_col_w: self.gap_col_w,
-            },
         };
         settings.save();
         self.last_design_mod_time = {
@@ -1614,10 +1596,11 @@ impl State {
                 self.zoom(1.0 / 1.15, None);
             }
             "Reset Zoom" => {
-                self.grid_size_x = 150.0;
-                self.grid_size_y = 75.0;
-                self.gap_col_w = 37.5;
-                self.gap_row_h = 37.5;
+                let (gx, gy, gw, gh) = configured_grid_geometry();
+                self.grid_size_x = gx;
+                self.grid_size_y = gy;
+                self.gap_col_w = gw;
+                self.gap_row_h = gh;
                 self.sync_grid_settings();
             }
             "Detach Circular Window" | "Detach Pane" => {
@@ -2460,6 +2443,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         // The engine detected the output scale before constructing the app.
         let scale = cce_ui::scale::scale_factor() as f64;
         let settings = DesignSettings::load();
+        // Grid geometry is config-owned, not part of the saved state.
+        let cfg_grid = configured_grid_geometry();
         let (lw, lh) = if is_detached_network {
             (400.0f32, 400.0f32)
         } else {
@@ -2640,10 +2625,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
             network_grid_visible: true,
-            grid_size_x: settings.graph.grid_size_x,
-            grid_size_y: settings.graph.grid_size_y,
-            gap_row_h: settings.graph.gap_row_h,
-            gap_col_w: settings.graph.gap_col_w,
+            grid_size_x: cfg_grid.0,
+            grid_size_y: cfg_grid.1,
+            gap_col_w: cfg_grid.2,
+            gap_row_h: cfg_grid.3,
             pan_x,
             pan_y,
             pan_velocity_x: 0.0,
@@ -4806,10 +4791,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         self.last_design_mod_time = Some(mod_time);
                          let settings = DesignSettings::load();
                          self.square_viewport = settings.viewport.square;
-                         self.grid_size_x = settings.graph.grid_size_x;
-                         self.grid_size_y = settings.graph.grid_size_y;
-                         self.gap_row_h = settings.graph.gap_row_h;
-                         self.gap_col_w = settings.graph.gap_col_w;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;
                          self.viewport_mut().show_cube = settings.viewport.show_cube_enabled;
