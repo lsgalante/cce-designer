@@ -685,6 +685,13 @@ impl PassivePlate {
 impl cce_ui::widget::Layout for PassivePlate {}
 
 impl cce_ui::widget::Paint for PassivePlate {
+    /// Nothing: the plate's fill AND border are drawn by `append_widget_plate` (or, in
+    /// circular mode, the circle+arc branch) in the designer's hand-ordered paint walk.
+    /// The default `paint` would emit a plain square-cornered quad of the whole rect,
+    /// which the walk then re-drew through `extra_quads` ON TOP of the rounded plate —
+    /// square corners over the rounded ones.
+    fn paint(&self, _rect: cce_ui::scene::layout::Rect, _ctx: &mut cce_ui::scene::paint::PaintCtx) {}
+
     fn color(&self) -> [f32; 4] {
         let mut c = self.color;
         c[3] *= cce_ui::layout::plate_opacity();
