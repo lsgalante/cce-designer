@@ -496,12 +496,19 @@ impl Default for ViewportSettings {
     }
 }
 
+/// The node grid's cell size and the gap between cells. The step from one node slot to the
+/// next is the two added up — there is no separate key for it.
+///
+/// The gaps were `skipped_row_h`/`skipped_col_w`; the aliases keep state.kdl files written
+/// under the old names loading, and the next save rewrites them.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GraphSettings {
     pub grid_size_x: f32,
     pub grid_size_y: f32,
-    pub skipped_row_h: f32,
-    pub skipped_col_w: f32,
+    #[serde(alias = "skipped_row_h")]
+    pub gap_row_h: f32,
+    #[serde(alias = "skipped_col_w")]
+    pub gap_col_w: f32,
 }
 
 impl Default for GraphSettings {
@@ -509,8 +516,8 @@ impl Default for GraphSettings {
         Self {
             grid_size_x: 80.0,
             grid_size_y: 40.0,
-            skipped_row_h: 20.0,
-            skipped_col_w: 20.0,
+            gap_row_h: 20.0,
+            gap_col_w: 20.0,
         }
     }
 }
@@ -957,8 +964,8 @@ pub struct State {
     pub network_grid_visible: bool,
     pub grid_size_x: f32,
     pub grid_size_y: f32,
-    pub skipped_row_h: f32,
-    pub skipped_col_w: f32,
+    pub gap_row_h: f32,
+    pub gap_col_w: f32,
 
     pub pan_x: f32,
     pub pan_y: f32,
@@ -1196,8 +1203,8 @@ impl State {
             graph: GraphSettings {
                 grid_size_x: self.grid_size_x,
                 grid_size_y: self.grid_size_y,
-                skipped_row_h: self.skipped_row_h,
-                skipped_col_w: self.skipped_col_w,
+                gap_row_h: self.gap_row_h,
+                gap_col_w: self.gap_col_w,
             },
         };
         settings.save();
@@ -1609,8 +1616,8 @@ impl State {
             "Reset Zoom" => {
                 self.grid_size_x = 150.0;
                 self.grid_size_y = 75.0;
-                self.skipped_col_w = 37.5;
-                self.skipped_row_h = 37.5;
+                self.gap_col_w = 37.5;
+                self.gap_row_h = 37.5;
                 self.sync_grid_settings();
             }
             "Detach Circular Window" | "Detach Pane" => {
@@ -2635,8 +2642,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             network_grid_visible: true,
             grid_size_x: settings.graph.grid_size_x,
             grid_size_y: settings.graph.grid_size_y,
-            skipped_row_h: settings.graph.skipped_row_h,
-            skipped_col_w: settings.graph.skipped_col_w,
+            gap_row_h: settings.graph.gap_row_h,
+            gap_col_w: settings.graph.gap_col_w,
             pan_x,
             pan_y,
             pan_velocity_x: 0.0,
@@ -2795,15 +2802,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let network_grid_visible = self.network_grid_visible;
         let grid_size_x = self.grid_size_x;
         let grid_size_y = self.grid_size_y;
-        let skipped_row_h = self.skipped_row_h;
-        let skipped_col_w = self.skipped_col_w;
+        let gap_row_h = self.gap_row_h;
+        let gap_col_w = self.gap_col_w;
         let pan_x = self.pan_x;
         let pan_y = self.pan_y;
         let grid_snap_enabled = self.grid_snap_enabled;
         let graph = self.graph_mut();
         graph.set_show_network_grid(network_grid_visible);
         graph.set_grid_sizes(grid_size_x, grid_size_y);
-        graph.set_skipped_sizes(skipped_row_h, skipped_col_w);
+        graph.set_skipped_sizes(gap_row_h, gap_col_w);
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
         if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
@@ -2916,8 +2923,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             return;
         }
 
-        let old_row_h = self.skipped_row_h;
-        let old_col_w = self.skipped_col_w;
+        let old_row_h = self.gap_row_h;
+        let old_col_w = self.gap_col_w;
 
         let node_area_y = self.positions[CONTENT_IDX].1;
         let (cx, cy) = match center {
@@ -2940,8 +2947,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         self.grid_size_x = new_gx;
         self.grid_size_y = new_gy;
-        self.skipped_row_h = old_row_h * (new_gy / old_gy);
-        self.skipped_col_w = old_col_w * (new_gx / old_gx);
+        self.gap_row_h = old_row_h * (new_gy / old_gy);
+        self.gap_col_w = old_col_w * (new_gx / old_gx);
 
         self.sync_grid_settings();
     }
@@ -2950,8 +2957,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     pub fn keep_cursor_in_view(&mut self) {
         let (px, py, pw, ph) = self.positions[CONTENT_IDX];
 
-        let cx = px + self.grid_cursor_col as f32 * (self.grid_size_x + self.skipped_col_w) + self.pan_x;
-        let cy = py + self.grid_cursor_row as f32 * (self.grid_size_y + self.skipped_row_h) + self.pan_y;
+        let cx = px + self.grid_cursor_col as f32 * (self.grid_size_x + self.gap_col_w) + self.pan_x;
+        let cy = py + self.grid_cursor_row as f32 * (self.grid_size_y + self.gap_row_h) + self.pan_y;
         let cw = self.grid_size_x;
         let ch = self.grid_size_y;
 
@@ -4148,8 +4155,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                         if *button == MouseButton::Right {
                             if !dialog_open && in_circle_network_pane {
-                                let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
-                                let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
+                                let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
+                                let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
                                 self.grid_cursor_col = col;
                                 self.grid_cursor_row = row;
                                 self.open_node_palette();
@@ -4251,8 +4258,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             self.sync_parameters_to_project();
                         }
                         if click_target.is_none() && !dialog_open && in_circle_network_pane {
-                            let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
-                            let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
+                            let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
+                            let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
                             self.grid_cursor_col = col;
                             self.grid_cursor_row = row;
                             changed = true;
@@ -4299,8 +4306,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                         self.grid_cursor_row = pos.1 as i32;
                                     }
                                 } else {
-                                    let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.skipped_col_w)).floor() as i32;
-                                    let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.skipped_row_h)).floor() as i32;
+                                    let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
+                                    let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
                                     self.grid_cursor_col = col;
                                     self.grid_cursor_row = row;
                                     changed = true;
@@ -4595,8 +4602,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                                 if active_nodes == 0 {
                                                     self.grid_size_x = 80.0;
                                                     self.grid_size_y = 40.0;
-                                                    self.skipped_col_w = 20.0;
-                                                    self.skipped_row_h = 20.0;
+                                                    self.gap_col_w = 20.0;
+                                                    self.gap_row_h = 20.0;
                                                     self.pan_x = 20.0;
                                                     self.pan_y = 20.0;
                                                 } else {
@@ -4642,8 +4649,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                                                     self.grid_size_x = (base_gx * f).clamp(30.0, 500.0);
                                                     self.grid_size_y = (base_gy * f).clamp(15.0, 250.0);
-                                                    self.skipped_col_w = base_col_w * f;
-                                                    self.skipped_row_h = base_row_h * f;
+                                                    self.gap_col_w = base_col_w * f;
+                                                    self.gap_row_h = base_row_h * f;
 
                                                     let mut actual_xmin = f32::MAX;
                                                     let mut actual_xmax = f32::MIN;
@@ -4652,9 +4659,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                                                     for slot_idx in 0..active_nodes {
                                                         let (col, row) = self.current_dir().children[slot_idx].position;
-                                                        let x_min = col * (self.grid_size_x + self.skipped_col_w);
+                                                        let x_min = col * (self.grid_size_x + self.gap_col_w);
                                                         let x_max = x_min + self.grid_size_x;
-                                                        let y_min = row * (self.grid_size_y + self.skipped_row_h);
+                                                        let y_min = row * (self.grid_size_y + self.gap_row_h);
                                                         let y_max = y_min + self.grid_size_y;
 
                                                         if x_min < actual_xmin { actual_xmin = x_min; }
@@ -4801,8 +4808,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                          self.square_viewport = settings.viewport.square;
                          self.grid_size_x = settings.graph.grid_size_x;
                          self.grid_size_y = settings.graph.grid_size_y;
-                         self.skipped_row_h = settings.graph.skipped_row_h;
-                         self.skipped_col_w = settings.graph.skipped_col_w;
+                         self.gap_row_h = settings.graph.gap_row_h;
+                         self.gap_col_w = settings.graph.gap_col_w;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;
                          self.viewport_mut().show_cube = settings.viewport.show_cube_enabled;

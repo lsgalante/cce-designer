@@ -172,8 +172,8 @@ impl State {
                         2 => { // Reset Zoom
                             state.grid_size_x = 150.0;
                             state.grid_size_y = 75.0;
-                            state.skipped_col_w = 37.5;
-                            state.skipped_row_h = 37.5;
+                            state.gap_col_w = 37.5;
+                            state.gap_row_h = 37.5;
                             state.sync_grid_settings();
                             changed = true;
                         }

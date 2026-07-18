@@ -433,8 +433,8 @@ mod tests {
             "graph": {
                 "grid_size_x": 80.0,
                 "grid_size_y": 40.0,
-                "skipped_row_h": 20.0,
-                "skipped_col_w": 20.0
+                "gap_row_h": 20.0,
+                "gap_col_w": 20.0
             }
         }
         "#;
@@ -444,6 +444,28 @@ mod tests {
         assert_eq!(settings.viewport.camera_pivot_size, 1.0);
         assert_eq!(settings.viewport.grid_color, [0.35, 0.35, 0.40]);
         
+        assert_eq!(settings.graph.gap_row_h, 20.0);
+        assert_eq!(settings.graph.gap_col_w, 20.0);
+
+        // A state.kdl written before the rename still loads: the gaps were skipped_row_h /
+        // skipped_col_w, and the aliases carry those onto the new fields.
+        let legacy = r#"
+        {
+            "graph": {
+                "grid_size_x": 71.0,
+                "grid_size_y": 31.0,
+                "skipped_row_h": 12.0,
+                "skipped_col_w": 14.0
+            }
+        }
+        "#;
+        let migrated: DesignSettings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(migrated.graph.gap_row_h, 12.0);
+        assert_eq!(migrated.graph.gap_col_w, 14.0);
+        // ...and saving writes the new names back out.
+        let rewritten = serde_json::to_string(&migrated).unwrap();
+        assert!(rewritten.contains("gap_row_h") && !rewritten.contains("skipped_row_h"));
+
         let serialized = serde_json::to_string(&settings).unwrap();
         let settings_roundtrip: DesignSettings = serde_json::from_str(&serialized).unwrap();
         assert_eq!(settings_roundtrip.viewport.show_camera_pivot_enabled, false);
