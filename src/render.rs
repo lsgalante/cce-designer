@@ -264,6 +264,16 @@ impl State {
                     for (acx, acy, ar, at, a0, a1, ac) in param_bg.arcs() {
                         pc.arc(acx, acy, ar, at, a0, a1, ac);
                     }
+                    // The controls' relief steps (control_relief styling), after the
+                    // flat quads so the walls shade the fills they cross.
+                    for (rx, ry, rw, rh, rr, rd, raised) in param_bg.reliefs() {
+                        let r4 = (rr, rr, rr, rr);
+                        if raised {
+                            pc.boss(rect(rx, ry, rw, rh), r4, rd);
+                        } else {
+                            pc.recess(rect(rx, ry, rw, rh), r4, rd);
+                        }
+                    }
                 });
             }
 
