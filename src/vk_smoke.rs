@@ -487,6 +487,7 @@ fn main() {
                 batches: &[],
                 overlay_verts: &[],
                 images: &image_quads,
+                plate_features: &[],
                 clear_color: [0.0; 4],
             });
         }
