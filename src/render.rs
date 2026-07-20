@@ -391,7 +391,14 @@ impl State {
         if w <= 0.0 || h <= 0.0 {
             return;
         }
-        let r = cce_ui::layout::plate_corner_radius();
+        // The viewport's corners sit on the window's, so its highlight follows
+        // the window clip's curvature-matched span; the interior panes keep the
+        // nominal plate radius their own plates are drawn with.
+        let r = if self.focused_pane == RIGHT_MENUBAR_IDX {
+            colors::backplate_corner_radius() * cce_ui::layout::corner_span_factor()
+        } else {
+            cce_ui::layout::plate_corner_radius()
+        };
         pc.border(rect(x, y, w, h), (r, r, r, r), [0.0; 4], color, thickness);
     }
 
