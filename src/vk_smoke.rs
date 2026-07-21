@@ -474,9 +474,9 @@ fn main() {
                 renderer.stage_scene(
                     pane,
                     vec![
-                        SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d() },
-                        SceneDraw { mesh: grid_mesh, mvp },
-                        SceneDraw { mesh: cube_mesh, mvp },
+                        SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d(), wireframe: false },
+                        SceneDraw { mesh: grid_mesh, mvp, wireframe: false },
+                        SceneDraw { mesh: cube_mesh, mvp, wireframe: false },
                     ],
                 );
             }

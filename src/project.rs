@@ -269,6 +269,7 @@ impl State {
         let show_parameters = self.show_parameters;
         let show_spreadsheet = self.show_spreadsheet;
         let show_playbar = self.show_playbar;
+        let wireframe = self.wireframe;
         let bool_str = |b: bool| if b { "true" } else { "false" };
 
         let camera_nodes: Vec<String> = self.current_dir().children.iter()
@@ -441,6 +442,27 @@ impl State {
                 }
             }
         }
+
+        // 2. Render subnet — render/display controls, present by default like
+        // Main. Toggles reflect live state so a reopened project shows real
+        // switches.
+        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 1.0));
+        render_node.children.clear();
+
+        ensure_param(render_node, "Render Settings", "section", "", &[], None, None, None);
+        ensure_param(render_node, "Show Wireframe", "toggle", bool_str(wireframe), &[], None, None, None);
+
+        for p in render_node.params.iter_mut() {
+            match p.name.as_str() {
+                "Show Wireframe" => set_toggle(p, wireframe),
+                _ => {}
+            }
+            if p.param_type == "toggle" {
+                if let Some(rest) = p.name.strip_prefix("Show ") {
+                    p.label = rest.to_string();
+                }
+            }
+        }
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {
@@ -472,6 +494,16 @@ impl State {
                         self.active_camera = cam.clone();
                         self.viewport_mut().active_camera = cam;
                     }
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some(render_idx) = self.fs_root.children.iter().position(|c| c.name == "Render") {
+            let params = self.fs_root.children[render_idx].params.clone();
+            for p in &params {
+                match p.name.as_str() {
+                    "Show Wireframe" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe = val; }
                     _ => {}
                 }
             }
