@@ -12,7 +12,7 @@ use crate::app::{
 use crate::geometry::network_sphere_vertices_with_errors;
 use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::{DisplayList, PaintCtx, Prim};
-use cce_ui::scene::painter::{append_widget_plate, append_widget_text};
+use cce_ui::scene::painter::{append_widget_plate, append_widget_plate_tinted, append_widget_text};
 
 const TAU: f32 = 2.0 * std::f32::consts::PI;
 
@@ -183,7 +183,7 @@ impl State {
             w.paint_self(&self.ui_context, pc);
         } else if idx == CONTENT_IDX {
             if !self.circular_network_pane {
-                append_widget_plate(w, pc);
+                append_widget_plate_tinted(w, pc, self.plate_focus_tint(idx));
             }
 
             pc.clip(clip, |pc| {
@@ -248,7 +248,7 @@ impl State {
                 }
             }
 
-            append_widget_plate(w, pc);
+            append_widget_plate_tinted(w, pc, self.plate_focus_tint(idx));
 
             // The params pane serves its chrome through the legacy plain-quad view,
             // which carries flat quads only — the controls' rounded-rect backgrounds
@@ -359,10 +359,35 @@ impl State {
     /// Highlight border around the focused context's pane. The per-pane
     /// menubars are hidden in the floating layout, so this border is the
     /// only visual indicator of `focused_pane`.
+    /// The focused pane's plate carries the highlight as its bevel's specular
+    /// tint under `control_relief` — the ring in `append_context_border` is the
+    /// flat-style treatment. The viewport (no plate of its own) and the
+    /// circular pane (arc ring) keep the ring in both styles.
+    fn plate_focus_tint(&self, idx: usize) -> Option<[f32; 3]> {
+        if !cce_ui::layout::control_relief() {
+            return None;
+        }
+        let focused = match idx {
+            NETWORK_PANEL_IDX | CONTENT_IDX => {
+                self.focused_pane == LEFT_MENUBAR_IDX && !self.circular_network_pane
+            }
+            PARAM_IDX => self.focused_pane == PARAM_MENUBAR_IDX,
+            SPREADSHEET_IDX => self.focused_pane == SPREADSHEET_MENUBAR_IDX,
+            _ => false,
+        };
+        focused.then(|| {
+            let c = colors::highlight_primary_color();
+            [c[0], c[1], c[2]]
+        })
+    }
+
     fn append_context_border(&self, pc: &mut PaintCtx) {
         if self.is_detached_network {
             return;
         }
+        // Plated panes under control_relief mark focus through their bevel's
+        // specular tint (plate_focus_tint) — no ring on top of it.
+        let relief = cce_ui::layout::control_relief();
 
         let thickness = 2.0;
         let mut color = colors::highlight_primary_color();
@@ -386,6 +411,9 @@ impl State {
                     );
                     return;
                 }
+                if relief {
+                    return;
+                }
                 color[3] *= self.network_opacity;
                 self.positions[NETWORK_PANEL_IDX]
             }
@@ -396,13 +424,13 @@ impl State {
                 self.positions[VIEWPORT_IDX]
             }
             PARAM_MENUBAR_IDX => {
-                if !self.show_parameters {
+                if !self.show_parameters || relief {
                     return;
                 }
                 self.positions[PARAM_IDX]
             }
             SPREADSHEET_MENUBAR_IDX => {
-                if !self.show_spreadsheet {
+                if !self.show_spreadsheet || relief {
                     return;
                 }
                 self.positions[SPREADSHEET_IDX]
