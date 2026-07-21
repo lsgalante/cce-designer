@@ -1716,19 +1716,38 @@ impl State {
     /// Rewrite the Main node's setting toggles from live app state, so the
     /// switches show the real value even after panes/settings were changed
     /// through the menus or keyboard while another node was selected.
+    /// Write a per-camera display toggle (Square Aspect / Show Camera Pivot)
+    /// back to the ACTIVE camera node — the setting's home — so the next
+    /// settings apply doesn't revert a menu/shortcut flip. No-op under
+    /// Default Camera, which has no node: the live value stands alone.
+    fn write_active_camera_toggle(&mut self, name: &str, val: bool) {
+        if self.active_camera == "Default Camera" {
+            return;
+        }
+        let active = self.active_camera.clone();
+        if let Some(cam) = self
+            .current_dir_mut()
+            .children
+            .iter_mut()
+            .find(|c| c.node_type == "camera" && c.name == active)
+        {
+            if let Some(p) = cam.params.iter_mut().find(|p| p.name == name) {
+                p.default = if val { "true" } else { "false" }.to_string();
+            }
+        }
+    }
+
     fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
-        let live: [(&str, bool); 12] = [
+        let live: [(&str, bool); 10] = [
             ("Show Network Pane", self.show_network),
             ("Show Viewport Pane", self.show_viewport),
             ("Show Parameters Pane", self.show_parameters),
             ("Show Spreadsheet Pane", self.show_spreadsheet),
             ("Show Playbar Pane", self.show_playbar),
             ("Circular Pane", self.circular_network_pane),
-            ("Square Aspect", self.square_viewport),
             ("Show Grid Guide", self.viewport().show_grid),
             ("Show Reference Cube", self.viewport().show_cube),
             ("Show Origin Axes", self.viewport().show_origin),
-            ("Show Camera Pivot", self.viewport().show_camera_pivot),
             ("Ray Traced Preview", self.viewport().rt_mode),
         ];
         let dir = self.current_dir_mut();
@@ -3328,11 +3347,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             Action::ToggleCameraPivot => {
                 let val = !self.viewport().show_camera_pivot;
                 self.viewport_mut().show_camera_pivot = val;
+                self.write_active_camera_toggle("Show Camera Pivot", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 3, val);
                 settings_changed = true;
             }
             Action::ToggleSquareViewport => {
                 self.square_viewport = !self.square_viewport;
+                let val = self.square_viewport;
+                self.write_active_camera_toggle("Square Aspect", val);
                 settings_changed = true;
             }
             Action::ToggleConfigure => {

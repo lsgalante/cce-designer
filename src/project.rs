@@ -270,6 +270,7 @@ impl State {
         let show_spreadsheet = self.show_spreadsheet;
         let show_playbar = self.show_playbar;
         let wireframe = self.wireframe;
+        let square_viewport = self.square_viewport;
         let bool_str = |b: bool| if b { "true" } else { "false" };
 
         let camera_nodes: Vec<String> = self.current_dir().children.iter()
@@ -392,11 +393,9 @@ impl State {
             ensure_param(main_node, "Active Camera", "choice", &self.active_camera, &camera_options_refs, None, None, None);
         }
 
-        ensure_param(main_node, "Square Aspect", "toggle", bool_str(self.square_viewport), &[], None, None, None);
         ensure_param(main_node, "Show Grid Guide", "toggle", bool_str(vp_show_grid), &[], None, None, None);
         ensure_param(main_node, "Show Reference Cube", "toggle", bool_str(vp_show_cube), &[], None, None, None);
         ensure_param(main_node, "Show Origin Axes", "toggle", bool_str(vp_show_origin), &[], None, None, None);
-        ensure_param(main_node, "Show Camera Pivot", "toggle", bool_str(vp_show_camera_pivot), &[], None, None, None);
         ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
         ensure_param(main_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
         ensure_param(main_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
@@ -408,14 +407,25 @@ impl State {
         // dispatched. Drop it from older saves too.
         main_node.params.retain(|p| !matches!(p.name.as_str(), "Help" | "About"));
 
+        // Square Aspect / Show Camera Pivot moved to the camera nodes
+        // (per-camera display params): retire Main's copies, keeping an older
+        // save's values as the seed for the cameras below.
+        let migrated_square = main_node.params.iter()
+            .find(|p| p.name == "Square Aspect")
+            .and_then(|p| p.default.parse::<bool>().ok());
+        let migrated_pivot = main_node.params.iter()
+            .find(|p| p.name == "Show Camera Pivot")
+            .and_then(|p| p.default.parse::<bool>().ok());
+        main_node.params.retain(|p| !matches!(p.name.as_str(), "Square Aspect" | "Show Camera Pivot"));
+
         // Boolean settings and pane-visibility items render as toggles. Older
         // saves stored these as choice dropdowns / buttons; retype them and
         // reflect live pane state so a reopened project shows real switches.
         for p in main_node.params.iter_mut() {
             match p.name.as_str() {
-                "Circular Pane" | "Square Aspect" | "Show Grid Guide"
+                "Circular Pane" | "Show Grid Guide"
                 | "Show Reference Cube" | "Show Origin Axes"
-                | "Show Camera Pivot" | "Ray Traced Preview" => {
+                | "Ray Traced Preview" => {
                     p.param_type = "toggle".to_string();
                     p.options.clear();
                     if p.default != "true" { p.default = "false".to_string(); }
@@ -463,6 +473,46 @@ impl State {
                 }
             }
         }
+
+        // 3. Camera display params — Square Aspect / Show Camera Pivot live on
+        // the camera nodes (applied from the ACTIVE camera). Ensured on every
+        // camera in the tree, seeded from the retired Main copies (older
+        // saves) or the live values.
+        fn ensure_camera_display_params(node: &mut FsNode, square: bool, pivot: bool) {
+            if node.node_type == "camera" {
+                let bool_str = |b: bool| if b { "true" } else { "false" };
+                if !node.params.iter().any(|p| p.name == "Square Aspect") {
+                    node.params.push(ParamDef {
+                        name: "Square Aspect".to_string(),
+                        label: "Square Aspect".to_string(),
+                        param_type: "toggle".to_string(),
+                        default: bool_str(square).to_string(),
+                        options: Vec::new(),
+                        min: None,
+                        max: None,
+                        step: None,
+                    });
+                }
+                if !node.params.iter().any(|p| p.name == "Show Camera Pivot") {
+                    node.params.push(ParamDef {
+                        name: "Show Camera Pivot".to_string(),
+                        label: "Camera Pivot".to_string(),
+                        param_type: "toggle".to_string(),
+                        default: bool_str(pivot).to_string(),
+                        options: Vec::new(),
+                        min: None,
+                        max: None,
+                        step: None,
+                    });
+                }
+            }
+            for child in &mut node.children {
+                ensure_camera_display_params(child, square, pivot);
+            }
+        }
+        let square_seed = migrated_square.unwrap_or(square_viewport);
+        let pivot_seed = migrated_pivot.unwrap_or(vp_show_camera_pivot);
+        ensure_camera_display_params(&mut self.fs_root, square_seed, pivot_seed);
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {
@@ -477,24 +527,39 @@ impl State {
                     "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
                     "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_cube = val; }
                     "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_origin = val; }
-                    "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_camera_pivot = val; }
                     "Ray Traced Preview" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().rt_mode = val; }
                     "Grid Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.grid_thickness = val / 1000.0; }
                     "Origin Guide Size" => if let Ok(val) = p.default.parse::<f32>() { self.origin_size = val / 10.0; }
                     "Camera Pivot Size" => if let Ok(val) = p.default.parse::<f32>() { self.camera_pivot_size = val / 10.0; }
                     "Background Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_mut().bg_color = col; }
                     "Grid Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_mut().grid_color = col; }
-                    "Square Aspect" => if let Ok(val) = p.default.parse::<bool>() { self.square_viewport = val; }
                     "Show Grid" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
                     "Cube" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_cube = val; }
                     "Origin" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_origin = val; }
-                    "Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_camera_pivot = val; }
                     "Active Camera" => {
                         let cam = p.default.clone();
                         self.active_camera = cam.clone();
                         self.viewport_mut().active_camera = cam;
                     }
                     _ => {}
+                }
+            }
+        }
+
+        // The ACTIVE camera's display params (per-camera). Default Camera has
+        // no node — the live values stand.
+        if self.active_camera != "Default Camera" {
+            let active = self.active_camera.clone();
+            let cam_params = self.current_dir().children.iter()
+                .find(|c| c.node_type == "camera" && c.name == active)
+                .map(|c| c.params.clone());
+            if let Some(params) = cam_params {
+                for p in &params {
+                    match p.name.as_str() {
+                        "Square Aspect" => if let Ok(val) = p.default.parse::<bool>() { self.square_viewport = val; }
+                        "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_camera_pivot = val; }
+                        _ => {}
+                    }
                 }
             }
         }
