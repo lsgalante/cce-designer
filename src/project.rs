@@ -363,18 +363,23 @@ impl State {
         ensure_param(main_node, "Redo", "button", "", &[], None, None, None);
 
         ensure_param(main_node, "View", "section", "", &[], None, None, None);
-        ensure_param(main_node, "Zoom In", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Zoom Out", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Reset Zoom", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Detach Circular Window", "button", "", &[], None, None, None);
-        ensure_param(main_node, "Show Network Pane", "toggle", bool_str(show_network), &[], None, None, None);
         ensure_param(main_node, "Show Viewport Pane", "toggle", bool_str(show_viewport), &[], None, None, None);
         ensure_param(main_node, "Show Parameters Pane", "toggle", bool_str(show_parameters), &[], None, None, None);
         ensure_param(main_node, "Show Spreadsheet Pane", "toggle", bool_str(show_spreadsheet), &[], None, None, None);
         ensure_param(main_node, "Show Playbar Pane", "toggle", bool_str(show_playbar), &[], None, None, None);
 
-        // Network Settings
-        ensure_param(main_node, "Network Settings", "section", "", &[], None, None, None);
+        // Network — renamed from the retired "Network Settings" (migrate older
+        // saves' section param in place so its position survives the reorder).
+        if let Some(sec) = main_node.params.iter_mut().find(|p| p.name == "Network Settings") {
+            sec.name = "Network".to_string();
+            sec.label = "Network".to_string();
+        }
+        ensure_param(main_node, "Network", "section", "", &[], None, None, None);
+        ensure_param(main_node, "Show Network Pane", "toggle", bool_str(show_network), &[], None, None, None);
+        ensure_param(main_node, "Zoom In", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Zoom Out", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Reset Zoom", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Detach Circular Window", "button", "", &[], None, None, None);
         ensure_param(main_node, "Circular Pane", "toggle", bool_str(self.circular_network_pane), &[], None, None, None);
         // Node color is config-owned (style.surface.graph.node.color in
         // config.kdl) — drop the retired per-project params from older saves.
@@ -439,6 +444,25 @@ impl State {
             }
         }
 
+        const MAIN_PARAM_ORDER: [&str; 32] = [
+            "File", "New Project", "Open", "Save", "Save As", "Exit",
+            "Edit", "Undo", "Redo",
+            "View", "Show Viewport Pane", "Show Parameters Pane",
+            "Show Spreadsheet Pane", "Show Playbar Pane",
+            "Network", "Show Network Pane", "Zoom In", "Zoom Out",
+            "Reset Zoom", "Detach Circular Window", "Circular Pane",
+            "Viewport Settings", "Active Camera",
+            "Show Grid Guide", "Show Reference Cube", "Show Origin Axes",
+            "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
+            "Camera Pivot Size", "Background Color", "Grid Color",
+        ];
+        main_node.params.sort_by_key(|p| {
+            MAIN_PARAM_ORDER
+                .iter()
+                .position(|n| *n == p.name)
+                .unwrap_or(MAIN_PARAM_ORDER.len())
+        });
+
         // Display labels only — the `name` stays the dispatch identity used by
         // execute_menu_action and the live-toggle refresh. The params pane keys
         // off `label` when set (param_display), and sync_parameters_to_project
@@ -446,6 +470,9 @@ impl State {
         for p in main_node.params.iter_mut() {
             if p.name == "New Project" {
                 p.label = "New".to_string();
+            } else if p.name == "Show Network Pane" {
+                // In the Network section the pane toggle reads as "Visible".
+                p.label = "Visible".to_string();
             } else if p.param_type == "toggle" {
                 if let Some(rest) = p.name.strip_prefix("Show ") {
                     p.label = rest.to_string();
