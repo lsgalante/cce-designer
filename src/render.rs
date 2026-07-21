@@ -281,6 +281,11 @@ impl State {
                             pc.recess(rect(rx, ry, rw, rh), r4, rd);
                         }
                     }
+                    // The slider thumbs (Prim::Sphere — no flat view carries
+                    // them), after the reliefs so the knob rides the carve.
+                    for (scx, scy, sr, sc) in param_bg.spheres() {
+                        pc.sphere(scx, scy, sr, sc);
+                    }
                 });
             }
 
