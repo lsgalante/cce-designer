@@ -83,13 +83,12 @@ pub const RIGHT_MENUBAR_IDX: usize = 8;
 pub const PARAM_MENUBAR_IDX: usize = 9;
 pub const STATUS_IDX: usize = 10;
 pub const BREADCRUMB_IDX: usize = 11;
-pub const NODE_PALETTE_IDX: usize = 12;
-pub const SPREADSHEET_IDX: usize = 13;
-pub const SPREADSHEET_MENUBAR_IDX: usize = 14;
-pub const NETWORK_PANEL_IDX: usize = 15;
-pub const PLAYBAR_IDX: usize = 16;
+pub const SPREADSHEET_IDX: usize = 12;
+pub const SPREADSHEET_MENUBAR_IDX: usize = 13;
+pub const NETWORK_PANEL_IDX: usize = 14;
+pub const PLAYBAR_IDX: usize = 15;
 
-pub const WIDGET_COUNT: usize = 17;
+pub const WIDGET_COUNT: usize = 16;
 
 /// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
 /// old `Vec<Box<dyn WidgetHost>>` erased that and pinned `WidgetHost`'s full surface through the
@@ -110,7 +109,6 @@ pub struct WidgetSlots {
     pub param_menubar: Adapted<MenuBar>,
     pub status: Adapted<StatusBar>,
     pub breadcrumb: Adapted<Breadcrumb>,
-    pub node_palette: Adapted<NodePalette>,
     pub spreadsheet: Adapted<Spreadsheet>,
     pub spreadsheet_menubar: Adapted<MenuBar>,
     pub network_panel: Adapted<PassivePlate>,
@@ -136,7 +134,6 @@ impl WidgetSlots {
             PARAM_MENUBAR_IDX => self.param_menubar.draggable(),
             STATUS_IDX => self.status.draggable(),
             BREADCRUMB_IDX => self.breadcrumb.draggable(),
-            NODE_PALETTE_IDX => self.node_palette.draggable(),
             SPREADSHEET_IDX => self.spreadsheet.draggable(),
             SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.draggable(),
             NETWORK_PANEL_IDX => self.network_panel.draggable(),
@@ -159,7 +156,6 @@ impl WidgetSlots {
             PARAM_MENUBAR_IDX => self.param_menubar.is_dragging(),
             STATUS_IDX => self.status.is_dragging(),
             BREADCRUMB_IDX => self.breadcrumb.is_dragging(),
-            NODE_PALETTE_IDX => self.node_palette.is_dragging(),
             SPREADSHEET_IDX => self.spreadsheet.is_dragging(),
             SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.is_dragging(),
             NETWORK_PANEL_IDX => self.network_panel.is_dragging(),
@@ -182,7 +178,6 @@ impl WidgetSlots {
             PARAM_MENUBAR_IDX => &self.param_menubar,
             STATUS_IDX => &self.status,
             BREADCRUMB_IDX => &self.breadcrumb,
-            NODE_PALETTE_IDX => &self.node_palette,
             SPREADSHEET_IDX => &self.spreadsheet,
             SPREADSHEET_MENUBAR_IDX => &self.spreadsheet_menubar,
             NETWORK_PANEL_IDX => &self.network_panel,
@@ -205,18 +200,12 @@ impl WidgetSlots {
             PARAM_MENUBAR_IDX => &mut self.param_menubar,
             STATUS_IDX => &mut self.status,
             BREADCRUMB_IDX => &mut self.breadcrumb,
-            NODE_PALETTE_IDX => &mut self.node_palette,
             SPREADSHEET_IDX => &mut self.spreadsheet,
             SPREADSHEET_MENUBAR_IDX => &mut self.spreadsheet_menubar,
             NETWORK_PANEL_IDX => &mut self.network_panel,
             PLAYBAR_IDX => &mut self.playbar,
             _ => panic!("widget slot index out of range: {idx}"),
         }
-    }
-
-    /// Per-slot dyn view in index order (the serialize path's input).
-    pub fn dyn_refs(&self) -> [&dyn WidgetHost; WIDGET_COUNT] {
-        [&self.header, &self.content, &self.splitter1, &self.viewport, &self.splitter2, &self.param, &self.canvas, &self.left_menubar, &self.right_menubar, &self.param_menubar, &self.status, &self.breadcrumb, &self.node_palette, &self.spreadsheet, &self.spreadsheet_menubar, &self.network_panel, &self.playbar]
     }
 }
 
@@ -632,34 +621,6 @@ impl DesignSettings {
     }
 }
 
-pub struct NodePalette {
-    pub x: f32, y: f32, w: f32, h: f32,
-    pub visible: bool,
-    pub query: String,
-    pub items: Vec<String>,
-    pub selected: usize,
-}
-
-impl NodePalette {
-    fn new() -> cce_ui::widget::Adapted<NodePalette> {
-        cce_ui::widget::Adapted::new(Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0, visible: false, query: String::new(), items: Vec::new(), selected: 0 })
-    }
-
-    fn panel_rect(&self) -> (f32, f32, f32, f32) {
-        let pw = 460.0_f32.min(self.w - 40.0).max(280.0);
-        let ph = 360.0_f32.min(self.h - 80.0).max(240.0);
-        (self.x + (self.w - pw) / 2.0, self.y + 76.0, pw, ph)
-    }
-
-    pub fn set_palette_state(&mut self, visible: bool, query: &str, items: &[String], selected: usize) {
-        self.visible = visible;
-        self.query = query.to_string();
-        self.items = items.to_vec();
-        self.selected = selected;
-    }
-}
-
-
 /// Dissolved cce-ui `Plate` (Phase 6as): a passive translucent panel — configured color
 /// at `plate_opacity` times the network fade, alpha negated when blur is on (the
 /// scenefx blur marker) — with no children and no events.
@@ -756,60 +717,6 @@ impl cce_ui::widget::Input for Canvas {
     // Hit-through: the pane never claims the pointer (the graph decides its own hits).
     fn hit(&self, _rect: cce_ui::scene::layout::Rect, _x: f32, _y: f32) -> bool { false }
 }
-
-impl cce_ui::widget::Layout for NodePalette {
-    // The model mirrors the landed rect (panel_rect/labels read it between events).
-    fn rect_assigned(&mut self, rect: cce_ui::scene::layout::Rect) {
-        self.x = rect.x;
-        self.y = rect.y;
-        self.w = rect.width;
-        self.h = rect.height;
-    }
-
-    fn z_order(&self) -> i32 {
-        200
-    }
-}
-
-impl cce_ui::widget::Paint for NodePalette {
-    fn color(&self) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
-
-    fn paint(&self, _rect: cce_ui::scene::layout::Rect, pc: &mut cce_ui::scene::paint::PaintCtx) {
-        use cce_ui::scene::layout::Rect;
-        // Visibility is model-owned (set through set_palette_state on the downcast model,
-        // not WidgetHost::set_visible on the wrapper), so the paint gate lives here.
-        if !self.visible {
-            return;
-        }
-        pc.quad(Rect { x: self.x, y: self.y, width: self.w, height: self.h }, [0.0, 0.0, 0.0, 0.45]);
-        let (px, py, pw, ph) = self.panel_rect();
-        pc.quad(Rect { x: px, y: py, width: pw, height: ph }, colors::popover_bg_color());
-        pc.quad(Rect { x: px + 16.0, y: py + 48.0, width: pw - 32.0, height: 32.0 }, [0.10, 0.10, 0.14, 1.0]);
-        let list_y = py + 92.0;
-        let row_h = 24.0;
-        let visible_rows = ((ph - 120.0) / row_h).floor().max(0.0) as usize;
-        let start = self.selected.saturating_sub(visible_rows.saturating_sub(1));
-        for (row, item_idx) in (start..self.items.len().min(start + visible_rows)).enumerate() {
-            let y = list_y + row as f32 * row_h;
-            let bg = if item_idx == self.selected { [0.24, 0.33, 0.55, 0.85] } else { [0.14, 0.14, 0.19, 0.55] };
-            pc.quad(Rect { x: px + 16.0, y, width: pw - 32.0, height: row_h - 2.0 }, bg);
-        }
-        for l in self.own_labels() {
-            pc.text(l.text, l.x, l.y, l.font_size, l.color);
-        }
-    }
-}
-
-impl cce_ui::widget::Input for NodePalette {
-    fn hit(&self, rect: cce_ui::scene::layout::Rect, x: f32, y: f32) -> bool {
-        self.visible && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
-    }
-
-    fn take_click(&mut self) -> bool {
-        self.visible
-    }
-}
-
 
 pub fn get_next_visible_pane(
     current_pane: usize,
@@ -941,10 +848,6 @@ pub struct State {
     pub slots: Box<WidgetSlots>,
     pub positions: Vec<(f32, f32, f32, f32)>,
     pub splitter_layout: cce_ui::layout::SplitterLayout,
-    pub node_palette_visible: bool,
-    pub node_palette_query: String,
-    pub node_palette_filtered: Vec<usize>,
-    pub node_palette_selected: usize,
     /// The add-node palette's cce-cloud popup (single active popup, toggle
     /// semantics — the status bar's tracker pattern).
     pub cloud_popups: cce_ui::process::CloudPopupTracker,
@@ -1119,13 +1022,6 @@ impl State {
         self.slots.get_dyn(idx).as_any().downcast_ref::<MenuBar>()
     }
 
-    pub fn palette(&self) -> &NodePalette {
-        self.slots.node_palette.as_any().downcast_ref::<NodePalette>().expect("not a NodePalette")
-    }
-
-    pub fn palette_mut(&mut self) -> &mut NodePalette {
-        self.slots.node_palette.as_any_mut().downcast_mut::<NodePalette>().expect("not a NodePalette")
-    }
 
     // Roster accessors on CONCRETE types (Phase 6aw, controller decision option 2): each
     // index's type is known statically, so the capability traits are reached by downcast +
@@ -1876,30 +1772,6 @@ impl State {
         names
     }
 
-    pub fn refresh_node_palette(&mut self) {
-        let q = self.node_palette_query.to_lowercase();
-        self.node_palette_filtered = self.node_templates.iter().enumerate()
-            .filter_map(|(i, t)| {
-                if q.is_empty() || t.label.to_lowercase().contains(&q) { Some(i) } else { None }
-            })
-            .collect();
-        if self.node_palette_selected >= self.node_palette_filtered.len() {
-            self.node_palette_selected = self.node_palette_filtered.len().saturating_sub(1);
-        }
-        let items: Vec<String> = self.node_palette_filtered.iter()
-            .map(|&i| self.node_templates[i].label.clone())
-            .collect();
-        let visible = self.node_palette_visible;
-        let query = self.node_palette_query.clone();
-        let selected = self.node_palette_selected;
-        self.palette_mut().set_palette_state(
-            visible,
-            &query,
-            &items,
-            selected,
-        );
-    }
-
     pub fn open_file_chooser(&self) {
         let Some(sender) = self.event_sender.clone() else { return };
         std::thread::spawn(move || {
@@ -2032,8 +1904,7 @@ impl State {
         });
     }
 
-    /// The add-node palette, as a `cce-cloud --dmenu` popup (the in-app
-    /// NodePalette widget is retired from this path): toggle-tracked like the
+    /// The add-node palette, as a `cce-cloud --dmenu` popup: toggle-tracked like the
     /// status bar's popups, positioned at the pointer and parented to the
     /// designer surface. The picked template comes back through the event
     /// loop as a fire-and-forget `AddNode` at the grid cursor.
@@ -2077,81 +1948,6 @@ impl State {
         });
     }
 
-    pub fn close_node_palette(&mut self) {
-        self.node_palette_visible = false;
-        self.refresh_node_palette();
-    }
-
-
-    pub fn place_selected_node(&mut self) -> bool {
-        let Some(&template_idx) = self.node_palette_filtered.get(self.node_palette_selected) else { return false; };
-        let mut node = self.node_templates[template_idx].node.clone();
-        let is_in_utility = !self.current_path.is_empty() && self.fs_root.children[self.current_path[0]].node_type == "utility";
-        if is_in_utility {
-            if crate::geometry::is_geometry_node_type(&node.node_type) {
-                self.update_status_text("Utility nodes cannot contain geometry.");
-                self.close_node_palette();
-                return false;
-            }
-        }
-        let (nx, ny) = self.find_empty_cell(self.grid_cursor_col as f32, self.grid_cursor_row as f32, None);
-        node.position = (nx, ny);
-        node.name = self.get_lowest_unused_name(&node.name);
-        self.current_dir_mut().children.push(node);
-        self.close_node_palette();
-        self.sync_nodes();
-        self.rebuild_positions();
-        self.apply_layout();
-        self.update_panel_bounds();
-        self.rebuild_scene_geometry();
-        true
-    }
-
-
-    pub fn handle_node_palette_key(&mut self, event: &KeyEvent) -> bool {
-        if event.state != ElementState::Pressed { return false; }
-        match &event.logical_key {
-            Key::Named(NamedKey::Escape) => {
-                self.close_node_palette();
-                true
-            }
-            Key::Named(NamedKey::Enter) => self.place_selected_node(),
-            Key::Named(NamedKey::ArrowDown) => {
-                if !self.node_palette_filtered.is_empty() {
-                    self.node_palette_selected = (self.node_palette_selected + 1).min(self.node_palette_filtered.len() - 1);
-                    self.refresh_node_palette();
-                }
-                true
-            }
-            Key::Named(NamedKey::ArrowUp) => {
-                if self.node_palette_selected > 0 {
-                    self.node_palette_selected -= 1;
-                    self.refresh_node_palette();
-                }
-                true
-            }
-            Key::Named(NamedKey::Backspace) => {
-                self.node_palette_query.pop();
-                self.refresh_node_palette();
-                true
-            }
-            Key::Named(NamedKey::Tab) => {
-                self.close_node_palette();
-                true
-            }
-            _ => {
-                if let Some(text) = &event.text {
-                    for ch in text.chars().filter(|c| !c.is_control()) {
-                        self.node_palette_query.push(ch);
-                    }
-                    self.refresh_node_palette();
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-    }
 
 pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String>>) {
     let mut headers = vec![
@@ -2594,7 +2390,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
             status: StatusBar::new().with_text("Ready"),
             breadcrumb: Breadcrumb::new(),
-            node_palette: NodePalette::new(),
             spreadsheet: Spreadsheet::new(),
             spreadsheet_menubar: {
                 let mut mb = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 3);
@@ -2682,10 +2477,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             slots,
             positions,
             splitter_layout,
-            node_palette_visible: false,
-            node_palette_query: String::new(),
-            node_palette_filtered: Vec::new(),
-            node_palette_selected: 0,
             cloud_popups: cce_ui::process::CloudPopupTracker::new(),
             drag_widget: None,
             focused_widget: None,
@@ -3084,7 +2875,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[CANVAS_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[STATUS_IDX] = (0.0, 0.0, 0.0, 0.0);
-            self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
             self.positions[PLAYBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
 
             self.slots.header.set_visible(false);
@@ -3179,7 +2969,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[CANVAS_IDX] = (0.0, HEADER_H, self.width, body_h);
             self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
             self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
-            self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
             self.positions[PLAYBAR_IDX] = (0.0, HEADER_H + body_h, self.width, pb_h);
 
             self.slots.header.set_visible(true);
@@ -3293,7 +3082,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[CANVAS_IDX] = (0.0, 0.0, self.width, body_h);
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
-                self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
                 self.positions[PLAYBAR_IDX] = (0.0, body_h, self.width, pb_h);
 
                 self.slots.header.set_visible(false);
@@ -3387,7 +3175,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[CANVAS_IDX] = (0.0, 0.0, self.width, body_h);
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
-                self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
                 self.positions[PLAYBAR_IDX] = if self.show_playbar {
                     (gap, self.height - STATUS_H - gap - PLAYBAR_H, self.width - 2.0 * gap, PLAYBAR_H)
                 } else {
@@ -3742,7 +3529,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::MouseWheel { delta, phase, .. } => {
-                let dialog_open = self.node_palette_visible;
                 let in_network_pane = self.in_network_pane();
                 // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
@@ -3754,7 +3540,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 let mut focus_changed = false;
                 let mut new_pane = None;
-                if !dialog_open {
+                {
                     if in_network_pane {
                         new_pane = Some(LEFT_MENUBAR_IDX);
                     } else if in_viewport {
@@ -3777,7 +3563,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 let mut handled = false;
                 let mut needs_sync_grid = false;
-                if !dialog_open && !self.modifiers.control_key() {
+                if !self.modifiers.control_key() {
                     // Routed (6bd shrink): propagate_event owns the scroll-gesture
                     // bookkeeping this loop used to hand-roll. The wheel is the only
                     // designer surface routed so far — the press/move cascade stays
@@ -3855,7 +3641,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.sync_layout();
                     self.read_panel_offsets();
                     true
-                } else if !dialog_open && in_network_pane {
+                } else if in_network_pane {
                     if self.modifiers.control_key() {
                         let factor = match delta {
                             MouseScrollDelta::LineDelta(_x, y) => {
@@ -4049,22 +3835,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                     self.viewport_mut().reset_velocity();
                 }
-                if self.node_palette_visible {
-                    if *btn_state == ElementState::Pressed {
-                        let (px, py, pw, ph) = self.palette().panel_rect();
-                        if self.cursor_x < px || self.cursor_x > px + pw || self.cursor_y < py || self.cursor_y > py + ph {
-                            self.close_node_palette();
-                        }
-                    }
-                    return true;
-                }
-                let dialog_open = self.node_palette_visible;
                 let in_network_pane = self.in_network_pane();
                 let node_area_x = self.positions[CONTENT_IDX].0;
                 let node_area_y = self.positions[CONTENT_IDX].1;
 
-                let is_pan_trigger = !dialog_open
-                    && in_network_pane
+                let is_pan_trigger = in_network_pane
                     && (*button == MouseButton::Middle
                         || (*button == MouseButton::Left && self.space_pressed));
 
@@ -4241,7 +4016,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
 
                         if *button == MouseButton::Right {
-                            if !dialog_open && in_circle_network_pane {
+                            if in_circle_network_pane {
                                 let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
                                 let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
                                 self.grid_cursor_col = col;
@@ -4344,7 +4119,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             self.slots.param.unfocus();
                             self.sync_parameters_to_project();
                         }
-                        if click_target.is_none() && !dialog_open && in_circle_network_pane {
+                        if click_target.is_none() && in_circle_network_pane {
                             let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
                             let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
                             self.grid_cursor_col = col;
@@ -4543,10 +4318,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if self.slots.param.keyboard_input(event, &mut self.ui_context) {
                     self.sync_parameters_to_project();
                     return true;
-                }
-
-                if self.node_palette_visible {
-                    return self.handle_node_palette_key(event);
                 }
 
                 if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) {
@@ -5305,32 +5076,3 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     }
 }
 
-impl NodePalette {
-    fn own_labels(&self) -> Vec<TextLabel> {
-        if !self.visible { return Vec::new(); }
-        let (px, py, _pw, ph) = self.panel_rect();
-        let mut labels = Vec::new();
-        labels.push(TextLabel { text: "Add Node".into(), x: px + 16.0, y: py + 14.0, font_size: 15.0, color: [0xdd, 0xdd, 0xe6] });
-        labels.push(TextLabel { text: "Type to search, Enter to place, Esc to close".into(), x: px + 100.0, y: py + 17.0, font_size: 11.0, color: [0x88, 0x88, 0x99] });
-        let query = if self.query.is_empty() { "Search nodes...".to_string() } else { self.query.clone() };
-        let query_color = if self.query.is_empty() { [0x66, 0x66, 0x77] } else { [0xdd, 0xdd, 0xe6] };
-        labels.push(TextLabel { text: query, x: px + 28.0, y: py + 57.0, font_size: 13.0, color: query_color });
-        let row_h = 24.0;
-        let visible_rows = ((ph - 120.0) / row_h).floor().max(0.0) as usize;
-        if self.items.is_empty() {
-            labels.push(TextLabel { text: "No matching nodes".into(), x: px + 28.0, y: py + 100.0, font_size: 12.0, color: [0xaa, 0xaa, 0xbb] });
-        } else {
-            let start = self.selected.saturating_sub(visible_rows.saturating_sub(1));
-            for (row, item_idx) in (start..self.items.len().min(start + visible_rows)).enumerate() {
-                labels.push(TextLabel {
-                    text: self.items[item_idx].clone(),
-                    x: px + 28.0,
-                    y: py + 98.0 + row as f32 * row_h,
-                    font_size: 12.0,
-                    color: if item_idx == self.selected { [0xff, 0xff, 0xdd] } else { [0xcc, 0xcc, 0xd8] },
-                });
-            }
-        }
-        labels
-    }
-}
