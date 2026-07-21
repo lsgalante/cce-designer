@@ -472,7 +472,15 @@ impl State {
                             continue;
                         }
                     }
-                    let alpha = if is_network_part { self.network_opacity.clamp(0.0, 1.0) } else { 1.0 };
+                    // Node text belongs to the node domain: it fades with
+                    // node_opacity, not the pane's network_opacity.
+                    let alpha = if is_node {
+                        self.node_opacity.clamp(0.0, 1.0)
+                    } else if is_network_part {
+                        self.network_opacity.clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
                     pc.text_faded(text, x, y, font_size, color, alpha, font, merge_bounds(widget_bounds, label_bounds));
                 }
             }

@@ -1005,6 +1005,9 @@ pub struct State {
     pub active_menu_cloud_idx: Option<(usize, usize)>,
     pub uniform_background: bool,
     pub network_opacity: f32,
+    /// Node-domain opacity (style.surface.graph.node.opacity) — independent of
+    /// the pane's network_opacity; fades node bodies/wires/ports and node text.
+    pub node_opacity: f32,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     pub floating_network_layout: (f32, f32, f32, f32),
@@ -2703,6 +2706,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             active_menu_cloud_idx: None,
             uniform_background: false,
             network_opacity: 0.95,
+            node_opacity: 1.0,
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -2829,6 +2833,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
             graph.set_uniform_background(self.uniform_background);
             graph.set_network_opacity(self.network_opacity);
+            graph.set_node_opacity(self.node_opacity);
             graph.set_cell_color(self.cell_color);
             graph.set_gap_color(self.gap_color);
         }
@@ -2882,6 +2887,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         cce_ui::layout::reload_config();
         
         let opacity = cce_ui::color::graph_opacity();
+        let node_opacity = cce_ui::color::graph_node_opacity();
         let cell_color = cce_ui::color::graph_cell_color();
         let gap_color = cce_ui::color::graph_gap_color();
         let snap_enabled = cce_ui::layout::graph_grid_snap();
@@ -2892,6 +2898,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         
         if (self.network_opacity - opacity).abs() > 0.001 {
             self.network_opacity = opacity;
+            changed = true;
+        }
+        if (self.node_opacity - node_opacity).abs() > 0.001 {
+            self.node_opacity = node_opacity;
             changed = true;
         }
         if self.cell_color != cell_color {
