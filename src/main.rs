@@ -226,6 +226,76 @@ mod tests {
         assert!((max_dist_2 - 1.0).abs() < 0.01, "Expected radius around 1.0, got {}", max_dist_2);
     }
 
+    /// The Plane template mirrors the Sphere subnet (an opencl node feeding an
+    /// output node); its kernel generates a divs x divs grid on XZ at y = 0,
+    /// with the Size param as the side length.
+    #[test]
+    fn test_plane_subnet_geometry_generation() {
+        let templates_root = crate::app::load_fs_tree();
+        let plane_template = templates_root
+            .children
+            .iter()
+            .find(|t| t.name == "Plane")
+            .expect("Plane template should be loaded");
+
+        assert_eq!(plane_template.children.len(), 2);
+        let opencl1 = plane_template.children.iter().find(|c| c.name == "opencl1").unwrap();
+        assert_eq!(opencl1.node_type, "opencl");
+        let output1 = plane_template.children.iter().find(|c| c.name == "output1").unwrap();
+        assert_eq!(output1.node_type, "output");
+
+        let generate = |size: Option<&str>, id: &str| {
+            let mut inst = plane_template.clone();
+            inst.id = id.to_string();
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            if let Some(size) = size {
+                inst.params.iter_mut().find(|p| p.name == "Size").unwrap().default = size.to_string();
+            }
+            let root = FsNode {
+                id: "root".to_string(),
+                name: "root".to_string(),
+                node_type: "node".to_string(),
+                children: vec![inst],
+                params: vec![],
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 0,
+                outputs: 0,
+            };
+            let mut visited = Vec::new();
+            let mut ocl_err = None;
+            let geom = crate::geometry::generate_single_node_geometry_with_errors(
+                &root,
+                &root.children[0],
+                &mut visited,
+                &mut ocl_err,
+            ).expect("Geometry generation failed");
+            assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+            geom
+        };
+
+        // Default Size 1.0: a 16x16 grid of two-triangle cells, flat at y = 0,
+        // spanning [-0.5, 0.5] on X and Z.
+        let geom = generate(None, "plane_inst");
+        assert_eq!(geom.vertices.len(), 16 * 16 * 6);
+        let mut max_x: f32 = 0.0;
+        let mut max_z: f32 = 0.0;
+        for v in &geom.vertices {
+            assert!(v.pos[1].abs() < 1e-6, "Expected flat plane at y=0, got y={}", v.pos[1]);
+            max_x = max_x.max(v.pos[0].abs());
+            max_z = max_z.max(v.pos[2].abs());
+        }
+        assert!((max_x - 0.5).abs() < 0.01, "Expected half-size 0.5 on X, got {}", max_x);
+        assert!((max_z - 0.5).abs() < 0.01, "Expected half-size 0.5 on Z, got {}", max_z);
+
+        // Size override 2.0 spans [-1, 1].
+        let geom_2 = generate(Some("2.0"), "plane_inst_2");
+        let max_x_2 = geom_2.vertices.iter().map(|v| v.pos[0].abs()).fold(0.0f32, f32::max);
+        assert!((max_x_2 - 1.0).abs() < 0.01, "Expected half-size 1.0 on X, got {}", max_x_2);
+    }
+
     #[test]
     fn test_dynamic_parameters_parsing_and_preprocessing() {
         let code = r#"

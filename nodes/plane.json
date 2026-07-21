@@ -1,0 +1,43 @@
+{
+  "name": "Plane",
+  "type": "node",
+  "inputs": 0,
+  "outputs": 1,
+  "params": [
+    {
+      "name": "Size",
+      "default": "1.0",
+      "type": "slider"
+    }
+  ],
+  "children": [
+    {
+      "name": "opencl1",
+      "type": "opencl",
+      "params": [
+        {
+          "name": "Code",
+          "default": "__kernel void process(__global const float* in_pos, __global const float* in_col, int in_count, __global float* out_pos, __global float* out_col, __global int* out_count, int max_vertices) {\n    int id = get_global_id(0);\n    if (id == 0) {\n        float size = chf(\"Size\", 1.0f);\n        float center_x = 0.0f;\n        float center_y = 0.0f;\n        float center_z = 0.0f;\n        int divs = 16;\n        float half_size = size * 0.5f;\n        float step = size / (float)divs;\n        float inv = size > 0.0f ? 1.0f / size : 0.0f;\n        int count = 0;\n        for (int i = 0; i < divs; i++) {\n            float x0 = -half_size + (float)i * step;\n            float x1 = x0 + step;\n            for (int j = 0; j < divs; j++) {\n                float z0 = -half_size + (float)j * step;\n                float z1 = z0 + step;\n                float px[6] = {x0, x1, x1, x0, x0, x1};\n                float pz[6] = {z0, z1, z0, z0, z1, z1};\n                for (int v = 0; v < 6; v++) {\n                    int idx = count++;\n                    if (idx < max_vertices) {\n                        out_pos[idx * 3 + 0] = center_x + px[v];\n                        out_pos[idx * 3 + 1] = center_y;\n                        out_pos[idx * 3 + 2] = center_z + pz[v];\n                        float fx = (px[v] + half_size) * inv;\n                        float fz = (pz[v] + half_size) * inv;\n                        out_col[idx * 3 + 0] = 0.35f + fx * 0.35f;\n                        out_col[idx * 3 + 1] = 0.45f + fz * 0.35f;\n                        out_col[idx * 3 + 2] = 0.85f;\n                    }\n                }\n            }\n        }\n        *out_count = count;\n    }\n}"
+        }
+      ],
+      "position": [
+        4.0,
+        2.0
+      ]
+    },
+    {
+      "name": "output1",
+      "type": "output",
+      "params": [
+        {
+          "name": "Input",
+          "default": "opencl1"
+        }
+      ],
+      "position": [
+        4.0,
+        3.0
+      ]
+    }
+  ]
+}
