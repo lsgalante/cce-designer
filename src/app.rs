@@ -853,6 +853,12 @@ pub struct State {
     pub cloud_popups: cce_ui::process::CloudPopupTracker,
 
     pub drag_widget: Option<usize>,
+    /// Where the pointer pressed when `drag_widget` armed — the drag
+    /// edge-panning gate: a bare click (press ~ release with jitter) must not
+    /// slide the graph under the armed node drag, or the commit re-derives the
+    /// node's cell against the panned origin and it teleports. Cleared (latch
+    /// open) once the pointer strays a real-drag distance from the press.
+    drag_press_cursor: Option<(f32, f32)>,
     pub focused_widget: Option<usize>,
 
     pub cursor_x: f32,
@@ -2502,6 +2508,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             splitter_layout,
             cloud_popups: cce_ui::process::CloudPopupTracker::new(),
             drag_widget: None,
+            drag_press_cursor: None,
             focused_widget: None,
             cursor_x: 0.0,
             cursor_y: 0.0,
@@ -4175,6 +4182,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     unsafe { (*ptr).handle_event(&ev, &mut self.ui_context); }
                                 }
                                 self.drag_widget = Some(i);
+                                self.drag_press_cursor = Some((self.cursor_x, self.cursor_y));
                             }
                             if i != PARAM_IDX {
                                 self.slots.get_dyn_mut(i).focus();
@@ -4277,6 +4285,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 }
                             }
                             self.drag_widget = None;
+                            self.drag_press_cursor = None;
                             changed = true;
                         }
                         let mut sync_params = false;
@@ -4800,9 +4809,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if tick_changed {
         }
 
+        // Edge-panning waits for a real drag gesture: the pointer must stray
+        // from the press point first (see `drag_press_cursor`).
+        if let Some((sx, sy)) = self.drag_press_cursor {
+            let dx = self.cursor_x - sx;
+            let dy = self.cursor_y - sy;
+            if dx * dx + dy * dy >= 64.0 {
+                self.drag_press_cursor = None;
+            }
+        }
         let mut panned = false;
         if let Some(idx) = self.drag_widget {
-            if idx == CONTENT_IDX {
+            if idx == CONTENT_IDX && self.drag_press_cursor.is_none() {
                 let (px, py, pw, ph) = self.positions[CONTENT_IDX];
                 let margin = 30.0_f32;
                 let pan_speed = 5.0_f32;
