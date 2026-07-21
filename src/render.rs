@@ -7,7 +7,7 @@ use crate::app::{
     CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX,
     BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
     SPREADSHEET_MENUBAR_IDX, SPREADSHEET_IDX,
-    LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX,
+    LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
 };
 use crate::geometry::network_sphere_vertices_with_errors;
 use cce_ui::scene::layout::Rect;
@@ -174,6 +174,13 @@ impl State {
             let r = self.circular_network_layout.r;
             pc.circle(cx, cy, r, w.color());
             pc.arc(cx, cy, r, 3.0, 0.0, TAU, [0.35, 0.65, 0.95, 0.80 * self.network_opacity]);
+        } else if idx == PLAYBAR_IDX {
+            // Modern-paint pane: the plate from the legacy views like the other
+            // panes, then paint_self emits the transport controls — geometry AND
+            // text (a subtree painter; append_frame_text skips this slot so the
+            // text isn't doubled).
+            append_widget_plate(w, pc);
+            w.paint_self(&self.ui_context, pc);
         } else if idx == CONTENT_IDX {
             if !self.circular_network_pane {
                 append_widget_plate(w, pc);
@@ -429,7 +436,9 @@ impl State {
                 continue;
             }
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
-            if is_menubar {
+            // The playbar's text is already in the geometry pass (subtree
+            // painter via paint_self — see paint_widget's PLAYBAR_IDX branch).
+            if is_menubar || i == PLAYBAR_IDX {
                 continue;
             }
             let is_node = i == CONTENT_IDX;

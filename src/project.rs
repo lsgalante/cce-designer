@@ -268,6 +268,7 @@ impl State {
         let show_viewport = self.show_viewport;
         let show_parameters = self.show_parameters;
         let show_spreadsheet = self.show_spreadsheet;
+        let show_playbar = self.show_playbar;
         let bool_str = |b: bool| if b { "true" } else { "false" };
 
         let camera_nodes: Vec<String> = self.current_dir().children.iter()
@@ -368,6 +369,7 @@ impl State {
         ensure_param(main_node, "Show Viewport Pane", "toggle", bool_str(show_viewport), &[], None, None, None);
         ensure_param(main_node, "Show Parameters Pane", "toggle", bool_str(show_parameters), &[], None, None, None);
         ensure_param(main_node, "Show Spreadsheet Pane", "toggle", bool_str(show_spreadsheet), &[], None, None, None);
+        ensure_param(main_node, "Show Playbar Pane", "toggle", bool_str(show_playbar), &[], None, None, None);
 
         // Network Settings
         ensure_param(main_node, "Network Settings", "section", "", &[], None, None, None);
@@ -421,6 +423,7 @@ impl State {
                 "Show Viewport Pane" => set_toggle(p, show_viewport),
                 "Show Parameters Pane" => set_toggle(p, show_parameters),
                 "Show Spreadsheet Pane" => set_toggle(p, show_spreadsheet),
+                "Show Playbar Pane" => set_toggle(p, show_playbar),
                 _ => {}
             }
         }

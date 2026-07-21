@@ -5,6 +5,7 @@ pub mod application;
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
 use app::{CustomEvent, McpAction, ModifiersState};
+pub mod playbar;
 pub mod viewport_3d;
 pub mod api;
 pub mod window;

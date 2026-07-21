@@ -271,6 +271,11 @@ impl State {
                             state.sync_nodes();
                             changed = true;
                         }
+                        8 => { // Show Playbar Pane
+                            state.execute_menu_action("Show Playbar Pane");
+                            state.sync_nodes();
+                            changed = true;
+                        }
                         _ => {}
                     }
                 }

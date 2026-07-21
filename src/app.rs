@@ -36,6 +36,7 @@ use wayland_client::{
 
 use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Label, Dropdown};
 use cce_ui::widget::UiContext;
+use crate::playbar::Playbar;
 use crate::viewport_3d::Viewport3D;
 use cce_ui::colors;
 use glam::{Mat4, Vec3};
@@ -86,8 +87,9 @@ pub const NODE_PALETTE_IDX: usize = 12;
 pub const SPREADSHEET_IDX: usize = 13;
 pub const SPREADSHEET_MENUBAR_IDX: usize = 14;
 pub const NETWORK_PANEL_IDX: usize = 15;
+pub const PLAYBAR_IDX: usize = 16;
 
-pub const WIDGET_COUNT: usize = 16;
+pub const WIDGET_COUNT: usize = 17;
 
 /// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
 /// old `Vec<Box<dyn WidgetHost>>` erased that and pinned `WidgetHost`'s full surface through the
@@ -112,6 +114,7 @@ pub struct WidgetSlots {
     pub spreadsheet: Adapted<Spreadsheet>,
     pub spreadsheet_menubar: Adapted<MenuBar>,
     pub network_panel: Adapted<PassivePlate>,
+    pub playbar: Adapted<Playbar>,
 }
 
 impl WidgetSlots {
@@ -137,6 +140,7 @@ impl WidgetSlots {
             SPREADSHEET_IDX => self.spreadsheet.draggable(),
             SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.draggable(),
             NETWORK_PANEL_IDX => self.network_panel.draggable(),
+            PLAYBAR_IDX => self.playbar.draggable(),
             _ => panic!("widget slot index out of range: {idx}"),
         }
     }
@@ -159,6 +163,7 @@ impl WidgetSlots {
             SPREADSHEET_IDX => self.spreadsheet.is_dragging(),
             SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.is_dragging(),
             NETWORK_PANEL_IDX => self.network_panel.is_dragging(),
+            PLAYBAR_IDX => self.playbar.is_dragging(),
             _ => panic!("widget slot index out of range: {idx}"),
         }
     }
@@ -181,6 +186,7 @@ impl WidgetSlots {
             SPREADSHEET_IDX => &self.spreadsheet,
             SPREADSHEET_MENUBAR_IDX => &self.spreadsheet_menubar,
             NETWORK_PANEL_IDX => &self.network_panel,
+            PLAYBAR_IDX => &self.playbar,
             _ => panic!("widget slot index out of range: {idx}"),
         }
     }
@@ -203,13 +209,14 @@ impl WidgetSlots {
             SPREADSHEET_IDX => &mut self.spreadsheet,
             SPREADSHEET_MENUBAR_IDX => &mut self.spreadsheet_menubar,
             NETWORK_PANEL_IDX => &mut self.network_panel,
+            PLAYBAR_IDX => &mut self.playbar,
             _ => panic!("widget slot index out of range: {idx}"),
         }
     }
 
     /// Per-slot dyn view in index order (the serialize path's input).
     pub fn dyn_refs(&self) -> [&dyn WidgetHost; WIDGET_COUNT] {
-        [&self.header, &self.content, &self.splitter1, &self.viewport, &self.splitter2, &self.param, &self.canvas, &self.left_menubar, &self.right_menubar, &self.param_menubar, &self.status, &self.breadcrumb, &self.node_palette, &self.spreadsheet, &self.spreadsheet_menubar, &self.network_panel]
+        [&self.header, &self.content, &self.splitter1, &self.viewport, &self.splitter2, &self.param, &self.canvas, &self.left_menubar, &self.right_menubar, &self.param_menubar, &self.status, &self.breadcrumb, &self.node_palette, &self.spreadsheet, &self.spreadsheet_menubar, &self.network_panel, &self.playbar]
     }
 }
 
@@ -222,6 +229,7 @@ pub const SPLITTER_W: f32 = 6.0;
 
 pub const MIN_COLUMN: f32 = 120.0;
 pub const BREADCRUMB_H: f32 = 24.0;
+pub const PLAYBAR_H: f32 = 36.0;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ParamDef {
@@ -972,6 +980,7 @@ pub struct State {
     pub show_viewport: bool,
     pub show_parameters: bool,
     pub show_spreadsheet: bool,
+    pub show_playbar: bool,
     pub is_scrolling_trackpad: bool,
     pub last_scroll_time: Instant,
     pub scroll_accum_x: f32,
@@ -1437,7 +1446,7 @@ impl State {
                 let updated_params = self.param().node_params();
                 // Live pane state, so a pane toggle only fires the visibility
                 // action when it actually flips relative to what's on screen.
-                let cur_show = (self.show_network, self.show_viewport, self.show_parameters, self.show_spreadsheet);
+                let cur_show = (self.show_network, self.show_viewport, self.show_parameters, self.show_spreadsheet, self.show_playbar);
                 let dir = self.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot_idx) {
                     let mut param_changed = false;
@@ -1465,6 +1474,7 @@ impl State {
                                         "Show Viewport Pane" => Some(cur_show.1),
                                         "Show Parameters Pane" => Some(cur_show.2),
                                         "Show Spreadsheet Pane" => Some(cur_show.3),
+                                        "Show Playbar Pane" => Some(cur_show.4),
                                         _ => None,
                                     };
                                     // execute_menu_action flips the pane, so only
@@ -1687,6 +1697,17 @@ impl State {
                 self.apply_layout();
                 self.sync_pane_focus();
             }
+            "Show Playbar Pane" => {
+                self.show_playbar = !self.show_playbar;
+                self.slots.playbar.set_visible(self.show_playbar);
+                let val = self.show_playbar;
+                self.menu_mut(HEADER_IDX).set_item_checked(2, 8, val);
+                // Not in the focus-cycle roster (get_next_visible_pane): the
+                // playbar is a transport strip with no menubar of its own.
+                self.rebuild_positions();
+                self.apply_layout();
+                self.sync_pane_focus();
+            }
             "Close Pane" => {
                 let mut parent_name = "";
                 if self.current_path.len() >= 1 {
@@ -1785,11 +1806,12 @@ impl State {
     /// switches show the real value even after panes/settings were changed
     /// through the menus or keyboard while another node was selected.
     fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
-        let live: [(&str, bool); 11] = [
+        let live: [(&str, bool); 12] = [
             ("Show Network Pane", self.show_network),
             ("Show Viewport Pane", self.show_viewport),
             ("Show Parameters Pane", self.show_parameters),
             ("Show Spreadsheet Pane", self.show_spreadsheet),
+            ("Show Playbar Pane", self.show_playbar),
             ("Circular Pane", self.circular_network_pane),
             ("Square Aspect", self.square_viewport),
             ("Show Grid Guide", self.viewport().show_grid),
@@ -2511,7 +2533,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             "Main Menu".to_string(),
         ];
         let mut slots = Box::new(WidgetSlots {
-            header: MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4),
+            header: MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane", "Show Playbar Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4),
             content: Graph::new(),
             splitter1: Splitter::new(SPLITTER_W),
             viewport: Viewport3D::new(),
@@ -2531,6 +2553,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 mb
             },
             network_panel: PassivePlate::new([0.10, 0.10, 0.13, 0.95], false),
+            playbar: {
+                let mut pb = Playbar::new();
+                pb.set_visible(false);
+                pb
+            },
         });
 
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
@@ -2646,6 +2673,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             show_viewport: true,
             show_parameters: true,
             show_spreadsheet: false,
+            show_playbar: false,
             is_scrolling_trackpad: false,
             last_scroll_time: Instant::now(),
             scroll_accum_x: 0.0,
@@ -3000,9 +3028,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[STATUS_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+            self.positions[PLAYBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
 
             self.slots.header.set_visible(false);
             self.slots.status.set_visible(false);
+            self.slots.playbar.set_visible(false);
             self.slots.content.set_visible(true);
             self.slots.network_panel.set_visible(true);
             self.slots.left_menubar.set_visible(false);
@@ -3017,6 +3047,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.slots.spreadsheet_menubar.set_visible(false);
         } else if self.detached_circular_network {
             // Parent process: Network pane is detached (hidden from main window)
+            let pb_h = if self.show_playbar { PLAYBAR_H } else { 0.0 };
+            let body_h = body_h - pb_h;
             let left_visible = false;
             let viewport_visible = self.show_viewport;
             let spreadsheet_visible = self.show_spreadsheet;
@@ -3091,6 +3123,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
             self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
             self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+            self.positions[PLAYBAR_IDX] = (0.0, HEADER_H + body_h, self.width, pb_h);
 
             self.slots.header.set_visible(true);
             self.slots.status.set_visible(false);
@@ -3106,11 +3139,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.slots.param_menubar.set_visible(right_visible);
             self.slots.spreadsheet.set_visible(spreadsheet_visible);
             self.slots.spreadsheet_menubar.set_visible(spreadsheet_visible);
+            self.slots.playbar.set_visible(self.show_playbar);
         } else {
             let paginator_w = 0.0;
             let body_h = self.height - STATUS_H;
             self.positions[0] = (0.0, 0.0, 0.0, 0.0);
             if self.circular_network_pane {
+                let pb_h = if self.show_playbar { PLAYBAR_H } else { 0.0 };
+                let body_h = body_h - pb_h;
                 let left_visible = false;
                 let viewport_visible = self.show_viewport;
                 let spreadsheet_visible = self.show_spreadsheet;
@@ -3160,7 +3196,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 }
 
                 let gap = 18.0;
-                let max_r = ((self.width - paginator_w - 2.0 * gap).min(self.height - STATUS_H - 2.0 * gap) / 2.0).max(50.0);
+                let max_r = ((self.width - paginator_w - 2.0 * gap).min(body_h - 2.0 * gap) / 2.0).max(50.0);
                 self.circular_network_layout.r = self.circular_network_layout.r.clamp(50.0, max_r);
 
                 let r = self.circular_network_layout.r;
@@ -3169,7 +3205,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.circular_network_layout.x = self.circular_network_layout.x.clamp(min_x, max_x);
 
                 let min_y = gap + r;
-                let max_y = (self.height - STATUS_H - gap - r).max(min_y);
+                let max_y = (body_h - gap - r).max(min_y);
                 self.circular_network_layout.y = self.circular_network_layout.y.clamp(min_y, max_y);
 
                 let cx = self.circular_network_layout.x;
@@ -3201,6 +3237,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+                self.positions[PLAYBAR_IDX] = (0.0, body_h, self.width, pb_h);
 
                 self.slots.header.set_visible(false);
                 self.slots.status.set_visible(false);
@@ -3216,25 +3253,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.slots.param_menubar.set_visible(false);
                 self.slots.spreadsheet.set_visible(spreadsheet_visible);
                 self.slots.spreadsheet_menubar.set_visible(false);
+                self.slots.playbar.set_visible(self.show_playbar);
             } else {
                 let gap = 18.0_f32;
+                let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
                 let (mut _fx, mut _fy, mut fw, mut _fh) = self.floating_network_layout;
                 fw = fw.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
                 let fx = paginator_w + gap;
                 let fy = gap;
-                let fh = (self.height - STATUS_H - 2.0 * gap).max(100.0);
+                let fh = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
                 self.floating_network_layout = (fx, fy, fw, fh);
 
                 let param_w = self.floating_param_width.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
                 self.floating_param_width = param_w;
                 let param_x = self.width - gap - param_w;
                 let param_y = gap;
-                let param_h = (self.height - STATUS_H - 2.0 * gap).max(100.0);
+                let param_h = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
 
                 let ss_x = if self.show_network { fx + fw + gap } else { paginator_w + gap };
                 let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
                 let ss_w = (ss_w_end - ss_x).max(150.0);
-                let ss_y_end = self.height - STATUS_H - gap;
+                let ss_y_end = self.height - STATUS_H - pb_off - gap;
                 let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
                 let ss_y = ss_y_end - ss_h;
                 self.floating_spreadsheet_height = ss_h;
@@ -3292,9 +3331,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[NODE_PALETTE_IDX] = (0.0, 0.0, self.width, self.height);
+                self.positions[PLAYBAR_IDX] = if self.show_playbar {
+                    (gap, self.height - STATUS_H - gap - PLAYBAR_H, self.width - 2.0 * gap, PLAYBAR_H)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                };
 
                 self.slots.header.set_visible(false);
                 self.slots.status.set_visible(false);
+                self.slots.playbar.set_visible(self.show_playbar);
                 self.slots.content.set_visible(self.show_network);
                 self.slots.network_panel.set_visible(self.show_network);
                 self.slots.left_menubar.set_visible(false);
