@@ -273,12 +273,11 @@ impl State {
                     }
                     // The controls' relief steps (control_relief styling), after the
                     // flat quads so the walls shade the fills they cross.
-                    for (rx, ry, rw, rh, rr, rd, raised) in param_bg.reliefs() {
-                        let r4 = (rr, rr, rr, rr);
+                    for (rx, ry, rw, rh, radii, rd, raised, edges) in param_bg.reliefs() {
                         if raised {
-                            pc.boss(rect(rx, ry, rw, rh), r4, rd);
+                            pc.boss_edges(rect(rx, ry, rw, rh), radii, rd, edges);
                         } else {
-                            pc.recess(rect(rx, ry, rw, rh), r4, rd);
+                            pc.recess_edges(rect(rx, ry, rw, rh), radii, rd, edges);
                         }
                     }
                     // The slider thumbs (Prim::Sphere — no flat view carries
