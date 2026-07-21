@@ -351,6 +351,11 @@ pub enum CustomEvent {
     /// A fire-and-forget action from an app-internal thread (the cce-files
     /// choosers deliver their picked path this way).
     RunAction(McpAction),
+    /// A cce-cloud popup thread announced its process (CloudPopupTracker
+    /// adoption — the add-node palette).
+    CloudSpawned { pid: u32, source: String },
+    /// A cce-cloud popup thread reported its popup closed.
+    CloudClosed { pid: u32, source: String },
     /// App-requested exit (menu File > Exit, MCP menu_action): the engine's
     /// update hook is the only place with exit access, so input handlers that
     /// see `exit_requested` route it here.
@@ -940,6 +945,9 @@ pub struct State {
     pub node_palette_query: String,
     pub node_palette_filtered: Vec<usize>,
     pub node_palette_selected: usize,
+    /// The add-node palette's cce-cloud popup (single active popup, toggle
+    /// semantics — the status bar's tracker pattern).
+    pub cloud_popups: cce_ui::process::CloudPopupTracker,
 
     pub drag_widget: Option<usize>,
     pub focused_widget: Option<usize>,
@@ -2024,11 +2032,49 @@ impl State {
         });
     }
 
+    /// The add-node palette, as a `cce-cloud --dmenu` popup (the in-app
+    /// NodePalette widget is retired from this path): toggle-tracked like the
+    /// status bar's popups, positioned at the pointer and parented to the
+    /// designer surface. The picked template comes back through the event
+    /// loop as a fire-and-forget `AddNode` at the grid cursor.
     pub fn open_node_palette(&mut self) {
-        self.node_palette_visible = true;
-        self.node_palette_query = String::new();
-        self.node_palette_selected = 0;
-        self.refresh_node_palette();
+        const SOURCE: &str = "node-palette";
+        if self.cloud_popups.click(SOURCE) == cce_ui::process::CloudPopupClick::ToggledOff {
+            return;
+        }
+        let Some(sender) = self.event_sender.clone() else { return };
+        // In a utility dir geometry templates are rejected at placement —
+        // don't offer them.
+        let in_utility = !self.current_path.is_empty()
+            && self.fs_root.children[self.current_path[0]].node_type == "utility";
+        let items: String = self
+            .node_templates
+            .iter()
+            .filter(|t| !in_utility || !crate::geometry::is_geometry_node_type(&t.node.node_type))
+            .map(|t| t.label.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (px, py) = (self.cursor_x as i32, self.cursor_y as i32);
+        let (gx, gy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
+        std::thread::spawn(move || {
+            let popup = cce_ui::process::CloudPopup::at(px, py).parent_app_id("cce-designer");
+            let mut spawned_pid = 0;
+            let result = popup.run_dmenu("Add Node:", &items, |pid| {
+                spawned_pid = pid;
+                let _ = sender.send(CustomEvent::CloudSpawned { pid, source: SOURCE.to_string() });
+            });
+            if let Ok(Some(selected)) = &result {
+                if !selected.is_empty() {
+                    let _ = sender.send(CustomEvent::RunAction(McpAction::AddNode {
+                        template_name: selected.clone(),
+                        name: None,
+                        x: gx,
+                        y: gy,
+                    }));
+                }
+            }
+            let _ = sender.send(CustomEvent::CloudClosed { pid: spawned_pid, source: SOURCE.to_string() });
+        });
     }
 
     pub fn close_node_palette(&mut self) {
@@ -2640,6 +2686,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             node_palette_query: String::new(),
             node_palette_filtered: Vec::new(),
             node_palette_selected: 0,
+            cloud_popups: cce_ui::process::CloudPopupTracker::new(),
             drag_widget: None,
             focused_widget: None,
             cursor_x: 0.0,

@@ -587,8 +587,15 @@ impl State {
                 }
                 CustomEvent::RunAction(action) => {
                     if let Err(e) = state.apply_action(action, &mut needs_redraw) {
-                        eprintln!("Action failed: {e}");
+                        state.update_status_text(&e);
+                        needs_redraw = true;
                     }
+                }
+                CustomEvent::CloudSpawned { pid, source } => {
+                    state.cloud_popups.on_spawned(pid, &source);
+                }
+                CustomEvent::CloudClosed { pid, source } => {
+                    let _ = state.cloud_popups.on_closed(pid, &source);
                 }
                 // Exit is handled by the Application::update wrapper
                 // (autosave + engine exit) before this is reached.
