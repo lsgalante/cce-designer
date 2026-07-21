@@ -244,14 +244,14 @@ mod tests {
         let output1 = plane_template.children.iter().find(|c| c.name == "output1").unwrap();
         assert_eq!(output1.node_type, "output");
 
-        let generate = |size: Option<&str>, id: &str| {
+        let generate = |overrides: &[(&str, &str)], id: &str| {
             let mut inst = plane_template.clone();
             inst.id = id.to_string();
             for child in &mut inst.children {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
-            if let Some(size) = size {
-                inst.params.iter_mut().find(|p| p.name == "Size").unwrap().default = size.to_string();
+            for (name, value) in overrides {
+                inst.params.iter_mut().find(|p| p.name == *name).unwrap().default = value.to_string();
             }
             let root = FsNode {
                 id: "root".to_string(),
@@ -276,9 +276,9 @@ mod tests {
             geom
         };
 
-        // Default Size 1.0: a 16x16 grid of two-triangle cells, flat at y = 0,
-        // spanning [-0.5, 0.5] on X and Z.
-        let geom = generate(None, "plane_inst");
+        // Defaults (Width/Length 1.0, Columns/Rows 16): a 16x16 grid of
+        // two-triangle cells, flat at y = 0, spanning [-0.5, 0.5] on X and Z.
+        let geom = generate(&[], "plane_inst");
         assert_eq!(geom.vertices.len(), 16 * 16 * 6);
         let mut max_x: f32 = 0.0;
         let mut max_z: f32 = 0.0;
@@ -287,13 +287,19 @@ mod tests {
             max_x = max_x.max(v.pos[0].abs());
             max_z = max_z.max(v.pos[2].abs());
         }
-        assert!((max_x - 0.5).abs() < 0.01, "Expected half-size 0.5 on X, got {}", max_x);
-        assert!((max_z - 0.5).abs() < 0.01, "Expected half-size 0.5 on Z, got {}", max_z);
+        assert!((max_x - 0.5).abs() < 0.01, "Expected half-width 0.5 on X, got {}", max_x);
+        assert!((max_z - 0.5).abs() < 0.01, "Expected half-length 0.5 on Z, got {}", max_z);
 
-        // Size override 2.0 spans [-1, 1].
-        let geom_2 = generate(Some("2.0"), "plane_inst_2");
+        // Width and Length size their axes independently.
+        let geom_2 = generate(&[("Width", "2.0"), ("Length", "3.0")], "plane_inst_2");
         let max_x_2 = geom_2.vertices.iter().map(|v| v.pos[0].abs()).fold(0.0f32, f32::max);
-        assert!((max_x_2 - 1.0).abs() < 0.01, "Expected half-size 1.0 on X, got {}", max_x_2);
+        let max_z_2 = geom_2.vertices.iter().map(|v| v.pos[2].abs()).fold(0.0f32, f32::max);
+        assert!((max_x_2 - 1.0).abs() < 0.01, "Expected half-width 1.0 on X, got {}", max_x_2);
+        assert!((max_z_2 - 1.5).abs() < 0.01, "Expected half-length 1.5 on Z, got {}", max_z_2);
+
+        // Columns/Rows control the cell counts per axis.
+        let geom_3 = generate(&[("Columns", "4"), ("Rows", "8")], "plane_inst_3");
+        assert_eq!(geom_3.vertices.len(), 4 * 8 * 6);
     }
 
     #[test]
