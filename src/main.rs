@@ -226,6 +226,89 @@ mod tests {
         assert!((max_dist_2 - 1.0).abs() < 0.01, "Expected radius around 1.0, got {}", max_dist_2);
     }
 
+    /// The Extrude template: a subnet (input -> opencl -> output) whose kernel
+    /// offsets each input triangle along its face normal and stitches side
+    /// walls. Per input triangle it emits top (3) + walls (18) + base (3) =
+    /// 24 vertices, or 21 with Keep Base off.
+    #[test]
+    fn test_extrude_subnet_geometry_generation() {
+        let templates_root = crate::app::load_fs_tree();
+        let sphere_template = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
+        let extrude_template = templates_root
+            .children
+            .iter()
+            .find(|t| t.name == "Extrude")
+            .expect("Extrude template should be loaded");
+        assert_eq!(extrude_template.children.len(), 3);
+        assert_eq!(extrude_template.inputs, 1);
+
+        let mut sphere_instance = sphere_template.clone();
+        sphere_instance.id = "sphere_inst".to_string();
+        sphere_instance.name = "Sphere 1".to_string();
+        for child in &mut sphere_instance.children {
+            child.id = format!("{}_{}", sphere_instance.id, child.name);
+        }
+
+        let mut extrude_instance = extrude_template.clone();
+        extrude_instance.id = "extrude_inst".to_string();
+        extrude_instance.name = "Extrude 1".to_string();
+        for child in &mut extrude_instance.children {
+            child.id = format!("{}_{}", extrude_instance.id, child.name);
+        }
+        extrude_instance.params.iter_mut().find(|p| p.name == "Input").unwrap().default =
+            "Sphere 1".to_string();
+
+        let root = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![sphere_instance, extrude_instance],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+
+        let mut visited = Vec::new();
+        let mut ocl_err = None;
+        let geom = crate::geometry::generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[1],
+            &mut visited,
+            &mut ocl_err,
+        ).expect("Extrude geometry generation failed");
+        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+        // 2304 sphere vertices = 768 triangles; 768 * 24 = 18432.
+        assert_eq!(geom.vertices.len(), 18432);
+
+        // Extruding a radius-0.5 sphere outward by the default 0.2 pushes the
+        // farthest vertices to ~0.7 from its center.
+        let mut max_dist: f32 = 0.0;
+        for v in &geom.vertices {
+            let dx = v.pos[0];
+            let dy = v.pos[1] - 0.55;
+            let dz = v.pos[2];
+            max_dist = max_dist.max((dx * dx + dy * dy + dz * dz).sqrt());
+        }
+        assert!((max_dist - 0.7).abs() < 0.02, "Expected max extent ~0.7, got {}", max_dist);
+
+        // Keep Base off drops the 3 base vertices per triangle: 768 * 21.
+        let mut root2 = root.clone();
+        root2.children[1].params.iter_mut().find(|p| p.name == "Keep Base").unwrap().default =
+            "false".to_string();
+        let mut visited2 = Vec::new();
+        let mut ocl_err2 = None;
+        let geom2 = crate::geometry::generate_single_node_geometry_with_errors(
+            &root2,
+            &root2.children[1],
+            &mut visited2,
+            &mut ocl_err2,
+        ).expect("Extrude geometry generation failed (no base)");
+        assert!(ocl_err2.is_none(), "OpenCL compilation error: {:?}", ocl_err2);
+        assert_eq!(geom2.vertices.len(), 16128);
+    }
+
     /// The Plane template mirrors the Sphere subnet (an opencl node feeding an
     /// output node); its kernel generates a divs x divs grid on XZ at y = 0,
     /// with the Size param as the side length.

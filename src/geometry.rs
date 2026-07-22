@@ -357,10 +357,15 @@ pub fn generate_single_node_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
 ) -> Option<Geometry> {
-    if visited.contains(&target.name) {
+    // Cycle guard by ID, not name: subnet instances share child names
+    // ("output1", "opencl1"), so a name guard falsely blocks a subnet that
+    // consumes another subnet's geometry (Extrude eating a Sphere never
+    // reaches the sphere's own output1). The wire-walk guard below (line
+    // ~490) already keys on id.
+    if visited.contains(&target.id) {
         return None;
     }
-    visited.push(target.name.clone());
+    visited.push(target.id.clone());
 
     let res = if target.node_type.eq_ignore_ascii_case("sphere") {
         let idx = find_sphere_index(root, target)?;
@@ -807,7 +812,13 @@ pub fn resolve_opencl_geometry_with_errors(
 ) -> Option<Geometry> {
     let input_name = node_param_str(target, "Input", "");
     let mut geom = if !input_name.is_empty() {
-        if let Some(input_node) = find_node_by_name(root, &input_name) {
+        // Siblings first, exactly like the output type's lookup: subnet
+        // templates (Extrude) wire their inner opencl to a child named
+        // "input1", and a global-first search would resolve to the FIRST
+        // subnet's child once two instances exist.
+        let sibling = find_parent_node(root, &target.id)
+            .and_then(|p| p.children.iter().find(|c| c.name == input_name || c.id == input_name));
+        if let Some(input_node) = sibling.or_else(|| find_node_by_name(root, &input_name)) {
             generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error).unwrap_or_default()
         } else {
             Geometry::default()
@@ -1561,7 +1572,7 @@ mod tests {
     #[test]
     fn test_add_node_points() {
         let add_node = FsNode {
-            id: String::new(),
+            id: "id Add points test".to_string(),
             inputs: 1,
             outputs: 1,
             name: "Add points test".to_string(),
@@ -1583,7 +1594,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root = FsNode {
-            id: String::new(),
+            id: "id root".to_string(),
             inputs: 1,
             outputs: 1,
             name: "root".to_string(),
@@ -1600,7 +1611,7 @@ mod tests {
     #[test]
     fn test_transform_node() {
         let sphere = FsNode {
-            id: String::new(),
+            id: "id Sphere 1".to_string(),
             inputs: 1,
             outputs: 1,
             name: "Sphere 1".to_string(),
@@ -1622,7 +1633,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         let transform1 = FsNode {
-            id: String::new(),
+            id: "id Transform 1".to_string(),
             inputs: 1,
             outputs: 1,
             name: "Transform 1".to_string(),
@@ -1654,7 +1665,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root = FsNode {
-            id: String::new(),
+            id: "id root".to_string(),
             inputs: 1,
             outputs: 1,
             name: "root".to_string(),
@@ -1678,7 +1689,7 @@ mod tests {
 
         // Test chained transform
         let transform2 = FsNode {
-            id: String::new(),
+            id: "id Transform 2".to_string(),
             inputs: 1,
             outputs: 1,
             name: "Transform 2".to_string(),
@@ -1710,7 +1721,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root_chained = FsNode {
-            id: String::new(),
+            id: "id root".to_string(),
             inputs: 1,
             outputs: 1,
             name: "root".to_string(),
@@ -1731,7 +1742,7 @@ mod tests {
 
         // Test loop detection
         let transform_loop = FsNode {
-            id: String::new(),
+            id: "id Transform Loop".to_string(),
             inputs: 1,
             outputs: 1,
             name: "Transform Loop".to_string(),
@@ -1763,7 +1774,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         let root_loop = FsNode {
-            id: String::new(),
+            id: "id root".to_string(),
             inputs: 1,
             outputs: 1,
             name: "root".to_string(),
@@ -1786,7 +1797,7 @@ mod tests {
         }
 
         let sphere = FsNode {
-            id: String::new(),
+            id: "id Sphere 1".to_string(),
             inputs: 1,
             outputs: 1,
             name: "Sphere 1".to_string(),
@@ -1809,7 +1820,7 @@ mod tests {
         };
 
         let opencl_node = FsNode {
-            id: String::new(),
+            id: "id OpenCL 1".to_string(),
             inputs: 1,
             outputs: 1,
             name: "OpenCL 1".to_string(),
@@ -1849,7 +1860,7 @@ mod tests {
         };
 
         let root = FsNode {
-            id: String::new(),
+            id: "id root".to_string(),
             inputs: 1,
             outputs: 1,
             name: "root".to_string(),
@@ -1940,7 +1951,7 @@ mod tests {
         };
 
         let root = FsNode {
-            id: String::new(),
+            id: "id root".to_string(),
             inputs: 1,
             outputs: 1,
             name: "root".to_string(),
