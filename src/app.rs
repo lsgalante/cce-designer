@@ -958,6 +958,11 @@ pub struct State {
     /// "Show Wireframe" toggle).
     pub wireframe: bool,
     pub last_viewport_wireframe: bool,
+    /// Draw the wireframe OVER the shaded geometry (the Render node's
+    /// "Wireframe Overlay" toggle) — edges visualized without giving up the
+    /// filled primitives. Wins over `wireframe` when both are set.
+    pub wireframe_overlay: bool,
+    pub last_viewport_wireframe_overlay: bool,
     pub last_viewport_rt_mode: bool,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
@@ -2623,6 +2628,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_show_viewport: false,
             wireframe: false,
             last_viewport_wireframe: false,
+            wireframe_overlay: false,
+            last_viewport_wireframe_overlay: false,
             last_viewport_rt_mode: false,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
@@ -5020,7 +5027,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     || self.last_viewport_height != ch
                     || self.last_viewport_active_camera != self.active_camera
                     || self.last_viewport_show_viewport != self.show_viewport
-                    || self.last_viewport_wireframe != self.wireframe;
+                    || self.last_viewport_wireframe != self.wireframe
+                    || self.last_viewport_wireframe_overlay != self.wireframe_overlay;
 
                 if viewport_changed {
                     if !rt_mode {
@@ -5041,21 +5049,31 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                     // Same draw order as the wgpu pass: bg quad, grid, origin,
                     // pivot, cube, spheres.
-                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false }];
+                    const NO_TINT: [f32; 4] = [0.0; 4];
+                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT }];
                     if self.viewport().show_grid {
-                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false });
+                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT });
                     }
                     if self.viewport().show_origin {
-                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false });
+                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT });
                     }
                     if self.viewport().show_camera_pivot {
-                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false });
+                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT });
                     }
                     if self.viewport().show_cube {
-                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false });
+                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT });
                     }
                     if self.vertex_count_spheres > 0 {
-                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: self.wireframe });
+                        if self.wireframe_overlay {
+                            // Shaded + wireframe: the filled mesh, then its
+                            // wire pass darkened so the edges separate from
+                            // the identical fill (the wire pipeline's depth
+                            // bias keeps the lines above the coplanar fill).
+                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT });
+                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: true, wire_tint: [0.0, 0.0, 0.0, 0.75] });
+                        } else {
+                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: self.wireframe, wire_tint: NO_TINT });
+                        }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
                     }
@@ -5079,6 +5097,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_active_camera = self.active_camera.clone();
                     self.last_viewport_show_viewport = self.show_viewport;
                     self.last_viewport_wireframe = self.wireframe;
+                    self.last_viewport_wireframe_overlay = self.wireframe_overlay;
                     self.last_viewport_rt_mode = rt_mode;
                     self.viewport_dirty = false;
                 }

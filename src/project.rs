@@ -270,6 +270,7 @@ impl State {
         let show_spreadsheet = self.show_spreadsheet;
         let show_playbar = self.show_playbar;
         let wireframe = self.wireframe;
+        let wireframe_overlay = self.wireframe_overlay;
         let square_viewport = self.square_viewport;
         let bool_str = |b: bool| if b { "true" } else { "false" };
 
@@ -491,10 +492,12 @@ impl State {
 
         ensure_param(render_node, "Render Settings", "section", "", &[], None, None, None);
         ensure_param(render_node, "Show Wireframe", "toggle", bool_str(wireframe), &[], None, None, None);
+        ensure_param(render_node, "Wireframe Overlay", "toggle", bool_str(wireframe_overlay), &[], None, None, None);
 
         for p in render_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Wireframe" => set_toggle(p, wireframe),
+                "Wireframe Overlay" => set_toggle(p, wireframe_overlay),
                 _ => {}
             }
             if p.param_type == "toggle" {
@@ -599,6 +602,7 @@ impl State {
             for p in &params {
                 match p.name.as_str() {
                     "Show Wireframe" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe = val; }
+                    "Wireframe Overlay" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe_overlay = val; }
                     _ => {}
                 }
             }
