@@ -385,10 +385,13 @@ impl State {
         // config.kdl) — drop the retired per-project params from older saves.
         main_node.params.retain(|p| !matches!(p.name.as_str(), "Node Color R" | "Node Color G" | "Node Color B"));
 
-        // Viewport Settings
-
-
-        ensure_param(main_node, "Viewport Settings", "section", "", &[], None, None, None);
+        // Viewport — renamed from the retired "Viewport Settings" (migrate
+        // older saves' section param in place).
+        if let Some(sec) = main_node.params.iter_mut().find(|p| p.name == "Viewport Settings") {
+            sec.name = "Viewport".to_string();
+            sec.label = "Viewport".to_string();
+        }
+        ensure_param(main_node, "Viewport", "section", "", &[], None, None, None);
         if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Active Camera") {
             p.options = camera_options.clone();
             if !p.options.contains(&p.default) {
@@ -451,7 +454,7 @@ impl State {
             "Show Spreadsheet Pane", "Show Playbar Pane",
             "Network", "Show Network Pane", "Zoom In", "Zoom Out",
             "Reset Zoom", "Detach Circular Window", "Circular Pane",
-            "Viewport Settings", "Active Camera",
+            "Viewport", "Active Camera",
             "Show Grid Guide", "Show Reference Cube", "Show Origin Axes",
             "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
             "Camera Pivot Size", "Background Color", "Grid Color",
