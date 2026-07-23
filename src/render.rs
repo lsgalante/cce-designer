@@ -285,6 +285,9 @@ impl State {
                     for (scx, scy, sr, sc) in param_bg.spheres() {
                         pc.sphere(scx, scy, sr, sc);
                     }
+                    // Scene-path rows (ramp curves) — geometry no flat view
+                    // carries; drawn last so they sit over the section wells.
+                    param_bg.paint_scene_rows(pc);
                 });
             }
 

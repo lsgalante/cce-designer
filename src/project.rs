@@ -412,6 +412,12 @@ impl State {
         ensure_param(main_node, "Background Color", "color", &color_to_hex(vp_bg_color), &[], None, None, None);
         ensure_param(main_node, "Grid Color", "color", &color_to_hex(vp_grid_color), &[], None, None, None);
 
+        // Style — the DE-chrome styling this instance renders with. The bevel
+        // profile ramp reshapes every recess/boss wall live (the identity 0→1
+        // smooth curve IS the analytic default the toolkit ships).
+        ensure_param(main_node, "Style", "section", "", &[], None, None, None);
+        ensure_param(main_node, "Bevel Profile", "ramp", "smooth;0.000:0.000,1.000:1.000", &[], None, None, None);
+
         // The Help section is retired — its only row was an About button nothing
         // dispatched. Drop it from older saves too.
         main_node.params.retain(|p| !matches!(p.name.as_str(), "Help" | "About"));
@@ -448,7 +454,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 32] = [
+        const MAIN_PARAM_ORDER: [&str; 34] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "View", "Show Viewport Pane", "Show Parameters Pane",
@@ -459,6 +465,7 @@ impl State {
             "Show Grid Guide", "Show Reference Cube", "Show Origin Axes",
             "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
             "Camera Pivot Size", "Background Color", "Grid Color",
+            "Style", "Bevel Profile",
         ];
         main_node.params.sort_by_key(|p| {
             MAIN_PARAM_ORDER
@@ -573,6 +580,15 @@ impl State {
                         let cam = p.default.clone();
                         self.active_camera = cam.clone();
                         self.viewport_mut().active_camera = cam;
+                    }
+
+                    // Style
+                    "Bevel Profile" => {
+                        if let Some((keys, smooth)) = cce_ui::widget::parse_ramp_spec(&p.default) {
+                            cce_ui::layout::set_bevel_profile_keys(&keys, smooth);
+                        } else {
+                            cce_ui::layout::clear_bevel_profile();
+                        }
                     }
                     _ => {}
                 }
