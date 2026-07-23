@@ -280,6 +280,11 @@ impl State {
                             pc.recess_edges(rect(rx, ry, rw, rh), radii, rd, edges);
                         }
                     }
+                    // The section carves' concave throat fillets — the inside
+                    // corners the box reliefs can't round.
+                    for (fcx, fcy, fr, fd, fs) in param_bg.section_fillets() {
+                        pc.concave_fillet(fcx, fcy, fr, fd, fs, false);
+                    }
                     // The slider thumbs (Prim::Sphere — no flat view carries
                     // them), after the reliefs so the knob rides the carve.
                     for (scx, scy, sr, sc) in param_bg.spheres() {
