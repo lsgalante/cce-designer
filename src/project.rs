@@ -417,6 +417,12 @@ impl State {
         // smooth curve IS the analytic default the toolkit ships).
         ensure_param(main_node, "Style", "section", "", &[], None, None, None);
         ensure_param(main_node, "Bevel Profile", "ramp", "smooth;0.000:0.000,1.000:1.000", &[], None, None, None);
+        // The plate perimeter roll's descent curve (face join → silhouette).
+        // Unlike the carve ramp — whose identity curve IS its analytic
+        // default — the roll's identity would be a straight chamfer, so the
+        // untouched identity spec means "analytic quadrant" (apply below
+        // clears the profile for it) and any edited curve takes over.
+        ensure_param(main_node, "Edge Profile", "ramp", "smooth;0.000:0.000,1.000:1.000", &[], None, None, None);
 
         // The Help section is retired — its only row was an About button nothing
         // dispatched. Drop it from older saves too.
@@ -454,7 +460,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 34] = [
+        const MAIN_PARAM_ORDER: [&str; 35] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "View", "Show Viewport Pane", "Show Parameters Pane",
@@ -465,7 +471,7 @@ impl State {
             "Show Grid Guide", "Show Reference Cube", "Show Origin Axes",
             "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
             "Camera Pivot Size", "Background Color", "Grid Color",
-            "Style", "Bevel Profile",
+            "Style", "Bevel Profile", "Edge Profile",
         ];
         main_node.params.sort_by_key(|p| {
             MAIN_PARAM_ORDER
@@ -588,6 +594,18 @@ impl State {
                             cce_ui::layout::set_bevel_profile_keys(&keys, smooth);
                         } else {
                             cce_ui::layout::clear_bevel_profile();
+                        }
+                    }
+                    "Edge Profile" => {
+                        // The untouched identity spec means "analytic
+                        // quadrant", not a straight chamfer (see the
+                        // ensure_param note).
+                        if p.default == "smooth;0.000:0.000,1.000:1.000" {
+                            cce_ui::layout::clear_roll_profile();
+                        } else if let Some((keys, smooth)) = cce_ui::widget::parse_ramp_spec(&p.default) {
+                            cce_ui::layout::set_roll_profile_keys(&keys, smooth);
+                        } else {
+                            cce_ui::layout::clear_roll_profile();
                         }
                     }
                     _ => {}
