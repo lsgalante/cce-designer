@@ -187,17 +187,47 @@ impl State {
             }
 
             pc.clip(clip, |pc| {
-                // Node bodies are beveled mini-plates on the DE corner family
-                // (squircle when corner_shape > 2); wires, grid cells, and
-                // toggles stay flat quads.
+                // Node bodies wear the parameter plate's fill exactly — same
+                // tint, opacity, and blur-behind marker (param_plate_fill) —
+                // drawn as beveled mini-plates on the DE corner family. They
+                // draw as ONE consecutive run so the renderer's blur snapshot
+                // is shared across all of them (one full-frame copy, not one
+                // per node). Wires/grid/axes stay flat BEHIND the nodes; the
+                // geometry toggles stay flat ON TOP. A selected/dragged node
+                // keeps the identical fill but glints via a highlight specular
+                // tint on its bevel, so selection still reads.
                 let node_r = cce_ui::layout::graph_node_corner_radius();
+                let radii = (node_r, node_r, node_r, node_r);
                 let node_bevel = cce_ui::colors::plate_bevel_width();
+                let node_fill = cce_ui::colors::param_plate_fill();
+                let sel = cce_ui::colors::node_selected_color();
+                let drag = cce_ui::colors::node_drag_color();
+                let hl = cce_ui::colors::highlight_primary_color();
+                let hl_tint = [hl[0], hl[1], hl[2]];
+                let same_rgb = |a: [f32; 4], b: [f32; 4]| a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+
+                let mut bodies: Vec<(f32, f32, f32, f32, bool)> = Vec::new();
+                let mut overlays: Vec<(f32, f32, f32, f32, [f32; 4])> = Vec::new();
+                let mut seen_node = false;
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
                     if self.graph().is_node_rect(qx, qy, qw, qh) {
-                        pc.bevel(rect(qx, qy, qw, qh), (node_r, node_r, node_r, node_r), qc, node_bevel);
+                        seen_node = true;
+                        bodies.push((qx, qy, qw, qh, same_rgb(qc, sel) || same_rgb(qc, drag)));
+                    } else if seen_node {
+                        overlays.push((qx, qy, qw, qh, qc));
                     } else {
                         pc.quad(rect(qx, qy, qw, qh), qc);
                     }
+                }
+                for (qx, qy, qw, qh, highlighted) in bodies {
+                    if highlighted {
+                        pc.bevel_tinted(rect(qx, qy, qw, qh), radii, node_fill, node_bevel, hl_tint);
+                    } else {
+                        pc.bevel(rect(qx, qy, qw, qh), radii, node_fill, node_bevel);
+                    }
+                }
+                for (qx, qy, qw, qh, qc) in overlays {
+                    pc.quad(rect(qx, qy, qw, qh), qc);
                 }
             });
 
