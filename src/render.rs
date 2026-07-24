@@ -187,12 +187,14 @@ impl State {
             }
 
             pc.clip(clip, |pc| {
-                // Node bodies get the DE corner family (squircle when corner_shape > 2);
-                // wires, grid cells, and toggles stay flat quads.
+                // Node bodies are beveled mini-plates on the DE corner family
+                // (squircle when corner_shape > 2); wires, grid cells, and
+                // toggles stay flat quads.
                 let node_r = cce_ui::layout::graph_node_corner_radius();
+                let node_bevel = cce_ui::colors::plate_bevel_width();
                 for (qx, qy, qw, qh, qc) in w.extra_quads() {
                     if self.graph().is_node_rect(qx, qy, qw, qh) {
-                        pc.rounded_rect(rect(qx, qy, qw, qh), node_r, (true, true, true, true), qc);
+                        pc.bevel(rect(qx, qy, qw, qh), (node_r, node_r, node_r, node_r), qc, node_bevel);
                     } else {
                         pc.quad(rect(qx, qy, qw, qh), qc);
                     }
