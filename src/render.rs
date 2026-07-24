@@ -198,7 +198,10 @@ impl State {
                 // tint on its bevel, so selection still reads.
                 let node_r = cce_ui::layout::graph_node_corner_radius();
                 let radii = (node_r, node_r, node_r, node_r);
-                let node_bevel = cce_ui::colors::plate_bevel_width();
+                // Half the plate's roll: a node is far smaller than the pane,
+                // so the plate's full bevel width would eat most of the body —
+                // a tighter lip keeps the flat face reading.
+                let node_bevel = cce_ui::colors::plate_bevel_width() * 0.5;
                 let node_fill = cce_ui::colors::param_plate_fill();
                 let sel = cce_ui::colors::node_selected_color();
                 let drag = cce_ui::colors::node_drag_color();
