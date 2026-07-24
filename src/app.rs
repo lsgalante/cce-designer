@@ -823,7 +823,7 @@ pub struct State {
     pub pending_window_drag: Option<PendingWindowDrag>,
     pub window_action: Option<cce_ui::engine::WindowAction>,
     pub vertex_count_spheres: u32,
-    pub node_color: [f32; 3],
+    pub node_color: [f32; 4],
     pub grid_color: [f32; 3],
     pub cell_color: [f32; 3],
     pub gap_color: [f32; 3],
@@ -2489,10 +2489,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             pending_window_drag: None,
             window_action: None,
             vertex_count_spheres: 0,
-            node_color: {
-                let nc = cce_ui::color::graph_node_color();
-                [nc[0], nc[1], nc[2]]
-            },
+            node_color: cce_ui::color::graph_node_color(),
             grid_color: settings.viewport.grid_color,
             cell_color: cce_ui::color::graph_cell_color(),
             gap_color: cce_ui::color::graph_gap_color(),
@@ -2640,12 +2637,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         state.update_inertial_settings();
         state.update_graph_settings_from_config();
         state.update_window_title();
-        colors::set_node_color([
-            state.node_color[0],
-            state.node_color[1],
-            state.node_color[2],
-            1.0,
-        ]);
+        colors::set_node_color(state.node_color);
         state.ensure_menubar_subnets();
         state.apply_settings_from_menubar_subnets();
         state.sync_nodes();
@@ -2768,9 +2760,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let cell_color = cce_ui::color::graph_cell_color();
         let gap_color = cce_ui::color::graph_gap_color();
         let snap_enabled = cce_ui::layout::graph_grid_snap();
-        let node_c = cce_ui::color::graph_node_color();
-        let node_color = [node_c[0], node_c[1], node_c[2]];
-        
+        let node_color = cce_ui::color::graph_node_color();
+
         let mut changed = false;
         
         if (self.network_opacity - opacity).abs() > 0.001 {
@@ -2791,7 +2782,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
         if self.node_color != node_color {
             self.node_color = node_color;
-            colors::set_node_color([node_color[0], node_color[1], node_color[2], 1.0]);
+            colors::set_node_color(node_color);
             changed = true;
         }
         if self.grid_snap_enabled != snap_enabled {
@@ -4714,15 +4705,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                          self.viewport_mut().show_origin = settings.viewport.show_origin_enabled;
                          self.viewport_mut().show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
                          self.viewport_mut().bg_color = settings.viewport.bg_color;
-                         let node_c = cce_ui::color::graph_node_color();
-                         self.node_color = [node_c[0], node_c[1], node_c[2]];
+                         self.node_color = cce_ui::color::graph_node_color();
                          self.viewport_mut().grid_color = settings.viewport.grid_color;
                          self.origin_size = settings.viewport.origin_size;
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
                          self.cell_color = cce_ui::color::graph_cell_color();
                          self.gap_color = cce_ui::color::graph_gap_color();
 
-                        colors::set_node_color([self.node_color[0], self.node_color[1], self.node_color[2], 1.0]);
+                        colors::set_node_color(self.node_color);
 
                         self.update_origin_geometry();
                         self.update_grid_geometry();
