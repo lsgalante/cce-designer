@@ -307,6 +307,18 @@ pub struct Project {
     pub view_state: ProjectViewState,
 }
 
+/// One entry in a node's right-click context menu, parallel to the visible
+/// labels shown via `context_menu::show`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeMenuAction {
+    /// Dive into the node's subnet (the double-click behavior).
+    Enter,
+    /// Flip the node's geometry visibility (utility nodes excluded).
+    ToggleGeometry,
+    /// Remove the node.
+    Delete,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum McpAction {
@@ -851,6 +863,14 @@ pub struct State {
     /// The add-node palette's cce-cloud popup (single active popup, toggle
     /// semantics — the status bar's tracker pattern).
     pub cloud_popups: cce_ui::process::CloudPopupTracker,
+
+    /// The node right-click context menu: the targeted node slot and the
+    /// actions parallel to the visible items pushed into `context_menu::show`.
+    /// `None` when no menu is open. The menu's geometry/paint lives in the
+    /// cce-ui `context_menu` thread-local; these just remember what to do on
+    /// click, since the designer routes menu clicks itself.
+    pub node_menu_slot: Option<usize>,
+    pub node_menu_actions: Vec<NodeMenuAction>,
 
     pub drag_widget: Option<usize>,
     /// Where the pointer pressed when `drag_widget` armed — the drag
@@ -1982,6 +2002,86 @@ impl State {
         });
     }
 
+    /// Open the node right-click context menu at the cursor for `slot`. The
+    /// items are contextual: Enter (dive into the subnet) for enterable nodes,
+    /// Show/Hide Geometry for non-utility nodes, and Delete always.
+    fn open_node_context_menu(&mut self, slot: usize) {
+        let (is_utility, geom_visible, enterable) = {
+            let dir = self.current_dir();
+            let Some(node) = dir.children.get(slot) else { return };
+            let enterable = node.node_type == "node"
+                || node.node_type == "utility"
+                || !node.children.is_empty();
+            (node.node_type == "utility", node.geometry_visible, enterable)
+        };
+        let mut options: Vec<String> = Vec::new();
+        let mut actions: Vec<NodeMenuAction> = Vec::new();
+        if enterable {
+            options.push("Enter".to_string());
+            actions.push(NodeMenuAction::Enter);
+        }
+        if !is_utility {
+            options.push(if geom_visible { "Hide Geometry" } else { "Show Geometry" }.to_string());
+            actions.push(NodeMenuAction::ToggleGeometry);
+        }
+        options.push("Delete".to_string());
+        actions.push(NodeMenuAction::Delete);
+
+        let target = self.slots.get_dyn(CONTENT_IDX).base().id();
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        self.node_menu_slot = Some(slot);
+        self.node_menu_actions = actions;
+    }
+
+    fn node_menu_open(&self) -> bool {
+        cce_ui::widget::context_menu::is_visible() && self.node_menu_slot.is_some()
+    }
+
+    fn close_node_menu(&mut self) {
+        cce_ui::widget::context_menu::hide();
+        self.node_menu_slot = None;
+        self.node_menu_actions.clear();
+    }
+
+    /// Route a left press while the node menu is open. A press ON the menu is
+    /// always consumed (running the clicked item, if any); a press outside
+    /// dismisses it and falls through to normal handling.
+    fn handle_node_menu_click(&mut self) -> bool {
+        if !self.node_menu_open() {
+            return false;
+        }
+        if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
+            let my = cce_ui::widget::context_menu::y();
+            let idx = ((self.cursor_y - my) / 24.0).floor() as usize;
+            let picked = self.node_menu_slot.zip(self.node_menu_actions.get(idx).copied());
+            self.close_node_menu();
+            if let Some((slot, action)) = picked {
+                self.dispatch_node_menu(slot, action);
+            }
+            return true;
+        }
+        self.close_node_menu();
+        false
+    }
+
+    fn dispatch_node_menu(&mut self, slot: usize, action: NodeMenuAction) {
+        match action {
+            NodeMenuAction::Enter => {
+                if slot < self.current_dir().children.len() {
+                    self.current_path.push(slot);
+                    self.on_path_changed();
+                }
+            }
+            NodeMenuAction::ToggleGeometry => {
+                let mut redraw = false;
+                let _ = self.apply_action(McpAction::ToggleGeometry { slot }, &mut redraw);
+            }
+            NodeMenuAction::Delete => {
+                self.delete_node(slot);
+            }
+        }
+    }
+
 
 pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String>>) {
     let mut headers = vec![
@@ -2509,6 +2609,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             positions,
             splitter_layout,
             cloud_popups: cce_ui::process::CloudPopupTracker::new(),
+            node_menu_slot: None,
+            node_menu_actions: Vec::new(),
             drag_widget: None,
             drag_press_cursor: None,
             focused_widget: None,
@@ -3741,6 +3843,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.cursor_y = position.y as f32;
                 let mut changed = false;
 
+                // Track hover on the node context menu so the highlight follows.
+                if self.node_menu_open()
+                    && cce_ui::widget::context_menu::cursor_moved(self.cursor_x, self.cursor_y)
+                {
+                    changed = true;
+                }
+
                 if self.is_panning {
                     let dx = self.cursor_x - self.pan_start_cx;
                     let dy = self.cursor_y - self.pan_start_cy;
@@ -3936,6 +4045,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 match btn_state {
                     ElementState::Pressed => {
+                        // The node context menu takes the first shot at a
+                        // press: a left click on it runs the item; any other
+                        // press (or a left click outside) dismisses it and
+                        // falls through to normal handling.
+                        if self.node_menu_open() {
+                            if *button == MouseButton::Left && self.handle_node_menu_click() {
+                                return true;
+                            }
+                            self.close_node_menu();
+                        }
+
                         let hits_any_menu = (0..WIDGET_COUNT).any(|i| {
                             hits_widget(self, i, self.cursor_x, self.cursor_y)
                                 && self.menubar_at(i).and_then(|m| m.get_menu_items_at(self.cursor_x, self.cursor_y)).is_some()
@@ -4049,7 +4169,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
 
                         if *button == MouseButton::Right {
+                            self.close_node_menu();
                             if in_circle_network_pane {
+                                // On a node → its context menu; empty space →
+                                // the add-node palette.
+                                if let Some(slot) = self.graph().node_at(self.cursor_x, self.cursor_y) {
+                                    self.graph_mut().set_selected_node(Some(slot));
+                                    self.sync_parameters_pane();
+                                    self.open_node_context_menu(slot);
+                                    return true;
+                                }
                                 let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
                                 let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
                                 self.grid_cursor_col = col;

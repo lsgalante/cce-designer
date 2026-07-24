@@ -133,6 +133,26 @@ impl State {
         self.append_frame_text(&mut pc);
         self.append_popovers(&mut pc);
 
+        // The node right-click context menu floats above everything (drawn last).
+        // Its labels carry bounds equal to the menu rect so the engine's text-
+        // occlusion clamp (which registers the menu rect) exempts them.
+        if cce_ui::widget::context_menu::is_visible() {
+            for (qx, qy, qw, qh, qc) in cce_ui::widget::context_menu::extra_quads() {
+                pc.quad(rect(qx, qy, qw, qh), qc);
+            }
+            let mx = cce_ui::widget::context_menu::x();
+            let my = cce_ui::widget::context_menu::y();
+            let bounds = Some([
+                mx,
+                my,
+                mx + cce_ui::widget::context_menu::w(),
+                my + cce_ui::widget::context_menu::h(),
+            ]);
+            for l in cce_ui::widget::context_menu::text_labels() {
+                pc.text_with(l.text, l.x, l.y, l.font_size, l.color, None, bounds);
+            }
+        }
+
         pc.finish()
     }
 
