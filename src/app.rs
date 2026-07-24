@@ -4751,11 +4751,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
 
         let mut tick_changed = false;
+        let mut param_ticked = false;
         let ctx = &mut self.ui_context;
         for i in 0..WIDGET_COUNT {
             if self.slots.get_dyn_mut(i).tick(dt, ctx) {
                 tick_changed = true;
+                if i == PARAM_IDX {
+                    param_ticked = true;
+                }
             }
+        }
+        // Live-streaming param widgets (the color picker's --stream lines)
+        // change row values inside tick — push them through the same sync the
+        // input path uses so they apply while the picker stays open.
+        if param_ticked {
+            self.sync_parameters_to_project();
         }
         if cce_ui::widget::hover_animation::tick(dt) {
             tick_changed = true;

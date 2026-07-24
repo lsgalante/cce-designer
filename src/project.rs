@@ -423,6 +423,20 @@ impl State {
         // untouched identity spec means "analytic quadrant" (apply below
         // clears the profile for it) and any edited curve takes over.
         ensure_param(main_node, "Edge Profile", "ramp", "smooth;0.000:0.000,1.000:1.000", &[], None, None, None);
+        // The params plate's tint, rgba — alpha doubles as the frost strength
+        // under plate blur. Seeded from the live cce-ui color (linear → sRGB
+        // for the hex; alpha is stored linear on both sides).
+        let plate_hex = {
+            let c = cce_ui::color::param_bg_color();
+            format!(
+                "#{:02x}{:02x}{:02x}{:02x}",
+                (cce_ui::color::linear_to_srgb(c[0]) * 255.0).round().clamp(0.0, 255.0) as u8,
+                (cce_ui::color::linear_to_srgb(c[1]) * 255.0).round().clamp(0.0, 255.0) as u8,
+                (cce_ui::color::linear_to_srgb(c[2]) * 255.0).round().clamp(0.0, 255.0) as u8,
+                (c[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+            )
+        };
+        ensure_param(main_node, "Plate Color", "rgba", &plate_hex, &[], None, None, None);
 
         // The Help section is retired — its only row was an About button nothing
         // dispatched. Drop it from older saves too.
@@ -460,7 +474,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 35] = [
+        const MAIN_PARAM_ORDER: [&str; 36] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "View", "Show Viewport Pane", "Show Parameters Pane",
@@ -471,7 +485,7 @@ impl State {
             "Show Grid Guide", "Show Reference Cube", "Show Origin Axes",
             "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
             "Camera Pivot Size", "Background Color", "Grid Color",
-            "Style", "Bevel Profile", "Edge Profile",
+            "Style", "Bevel Profile", "Edge Profile", "Plate Color",
         ];
         main_node.params.sort_by_key(|p| {
             MAIN_PARAM_ORDER
@@ -606,6 +620,16 @@ impl State {
                             cce_ui::layout::set_roll_profile_keys(&keys, smooth);
                         } else {
                             cce_ui::layout::clear_roll_profile();
+                        }
+                    }
+                    "Plate Color" => {
+                        if let Some(c) = cce_ui::color::parse_hex_bytes(&p.default) {
+                            cce_ui::color::set_param_bg_color([
+                                cce_ui::color::srgb_to_linear(c[0] as f32 / 255.0),
+                                cce_ui::color::srgb_to_linear(c[1] as f32 / 255.0),
+                                cce_ui::color::srgb_to_linear(c[2] as f32 / 255.0),
+                                c[3] as f32 / 255.0,
+                            ]);
                         }
                     }
                     _ => {}
