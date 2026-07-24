@@ -251,9 +251,11 @@ impl State {
             };
 
             // Idle: draw the scrollbar first so the translucent pane plate settles over it.
+            // Track and thumb are pills — half-width radius on the DE corner
+            // family (squircle when corner_shape > 2), like the nodes.
             if let Some((quads, false)) = &param_scrollbar {
                 for &(qx, qy, qw, qh, qc) in quads {
-                    pc.quad(rect(qx, qy, qw, qh), qc);
+                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
                 }
             }
 
@@ -315,7 +317,7 @@ impl State {
             // Active: draw the scrollbar last so it rides above the pane content and plate.
             if let Some((quads, true)) = &param_scrollbar {
                 for &(qx, qy, qw, qh, qc) in quads {
-                    pc.quad(rect(qx, qy, qw, qh), qc);
+                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
                 }
             }
         }
