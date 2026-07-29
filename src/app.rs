@@ -780,6 +780,12 @@ pub enum AppDrag {
     NetworkResize { dir: ResizeDirection, start_rect: (f32, f32, f32, f32), start_mouse: (f32, f32) },
     ParamResize { start_w: f32, start_mouse_x: f32 },
     SpreadsheetResize { start_h: f32, start_mouse_y: f32 },
+    /// The spreadsheet's left edge IS the network pane's right boundary: the drag
+    /// resizes the network pane's width and the layout re-derives the spreadsheet
+    /// from the freed/claimed space, so the neighbor makes room.
+    SpreadsheetResizeLeft { start_network_w: f32, start_mouse_x: f32 },
+    /// The spreadsheet's right edge, symmetrically, drives the parameter pane's width.
+    SpreadsheetResizeRight { start_param_w: f32, start_mouse_x: f32 },
 }
 
 #[repr(C)]
@@ -1289,7 +1295,8 @@ impl State {
         cx >= param_x - margin && cx <= param_x + margin && cy >= param_y - margin && cy <= param_y + param_h + margin
     }
 
-    /// The floating spreadsheet pane's rect (same derivation as the layout pass).
+    /// The floating spreadsheet pane's rect (same derivation as the layout pass,
+    /// playbar offset included).
     pub fn floating_spreadsheet_rect(&self) -> (f32, f32, f32, f32) {
         let gap = 18.0_f32;
         let fx = gap;
@@ -1300,20 +1307,34 @@ impl State {
         let ss_x = if self.show_network { fx + fw + gap } else { gap };
         let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
         let ss_w = (ss_w_end - ss_x).max(150.0);
-        let ss_y_end = self.height - STATUS_H - gap;
-        let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - HEADER_H - gap).max(100.0));
+        let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
+        let ss_y_end = self.height - STATUS_H - pb_off - gap;
+        let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
         let ss_y = ss_y_end - ss_h;
         (ss_x, ss_y, ss_w, ss_h)
     }
 
-    /// Whether (cx, cy) is on the spreadsheet pane's top edge-resize hotspot.
-    pub fn on_spreadsheet_resize_edge(&self, cx: f32, cy: f32) -> bool {
+    /// The spreadsheet pane's edge-resize hotspot at (cx, cy): top resizes the
+    /// pane's own height; the left/right edges drive the neighboring pane's width
+    /// (network / parameters), so each exists only while that neighbor is shown
+    /// to make room. `None` off every edge.
+    pub fn spreadsheet_resize_edge_at(&self, cx: f32, cy: f32) -> Option<ResizeDirection> {
         if !self.show_spreadsheet {
-            return false;
+            return None;
         }
-        let (ss_x, ss_y, ss_w, _ss_h) = self.floating_spreadsheet_rect();
+        let (ss_x, ss_y, ss_w, ss_h) = self.floating_spreadsheet_rect();
         let margin = 8.0_f32;
-        cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin
+        let in_v = cy >= ss_y - margin && cy <= ss_y + ss_h + margin;
+        if self.show_network && !self.circular_network_pane && in_v && cx >= ss_x - margin && cx <= ss_x + margin {
+            return Some(ResizeDirection { left: true, right: false, top: false, bottom: false });
+        }
+        if self.show_parameters && in_v && cx >= ss_x + ss_w - margin && cx <= ss_x + ss_w + margin {
+            return Some(ResizeDirection { left: false, right: true, top: false, bottom: false });
+        }
+        if cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin {
+            return Some(ResizeDirection { left: false, right: false, top: true, bottom: false });
+        }
+        None
     }
 
     /// The resize cursor for an active pane-edge drag, or for hovering one of the
@@ -1328,6 +1349,9 @@ impl State {
                 AppDrag::NetworkResize { dir, .. } => dir_cursor(dir),
                 AppDrag::ParamResize { .. } => CursorIcon::EwResize,
                 AppDrag::SpreadsheetResize { .. } => CursorIcon::NsResize,
+                AppDrag::SpreadsheetResizeLeft { .. } | AppDrag::SpreadsheetResizeRight { .. } => {
+                    CursorIcon::EwResize
+                }
             });
         }
         if let Some(dir) = self.network_resize_edge_at(cx, cy) {
@@ -1336,8 +1360,8 @@ impl State {
         if self.on_param_resize_edge(cx, cy) {
             return Some(CursorIcon::EwResize);
         }
-        if self.on_spreadsheet_resize_edge(cx, cy) {
-            return Some(CursorIcon::NsResize);
+        if let Some(dir) = self.spreadsheet_resize_edge_at(cx, cy) {
+            return Some(dir_cursor(dir));
         }
         None
     }
@@ -3907,6 +3931,40 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.apply_layout();
                                 changed = true;
                             }
+                            AppDrag::SpreadsheetResizeLeft { start_network_w, start_mouse_x } => {
+                                // The shared boundary with the network pane: the edge drag
+                                // sets the network width; the layout hands the rest of the
+                                // span to the spreadsheet. Both panes keep their minimums.
+                                let dx = self.cursor_x - start_mouse_x;
+                                let gap = 18.0_f32;
+                                let (fx, _, _, _) = self.floating_network_layout;
+                                let ss_right = if self.show_parameters {
+                                    self.width - gap - self.floating_param_width - gap
+                                } else {
+                                    self.width - gap
+                                };
+                                let max_w = (ss_right - gap - 150.0 - fx).max(150.0);
+                                self.floating_network_layout.2 = (start_network_w + dx).clamp(150.0, max_w);
+                                self.rebuild_positions();
+                                self.apply_layout();
+                                self.sync_grid_settings();
+                                changed = true;
+                            }
+                            AppDrag::SpreadsheetResizeRight { start_param_w, start_mouse_x } => {
+                                // The shared boundary with the parameter pane, symmetrically.
+                                let dx = self.cursor_x - start_mouse_x;
+                                let gap = 18.0_f32;
+                                let ss_x = if self.show_network {
+                                    self.floating_network_layout.0 + self.floating_network_layout.2 + gap
+                                } else {
+                                    gap
+                                };
+                                let max_w = (self.width - gap - ss_x - 150.0 - gap).max(150.0);
+                                self.floating_param_width = (start_param_w - dx).clamp(150.0, max_w);
+                                self.rebuild_positions();
+                                self.apply_layout();
+                                changed = true;
+                            }
                         }
                     } else if let Some(idx) = self.drag_widget {
                         // A widget drag: the slot's own Input drag hooks are driving.
@@ -4149,11 +4207,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             let cx = self.cursor_x;
                             let cy = self.cursor_y;
 
-                            if self.on_spreadsheet_resize_edge(cx, cy) {
-                                let (_, _, _, ss_h) = self.floating_spreadsheet_rect();
-                                self.app_drag = Some(AppDrag::SpreadsheetResize {
-                                    start_h: ss_h,
-                                    start_mouse_y: cy,
+                            if let Some(dir) = self.spreadsheet_resize_edge_at(cx, cy) {
+                                self.app_drag = Some(if dir.left {
+                                    AppDrag::SpreadsheetResizeLeft {
+                                        start_network_w: self.floating_network_layout.2,
+                                        start_mouse_x: cx,
+                                    }
+                                } else if dir.right {
+                                    AppDrag::SpreadsheetResizeRight {
+                                        start_param_w: self.floating_param_width,
+                                        start_mouse_x: cx,
+                                    }
+                                } else {
+                                    let (_, _, _, ss_h) = self.floating_spreadsheet_rect();
+                                    AppDrag::SpreadsheetResize {
+                                        start_h: ss_h,
+                                        start_mouse_y: cy,
+                                    }
                                 });
                                 self.focused_pane = SPREADSHEET_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
@@ -4354,14 +4424,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             let idx = match drag {
                                 AppDrag::NetworkResize { .. } => NETWORK_PANEL_IDX,
                                 AppDrag::ParamResize { .. } => PARAM_IDX,
-                                AppDrag::SpreadsheetResize { .. } => SPREADSHEET_IDX,
+                                AppDrag::SpreadsheetResize { .. }
+                                | AppDrag::SpreadsheetResizeLeft { .. }
+                                | AppDrag::SpreadsheetResizeRight { .. } => SPREADSHEET_IDX,
                             };
                             {
                                 let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                             }
                             self.sync_layout();
-                            if matches!(drag, AppDrag::NetworkResize { .. }) {
+                            // Both of these resized the network pane, so the node
+                            // offsets need the same refresh.
+                            if matches!(drag, AppDrag::NetworkResize { .. } | AppDrag::SpreadsheetResizeLeft { .. }) {
                                 self.read_panel_offsets();
                             }
                             changed = true;
