@@ -50,6 +50,24 @@ pub struct Viewport3D {
 }
 
 impl Viewport3D {
+    /// Hard pitch limit for the orbit: just short of the poles. Past ±90° the
+    /// up-vector flips and the view rolls — from there orbiting reads as the
+    /// geometry tumbling with the camera instead of the camera moving around it.
+    pub const MAX_PITCH: f32 = 89.9 * std::f32::consts::PI / 180.0;
+
+    /// The default camera's base pitch above the horizon (position (2.5,1.8,2.5)
+    /// looking at the origin — the `get_matrices` defaults).
+    fn default_pitch0() -> f32 {
+        (1.8f32 / Vec3::new(2.5, 1.8, 2.5).length()).asin()
+    }
+
+    /// Clamp the default-camera scroll orbit short of the poles
+    /// (total pitch = pitch0 - rotation_x).
+    fn clamp_orbit_pitch(&mut self) {
+        let p0 = Self::default_pitch0();
+        self.rotation_x = self.rotation_x.clamp(p0 - Self::MAX_PITCH, p0 + Self::MAX_PITCH);
+    }
+
     pub fn new() -> Adapted<Viewport3D> {
         Adapted::new(Self {
             rotation_x: 0.0,
@@ -129,7 +147,10 @@ impl Viewport3D {
         // rotated the geometry within world space (visible against the pivot
         // marker, and it swung the shading) instead of moving the camera.
         let total_ry = ry.to_radians() + yaw0 - self.rotation_y;
-        let total_rx = rx.to_radians() + pitch0 - self.rotation_x;
+        // Safety clamp short of the poles regardless of what the stored camera
+        // state says: past ±90° the up-vector flips and the whole view rolls.
+        let total_rx =
+            (rx.to_radians() + pitch0 - self.rotation_x).clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
 
         let view_rot_pos = Mat4::from_rotation_y(total_ry) * Mat4::from_rotation_x(-total_rx);
         let camera_up = view_rot_pos.transform_vector3(Vec3::Y);
@@ -200,8 +221,9 @@ impl cce_ui::widget::Input for Viewport3D {
                     } else {
                         self.rotation_y += dx;
                         self.rotation_x -= dy;
+                        self.clamp_orbit_pitch();
                     }
-                    
+
                     self.is_rotating = false;
                     let dt = 0.016;
                     self.rotate_velocity_yaw = self.rotate_velocity_yaw * 0.4 + (dx / dt) * 0.6;
@@ -236,6 +258,7 @@ impl cce_ui::widget::Input for Viewport3D {
                     } else {
                         self.rotation_y += dx;
                         self.rotation_x -= dy;
+                        self.clamp_orbit_pitch();
                     }
 
                     self.is_rotating = true;
@@ -290,6 +313,7 @@ impl cce_ui::widget::Input for Viewport3D {
                 } else {
                     self.rotation_y += dx;
                     self.rotation_x += dy;
+                    self.clamp_orbit_pitch();
                 }
 
                 let decay = self.scroll_friction.powf(dt * 60.0);

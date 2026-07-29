@@ -2234,25 +2234,45 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let camera_name = self.active_camera.clone();
         let dir = self.current_dir_mut();
         if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
-            if let Some(p) = node.params.iter_mut().find(|p| p.name == "Rotation") {
-                let parts: Vec<&str> = p.default
+            // The camera's base pitch above the horizon (Position vs Pivot): the
+            // Rotation.x clamp below is on the TOTAL pitch, matching get_matrices'
+            // pitch0 + rx composition.
+            let parse3 = |s: &str| -> Option<Vec3> {
+                let parts: Vec<&str> = s
                     .split(|c| c == ':' || c == ',' || c == ' ')
                     .filter(|s| !s.is_empty())
                     .collect();
+                if parts.len() >= 3 {
+                    if let (Ok(x), Ok(y), Ok(z)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                        return Some(Vec3::new(x, y, z));
+                    }
+                }
+                None
+            };
+            let pos = node.params.iter().find(|p| p.name == "Position")
+                .and_then(|p| parse3(&p.default))
+                .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
+            let piv = node.params.iter().find(|p| p.name == "Pivot")
+                .and_then(|p| parse3(&p.default))
+                .unwrap_or(Vec3::ZERO);
+            let offset = pos - piv;
+            let pitch0_deg = (offset.y / offset.length().max(1e-5)).asin().to_degrees();
+            let max_pitch_deg = crate::viewport_3d::Viewport3D::MAX_PITCH.to_degrees();
+
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == "Rotation") {
                 let mut rx = 0.0f32;
                 let mut ry = 0.0f32;
                 let mut rz = 0.0f32;
-                if parts.len() >= 3 {
-                    if let (Ok(vx), Ok(vy), Ok(vz)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
-                        rx = vx;
-                        ry = vy;
-                        rz = vz;
-                    }
+                if let Some(v) = parse3(&p.default) {
+                    rx = v.x;
+                    ry = v.y;
+                    rz = v.z;
                 }
                 ry += d_yaw.to_degrees();
-                rx -= d_pitch.to_degrees();
-                while rx > 180.0 { rx -= 360.0; }
-                while rx < -180.0 { rx += 360.0; }
+                // Clamp the orbit short of the poles: past ±90° total pitch the
+                // up-vector flips and orbiting reads as the geometry tumbling.
+                rx = (rx - d_pitch.to_degrees())
+                    .clamp(-max_pitch_deg - pitch0_deg, max_pitch_deg - pitch0_deg);
                 while ry > 180.0 { ry -= 360.0; }
                 while ry < -180.0 { ry += 360.0; }
                 p.default = format!("{:.2}:{:.2}:{:.2}", rx, ry, rz);

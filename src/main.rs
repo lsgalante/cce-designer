@@ -106,6 +106,23 @@ mod tests {
     }
 
     #[test]
+    fn test_orbit_pitch_clamps_short_of_poles() {
+        use cce_ui::widget::WidgetHost;
+        use glam::Vec3;
+        let mut vp = crate::viewport_3d::Viewport3D::new();
+        let inner = vp.as_any_mut().downcast_mut::<crate::viewport_3d::Viewport3D>().unwrap();
+
+        // However far the stored pitch runs, the camera must never cross a pole:
+        // world-up keeps a positive eye-space Y (the view never rolls upside down).
+        for rx in [-100.0_f32, -3.0, 0.0, 3.0, 100.0] {
+            inner.rotation_x = rx;
+            let (_, view, _) = inner.get_matrices(1.0, None, None, None);
+            let up_eye = view.transform_vector3(Vec3::Y);
+            assert!(up_eye.y > 0.0, "camera flipped at rotation_x = {rx}: up_eye = {up_eye:?}");
+        }
+    }
+
+    #[test]
     fn test_node_template_names() {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
