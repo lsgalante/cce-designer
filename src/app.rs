@@ -780,12 +780,12 @@ pub enum AppDrag {
     NetworkResize { dir: ResizeDirection, start_rect: (f32, f32, f32, f32), start_mouse: (f32, f32) },
     ParamResize { start_w: f32, start_mouse_x: f32 },
     SpreadsheetResize { start_h: f32, start_mouse_y: f32 },
-    /// The spreadsheet's left edge IS the network pane's right boundary: the drag
-    /// resizes the network pane's width and the layout re-derives the spreadsheet
-    /// from the freed/claimed space, so the neighbor makes room.
-    SpreadsheetResizeLeft { start_network_w: f32, start_mouse_x: f32 },
-    /// The spreadsheet's right edge, symmetrically, drives the parameter pane's width.
-    SpreadsheetResizeRight { start_param_w: f32, start_mouse_x: f32 },
+    /// The spreadsheet's left edge drag, as an inset past the flush position
+    /// beside the network pane: a positive inset tucks the spreadsheet UNDER
+    /// the pane, whose bottom the layout raises to make room.
+    SpreadsheetResizeLeft { start_inset: f32, start_mouse_x: f32 },
+    /// The spreadsheet's right edge, symmetrically, tucking under the parameter pane.
+    SpreadsheetResizeRight { start_inset: f32, start_mouse_x: f32 },
 }
 
 #[repr(C)]
@@ -954,6 +954,12 @@ pub struct State {
     pub app_drag: Option<AppDrag>,
     pub floating_param_width: f32,
     pub floating_spreadsheet_height: f32,
+    /// How far the spreadsheet's left/right edge reaches INTO the neighboring
+    /// pane's span past its flush position (0 = glued beside the neighbor).
+    /// A positive inset tucks the spreadsheet UNDER that neighbor: the layout
+    /// raises the neighbor's bottom edge to the spreadsheet's top.
+    pub floating_spreadsheet_inset_left: f32,
+    pub floating_spreadsheet_inset_right: f32,
     pub loaded_project_path: Option<std::path::PathBuf>,
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
@@ -1295,8 +1301,11 @@ impl State {
         cx >= param_x - margin && cx <= param_x + margin && cy >= param_y - margin && cy <= param_y + param_h + margin
     }
 
-    /// The floating spreadsheet pane's rect (same derivation as the layout pass,
-    /// playbar offset included).
+    /// The floating spreadsheet pane's rect (the single derivation the layout pass
+    /// and the edge hotspots share). A positive side inset pulls that edge past its
+    /// flush position into the neighbor's span — the pane tucks UNDER the neighbor,
+    /// whose bottom the layout raises to the spreadsheet's top — so the height clamp
+    /// keeps 100px of shortened neighbor above.
     pub fn floating_spreadsheet_rect(&self) -> (f32, f32, f32, f32) {
         let gap = 18.0_f32;
         let fx = gap;
@@ -1304,14 +1313,31 @@ impl State {
         fw = fw.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
         let param_w = self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
         let param_x = self.width - gap - param_w;
-        let ss_x = if self.show_network { fx + fw + gap } else { gap };
-        let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
-        let ss_w = (ss_w_end - ss_x).max(150.0);
+        let flush_left = if self.show_network { fx + fw + gap } else { gap };
+        let flush_right = if self.show_parameters { param_x - gap } else { self.width - gap };
+        let ss_x = (flush_left - self.floating_spreadsheet_inset_left.max(0.0)).max(gap);
+        let ss_end = (flush_right + self.floating_spreadsheet_inset_right.max(0.0)).min(self.width - gap);
+        let ss_w = (ss_end - ss_x).max(150.0);
         let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
         let ss_y_end = self.height - STATUS_H - pb_off - gap;
-        let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
+        let max_h = if self.spreadsheet_tucks_left() || self.spreadsheet_tucks_right() {
+            ss_y_end - (gap + 100.0 + gap)
+        } else {
+            ss_y_end - gap
+        };
+        let ss_h = self.floating_spreadsheet_height.clamp(100.0, max_h.max(100.0));
         let ss_y = ss_y_end - ss_h;
         (ss_x, ss_y, ss_w, ss_h)
+    }
+
+    /// Whether the spreadsheet is tucked under the network / parameter pane
+    /// (side inset active while both panes are shown).
+    pub fn spreadsheet_tucks_left(&self) -> bool {
+        self.show_spreadsheet && self.show_network && self.floating_spreadsheet_inset_left > 0.5
+    }
+
+    pub fn spreadsheet_tucks_right(&self) -> bool {
+        self.show_spreadsheet && self.show_parameters && self.floating_spreadsheet_inset_right > 0.5
     }
 
     /// The spreadsheet pane's edge-resize hotspot at (cx, cy): top resizes the
@@ -2723,6 +2749,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             app_drag: None,
             floating_param_width: 300.0,
             floating_spreadsheet_height: 250.0,
+            floating_spreadsheet_inset_left: 0.0,
+            floating_spreadsheet_inset_right: 0.0,
             loaded_project_path: None,
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
             recent_files,
@@ -3258,22 +3286,28 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 fw = fw.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
                 let fx = paginator_w + gap;
                 let fy = gap;
-                let fh = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
+                let mut fh = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
                 self.floating_network_layout = (fx, fy, fw, fh);
 
                 let param_w = self.floating_param_width.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
                 self.floating_param_width = param_w;
                 let param_x = self.width - gap - param_w;
                 let param_y = gap;
-                let param_h = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
+                let mut param_h = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
 
-                let ss_x = if self.show_network { fx + fw + gap } else { paginator_w + gap };
-                let ss_w_end = if self.show_parameters { param_x - gap } else { self.width - gap };
-                let ss_w = (ss_w_end - ss_x).max(150.0);
-                let ss_y_end = self.height - STATUS_H - pb_off - gap;
-                let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
-                let ss_y = ss_y_end - ss_h;
+                // The spreadsheet rect (shared derivation with the edge hotspots —
+                // reads the clamped network width written back above). A side inset
+                // tucks the spreadsheet UNDER that neighbor: the neighbor's bottom
+                // rises to the spreadsheet's top edge to make room.
+                let (ss_x, ss_y, ss_w, ss_h) = self.floating_spreadsheet_rect();
                 self.floating_spreadsheet_height = ss_h;
+                if self.spreadsheet_tucks_left() {
+                    fh = (ss_y - gap - fy).max(100.0);
+                    self.floating_network_layout.3 = fh;
+                }
+                if self.spreadsheet_tucks_right() {
+                    param_h = (ss_y - gap - param_y).max(100.0);
+                }
 
                 let viewport_visible = self.show_viewport;
                 let spreadsheet_visible = self.show_spreadsheet;
@@ -3931,36 +3965,31 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.apply_layout();
                                 changed = true;
                             }
-                            AppDrag::SpreadsheetResizeLeft { start_network_w, start_mouse_x } => {
-                                // The shared boundary with the network pane: the edge drag
-                                // sets the network width; the layout hands the rest of the
-                                // span to the spreadsheet. Both panes keep their minimums.
+                            AppDrag::SpreadsheetResizeLeft { start_inset, start_mouse_x } => {
+                                // Dragging the left edge past its flush position tucks the
+                                // spreadsheet under the network pane (the layout raises the
+                                // pane's bottom to make room); back to flush un-tucks it.
                                 let dx = self.cursor_x - start_mouse_x;
                                 let gap = 18.0_f32;
-                                let (fx, _, _, _) = self.floating_network_layout;
-                                let ss_right = if self.show_parameters {
-                                    self.width - gap - self.floating_param_width - gap
-                                } else {
-                                    self.width - gap
-                                };
-                                let max_w = (ss_right - gap - 150.0 - fx).max(150.0);
-                                self.floating_network_layout.2 = (start_network_w + dx).clamp(150.0, max_w);
+                                let (fx, _, fw, _) = self.floating_network_layout;
+                                let flush_left = fx + fw + gap;
+                                let max_inset = (flush_left - gap).max(0.0);
+                                self.floating_spreadsheet_inset_left =
+                                    (start_inset - dx).clamp(0.0, max_inset);
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 self.sync_grid_settings();
                                 changed = true;
                             }
-                            AppDrag::SpreadsheetResizeRight { start_param_w, start_mouse_x } => {
-                                // The shared boundary with the parameter pane, symmetrically.
+                            AppDrag::SpreadsheetResizeRight { start_inset, start_mouse_x } => {
+                                // The right edge tucks under the parameter pane, symmetrically.
                                 let dx = self.cursor_x - start_mouse_x;
                                 let gap = 18.0_f32;
-                                let ss_x = if self.show_network {
-                                    self.floating_network_layout.0 + self.floating_network_layout.2 + gap
-                                } else {
-                                    gap
-                                };
-                                let max_w = (self.width - gap - ss_x - 150.0 - gap).max(150.0);
-                                self.floating_param_width = (start_param_w - dx).clamp(150.0, max_w);
+                                let param_x = self.width - gap - self.floating_param_width;
+                                let flush_right = param_x - gap;
+                                let max_inset = (self.width - gap - flush_right).max(0.0);
+                                self.floating_spreadsheet_inset_right =
+                                    (start_inset + dx).clamp(0.0, max_inset);
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 changed = true;
@@ -4210,12 +4239,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             if let Some(dir) = self.spreadsheet_resize_edge_at(cx, cy) {
                                 self.app_drag = Some(if dir.left {
                                     AppDrag::SpreadsheetResizeLeft {
-                                        start_network_w: self.floating_network_layout.2,
+                                        start_inset: self.floating_spreadsheet_inset_left,
                                         start_mouse_x: cx,
                                     }
                                 } else if dir.right {
                                     AppDrag::SpreadsheetResizeRight {
-                                        start_param_w: self.floating_param_width,
+                                        start_inset: self.floating_spreadsheet_inset_right,
                                         start_mouse_x: cx,
                                     }
                                 } else {
