@@ -82,6 +82,30 @@ mod tests {
     }
 
     #[test]
+    fn test_default_camera_orbit_moves_camera_not_geometry() {
+        use cce_ui::widget::WidgetHost;
+        use glam::{Mat4, Vec3};
+        let mut vp = crate::viewport_3d::Viewport3D::new();
+        let inner = vp.as_any_mut().downcast_mut::<crate::viewport_3d::Viewport3D>().unwrap();
+
+        let (_, view0, model0) = inner.get_matrices(1.0, None, None, None);
+        inner.rotation_y = 0.7;
+        inner.rotation_x = 0.2;
+        let (_, view1, model1) = inner.get_matrices(1.0, None, None, None);
+
+        // The scroll orbit must never rotate the geometry within world space.
+        assert_eq!(model0, Mat4::IDENTITY);
+        assert_eq!(model1, Mat4::IDENTITY);
+        // The camera moved...
+        assert!(view0 != view1);
+        // ...by orbiting: the pivot (look-at center) stays at the same eye-space
+        // point, and the camera keeps its distance from it.
+        let p0 = view0.transform_point3(Vec3::ZERO);
+        let p1 = view1.transform_point3(Vec3::ZERO);
+        assert!((p0 - p1).length() < 1e-4, "pivot drifted: {p0:?} vs {p1:?}");
+    }
+
+    #[test]
     fn test_node_template_names() {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);

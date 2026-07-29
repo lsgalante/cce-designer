@@ -5264,13 +5264,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
                     let mvp = (proj * view_mat * model).to_cols_array_2d();
 
-                    let cam_angle_y = camera_pos.x.atan2(camera_pos.z);
-                    let rot_angle = if self.active_camera != "Default Camera" {
+                    // The camera's world yaw, matching get_matrices' fold: the scroll
+                    // orbit now moves the camera (subtracted), not the model, so the
+                    // billboard faces the orbited camera in both camera modes.
+                    let rot_angle = {
                         let base_offset = camera_pos - pivot;
                         let yaw0 = base_offset.x.atan2(base_offset.z);
-                        ry.to_radians() + yaw0
-                    } else {
-                        self.viewport().rotation_y + cam_angle_y
+                        ry.to_radians() + yaw0 - self.viewport().rotation_y
                     };
                     let model_pivot = Mat4::from_translation(pivot) * Mat4::from_rotation_y(rot_angle);
                     let mvp_pivot = (proj * view_mat * model_pivot).to_cols_array_2d();

@@ -122,15 +122,22 @@ impl Viewport3D {
         let yaw0 = base_offset.x.atan2(base_offset.z);
         let pitch0 = (base_offset.y / distance.max(1e-5)).asin();
 
-        let total_ry = ry.to_radians() + yaw0;
-        let total_rx = rx.to_radians() + pitch0;
+        // The default-camera scroll orbit (`rotation_x`/`rotation_y`) folds into
+        // the CAMERA's orbit around the pivot — subtracted, because moving the
+        // camera one way spins the view the way rotating the world the other way
+        // used to. The old path put these angles in the model matrix, which
+        // rotated the geometry within world space (visible against the pivot
+        // marker, and it swung the shading) instead of moving the camera.
+        let total_ry = ry.to_radians() + yaw0 - self.rotation_y;
+        let total_rx = rx.to_radians() + pitch0 - self.rotation_x;
 
         let view_rot_pos = Mat4::from_rotation_y(total_ry) * Mat4::from_rotation_x(-total_rx);
         let camera_up = view_rot_pos.transform_vector3(Vec3::Y);
         let camera_world_pos = pivot + view_rot_pos.transform_vector3(Vec3::new(0.0, 0.0, distance) * self.zoom);
         let view_mat = Mat4::from_rotation_z(rz.to_radians()) * Mat4::look_at_rh(camera_world_pos, pivot, camera_up);
 
-        let model = Mat4::from_rotation_y(self.rotation_y) * Mat4::from_rotation_x(self.rotation_x);
+        // Geometry stays stationary in world space; the camera does the moving.
+        let model = Mat4::IDENTITY;
         let proj = Mat4::perspective_rh(0.9, aspect, 0.1, 100.0);
 
         (proj, view_mat, model)
