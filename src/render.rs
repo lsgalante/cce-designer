@@ -205,6 +205,33 @@ impl State {
             // text isn't doubled).
             append_widget_plate(w, pc);
             w.paint_self(&self.ui_context, pc);
+        } else if idx == VIEWPORT_IDX {
+            // The viewport wears the plate bevel's rim only. It can't be a real
+            // `Bevel` plate: the SDF plate draw owns fill AND roll together, so a
+            // transparent fill kills the roll and the params fill would frost the
+            // whole 3D scene behind its blur marker. A `Boss` step is the rim
+            // alone — a fill-less overlay of translucent light/shadow over the
+            // scene. Same gate as the plated panes (plate border + control_relief)
+            // so the DE style flips together; the radius follows the window
+            // curvature (the viewport's corners sit on the window's).
+            if cce_ui::layout::control_relief() && cce_ui::colors::plate_border_color().is_some() {
+                let (px, py, pw, ph) = self.positions[VIEWPORT_IDX];
+                if pw > 0.0 && ph > 0.0 {
+                    let r = colors::backplate_corner_radius() * cce_ui::layout::corner_span_factor();
+                    pc.boss_edges(
+                        rect(px, py, pw, ph),
+                        (r, r, r, r),
+                        cce_ui::colors::plate_bevel_width(),
+                        (true, true, true, true),
+                    );
+                }
+            }
+            for (qx, qy, qw, qh, qc) in w.extra_quads() {
+                pc.quad(rect(qx, qy, qw, qh), qc);
+            }
+            for (cx, cy, cr, cc) in w.extra_circles() {
+                pc.circle(cx, cy, cr, cc);
+            }
         } else if idx == CONTENT_IDX {
             if !self.circular_network_pane {
                 append_widget_plate_tinted(w, pc, self.plate_focus_tint(idx));
@@ -436,8 +463,8 @@ impl State {
     /// only visual indicator of `focused_pane`.
     /// The focused pane's plate carries the highlight as its bevel's specular
     /// tint under `control_relief` — the ring in `append_context_border` is the
-    /// flat-style treatment. The viewport (no plate of its own) and the
-    /// circular pane (arc ring) keep the ring in both styles.
+    /// flat-style treatment. The viewport (rim-only Boss overlay, which carries
+    /// no tint) and the circular pane (arc ring) keep the ring in both styles.
     fn plate_focus_tint(&self, idx: usize) -> Option<[f32; 3]> {
         if !cce_ui::layout::control_relief() {
             return None;
