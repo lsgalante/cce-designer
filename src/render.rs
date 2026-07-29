@@ -218,12 +218,16 @@ impl State {
                 let (px, py, pw, ph) = self.positions[VIEWPORT_IDX];
                 if pw > 0.0 && ph > 0.0 {
                     let r = colors::backplate_corner_radius() * cce_ui::layout::corner_span_factor();
-                    pc.boss_edges(
-                        rect(px, py, pw, ph),
-                        (r, r, r, r),
-                        cce_ui::colors::plate_bevel_width(),
-                        (true, true, true, true),
-                    );
+                    let vp_rect = rect(px, py, pw, ph);
+                    let radii = (r, r, r, r);
+                    let depth = cce_ui::colors::plate_bevel_width();
+                    // Focus marks through the rim's specular tint, exactly the
+                    // plated panes' treatment (plate_focus_tint).
+                    if let Some(tint) = self.plate_focus_tint(idx) {
+                        pc.boss_edges_tinted(vp_rect, radii, depth, (true, true, true, true), tint);
+                    } else {
+                        pc.boss_edges(vp_rect, radii, depth, (true, true, true, true));
+                    }
                 }
             }
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
@@ -463,8 +467,9 @@ impl State {
     /// only visual indicator of `focused_pane`.
     /// The focused pane's plate carries the highlight as its bevel's specular
     /// tint under `control_relief` — the ring in `append_context_border` is the
-    /// flat-style treatment. The viewport (rim-only Boss overlay, which carries
-    /// no tint) and the circular pane (arc ring) keep the ring in both styles.
+    /// flat-style treatment (the viewport's rim-only Boss overlay tints the
+    /// same way). Only the circular pane (arc ring) keeps the ring in both
+    /// styles.
     fn plate_focus_tint(&self, idx: usize) -> Option<[f32; 3]> {
         if !cce_ui::layout::control_relief() {
             return None;
@@ -473,6 +478,7 @@ impl State {
             NETWORK_PANEL_IDX | CONTENT_IDX => {
                 self.focused_pane == LEFT_MENUBAR_IDX && !self.circular_network_pane
             }
+            VIEWPORT_IDX => self.focused_pane == RIGHT_MENUBAR_IDX,
             PARAM_IDX => self.focused_pane == PARAM_MENUBAR_IDX,
             SPREADSHEET_IDX => self.focused_pane == SPREADSHEET_MENUBAR_IDX,
             _ => false,
@@ -520,7 +526,7 @@ impl State {
                 self.positions[NETWORK_PANEL_IDX]
             }
             RIGHT_MENUBAR_IDX => {
-                if !self.show_viewport {
+                if !self.show_viewport || relief {
                     return;
                 }
                 self.positions[VIEWPORT_IDX]

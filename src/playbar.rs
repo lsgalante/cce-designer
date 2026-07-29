@@ -81,15 +81,13 @@ impl Paint for Playbar {
         true
     }
 
-    /// The pane IS its own plate, exactly the ParametersBg contract: PARAM_BG
-    /// scaled by the global plate opacity, alpha negated as the blur marker.
+    /// The pane IS its own plate, exactly the ParametersBg contract: the
+    /// parameter plate's fill — tint, opacity, and blur-behind marker
+    /// (`param_plate_fill`) — so it tracks a live retint / opacity / blur
+    /// toggle with the other panes (the old hand-rolled PARAM_BG copy froze
+    /// the Style section's "Plate Color" out of this pane).
     fn color(&self) -> [f32; 4] {
-        let mut c = colors::PARAM_BG;
-        c[3] *= cce_ui::layout::plate_opacity();
-        if colors::plate_blur() {
-            c[3] = -c[3].abs();
-        }
-        c
+        colors::param_plate_fill()
     }
 
     fn solid_border(&self) -> Option<([f32; 4], f32)> {
