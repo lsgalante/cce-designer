@@ -633,22 +633,20 @@ impl DesignSettings {
     }
 }
 
-/// Dissolved cce-ui `Plate` (Phase 6as): a passive translucent panel — configured color
-/// at `plate_opacity` times the network fade, alpha negated when blur is on (the
-/// scenefx blur marker) — with no children and no events.
+/// Dissolved cce-ui `Plate` (Phase 6as): a passive panel wearing the parameter
+/// plate's fill — same tint, opacity, and blur-behind marker (`param_plate_fill`),
+/// so the network plate's bevel rolls exactly like the params plate's and tracks a
+/// live retint/opacity/blur toggle — scaled by the network fade. No children, no
+/// events.
 pub struct PassivePlate {
-    color: [f32; 4],
-    blur: bool,
     pub network_opacity: f32,
     /// Circular hit shape while the network pane is round (the legacy Plate marker).
     curved_circle: Option<(f32, f32, f32)>,
 }
 
 impl PassivePlate {
-    pub fn new(color: [f32; 4], blur: bool) -> cce_ui::widget::Adapted<PassivePlate> {
+    pub fn new() -> cce_ui::widget::Adapted<PassivePlate> {
         cce_ui::widget::Adapted::new(Self {
-            color,
-            blur,
             network_opacity: 1.0,
             curved_circle: None,
         })
@@ -674,12 +672,10 @@ impl cce_ui::widget::Paint for PassivePlate {
     fn paint(&self, _rect: cce_ui::scene::layout::Rect, _ctx: &mut cce_ui::scene::paint::PaintCtx) {}
 
     fn color(&self) -> [f32; 4] {
-        let mut c = self.color;
-        c[3] *= cce_ui::layout::plate_opacity();
+        // `param_plate_fill` folds in the plate opacity and the blur marker; the
+        // network fade scales the (possibly negative) alpha without flipping its sign.
+        let mut c = cce_ui::colors::param_plate_fill();
         c[3] *= self.network_opacity;
-        if self.blur && cce_ui::colors::plate_blur() {
-            c[3] = -c[3].abs();
-        }
         c
     }
 
@@ -2530,7 +2526,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 mb.set_visible(false);
                 mb
             },
-            network_panel: PassivePlate::new([0.10, 0.10, 0.13, 0.95], false),
+            network_panel: PassivePlate::new(),
             playbar: {
                 let mut pb = Playbar::new();
                 pb.set_visible(false);

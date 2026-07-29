@@ -192,7 +192,11 @@ impl State {
             let cx = self.circular_network_layout.x;
             let cy = self.circular_network_layout.y;
             let r = self.circular_network_layout.r;
-            pc.circle(cx, cy, r, w.color());
+            // Circles carry no blur-behind marker (only Plate/Bevel prims do) — a
+            // negative alpha from the params fill would render garbage, so clamp it.
+            let mut fill = w.color();
+            fill[3] = fill[3].abs();
+            pc.circle(cx, cy, r, fill);
             pc.arc(cx, cy, r, 3.0, 0.0, TAU, [0.35, 0.65, 0.95, 0.80 * self.network_opacity]);
         } else if idx == PLAYBAR_IDX {
             // Modern-paint pane: the plate from the legacy views like the other
