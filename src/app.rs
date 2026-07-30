@@ -5369,8 +5369,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             // wire pass darkened so the edges separate from
                             // the identical fill (the wire pipeline's depth
                             // bias keeps the lines above the coplanar fill).
+                            // The tint stays PARTIAL: wires keep a share of
+                            // their world-anchored vertex colors — a flat
+                            // black lattice is azimuthally unmarked (a UV
+                            // sphere's wires self-map every segment step), so
+                            // it perceptually glues the mesh to the camera
+                            // during orbits, dominating the fill's cues.
                             draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT });
-                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: true, wire_tint: [0.0, 0.0, 0.0, 0.75] });
+                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: true, wire_tint: [0.0, 0.0, 0.0, 0.45] });
                         } else {
                             draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: self.wireframe, wire_tint: NO_TINT });
                         }
