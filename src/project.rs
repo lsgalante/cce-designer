@@ -271,6 +271,9 @@ impl State {
         let show_playbar = self.show_playbar;
         let wireframe = self.wireframe;
         let wireframe_overlay = self.wireframe_overlay;
+        let render_points = self.render_points;
+        let point_size = self.point_size;
+        let point_color = self.point_color;
         let square_viewport = self.square_viewport;
         let bool_str = |b: bool| if b { "true" } else { "false" };
 
@@ -520,11 +523,17 @@ impl State {
         ensure_param(render_node, "Render Settings", "section", "", &[], None, None, None);
         ensure_param(render_node, "Show Wireframe", "toggle", bool_str(wireframe), &[], None, None, None);
         ensure_param(render_node, "Wireframe Overlay", "toggle", bool_str(wireframe_overlay), &[], None, None, None);
+        ensure_param(render_node, "Render Points", "toggle", bool_str(render_points), &[], None, None, None);
+        ensure_param(render_node, "Point Size", "slider:0.01:0.30", &format!("{:.2}", point_size), &[], Some(0.01), Some(0.30), None);
+        ensure_param(render_node, "Point Color", "color", &color_to_hex(point_color), &[], None, None, None);
 
         for p in render_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Wireframe" => set_toggle(p, wireframe),
                 "Wireframe Overlay" => set_toggle(p, wireframe_overlay),
+                "Render Points" => set_toggle(p, render_points),
+                "Point Size" => p.default = format!("{:.2}", point_size),
+                "Point Color" => p.default = color_to_hex(point_color),
                 _ => {}
             }
             if p.param_type == "toggle" {
@@ -661,6 +670,9 @@ impl State {
                 match p.name.as_str() {
                     "Show Wireframe" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe = val; }
                     "Wireframe Overlay" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe_overlay = val; }
+                    "Render Points" => if let Ok(val) = p.default.parse::<bool>() { self.render_points = val; }
+                    "Point Size" => if let Ok(val) = p.default.parse::<f32>() { self.point_size = val.clamp(0.005, 1.0); }
+                    "Point Color" => if let Some(col) = hex_to_color(&p.default) { self.point_color = col; }
                     _ => {}
                 }
             }

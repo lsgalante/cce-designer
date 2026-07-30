@@ -1424,6 +1424,52 @@ pub fn origin_vectors_vertices(scale: f32) -> Vec<Vertex3D> {
     verts
 }
 
+/// The Render node's point display: one small octahedron per DISTINCT vertex
+/// position of `src` (positions quantized for the dedup — the raw triangle
+/// soup repeats each vertex per face). Every face is emitted in both windings
+/// so the raster pass's backface cull can't eat half the diamond.
+pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vertex3D> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let r = size.max(0.001);
+    for v in src {
+        let key = (
+            (v.position[0] * 1000.0).round() as i32,
+            (v.position[1] * 1000.0).round() as i32,
+            (v.position[2] * 1000.0).round() as i32,
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        let [px, py, pz] = v.position;
+        let top = [px, py + r, pz];
+        let bot = [px, py - r, pz];
+        let xp = [px + r, py, pz];
+        let xm = [px - r, py, pz];
+        let zp = [px, py, pz + r];
+        let zm = [px, py, pz - r];
+        let faces = [
+            [top, zp, xp],
+            [top, xp, zm],
+            [top, zm, xm],
+            [top, xm, zp],
+            [bot, xp, zp],
+            [bot, zm, xp],
+            [bot, xm, zm],
+            [bot, zp, xm],
+        ];
+        for f in faces {
+            for p in f {
+                out.push(Vertex3D { position: p, color });
+            }
+            for p in [f[0], f[2], f[1]] {
+                out.push(Vertex3D { position: p, color });
+            }
+        }
+    }
+    out
+}
+
 pub fn camera_pivot_vertices(scale: f32) -> Vec<Vertex3D> {
     let mut verts = Vec::new();
     let t = 0.002 * scale; 

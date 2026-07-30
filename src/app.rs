@@ -807,6 +807,8 @@ pub struct SceneMeshes {
     pub grid: cce_ui::vk::MeshId,
     pub origin: cce_ui::vk::MeshId,
     pub pivot: cce_ui::vk::MeshId,
+    /// The Render node's point display (one octahedron per distinct vertex).
+    pub points: cce_ui::vk::MeshId,
 }
 
 /// A left-press on the detached circular window's chrome that becomes an
@@ -991,6 +993,19 @@ pub struct State {
     /// filled primitives. Wins over `wireframe` when both are set.
     pub wireframe_overlay: bool,
     pub last_viewport_wireframe_overlay: bool,
+    /// Point display of the node geometry (the Render node's "Render Points"
+    /// toggle): one small octahedron per distinct vertex, sized by
+    /// "Point Size" and tinted by "Point Color".
+    pub render_points: bool,
+    pub point_size: f32,
+    pub point_color: [f32; 3],
+    /// (geometry version, quantized size, color) the points mesh was last
+    /// built from; `point_vertex_count` gates the draw.
+    pub last_points_key: Option<(u64, i32, [u8; 3])>,
+    pub point_vertex_count: u32,
+    pub last_viewport_render_points: bool,
+    pub last_viewport_point_size: f32,
+    pub last_viewport_point_color: [f32; 3],
     pub last_viewport_rt_mode: bool,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
@@ -2797,6 +2812,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_wireframe: false,
             wireframe_overlay: false,
             last_viewport_wireframe_overlay: false,
+            render_points: false,
+            point_size: 0.02,
+            point_color: [1.0, 1.0, 1.0],
+            last_points_key: None,
+            point_vertex_count: 0,
+            last_viewport_render_points: false,
+            last_viewport_point_size: 0.0,
+            last_viewport_point_color: [0.0, 0.0, 0.0],
             last_viewport_rt_mode: false,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
@@ -5143,6 +5166,31 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.spheres_dirty = false;
             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&self.rt_sphere_verts));
         }
+
+        // The Render node's point display: rebuilt whenever the geometry or
+        // the point params moved (the key), skipped entirely while off.
+        if self.render_points {
+            let key = (
+                self.rt_geometry_version,
+                (self.point_size * 1000.0).round() as i32,
+                [
+                    (self.point_color[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (self.point_color[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (self.point_color[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+                ],
+            );
+            if self.last_points_key != Some(key) {
+                let verts = crate::geometry::points_vertices(
+                    &self.rt_sphere_verts,
+                    self.point_size,
+                    cce_ui::colors::to_linear_rgb(self.point_color),
+                );
+                self.point_vertex_count = verts.len() as u32;
+                renderer.update_mesh(meshes.points, bytemuck::cast_slice(&verts));
+                self.last_points_key = Some(key);
+                self.viewport_dirty = true;
+            }
+        }
     }
 
     /// One-time renderer setup (engine `renderer_init` hook): the persistent
@@ -5163,6 +5211,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             grid: renderer.create_mesh(bytemuck::cast_slice(&grid_verts)),
             origin: renderer.create_mesh(bytemuck::cast_slice(&origin_verts)),
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
+            points: renderer.create_mesh(&[]),
         });
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush.
@@ -5276,7 +5325,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     || self.last_viewport_active_camera != self.active_camera
                     || self.last_viewport_show_viewport != self.show_viewport
                     || self.last_viewport_wireframe != self.wireframe
-                    || self.last_viewport_wireframe_overlay != self.wireframe_overlay;
+                    || self.last_viewport_wireframe_overlay != self.wireframe_overlay
+                    || self.last_viewport_render_points != self.render_points
+                    || self.last_viewport_point_size != self.point_size
+                    || self.last_viewport_point_color != self.point_color;
 
                 if viewport_changed {
                     if !rt_mode {
@@ -5307,6 +5359,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                     if self.viewport().show_cube {
                         draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT });
+                    }
+                    if self.render_points && self.point_vertex_count > 0 {
+                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT });
                     }
                     if self.vertex_count_spheres > 0 {
                         if self.wireframe_overlay {
@@ -5343,6 +5398,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_show_viewport = self.show_viewport;
                     self.last_viewport_wireframe = self.wireframe;
                     self.last_viewport_wireframe_overlay = self.wireframe_overlay;
+                    self.last_viewport_render_points = self.render_points;
+                    self.last_viewport_point_size = self.point_size;
+                    self.last_viewport_point_color = self.point_color;
                     self.last_viewport_rt_mode = rt_mode;
                     self.viewport_dirty = false;
                 }
