@@ -1424,14 +1424,20 @@ pub fn origin_vectors_vertices(scale: f32) -> Vec<Vertex3D> {
     verts
 }
 
-/// The Render node's point display: one small octahedron per DISTINCT vertex
+/// The Render node's point display: one small ball per DISTINCT vertex
 /// position of `src` (positions quantized for the dedup — the raw triangle
-/// soup repeats each vertex per face). Every face is emitted in both windings
-/// so the raster pass's backface cull can't eat half the diamond.
+/// soup repeats each vertex per face). A low-res UV sphere in a uniform color
+/// reads as a flat CIRCLE from every viewpoint, with no camera-dependent
+/// billboarding to rebuild on orbit. The vertex ordering copies the OpenCL
+/// sphere kernel's exactly — that winding is the one the raster pass's
+/// backface cull is known to keep.
 pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vertex3D> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     let r = size.max(0.001);
+    const LAT_STEPS: usize = 4;
+    const LON_STEPS: usize = 10;
+    let pi = std::f32::consts::PI;
     for v in src {
         let key = (
             (v.position[0] * 1000.0).round() as i32,
@@ -1441,29 +1447,27 @@ pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vert
         if !seen.insert(key) {
             continue;
         }
-        let [px, py, pz] = v.position;
-        let top = [px, py + r, pz];
-        let bot = [px, py - r, pz];
-        let xp = [px + r, py, pz];
-        let xm = [px - r, py, pz];
-        let zp = [px, py, pz + r];
-        let zm = [px, py, pz - r];
-        let faces = [
-            [top, zp, xp],
-            [top, xp, zm],
-            [top, zm, xm],
-            [top, xm, zp],
-            [bot, xp, zp],
-            [bot, zm, xp],
-            [bot, xm, zm],
-            [bot, zp, xm],
-        ];
-        for f in faces {
-            for p in f {
-                out.push(Vertex3D { position: p, color });
-            }
-            for p in [f[0], f[2], f[1]] {
-                out.push(Vertex3D { position: p, color });
+        let [cx, cy, cz] = v.position;
+        let sp = |theta: f32, phi: f32| {
+            [
+                cx + r * theta.sin() * phi.cos(),
+                cy + r * theta.cos(),
+                cz + r * theta.sin() * phi.sin(),
+            ]
+        };
+        for lat in 0..LAT_STEPS {
+            let theta0 = pi * lat as f32 / LAT_STEPS as f32;
+            let theta1 = pi * (lat + 1) as f32 / LAT_STEPS as f32;
+            for lon in 0..LON_STEPS {
+                let phi0 = 2.0 * pi * lon as f32 / LON_STEPS as f32;
+                let phi1 = 2.0 * pi * (lon + 1) as f32 / LON_STEPS as f32;
+                let p00 = sp(theta0, phi0);
+                let p10 = sp(theta1, phi0);
+                let p11 = sp(theta1, phi1);
+                let p01 = sp(theta0, phi1);
+                for p in [p00, p10, p11, p00, p11, p01] {
+                    out.push(Vertex3D { position: p, color });
+                }
             }
         }
     }
