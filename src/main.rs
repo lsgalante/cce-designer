@@ -123,6 +123,23 @@ mod tests {
     }
 
     #[test]
+    fn test_scene_camera_yaw_changes_view() {
+        use cce_ui::widget::WidgetHost;
+        use glam::Vec3;
+        let mut vp = crate::viewport_3d::Viewport3D::new();
+        let inner = vp.as_any_mut().downcast_mut::<crate::viewport_3d::Viewport3D>().unwrap();
+        inner.active_camera = "Camera 1".to_string();
+        let pos = Vec3::new(2.5, 1.8, 2.5);
+        let piv = Vec3::ZERO;
+        let (_, v1, _) = inner.get_matrices(1.0, Some(pos), Some(Vec3::new(23.62, -58.83, 0.0)), Some(piv));
+        let (_, v2, _) = inner.get_matrices(1.0, Some(pos), Some(Vec3::new(23.62, 31.17, 0.0)), Some(piv));
+        let p1 = v1.transform_point3(Vec3::new(1.0, 0.0, 0.0));
+        let p2 = v2.transform_point3(Vec3::new(1.0, 0.0, 0.0));
+        println!("world (1,0,0) in eye space: {p1:?} vs {p2:?}");
+        assert!((p1 - p2).length() > 0.1, "yaw had no effect: {p1:?} vs {p2:?}");
+    }
+
+    #[test]
     fn test_node_template_names() {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);

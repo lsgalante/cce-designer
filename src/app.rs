@@ -5284,15 +5284,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
                     let mvp = (proj * view_mat * model).to_cols_array_2d();
 
-                    // The camera's world yaw, matching get_matrices' fold: the scroll
-                    // orbit now moves the camera (subtracted), not the model, so the
-                    // billboard faces the orbited camera in both camera modes.
-                    let rot_angle = {
-                        let base_offset = camera_pos - pivot;
-                        let yaw0 = base_offset.x.atan2(base_offset.z);
-                        ry.to_radians() + yaw0 - self.viewport().rotation_y
-                    };
-                    let model_pivot = Mat4::from_translation(pivot) * Mat4::from_rotation_y(rot_angle);
+                    // The camera-pivot marker is WORLD-FIXED at the pivot point, like
+                    // the origin gizmo. Its old yaw rotation existed to keep it glued
+                    // to the model-matrix orbit's rotating world; with the camera
+                    // doing the moving it must not rotate, or its axis beams read as
+                    // scene geometry spinning with the camera over the stationary grid.
+                    let model_pivot = Mat4::from_translation(pivot);
                     let mvp_pivot = (proj * view_mat * model_pivot).to_cols_array_2d();
 
                     // Same draw order as the wgpu pass: bg quad, grid, origin,
