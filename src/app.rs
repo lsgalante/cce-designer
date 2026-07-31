@@ -319,6 +319,13 @@ pub enum NodeMenuAction {
     Delete,
 }
 
+/// The 3D viewport's right-click context menu actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewportMenuAction {
+    /// Move the active camera so the visible node geometry fills the view.
+    FrameAll,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum McpAction {
@@ -879,6 +886,10 @@ pub struct State {
     /// click, since the designer routes menu clicks itself.
     pub node_menu_slot: Option<usize>,
     pub node_menu_actions: Vec<NodeMenuAction>,
+    /// The viewport right-click menu (same thread-local `context_menu`
+    /// machinery as the node menu; this flag says the open menu is OURS).
+    pub viewport_menu_active: bool,
+    pub viewport_menu_actions: Vec<ViewportMenuAction>,
 
     pub drag_widget: Option<usize>,
     /// Where the pointer pressed when `drag_widget` armed — the drag
@@ -2151,6 +2162,136 @@ impl State {
         false
     }
 
+    /// "Frame All": move the active camera so the visible node geometry
+    /// fills the viewport. The bounding sphere of the geometry becomes the
+    /// camera pivot, and the camera slides along its EXISTING base direction
+    /// (Position relative to Pivot — the view direction is preserved because
+    /// get_matrices derives yaw0/pitch0 from that offset) to the distance
+    /// where the sphere spans the narrower FOV axis. Viewport zoom resets to
+    /// 1 so the distance is authoritative. For the Default Camera (no node
+    /// to write) only the zoom is fitted — its pivot is fixed at the origin.
+    pub fn frame_all(&mut self) {
+        if self.rt_sphere_verts.is_empty() {
+            return;
+        }
+        let mut min = Vec3::splat(f32::MAX);
+        let mut max = Vec3::splat(f32::MIN);
+        for v in &self.rt_sphere_verts {
+            let p = Vec3::from_array(v.position);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        let center = (min + max) * 0.5;
+        let mut radius = 0.0f32;
+        for v in &self.rt_sphere_verts {
+            radius = radius.max((Vec3::from_array(v.position) - center).length());
+        }
+        let radius = radius.max(0.05);
+
+        // Fit the bounding sphere inside the narrower frustum axis
+        // (get_matrices: vertical FOV 0.9 rad), with a little breathing room.
+        let (w, h) = (self.last_viewport_width.max(1) as f32, self.last_viewport_height.max(1) as f32);
+        let aspect = if self.square_viewport { 1.0 } else { w / h };
+        let half_v = 0.45f32;
+        let half_h = (half_v.tan() * aspect).atan();
+        let half = half_v.min(half_h);
+        // 1.25: the sphere spans ~80% of the narrow axis — snug without
+        // touching the pane edges.
+        let dist = (radius / half.sin()) * 1.25;
+
+        if self.active_camera == "Default Camera" {
+            // Fixed eye ray through the origin — fit with zoom alone.
+            let base_len = Vec3::new(2.5, 1.8, 2.5).length();
+            self.viewport_mut().zoom = (dist / base_len).clamp(0.05, 20.0);
+            self.viewport_mut().reset_velocity();
+        } else {
+            let camera_name = self.active_camera.clone();
+            let dir = self.current_dir_mut();
+            if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
+                let parse3 = |s: &str| -> Option<Vec3> {
+                    let parts: Vec<&str> = s
+                        .split(|c| c == ':' || c == ',' || c == ' ')
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if parts.len() >= 3 {
+                        if let (Ok(x), Ok(y), Ok(z)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                            return Some(Vec3::new(x, y, z));
+                        }
+                    }
+                    None
+                };
+                let pos = node.params.iter().find(|p| p.name == "Position")
+                    .and_then(|p| parse3(&p.default))
+                    .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
+                let piv = node.params.iter().find(|p| p.name == "Pivot")
+                    .and_then(|p| parse3(&p.default))
+                    .unwrap_or(Vec3::ZERO);
+                let offset = pos - piv;
+                let dir_unit = if offset.length() > 1e-4 {
+                    offset.normalize()
+                } else {
+                    Vec3::new(2.5, 1.8, 2.5).normalize()
+                };
+                let new_pos = center + dir_unit * dist;
+                let fmt3 = |v: Vec3| format!("{:.2}:{:.2}:{:.2}", v.x, v.y, v.z);
+                if let Some(p) = node.params.iter_mut().find(|p| p.name == "Pivot") {
+                    p.default = fmt3(center);
+                }
+                if let Some(p) = node.params.iter_mut().find(|p| p.name == "Position") {
+                    p.default = fmt3(new_pos);
+                }
+                self.viewport_mut().zoom = 1.0;
+                self.viewport_mut().reset_velocity();
+            }
+        }
+        self.viewport_dirty = true;
+        self.sync_parameters_pane();
+    }
+
+    /// Open the viewport right-click context menu at the cursor.
+    fn open_viewport_context_menu(&mut self) {
+        let options = vec!["Frame All".to_string()];
+        let actions = vec![ViewportMenuAction::FrameAll];
+        let target = self.slots.viewport.id();
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        self.viewport_menu_active = true;
+        self.viewport_menu_actions = actions;
+    }
+
+    fn viewport_menu_open(&self) -> bool {
+        cce_ui::widget::context_menu::is_visible() && self.viewport_menu_active
+    }
+
+    fn close_viewport_menu(&mut self) {
+        cce_ui::widget::context_menu::hide();
+        self.viewport_menu_active = false;
+        self.viewport_menu_actions.clear();
+    }
+
+    /// Route a left press while the viewport menu is open — same contract as
+    /// `handle_node_menu_click`.
+    fn handle_viewport_menu_click(&mut self) -> bool {
+        if !self.viewport_menu_open() {
+            return false;
+        }
+        if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
+            let my = cce_ui::widget::context_menu::y();
+            let idx = ((self.cursor_y - my) / 24.0).floor() as usize;
+            let picked = self.viewport_menu_actions.get(idx).copied();
+            self.close_viewport_menu();
+            if let Some(action) = picked {
+                match action {
+                    ViewportMenuAction::FrameAll => {
+                        self.frame_all();
+                    }
+                }
+            }
+            return true;
+        }
+        self.close_viewport_menu();
+        false
+    }
+
     fn dispatch_node_menu(&mut self, slot: usize, action: NodeMenuAction) {
         match action {
             NodeMenuAction::Enter => {
@@ -2718,6 +2859,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             cloud_popups: cce_ui::process::CloudPopupTracker::new(),
             node_menu_slot: None,
             node_menu_actions: Vec::new(),
+            viewport_menu_active: false,
+            viewport_menu_actions: Vec::new(),
             drag_widget: None,
             drag_press_cursor: None,
             focused_widget: None,
@@ -3989,8 +4132,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.cursor_y = position.y as f32;
                 let mut changed = false;
 
-                // Track hover on the node context menu so the highlight follows.
-                if self.node_menu_open()
+                // Track hover on the node/viewport context menus so the
+                // highlight follows.
+                if (self.node_menu_open() || self.viewport_menu_open())
                     && cce_ui::widget::context_menu::cursor_moved(self.cursor_x, self.cursor_y)
                 {
                     changed = true;
@@ -4230,6 +4374,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             }
                             self.close_node_menu();
                         }
+                        if self.viewport_menu_open() {
+                            if *button == MouseButton::Left && self.handle_viewport_menu_click() {
+                                return true;
+                            }
+                            self.close_viewport_menu();
+                        }
 
                         let hits_any_menu = (0..WIDGET_COUNT).any(|i| {
                             hits_widget(self, i, self.cursor_x, self.cursor_y)
@@ -4357,6 +4507,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                         if *button == MouseButton::Right {
                             self.close_node_menu();
+                            self.close_viewport_menu();
+                            if self.cursor_in_viewport() && !in_circle_network_pane {
+                                self.open_viewport_context_menu();
+                                return true;
+                            }
                             if in_circle_network_pane {
                                 // On a node → its context menu; empty space →
                                 // the add-node palette.
