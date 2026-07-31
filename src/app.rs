@@ -1282,6 +1282,16 @@ impl State {
         }
     }
 
+    /// Whether the cursor sits over the 3D viewport pane — the wheel arm's
+    /// routing test, shared with `handle_pinch`.
+    pub fn cursor_in_viewport(&self) -> bool {
+        let node_area_y = self.positions[CONTENT_IDX].1;
+        self.cursor_x >= self.content_right_x()
+            && self.cursor_x < self.splitter_layout.splitter2_x
+            && self.cursor_y >= node_area_y
+            && self.cursor_y < self.height - STATUS_H
+    }
+
     // --- Pane edge-resize hotspots. Each is the single source of truth for its zone:
     // the press handlers arm the matching `AppDrag` off it, and `pane_resize_cursor`
     // shows the resize cursor over it, so the two can't drift apart.
@@ -3765,10 +3775,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
 
-                let in_viewport = self.cursor_x >= self.content_right_x()
-                    && self.cursor_x < self.splitter_layout.splitter2_x
-                    && self.cursor_y >= node_area_y
-                    && self.cursor_y < self.height - STATUS_H;
+                let in_viewport = self.cursor_in_viewport();
 
                 let mut focus_changed = false;
                 let mut new_pane = None;
@@ -3923,6 +3930,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             }
                         }
                     }
+                } else if in_viewport && self.modifiers.control_key() {
+                    // Ctrl+wheel zoom over the 3D viewport. The routed pass
+                    // above deliberately skips wheels while ctrl is held, so
+                    // hand the event to the viewport widget here — its ctrl
+                    // branch is the camera zoom. (Trackpad pinches take the
+                    // direct `handle_pinch` path and never reach this.)
+                    self.slots.get_dyn_mut(VIEWPORT_IDX).set_modifiers(
+                        self.modifiers.control_key(),
+                        self.modifiers.shift_key(),
+                        self.modifiers.alt_key(),
+                    );
+                    let wheel_ev = cce_ui::widget::Event::MouseWheel {
+                        delta: *delta,
+                        x: self.cursor_x,
+                        y: self.cursor_y,
+                        local_x: self.cursor_x,
+                        local_y: self.cursor_y,
+                    };
+                    let vp = self.slots.viewport.id();
+                    self.ui_context.propagate_event(&wheel_ev, vp)
                 } else {
                     false
                 };

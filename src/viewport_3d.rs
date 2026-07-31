@@ -127,6 +127,22 @@ impl Viewport3D {
         self.scroll_lock = 0;
     }
 
+    /// Trackpad pinch: direct-manipulation camera zoom. `factor` is the
+    /// scale change since the last gesture update (engine `handle_pinch`
+    /// semantics), applied 1:1 — spreading fingers 2x halves the camera
+    /// distance. Feeds the same accumulator as the ctrl-wheel zoom so the
+    /// release inertia matches.
+    pub fn pinch_zoom(&mut self, factor: f32) {
+        if factor <= 0.0 {
+            return;
+        }
+        let dy = factor.ln();
+        self.zoom = (self.zoom * (-dy).exp()).clamp(0.05, 20.0);
+        self.is_zooming = true;
+        self.last_zoom_time = std::time::Instant::now();
+        self.zoom_accum += dy;
+    }
+
     pub fn get_matrices(&self, aspect: f32, custom_camera_pos: Option<Vec3>, custom_camera_rot: Option<Vec3>, custom_pivot: Option<Vec3>) -> (Mat4, Mat4, Mat4) {
         let camera_pos = custom_camera_pos.unwrap_or(Vec3::new(2.5, 1.8, 2.5));
         let pivot = custom_pivot.unwrap_or(Vec3::ZERO);

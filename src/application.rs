@@ -276,6 +276,19 @@ impl Application for State {
         }
     }
 
+    fn handle_pinch(&mut self, factor: f32, pos: LogicalPosition, needs_rebuild: &mut bool) -> bool {
+        self.cursor_x = pos.x;
+        self.cursor_y = pos.y;
+        // 1:1 camera zoom over the 3D viewport; anywhere else falls back to
+        // the engine's ctrl+wheel synthesis (which is what zooms the graph).
+        if self.is_detached_network || !self.cursor_in_viewport() {
+            return false;
+        }
+        self.viewport_mut().pinch_zoom(factor);
+        *needs_rebuild = true;
+        true
+    }
+
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<CustomEvent> {
         self.sync_modifiers_from_ctx();
         let ev = WindowEvent::KeyboardInput { event: event.clone() };
