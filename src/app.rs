@@ -4379,6 +4379,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 return true;
                             }
                             self.close_viewport_menu();
+                            // Swallow the dismissing left press: it should not
+                            // also orbit/click whatever sits underneath, and
+                            // returning true forces the redraw that actually
+                            // erases the menu — falling through here left the
+                            // menu painted until the next incidental redraw.
+                            if *button == MouseButton::Left {
+                                return true;
+                            }
                         }
 
                         let hits_any_menu = (0..WIDGET_COUNT).any(|i| {
