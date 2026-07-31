@@ -997,11 +997,13 @@ pub struct State {
     /// they carry the geometry's vertex colors unlit — brighter than the lit
     /// fill beneath, which is what separates them.
     pub wire_single_color: bool,
-    pub wire_color: [f32; 3],
+    /// RGBA: the alpha channel is the wireframe's OWN opacity in both color
+    /// modes — the geometry Opacity slider affects only the polygons.
+    pub wire_color: [f32; 4],
     /// Wire line width in framebuffer pixels ("Wire Thickness" slider).
     pub wire_width: f32,
     pub last_viewport_wire_single_color: bool,
-    pub last_viewport_wire_color: [f32; 3],
+    pub last_viewport_wire_color: [f32; 4],
     pub last_viewport_wire_width: f32,
     /// Opacity of the rendered node geometry (the Render node's "Opacity"
     /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
@@ -2835,10 +2837,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             wireframe: false,
             last_viewport_wireframe: false,
             wire_single_color: false,
-            wire_color: [1.0, 1.0, 1.0],
+            wire_color: [1.0, 1.0, 1.0, 1.0],
             wire_width: 1.0,
             last_viewport_wire_single_color: false,
-            last_viewport_wire_color: [1.0, 1.0, 1.0],
+            last_viewport_wire_color: [1.0, 1.0, 1.0, 1.0],
             last_viewport_wire_width: 1.0,
             geo_opacity: 1.0,
             last_viewport_geo_opacity: 1.0,
@@ -5441,12 +5443,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             // fill beneath. Far-side wires that clear the
                             // depth test near the limb show as their own
                             // (complementary) colors — a soft x-ray read.
+                            // The wires' opacity is the Wire Color ALPHA in
+                            // both modes; the geometry Opacity slider is
+                            // polygons-only.
                             let tint = if self.wire_single_color {
                                 [self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0]
                             } else {
                                 [0.0, 0.0, 0.0, 0.0]
                             };
-                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: geo_opacity, line_width: self.wire_width, wire_base_width: 0.0 });
+                            let wire_alpha = self.wire_color[3].clamp(0.0, 1.0);
+                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0 });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);

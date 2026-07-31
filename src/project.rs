@@ -15,6 +15,20 @@ fn hex_to_color(hex: &str) -> Option<[f32; 3]> {
     cce_ui::color::parse_hex_rgb(hex)
 }
 
+fn color_to_hex8(rgba: [f32; 4]) -> String {
+    format!("#{:02x}{:02x}{:02x}{:02x}",
+        (rgba[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (rgba[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (rgba[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (rgba[3] * 255.0).round().clamp(0.0, 255.0) as u8
+    )
+}
+
+/// 6- or 8-digit hex → RGBA (alpha 1.0 when absent).
+fn hex_to_rgba(hex: &str) -> Option<[f32; 4]> {
+    cce_ui::color::parse_hex_rgba(hex)
+}
+
 impl State {
 
 
@@ -530,7 +544,9 @@ impl State {
         ensure_param(render_node, "Render Settings", "section", "", &[], None, None, None);
         ensure_param(render_node, "Show Wireframe", "toggle", bool_str(wireframe), &[], None, None, None);
         ensure_param(render_node, "Wire Single Color", "toggle", bool_str(wire_single_color), &[], None, None, None);
-        ensure_param(render_node, "Wire Color", "color", &color_to_hex(wire_color), &[], None, None, None);
+        // rgba: the alpha channel is the wireframe's own opacity (the
+        // geometry Opacity slider deliberately leaves wires alone).
+        ensure_param(render_node, "Wire Color", "rgba", &color_to_hex8(wire_color), &[], None, None, None);
         ensure_param(render_node, "Wire Thickness", "slider:1.0:8.0:1", &format!("{:.1}", wire_width), &[], Some(1.0), Some(8.0), None);
         ensure_param(render_node, "Opacity", "slider:0.00:1.00", &format!("{:.2}", geo_opacity), &[], Some(0.0), Some(1.0), None);
         ensure_param(render_node, "Render Points", "toggle", bool_str(render_points), &[], None, None, None);
@@ -541,7 +557,11 @@ impl State {
             match p.name.as_str() {
                 "Show Wireframe" => set_toggle(p, wireframe),
                 "Wire Single Color" => set_toggle(p, wire_single_color),
-                "Wire Color" => p.default = color_to_hex(wire_color),
+                "Wire Color" => {
+                    // Type migration: early saves carried a plain rgb color.
+                    p.param_type = "rgba".to_string();
+                    p.default = color_to_hex8(wire_color);
+                }
                 "Wire Thickness" => p.default = format!("{:.1}", wire_width),
                 "Opacity" => p.default = format!("{:.2}", geo_opacity),
                 "Render Points" => set_toggle(p, render_points),
@@ -690,7 +710,7 @@ impl State {
                 match p.name.as_str() {
                     "Show Wireframe" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe = val; }
                     "Wire Single Color" => if let Ok(val) = p.default.parse::<bool>() { self.wire_single_color = val; }
-                    "Wire Color" => if let Some(col) = hex_to_color(&p.default) { self.wire_color = col; }
+                    "Wire Color" => if let Some(col) = hex_to_rgba(&p.default) { self.wire_color = col; }
                     "Wire Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.wire_width = val.clamp(1.0, 8.0); }
                     "Opacity" => if let Ok(val) = p.default.parse::<f32>() { self.geo_opacity = val.clamp(0.0, 1.0); }
                     "Render Points" => if let Ok(val) = p.default.parse::<bool>() { self.render_points = val; }
