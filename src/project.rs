@@ -270,6 +270,8 @@ impl State {
         let show_spreadsheet = self.show_spreadsheet;
         let show_playbar = self.show_playbar;
         let wireframe = self.wireframe;
+        let wire_single_color = self.wire_single_color;
+        let wire_color = self.wire_color;
         let geo_opacity = self.geo_opacity;
         let render_points = self.render_points;
         let point_size = self.point_size;
@@ -526,6 +528,8 @@ impl State {
 
         ensure_param(render_node, "Render Settings", "section", "", &[], None, None, None);
         ensure_param(render_node, "Show Wireframe", "toggle", bool_str(wireframe), &[], None, None, None);
+        ensure_param(render_node, "Wire Single Color", "toggle", bool_str(wire_single_color), &[], None, None, None);
+        ensure_param(render_node, "Wire Color", "color", &color_to_hex(wire_color), &[], None, None, None);
         ensure_param(render_node, "Opacity", "slider:0.00:1.00", &format!("{:.2}", geo_opacity), &[], Some(0.0), Some(1.0), None);
         ensure_param(render_node, "Render Points", "toggle", bool_str(render_points), &[], None, None, None);
         ensure_param(render_node, "Point Size", "slider:0.01:0.30", &format!("{:.2}", point_size), &[], Some(0.01), Some(0.30), None);
@@ -534,6 +538,8 @@ impl State {
         for p in render_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Wireframe" => set_toggle(p, wireframe),
+                "Wire Single Color" => set_toggle(p, wire_single_color),
+                "Wire Color" => p.default = color_to_hex(wire_color),
                 "Opacity" => p.default = format!("{:.2}", geo_opacity),
                 "Render Points" => set_toggle(p, render_points),
                 "Point Size" => p.default = format!("{:.2}", point_size),
@@ -673,6 +679,8 @@ impl State {
             for p in &params {
                 match p.name.as_str() {
                     "Show Wireframe" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe = val; }
+                    "Wire Single Color" => if let Ok(val) = p.default.parse::<bool>() { self.wire_single_color = val; }
+                    "Wire Color" => if let Some(col) = hex_to_color(&p.default) { self.wire_color = col; }
                     "Opacity" => if let Ok(val) = p.default.parse::<f32>() { self.geo_opacity = val.clamp(0.0, 1.0); }
                     "Render Points" => if let Ok(val) = p.default.parse::<bool>() { self.render_points = val; }
                     "Point Size" => if let Ok(val) = p.default.parse::<f32>() { self.point_size = val.clamp(0.005, 1.0); }

@@ -985,12 +985,17 @@ pub struct State {
     pub last_viewport_active_camera: String,
     pub last_viewport_show_viewport: bool,
     /// Wireframe display of the node geometry (the Render utility node's
-    /// "Show Wireframe" toggle).
+    /// "Show Wireframe" toggle): a wire pass drawn IN ADDITION to the filled
+    /// geometry, never instead of it.
     pub wireframe: bool,
     pub last_viewport_wireframe: bool,
-    /// Draw the wireframe OVER the shaded geometry (the Render node's
-    /// "Wireframe Overlay" toggle) — edges visualized without giving up the
-    /// filled primitives. Wins over `wireframe` when both are set.
+    /// "Wire Single Color" toggle: on, the wires draw in `wire_color`; off,
+    /// they keep the geometry's vertex colors (darkened enough to separate
+    /// from the identical fill beneath).
+    pub wire_single_color: bool,
+    pub wire_color: [f32; 3],
+    pub last_viewport_wire_single_color: bool,
+    pub last_viewport_wire_color: [f32; 3],
     /// Opacity of the rendered node geometry (the Render node's "Opacity"
     /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
     pub geo_opacity: f32,
@@ -2822,6 +2827,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_show_viewport: false,
             wireframe: false,
             last_viewport_wireframe: false,
+            wire_single_color: false,
+            wire_color: [1.0, 1.0, 1.0],
+            last_viewport_wire_single_color: false,
+            last_viewport_wire_color: [1.0, 1.0, 1.0],
             geo_opacity: 1.0,
             last_viewport_geo_opacity: 1.0,
             render_points: false,
@@ -5355,6 +5364,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     || self.last_viewport_show_viewport != self.show_viewport
                     || self.last_viewport_wireframe != self.wireframe
                     || self.last_viewport_geo_opacity != self.geo_opacity
+                    || self.last_viewport_wire_single_color != self.wire_single_color
+                    || self.last_viewport_wire_color != self.wire_color
                     || self.last_viewport_render_points != self.render_points
                     || self.last_viewport_point_size != self.point_size
                     || self.last_viewport_point_color != self.point_color;
@@ -5396,7 +5407,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity });
                     }
                     if self.vertex_count_spheres > 0 {
-                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: self.wireframe, wire_tint: NO_TINT, opacity: geo_opacity });
+                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity });
+                        if self.wireframe {
+                            // The wire pass rides ON TOP of the fill (never
+                            // replaces it). Single-color mode replaces the
+                            // fragment color outright; geometry-color mode
+                            // keeps the vertex colors, darkened 45% so the
+                            // wires separate from the identical fill beneath
+                            // (a full-strength copy would vanish into it).
+                            let tint = if self.wire_single_color {
+                                [self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0]
+                            } else {
+                                [0.0, 0.0, 0.0, 0.45]
+                            };
+                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: true, wire_tint: tint, opacity: geo_opacity });
+                        }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
                     }
@@ -5421,6 +5446,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_show_viewport = self.show_viewport;
                     self.last_viewport_wireframe = self.wireframe;
                     self.last_viewport_geo_opacity = self.geo_opacity;
+                    self.last_viewport_wire_single_color = self.wire_single_color;
+                    self.last_viewport_wire_color = self.wire_color;
                     self.last_viewport_render_points = self.render_points;
                     self.last_viewport_point_size = self.point_size;
                     self.last_viewport_point_color = self.point_color;
