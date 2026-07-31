@@ -804,6 +804,10 @@ pub struct SceneMeshes {
     pub cube: cce_ui::vk::MeshId,
     pub viewport_bg: cce_ui::vk::MeshId,
     pub spheres: cce_ui::vk::MeshId,
+    /// LINE_LIST edge expansion of `spheres` (vertex pairs per triangle
+    /// edge) — the wire pass draws real line primitives, never
+    /// PolygonMode::LINE (driver-broken; see cce-ui's scene stage).
+    pub sphere_edges: cce_ui::vk::MeshId,
     pub grid: cce_ui::vk::MeshId,
     pub origin: cce_ui::vk::MeshId,
     pub pivot: cce_ui::vk::MeshId,
@@ -990,12 +994,15 @@ pub struct State {
     pub wireframe: bool,
     pub last_viewport_wireframe: bool,
     /// "Wire Single Color" toggle: on, the wires draw in `wire_color`; off,
-    /// they keep the geometry's vertex colors (darkened enough to separate
-    /// from the identical fill beneath).
+    /// they carry the geometry's vertex colors unlit — brighter than the lit
+    /// fill beneath, which is what separates them.
     pub wire_single_color: bool,
     pub wire_color: [f32; 3],
+    /// Wire line width in framebuffer pixels ("Wire Thickness" slider).
+    pub wire_width: f32,
     pub last_viewport_wire_single_color: bool,
     pub last_viewport_wire_color: [f32; 3],
+    pub last_viewport_wire_width: f32,
     /// Opacity of the rendered node geometry (the Render node's "Opacity"
     /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
     pub geo_opacity: f32,
@@ -2829,8 +2836,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_wireframe: false,
             wire_single_color: false,
             wire_color: [1.0, 1.0, 1.0],
+            wire_width: 1.0,
             last_viewport_wire_single_color: false,
             last_viewport_wire_color: [1.0, 1.0, 1.0],
+            last_viewport_wire_width: 1.0,
             geo_opacity: 1.0,
             last_viewport_geo_opacity: 1.0,
             render_points: false,
@@ -5203,6 +5212,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if self.spheres_dirty {
             self.spheres_dirty = false;
             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&self.rt_sphere_verts));
+            // Edge mesh for the wire pass: each triangle's three edges as
+            // LINE_LIST vertex pairs, carrying the same colors.
+            let mut edges = Vec::with_capacity(self.rt_sphere_verts.len() * 2);
+            for tri in self.rt_sphere_verts.chunks_exact(3) {
+                for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+                    edges.push(tri[a]);
+                    edges.push(tri[b]);
+                }
+            }
+            renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&edges));
         }
 
         // The Render node's point display: rebuilt whenever the geometry or
@@ -5246,6 +5265,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             cube: renderer.create_mesh(bytemuck::cast_slice(&cube_verts)),
             viewport_bg: renderer.create_mesh(bytemuck::cast_slice(&bg_verts)),
             spheres: renderer.create_mesh(&[]),
+            sphere_edges: renderer.create_mesh(&[]),
             grid: renderer.create_mesh(bytemuck::cast_slice(&grid_verts)),
             origin: renderer.create_mesh(bytemuck::cast_slice(&origin_verts)),
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
@@ -5366,6 +5386,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     || self.last_viewport_geo_opacity != self.geo_opacity
                     || self.last_viewport_wire_single_color != self.wire_single_color
                     || self.last_viewport_wire_color != self.wire_color
+                    || self.last_viewport_wire_width != self.wire_width
                     || self.last_viewport_render_points != self.render_points
                     || self.last_viewport_point_size != self.point_size
                     || self.last_viewport_point_color != self.point_color;
@@ -5390,37 +5411,42 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     // furniture stays opaque.
                     const NO_TINT: [f32; 4] = [0.0; 4];
                     let geo_opacity = self.geo_opacity.clamp(0.0, 1.0);
-                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 }];
+                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 }];
                     if self.viewport().show_grid {
-                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
+                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.viewport().show_origin {
-                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
+                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.viewport().show_camera_pivot {
-                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
+                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.viewport().show_cube {
-                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
+                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.render_points && self.point_vertex_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity });
+                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.vertex_count_spheres > 0 {
-                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity });
+                        // With wires coming, the fill is pushed back by its
+                        // slope-scaled offset so the lattice reads solid.
+                        let base = if self.wireframe { self.wire_width } else { 0.0 };
+                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base });
                         if self.wireframe {
                             // The wire pass rides ON TOP of the fill (never
                             // replaces it). Single-color mode replaces the
                             // fragment color outright; geometry-color mode
-                            // keeps the vertex colors, darkened 45% so the
-                            // wires separate from the identical fill beneath
-                            // (a full-strength copy would vanish into it).
+                            // draws the raw vertex colors — the wire pass is
+                            // unlit, so they read brighter than the shaded
+                            // fill beneath. Far-side wires that clear the
+                            // depth test near the limb show as their own
+                            // (complementary) colors — a soft x-ray read.
                             let tint = if self.wire_single_color {
                                 [self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0]
                             } else {
-                                [0.0, 0.0, 0.0, 0.45]
+                                [0.0, 0.0, 0.0, 0.0]
                             };
-                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: true, wire_tint: tint, opacity: geo_opacity });
+                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: geo_opacity, line_width: self.wire_width, wire_base_width: 0.0 });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
@@ -5448,6 +5474,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_geo_opacity = self.geo_opacity;
                     self.last_viewport_wire_single_color = self.wire_single_color;
                     self.last_viewport_wire_color = self.wire_color;
+                    self.last_viewport_wire_width = self.wire_width;
                     self.last_viewport_render_points = self.render_points;
                     self.last_viewport_point_size = self.point_size;
                     self.last_viewport_point_color = self.point_color;
