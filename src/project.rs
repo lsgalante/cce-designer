@@ -532,7 +532,7 @@ impl State {
         ensure_param(render_node, "Wire Color", "color", &color_to_hex(wire_color), &[], None, None, None);
         ensure_param(render_node, "Opacity", "slider:0.00:1.00", &format!("{:.2}", geo_opacity), &[], Some(0.0), Some(1.0), None);
         ensure_param(render_node, "Render Points", "toggle", bool_str(render_points), &[], None, None, None);
-        ensure_param(render_node, "Point Size", "slider:0.00:0.10", &format!("{:.2}", point_size), &[], Some(0.0), Some(0.10), None);
+        ensure_param(render_node, "Point Size", "slider:0.000:0.100:3", &format!("{:.3}", point_size), &[], Some(0.0), Some(0.10), None);
         ensure_param(render_node, "Point Color", "color", &color_to_hex(point_color), &[], None, None, None);
 
         for p in render_node.params.iter_mut() {
@@ -543,11 +543,12 @@ impl State {
                 "Opacity" => p.default = format!("{:.2}", geo_opacity),
                 "Render Points" => set_toggle(p, render_points),
                 "Point Size" => {
-                    // Range migration: older saves carried slider:0.01:0.30.
-                    p.param_type = "slider:0.00:0.10".to_string();
+                    // Range/precision migration: older saves carried
+                    // slider:0.01:0.30 (2 decimals).
+                    p.param_type = "slider:0.000:0.100:3".to_string();
                     p.min = Some(0.0);
                     p.max = Some(0.10);
-                    p.default = format!("{:.2}", point_size);
+                    p.default = format!("{:.3}", point_size);
                 }
                 "Point Color" => p.default = color_to_hex(point_color),
                 _ => {}
