@@ -991,8 +991,10 @@ pub struct State {
     /// Draw the wireframe OVER the shaded geometry (the Render node's
     /// "Wireframe Overlay" toggle) — edges visualized without giving up the
     /// filled primitives. Wins over `wireframe` when both are set.
-    pub wireframe_overlay: bool,
-    pub last_viewport_wireframe_overlay: bool,
+    /// Opacity of the rendered node geometry (the Render node's "Opacity"
+    /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
+    pub geo_opacity: f32,
+    pub last_viewport_geo_opacity: f32,
     /// Point display of the node geometry (the Render node's "Render Points"
     /// toggle): one small octahedron per distinct vertex, sized by
     /// "Point Size" and tinted by "Point Color".
@@ -2820,8 +2822,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_show_viewport: false,
             wireframe: false,
             last_viewport_wireframe: false,
-            wireframe_overlay: false,
-            last_viewport_wireframe_overlay: false,
+            geo_opacity: 1.0,
+            last_viewport_geo_opacity: 1.0,
             render_points: false,
             point_size: 0.02,
             point_color: [1.0, 1.0, 1.0],
@@ -5352,7 +5354,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     || self.last_viewport_active_camera != self.active_camera
                     || self.last_viewport_show_viewport != self.show_viewport
                     || self.last_viewport_wireframe != self.wireframe
-                    || self.last_viewport_wireframe_overlay != self.wireframe_overlay
+                    || self.last_viewport_geo_opacity != self.geo_opacity
                     || self.last_viewport_render_points != self.render_points
                     || self.last_viewport_point_size != self.point_size
                     || self.last_viewport_point_color != self.point_color;
@@ -5372,41 +5374,29 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     let mvp_pivot = (proj * view_mat * model_pivot).to_cols_array_2d();
 
                     // Same draw order as the wgpu pass: bg quad, grid, origin,
-                    // pivot, cube, spheres.
+                    // pivot, cube, spheres. The node geometry (points +
+                    // spheres) carries the Render node's Opacity; scene
+                    // furniture stays opaque.
                     const NO_TINT: [f32; 4] = [0.0; 4];
-                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT }];
+                    let geo_opacity = self.geo_opacity.clamp(0.0, 1.0);
+                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 }];
                     if self.viewport().show_grid {
-                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT });
+                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
                     }
                     if self.viewport().show_origin {
-                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT });
+                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
                     }
                     if self.viewport().show_camera_pivot {
-                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT });
+                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
                     }
                     if self.viewport().show_cube {
-                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT });
+                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0 });
                     }
                     if self.render_points && self.point_vertex_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT });
+                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity });
                     }
                     if self.vertex_count_spheres > 0 {
-                        if self.wireframe_overlay {
-                            // Shaded + wireframe: the filled mesh, then its
-                            // wire pass darkened so the edges separate from
-                            // the identical fill (the wire pipeline's depth
-                            // bias keeps the lines above the coplanar fill).
-                            // The tint stays PARTIAL: wires keep a share of
-                            // their world-anchored vertex colors — a flat
-                            // black lattice is azimuthally unmarked (a UV
-                            // sphere's wires self-map every segment step), so
-                            // it perceptually glues the mesh to the camera
-                            // during orbits, dominating the fill's cues.
-                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT });
-                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: true, wire_tint: [0.0, 0.0, 0.0, 0.45] });
-                        } else {
-                            draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: self.wireframe, wire_tint: NO_TINT });
-                        }
+                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: self.wireframe, wire_tint: NO_TINT, opacity: geo_opacity });
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
                     }
@@ -5430,7 +5420,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.last_viewport_active_camera = self.active_camera.clone();
                     self.last_viewport_show_viewport = self.show_viewport;
                     self.last_viewport_wireframe = self.wireframe;
-                    self.last_viewport_wireframe_overlay = self.wireframe_overlay;
+                    self.last_viewport_geo_opacity = self.geo_opacity;
                     self.last_viewport_render_points = self.render_points;
                     self.last_viewport_point_size = self.point_size;
                     self.last_viewport_point_color = self.point_color;
