@@ -171,6 +171,42 @@ impl Paint for Playbar {
             ctx.recess(track, (tr, tr, tr, tr), recess_t);
         }
 
+        // Tick marks: frame steps on the 1-2-5 ladder, grown until minors sit
+        // >=6px apart. Every 5th step is a major — taller, brighter, and
+        // labeled with its frame number when the pane has room below the
+        // track and majors aren't crowded.
+        let range = (self.end_frame - self.start_frame).max(1.0);
+        let ppf = track.width / range;
+        let mut step = 1.0f32;
+        let cycle = [2.0f32, 2.5, 2.0];
+        let mut ci = 0;
+        while step * ppf < 6.0 {
+            step *= cycle[ci % 3];
+            ci += 1;
+        }
+        let major = step * 5.0;
+        let minor_col = [0.82, 0.84, 0.90, 0.30];
+        let major_col = [0.87, 0.89, 0.94, 0.55];
+        let below = rect.y + rect.height - (track.y + track.height);
+        let label_room = below >= 14.0 && major * ppf >= 34.0;
+        let mut f = (self.start_frame / step).ceil() * step;
+        while f <= self.end_frame + 0.001 {
+            let x = track.x + ((f - self.start_frame) / range) * track.width;
+            let is_major = (f / major - (f / major).round()).abs() < 1e-3;
+            if is_major {
+                ctx.quad(Rect { x: x - 0.5, y: track.y, width: 1.0, height: track.height + 3.0 }, major_col);
+                if label_room && x + 24.0 <= track.x + track.width {
+                    ctx.text(format!("{}", f.round() as i64), x + 3.0, track.y + track.height + 2.0, 9.0, [0x8a, 0x8a, 0x96]);
+                }
+            } else {
+                ctx.quad(
+                    Rect { x: x - 0.5, y: track.y + track.height * 0.45, width: 1.0, height: track.height * 0.55 },
+                    minor_col,
+                );
+            }
+            f += step;
+        }
+
         // Playhead: a full-height line over the track, in the DE accent.
         let px = track.x + self.t() * track.width;
         ctx.quad(Rect { x: px - 1.0, y: track.y - 3.0, width: 2.0, height: track.height + 6.0 }, accent);
