@@ -423,11 +423,8 @@ impl State {
         }
 
         ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
-        ensure_param(main_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
-        ensure_param(main_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
         ensure_param(main_node, "Camera Pivot Size", "spinbox", &((self.camera_pivot_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
         ensure_param(main_node, "Background Color", "color", &color_to_hex(vp_bg_color), &[], None, None, None);
-        ensure_param(main_node, "Grid Color", "color", &color_to_hex(vp_grid_color), &[], None, None, None);
 
         // Style — the DE-chrome styling this instance renders with. The bevel
         // profile ramp reshapes every recess/boss wall live (the identity 0→1
@@ -459,7 +456,7 @@ impl State {
         // dispatched. Drop it from older saves too.
         main_node.params.retain(|p| !matches!(p.name.as_str(), "Help" | "About"));
 
-        // The viewport guide toggles moved to the Guides utility node: retire
+        // The viewport guide params moved to the Guides utility node: retire
         // Main's copies, keeping an older save's values as the seeds.
         let migrated_grid = main_node.params.iter()
             .find(|p| p.name == "Show Grid Guide")
@@ -470,8 +467,21 @@ impl State {
         let migrated_origin = main_node.params.iter()
             .find(|p| p.name == "Show Origin Axes")
             .and_then(|p| p.default.parse::<bool>().ok());
+        let migrated_thickness = main_node.params.iter()
+            .find(|p| p.name == "Grid Thickness")
+            .map(|p| p.default.clone());
+        let migrated_origin_size = main_node.params.iter()
+            .find(|p| p.name == "Origin Guide Size")
+            .map(|p| p.default.clone());
+        let migrated_grid_color = main_node.params.iter()
+            .find(|p| p.name == "Grid Color")
+            .map(|p| p.default.clone());
         main_node.params.retain(|p| {
-            !matches!(p.name.as_str(), "Show Grid Guide" | "Show Reference Cube" | "Show Origin Axes")
+            !matches!(
+                p.name.as_str(),
+                "Show Grid Guide" | "Show Reference Cube" | "Show Origin Axes"
+                    | "Grid Thickness" | "Origin Guide Size" | "Grid Color"
+            )
         });
 
         // Square Aspect / Show Camera Pivot moved to the camera nodes
@@ -504,7 +514,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 33] = [
+        const MAIN_PARAM_ORDER: [&str; 30] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "View", "Show Viewport Pane", "Show Parameters Pane",
@@ -512,8 +522,8 @@ impl State {
             "Network", "Show Network Pane", "Zoom In", "Zoom Out",
             "Reset Zoom", "Detach Circular Window", "Circular Pane",
             "Viewport", "Active Camera",
-            "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
-            "Camera Pivot Size", "Background Color", "Grid Color",
+            "Ray Traced Preview",
+            "Camera Pivot Size", "Background Color",
             "Style", "Bevel Profile", "Edge Profile", "Plate Color",
         ];
         main_node.params.sort_by_key(|p| {
@@ -548,6 +558,14 @@ impl State {
         ensure_param(guides_node, "Show Grid Guide", "toggle", bool_str(migrated_grid.unwrap_or(vp_show_grid)), &[], None, None, None);
         ensure_param(guides_node, "Show Reference Cube", "toggle", bool_str(migrated_cube.unwrap_or(vp_show_cube)), &[], None, None, None);
         ensure_param(guides_node, "Show Origin Axes", "toggle", bool_str(migrated_origin.unwrap_or(vp_show_origin)), &[], None, None, None);
+        let thickness_seed = migrated_thickness
+            .unwrap_or_else(|| ((self.grid_thickness * 1000.0) as i32).to_string());
+        ensure_param(guides_node, "Grid Thickness", "spinbox", &thickness_seed, &[], Some(2.0), Some(200.0), Some(1.0));
+        let origin_size_seed = migrated_origin_size
+            .unwrap_or_else(|| ((self.origin_size * 10.0) as i32).to_string());
+        ensure_param(guides_node, "Origin Guide Size", "spinbox", &origin_size_seed, &[], Some(1.0), Some(50.0), Some(1.0));
+        let grid_color_seed = migrated_grid_color.unwrap_or_else(|| color_to_hex(vp_grid_color));
+        ensure_param(guides_node, "Grid Color", "color", &grid_color_seed, &[], None, None, None);
         for p in guides_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Grid Guide" => set_toggle(p, vp_show_grid),
@@ -667,6 +685,9 @@ impl State {
                     "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
                     "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_cube = val; }
                     "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_origin = val; }
+                    "Grid Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.grid_thickness = val / 1000.0; }
+                    "Origin Guide Size" => if let Ok(val) = p.default.parse::<f32>() { self.origin_size = val / 10.0; }
+                    "Grid Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_mut().grid_color = col; }
                     _ => {}
                 }
             }
