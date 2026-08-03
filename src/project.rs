@@ -422,8 +422,6 @@ impl State {
             ensure_param(main_node, "Active Camera", "choice", &self.active_camera, &camera_options_refs, None, None, None);
         }
 
-        ensure_param(main_node, "Show Reference Cube", "toggle", bool_str(vp_show_cube), &[], None, None, None);
-        ensure_param(main_node, "Show Origin Axes", "toggle", bool_str(vp_show_origin), &[], None, None, None);
         ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
         ensure_param(main_node, "Grid Thickness", "spinbox", &((self.grid_thickness * 1000.0) as i32).to_string(), &[], Some(2.0), Some(200.0), Some(1.0));
         ensure_param(main_node, "Origin Guide Size", "spinbox", &((self.origin_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
@@ -461,12 +459,20 @@ impl State {
         // dispatched. Drop it from older saves too.
         main_node.params.retain(|p| !matches!(p.name.as_str(), "Help" | "About"));
 
-        // The grid toggle moved to the Guides utility node: retire Main's
-        // copy, keeping an older save's value as the seed.
+        // The viewport guide toggles moved to the Guides utility node: retire
+        // Main's copies, keeping an older save's values as the seeds.
         let migrated_grid = main_node.params.iter()
             .find(|p| p.name == "Show Grid Guide")
             .and_then(|p| p.default.parse::<bool>().ok());
-        main_node.params.retain(|p| p.name != "Show Grid Guide");
+        let migrated_cube = main_node.params.iter()
+            .find(|p| p.name == "Show Reference Cube")
+            .and_then(|p| p.default.parse::<bool>().ok());
+        let migrated_origin = main_node.params.iter()
+            .find(|p| p.name == "Show Origin Axes")
+            .and_then(|p| p.default.parse::<bool>().ok());
+        main_node.params.retain(|p| {
+            !matches!(p.name.as_str(), "Show Grid Guide" | "Show Reference Cube" | "Show Origin Axes")
+        });
 
         // Square Aspect / Show Camera Pivot moved to the camera nodes
         // (per-camera display params): retire Main's copies, keeping an older
@@ -484,9 +490,7 @@ impl State {
         // reflect live pane state so a reopened project shows real switches.
         for p in main_node.params.iter_mut() {
             match p.name.as_str() {
-                "Circular Pane" | "Show Grid Guide"
-                | "Show Reference Cube" | "Show Origin Axes"
-                | "Ray Traced Preview" => {
+                "Circular Pane" | "Ray Traced Preview" => {
                     p.param_type = "toggle".to_string();
                     p.options.clear();
                     if p.default != "true" { p.default = "false".to_string(); }
@@ -500,7 +504,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 35] = [
+        const MAIN_PARAM_ORDER: [&str; 33] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "View", "Show Viewport Pane", "Show Parameters Pane",
@@ -508,7 +512,6 @@ impl State {
             "Network", "Show Network Pane", "Zoom In", "Zoom Out",
             "Reset Zoom", "Detach Circular Window", "Circular Pane",
             "Viewport", "Active Camera",
-            "Show Reference Cube", "Show Origin Axes",
             "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
             "Camera Pivot Size", "Background Color", "Grid Color",
             "Style", "Bevel Profile", "Edge Profile", "Plate Color",
@@ -541,12 +544,16 @@ impl State {
         // migrated off Main), sitting in the cell Render vacated.
         let guides_node = find_or_create_subnet(&mut self.fs_root, "Guides", "utility", (0.0, 1.0));
         guides_node.children.clear();
-        let show_grid_seed = migrated_grid.unwrap_or(vp_show_grid);
         ensure_param(guides_node, "Guides", "section", "", &[], None, None, None);
-        ensure_param(guides_node, "Show Grid Guide", "toggle", bool_str(show_grid_seed), &[], None, None, None);
+        ensure_param(guides_node, "Show Grid Guide", "toggle", bool_str(migrated_grid.unwrap_or(vp_show_grid)), &[], None, None, None);
+        ensure_param(guides_node, "Show Reference Cube", "toggle", bool_str(migrated_cube.unwrap_or(vp_show_cube)), &[], None, None, None);
+        ensure_param(guides_node, "Show Origin Axes", "toggle", bool_str(migrated_origin.unwrap_or(vp_show_origin)), &[], None, None, None);
         for p in guides_node.params.iter_mut() {
-            if p.name == "Show Grid Guide" {
-                set_toggle(p, vp_show_grid);
+            match p.name.as_str() {
+                "Show Grid Guide" => set_toggle(p, vp_show_grid),
+                "Show Reference Cube" => set_toggle(p, vp_show_cube),
+                "Show Origin Axes" => set_toggle(p, vp_show_origin),
+                _ => {}
             }
             if p.param_type == "toggle" {
                 if let Some(rest) = p.name.strip_prefix("Show ") {
@@ -656,10 +663,11 @@ impl State {
         if let Some(guides_idx) = self.fs_root.children.iter().position(|c| c.name == "Guides") {
             let params = self.fs_root.children[guides_idx].params.clone();
             for p in &params {
-                if p.name == "Show Grid Guide" {
-                    if let Ok(val) = p.default.parse::<bool>() {
-                        self.viewport_mut().show_grid = val;
-                    }
+                match p.name.as_str() {
+                    "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
+                    "Show Reference Cube" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_cube = val; }
+                    "Show Origin Axes" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_origin = val; }
+                    _ => {}
                 }
             }
         }
