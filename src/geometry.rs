@@ -398,6 +398,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_transform_geometry_with_errors(root, target, visited, ocl_error)
     } else if target.node_type.eq_ignore_ascii_case("scatter") {
         resolve_scatter_geometry_with_errors(root, target, visited, ocl_error)
+    } else if target.node_type.eq_ignore_ascii_case("group") {
+        resolve_group_geometry_with_errors(root, target, visited, ocl_error)
     } else if target.node_type.eq_ignore_ascii_case("opencl") {
         resolve_opencl_geometry_with_errors(root, target, visited, ocl_error)
     } else if target.node_type.eq_ignore_ascii_case("node") {
@@ -476,6 +478,99 @@ pub fn resolve_transform_geometry_with_errors(
 pub fn resolve_scatter_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
     let mut err = None;
     resolve_scatter_geometry_with_errors(root, target, visited, &mut err)
+}
+
+/// The Group node: pass the input geometry through, tagging the elements
+/// selected by an axis-aligned box (Center/Size) with a per-vertex membership
+/// attribute `group:<name>` = Float(1.0). Element Type picks the selection
+/// unit over the triangle soup — Points (per vertex), Primitives (a
+/// triangle's centroid; all three vertices tag together), Edges (a triangle
+/// edge with both endpoints inside; its two vertices tag). Membership rides
+/// GVertex::attributes so it survives merges and native filters — downstream
+/// nodes consume it by reading the same attribute. Highlight tints members
+/// toward a warm accent so the group reads in the viewport.
+pub fn resolve_group_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+) -> Option<Geometry> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)?;
+
+    let group_name = node_param_str(target, "Group Name", "group1");
+    let attr = format!("group:{}", group_name.trim());
+    let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
+    let center = node_param_vec3(target, "Center", Vec3::ZERO);
+    let half = node_param_vec3(target, "Size", Vec3::ONE) * 0.5;
+    let invert = node_param_str(target, "Invert", "false") == "true";
+    let highlight = node_param_str(target, "Highlight", "true") == "true";
+
+    let inside = |p: &[f32; 3]| -> bool {
+        (p[0] - center.x).abs() <= half.x
+            && (p[1] - center.y).abs() <= half.y
+            && (p[2] - center.z).abs() <= half.z
+    };
+
+    let n = geom.vertices.len();
+    let mut member = vec![false; n];
+    match etype.as_str() {
+        "primitives" => {
+            for tri in 0..n / 3 {
+                let b = tri * 3;
+                let centroid = [
+                    (geom.vertices[b].pos[0] + geom.vertices[b + 1].pos[0] + geom.vertices[b + 2].pos[0]) / 3.0,
+                    (geom.vertices[b].pos[1] + geom.vertices[b + 1].pos[1] + geom.vertices[b + 2].pos[1]) / 3.0,
+                    (geom.vertices[b].pos[2] + geom.vertices[b + 1].pos[2] + geom.vertices[b + 2].pos[2]) / 3.0,
+                ];
+                if inside(&centroid) {
+                    member[b] = true;
+                    member[b + 1] = true;
+                    member[b + 2] = true;
+                }
+            }
+        }
+        "edges" => {
+            for tri in 0..n / 3 {
+                let b = tri * 3;
+                for (a, c) in [(0usize, 1usize), (1, 2), (2, 0)] {
+                    if inside(&geom.vertices[b + a].pos) && inside(&geom.vertices[b + c].pos) {
+                        member[b + a] = true;
+                        member[b + c] = true;
+                    }
+                }
+            }
+        }
+        _ => {
+            for (i, v) in geom.vertices.iter().enumerate() {
+                if inside(&v.pos) {
+                    member[i] = true;
+                }
+            }
+        }
+    }
+    if invert {
+        for m in member.iter_mut() {
+            *m = !*m;
+        }
+    }
+
+    for (i, v) in geom.vertices.iter_mut().enumerate() {
+        if member[i] {
+            v.attributes.insert(attr.clone(), GAttribute::Float(1.0));
+            if highlight {
+                let acc = [1.0, 0.78, 0.20];
+                for k in 0..3 {
+                    v.col[k] = v.col[k] * 0.35 + acc[k] * 0.65;
+                }
+            }
+        }
+    }
+    Some(geom)
 }
 
 struct PrecomputedTriangle {
@@ -1155,6 +1250,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "input"
         || nt == "output"
         || nt == "scatter"
+        || nt == "group"
 }
 
 pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
@@ -1214,6 +1310,15 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_scatter_geometry_with_errors(root, node, &mut visited, ocl_error) {
+                    out.merge(geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("group") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_group_geometry_with_errors(root, node, &mut visited, ocl_error) {
                     out.merge(geom);
                 }
             }
