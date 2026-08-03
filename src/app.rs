@@ -1867,22 +1867,26 @@ impl State {
     }
 
     fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
-        let live: [(&str, bool); 10] = [
+        let live_main: [(&str, bool); 9] = [
             ("Show Network Pane", self.show_network),
             ("Show Viewport Pane", self.show_viewport),
             ("Show Parameters Pane", self.show_parameters),
             ("Show Spreadsheet Pane", self.show_spreadsheet),
             ("Show Playbar Pane", self.show_playbar),
             ("Circular Pane", self.circular_network_pane),
-            ("Show Grid Guide", self.viewport().show_grid),
             ("Show Reference Cube", self.viewport().show_cube),
             ("Show Origin Axes", self.viewport().show_origin),
             ("Ray Traced Preview", self.viewport().rt_mode),
         ];
+        let live_guides: [(&str, bool); 1] = [("Show Grid Guide", self.viewport().show_grid)];
         let dir = self.current_dir_mut();
         let Some(child) = dir.children.get_mut(slot_idx) else { return };
-        if child.name != "Main" { return; }
-        for (name, on) in live {
+        let live: &[(&str, bool)] = match child.name.as_str() {
+            "Main" => &live_main,
+            "Guides" => &live_guides,
+            _ => return,
+        };
+        for &(name, on) in live {
             if let Some(p) = child.params.iter_mut().find(|p| p.name == name && p.param_type == "toggle") {
                 p.default = if on { "true" } else { "false" }.to_string();
             }

@@ -422,7 +422,6 @@ impl State {
             ensure_param(main_node, "Active Camera", "choice", &self.active_camera, &camera_options_refs, None, None, None);
         }
 
-        ensure_param(main_node, "Show Grid Guide", "toggle", bool_str(vp_show_grid), &[], None, None, None);
         ensure_param(main_node, "Show Reference Cube", "toggle", bool_str(vp_show_cube), &[], None, None, None);
         ensure_param(main_node, "Show Origin Axes", "toggle", bool_str(vp_show_origin), &[], None, None, None);
         ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
@@ -462,6 +461,13 @@ impl State {
         // dispatched. Drop it from older saves too.
         main_node.params.retain(|p| !matches!(p.name.as_str(), "Help" | "About"));
 
+        // The grid toggle moved to the Guides utility node: retire Main's
+        // copy, keeping an older save's value as the seed.
+        let migrated_grid = main_node.params.iter()
+            .find(|p| p.name == "Show Grid Guide")
+            .and_then(|p| p.default.parse::<bool>().ok());
+        main_node.params.retain(|p| p.name != "Show Grid Guide");
+
         // Square Aspect / Show Camera Pivot moved to the camera nodes
         // (per-camera display params): retire Main's copies, keeping an older
         // save's values as the seed for the cameras below.
@@ -494,7 +500,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 36] = [
+        const MAIN_PARAM_ORDER: [&str; 35] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "View", "Show Viewport Pane", "Show Parameters Pane",
@@ -502,7 +508,7 @@ impl State {
             "Network", "Show Network Pane", "Zoom In", "Zoom Out",
             "Reset Zoom", "Detach Circular Window", "Circular Pane",
             "Viewport", "Active Camera",
-            "Show Grid Guide", "Show Reference Cube", "Show Origin Axes",
+            "Show Reference Cube", "Show Origin Axes",
             "Ray Traced Preview", "Grid Thickness", "Origin Guide Size",
             "Camera Pivot Size", "Background Color", "Grid Color",
             "Style", "Bevel Profile", "Edge Profile", "Plate Color",
@@ -531,10 +537,32 @@ impl State {
             }
         }
 
-        // 2. Render subnet — render/display controls, present by default like
+        // 2. Guides subnet — viewport guide toggles (home of the grid toggle,
+        // migrated off Main), sitting in the cell Render vacated.
+        let guides_node = find_or_create_subnet(&mut self.fs_root, "Guides", "utility", (0.0, 1.0));
+        guides_node.children.clear();
+        let show_grid_seed = migrated_grid.unwrap_or(vp_show_grid);
+        ensure_param(guides_node, "Guides", "section", "", &[], None, None, None);
+        ensure_param(guides_node, "Show Grid Guide", "toggle", bool_str(show_grid_seed), &[], None, None, None);
+        for p in guides_node.params.iter_mut() {
+            if p.name == "Show Grid Guide" {
+                set_toggle(p, vp_show_grid);
+            }
+            if p.param_type == "toggle" {
+                if let Some(rest) = p.name.strip_prefix("Show ") {
+                    p.label = rest.to_string();
+                }
+            }
+        }
+
+        // 3. Render subnet — render/display controls, present by default like
         // Main. Toggles reflect live state so a reopened project shows real
-        // switches.
-        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 1.0));
+        // switches. One cell below Guides; older saves parked at the old
+        // default (0,1) slide down to make room.
+        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 2.0));
+        if render_node.position == (0.0, 1.0) {
+            render_node.position = (0.0, 2.0);
+        }
         render_node.children.clear();
 
         // The overlay toggle is retired — drop it from older saves so the
@@ -625,6 +653,16 @@ impl State {
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {
+        if let Some(guides_idx) = self.fs_root.children.iter().position(|c| c.name == "Guides") {
+            let params = self.fs_root.children[guides_idx].params.clone();
+            for p in &params {
+                if p.name == "Show Grid Guide" {
+                    if let Ok(val) = p.default.parse::<bool>() {
+                        self.viewport_mut().show_grid = val;
+                    }
+                }
+            }
+        }
         if let Some(main_idx) = self.fs_root.children.iter().position(|c| c.name == "Main") {
             let params = self.fs_root.children[main_idx].params.clone();
             for p in &params {
