@@ -423,7 +423,6 @@ impl State {
         }
 
         ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
-        ensure_param(main_node, "Camera Pivot Size", "spinbox", &((self.camera_pivot_size * 10.0) as i32).to_string(), &[], Some(1.0), Some(50.0), Some(1.0));
         ensure_param(main_node, "Background Color", "color", &color_to_hex(vp_bg_color), &[], None, None, None);
 
         // Style — the DE-chrome styling this instance renders with. The bevel
@@ -493,7 +492,12 @@ impl State {
         let migrated_pivot = main_node.params.iter()
             .find(|p| p.name == "Show Camera Pivot")
             .and_then(|p| p.default.parse::<bool>().ok());
-        main_node.params.retain(|p| !matches!(p.name.as_str(), "Square Aspect" | "Show Camera Pivot"));
+        let migrated_pivot_size = main_node.params.iter()
+            .find(|p| p.name == "Camera Pivot Size")
+            .map(|p| p.default.clone());
+        main_node.params.retain(|p| {
+            !matches!(p.name.as_str(), "Square Aspect" | "Show Camera Pivot" | "Camera Pivot Size")
+        });
 
         // Boolean settings and pane-visibility items render as toggles. Older
         // saves stored these as choice dropdowns / buttons; retype them and
@@ -514,7 +518,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 30] = [
+        const MAIN_PARAM_ORDER: [&str; 29] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "View", "Show Viewport Pane", "Show Parameters Pane",
@@ -523,7 +527,7 @@ impl State {
             "Reset Zoom", "Detach Circular Window", "Circular Pane",
             "Viewport", "Active Camera",
             "Ray Traced Preview",
-            "Camera Pivot Size", "Background Color",
+            "Background Color",
             "Style", "Bevel Profile", "Edge Profile", "Plate Color",
         ];
         main_node.params.sort_by_key(|p| {
@@ -636,11 +640,11 @@ impl State {
             }
         }
 
-        // 3. Camera display params — Square Aspect / Show Camera Pivot live on
-        // the camera nodes (applied from the ACTIVE camera). Ensured on every
-        // camera in the tree, seeded from the retired Main copies (older
-        // saves) or the live values.
-        fn ensure_camera_display_params(node: &mut FsNode, square: bool, pivot: bool) {
+        // 3. Camera display params — Square Aspect / Show Camera Pivot /
+        // Camera Pivot Size live on the camera nodes (applied from the
+        // ACTIVE camera). Ensured on every camera in the tree, seeded from
+        // the retired Main copies (older saves) or the live values.
+        fn ensure_camera_display_params(node: &mut FsNode, square: bool, pivot: bool, pivot_size: &str) {
             if node.node_type == "camera" {
                 let bool_str = |b: bool| if b { "true" } else { "false" };
                 if !node.params.iter().any(|p| p.name == "Square Aspect") {
@@ -667,14 +671,28 @@ impl State {
                         step: None,
                     });
                 }
+                if !node.params.iter().any(|p| p.name == "Camera Pivot Size") {
+                    node.params.push(ParamDef {
+                        name: "Camera Pivot Size".to_string(),
+                        label: "Camera Pivot Size".to_string(),
+                        param_type: "spinbox".to_string(),
+                        default: pivot_size.to_string(),
+                        options: Vec::new(),
+                        min: Some(1.0),
+                        max: Some(50.0),
+                        step: Some(1.0),
+                    });
+                }
             }
             for child in &mut node.children {
-                ensure_camera_display_params(child, square, pivot);
+                ensure_camera_display_params(child, square, pivot, pivot_size);
             }
         }
         let square_seed = migrated_square.unwrap_or(square_viewport);
         let pivot_seed = migrated_pivot.unwrap_or(vp_show_camera_pivot);
-        ensure_camera_display_params(&mut self.fs_root, square_seed, pivot_seed);
+        let pivot_size_seed = migrated_pivot_size
+            .unwrap_or_else(|| ((self.camera_pivot_size * 10.0) as i32).to_string());
+        ensure_camera_display_params(&mut self.fs_root, square_seed, pivot_seed, &pivot_size_seed);
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {
@@ -765,6 +783,7 @@ impl State {
                     match p.name.as_str() {
                         "Square Aspect" => if let Ok(val) = p.default.parse::<bool>() { self.square_viewport = val; }
                         "Show Camera Pivot" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_camera_pivot = val; }
+                        "Camera Pivot Size" => if let Ok(val) = p.default.parse::<f32>() { self.camera_pivot_size = val / 10.0; }
                         _ => {}
                     }
                 }
