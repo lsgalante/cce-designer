@@ -555,8 +555,13 @@ impl State {
         }
 
         // 2. Guides subnet — viewport guide toggles (home of the grid toggle,
-        // migrated off Main), sitting in the cell Render vacated.
-        let guides_node = find_or_create_subnet(&mut self.fs_root, "Guides", "utility", (0.0, 1.0));
+        // migrated off Main). The utility column keeps one empty cell between
+        // nodes: Main (0,0), Guides (0,2), Render (0,4); older saves parked
+        // at prior defaults slide to the spaced slots.
+        let guides_node = find_or_create_subnet(&mut self.fs_root, "Guides", "utility", (0.0, 2.0));
+        if guides_node.position == (0.0, 1.0) {
+            guides_node.position = (0.0, 2.0);
+        }
         guides_node.children.clear();
         ensure_param(guides_node, "Guides", "section", "", &[], None, None, None);
         ensure_param(guides_node, "Show Grid Guide", "toggle", bool_str(migrated_grid.unwrap_or(vp_show_grid)), &[], None, None, None);
@@ -586,11 +591,11 @@ impl State {
 
         // 3. Render subnet — render/display controls, present by default like
         // Main. Toggles reflect live state so a reopened project shows real
-        // switches. One cell below Guides; older saves parked at the old
-        // default (0,1) slide down to make room.
-        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 2.0));
-        if render_node.position == (0.0, 1.0) {
-            render_node.position = (0.0, 2.0);
+        // switches. Two rows below Guides (the spaced column); older saves
+        // parked at the prior defaults slide down.
+        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 4.0));
+        if render_node.position == (0.0, 1.0) || render_node.position == (0.0, 2.0) {
+            render_node.position = (0.0, 4.0);
         }
         render_node.children.clear();
 
