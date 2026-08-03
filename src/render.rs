@@ -60,6 +60,18 @@ impl State {
     /// cache are gone). Draw order is the hand-maintained slot order the vertex path
     /// used; the circular network pane rides `PaintItem::clip_circle`.
     pub(crate) fn collect_display_list(&mut self) -> DisplayList {
+        // Refresh popover registration: the engine's text-occlusion clamp
+        // reads `ui_context.active_popovers` to keep underlying text from
+        // bleeding through an open popup's plate. The legacy render_widget
+        // helper registered these as a side effect; the designer's own paint
+        // walk must do it explicitly or open dropdowns get no occlusion.
+        self.ui_context.clear_popovers();
+        for i in 0..WIDGET_COUNT {
+            if self.slots.get_dyn(i).visible() && self.slots.get_dyn(i).popover_rect().is_some() {
+                self.ui_context.register_popover(self.slots.get_dyn_mut(i));
+            }
+        }
+
         let show_cursor = self.drag_widget.is_none() && self.app_drag.is_none();
 
         // The graph content clip (node quads, cursor) and the circular pane clip.
