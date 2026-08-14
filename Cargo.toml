@@ -10,7 +10,6 @@ calloop = "0.13.0"
 calloop-wayland-source = "0.3.0"
 wayland-client = { version = "0.31", features = ["system"] }
 xkeysym = "0.2"
-raw-window-handle = "0.6"
 bytemuck = { version = "1", features = ["derive"] }
 # Only the vk-smoke bin shapes text directly now — the app's text goes through
 # the engine's display-list pass (display_list_text) since the paint migration.
