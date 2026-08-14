@@ -32,8 +32,8 @@ use calloop_wayland_source::WaylandSource;
 
 use cce_ui::engine::{quad_vertices, Vertex};
 use glam::{Mat4, Vec3};
-use glyphon::cosmic_text::{Attrs, Buffer as TextBuffer, Family, Metrics, Shaping};
-use glyphon::{FontSystem, SwashCache};
+use cce_ui::cosmic_text::{Attrs, Buffer as TextBuffer, Family, Metrics, Shaping};
+use cce_ui::cosmic_text::{FontSystem, SwashCache};
 use vk::{Frame2D, ImageQuad, RtCamera, RtMaterial, RtTriangle, SceneDraw, TextSpan, Vertex3D, VkRenderer};
 
 struct SmokeApp {
