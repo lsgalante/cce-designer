@@ -11,7 +11,7 @@ generation — and displayed in a 3D viewport with both a raster pass and a path
 
 This crate is one member of the multi-repo `cce` Cargo workspace; workspace-wide rules
 (multi-repo layout, no `[workspace.dependencies]`, shared `../target/`) live in
-`../CLAUDE.md`. This directory is its own git repository.
+`../cce-compositor/WORKSPACE.md`. This directory is its own git repository.
 
 ## Build, test, run
 
@@ -109,7 +109,7 @@ is the introspection surface.
 `DesignSettings` (viewport/graph display state the app rewrites itself:
 colors, grid sizes, show flags) persists to `state.kdl` — deliberately NOT
 `config.kdl`, which is the user-authored toolkit-config override slot that
-cce-ui auto-merges (see `../CLAUDE.md`). Legacy `design.kdl` / `design.json`
+cce-ui auto-merges (see `../cce-compositor/WORKSPACE.md`). Legacy `design.kdl` / `design.json`
 files migrate on load. Scroll behavior (`scroll_speed`, `inertial_scroll`,
 `scroll_friction`) is intentionally absent: it is config-owned
 (`input.inertial` in config.kdl) and must not be shadowed by app state.
