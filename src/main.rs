@@ -993,6 +993,14 @@ mod tests {
                 .next()
                 .expect("Main's params include a dropdown (Open)");
             dropdown.open = true;
+            // The popover expands on a wall-clock animation, and every geometry
+            // reader uses `anim_snap`, a snapshot refreshed only on tick/event —
+            // so writing `open` directly leaves the snapshot at 0 and the menu
+            // draws with zero extent. Ticking folds the progress in; because the
+            // direct write left `anim_start` unset, that lands fully open at once
+            // instead of waiting out the animation.
+            let mut tick_ctx = cce_ui::context::UiContext::new();
+            cce_ui::widget::WidgetHost::tick(dropdown, 0.0, &mut tick_ctx);
         }
 
         let list = state.collect_display_list();
