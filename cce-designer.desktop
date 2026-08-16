@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Designer
+Comment=Visual UI designer for clear-ui
+Exec=cce-designer
+Icon=preferences-system-symbolic
+Categories=Graphics;Development;
+Keywords=designer;ui;layout;clear-ui;
+StartupNotify=true
+StartupWMClass=cce-designer
