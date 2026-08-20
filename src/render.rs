@@ -276,15 +276,21 @@ impl State {
                 let hl_tint = [hl[0], hl[1], hl[2]];
                 let same_rgb = |a: [f32; 4], b: [f32; 4]| a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
 
+                // Grid cells arrive tagged with their surviving corners and draw
+                // as superellipse tiles, like the desktop grid; everything else
+                // stays a flat quad.
+                let cell_r = self.graph().cell_corner_radius();
                 let mut bodies: Vec<(f32, f32, f32, f32, bool)> = Vec::new();
                 let mut overlays: Vec<(f32, f32, f32, f32, [f32; 4])> = Vec::new();
                 let mut seen_node = false;
-                for (qx, qy, qw, qh, qc) in w.extra_quads() {
+                for (qx, qy, qw, qh, qc, cell) in self.graph().geometry_quads_tagged(clip) {
                     if self.graph().is_node_rect(qx, qy, qw, qh) {
                         seen_node = true;
                         bodies.push((qx, qy, qw, qh, same_rgb(qc, sel) || same_rgb(qc, drag)));
                     } else if seen_node {
                         overlays.push((qx, qy, qw, qh, qc));
+                    } else if let Some(corners) = cell {
+                        pc.rounded_rect(rect(qx, qy, qw, qh), cell_r, corners, qc);
                     } else {
                         pc.quad(rect(qx, qy, qw, qh), qc);
                     }
@@ -321,11 +327,10 @@ impl State {
                     let r = cce_ui::layout::graph_node_corner_radius();
                     pc.border(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], color, thickness);
                 } else {
+                    // The empty-cell cursor follows the cells' superellipse arcs.
+                    let r = self.graph().cell_corner_radius();
                     pc.clip(clip, |pc| {
-                        pc.quad(rect(cx, cy, cw, thickness), color);
-                        pc.quad(rect(cx, cy + ch - thickness, cw, thickness), color);
-                        pc.quad(rect(cx, cy + thickness, thickness, ch - thickness * 2.0), color);
-                        pc.quad(rect(cx + cw - thickness, cy + thickness, thickness, ch - thickness * 2.0), color);
+                        pc.border(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], color, thickness);
                     });
                 }
             }
