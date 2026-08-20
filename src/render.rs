@@ -12,7 +12,7 @@ use crate::app::{
 use crate::geometry::network_sphere_vertices_with_errors;
 use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::{DisplayList, PaintCtx, Prim};
-use cce_ui::scene::painter::{append_widget_plate, append_widget_plate_tinted, append_widget_text};
+use cce_ui::scene::painter::{append_widget_plate, append_widget_plate_radii, append_widget_text};
 
 const TAU: f32 = 2.0 * std::f32::consts::PI;
 
@@ -30,6 +30,34 @@ fn merge_bounds(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
 }
 
 impl State {
+    /// Per-corner plate radii for a pane rect: a corner that sits ON a window
+    /// corner is this pane's share of the window silhouette — the compositor
+    /// clips the window at the span-widened backplate arc, so the pane wears
+    /// that arc there (what a full-window root plate does in one piece).
+    /// Interior corners keep the widget-scale nominal plate radius, matching
+    /// the squircles of the sibling panes around them.
+    fn pane_plate_radii(&self, x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
+        let nominal = cce_ui::layout::plate_corner_radius();
+        let window_r = colors::backplate_corner_radius() * cce_ui::layout::corner_span_factor();
+        let e = 1.5;
+        let left = x <= e;
+        let top = y <= e;
+        let right = x + w >= self.width - e;
+        let bottom = y + h >= self.height - e;
+        (
+            if top && left { window_r } else { nominal },
+            if top && right { window_r } else { nominal },
+            if bottom && right { window_r } else { nominal },
+            if bottom && left { window_r } else { nominal },
+        )
+    }
+
+    /// [`pane_plate_radii`](Self::pane_plate_radii) for a slot's laid-out rect.
+    fn slot_plate_radii(&self, idx: usize) -> (f32, f32, f32, f32) {
+        let (x, y, w, h) = self.positions[idx];
+        self.pane_plate_radii(x, y, w, h)
+    }
+
     /// The rounded-rect clip (plate rect + corner radius) a widget's content must stay
     /// inside, so children of plates cut off at the plate's rounded corners: the network
     /// plate for the network pane's parts (graph content, breadcrumb), the pane's own
@@ -215,7 +243,8 @@ impl State {
             // panes, then paint_self emits the transport controls — geometry AND
             // text (a subtree painter; append_frame_text skips this slot so the
             // text isn't doubled).
-            append_widget_plate(w, pc);
+            let (wx, wy, ww2, wh2) = w.rect();
+            append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {
             // The viewport wears the plate bevel's rim only. It can't be a real
@@ -224,14 +253,14 @@ impl State {
             // whole 3D scene behind its blur marker. A `Boss` step is the rim
             // alone — a fill-less overlay of translucent light/shadow over the
             // scene. Same gate as the plated panes (plate border + control_relief)
-            // so the DE style flips together; the radius follows the window
-            // curvature (the viewport's corners sit on the window's).
+            // so the DE style flips together; corners that sit on the window's
+            // follow the window curvature, interior corners the plate nominal
+            // (pane_plate_radii — the shared window-corner resolution).
             if cce_ui::layout::control_relief() && cce_ui::colors::plate_border_color().is_some() {
                 let (px, py, pw, ph) = self.positions[VIEWPORT_IDX];
                 if pw > 0.0 && ph > 0.0 {
-                    let r = colors::backplate_corner_radius() * cce_ui::layout::corner_span_factor();
                     let vp_rect = rect(px, py, pw, ph);
-                    let radii = (r, r, r, r);
+                    let radii = self.pane_plate_radii(px, py, pw, ph);
                     let depth = cce_ui::colors::plate_bevel_width();
                     // Focus marks through the rim's specular tint, exactly the
                     // plated panes' treatment (plate_focus_tint).
@@ -250,7 +279,8 @@ impl State {
             }
         } else if idx == CONTENT_IDX {
             if !self.circular_network_pane {
-                append_widget_plate_tinted(w, pc, self.plate_focus_tint(idx));
+                let (wx, wy, ww2, wh2) = w.rect();
+                append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             }
 
             pc.clip(clip, |pc| {
@@ -364,7 +394,8 @@ impl State {
                 }
             }
 
-            append_widget_plate_tinted(w, pc, self.plate_focus_tint(idx));
+            let (wx, wy, ww2, wh2) = w.rect();
+            append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
 
             // The params pane serves its chrome through the legacy plain-quad view,
             // which carries flat quads only — the controls' rounded-rect backgrounds
@@ -566,15 +597,10 @@ impl State {
         if w <= 0.0 || h <= 0.0 {
             return;
         }
-        // The viewport's corners sit on the window's, so its highlight follows
-        // the window clip's curvature-matched span; the interior panes keep the
-        // nominal plate radius their own plates are drawn with.
-        let r = if self.focused_pane == RIGHT_MENUBAR_IDX {
-            colors::backplate_corner_radius() * cce_ui::layout::corner_span_factor()
-        } else {
-            cce_ui::layout::plate_corner_radius()
-        };
-        pc.border(rect(x, y, w, h), (r, r, r, r), [0.0; 4], color, thickness);
+        // The highlight follows the pane plate's arcs exactly: window-corner
+        // corners at the window clip's curvature-matched span, interior
+        // corners at the nominal plate radius (pane_plate_radii).
+        pc.border(rect(x, y, w, h), self.pane_plate_radii(x, y, w, h), [0.0; 4], color, thickness);
     }
 
     /// The frame's text, as `Prim::Text` items shaped and drawn by the engine
