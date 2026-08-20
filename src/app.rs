@@ -845,8 +845,6 @@ pub struct State {
     pub pending_viewport_bg: Option<Vec<Vertex3D>>,
     /// The spheres mesh needs re-upload from `rt_sphere_verts`.
     pub spheres_dirty: bool,
-    /// Renderer corner radius applied last frame (physical px); re-set on change.
-    pub last_corner_radius: f32,
     pub pending_window_drag: Option<PendingWindowDrag>,
     pub window_action: Option<cce_ui::engine::WindowAction>,
     pub vertex_count_spheres: u32,
@@ -2839,7 +2837,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             pending_pivot: None,
             pending_viewport_bg: None,
             spheres_dirty: false,
-            last_corner_radius: -1.0,
             pending_window_drag: None,
             window_action: None,
             vertex_count_spheres: 0,
@@ -3922,7 +3919,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.physical_height = (height as f64 * scale) as u32;
             self.width = width;
             self.height = height;
-            self.last_corner_radius = -1.0;
 
             if old_width > 0.0 {
                 let r = self.width / old_width;
@@ -5448,15 +5444,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         self.viewport_dirty = true;
     }
 
-    /// Frame staging (engine `stage_renderer` hook): corner radius, pending
-    /// meshes, text, and the 3D scene / RT pane. Returns true while the path
-    /// tracer is still refining, to keep frames coming.
+    /// Frame staging (engine `stage_renderer` hook): pending meshes, text, and
+    /// the 3D scene / RT pane. Returns true while the path tracer is still
+    /// refining, to keep frames coming. The renderer's window-corner clip is
+    /// left at the engine default (0) — the compositor rounds the window.
     pub fn stage_frame(&mut self, renderer: &mut cce_ui::vk::VkRenderer) -> bool {
-        let radius = cce_ui::color::backplate_corner_radius() * self.scale as f32;
-        if radius != self.last_corner_radius {
-            self.last_corner_radius = radius;
-            renderer.set_corner_radius(radius);
-        }
         self.flush_pending_meshes(renderer);
         let meshes = self.meshes.expect("stage_frame before renderer_init");
 
