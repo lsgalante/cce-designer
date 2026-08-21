@@ -253,11 +253,15 @@ impl State {
             // whole 3D scene behind its blur marker. A `Boss` step is the rim
             // alone — a fill-less overlay of translucent light/shadow over the
             // scene. Same gate as the plated panes (plate border + control_relief)
-            // so the DE style flips together; corners that sit on the window's
-            // follow the window curvature, interior corners the plate nominal
-            // (pane_plate_radii — the shared window-corner resolution).
+            // so the DE style flips together. The rim spans the WHOLE window,
+            // not the viewport column: the 3D canvas is full-bleed (CANVAS_IDX
+            // covers the window and the other panes float over it), so the
+            // scene viewer's relief is the window's own backplate edge — full
+            // rect, window radius on all four corners, concentric with the
+            // compositor's silhouette clip. A column-rect rim floated arcs in
+            // the middle of the scene that read as wrong-radius corners.
             if cce_ui::layout::control_relief() && cce_ui::colors::plate_border_color().is_some() {
-                let (px, py, pw, ph) = self.positions[VIEWPORT_IDX];
+                let (px, py, pw, ph) = (0.0, 0.0, self.width, self.height);
                 if pw > 0.0 && ph > 0.0 {
                     let vp_rect = rect(px, py, pw, ph);
                     let radii = self.pane_plate_radii(px, py, pw, ph);
@@ -577,7 +581,9 @@ impl State {
                 if !self.show_viewport || relief {
                     return;
                 }
-                self.positions[VIEWPORT_IDX]
+                // The scene viewer's rim is the whole window backplate (see the
+                // VIEWPORT_IDX paint branch); its focus highlight follows it.
+                (0.0, 0.0, self.width, self.height)
             }
             PARAM_MENUBAR_IDX => {
                 if !self.show_parameters || relief {
