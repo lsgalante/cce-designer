@@ -383,11 +383,17 @@ impl State {
         ensure_param(main_node, "Undo", "button", "", &[], None, None, None);
         ensure_param(main_node, "Redo", "button", "", &[], None, None, None);
 
-        ensure_param(main_node, "View", "section", "", &[], None, None, None);
-        ensure_param(main_node, "Show Viewport Pane", "toggle", bool_str(show_viewport), &[], None, None, None);
-        ensure_param(main_node, "Show Parameters Pane", "toggle", bool_str(show_parameters), &[], None, None, None);
-        ensure_param(main_node, "Show Spreadsheet Pane", "toggle", bool_str(show_spreadsheet), &[], None, None, None);
-        ensure_param(main_node, "Show Playbar Pane", "toggle", bool_str(show_playbar), &[], None, None, None);
+        // The pane-visibility toggles moved to the View utility node (below):
+        // retire Main's copies and its now-empty View section from older saves.
+        // No value migration — pane state is session-owned, never applied from
+        // the project, so the View node seeds from live state.
+        main_node.params.retain(|p| {
+            !matches!(
+                p.name.as_str(),
+                "View" | "Show Network Pane" | "Show Viewport Pane" | "Show Parameters Pane"
+                    | "Show Spreadsheet Pane" | "Show Playbar Pane"
+            )
+        });
 
         // Network — renamed from the retired "Network Settings" (migrate older
         // saves' section param in place so its position survives the reorder).
@@ -396,7 +402,6 @@ impl State {
             sec.label = "Network".to_string();
         }
         ensure_param(main_node, "Network", "section", "", &[], None, None, None);
-        ensure_param(main_node, "Show Network Pane", "toggle", bool_str(show_network), &[], None, None, None);
         ensure_param(main_node, "Zoom In", "button", "", &[], None, None, None);
         ensure_param(main_node, "Zoom Out", "button", "", &[], None, None, None);
         ensure_param(main_node, "Reset Zoom", "button", "", &[], None, None, None);
@@ -499,9 +504,9 @@ impl State {
             !matches!(p.name.as_str(), "Square Aspect" | "Show Camera Pivot" | "Camera Pivot Size")
         });
 
-        // Boolean settings and pane-visibility items render as toggles. Older
-        // saves stored these as choice dropdowns / buttons; retype them and
-        // reflect live pane state so a reopened project shows real switches.
+        // Boolean settings render as toggles. Older saves stored these as
+        // choice dropdowns / buttons; retype them so a reopened project shows
+        // real switches.
         for p in main_node.params.iter_mut() {
             match p.name.as_str() {
                 "Circular Pane" | "Ray Traced Preview" => {
@@ -509,21 +514,14 @@ impl State {
                     p.options.clear();
                     if p.default != "true" { p.default = "false".to_string(); }
                 }
-                "Show Network Pane" => set_toggle(p, show_network),
-                "Show Viewport Pane" => set_toggle(p, show_viewport),
-                "Show Parameters Pane" => set_toggle(p, show_parameters),
-                "Show Spreadsheet Pane" => set_toggle(p, show_spreadsheet),
-                "Show Playbar Pane" => set_toggle(p, show_playbar),
                 _ => {}
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 29] = [
+        const MAIN_PARAM_ORDER: [&str; 23] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
-            "View", "Show Viewport Pane", "Show Parameters Pane",
-            "Show Spreadsheet Pane", "Show Playbar Pane",
-            "Network", "Show Network Pane", "Zoom In", "Zoom Out",
+            "Network", "Zoom In", "Zoom Out",
             "Reset Zoom", "Detach Circular Window", "Circular Pane",
             "Viewport", "Active Camera",
             "Ray Traced Preview",
@@ -544,9 +542,6 @@ impl State {
         for p in main_node.params.iter_mut() {
             if p.name == "New Project" {
                 p.label = "New".to_string();
-            } else if p.name == "Show Network Pane" {
-                // In the Network section the pane toggle reads as "Visible".
-                p.label = "Visible".to_string();
             } else if p.param_type == "toggle" {
                 if let Some(rest) = p.name.strip_prefix("Show ") {
                     p.label = rest.to_string();
@@ -554,13 +549,45 @@ impl State {
             }
         }
 
-        // 2. Guides subnet — viewport guide toggles (home of the grid toggle,
+        // 2. View subnet — the pane-visibility switches, migrated off Main's
+        // View section (the Guides pattern: a setting's home is a utility
+        // node; the header menu items stay as command access). Pane state is
+        // session-owned and never applied from the project, so the toggles
+        // seed and refresh from live state.
+        let view_node = find_or_create_subnet(&mut self.fs_root, "View", "utility", (0.0, 2.0));
+        view_node.children.clear();
+        ensure_param(view_node, "Panes", "section", "", &[], None, None, None);
+        ensure_param(view_node, "Show Network Pane", "toggle", bool_str(show_network), &[], None, None, None);
+        ensure_param(view_node, "Show Viewport Pane", "toggle", bool_str(show_viewport), &[], None, None, None);
+        ensure_param(view_node, "Show Parameters Pane", "toggle", bool_str(show_parameters), &[], None, None, None);
+        ensure_param(view_node, "Show Spreadsheet Pane", "toggle", bool_str(show_spreadsheet), &[], None, None, None);
+        ensure_param(view_node, "Show Playbar Pane", "toggle", bool_str(show_playbar), &[], None, None, None);
+        for p in view_node.params.iter_mut() {
+            match p.name.as_str() {
+                "Show Network Pane" => set_toggle(p, show_network),
+                "Show Viewport Pane" => set_toggle(p, show_viewport),
+                "Show Parameters Pane" => set_toggle(p, show_parameters),
+                "Show Spreadsheet Pane" => set_toggle(p, show_spreadsheet),
+                "Show Playbar Pane" => set_toggle(p, show_playbar),
+                _ => {}
+            }
+            // "Show Network Pane" -> "Network": inside the Panes section the
+            // toggles read by pane name alone. The `name` stays the dispatch
+            // identity execute_menu_action fires on.
+            if p.param_type == "toggle" {
+                if let Some(rest) = p.name.strip_prefix("Show ").and_then(|r| r.strip_suffix(" Pane")) {
+                    p.label = rest.to_string();
+                }
+            }
+        }
+
+        // 3. Guides subnet — viewport guide toggles (home of the grid toggle,
         // migrated off Main). The utility column keeps one empty cell between
-        // nodes: Main (0,0), Guides (0,2), Render (0,4); older saves parked
-        // at prior defaults slide to the spaced slots.
-        let guides_node = find_or_create_subnet(&mut self.fs_root, "Guides", "utility", (0.0, 2.0));
-        if guides_node.position == (0.0, 1.0) {
-            guides_node.position = (0.0, 2.0);
+        // nodes: Main (0,0), View (0,2), Guides (0,4), Render (0,6); older
+        // saves parked at prior defaults slide to the spaced slots.
+        let guides_node = find_or_create_subnet(&mut self.fs_root, "Guides", "utility", (0.0, 4.0));
+        if guides_node.position == (0.0, 1.0) || guides_node.position == (0.0, 2.0) {
+            guides_node.position = (0.0, 4.0);
         }
         guides_node.children.clear();
         ensure_param(guides_node, "Guides", "section", "", &[], None, None, None);
@@ -589,13 +616,13 @@ impl State {
             }
         }
 
-        // 3. Render subnet — render/display controls, present by default like
+        // 4. Render subnet — render/display controls, present by default like
         // Main. Toggles reflect live state so a reopened project shows real
         // switches. Two rows below Guides (the spaced column); older saves
         // parked at the prior defaults slide down.
-        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 4.0));
-        if render_node.position == (0.0, 1.0) || render_node.position == (0.0, 2.0) {
-            render_node.position = (0.0, 4.0);
+        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 6.0));
+        if render_node.position == (0.0, 1.0) || render_node.position == (0.0, 2.0) || render_node.position == (0.0, 4.0) {
+            render_node.position = (0.0, 6.0);
         }
         render_node.children.clear();
 
