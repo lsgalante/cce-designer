@@ -247,32 +247,32 @@ impl State {
             append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {
-            // The viewport wears the plate bevel's rim only. It can't be a real
-            // `Bevel` plate: the SDF plate draw owns fill AND roll together, so a
-            // transparent fill kills the roll and the params fill would frost the
-            // whole 3D scene behind its blur marker. A `Boss` step is the rim
-            // alone — a fill-less overlay of translucent light/shadow over the
-            // scene. Same gate as the plated panes (plate border + control_relief)
-            // so the DE style flips together. The rim spans the WHOLE window,
-            // not the viewport column: the 3D canvas is full-bleed (CANVAS_IDX
-            // covers the window and the other panes float over it), so the
-            // scene viewer's relief is the window's own backplate edge — full
-            // rect, window radius on all four corners, concentric with the
-            // compositor's silhouette clip. A column-rect rim floated arcs in
-            // the middle of the scene that read as wrong-radius corners.
-            if cce_ui::layout::control_relief() && cce_ui::colors::plate_border_color().is_some() {
+            // The scene viewer's lip is a FLAT stroke on the window arc, not a
+            // relief. A Boss rim was tried twice and rejected: the SDF relief
+            // band's contours pull inside the true superellipse at window-scale
+            // radii, so the lit lip visibly cut the corner against the
+            // compositor's silhouette clip, and its shadow side re-tinted the
+            // scene it crossed. The tessellated border stroke follows the exact
+            // arc. It spans the WHOLE window, not the viewport column: the 3D
+            // canvas is full-bleed (CANVAS_IDX covers the window; the other
+            // panes float over it), so this lip is the window's own backplate
+            // edge — window radius on all four corners, concentric with the
+            // silhouette. Focus marks by coloring the stroke with the highlight
+            // (standing in for the plated panes' bevel tint); with
+            // control_relief off, append_context_border owns the focus ring as
+            // for every pane.
+            if let Some(bc) = cce_ui::colors::plate_border_color() {
                 let (px, py, pw, ph) = (0.0, 0.0, self.width, self.height);
                 if pw > 0.0 && ph > 0.0 {
                     let vp_rect = rect(px, py, pw, ph);
                     let radii = self.pane_plate_radii(px, py, pw, ph);
-                    let depth = cce_ui::colors::plate_bevel_width();
-                    // Focus marks through the rim's specular tint, exactly the
-                    // plated panes' treatment (plate_focus_tint).
-                    if let Some(tint) = self.plate_focus_tint(idx) {
-                        pc.boss_edges_tinted(vp_rect, radii, depth, (true, true, true, true), tint);
+                    let color = if cce_ui::layout::control_relief() && self.focused_pane == RIGHT_MENUBAR_IDX {
+                        let hl = colors::highlight_primary_color();
+                        [hl[0], hl[1], hl[2], 0.9]
                     } else {
-                        pc.boss_edges(vp_rect, radii, depth, (true, true, true, true));
-                    }
+                        bc
+                    };
+                    pc.border(vp_rect, radii, [0.0; 4], color, cce_ui::colors::plate_border_thickness());
                 }
             }
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
