@@ -252,32 +252,36 @@ impl State {
             append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {
-            // The scene viewer's lip is a FLAT stroke on the window arc, not a
-            // relief. A Boss rim was tried twice and rejected: the SDF relief
-            // band's contours pull inside the true superellipse at window-scale
-            // radii, so the lit lip visibly cut the corner against the
-            // compositor's silhouette clip, and its shadow side re-tinted the
-            // scene it crossed. The tessellated border stroke follows the exact
-            // arc. It spans the WHOLE window, not the viewport column: the 3D
-            // canvas is full-bleed (CANVAS_IDX covers the window; the other
-            // panes float over it), so this lip is the window's own backplate
-            // edge — window radius on all four corners, concentric with the
-            // silhouette. Focus marks by coloring the stroke with the highlight
-            // (standing in for the plated panes' bevel tint); with
-            // control_relief off, append_context_border owns the focus ring as
-            // for every pane.
+            // The scene viewer's lip is the window's own backplate edge: the
+            // 3D canvas is full-bleed (CANVAS_IDX covers the window; the other
+            // panes float over it), so the lip spans the WHOLE window with the
+            // window radius on all four corners (pane_plate_radii on the full
+            // rect — the SHARED silhouette value, concentric with the
+            // compositor clip). Under control_relief it is a Boss rim — the
+            // fill-less relief of the plated panes (a real Bevel would own
+            // fill AND roll together: a transparent fill kills the roll, and
+            // the params fill would frost the scene behind its blur marker);
+            // focus marks through the rim's specular tint. Without
+            // control_relief it degrades to the flat plate-border stroke,
+            // exactly a bordered plate's outline→relief degradation, and
+            // append_context_border owns the focus ring. (The relief band's
+            // SDF contours pull a hair inside the true superellipse at this
+            // radius — known, accepted; the flat stroke traces it exactly.)
             if let Some(bc) = cce_ui::colors::plate_border_color() {
                 let (px, py, pw, ph) = (0.0, 0.0, self.width, self.height);
                 if pw > 0.0 && ph > 0.0 {
                     let vp_rect = rect(px, py, pw, ph);
                     let radii = self.pane_plate_radii(px, py, pw, ph);
-                    let color = if cce_ui::layout::control_relief() && self.focused_pane == RIGHT_MENUBAR_IDX {
-                        let hl = colors::highlight_primary_color();
-                        [hl[0], hl[1], hl[2], 0.9]
+                    if cce_ui::layout::control_relief() {
+                        let depth = cce_ui::colors::plate_bevel_width();
+                        if let Some(tint) = self.plate_focus_tint(idx) {
+                            pc.boss_edges_tinted(vp_rect, radii, depth, (true, true, true, true), tint);
+                        } else {
+                            pc.boss_edges(vp_rect, radii, depth, (true, true, true, true));
+                        }
                     } else {
-                        bc
-                    };
-                    pc.border(vp_rect, radii, [0.0; 4], color, cce_ui::colors::plate_border_thickness());
+                        pc.border(vp_rect, radii, [0.0; 4], bc, cce_ui::colors::plate_border_thickness());
+                    }
                 }
             }
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
