@@ -130,6 +130,57 @@ mod tests {
         assert!(state.slots.get_dyn(CONTENT_IDX).visible(), "graph did not come back");
     }
 
+    /// Both sides of a detach. The child must show ONE pane and nothing else —
+    /// a stray visible slot would paint over it — and the parent must stop
+    /// laying the pane out, or the space it held is never released.
+    #[test]
+    fn test_detached_pane_claims_its_window_and_leaves_the_parent() {
+        use crate::plate_corner::DETACHED_MARGIN;
+        use crate::slots::{PARAM_IDX, VIEWPORT_IDX, WIDGET_COUNT};
+
+        // Child: the detached window.
+        let mut child = State::new(false);
+        child.detached_pane = Some(PARAM_IDX);
+        child.resize(600.0, 400.0, 1.0);
+        for i in 0..WIDGET_COUNT {
+            let visible = child.slots.get_dyn(i).visible();
+            assert_eq!(visible, i == PARAM_IDX, "slot {i} visibility in a detached window");
+        }
+        let (x, y, w, h) = child.slots.get_dyn(PARAM_IDX).rect();
+        assert_eq!((x, y), (DETACHED_MARGIN, DETACHED_MARGIN));
+        assert_eq!(w, 600.0 - 2.0 * DETACHED_MARGIN);
+        assert_eq!(h, 400.0 - 2.0 * DETACHED_MARGIN);
+
+        // Parent: the window that handed the pane out.
+        let mut parent = State::new(false);
+        parent.resize(1600.0, 900.0, 1.0);
+        assert!(parent.slots.get_dyn(PARAM_IDX).visible(), "params starts in the parent");
+        parent.detached_panes[PARAM_IDX] = true;
+        parent.rebuild_positions();
+        parent.apply_layout();
+        assert!(!parent.slots.get_dyn(PARAM_IDX).visible(), "params still laid out after detaching");
+        assert!(parent.slots.get_dyn(VIEWPORT_IDX).visible(), "the rest of the parent survived");
+    }
+
+    /// Detach must not be offered where it cannot work: twice for one pane, or
+    /// from inside a detached window (which would fork the pane again).
+    #[test]
+    fn test_detach_is_only_offered_where_it_works() {
+        use crate::slots::{PARAM_IDX, SPREADSHEET_IDX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        assert!(state.plate_can_detach(PARAM_IDX), "params should be detachable");
+
+        state.detached_panes[PARAM_IDX] = true;
+        assert!(!state.plate_can_detach(PARAM_IDX), "params offered detach twice");
+        assert!(state.plate_can_detach(SPREADSHEET_IDX), "one detach blocked the others");
+
+        let mut child = State::new(false);
+        child.detached_pane = Some(PARAM_IDX);
+        child.resize(600.0, 400.0, 1.0);
+        assert!(!child.plate_can_detach(PARAM_IDX), "a detached window offered to detach again");
+    }
+
     /// The menu is contextual, and the two states are mutually exclusive: a
     /// collapsed plate must offer Expand and NOT Collapse, or the item that
     /// restores it is unreachable.

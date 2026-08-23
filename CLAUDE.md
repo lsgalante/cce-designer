@@ -38,6 +38,13 @@ kernels and need a working OpenCL runtime; they are not pure-CPU tests.
 - `cce-designer --detached-network` — a separate network-pane-only window. It syncs
   with the main window by autosaving/polling `default_project.json` mtime (see the
   main loop in `src/main.rs`) — there is no socket between the two.
+- `cce-designer --detached-params` / `--detached-spreadsheet` / `--detached-playbar`
+  — the same idea for the other plates (`plate_corner::pane_detach_flag`), spawned by
+  the plate corner menu's Detach. These windows are plain rectangles with standard CSD
+  and no 3D canvas; `--detached-network` stays its own flag because that window is
+  CIRCULAR, with a radial border resize no rectangular pane wants. All of them share
+  the one `default_project.json` sync channel, and only the main window runs the MCP
+  server.
 
 ### MCP automation server
 

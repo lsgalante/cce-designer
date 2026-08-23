@@ -13,7 +13,7 @@
 //! here on a fully-round radius so the trough reads as a ring.
 
 use crate::app::State;
-use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
+use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT};
 
 /// Radius of the control itself.
 pub const CORNER_R: f32 = 8.0;
@@ -187,12 +187,45 @@ impl State {
     /// as that path is generalized, and until then they simply do not offer
     /// the item rather than offering one that does nothing.
     pub fn plate_can_detach(&self, idx: usize) -> bool {
-        idx == NETWORK_PANEL_IDX && !self.is_detached_network
+        // A detached window never offers to detach its own pane again, and a
+        // pane already handed out cannot be handed out twice.
+        if self.is_detached_network || self.detached_pane.is_some() {
+            return false;
+        }
+        match idx {
+            NETWORK_PANEL_IDX => !self.detached_circular_network,
+            other => pane_detach_flag(other).is_some() && !self.detached_panes[other],
+        }
     }
 
     fn detach_plate(&mut self, idx: usize) {
         if idx == NETWORK_PANEL_IDX {
             self.execute_action(crate::shortcut::Action::DetachCircularWindow);
+            return;
+        }
+        let Some(flag) = pane_detach_flag(idx) else { return };
+
+        // The detached window reads the pane out of the shared project file and
+        // then syncs through it, exactly as the network window does — so it has
+        // to be on disk BEFORE the child starts.
+        let shared = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
+        if let Err(e) = self.save_to_file(&shared) {
+            eprintln!("Failed to save shared project before detaching: {e:?}");
+            return;
+        }
+
+        match std::env::current_exe() {
+            Ok(exe) => match std::process::Command::new(exe).arg(flag).spawn() {
+                Ok(_) => {
+                    self.detached_panes[idx] = true;
+                    self.rebuild_positions();
+                    self.apply_layout();
+                }
+                // Leave the pane in place if the child never started, rather
+                // than hiding it into a window that does not exist.
+                Err(e) => eprintln!("Failed to spawn detached {}: {e:?}", plate_title(idx)),
+            },
+            Err(e) => eprintln!("Cannot locate own executable to detach: {e:?}"),
         }
     }
 }
@@ -240,5 +273,83 @@ impl State {
     /// painting a pane's body, and the title text only appears here.
     pub fn pane_is_collapsed(&self, idx: usize) -> bool {
         PLATE_SLOTS.contains(&idx) && self.collapsed_panes[idx]
+    }
+}
+
+/// The CLI flag that runs this pane as its own window, e.g. `--detached-params`.
+/// The network keeps `--detached-network`, handled separately: its detached
+/// window is circular, not merely detached.
+pub fn pane_detach_flag(idx: usize) -> Option<&'static str> {
+    match idx {
+        PARAM_IDX => Some("--detached-params"),
+        SPREADSHEET_IDX => Some("--detached-spreadsheet"),
+        PLAYBAR_IDX => Some("--detached-playbar"),
+        _ => None,
+    }
+}
+
+/// The pane an argv entry asks for, if any — the inverse of [`pane_detach_flag`].
+pub fn pane_from_detach_flag(arg: &str) -> Option<usize> {
+    PLATE_SLOTS
+        .iter()
+        .copied()
+        .find(|&idx| pane_detach_flag(idx) == Some(arg))
+}
+
+/// The detached window's `app_id`, which the compositor keys window rules off.
+pub fn pane_app_id(idx: usize) -> &'static str {
+    match idx {
+        PARAM_IDX => "cce-designer-params",
+        SPREADSHEET_IDX => "cce-designer-spreadsheet",
+        PLAYBAR_IDX => "cce-designer-playbar",
+        _ => "cce-designer",
+    }
+}
+
+/// Inset of a detached pane inside its own window, so the plate keeps a visible
+/// edge of its own instead of fusing with the window border.
+pub const DETACHED_MARGIN: f32 = 8.0;
+
+impl State {
+    /// Resolve the detached-window arrangement, both sides of it.
+    ///
+    /// A post-pass for the same reason `apply_collapsed_panes` is one: detaching
+    /// means one thing regardless of which of the three layout branches just
+    /// ran. In the CHILD process the detached pane claims the whole window and
+    /// every other slot goes dark; in the PARENT the panes it has handed out
+    /// stop being laid out, so the space they held is released.
+    pub(crate) fn apply_detached_panes(&mut self) {
+        if let Some(idx) = self.detached_pane {
+            for i in 0..WIDGET_COUNT {
+                if i == idx {
+                    continue;
+                }
+                self.positions[i] = (0.0, 0.0, 0.0, 0.0);
+                self.slots.get_dyn_mut(i).set_visible(false);
+            }
+            let m = DETACHED_MARGIN;
+            self.positions[idx] = (
+                m,
+                m,
+                (self.width - 2.0 * m).max(0.0),
+                (self.height - 2.0 * m).max(0.0),
+            );
+            self.slots.get_dyn_mut(idx).set_visible(true);
+            return;
+        }
+
+        for idx in PLATE_SLOTS {
+            if !self.detached_panes[idx] {
+                continue;
+            }
+            self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
+            self.slots.get_dyn_mut(idx).set_visible(false);
+            if idx == NETWORK_PANEL_IDX {
+                for child in [crate::slots::CONTENT_IDX, crate::slots::BREADCRUMB_IDX] {
+                    self.positions[child] = (0.0, 0.0, 0.0, 0.0);
+                    self.slots.get_dyn_mut(child).set_visible(false);
+                }
+            }
+        }
     }
 }

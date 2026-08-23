@@ -731,6 +731,15 @@ pub struct State {
     pub circular_network_layout: cce_ui::layout::CircularPaneLayout,
     pub is_detached_network: bool,
     pub detached_circular_network: bool,
+    /// This process IS the detached window for one pane — the generic sibling
+    /// of `is_detached_network`, which stays its own flag because the network's
+    /// detached window is not merely detached: it is CIRCULAR, with a radial
+    /// border resize and custom CSD that no rectangular pane wants.
+    pub detached_pane: Option<usize>,
+    /// The MAIN window's record of which panes it has handed to a detached
+    /// window, so it stops laying them out. `detached_circular_network` is the
+    /// network's equivalent.
+    pub detached_panes: [bool; WIDGET_COUNT],
     pub last_project_mod_time: Option<std::time::SystemTime>,
     pub last_project_check: std::time::Instant,
     pub needs_autosave: bool,
@@ -2666,6 +2675,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
             is_detached_network,
             detached_circular_network: false,
+            detached_pane: None,
+            detached_panes: [false; WIDGET_COUNT],
             last_project_mod_time: {
                 let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
                 std::fs::metadata(&default_proj_path).and_then(|m| m.modified()).ok()
@@ -3384,6 +3395,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
         }
 
+        self.apply_detached_panes();
         self.apply_collapsed_panes();
     }
 
@@ -5222,7 +5234,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         // 3D canvas: stage the scene into the renderer's backdrop when the
         // viewport is visible and its inputs changed; unstaged frames reuse the
         // previous backdrop (the renderer's equivalent of the old cached pass).
-        if !self.is_detached_network && self.show_viewport {
+        // A detached pane's window has no 3D canvas: the scene would stage
+        // behind the pane and show through its translucent plate.
+        if !self.is_detached_network && self.detached_pane.is_none() && self.show_viewport {
             let cx_logical = 0.0;
             let cy_logical = HEADER_H;
             let cw_logical = self.width;
@@ -5451,6 +5465,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         // The engine draws the frame; keep frames coming while the path
         // tracer is still refining.
         !self.is_detached_network
+            && self.detached_pane.is_none()
             && self.show_viewport
             && self.viewport().rt_mode
             && renderer.rt_accumulating()

@@ -91,7 +91,10 @@ impl State {
     /// window wrote it. Returns true when a reload happened.
     fn poll_shared_project(&mut self) -> bool {
         let mut redraw = false;
-        let syncing = self.is_detached_network || self.detached_circular_network;
+        let syncing = self.is_detached_network
+            || self.detached_circular_network
+            || self.detached_pane.is_some()
+            || self.detached_panes.iter().any(|d| *d);
         if !syncing {
             return false;
         }
@@ -133,7 +136,12 @@ impl State {
     }
 
     pub(crate) fn autosave_on_exit(&mut self) {
-        if self.needs_autosave && (self.is_detached_network || self.detached_circular_network) {
+        if self.needs_autosave
+            && (self.is_detached_network
+                || self.detached_circular_network
+                || self.detached_pane.is_some()
+                || self.detached_panes.iter().any(|d| *d))
+        {
             let _ = self.save_to_file(&Self::default_project_path());
         }
     }
@@ -147,9 +155,20 @@ impl Application for State {
         sender: calloop::channel::Sender<CustomEvent>,
     ) -> Self {
         let is_detached_network = std::env::args().any(|arg| arg == "--detached-network");
+        let detached_pane = std::env::args()
+            .find_map(|arg| crate::plate_corner::pane_from_detach_flag(&arg));
         let mut state = State::new(is_detached_network);
+        if let Some(idx) = detached_pane {
+            // Set after construction, so the layout that `State::new` already
+            // ran has to be redone against the detached shape.
+            state.detached_pane = Some(idx);
+            state.rebuild_positions();
+            state.apply_layout();
+        }
         state.event_sender = Some(sender.clone());
-        if !is_detached_network {
+        // One MCP server per project: the detached windows are satellites of the
+        // main one and would only collide on the port.
+        if !is_detached_network && detached_pane.is_none() {
             start_mcp_server(sender);
         }
         state
@@ -158,6 +177,8 @@ impl Application for State {
     fn settings(&self) -> WindowSettings {
         let (app_id, min_size) = if self.is_detached_network {
             ("circular-network-pane", (200, 200))
+        } else if let Some(idx) = self.detached_pane {
+            (crate::plate_corner::pane_app_id(idx), (240, 160))
         } else {
             ("cce-designer", (480, 320))
         };
