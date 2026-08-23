@@ -1,0 +1,25 @@
+{
+  "name": "Simnet",
+  "type": "simnet",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" }
+  ],
+  "children": [
+    {
+      "name": "input1",
+      "type": "input",
+      "params": [],
+      "position": [4.0, 1.0]
+    },
+    {
+      "name": "output1",
+      "type": "output",
+      "params": [
+        { "name": "Input", "default": "input1" }
+      ],
+      "position": [4.0, 3.0]
+    }
+  ]
+}

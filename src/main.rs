@@ -488,6 +488,7 @@ mod tests {
             &root.children[0],
             &mut visited,
             &mut ocl_err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
         ).expect("Geometry generation failed");
         
         assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
@@ -533,6 +534,7 @@ mod tests {
             &root_2.children[0],
             &mut visited_2,
             &mut ocl_err_2,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
         ).expect("Geometry generation failed");
         
         assert!(ocl_err_2.is_none(), "OpenCL compilation error: {:?}", ocl_err_2);
@@ -602,6 +604,7 @@ mod tests {
             &root.children[1],
             &mut visited,
             &mut ocl_err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
         ).expect("Extrude geometry generation failed");
         assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
         // 2304 sphere vertices = 768 triangles; 768 * 24 = 18432.
@@ -629,6 +632,7 @@ mod tests {
             &root2.children[1],
             &mut visited2,
             &mut ocl_err2,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
         ).expect("Extrude geometry generation failed (no base)");
         assert!(ocl_err2.is_none(), "OpenCL compilation error: {:?}", ocl_err2);
         assert_eq!(geom2.vertices.len(), 16128);
@@ -679,6 +683,7 @@ mod tests {
                 &root.children[0],
                 &mut visited,
                 &mut ocl_err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
             ).expect("Geometry generation failed");
             assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
             geom

@@ -119,7 +119,19 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
   order over the widget slots, circular-pane clipping via `PaintItem::clip_circle`,
   network fade via text alpha. Rebuilt every drawn frame; the engine tessellates,
   shapes, and draws it.
-- `src/geometry.rs` — node-graph evaluation. Each OpenCL node's kernel code is
+- `src/geometry.rs` — node-graph evaluation. Every evaluator threads an
+  `EvalSim` (current frame + `SimCache` + feedback stack) alongside the error
+  slot. The `simnet` node type iterates: the chain between its `input` and
+  `output` children is one simulation STEP; step 1 eats the simnet's own
+  `Input` (like a subnet), each later step eats the previous state, which the
+  `input` node reads off the feedback stack instead of jumping to the outer
+  graph. Solves run up to the playbar frame and cache per node id on `State::
+  sim_cache` (playing forward = one step per frame); the cache key hashes the
+  simnet subtree + seed, so edits restart the sim, and backward scrubs restart
+  from the seed (steps are not invertible). The scene walk does NOT recurse
+  into a simnet's children — that would draw one un-iterated pass of the chain
+  on top of the solved result. Frame changes invalidate the scene only when the
+  graph `contains_simnet`. Each OpenCL node's kernel code is
   preprocessed: `chf("name", default)` / `chi` / `chv` calls are parsed into dynamic
   UI parameters (`parse_dynamic_params`) and rewritten to `param_values[i]` reads
   (`preprocess_opencl_code`). `network_sphere_vertices_with_errors` walks the graph

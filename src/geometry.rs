@@ -346,9 +346,94 @@ pub fn find_parent_node<'a>(root: &'a FsNode, child_id: &str) -> Option<&'a FsNo
     visit(root, child_id)
 }
 
+/// One simnet's solved state, kept between evaluations so playing forward costs
+/// one iteration per frame instead of re-solving the whole history every redraw.
+struct SimSolve {
+    /// Identity of everything the solve depends on — the simnet's own subtree and
+    /// its seed geometry. When this changes the cached state is meaningless and
+    /// the sim restarts from the seed.
+    key: u64,
+    /// The frame `state` is the solution FOR.
+    frame: i32,
+    state: Geometry,
+}
+
+/// Per-simnet solved states, keyed by node id. Owned by the caller (the app keeps
+/// one across frames; a one-shot render can pass a fresh one) rather than being a
+/// global, so two evaluations of different graphs cannot poison each other.
+#[derive(Default)]
+pub struct SimCache {
+    entries: std::collections::HashMap<String, SimSolve>,
+}
+
+impl SimCache {
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+/// The simulation half of an evaluation: which frame the graph is being evaluated
+/// at, the solve cache, and the feedback stack that makes iteration possible.
+///
+/// The stack is what an `input` node inside a simnet reads instead of jumping to
+/// the outer graph: during iteration N its parent simnet has pushed the state
+/// from iteration N-1, and that — not the seed — is what the chain consumes.
+pub struct EvalSim<'a> {
+    pub frame: i32,
+    /// The timeline's first frame — the frame at which every sim shows its seed,
+    /// having taken no steps yet.
+    pub start_frame: i32,
+    pub cache: &'a mut SimCache,
+    feedback: Vec<(String, Geometry)>,
+}
+
+impl<'a> EvalSim<'a> {
+    pub fn new(frame: i32, start_frame: i32, cache: &'a mut SimCache) -> Self {
+        Self { frame, start_frame, cache, feedback: Vec::new() }
+    }
+
+    /// Steps the sim owes at the frame being evaluated. Scrubbing before the
+    /// start frame is not negative time — it is simply the seed.
+    fn steps_due(&self) -> i32 {
+        (self.frame - self.start_frame).max(0)
+    }
+
+    /// The state an `input` node should yield, if its parent simnet is mid-solve.
+    fn feedback_for(&self, simnet_id: &str) -> Option<&Geometry> {
+        self.feedback
+            .iter()
+            .rev()
+            .find(|(id, _)| id == simnet_id)
+            .map(|(_, g)| g)
+    }
+}
+
+/// Hash of everything a simnet's solve depends on: its own subtree (so editing any
+/// node in the chain restarts the sim) and the seed geometry (so an upstream change
+/// does too).
+fn sim_solve_key(simnet: &FsNode, seed: &Geometry) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(json) = serde_json::to_string(simnet) {
+        json.hash(&mut h);
+    }
+    seed.vertices.len().hash(&mut h);
+    for v in &seed.vertices {
+        for c in v.pos {
+            c.to_bits().hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Evaluate with neither error reporting nor a persistent sim cache. Any simnet
+/// reached this way solves at frame 0 — that is, shows its seed — because there
+/// is no timeline in scope to say otherwise.
 pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
     let mut err = None;
-    generate_single_node_geometry_with_errors(root, target, visited, &mut err)
+    let mut cache = SimCache::default();
+    let mut sim = EvalSim::new(0, 0, &mut cache);
+    generate_single_node_geometry_with_errors(root, target, visited, &mut err, &mut sim)
 }
 
 pub fn generate_single_node_geometry_with_errors(
@@ -356,6 +441,7 @@ pub fn generate_single_node_geometry_with_errors(
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
 ) -> Option<Geometry> {
     // Cycle guard by ID, not name: subnet instances share child names
     // ("output1", "opencl1"), so a name guard falsely blocks a subnet that
@@ -395,16 +481,18 @@ pub fn generate_single_node_geometry_with_errors(
         }
         Some(geom)
     } else if target.node_type.eq_ignore_ascii_case("transform") {
-        resolve_transform_geometry_with_errors(root, target, visited, ocl_error)
+        resolve_transform_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("scatter") {
-        resolve_scatter_geometry_with_errors(root, target, visited, ocl_error)
+        resolve_scatter_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("group") {
-        resolve_group_geometry_with_errors(root, target, visited, ocl_error)
+        resolve_group_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("opencl") {
-        resolve_opencl_geometry_with_errors(root, target, visited, ocl_error)
+        resolve_opencl_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("simnet") {
+        resolve_simnet_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("node") {
         if let Some(output_node) = target.children.iter().find(|c| c.node_type.eq_ignore_ascii_case("output")) {
-            generate_single_node_geometry_with_errors(root, output_node, visited, ocl_error)
+            generate_single_node_geometry_with_errors(root, output_node, visited, ocl_error, sim)
         } else {
             None
         }
@@ -421,17 +509,25 @@ pub fn generate_single_node_geometry_with_errors(
             };
             let input_node = input_node.or_else(|| find_node_by_name(root, &input_name));
             if let Some(node) = input_node {
-                generate_single_node_geometry_with_errors(root, node, visited, ocl_error)
+                generate_single_node_geometry_with_errors(root, node, visited, ocl_error, sim)
             } else {
                 None
             }
         }
     } else if target.node_type.eq_ignore_ascii_case("input") {
         if let Some(parent) = find_parent_node(root, &target.id) {
+            // Inside a simnet that is mid-solve, the input IS the previous
+            // iteration's state — that feedback, not the outer graph, is what
+            // makes the chain iterate rather than recompute the same thing.
+            if let Some(prev) = sim.feedback_for(&parent.id) {
+                let fed = prev.clone();
+                visited.pop();
+                return Some(fed);
+            }
             let input_name = node_param_str(parent, "Input", "");
             if !input_name.is_empty() {
                 if let Some(input_node) = find_node_by_name(root, &input_name) {
-                    generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)
+                    generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
                 } else {
                     None
                 }
@@ -451,7 +547,9 @@ pub fn generate_single_node_geometry_with_errors(
 
 pub fn resolve_transform_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
     let mut err = None;
-    resolve_transform_geometry_with_errors(root, target, visited, &mut err)
+    let mut cache = SimCache::default();
+    let mut sim = EvalSim::new(0, 0, &mut cache);
+    resolve_transform_geometry_with_errors(root, target, visited, &mut err, &mut sim)
 }
 
 pub fn resolve_transform_geometry_with_errors(
@@ -459,13 +557,14 @@ pub fn resolve_transform_geometry_with_errors(
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
 ) -> Option<Geometry> {
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
         return None;
     }
     let input_node = find_node_by_name(root, &input_name)?;
-    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let translation = node_param_vec3(target, "Translation", Vec3::ZERO);
     for v in &mut geom.vertices {
         v.pos[0] += translation.x;
@@ -477,7 +576,9 @@ pub fn resolve_transform_geometry_with_errors(
 
 pub fn resolve_scatter_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
     let mut err = None;
-    resolve_scatter_geometry_with_errors(root, target, visited, &mut err)
+    let mut cache = SimCache::default();
+    let mut sim = EvalSim::new(0, 0, &mut cache);
+    resolve_scatter_geometry_with_errors(root, target, visited, &mut err, &mut sim)
 }
 
 /// The Group node: pass the input geometry through, tagging the elements
@@ -494,13 +595,14 @@ pub fn resolve_group_geometry_with_errors(
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
 ) -> Option<Geometry> {
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
         return None;
     }
     let input_node = find_node_by_name(root, &input_name)?;
-    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let group_name = node_param_str(target, "Group Name", "group1");
     let attr = format!("group:{}", group_name.trim());
@@ -586,6 +688,7 @@ pub fn resolve_scatter_geometry_with_errors(
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
 ) -> Option<Geometry> {
     if visited.contains(&target.id) {
         return None;
@@ -604,7 +707,7 @@ pub fn resolve_scatter_geometry_with_errors(
             return None;
         }
     };
-    let geom = match generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error) {
+    let geom = match generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim) {
         Some(g) => g,
         None => {
             visited.pop();
@@ -904,6 +1007,7 @@ pub fn resolve_opencl_geometry_with_errors(
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
 ) -> Option<Geometry> {
     let input_name = node_param_str(target, "Input", "");
     let mut geom = if !input_name.is_empty() {
@@ -914,7 +1018,7 @@ pub fn resolve_opencl_geometry_with_errors(
         let sibling = find_parent_node(root, &target.id)
             .and_then(|p| p.children.iter().find(|c| c.name == input_name || c.id == input_name));
         if let Some(input_node) = sibling.or_else(|| find_node_by_name(root, &input_name)) {
-            generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error).unwrap_or_default()
+            generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim).unwrap_or_default()
         } else {
             Geometry::default()
         }
@@ -1251,15 +1355,25 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "output"
         || nt == "scatter"
         || nt == "group"
+        || nt == "simnet"
 }
 
+/// The scene at the timeline's start frame, with a throwaway sim cache — every
+/// simnet shows its seed. Callers that have a timeline should build their own
+/// [`EvalSim`] and keep its [`SimCache`] across frames.
 pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
     let mut err = None;
-    network_sphere_vertices_with_errors(root, &mut err)
+    let mut cache = SimCache::default();
+    let mut sim = EvalSim::new(0, 0, &mut cache);
+    network_sphere_vertices_with_errors(root, &mut err, &mut sim)
 }
 
-pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option<String>) -> Geometry {
-    fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>) {
+pub fn network_sphere_vertices_with_errors(
+    root: &FsNode,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Geometry {
+    fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>, sim: &mut EvalSim) {
         let is_visible = parent_visible && node.geometry_visible;
         if node.node_type.eq_ignore_ascii_case("sphere") {
             let idx = *count;
@@ -1300,7 +1414,7 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
             *count += 1;
             if is_visible {
                 let mut visited = Vec::new();
-                if let Some(geom) = resolve_transform_geometry_with_errors(root, node, &mut visited, ocl_error) {
+                if let Some(geom) = resolve_transform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(geom);
                 }
             }
@@ -1309,7 +1423,7 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
             *count += 1;
             if is_visible {
                 let mut visited = Vec::new();
-                if let Some(geom) = resolve_scatter_geometry_with_errors(root, node, &mut visited, ocl_error) {
+                if let Some(geom) = resolve_scatter_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(geom);
                 }
             }
@@ -1318,7 +1432,7 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
             *count += 1;
             if is_visible {
                 let mut visited = Vec::new();
-                if let Some(geom) = resolve_group_geometry_with_errors(root, node, &mut visited, ocl_error) {
+                if let Some(geom) = resolve_group_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(geom);
                 }
             }
@@ -1327,20 +1441,34 @@ pub fn network_sphere_vertices_with_errors(root: &FsNode, ocl_error: &mut Option
             *count += 1;
             if is_visible {
                 let mut visited = Vec::new();
-                if let Some(geom) = resolve_opencl_geometry_with_errors(root, node, &mut visited, ocl_error) {
+                if let Some(geom) = resolve_opencl_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(geom);
                 }
             }
+        } else if node.node_type.eq_ignore_ascii_case("simnet") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_simnet_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(geom);
+                }
+            }
+            // The chain inside a simnet is the simulation STEP, not scene
+            // content. Recursing into it the way a subnet is recursed into
+            // would merge one un-iterated pass of the chain alongside the
+            // solved result — the sim would draw itself twice, once wrong.
+            return;
         }
         for child in &node.children {
-            visit(root, child, is_visible, count, out, ocl_error);
+            visit(root, child, is_visible, count, out, ocl_error, sim);
         }
     }
 
     let mut out = Geometry::new();
     let mut count = 0;
     for child in &root.children {
-        visit(root, child, true, &mut count, &mut out, ocl_error);
+        visit(root, child, true, &mut count, &mut out, ocl_error, sim);
     }
     out
 }
@@ -2028,7 +2156,7 @@ mod tests {
 
         let mut visited = Vec::new();
         let mut err = None;
-        let geom = resolve_opencl_geometry_with_errors(&root, &opencl_node, &mut visited, &mut err).unwrap();
+        let geom = resolve_opencl_geometry_with_errors(&root, &opencl_node, &mut visited, &mut err, &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default())).unwrap();
         assert!(!geom.vertices.is_empty());
         assert!(err.is_none());
 
@@ -2141,3 +2269,242 @@ mod tests {
 }
 
 
+
+/// Solve a simnet up to the frame being evaluated.
+///
+/// The chain between the simnet's `input` and `output` children is one step of
+/// the simulation. Step 1 consumes the seed (the simnet's own `Input`, exactly
+/// like a subnet's); every later step consumes the step before it, which the
+/// `input` node picks up from the feedback stack. At the timeline's start frame
+/// the sim has taken no steps and IS the seed.
+pub fn resolve_simnet_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Geometry> {
+    let output_node = target
+        .children
+        .iter()
+        .find(|c| c.node_type.eq_ignore_ascii_case("output"))?
+        .clone();
+
+    let seed = {
+        let input_name = node_param_str(target, "Input", "");
+        if input_name.is_empty() {
+            Geometry::new()
+        } else {
+            find_node_by_name(root, &input_name)
+                .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+                .unwrap_or_default()
+        }
+    };
+
+    let key = sim_solve_key(target, &seed);
+    let due = sim.steps_due();
+
+    // Resume from the cached solve when it is still valid and has not run PAST
+    // the frame asked for; scrubbing backwards has to restart from the seed,
+    // because a step is not invertible.
+    let (mut state, mut done) = match sim.cache.entries.get(&target.id) {
+        Some(prev) if prev.key == key && prev.frame <= due => (prev.state.clone(), prev.frame),
+        _ => (seed, 0),
+    };
+
+    while done < due {
+        sim.feedback.push((target.id.clone(), state));
+        let stepped = generate_single_node_geometry_with_errors(root, &output_node, visited, ocl_error, sim);
+        let fed_back = sim.feedback.pop().map(|(_, g)| g);
+        // A step that yields nothing (an unwired chain, a failed kernel) holds
+        // the previous state rather than collapsing the sim to empty geometry.
+        state = stepped.or(fed_back).unwrap_or_default();
+        done += 1;
+    }
+
+    sim.cache.entries.insert(
+        target.id.clone(),
+        SimSolve { key, frame: due, state: state.clone() },
+    );
+    Some(state)
+}
+
+/// Does this graph contain a simnet anywhere? The frame-change invalidation asks
+/// before rebuilding the scene, since for a graph without one the timeline
+/// changes nothing.
+pub fn contains_simnet(root: &FsNode) -> bool {
+    if root.node_type.eq_ignore_ascii_case("simnet") {
+        return true;
+    }
+    root.children.iter().any(contains_simnet)
+}
+
+#[cfg(test)]
+mod simnet_tests {
+    use super::*;
+    use crate::app::{FsNode, ParamDef};
+
+    fn param(name: &str, value: &str) -> ParamDef {
+        ParamDef {
+            name: name.to_string(),
+            label: String::new(),
+            param_type: "text".to_string(),
+            default: value.to_string(),
+            options: vec![],
+            min: None,
+            max: None,
+            step: None,
+        }
+    }
+
+    fn node(id: &str, name: &str, node_type: &str, params: Vec<ParamDef>, children: Vec<FsNode>) -> FsNode {
+        FsNode {
+            id: id.to_string(),
+            inputs: 1,
+            outputs: 1,
+            name: name.to_string(),
+            node_type: node_type.to_string(),
+            children,
+            params,
+            geometry_visible: true,
+            position: (0.0, 0.0),
+        }
+    }
+
+    /// A simnet whose chain is one Transform: each step shifts the geometry by
+    /// the same offset, so the solved position reads back the step COUNT. Uses
+    /// transform, not an OpenCL node, so the test is pure CPU.
+    fn stepping_graph() -> FsNode {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let step = node(
+            "id-step",
+            "step1",
+            "transform",
+            vec![param("Input", "input1"), param("Translation", "1.00:0.00:0.00")],
+            vec![],
+        );
+        let inner_output = node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]);
+        let sim = node(
+            "id-sim",
+            "Simnet 1",
+            "simnet",
+            vec![param("Input", "Sphere 1")],
+            vec![inner_input, step, inner_output],
+        );
+        node("id-root", "root", "node", vec![], vec![sphere, sim])
+    }
+
+    fn solve_at(root: &FsNode, frame: i32) -> Geometry {
+        let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap();
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(frame, 1, &mut cache);
+        let mut visited = Vec::new();
+        let mut err = None;
+        resolve_simnet_geometry_with_errors(root, sim_node, &mut visited, &mut err, &mut sim)
+            .expect("simnet solves")
+    }
+
+    fn min_x(g: &Geometry) -> f32 {
+        g.vertices.iter().map(|v| v.pos[0]).fold(f32::INFINITY, f32::min)
+    }
+
+    #[test]
+    fn test_simnet_at_start_frame_is_its_seed() {
+        let root = stepping_graph();
+        let seeded = solve_at(&root, 1);
+        let mut visited = Vec::new();
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(1, 1, &mut cache);
+        let mut err = None;
+        let raw = generate_single_node_geometry_with_errors(
+            &root,
+            root.children.iter().find(|c| c.name == "Sphere 1").unwrap(),
+            &mut visited,
+            &mut err,
+            &mut sim,
+        )
+        .expect("seed geometry");
+
+        assert!(!seeded.vertices.is_empty(), "the sim produced nothing at its start frame");
+        assert_eq!(seeded.vertices.len(), raw.vertices.len());
+        assert!((min_x(&seeded) - min_x(&raw)).abs() < 1e-4,
+            "at the start frame the sim has taken no steps, so it must BE the seed");
+    }
+
+    /// The point of the whole thing: frame N is N applications of the chain, not
+    /// one. A simnet that resolved its input to the outer graph every time would
+    /// sit at one step forever.
+    #[test]
+    fn test_simnet_iterates_once_per_frame() {
+        let root = stepping_graph();
+        let base = min_x(&solve_at(&root, 1));
+        for steps in 1..=4 {
+            let solved = solve_at(&root, 1 + steps);
+            let moved = min_x(&solved) - base;
+            assert!((moved - steps as f32).abs() < 1e-4,
+                "frame {} should be {} steps of +1.0, got {moved}", 1 + steps, steps);
+        }
+    }
+
+    /// Scrubbing before the start frame is not negative time.
+    #[test]
+    fn test_simnet_before_the_start_frame_holds_its_seed() {
+        let root = stepping_graph();
+        let base = min_x(&solve_at(&root, 1));
+        assert!((min_x(&solve_at(&root, -20)) - base).abs() < 1e-4);
+    }
+
+    /// Resuming from the cache must land on the same answer as solving cold, or
+    /// playback and scrubbing would disagree about the same frame.
+    #[test]
+    fn test_simnet_cache_resume_matches_a_cold_solve() {
+        let root = stepping_graph();
+        let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap();
+        let mut cache = SimCache::default();
+
+        // Step forward frame by frame through the shared cache.
+        let mut warm = 0.0;
+        for frame in 1..=6 {
+            let mut sim = EvalSim::new(frame, 1, &mut cache);
+            let mut visited = Vec::new();
+            let mut err = None;
+            let g = resolve_simnet_geometry_with_errors(&root, sim_node, &mut visited, &mut err, &mut sim).unwrap();
+            warm = min_x(&g);
+        }
+        let cold = min_x(&solve_at(&root, 6));
+        assert!((warm - cold).abs() < 1e-4, "resumed solve {warm} != cold solve {cold}");
+    }
+
+    /// Editing the chain has to restart the sim: a cached state solved from the
+    /// old chain is not a state of the new one.
+    #[test]
+    fn test_editing_the_chain_invalidates_the_cache() {
+        let mut root = stepping_graph();
+        let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap().clone();
+        let mut cache = SimCache::default();
+        {
+            let mut sim = EvalSim::new(5, 1, &mut cache);
+            let mut visited = Vec::new();
+            let mut err = None;
+            resolve_simnet_geometry_with_errors(&root, &sim_node, &mut visited, &mut err, &mut sim).unwrap();
+        }
+
+        // Double the step size; frame 5 (4 steps) must now read 8, not 4.
+        {
+            let sim_mut = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
+            let step = sim_mut.children.iter_mut().find(|c| c.name == "step1").unwrap();
+            step.params.iter_mut().find(|p| p.name == "Translation").unwrap().default =
+                "2.00:0.00:0.00".to_string();
+        }
+        let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap().clone();
+        let base = min_x(&solve_at(&root, 1));
+        let mut sim = EvalSim::new(5, 1, &mut cache);
+        let mut visited = Vec::new();
+        let mut err = None;
+        let g = resolve_simnet_geometry_with_errors(&root, &sim_node, &mut visited, &mut err, &mut sim).unwrap();
+        let moved = min_x(&g) - base;
+        assert!((moved - 8.0).abs() < 1e-4,
+            "stale cache: expected 4 steps of +2.0 = 8, got {moved}");
+    }
+}

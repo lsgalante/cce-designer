@@ -775,7 +775,15 @@ impl State {
 
     pub(crate) fn rebuild_scene_geometry(&mut self) {
         let mut ocl_error = None;
-        let geom = network_sphere_vertices_with_errors(&self.fs_root, &mut ocl_error);
+        // The sim cache lives on State so playing forward steps each simnet once
+        // per frame instead of re-solving its whole history every rebuild.
+        let (frame, start) = (self.sim_frame(), self.sim_start_frame());
+        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let geom = {
+            let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
+            network_sphere_vertices_with_errors(&self.fs_root, &mut ocl_error, &mut sim)
+        };
+        self.sim_cache = sim_cache;
 
         fn has_visible_opencl(node: &FsNode) -> bool {
             if node.node_type.eq_ignore_ascii_case("opencl") && node.geometry_visible {

@@ -199,6 +199,17 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
             }),
         ),
         tool(
+            "set_frame",
+            "Move the playhead. Simnets solve up to this frame.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "frame": { "type": "number", "description": "Timeline frame" },
+                },
+                "required": ["frame"],
+            }),
+        ),
+        tool(
             "menu_click",
             "Click a menubar item by indices (widget_idx must be a menubar widget slot).",
             json!({

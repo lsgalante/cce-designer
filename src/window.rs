@@ -894,6 +894,15 @@ impl State {
                 needs_redraw = true;
                 Ok(format!("{pane} detached={}", state.pane_is_detached(idx)))
             }
+            McpAction::SetFrame { frame } => {
+                let clamped = {
+                    let pb = state.slots.playbar.inner_mut();
+                    pb.current_frame = frame.clamp(pb.start_frame, pb.end_frame).round();
+                    pb.current_frame
+                };
+                needs_redraw = true;
+                Ok(format!("frame={clamped}"))
+            }
             McpAction::ToggleCircularPane => {
                 state.circular_network_pane = !state.circular_network_pane;
                 let val = state.circular_network_pane;

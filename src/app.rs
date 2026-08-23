@@ -216,6 +216,9 @@ pub enum McpAction {
     /// Move a pane out into its own window, or take it back — the corner menu's
     /// Detach/Reattach.
     SetPaneDetached { pane: String, detached: bool },
+    /// Move the playhead. Simnets solve up to this frame, so it is the only way
+    /// to drive a simulation without dragging the playbar.
+    SetFrame { frame: f32 },
 }
 
 #[derive(Debug, Clone)]
@@ -666,6 +669,11 @@ pub struct State {
     /// The plate corner menu — same `context_menu` thread-local again; the slot
     /// says which plate's control opened it (and doubles as the pressed state
     /// the corner control paints with).
+    /// Solved simulation states, kept across frames so playing forward costs one
+    /// step per frame instead of re-solving from the start frame every redraw.
+    pub sim_cache: crate::geometry::SimCache,
+    /// Frame the scene was last built at, so the timeline moving can invalidate it.
+    pub last_sim_frame: i32,
     pub plate_menu_slot: Option<usize>,
     pub plate_menu_actions: Vec<crate::plate_corner::PlateMenuAction>,
     /// Panes shrunk to their title stub, indexed by slot. Only the
@@ -996,6 +1004,16 @@ impl State {
     }
 
     pub fn body_h(&self) -> f32 { self.height - HEADER_H - STATUS_H }
+
+    /// The timeline frame the graph is evaluated at — what a simnet solves up to.
+    pub fn sim_frame(&self) -> i32 {
+        self.slots.playbar.inner().current_frame.round() as i32
+    }
+
+    /// The timeline's first frame: where every sim sits at its seed.
+    pub fn sim_start_frame(&self) -> i32 {
+        self.slots.playbar.inner().start_frame.round() as i32
+    }
 
     pub fn get_col_geometries(&self) -> (f32, f32, f32, f32, f32, f32) {
         let left_visible = self.show_network && !self.circular_network_pane && !self.is_detached_network && !self.detached_circular_network;
@@ -2410,6 +2428,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
 
 
+        let sim_frame = self.sim_frame();
+        let sim_start = self.sim_start_frame();
         let mut cache_hit = false;
         let mut current_name = None;
         let mut current_params = None;
@@ -2433,7 +2453,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             if let Some(node) = selected_node {
                 let mut visited = Vec::new();
                 let mut ocl_error = None;
-                if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error) {
+                // A throwaway cache: `selected_node` borrows self, so the
+                // shared one cannot be reached from here. The answer is the
+                // same either way — a simnet just re-solves for the
+                // spreadsheet, which only runs when the selection changed.
+                let mut sim_cache = crate::geometry::SimCache::default();
+                let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
+                if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
                     let (h, r) = Self::geometry_to_spreadsheet_data(&geom);
                     headers = h;
                     rows = r;
@@ -2628,6 +2654,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             node_menu_actions: Vec::new(),
             viewport_menu_active: false,
             viewport_menu_actions: Vec::new(),
+            sim_cache: crate::geometry::SimCache::default(),
+            last_sim_frame: i32::MIN,
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
             collapsed_panes: [false; WIDGET_COUNT],
@@ -4951,6 +4979,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     pub fn tick_frame(&mut self, dt: f32) -> bool {
         let now = Instant::now();
         self.last_frame = now;
+
+        // A simnet's geometry is a function of the frame, so advancing the
+        // timeline invalidates the scene the way editing a node does. Gated on
+        // the graph actually containing one: without this, every frame of
+        // playback would rebuild the scene for a graph that cannot have
+        // changed.
+        let frame_now = self.sim_frame();
+        if frame_now != self.last_sim_frame {
+            self.last_sim_frame = frame_now;
+            if crate::geometry::contains_simnet(&self.fs_root) {
+                self.rebuild_scene_geometry();
+                self.viewport_dirty = true;
+            }
+        }
 
         // A detached window the user closed hands its pane back here, so a
         // closed window cannot strand the pane as a stub nothing can revive.
