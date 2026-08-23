@@ -418,6 +418,14 @@ pub fn configured_grid_geometry() -> (f32, f32, f32, f32) {
 pub struct DesignSettings {
     #[serde(default)]
     pub viewport: ViewportSettings,
+    /// Project to open at startup instead of the bundled default — the Main
+    /// node's "Set As Default" button. A path string (what
+    /// `loaded_project_path` held when it was set); absent = the bundled
+    /// `default_project.json`. Deliberately NOT the project file itself:
+    /// that file is versioned AND is the detached-window sync channel, so
+    /// "make this the default" must not rewrite it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_project: Option<String>,
 }
 
 fn float_array_to_hex(rgb: &[f32; 3]) -> String {
@@ -444,7 +452,11 @@ impl DesignSettings {
 
     fn load_kdl(path: &std::path::Path) -> Option<Self> {
         let content = fs::read_to_string(path).ok()?;
-        let mut json_val = cce_ui::config::parse_kdl_to_json(&content);
+        Some(Self::from_kdl_str(&content))
+    }
+
+    pub(crate) fn from_kdl_str(content: &str) -> Self {
+        let mut json_val = cce_ui::config::parse_kdl_to_json(content);
         // Convert hex strings back to color arrays
         if let Some(obj) = json_val.as_object_mut() {
             if let Some(viewport) = obj.get_mut("viewport").and_then(|v| v.as_object_mut()) {
@@ -464,7 +476,7 @@ impl DesignSettings {
                 }
             }
         }
-        Some(serde_json::from_value::<Self>(json_val).unwrap_or_else(|_| Self::default()))
+        serde_json::from_value::<Self>(json_val).unwrap_or_else(|_| Self::default())
     }
 
     fn load() -> Self {
@@ -497,6 +509,12 @@ impl DesignSettings {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
+        if let Some(kdl_str) = self.to_kdl_str() {
+            let _ = fs::write(path, kdl_str);
+        }
+    }
+
+    pub(crate) fn to_kdl_str(&self) -> Option<String> {
         if let Ok(mut json_val) = serde_json::to_value(self) {
             // Convert color arrays to hex strings
             if let Some(obj) = json_val.as_object_mut() {
@@ -515,9 +533,9 @@ impl DesignSettings {
                     }
                 }
             }
-            let kdl_str = cce_ui::config::json_to_kdl_string(&json_val);
-            let _ = fs::write(path, kdl_str);
+            return Some(cce_ui::config::json_to_kdl_string(&json_val));
         }
+        None
     }
 }
 
@@ -796,6 +814,10 @@ pub struct State {
     pub floating_spreadsheet_inset_left: f32,
     pub floating_spreadsheet_inset_right: f32,
     pub loaded_project_path: Option<std::path::PathBuf>,
+    /// The configured startup project (`DesignSettings::default_project`),
+    /// mirrored live so "Set As Default" can rewrite it and `save_settings` —
+    /// which reconstructs DesignSettings from live state — can carry it.
+    pub default_project_setting: Option<String>,
     pub last_saved_root_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
     pub viewport_dirty: bool,
@@ -967,6 +989,7 @@ impl State {
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
             },
+            default_project: self.default_project_setting.clone(),
         };
         settings.save();
         self.last_design_mod_time = {
@@ -1403,6 +1426,9 @@ impl State {
             }
             "New Project" | "New" => {
                 self.new_project();
+            }
+            "Set As Default" => {
+                self.set_current_as_default();
             }
             "Open" => {
                 self.open_file_chooser();
@@ -2766,6 +2792,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             floating_spreadsheet_inset_left: 0.0,
             floating_spreadsheet_inset_right: 0.0,
             loaded_project_path: None,
+            default_project_setting: settings.default_project.clone(),
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
             recent_files,
             viewport_dirty: true,
@@ -5038,6 +5065,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     if Some(mod_time) != self.last_design_mod_time {
                         self.last_design_mod_time = Some(mod_time);
                          let settings = DesignSettings::load();
+                         self.default_project_setting = settings.default_project.clone();
                          self.square_viewport = settings.viewport.square;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;

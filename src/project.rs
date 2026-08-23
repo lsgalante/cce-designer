@@ -225,6 +225,43 @@ impl State {
         Ok(())
     }
 
+    /// The Main node's "Set As Default": remember the currently-loaded project
+    /// as what the app opens at startup. A pointer in state.kdl — NOT a rewrite
+    /// of the bundled default_project.json, which is versioned and doubles as
+    /// the detached-window sync channel. A scratch (never-saved) project has no
+    /// path to point at, so the click is a no-op with a note.
+    pub(crate) fn set_current_as_default(&mut self) {
+        match &self.loaded_project_path {
+            Some(path) => {
+                self.default_project_setting = Some(path.to_string_lossy().into_owned());
+                self.save_settings();
+            }
+            None => {
+                eprintln!("Set As Default: no project file is loaded — save the project first");
+            }
+        }
+    }
+
+    /// Open the configured startup project, if any. Main window only — the
+    /// detached windows must keep seeding from default_project.json, which is
+    /// their sync channel with the parent. A missing or unloadable default
+    /// falls back to what State::new already loaded, and a default that no
+    /// longer exists is dropped from the settings so it does not fail on every
+    /// launch from now on.
+    pub(crate) fn load_default_project_setting(&mut self) {
+        let Some(configured) = self.default_project_setting.clone() else { return };
+        let path = std::path::PathBuf::from(&configured);
+        if !path.exists() {
+            eprintln!("Default project is gone, clearing the setting: {configured}");
+            self.default_project_setting = None;
+            self.save_settings();
+            return;
+        }
+        if let Err(e) = self.load_from_file(&path) {
+            eprintln!("Failed to load default project {configured}: {e:?}");
+        }
+    }
+
     pub(crate) fn new_project(&mut self) {
         self.fs_root = FsNode {
             id: "root".to_string(),
@@ -378,6 +415,7 @@ impl State {
 
         ensure_param(main_node, "Save", "button", "", &[], None, None, None);
         ensure_param(main_node, "Save As", "button", "", &[], None, None, None);
+        ensure_param(main_node, "Set As Default", "button", "", &[], None, None, None);
         ensure_param(main_node, "Exit", "button", "", &[], None, None, None);
 
         ensure_param(main_node, "Edit", "section", "", &[], None, None, None);
@@ -507,8 +545,8 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 19] = [
-            "File", "New Project", "Open", "Save", "Save As", "Exit",
+        const MAIN_PARAM_ORDER: [&str; 20] = [
+            "File", "New Project", "Open", "Save", "Save As", "Set As Default", "Exit",
             "Edit", "Undo", "Redo",
             "Network", "Zoom In", "Zoom Out",
             "Reset Zoom", "Detach Circular Window", "Circular Pane",

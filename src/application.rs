@@ -169,6 +169,10 @@ impl Application for State {
         // One MCP server per project: the detached windows are satellites of the
         // main one and would only collide on the port.
         if !is_detached_network && detached_pane.is_none() {
+            // The user's configured startup project, over the bundled default
+            // State::new seeded. Main window only: the detached windows read
+            // default_project.json as their sync channel and must keep it.
+            state.load_default_project_setting();
             start_mcp_server(sender);
         }
         state

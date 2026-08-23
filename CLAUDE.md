@@ -149,6 +149,14 @@ is the introspection surface.
 
 ### App-written settings: `~/.config/cce/cce-designer/state.kdl`
 
+`default_project` in state.kdl points at the project the main window opens on
+startup (the Main node's File > "Set As Default" button; absent = the bundled
+`default_project.json`). It is a POINTER, never a rewrite of
+default_project.json — that file is versioned and is the detached-window sync
+channel. A default whose path no longer exists is dropped from the settings on
+launch. Detached windows ignore it: they must keep seeding from the sync
+channel.
+
 `DesignSettings` (viewport/graph display state the app rewrites itself:
 colors, grid sizes, show flags) persists to `state.kdl` — deliberately NOT
 `config.kdl`, which is the user-authored toolkit-config override slot that

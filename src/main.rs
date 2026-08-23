@@ -69,6 +69,50 @@ mod tests {
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
 
+    /// The default-project pointer must survive the KDL round trip state.kdl
+    /// actually goes through — serde alone passing means nothing if
+    /// json_to_kdl_string / parse_kdl_to_json drop or retype the field.
+    #[test]
+    fn test_default_project_setting_survives_the_kdl_round_trip() {
+        let mut settings = DesignSettings::default();
+        settings.default_project = Some("/home/user/projects/gears".to_string());
+        let kdl = settings.to_kdl_str().expect("settings serialize");
+        let back = DesignSettings::from_kdl_str(&kdl);
+        assert_eq!(back.default_project.as_deref(), Some("/home/user/projects/gears"));
+
+        // And absence stays absence — an unset default must not come back as
+        // Some("") and shadow the bundled project.
+        let none_kdl = DesignSettings::default().to_kdl_str().expect("serialize");
+        assert_eq!(DesignSettings::from_kdl_str(&none_kdl).default_project, None);
+    }
+
+    /// The button must exist on Main, inside the File section, before Exit.
+    #[test]
+    fn test_main_node_offers_set_as_default() {
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+        let main = state.fs_root.children.iter().find(|c| c.name == "Main").expect("Main node");
+        let names: Vec<&str> = main.params.iter().map(|p| p.name.as_str()).collect();
+        let idx = names.iter().position(|n| *n == "Set As Default").expect("Set As Default param");
+        let save_as = names.iter().position(|n| *n == "Save As").unwrap();
+        let exit = names.iter().position(|n| *n == "Exit").unwrap();
+        assert!(save_as < idx && idx < exit, "Set As Default out of place: {names:?}");
+        assert_eq!(main.params[idx].param_type, "button");
+    }
+
+    /// A scratch project has no path — the click must not invent a default.
+    #[test]
+    fn test_set_as_default_without_a_loaded_file_is_a_noop() {
+        let mut state = State::new(false);
+        assert_eq!(state.loaded_project_path, None);
+        let before = state.default_project_setting.clone();
+        // Deliberately NOT via set_current_as_default's saving path: with a
+        // loaded path it would write the real ~/.config state.kdl. The no-path
+        // arm does not save, so it is safe to exercise directly.
+        state.set_current_as_default();
+        assert_eq!(state.default_project_setting, before);
+    }
+
     /// The corner control has to land ON its plate: derived from the slot's live
     /// rect, an off-by-one in the inset would put the trigger outside the pane
     /// (unclickable, and painted over the neighbour) with nothing to catch it —
