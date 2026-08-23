@@ -44,7 +44,12 @@ kernels and need a working OpenCL runtime; they are not pure-CPU tests.
   and no 3D canvas; `--detached-network` stays its own flag because that window is
   CIRCULAR, with a radial border resize no rectangular pane wants. All of them share
   the one `default_project.json` sync channel, and only the main window runs the MCP
-  server.
+  server. The parent keeps a stub for each pane it handed out — that stub's corner
+  control is the only way to Reattach — and reaps its children with `try_wait` from
+  the frame tick, so a window the user closes hands its pane back. NOT `kill(pid, 0)`:
+  an unreaped exited child is a zombie, which that probe calls alive forever.
+  Note that detaching REWRITES `default_project.json` in the source tree, since that
+  file is the sync channel; it is versioned, so check `git status` after testing.
 
 ### MCP automation server
 

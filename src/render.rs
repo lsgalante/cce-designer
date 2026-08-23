@@ -221,7 +221,7 @@ impl State {
         // Returning here is what suppresses the body — the params rows, the
         // spreadsheet grid, the transport controls — rather than relying on
         // each pane's own clip to hide content taller than the stub.
-        if self.pane_is_collapsed(idx) {
+        if let Some(stub_label) = self.pane_stub_label(idx) {
             let (sx, sy, sw, sh) = w.rect();
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(sx, sy, sw, sh));
             let font_size = 12.0;
@@ -229,7 +229,7 @@ impl State {
             // Bounds stop at the corner control so a long name cannot run under it.
             let text_right = sx + sw - 2.0 * crate::plate_corner::CORNER_INSET;
             pc.text_with(
-                crate::plate_corner::plate_title(idx),
+                stub_label,
                 sx + 12.0,
                 ty,
                 font_size,

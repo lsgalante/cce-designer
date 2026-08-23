@@ -882,6 +882,18 @@ impl State {
                 needs_redraw = true;
                 Ok(format!("{pane} collapsed={collapsed}"))
             }
+            McpAction::SetPaneDetached { pane, detached } => {
+                let idx = match pane.to_ascii_lowercase().as_str() {
+                    "network" => crate::slots::NETWORK_PANEL_IDX,
+                    "parameters" | "params" => crate::slots::PARAM_IDX,
+                    "spreadsheet" => crate::slots::SPREADSHEET_IDX,
+                    "playbar" => crate::slots::PLAYBAR_IDX,
+                    other => return Err(format!("unknown pane: {other}")),
+                };
+                state.set_pane_detached(idx, detached);
+                needs_redraw = true;
+                Ok(format!("{pane} detached={}", state.pane_is_detached(idx)))
+            }
             McpAction::ToggleCircularPane => {
                 state.circular_network_pane = !state.circular_network_pane;
                 let val = state.circular_network_pane;

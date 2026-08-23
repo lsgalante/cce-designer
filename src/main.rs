@@ -151,15 +151,86 @@ mod tests {
         assert_eq!(w, 600.0 - 2.0 * DETACHED_MARGIN);
         assert_eq!(h, 400.0 - 2.0 * DETACHED_MARGIN);
 
-        // Parent: the window that handed the pane out.
+        // Parent: the window that handed the pane out keeps a STUB, because the
+        // stub carries the corner control that is the only way to reattach.
+        use crate::plate_corner::STUB_H;
         let mut parent = State::new(false);
         parent.resize(1600.0, 900.0, 1.0);
         assert!(parent.slots.get_dyn(PARAM_IDX).visible(), "params starts in the parent");
+        let (_, _, _, full_h) = parent.slots.get_dyn(PARAM_IDX).rect();
+
         parent.detached_panes[PARAM_IDX] = true;
         parent.rebuild_positions();
         parent.apply_layout();
-        assert!(!parent.slots.get_dyn(PARAM_IDX).visible(), "params still laid out after detaching");
+
+        let (_, _, _, stub_h) = parent.slots.get_dyn(PARAM_IDX).rect();
+        assert!(full_h > stub_h, "detaching did not shrink the pane in the parent");
+        assert_eq!(stub_h, STUB_H, "the parent's leftover is not a stub");
+        assert!(parent.plate_corner_center(PARAM_IDX).is_some(),
+            "the stub has no corner control — nothing can reattach the pane");
+        // Collapsed and detached stubs must not read the same.
+        let label = parent.pane_stub_label(PARAM_IDX).expect("a detached pane is stubbed");
+        assert!(label.contains("detached"), "stub does not say the pane is detached: {label}");
         assert!(parent.slots.get_dyn(VIEWPORT_IDX).visible(), "the rest of the parent survived");
+    }
+
+    /// The way back. A detached pane's menu offers Reattach and nothing else,
+    /// and reattaching restores the pane in full.
+    #[test]
+    fn test_reattach_brings_a_detached_pane_back() {
+        use crate::plate_corner::PlateMenuAction;
+        use crate::slots::PARAM_IDX;
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        let (_, _, _, full_h) = state.slots.get_dyn(PARAM_IDX).rect();
+
+        state.detached_panes[PARAM_IDX] = true;
+        state.rebuild_positions();
+        state.apply_layout();
+
+        state.open_plate_menu(PARAM_IDX);
+        assert_eq!(state.plate_menu_actions, vec![PlateMenuAction::Reattach],
+            "a detached pane must offer Reattach and only Reattach");
+        state.close_plate_menu();
+
+        state.reattach_plate(PARAM_IDX);
+        assert!(!state.pane_is_detached(PARAM_IDX), "still marked detached after reattach");
+        assert!(state.pane_stub_label(PARAM_IDX).is_none(), "still a stub after reattach");
+        let (_, _, _, back_h) = state.slots.get_dyn(PARAM_IDX).rect();
+        assert_eq!(back_h, full_h, "reattach did not restore the pane height");
+    }
+
+    /// A detached window the user closes themselves must not strand its pane as
+    /// a stub the parent thinks is still elsewhere. Uses a REAL child, reaped
+    /// before the poll, so the liveness probe is the one that runs in the app.
+    #[test]
+    fn test_parent_reclaims_a_pane_whose_window_exited() {
+        use crate::slots::SPREADSHEET_IDX;
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+
+        // Deliberately NOT reaped here: an unreaped exited child is a zombie,
+        // which is exactly the state a closed window leaves behind. A pid-based
+        // `kill(pid, 0)` probe calls a zombie alive and never reclaims the pane
+        // — this test only bites if the poll reaps for itself.
+        let child = std::process::Command::new("true").spawn().expect("spawn a short-lived child");
+        state.detached_children.insert(SPREADSHEET_IDX, child);
+        state.detached_panes[SPREADSHEET_IDX] = true;
+        state.rebuild_positions();
+        state.apply_layout();
+        assert!(state.pane_is_detached(SPREADSHEET_IDX));
+
+        let mut reclaimed = false;
+        for _ in 0..200 {
+            if state.poll_detached_children() {
+                reclaimed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(reclaimed, "poll never noticed the exited child");
+        assert!(!state.pane_is_detached(SPREADSHEET_IDX), "pane stayed detached after its window exited");
+        assert!(!state.detached_children.contains_key(&SPREADSHEET_IDX), "stale child handle kept");
     }
 
     /// Detach must not be offered where it cannot work: twice for one pane, or

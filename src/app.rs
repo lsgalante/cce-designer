@@ -213,6 +213,9 @@ pub enum McpAction {
     /// Collapse a pane to its title stub, or restore it — the plate corner
     /// menu's Collapse/Expand, reachable without driving the pointer.
     SetPaneCollapsed { pane: String, collapsed: bool },
+    /// Move a pane out into its own window, or take it back — the corner menu's
+    /// Detach/Reattach.
+    SetPaneDetached { pane: String, detached: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -737,9 +740,18 @@ pub struct State {
     /// border resize and custom CSD that no rectangular pane wants.
     pub detached_pane: Option<usize>,
     /// The MAIN window's record of which panes it has handed to a detached
-    /// window, so it stops laying them out. `detached_circular_network` is the
+    /// window, so it lays them out as stubs. `detached_circular_network` is the
     /// network's equivalent.
     pub detached_panes: [bool; WIDGET_COUNT],
+    /// The detached child PROCESS per pane — so Reattach can close the window it
+    /// is taking the pane back from, and so the parent can notice a child the
+    /// user closed themselves and take the pane back on its own.
+    ///
+    /// The handle, not a bare pid: an exited child the parent never waits on is
+    /// a ZOMBIE, and `kill(pid, 0)` succeeds for zombies — a pid-based liveness
+    /// probe reports a closed window as still running, forever. `try_wait`
+    /// reaps and reports for real.
+    pub detached_children: std::collections::HashMap<usize, std::process::Child>,
     pub last_project_mod_time: Option<std::time::SystemTime>,
     pub last_project_check: std::time::Instant,
     pub needs_autosave: bool,
@@ -2677,6 +2689,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             detached_circular_network: false,
             detached_pane: None,
             detached_panes: [false; WIDGET_COUNT],
+            detached_children: std::collections::HashMap::new(),
             last_project_mod_time: {
                 let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
                 std::fs::metadata(&default_proj_path).and_then(|m| m.modified()).ok()
@@ -3554,9 +3567,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 3, val);
 
                 if self.detached_circular_network {
-                    let _ = std::process::Command::new(std::env::current_exe().unwrap())
+                    match std::process::Command::new(std::env::current_exe().unwrap())
                         .arg("--detached-network")
-                        .spawn();
+                        .spawn()
+                    {
+                        Ok(child) => {
+                            self.detached_children.insert(NETWORK_PANEL_IDX, child);
+                        }
+                        Err(e) => eprintln!("Failed to spawn detached network: {e:?}"),
+                    }
+                } else {
+                    self.detached_children.remove(&NETWORK_PANEL_IDX);
                 }
 
                 self.rebuild_positions();
@@ -4931,6 +4952,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let now = Instant::now();
         self.last_frame = now;
 
+        // A detached window the user closed hands its pane back here, so a
+        // closed window cannot strand the pane as a stub nothing can revive.
+        let reclaimed = self.poll_detached_children();
+
         if now.duration_since(self.last_config_read).as_secs_f32() > 2.0 {
             self.last_config_read = now;
             let config_paths = [
@@ -5137,7 +5162,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.read_panel_offsets();
         }
 
-        tick_changed || panned
+        tick_changed || panned || reclaimed
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.

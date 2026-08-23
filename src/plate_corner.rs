@@ -39,6 +39,8 @@ pub enum PlateMenuAction {
     Expand,
     /// Move the pane out into its own window.
     Detach,
+    /// Take a detached pane back, closing the window that held it.
+    Reattach,
 }
 
 impl State {
@@ -68,10 +70,11 @@ impl State {
         if pw < MIN_PLATE_SPAN {
             return None;
         }
-        if self.collapsed_panes[idx] {
-            // The stub is BUILT to carry the control, and is shorter than the
+        if self.pane_is_stubbed(idx) {
+            // A stub is BUILT to carry the control, and is shorter than the
             // minimum span a full pane must clear — applying that guard here
-            // deleted the only control that can expand the pane again.
+            // deleted the only control that can bring the pane back, whether it
+            // was collapsed or detached.
             return Some((x + pw - CORNER_INSET, y + ph / 2.0));
         }
         if ph < MIN_PLATE_SPAN {
@@ -113,6 +116,22 @@ impl State {
 
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<PlateMenuAction> = Vec::new();
+
+        // A detached pane lives in another window: collapsing the stub it left
+        // behind would mean nothing, so the only thing to offer is taking it back.
+        if self.pane_is_detached(idx) {
+            let target = self.slots.get_dyn(idx).base().id();
+            cce_ui::widget::context_menu::show(
+                cx - CORNER_R,
+                cy + CORNER_R,
+                vec!["Reattach".to_string()],
+                0,
+                target,
+            );
+            self.plate_menu_slot = Some(idx);
+            self.plate_menu_actions = vec![PlateMenuAction::Reattach];
+            return;
+        }
 
         if self.collapsed_panes[idx] {
             options.push("Expand".to_string());
@@ -168,6 +187,7 @@ impl State {
             PlateMenuAction::Collapse => self.set_pane_collapsed(idx, true),
             PlateMenuAction::Expand => self.set_pane_collapsed(idx, false),
             PlateMenuAction::Detach => self.detach_plate(idx),
+            PlateMenuAction::Reattach => self.reattach_plate(idx),
         }
     }
 
@@ -216,7 +236,8 @@ impl State {
 
         match std::env::current_exe() {
             Ok(exe) => match std::process::Command::new(exe).arg(flag).spawn() {
-                Ok(_) => {
+                Ok(child) => {
+                    self.detached_children.insert(idx, child);
                     self.detached_panes[idx] = true;
                     self.rebuild_positions();
                     self.apply_layout();
@@ -253,19 +274,7 @@ impl State {
             if !self.collapsed_panes[idx] {
                 continue;
             }
-            let (x, y, w, h) = self.positions[idx];
-            if w <= 0.0 || h <= 0.0 {
-                // Already laid out as hidden — collapse has nothing to say.
-                continue;
-            }
-            self.positions[idx] = (x, y, w, STUB_H.min(h));
-
-            if idx == NETWORK_PANEL_IDX {
-                for child in [crate::slots::CONTENT_IDX, crate::slots::BREADCRUMB_IDX] {
-                    self.positions[child] = (0.0, 0.0, 0.0, 0.0);
-                    self.slots.get_dyn_mut(child).set_visible(false);
-                }
-            }
+            self.stub_slot(idx);
         }
     }
 
@@ -338,18 +347,142 @@ impl State {
             return;
         }
 
+        // The parent keeps a STUB for each pane it handed out rather than
+        // dropping it: the stub carries the corner control, which is the only
+        // way back. Hiding the pane outright left no way to reattach it.
         for idx in PLATE_SLOTS {
-            if !self.detached_panes[idx] {
-                continue;
-            }
-            self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
-            self.slots.get_dyn_mut(idx).set_visible(false);
-            if idx == NETWORK_PANEL_IDX {
-                for child in [crate::slots::CONTENT_IDX, crate::slots::BREADCRUMB_IDX] {
-                    self.positions[child] = (0.0, 0.0, 0.0, 0.0);
-                    self.slots.get_dyn_mut(child).set_visible(false);
-                }
+            if self.detached_panes[idx] {
+                self.stub_slot(idx);
             }
         }
+    }
+
+    /// Shrink one slot to its title stub, taking any separate body slots with it.
+    /// Shared by collapse and by the parent side of a detach.
+    fn stub_slot(&mut self, idx: usize) {
+        let (x, y, w, h) = self.positions[idx];
+        if w <= 0.0 || h <= 0.0 {
+            // Already laid out as hidden — there is no stub to make.
+            return;
+        }
+        self.positions[idx] = (x, y, w, STUB_H.min(h));
+        if idx == NETWORK_PANEL_IDX {
+            for child in [crate::slots::CONTENT_IDX, crate::slots::BREADCRUMB_IDX] {
+                self.positions[child] = (0.0, 0.0, 0.0, 0.0);
+                self.slots.get_dyn_mut(child).set_visible(false);
+            }
+        }
+    }
+}
+
+impl State {
+    /// Is this pane currently living in a detached window? The network's flag
+    /// is separate because its detached window is the circular one.
+    pub fn pane_is_detached(&self, idx: usize) -> bool {
+        if idx == NETWORK_PANEL_IDX {
+            return self.detached_circular_network;
+        }
+        PLATE_SLOTS.contains(&idx) && self.detached_panes[idx]
+    }
+
+    /// Is this pane drawn as a stub rather than in full — collapsed, or left
+    /// behind by a detach?
+    pub fn pane_is_stubbed(&self, idx: usize) -> bool {
+        self.pane_is_detached(idx) || self.pane_is_collapsed(idx)
+    }
+
+    /// The label a stubbed pane shows, or `None` when the pane is drawn in full.
+    /// Collapsed and detached both stub, and they must not look alike: one is
+    /// one click from expanding, the other is somewhere else entirely.
+    pub fn pane_stub_label(&self, idx: usize) -> Option<String> {
+        if self.pane_is_detached(idx) {
+            Some(format!("{} — detached", plate_title(idx)))
+        } else if self.pane_is_collapsed(idx) {
+            Some(plate_title(idx).to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Detach or reattach a pane — the corner menu's two window actions, also
+    /// the MCP surface's, so pane placement is scriptable like collapse is.
+    pub fn set_pane_detached(&mut self, idx: usize, detached: bool) {
+        if detached {
+            if self.plate_can_detach(idx) {
+                self.detach_plate(idx);
+            }
+        } else {
+            self.reattach_plate(idx);
+        }
+    }
+
+    /// Take a detached pane back and close the window that held it.
+    pub fn reattach_plate(&mut self, idx: usize) {
+        if !self.pane_is_detached(idx) {
+            return;
+        }
+        self.close_detached_child(idx);
+
+        if idx == NETWORK_PANEL_IDX {
+            // Toggling the action back off is the network's own reattach — it
+            // clears the flag and re-lays out without spawning anything.
+            self.execute_action(crate::shortcut::Action::DetachCircularWindow);
+            return;
+        }
+
+        self.detached_panes[idx] = false;
+        self.rebuild_positions();
+        self.apply_layout();
+    }
+
+    /// Close the detached child and reap it. Best-effort: a child the user
+    /// already closed is simply gone, and reattaching must work anyway.
+    fn close_detached_child(&mut self, idx: usize) {
+        if let Some(mut child) = self.detached_children.remove(&idx) {
+            let _ = child.kill();
+            // Reap it, or the process table keeps a zombie for the rest of the
+            // session — the same trap the liveness probe fell into.
+            let _ = child.wait();
+        }
+    }
+
+    /// Notice detached children the user closed themselves and take their panes
+    /// back, so a closed window does not strand its pane as a dead stub. Called
+    /// from the frame tick.
+    ///
+    /// `try_wait`, NOT `kill(pid, 0)`: the child is ours and unreaped, so once
+    /// it exits it is a zombie — still present in the process table, so the
+    /// signal probe reports it alive forever and the pane is never reclaimed.
+    pub(crate) fn poll_detached_children(&mut self) -> bool {
+        let mut reclaimed = false;
+        for idx in PLATE_SLOTS {
+            if !self.pane_is_detached(idx) {
+                continue;
+            }
+            let exited = match self.detached_children.get_mut(&idx) {
+                // `Ok(None)` is the only "still running" answer; an Err handle
+                // is no more useful than an exited one.
+                Some(child) => !matches!(child.try_wait(), Ok(None)),
+                None => continue,
+            };
+            if !exited {
+                continue;
+            }
+            self.detached_children.remove(&idx);
+            if idx == NETWORK_PANEL_IDX {
+                self.detached_circular_network = false;
+                let val = false;
+                self.menu_mut(crate::slots::LEFT_MENUBAR_IDX).set_item_checked(2, 3, val);
+                self.menu_mut(crate::slots::HEADER_IDX).set_item_checked(2, 3, val);
+            } else {
+                self.detached_panes[idx] = false;
+            }
+            reclaimed = true;
+        }
+        if reclaimed {
+            self.rebuild_positions();
+            self.apply_layout();
+        }
+        reclaimed
     }
 }

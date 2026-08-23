@@ -187,6 +187,18 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
             }),
         ),
         tool(
+            "set_pane_detached",
+            "Move a pane into its own window, or take it back.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pane": { "type": "string", "description": "network | parameters | spreadsheet | playbar" },
+                    "detached": { "type": "boolean", "description": "true to detach, false to reattach" },
+                },
+                "required": ["pane", "detached"],
+            }),
+        ),
+        tool(
             "menu_click",
             "Click a menubar item by indices (widget_idx must be a menubar widget slot).",
             json!({
