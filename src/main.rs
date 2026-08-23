@@ -5,6 +5,7 @@ pub mod application;
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
 use app::{CustomEvent, McpAction, ModifiersState};
+pub mod plate_corner;
 pub mod playbar;
 pub mod viewport_3d;
 pub mod api;
@@ -67,6 +68,92 @@ mod tests {
     use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX};
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
+
+    /// The corner control has to land ON its plate: derived from the slot's live
+    /// rect, an off-by-one in the inset would put the trigger outside the pane
+    /// (unclickable, and painted over the neighbour) with nothing to catch it —
+    /// the render pass draws wherever it is told.
+    #[test]
+    fn test_plate_corner_sits_inside_its_plate() {
+        use crate::plate_corner::{CORNER_R, PLATE_SLOTS};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+
+        let mut checked = 0;
+        for idx in PLATE_SLOTS {
+            let Some((cx, cy)) = state.plate_corner_center(idx) else { continue };
+            let (x, y, w, h) = state.slots.get_dyn(idx).rect();
+            checked += 1;
+
+            // Inside the plate, with the whole disc clear of every edge.
+            assert!(cx - CORNER_R >= x && cx + CORNER_R <= x + w,
+                "slot {idx}: corner x {cx} escapes plate {x}..{}", x + w);
+            assert!(cy - CORNER_R >= y && cy + CORNER_R <= y + h,
+                "slot {idx}: corner y {cy} escapes plate {y}..{}", y + h);
+            // ...and in the TOP-RIGHT quadrant of it, not merely somewhere inside.
+            assert!(cx > x + w / 2.0, "slot {idx}: corner is not on the right");
+            assert!(cy < y + h / 2.0, "slot {idx}: corner is not at the top");
+
+            // The hit test must agree with where it is painted.
+            assert_eq!(state.plate_corner_at(cx, cy), Some(idx), "slot {idx}: centre misses");
+            assert_eq!(state.plate_corner_at(cx + CORNER_R * 2.0, cy), None,
+                "slot {idx}: hit radius reaches past the control");
+        }
+        assert!(checked >= 2, "expected at least the network and params plates, checked {checked}");
+    }
+
+    /// Collapse must actually reclaim the plate AND take its body with it, and
+    /// expanding must put both back — a stub that still hosts a full-height
+    /// graph would paint the pane over the viewport it just freed.
+    #[test]
+    fn test_collapse_shrinks_the_plate_and_restores_it() {
+        use crate::plate_corner::STUB_H;
+        use crate::slots::{CONTENT_IDX, NETWORK_PANEL_IDX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+
+        let (_, _, _, full_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        assert!(full_h > STUB_H, "network plate starts taller than a stub");
+        assert!(state.slots.get_dyn(CONTENT_IDX).visible(), "graph starts visible");
+
+        state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
+        let (_, _, _, stub_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        assert_eq!(stub_h, STUB_H, "collapsed plate is not the stub height");
+        assert!(!state.slots.get_dyn(CONTENT_IDX).visible(), "graph survived the collapse");
+        // The control that expands it again must still be there.
+        assert!(state.plate_corner_center(NETWORK_PANEL_IDX).is_some(),
+            "collapsed plate lost its corner control — nothing can expand it");
+
+        state.set_pane_collapsed(NETWORK_PANEL_IDX, false);
+        let (_, _, _, back_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        assert_eq!(back_h, full_h, "expanding did not restore the plate height");
+        assert!(state.slots.get_dyn(CONTENT_IDX).visible(), "graph did not come back");
+    }
+
+    /// The menu is contextual, and the two states are mutually exclusive: a
+    /// collapsed plate must offer Expand and NOT Collapse, or the item that
+    /// restores it is unreachable.
+    #[test]
+    fn test_plate_corner_menu_is_contextual() {
+        use crate::plate_corner::{PlateMenuAction, PLATE_SLOTS};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+
+        let idx = PLATE_SLOTS.iter().copied()
+            .find(|&i| state.plate_corner_center(i).is_some())
+            .expect("some plate carries a corner control at this size");
+
+        state.open_plate_menu(idx);
+        assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::Expand));
+        state.close_plate_menu();
+
+        state.set_pane_collapsed(idx, true);
+        state.open_plate_menu(idx);
+        assert!(state.plate_menu_actions.contains(&PlateMenuAction::Expand));
+        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+        state.close_plate_menu();
+    }
 
     /// DE chrome is config-owned (`style.surface.relief.profile` /
     /// `.edge_profile` / `style.surface.param.color`), so Main's retired Style

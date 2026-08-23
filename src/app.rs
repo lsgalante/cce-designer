@@ -210,6 +210,9 @@ pub enum McpAction {
     /// Execute a label-matched menu-pane action ("Show Spreadsheet Pane", "Save", ...)
     /// — the items `menu_click`'s index-matched menubar dispatch cannot reach.
     MenuAction { label: String },
+    /// Collapse a pane to its title stub, or restore it — the plate corner
+    /// menu's Collapse/Expand, reachable without driving the pointer.
+    SetPaneCollapsed { pane: String, collapsed: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -657,6 +660,14 @@ pub struct State {
     /// machinery as the node menu; this flag says the open menu is OURS).
     pub viewport_menu_active: bool,
     pub viewport_menu_actions: Vec<ViewportMenuAction>,
+    /// The plate corner menu — same `context_menu` thread-local again; the slot
+    /// says which plate's control opened it (and doubles as the pressed state
+    /// the corner control paints with).
+    pub plate_menu_slot: Option<usize>,
+    pub plate_menu_actions: Vec<crate::plate_corner::PlateMenuAction>,
+    /// Panes shrunk to their title stub, indexed by slot. Only the
+    /// `plate_corner::PLATE_SLOTS` entries are ever set.
+    pub collapsed_panes: [bool; WIDGET_COUNT],
 
     pub drag_widget: Option<usize>,
     /// Where the pointer pressed when `drag_widget` armed — the drag
@@ -2596,6 +2607,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             node_menu_actions: Vec::new(),
             viewport_menu_active: false,
             viewport_menu_actions: Vec::new(),
+            plate_menu_slot: None,
+            plate_menu_actions: Vec::new(),
+            collapsed_panes: [false; WIDGET_COUNT],
             drag_widget: None,
             drag_press_cursor: None,
             focused_widget: None,
@@ -3369,6 +3383,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.slots.get_dyn_mut(idx).set_visible(false);
             }
         }
+
+        self.apply_collapsed_panes();
     }
 
 
@@ -4107,6 +4123,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 return true;
                             }
                             self.close_node_menu();
+                        }
+                        // The plate corner menu, same contract as the node
+                        // menu above: it took the click, or it is dismissed.
+                        if self.plate_menu_open() {
+                            if *button == MouseButton::Left && self.handle_plate_menu_click() {
+                                return true;
+                            }
+                            self.close_plate_menu();
+                            if *button == MouseButton::Left {
+                                return true;
+                            }
+                        }
+                        // A press ON a corner control opens (or re-closes) its
+                        // menu and never reaches the pane underneath.
+                        if *button == MouseButton::Left {
+                            if let Some(idx) = self.plate_corner_at(self.cursor_x, self.cursor_y) {
+                                self.open_plate_menu(idx);
+                                return true;
+                            }
                         }
                         if self.viewport_menu_open() {
                             if *button == MouseButton::Left && self.handle_viewport_menu_click() {

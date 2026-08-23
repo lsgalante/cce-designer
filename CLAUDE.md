@@ -87,6 +87,16 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
   slot's concrete type (`viewport()`, `graph_mut()`, `menu(idx)`, …) live here too, and
   `State` keeps one-line forwarders. `PassivePlate` and `Canvas`, the two app-owned
   slot-only widgets, are also here.
+- `src/plate_corner.rs` — the plate corner control: a circular menu trigger on the
+  top-right of each pane that draws its own plate (`PLATE_SLOTS` — network, params,
+  spreadsheet, playbar; NOT the viewport, whose plate is the window-spanning lip).
+  Geometry is derived from the slot's live rect, so it holds across all three
+  `rebuild_positions` branches; the circular network pane is special-cased onto its
+  arc. The menu is a third `cce_ui::widget::context_menu` consumer alongside the node
+  and viewport right-click menus, with the same `*_menu_actions` + `handle_*_menu_click`
+  contract. Collapse shrinks a plate to its title stub via `apply_collapsed_panes`, a
+  post-pass over `positions[..]` (one place, all three branches); the stub is exempt
+  from the minimum-span guard or it would lose the control that expands it again.
 - `src/application.rs` — the `Application` impl: translates engine hooks into
   `WindowEvent`s, detached-window CSD, HTTP-server startup, exit autosave.
 - `src/window.rs` — `WindowEvent` plus the post-event side-effect pass

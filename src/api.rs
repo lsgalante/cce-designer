@@ -175,6 +175,18 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool("toggle_circular_pane", "Toggle the circular network pane.", no_args()),
         tool(
+            "set_pane_collapsed",
+            "Collapse a pane to its title stub, or expand it back.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pane": { "type": "string", "description": "network | parameters | spreadsheet | playbar" },
+                    "collapsed": { "type": "boolean", "description": "true to collapse, false to expand" },
+                },
+                "required": ["pane", "collapsed"],
+            }),
+        ),
+        tool(
             "menu_click",
             "Click a menubar item by indices (widget_idx must be a menubar widget slot).",
             json!({

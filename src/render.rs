@@ -172,6 +172,7 @@ impl State {
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
         self.append_popovers(&mut pc);
+        self.append_plate_corners(&mut pc);
 
         // The node right-click context menu floats above everything (drawn last).
         // Its labels carry bounds equal to the menu rect so the engine's text-
@@ -212,6 +213,30 @@ impl State {
 
         let w = self.slots.get_dyn(idx);
         if !w.visible() {
+            return;
+        }
+
+        // A collapsed pane is its title stub and nothing else: the plate, the
+        // name, and (from the later corner pass) the control that restores it.
+        // Returning here is what suppresses the body — the params rows, the
+        // spreadsheet grid, the transport controls — rather than relying on
+        // each pane's own clip to hide content taller than the stub.
+        if self.pane_is_collapsed(idx) {
+            let (sx, sy, sw, sh) = w.rect();
+            append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(sx, sy, sw, sh));
+            let font_size = 12.0;
+            let ty = cce_ui::layout::align_text_y(sy, sh, font_size, 0.0);
+            // Bounds stop at the corner control so a long name cannot run under it.
+            let text_right = sx + sw - 2.0 * crate::plate_corner::CORNER_INSET;
+            pc.text_with(
+                crate::plate_corner::plate_title(idx),
+                sx + 12.0,
+                ty,
+                font_size,
+                [0xcc, 0xcc, 0xd4],
+                None,
+                Some([sx, sy, text_right, sy + sh]),
+            );
             return;
         }
 
@@ -690,6 +715,36 @@ impl State {
     /// occludes the widget labels underneath it — the display list is drawn
     /// strictly in order, so a popover background emitted in the geometry
     /// pass would sit under every label.
+    /// The plates' corner menu triggers, drawn above pane content but below an
+    /// open context menu: a ring in the plate's own border color over a face
+    /// that stays transparent until hover, so the control reads as part of the
+    /// plate edge until it is reached for.
+    fn append_plate_corners(&self, pc: &mut PaintCtx) {
+        let hovered = self.plate_corner_at(self.cursor_x, self.cursor_y);
+        for idx in crate::plate_corner::PLATE_SLOTS {
+            let Some((cx, cy)) = self.plate_corner_center(idx) else { continue };
+            let r = crate::plate_corner::CORNER_R;
+            let face = if hovered == Some(idx) || self.plate_menu_slot == Some(idx) {
+                let mut c = cce_ui::colors::param_plate_fill();
+                // The plate fill carries the blur-behind marker as a NEGATIVE
+                // alpha; a control this small must not open its own blur tap.
+                c[3] = c[3].abs().max(0.35);
+                c
+            } else {
+                [0.0; 4]
+            };
+            // A real circle, not a fully-rounded rect: the trough prim clamps
+            // its radii below half the side, so an `inset_plate` this small
+            // closes into a rounded SQUARE with a second square wall inside it.
+            if face[3] > 0.001 {
+                pc.circle(cx, cy, r, face);
+            }
+            let ring = cce_ui::colors::plate_border_color()
+                .unwrap_or([0.55, 0.58, 0.66, 0.85]);
+            pc.arc(cx, cy, r, cce_ui::colors::plate_border_thickness().max(1.0), 0.0, TAU, ring);
+        }
+    }
+
     fn append_popovers(&self, pc: &mut PaintCtx) {
         for i in 0..WIDGET_COUNT {
             let w = self.slots.get_dyn(i);
