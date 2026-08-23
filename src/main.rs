@@ -68,6 +68,43 @@ mod tests {
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
 
+    /// DE chrome is config-owned (`style.surface.relief.profile` /
+    /// `.edge_profile` / `style.surface.param.color`), so Main's retired Style
+    /// section must not come back from an older project file — while it did,
+    /// loading a project silently outranked the user's config.kdl.
+    #[test]
+    fn test_legacy_style_params_are_dropped_from_main() {
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+        let main_idx = state.fs_root.children.iter().position(|c| c.name == "Main").expect("Main node");
+
+        // Re-seed the params exactly as a pre-removal save carries them.
+        for (name, ty, val) in [
+            ("Style", "section", ""),
+            ("Bevel Profile", "ramp", "smooth;0.000:0.000,0.500:0.900,1.000:1.000"),
+            ("Edge Profile", "ramp", "smooth;0.000:0.000,1.000:1.000"),
+            ("Plate Color", "rgba", "#11223344"),
+        ] {
+            state.fs_root.children[main_idx].params.push(crate::app::ParamDef {
+                name: name.to_string(),
+                label: String::new(),
+                param_type: ty.to_string(),
+                default: val.to_string(),
+                options: Vec::new(),
+                min: None,
+                max: None,
+                step: None,
+            });
+        }
+
+        state.ensure_menubar_subnets();
+        let names: Vec<&str> = state.fs_root.children[main_idx]
+            .params.iter().map(|p| p.name.as_str()).collect();
+        for retired in ["Style", "Bevel Profile", "Edge Profile", "Plate Color"] {
+            assert!(!names.contains(&retired), "retired style param survived load: {retired} in {names:?}");
+        }
+    }
+
     /// The roster macro (`widget_roster!` in `src/slots.rs`) numbers the `*_IDX`
     /// constants from declaration order. A mis-expansion that skipped a number would
     /// leave the last slot addressed as `WIDGET_COUNT`, unreachable through `get_dyn`

@@ -431,31 +431,19 @@ impl State {
         ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
         ensure_param(main_node, "Background Color", "color", &color_to_hex(vp_bg_color), &[], None, None, None);
 
-        // Style — the DE-chrome styling this instance renders with. The bevel
-        // profile ramp reshapes every recess/boss wall live (the identity 0→1
-        // smooth curve IS the analytic default the toolkit ships).
-        ensure_param(main_node, "Style", "section", "", &[], None, None, None);
-        ensure_param(main_node, "Bevel Profile", "ramp", "smooth;0.000:0.000,1.000:1.000", &[], None, None, None);
-        // The plate perimeter roll's descent curve (face join → silhouette).
-        // Unlike the carve ramp — whose identity curve IS its analytic
-        // default — the roll's identity would be a straight chamfer, so the
-        // untouched identity spec means "analytic quadrant" (apply below
-        // clears the profile for it) and any edited curve takes over.
-        ensure_param(main_node, "Edge Profile", "ramp", "smooth;0.000:0.000,1.000:1.000", &[], None, None, None);
-        // The params plate's tint, rgba — alpha doubles as the frost strength
-        // under plate blur. Seeded from the live cce-ui color (linear → sRGB
-        // for the hex; alpha is stored linear on both sides).
-        let plate_hex = {
-            let c = cce_ui::color::param_bg_color();
-            format!(
-                "#{:02x}{:02x}{:02x}{:02x}",
-                (cce_ui::color::linear_to_srgb(c[0]) * 255.0).round().clamp(0.0, 255.0) as u8,
-                (cce_ui::color::linear_to_srgb(c[1]) * 255.0).round().clamp(0.0, 255.0) as u8,
-                (cce_ui::color::linear_to_srgb(c[2]) * 255.0).round().clamp(0.0, 255.0) as u8,
-                (c[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+        // The Style section is retired — DE chrome is config-owned, not
+        // per-project: the wall and edge relief curves are
+        // `style.surface.relief.profile` / `.edge_profile` and the params
+        // plate tint is `style.surface.param.color` in config.kdl, which
+        // cce-ui already applies for every client. Main's copies shadowed
+        // those on load, so a project file silently outranked the user's
+        // config. Drop them from older saves.
+        main_node.params.retain(|p| {
+            !matches!(
+                p.name.as_str(),
+                "Style" | "Bevel Profile" | "Edge Profile" | "Plate Color"
             )
-        };
-        ensure_param(main_node, "Plate Color", "rgba", &plate_hex, &[], None, None, None);
+        });
 
         // The Help section is retired — its only row was an About button nothing
         // dispatched. Drop it from older saves too.
@@ -519,7 +507,7 @@ impl State {
             }
         }
 
-        const MAIN_PARAM_ORDER: [&str; 23] = [
+        const MAIN_PARAM_ORDER: [&str; 19] = [
             "File", "New Project", "Open", "Save", "Save As", "Exit",
             "Edit", "Undo", "Redo",
             "Network", "Zoom In", "Zoom Out",
@@ -527,7 +515,6 @@ impl State {
             "Viewport", "Active Camera",
             "Ray Traced Preview",
             "Background Color",
-            "Style", "Bevel Profile", "Edge Profile", "Plate Color",
         ];
         main_node.params.sort_by_key(|p| {
             MAIN_PARAM_ORDER
@@ -769,36 +756,6 @@ impl State {
                         self.viewport_mut().active_camera = cam;
                     }
 
-                    // Style
-                    "Bevel Profile" => {
-                        if let Some((keys, smooth)) = cce_ui::widget::parse_ramp_spec(&p.default) {
-                            cce_ui::layout::set_bevel_profile_keys(&keys, smooth);
-                        } else {
-                            cce_ui::layout::clear_bevel_profile();
-                        }
-                    }
-                    "Edge Profile" => {
-                        // The untouched identity spec means "analytic
-                        // quadrant", not a straight chamfer (see the
-                        // ensure_param note).
-                        if p.default == "smooth;0.000:0.000,1.000:1.000" {
-                            cce_ui::layout::clear_roll_profile();
-                        } else if let Some((keys, smooth)) = cce_ui::widget::parse_ramp_spec(&p.default) {
-                            cce_ui::layout::set_roll_profile_keys(&keys, smooth);
-                        } else {
-                            cce_ui::layout::clear_roll_profile();
-                        }
-                    }
-                    "Plate Color" => {
-                        if let Some(c) = cce_ui::color::parse_hex_bytes(&p.default) {
-                            cce_ui::color::set_param_bg_color([
-                                cce_ui::color::srgb_to_linear(c[0] as f32 / 255.0),
-                                cce_ui::color::srgb_to_linear(c[1] as f32 / 255.0),
-                                cce_ui::color::srgb_to_linear(c[2] as f32 / 255.0),
-                                c[3] as f32 / 255.0,
-                            ]);
-                        }
-                    }
                     _ => {}
                 }
             }

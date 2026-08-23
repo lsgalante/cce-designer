@@ -83,9 +83,9 @@ impl Paint for Playbar {
 
     /// The pane IS its own plate, exactly the ParametersBg contract: the
     /// parameter plate's fill — tint, opacity, and blur-behind marker
-    /// (`param_plate_fill`) — so it tracks a live retint / opacity / blur
-    /// toggle with the other panes (the old hand-rolled PARAM_BG copy froze
-    /// the Style section's "Plate Color" out of this pane).
+    /// (`param_plate_fill`) — so it tracks the configured plate tint
+    /// (`style.surface.param.color`) with the other panes, where the old
+    /// hand-rolled PARAM_BG copy froze this pane at the built-in default.
     fn color(&self) -> [f32; 4] {
         colors::param_plate_fill()
     }
