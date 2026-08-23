@@ -13,6 +13,7 @@ pub mod geometry;
 pub mod project;
 pub mod render;
 pub mod shortcut;
+pub mod slots;
 pub mod thumbnail;
 
 #[cfg(test)]
@@ -62,7 +63,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::test_prelude::*;
-    use crate::app::{get_next_visible_pane, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, DesignSettings, FsNode, Project, ProjectViewState};
+    use crate::app::{get_next_visible_pane, DesignSettings, FsNode, Project, ProjectViewState};
+    use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX};
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
 

@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use crate::app::{State, Project, FsNode, ProjectViewState, CONTENT_IDX, ParamDef};
+use crate::app::{State, Project, FsNode, ProjectViewState, ParamDef};
+use crate::slots::CONTENT_IDX;
 
 fn color_to_hex(rgb: [f32; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}",

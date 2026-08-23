@@ -10,7 +10,8 @@ use std::path::Path;
 
 use cce_ui::widget::WidgetHost;
 use crate::shortcut::Action;
-use crate::app::{State, CustomEvent, McpAction, TouchPhase, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, PARAM_IDX, WIDGET_COUNT, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
+use crate::app::{State, CustomEvent, McpAction, TouchPhase, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
+use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, PARAM_IDX, WIDGET_COUNT};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalPosition {

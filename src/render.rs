@@ -2,8 +2,9 @@
 use cce_ui::colors;
 use cce_ui::widget::WidgetHost;
 
-use crate::app::{
-    State, FsNode, WIDGET_COUNT,
+use crate::app::{State, FsNode};
+use crate::slots::{
+    WIDGET_COUNT,
     CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX,
     BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
     SPREADSHEET_MENUBAR_IDX, SPREADSHEET_IDX,

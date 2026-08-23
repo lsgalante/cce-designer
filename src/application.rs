@@ -16,7 +16,8 @@ use cce_ui::widget::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use wayland_client::QueueHandle;
 
 use crate::api::start_mcp_server;
-use crate::app::{CustomEvent, PendingWindowDrag, State, TouchPhase, LEFT_MENUBAR_IDX};
+use crate::app::{CustomEvent, PendingWindowDrag, State, TouchPhase};
+use crate::slots::LEFT_MENUBAR_IDX;
 use crate::window::{LocalPosition, WindowEvent};
 
 /// Pointer travel (logical px) before a chrome press becomes an interactive

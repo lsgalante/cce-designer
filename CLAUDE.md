@@ -70,14 +70,21 @@ geometry AND text — is the engine's single paint path: `display_list` returns
 engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its own;
 `glyphon` remains a dependency only for the standalone `vk-smoke` bin).
 
-- `src/app.rs` (~5k lines) — the heart: `State` (the entire app model), `HttpAction` /
-  `CustomEvent`, node-template loading, pane layout. Top-level widgets live in fixed
-  slots addressed by `*_IDX` constants (`VIEWPORT_IDX`, `PARAM_IDX`, `NETWORK_PANEL_IDX`,
-  … up to `WIDGET_COUNT`) rather than a dynamic tree. `tick_frame` (simulation:
+- `src/app.rs` (~5.4k lines) — the heart: `State` (the entire app model), `HttpAction` /
+  `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
   (`pending_*` fields, `spheres_dirty`) and flushed in `stage_frame` because only
   the engine hooks see the renderer.
+- `src/slots.rs` — the widget roster. Top-level widgets live in fixed slots on
+  `WidgetSlots` addressed by `*_IDX` constants (`VIEWPORT_IDX`, `PARAM_IDX`,
+  `NETWORK_PANEL_IDX`, … up to `WIDGET_COUNT`) rather than a dynamic tree; every slot
+  is statically typed, and index-driven paths (draw order, focus cycling, broadcast
+  loops) go through `get_dyn`/`get_dyn_mut`. The typed accessors that assert a slot's
+  concrete type (`viewport()`, `graph_mut()`, `menu(idx)`, …) live here too — `State`
+  keeps one-line forwarders. Adding a slot means the constant, the field and the four
+  dispatch arms, all in this file. `PassivePlate` and `Canvas`, the two app-owned
+  slot-only widgets, are also here.
 - `src/application.rs` — the `Application` impl: translates engine hooks into
   `WindowEvent`s, detached-window CSD, HTTP-server startup, exit autosave.
 - `src/window.rs` — `WindowEvent` plus the post-event side-effect pass
