@@ -57,12 +57,6 @@ impl State {
         )
     }
 
-    /// [`pane_plate_radii`](Self::pane_plate_radii) for a slot's laid-out rect.
-    fn slot_plate_radii(&self, idx: usize) -> (f32, f32, f32, f32) {
-        let (x, y, w, h) = self.positions[idx];
-        self.pane_plate_radii(x, y, w, h)
-    }
-
     /// The rounded-rect clip (plate rect + corner radius) a widget's content must stay
     /// inside, so children of plates cut off at the plate's rounded corners: the network
     /// plate for the network pane's parts (graph content, breadcrumb), the pane's own
