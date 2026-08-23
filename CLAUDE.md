@@ -80,10 +80,12 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
   `WidgetSlots` addressed by `*_IDX` constants (`VIEWPORT_IDX`, `PARAM_IDX`,
   `NETWORK_PANEL_IDX`, … up to `WIDGET_COUNT`) rather than a dynamic tree; every slot
   is statically typed, and index-driven paths (draw order, focus cycling, broadcast
-  loops) go through `get_dyn`/`get_dyn_mut`. The typed accessors that assert a slot's
-  concrete type (`viewport()`, `graph_mut()`, `menu(idx)`, …) live here too — `State`
-  keeps one-line forwarders. Adding a slot means the constant, the field and the four
-  dispatch arms, all in this file. `PassivePlate` and `Canvas`, the two app-owned
+  loops) go through `get_dyn`/`get_dyn_mut`. The roster is declared once, as one line
+  per slot in the `widget_roster!` macro invocation (`INDEX_CONST: field: WidgetType`),
+  which generates the constants, `WIDGET_COUNT`, the struct fields and all four
+  dispatch matches — adding a pane is that one line. The typed accessors that assert a
+  slot's concrete type (`viewport()`, `graph_mut()`, `menu(idx)`, …) live here too, and
+  `State` keeps one-line forwarders. `PassivePlate` and `Canvas`, the two app-owned
   slot-only widgets, are also here.
 - `src/application.rs` — the `Application` impl: translates engine hooks into
   `WindowEvent`s, detached-window CSD, HTTP-server startup, exit autosave.

@@ -68,6 +68,25 @@ mod tests {
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
 
+    /// The roster macro (`widget_roster!` in `src/slots.rs`) numbers the `*_IDX`
+    /// constants from declaration order. A mis-expansion that skipped a number would
+    /// leave the last slot addressed as `WIDGET_COUNT`, unreachable through `get_dyn`
+    /// and invisible to every `0..WIDGET_COUNT` loop — but would still compile.
+    #[test]
+    fn test_widget_roster_indices_are_dense() {
+        use crate::slots::*;
+        let roster = [
+            HEADER_IDX, CONTENT_IDX, SPLITTER1_IDX, VIEWPORT_IDX,
+            SPLITTER2_IDX, PARAM_IDX, CANVAS_IDX, LEFT_MENUBAR_IDX,
+            RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, STATUS_IDX, BREADCRUMB_IDX,
+            SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
+        ];
+        assert_eq!(roster.len(), WIDGET_COUNT, "roster length vs WIDGET_COUNT");
+        for (i, idx) in roster.iter().enumerate() {
+            assert_eq!(i, *idx, "slot #{i} expanded to index {idx}");
+        }
+    }
+
     #[test]
     fn test_load_default_project() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");

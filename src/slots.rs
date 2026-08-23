@@ -3,9 +3,10 @@
 //! The designer does not build a dynamic widget tree — every top-level pane, bar and
 //! plate lives in a named field of [`WidgetSlots`], and the `*_IDX` constants address
 //! those same fields positionally for the genuinely index-driven paths (draw order,
-//! focus cycling, broadcast loops). Split out of `app.rs` so that adding or reordering
-//! a slot is a change to one file: the constant, the field, and the four dispatch
-//! arms are all here, as are the typed accessors that assert each slot's concrete type.
+//! focus cycling, broadcast loops). The whole roster is declared once, in the
+//! `widget_roster!` invocation below — one line per slot, from which the constants,
+//! the struct fields and every index→field dispatch are generated. The typed accessors
+//! that assert each slot's concrete type are hand-written, below the macro.
 
 use cce_ui::widget::{
     Adapted, Breadcrumb, Graph, MenuBar, ParametersBg, Splitter, Spreadsheet, StatusBar,
@@ -15,143 +16,99 @@ use cce_ui::widget::{
 use crate::playbar::Playbar;
 use crate::viewport_3d::Viewport3D;
 
-pub const HEADER_IDX: usize = 0;
-pub const CONTENT_IDX: usize = 1;
-pub const SPLITTER1_IDX: usize = 2;
-pub const VIEWPORT_IDX: usize = 3;
-pub const SPLITTER2_IDX: usize = 4;
-pub const PARAM_IDX: usize = 5;
-pub const CANVAS_IDX: usize = 6;
-pub const LEFT_MENUBAR_IDX: usize = 7;
-pub const RIGHT_MENUBAR_IDX: usize = 8;
-pub const PARAM_MENUBAR_IDX: usize = 9;
-pub const STATUS_IDX: usize = 10;
-pub const BREADCRUMB_IDX: usize = 11;
-pub const SPREADSHEET_IDX: usize = 12;
-pub const SPREADSHEET_MENUBAR_IDX: usize = 13;
-pub const NETWORK_PANEL_IDX: usize = 14;
-pub const PLAYBAR_IDX: usize = 15;
+/// Declares the whole roster from one line per slot: `INDEX_CONST: field: WidgetType`.
+///
+/// Declaration order *is* slot order: the `*_IDX` constants are numbered from it and
+/// `WIDGET_COUNT` falls out of the length. The single list below generates the
+/// constants, the `WidgetSlots` fields, and all four index→field dispatch matches, so
+/// adding or reordering a pane is one line instead of six hand-kept edits whose only
+/// backstop was a runtime panic.
+macro_rules! widget_roster {
+    ($($idx:ident : $field:ident : $ty:ty),+ $(,)?) => {
+        widget_roster!(@number 0usize; $($idx)+);
 
-pub const WIDGET_COUNT: usize = 16;
+        /// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
+        /// old `Vec<Box<dyn WidgetHost>>` erased that and pinned `WidgetHost`'s full surface through the
+        /// broadcast loops. Boxed as a whole so registered widget pointers stay stable while the
+        /// containing `State` moves. The `*_IDX` constants keep addressing the same slots through
+        /// `get_dyn`/`get_dyn_mut` for the genuinely index-driven paths (draw order, focus cycling,
+        /// broadcast loops); everything else reaches the concrete field.
+        pub struct WidgetSlots {
+            $(pub $field: Adapted<$ty>,)+
+        }
 
-/// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
-/// old `Vec<Box<dyn WidgetHost>>` erased that and pinned `WidgetHost`'s full surface through the
-/// broadcast loops. Boxed as a whole so registered widget pointers stay stable while the
-/// containing `State` moves. The `*_IDX` constants keep addressing the same slots through
-/// `get_dyn`/`get_dyn_mut` for the genuinely index-driven paths (draw order, focus cycling,
-/// broadcast loops); everything else reaches the concrete field.
-pub struct WidgetSlots {
-    pub header: Adapted<MenuBar>,
-    pub content: Adapted<Graph>,
-    pub splitter1: Adapted<Splitter>,
-    pub viewport: Adapted<Viewport3D>,
-    pub splitter2: Adapted<Splitter>,
-    pub param: Adapted<ParametersBg>,
-    pub canvas: Adapted<Canvas>,
-    pub left_menubar: Adapted<MenuBar>,
-    pub right_menubar: Adapted<MenuBar>,
-    pub param_menubar: Adapted<MenuBar>,
-    pub status: Adapted<StatusBar>,
-    pub breadcrumb: Adapted<Breadcrumb>,
-    pub spreadsheet: Adapted<Spreadsheet>,
-    pub spreadsheet_menubar: Adapted<MenuBar>,
-    pub network_panel: Adapted<PassivePlate>,
-    pub playbar: Adapted<Playbar>,
+        impl WidgetSlots {
+            // Per-slot drag queries (the ControlPanel endgame took `draggable`/`is_dragging`
+            // off `WidgetHost`): the roster routes an index to the concrete slot's inherent
+            // `Adapted` read, like the other value drains.
+            pub fn draggable(&self, idx: usize) -> bool {
+                match idx {
+                    $($idx => self.$field.draggable(),)+
+                    _ => slot_out_of_range(idx),
+                }
+            }
+
+            pub fn is_dragging(&self, idx: usize) -> bool {
+                match idx {
+                    $($idx => self.$field.is_dragging(),)+
+                    _ => slot_out_of_range(idx),
+                }
+            }
+
+            pub fn get_dyn(&self, idx: usize) -> &(dyn WidgetHost + 'static) {
+                match idx {
+                    $($idx => &self.$field,)+
+                    _ => slot_out_of_range(idx),
+                }
+            }
+
+            pub fn get_dyn_mut(&mut self, idx: usize) -> &mut (dyn WidgetHost + 'static) {
+                match idx {
+                    $($idx => &mut self.$field,)+
+                    _ => slot_out_of_range(idx),
+                }
+            }
+        }
+    };
+
+    // Number the constants in declaration order; what is left over at the end is the count.
+    (@number $n:expr;) => {
+        pub const WIDGET_COUNT: usize = $n;
+    };
+    (@number $n:expr; $head:ident $($rest:ident)*) => {
+        pub const $head: usize = $n;
+        widget_roster!(@number $n + 1; $($rest)*);
+    };
+}
+
+/// Every dispatch match needs a `_` arm — the compiler cannot see that the constant
+/// patterns cover `0..WIDGET_COUNT` — and `!` fits all four return types.
+#[cold]
+#[inline(never)]
+fn slot_out_of_range(idx: usize) -> ! {
+    panic!("widget slot index out of range: {idx}")
+}
+
+widget_roster! {
+    HEADER_IDX:              header:              MenuBar,
+    CONTENT_IDX:             content:             Graph,
+    SPLITTER1_IDX:           splitter1:           Splitter,
+    VIEWPORT_IDX:            viewport:            Viewport3D,
+    SPLITTER2_IDX:           splitter2:           Splitter,
+    PARAM_IDX:               param:               ParametersBg,
+    CANVAS_IDX:              canvas:              Canvas,
+    LEFT_MENUBAR_IDX:        left_menubar:        MenuBar,
+    RIGHT_MENUBAR_IDX:       right_menubar:       MenuBar,
+    PARAM_MENUBAR_IDX:       param_menubar:       MenuBar,
+    STATUS_IDX:              status:              StatusBar,
+    BREADCRUMB_IDX:          breadcrumb:          Breadcrumb,
+    SPREADSHEET_IDX:         spreadsheet:         Spreadsheet,
+    SPREADSHEET_MENUBAR_IDX: spreadsheet_menubar: MenuBar,
+    NETWORK_PANEL_IDX:       network_panel:       PassivePlate,
+    PLAYBAR_IDX:             playbar:             Playbar,
 }
 
 impl WidgetSlots {
-
-    // Per-slot drag queries (the ControlPanel endgame took `draggable`/`is_dragging`
-    // off `WidgetHost`): the roster routes an index to the concrete slot's inherent
-    // `Adapted` read, like the other value drains.
-    pub fn draggable(&self, idx: usize) -> bool {
-        match idx {
-            HEADER_IDX => self.header.draggable(),
-            CONTENT_IDX => self.content.draggable(),
-            SPLITTER1_IDX => self.splitter1.draggable(),
-            VIEWPORT_IDX => self.viewport.draggable(),
-            SPLITTER2_IDX => self.splitter2.draggable(),
-            PARAM_IDX => self.param.draggable(),
-            CANVAS_IDX => self.canvas.draggable(),
-            LEFT_MENUBAR_IDX => self.left_menubar.draggable(),
-            RIGHT_MENUBAR_IDX => self.right_menubar.draggable(),
-            PARAM_MENUBAR_IDX => self.param_menubar.draggable(),
-            STATUS_IDX => self.status.draggable(),
-            BREADCRUMB_IDX => self.breadcrumb.draggable(),
-            SPREADSHEET_IDX => self.spreadsheet.draggable(),
-            SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.draggable(),
-            NETWORK_PANEL_IDX => self.network_panel.draggable(),
-            PLAYBAR_IDX => self.playbar.draggable(),
-            _ => panic!("widget slot index out of range: {idx}"),
-        }
-    }
-
-    pub fn is_dragging(&self, idx: usize) -> bool {
-        match idx {
-            HEADER_IDX => self.header.is_dragging(),
-            CONTENT_IDX => self.content.is_dragging(),
-            SPLITTER1_IDX => self.splitter1.is_dragging(),
-            VIEWPORT_IDX => self.viewport.is_dragging(),
-            SPLITTER2_IDX => self.splitter2.is_dragging(),
-            PARAM_IDX => self.param.is_dragging(),
-            CANVAS_IDX => self.canvas.is_dragging(),
-            LEFT_MENUBAR_IDX => self.left_menubar.is_dragging(),
-            RIGHT_MENUBAR_IDX => self.right_menubar.is_dragging(),
-            PARAM_MENUBAR_IDX => self.param_menubar.is_dragging(),
-            STATUS_IDX => self.status.is_dragging(),
-            BREADCRUMB_IDX => self.breadcrumb.is_dragging(),
-            SPREADSHEET_IDX => self.spreadsheet.is_dragging(),
-            SPREADSHEET_MENUBAR_IDX => self.spreadsheet_menubar.is_dragging(),
-            NETWORK_PANEL_IDX => self.network_panel.is_dragging(),
-            PLAYBAR_IDX => self.playbar.is_dragging(),
-            _ => panic!("widget slot index out of range: {idx}"),
-        }
-    }
-
-    pub fn get_dyn(&self, idx: usize) -> &(dyn WidgetHost + 'static) {
-        match idx {
-            HEADER_IDX => &self.header,
-            CONTENT_IDX => &self.content,
-            SPLITTER1_IDX => &self.splitter1,
-            VIEWPORT_IDX => &self.viewport,
-            SPLITTER2_IDX => &self.splitter2,
-            PARAM_IDX => &self.param,
-            CANVAS_IDX => &self.canvas,
-            LEFT_MENUBAR_IDX => &self.left_menubar,
-            RIGHT_MENUBAR_IDX => &self.right_menubar,
-            PARAM_MENUBAR_IDX => &self.param_menubar,
-            STATUS_IDX => &self.status,
-            BREADCRUMB_IDX => &self.breadcrumb,
-            SPREADSHEET_IDX => &self.spreadsheet,
-            SPREADSHEET_MENUBAR_IDX => &self.spreadsheet_menubar,
-            NETWORK_PANEL_IDX => &self.network_panel,
-            PLAYBAR_IDX => &self.playbar,
-            _ => panic!("widget slot index out of range: {idx}"),
-        }
-    }
-
-    pub fn get_dyn_mut(&mut self, idx: usize) -> &mut (dyn WidgetHost + 'static) {
-        match idx {
-            HEADER_IDX => &mut self.header,
-            CONTENT_IDX => &mut self.content,
-            SPLITTER1_IDX => &mut self.splitter1,
-            VIEWPORT_IDX => &mut self.viewport,
-            SPLITTER2_IDX => &mut self.splitter2,
-            PARAM_IDX => &mut self.param,
-            CANVAS_IDX => &mut self.canvas,
-            LEFT_MENUBAR_IDX => &mut self.left_menubar,
-            RIGHT_MENUBAR_IDX => &mut self.right_menubar,
-            PARAM_MENUBAR_IDX => &mut self.param_menubar,
-            STATUS_IDX => &mut self.status,
-            BREADCRUMB_IDX => &mut self.breadcrumb,
-            SPREADSHEET_IDX => &mut self.spreadsheet,
-            SPREADSHEET_MENUBAR_IDX => &mut self.spreadsheet_menubar,
-            NETWORK_PANEL_IDX => &mut self.network_panel,
-            PLAYBAR_IDX => &mut self.playbar,
-            _ => panic!("widget slot index out of range: {idx}"),
-        }
-    }
-
     /// Roster index of the slot at `target_addr` (a thin widget address — the comparison
     /// never dereferences; callers pass `ptr as *const ()`).
     pub fn find_index(&self, target_addr: *const ()) -> Option<usize> {
