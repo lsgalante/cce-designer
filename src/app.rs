@@ -140,6 +140,17 @@ pub struct FsNode {
     pub outputs: usize,
 }
 
+impl FsNode {
+    /// Can this node be dived into (Enter, double-click, the network's `i`)?
+    /// One predicate, because it was hand-copied at three call sites and none
+    /// of them learned about new container types: subnet-like types by name,
+    /// otherwise anything that actually has children.
+    pub fn is_enterable(&self) -> bool {
+        matches!(self.node_type.as_str(), "node" | "utility" | "simnet")
+            || !self.children.is_empty()
+    }
+}
+
 fn default_node_type() -> String { "node".to_string() }
 fn default_node_geometry_visible() -> bool { true }
 fn default_node_position() -> (f32, f32) { (0.0, 0.0) }
@@ -1893,9 +1904,7 @@ impl State {
         let (is_utility, geom_visible, enterable) = {
             let dir = self.current_dir();
             let Some(node) = dir.children.get(slot) else { return };
-            let enterable = node.node_type == "node"
-                || node.node_type == "utility"
-                || !node.children.is_empty();
+            let enterable = node.is_enterable();
             (node.node_type == "utility", node.geometry_visible, enterable)
         };
         let mut options: Vec<String> = Vec::new();
@@ -4520,7 +4529,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 if let Some(dir_idx) = self.graph().double_clicked_node() {
                                     self.graph_mut().clear_double_clicked_node();
                                     let dir = self.current_dir();
-                                    if dir_idx < dir.children.len() && (dir.children[dir_idx].node_type == "node" || dir.children[dir_idx].node_type == "utility" || !dir.children[dir_idx].children.is_empty()) {
+                                    if dir_idx < dir.children.len() && dir.children[dir_idx].is_enterable() {
                                         self.current_path.push(dir_idx);
                                         self.on_path_changed();
                                         changed = true;
@@ -4786,7 +4795,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                             if self.focused_pane == LEFT_MENUBAR_IDX {
                                                 if let Some(slot_idx) = self.graph().selected_node() {
                                                     let dir = self.current_dir();
-                                                     if slot_idx < dir.children.len() && (dir.children[slot_idx].node_type == "node" || dir.children[slot_idx].node_type == "utility" || !dir.children[slot_idx].children.is_empty()) {
+                                                     if slot_idx < dir.children.len() && dir.children[slot_idx].is_enterable() {
                                                          self.current_path.push(slot_idx);
                                                          self.on_path_changed();
                                                          changed = true;
