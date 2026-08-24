@@ -11,6 +11,7 @@ pub mod viewport_3d;
 pub mod api;
 pub mod window;
 pub mod geometry;
+pub mod kernel_cpu;
 pub mod project;
 pub mod render;
 pub mod shortcut;

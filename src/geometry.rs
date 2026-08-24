@@ -1059,7 +1059,26 @@ pub fn resolve_opencl_geometry_with_errors(
         }
 
         let processed_code = preprocess_opencl_code(&code);
-        if let Err(e) = run_opencl_kernel_with_params(&processed_code, &mut geom, &flat_values) {
+        // CPU reference backend (kernel_cpu): forced via CCE_KERNEL_CPU=1, and
+        // the automatic fallback when there is no OpenCL platform at all — the
+        // state this machine reached silently when nvidia-open fell out of
+        // kernel lockstep, which used to mean every kernel node produced
+        // empty geometry. A kernel that FAILS on a present platform (compile
+        // error, bad code) does NOT fall back: the two backends share the
+        // language, so the error is almost certainly in the kernel, and
+        // hiding the GPU diagnostics behind a second attempt would obscure it.
+        let result = if crate::kernel_cpu::forced() {
+            crate::kernel_cpu::run_kernel_cpu(&processed_code, &mut geom, &flat_values)
+        } else {
+            match run_opencl_kernel_with_params(&processed_code, &mut geom, &flat_values) {
+                Err(e) if e.contains("No OpenCL platforms/devices found") => {
+                    note_cpu_fallback_once();
+                    crate::kernel_cpu::run_kernel_cpu(&processed_code, &mut geom, &flat_values)
+                }
+                r => r,
+            }
+        };
+        if let Err(e) = result {
             if ocl_error.is_none() {
                 *ocl_error = Some(e);
             }
@@ -1068,6 +1087,15 @@ pub fn resolve_opencl_geometry_with_errors(
     Some(geom)
 }
 
+
+/// One stderr note per process when kernels silently move to the CPU
+/// reference — the sphere disappearing taught us "silently" is the problem.
+fn note_cpu_fallback_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        eprintln!("cce-designer: no OpenCL platform — node kernels running on the CPU reference backend");
+    });
+}
 
 struct OpenClCache {
     device: opencl3::device::Device,

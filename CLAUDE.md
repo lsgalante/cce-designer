@@ -28,7 +28,10 @@ standalone renderer smoke test that opens its own window; run it inside a Waylan
 session with `cargo run -p cce-designer --bin vk-smoke`.
 
 Some tests (e.g. `test_sphere_subnet_geometry_generation`) execute real OpenCL
-kernels and need a working OpenCL runtime; they are not pure-CPU tests.
+kernels THROUGH the OpenCL runtime when one exists; without one they exercise
+the CPU reference backend via the automatic fallback, so the suite is green
+headless. `kernel_cpu`'s template tests always run the CPU side; the
+cross-validation test compares backends and skips silently with no platform.
 
 ### CLI modes
 
@@ -119,6 +122,18 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
   order over the widget slots, circular-pane clipping via `PaintItem::clip_circle`,
   network fade via text alpha. Rebuilt every drawn frame; the engine tessellates,
   shapes, and draws it.
+- `src/kernel_cpu.rs` — the CPU reference backend for node kernels: a
+  tree-walking interpreter for the C subset the kernels use (scalars, arrays,
+  user functions with pointer params, casts, the positional buffer ABI),
+  running the exact launcher contract of `run_opencl_kernel_with_params`. It is
+  the SEMANTIC REFERENCE — `cpu_matches_opencl_on_every_shipped_kernel`
+  compares the two backends vertex-by-vertex on every template kernel when a
+  platform exists, and the absolute template tests keep kernel coverage green
+  headless. Selected automatically when there is no OpenCL platform (one
+  stderr note), or forced with `CCE_KERNEL_CPU=1`. A kernel that fails ON a
+  present platform does not fall back — the error is in the kernel, and the
+  GPU diagnostics should surface. Step-budgeted so a non-terminating kernel is
+  an error, not a UI freeze. No vector types / barriers / local memory.
 - `src/geometry.rs` — node-graph evaluation. Every evaluator threads an
   `EvalSim` (current frame + `SimCache` + feedback stack) alongside the error
   slot. The `simnet` node type iterates: the chain between its `input` and
