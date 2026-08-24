@@ -716,32 +716,20 @@ impl State {
     /// strictly in order, so a popover background emitted in the geometry
     /// pass would sit under every label.
     /// The plates' corner menu triggers, drawn above pane content but below an
-    /// open context menu: a ring in the plate's own border color over a face
-    /// that stays transparent until hover, so the control reads as part of the
-    /// plate edge until it is reached for.
+    /// open context menu: a solid dot in the plate's border color — one color,
+    /// like the graph's port dots and geometry toggles — growing slightly on
+    /// hover (and while its menu is open) instead of changing tint.
     fn append_plate_corners(&self, pc: &mut PaintCtx) {
         let hovered = self.plate_corner_at(self.cursor_x, self.cursor_y);
         for idx in crate::plate_corner::PLATE_SLOTS {
             let Some((cx, cy)) = self.plate_corner_center(idx) else { continue };
-            let r = crate::plate_corner::CORNER_R;
-            let face = if hovered == Some(idx) || self.plate_menu_slot == Some(idx) {
-                let mut c = cce_ui::colors::param_plate_fill();
-                // The plate fill carries the blur-behind marker as a NEGATIVE
-                // alpha; a control this small must not open its own blur tap.
-                c[3] = c[3].abs().max(0.35);
-                c
-            } else {
-                [0.0; 4]
-            };
-            // A real circle, not a fully-rounded rect: the trough prim clamps
-            // its radii below half the side, so an `inset_plate` this small
-            // closes into a rounded SQUARE with a second square wall inside it.
-            if face[3] > 0.001 {
-                pc.circle(cx, cy, r, face);
+            let mut r = crate::plate_corner::CORNER_R;
+            if hovered == Some(idx) || self.plate_menu_slot == Some(idx) {
+                r *= 1.15;
             }
-            let ring = cce_ui::colors::plate_border_color()
+            let fill = cce_ui::colors::plate_border_color()
                 .unwrap_or([0.55, 0.58, 0.66, 0.85]);
-            pc.arc(cx, cy, r, cce_ui::colors::plate_border_thickness().max(1.0), 0.0, TAU, ring);
+            pc.circle(cx, cy, r, fill);
         }
     }
 
