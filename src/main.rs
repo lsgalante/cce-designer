@@ -470,6 +470,27 @@ mod tests {
         assert_eq!(v, Some("survived"), "migration recreated Guides instead of moving it");
     }
 
+    /// Ctrl+S saves in place, Ctrl+Shift+S is Save As — and the Shift must
+    /// actually discriminate: a matcher that ignores modifiers would fire
+    /// plain Save for both.
+    #[test]
+    fn test_save_as_chord() {
+        let mut m = ShortcutManager::new();
+        m.register("Ctrl+s", Action::Save).unwrap();
+        m.register("Ctrl+Shift+s", Action::SaveAs).unwrap();
+        let ctrl = crate::app::ModifiersState { ctrl: true, ..Default::default() };
+        let ctrl_shift = crate::app::ModifiersState { ctrl: true, shift: true, ..Default::default() };
+        // The REAL event shapes: xkb delivers the shifted character when
+        // Shift is held — "S", not "s". The first version of this test fed
+        // lowercase for both and passed against a matcher that could never
+        // fire in practice.
+        let lower = cce_ui::widget::Key::Character("s".into());
+        let upper = cce_ui::widget::Key::Character("S".into());
+        assert_eq!(m.match_action(&ctrl, &lower), Some(Action::Save));
+        assert_eq!(m.match_action(&ctrl_shift, &upper), Some(Action::SaveAs));
+        assert_eq!(m.match_action(&ctrl_shift, &lower), Some(Action::SaveAs));
+    }
+
     #[test]
     fn test_load_default_project() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");

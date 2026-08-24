@@ -13,6 +13,7 @@ pub enum Action {
     ToggleCircularPane,
     DetachCircularWindow,
     Save,
+    SaveAs,
     NextContext,
     PrevContext,
 }
@@ -76,11 +77,21 @@ impl Shortcut {
     }
 
     pub fn matches(&self, mods: &ModifiersState, key: &Key) -> bool {
-        mods.control_key() == self.ctrl
-            && mods.shift_key() == self.shift
-            && mods.alt_key() == self.alt
-            && mods.super_key() == self.logo
-            && key == &self.key
+        if mods.control_key() != self.ctrl
+            || mods.shift_key() != self.shift
+            || mods.alt_key() != self.alt
+            || mods.super_key() != self.logo
+        {
+            return false;
+        }
+        // Character keys compare case-insensitively: with Shift held, xkb
+        // delivers the SHIFTED character ("S"), so an exact match against the
+        // chord's stored "s" made every Shift+letter chord unmatchable —
+        // Ctrl+Shift+Tab never noticed because Named keys aren't shifted.
+        match (key, &self.key) {
+            (Key::Character(a), Key::Character(b)) => a.eq_ignore_ascii_case(b),
+            (a, b) => a == b,
+        }
     }
 }
 

@@ -2714,6 +2714,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             register("toggle_spreadsheet", "`", Action::ToggleSpreadsheet);
             register("toggle_circular_pane", "Ctrl+d", Action::ToggleCircularPane);
             register("save_document", "Ctrl+s", Action::Save);
+            register("save_document_as", "Ctrl+Shift+s", Action::SaveAs);
             register("next_context", "Ctrl+Tab", Action::NextContext);
             register("previous_context", "Ctrl+Shift+Tab", Action::PrevContext);
         }
@@ -3711,6 +3712,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.rebuild_positions();
                 self.apply_layout();
                 self.sync_grid_settings();
+            }
+            Action::SaveAs => {
+                self.save_file_chooser();
             }
             Action::Save => {
                 let path_opt = self.loaded_project_path.clone();
