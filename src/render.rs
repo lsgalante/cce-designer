@@ -172,6 +172,7 @@ impl State {
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
         self.append_popovers(&mut pc);
+        self.append_dock_drag_overlay(&mut pc);
         self.append_plate_corners(&mut pc);
 
         // The node right-click context menu floats above everything (drawn last).
@@ -719,6 +720,22 @@ impl State {
     /// open context menu: a solid dot in the plate's border color — one color,
     /// like the graph's port dots and geometry toggles — growing slightly on
     /// hover (and while its menu is open) instead of changing tint.
+    /// The dock-drop highlight while a plate is being dragged by its dot: the
+    /// region the release would snap it into, tinted and outlined.
+    fn append_dock_drag_overlay(&self, pc: &mut PaintCtx) {
+        let (Some(crate::app::AppDrag::DockDrag { .. }), Some(target)) = (self.app_drag, self.dock_drag_target) else {
+            return;
+        };
+        let (x, y, w, h) = self.dock_rect(target);
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let hl = colors::highlight_primary_color();
+        let r = cce_ui::layout::plate_corner_radius();
+        pc.rounded_rect(rect(x, y, w, h), r, (true, true, true, true), [hl[0], hl[1], hl[2], 0.12]);
+        pc.border(rect(x, y, w, h), (r, r, r, r), [0.0; 4], [hl[0], hl[1], hl[2], 0.8], 2.0);
+    }
+
     fn append_plate_corners(&self, pc: &mut PaintCtx) {
         let hovered = self.plate_corner_at(self.cursor_x, self.cursor_y);
         for idx in crate::plate_corner::PLATE_SLOTS {

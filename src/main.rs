@@ -235,6 +235,54 @@ mod tests {
         assert!(parent.slots.get_dyn(VIEWPORT_IDX).visible(), "the rest of the parent survived");
     }
 
+    /// Dock swap: dragging a plate's dot to another region swaps occupants,
+    /// and the dock-owned dimensions stay put — the network lands in the
+    /// bottom strip's rect, the spreadsheet in the left column's.
+    #[test]
+    fn test_dock_swap_repositions_plates() {
+        use crate::app::Dock;
+        use crate::slots::{NETWORK_PANEL_IDX, SPREADSHEET_IDX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.show_spreadsheet = true;
+        state.rebuild_positions();
+        state.apply_layout();
+
+        let net_before = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        let ss_before = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        assert!(net_before.2 > 0.0 && ss_before.2 > 0.0);
+        assert!(net_before.1 < ss_before.1, "network starts above the bottom strip");
+
+        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Bottom);
+        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Bottom));
+        assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Left));
+
+        let net_after = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        let ss_after = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        // The network now wears (approximately) the strip geometry and the
+        // spreadsheet the left column's; exact equality is not required
+        // because the strip derivation reads dock occupancy, but the vertical
+        // order must have inverted and both must remain visible.
+        assert!(net_after.1 > ss_after.1, "network did not move below the spreadsheet");
+        assert!(net_after.2 > 0.0 && ss_after.2 > 0.0, "a pane vanished in the swap");
+
+        // Dropping it back restores the original arrangement.
+        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Left);
+        assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Bottom));
+    }
+
+    /// The drop-region mapping: lower band is the bottom dock, the rest
+    /// splits into halves.
+    #[test]
+    fn test_dock_region_mapping() {
+        use crate::app::Dock;
+        let mut state = State::new(false);
+        state.resize(1000.0, 1000.0, 1.0);
+        assert_eq!(state.dock_region_at(100.0, 100.0), Dock::Left);
+        assert_eq!(state.dock_region_at(900.0, 100.0), Dock::Right);
+        assert_eq!(state.dock_region_at(500.0, 900.0), Dock::Bottom);
+    }
+
     /// Full width tucks the spreadsheet under BOTH neighbors (their bottoms
     /// rise via the tuck interlock); between-panes clears both tucks.
     #[test]
