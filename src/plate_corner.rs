@@ -41,6 +41,11 @@ pub enum PlateMenuAction {
     Detach,
     /// Take a detached pane back, closing the window that held it.
     Reattach,
+    /// Spreadsheet: span the full window width, tucking under both neighbors
+    /// (whose bottoms the layout raises to make room — the playbar treatment).
+    FullWidth,
+    /// Spreadsheet: back to the strip between the network and params panes.
+    BetweenPanes,
 }
 
 impl State {
@@ -141,6 +146,19 @@ impl State {
             actions.push(PlateMenuAction::Collapse);
         }
 
+        if idx == SPREADSHEET_IDX && !self.collapsed_panes[idx] {
+            // Layout spans: full-width is the playbar treatment; the neighbors'
+            // bottoms rise to make room via the tuck interlock.
+            if !(self.spreadsheet_tucks_left() && self.spreadsheet_tucks_right()) {
+                options.push("Full Width".to_string());
+                actions.push(PlateMenuAction::FullWidth);
+            }
+            if self.spreadsheet_tucks_left() || self.spreadsheet_tucks_right() {
+                options.push("Between Panes".to_string());
+                actions.push(PlateMenuAction::BetweenPanes);
+            }
+        }
+
         if self.plate_can_detach(idx) {
             options.push("Detach".to_string());
             actions.push(PlateMenuAction::Detach);
@@ -188,7 +206,21 @@ impl State {
             PlateMenuAction::Expand => self.set_pane_collapsed(idx, false),
             PlateMenuAction::Detach => self.detach_plate(idx),
             PlateMenuAction::Reattach => self.reattach_plate(idx),
+            PlateMenuAction::FullWidth => self.set_spreadsheet_full_width(true),
+            PlateMenuAction::BetweenPanes => self.set_spreadsheet_full_width(false),
         }
+    }
+
+    /// Spreadsheet span: full width sets both tuck insets to their maxima
+    /// (the rect derivation clamps to the usable span), between-panes clears
+    /// them. The neighbors' heights follow through the existing tuck interlock.
+    pub fn set_spreadsheet_full_width(&mut self, full: bool) {
+        let v = if full { self.width.max(1.0) } else { 0.0 };
+        self.floating_spreadsheet_inset_left = v;
+        self.floating_spreadsheet_inset_right = v;
+        self.rebuild_positions();
+        self.apply_layout();
+        self.read_panel_offsets();
     }
 
     pub fn set_pane_collapsed(&mut self, idx: usize, collapsed: bool) {

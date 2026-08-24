@@ -235,6 +235,26 @@ mod tests {
         assert!(parent.slots.get_dyn(VIEWPORT_IDX).visible(), "the rest of the parent survived");
     }
 
+    /// Full width tucks the spreadsheet under BOTH neighbors (their bottoms
+    /// rise via the tuck interlock); between-panes clears both tucks.
+    #[test]
+    fn test_spreadsheet_full_width_round_trip() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.show_spreadsheet = true;
+        state.rebuild_positions();
+        assert!(!state.spreadsheet_tucks_left() && !state.spreadsheet_tucks_right());
+
+        state.set_spreadsheet_full_width(true);
+        assert!(state.spreadsheet_tucks_left() && state.spreadsheet_tucks_right(),
+            "full width must tuck under both neighbors");
+        let (ss_x, _, ss_w, _) = state.floating_spreadsheet_rect();
+        assert!(ss_x <= 18.5 && ss_x + ss_w >= 1600.0 - 18.5, "not actually full width: x={ss_x} w={ss_w}");
+
+        state.set_spreadsheet_full_width(false);
+        assert!(!state.spreadsheet_tucks_left() && !state.spreadsheet_tucks_right());
+    }
+
     /// The way back. A detached pane's menu offers Reattach and nothing else,
     /// and reattaching restores the pane in full.
     #[test]

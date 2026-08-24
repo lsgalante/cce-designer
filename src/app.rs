@@ -600,6 +600,19 @@ pub enum AppDrag {
     SpreadsheetResizeLeft { start_inset: f32, start_mouse_x: f32 },
     /// The spreadsheet's right edge, symmetrically, tucking under the parameter pane.
     SpreadsheetResizeRight { start_inset: f32, start_mouse_x: f32 },
+    /// Dragging a plate's corner dot: continuous adjustment of that pane's
+    /// free layout parameters (the panes are edge-anchored, so "moving" one
+    /// means driving what the layout lets vary — network width, params width,
+    /// spreadsheet height + right tuck). Armed from a press on the dot once
+    /// motion exceeds the click threshold; a clean click still opens the menu.
+    CornerLayout {
+        idx: usize,
+        start_mouse: (f32, f32),
+        start_fw: f32,
+        start_param_w: f32,
+        start_ss_h: f32,
+        start_inset_r: f32,
+    },
 }
 
 #[repr(C)]
@@ -708,6 +721,9 @@ pub struct State {
     /// Panes shrunk to their title stub, indexed by slot. Only the
     /// `plate_corner::PLATE_SLOTS` entries are ever set.
     pub collapsed_panes: [bool; WIDGET_COUNT],
+    /// A press on a plate corner dot, not yet resolved into click-opens-menu
+    /// or drag-adjusts-layout: `(slot, press_x, press_y)`.
+    pub corner_press: Option<(usize, f32, f32)>,
 
     pub drag_widget: Option<usize>,
     /// Where the pointer pressed when `drag_widget` armed — the drag
@@ -1240,6 +1256,7 @@ impl State {
             return Some(match drag {
                 AppDrag::NetworkResize { dir, .. } => dir_cursor(dir),
                 AppDrag::ParamResize { .. } => CursorIcon::EwResize,
+                AppDrag::CornerLayout { .. } => CursorIcon::Move,
                 AppDrag::SpreadsheetResize { .. } => CursorIcon::NsResize,
                 AppDrag::SpreadsheetResizeLeft { .. } | AppDrag::SpreadsheetResizeRight { .. } => {
                     CursorIcon::EwResize
@@ -2768,6 +2785,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
             collapsed_panes: [false; WIDGET_COUNT],
+            corner_press: None,
             drag_widget: None,
             drag_press_cursor: None,
             focused_widget: None,
@@ -4064,6 +4082,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     changed = true;
                 }
 
+                // An armed corner-dot press becomes a layout drag once it
+                // moves; stubbed (collapsed/detached) panes stay click-only.
+                if let Some((idx, px, py)) = self.corner_press {
+                    let moved = (self.cursor_x - px).abs().max((self.cursor_y - py).abs());
+                    if moved > 4.0 {
+                        self.corner_press = None;
+                        if !self.pane_is_stubbed(idx) && idx != PLAYBAR_IDX {
+                            self.app_drag = Some(AppDrag::CornerLayout {
+                                idx,
+                                start_mouse: (px, py),
+                                start_fw: self.floating_network_layout.2,
+                                start_param_w: self.floating_param_width,
+                                start_ss_h: self.floating_spreadsheet_height,
+                                start_inset_r: self.floating_spreadsheet_inset_right,
+                            });
+                        }
+                    }
+                }
+
                 if self.is_panning {
                     let dx = self.cursor_x - self.pan_start_cx;
                     let dy = self.cursor_y - self.pan_start_cy;
@@ -4136,6 +4173,37 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 let max_inset = (flush_left - gap).max(0.0);
                                 self.floating_spreadsheet_inset_left =
                                     (start_inset - dx).clamp(0.0, max_inset);
+                                self.rebuild_positions();
+                                self.apply_layout();
+                                self.sync_grid_settings();
+                                changed = true;
+                            }
+                            AppDrag::CornerLayout { idx, start_mouse, start_fw, start_param_w, start_ss_h, start_inset_r } => {
+                                let dx = self.cursor_x - start_mouse.0;
+                                let dy = self.cursor_y - start_mouse.1;
+                                let gap = 18.0_f32;
+                                match idx {
+                                    NETWORK_PANEL_IDX => {
+                                        // Dot rides the pane's top-right: width follows it.
+                                        let max_w = (self.width - 2.0 * gap).max(150.0);
+                                        self.floating_network_layout.2 = (start_fw + dx).clamp(150.0, max_w);
+                                    }
+                                    PARAM_IDX => {
+                                        // Right-anchored: the LEFT edge follows the cursor.
+                                        let max_w = (self.width - 2.0 * gap).max(150.0);
+                                        self.floating_param_width = (start_param_w - dx).clamp(150.0, max_w);
+                                    }
+                                    SPREADSHEET_IDX => {
+                                        // Corner drag: vertical is height, horizontal is the
+                                        // right tuck under the params pane.
+                                        self.floating_spreadsheet_height = (start_ss_h - dy).max(100.0);
+                                        let param_x = self.width - gap - self.floating_param_width;
+                                        let flush_right = param_x - gap;
+                                        let max_inset = (self.width - gap - flush_right).max(0.0);
+                                        self.floating_spreadsheet_inset_right = (start_inset_r + dx).clamp(0.0, max_inset);
+                                    }
+                                    _ => {}
+                                }
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 self.sync_grid_settings();
@@ -4309,11 +4377,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 return true;
                             }
                         }
-                        // A press ON a corner control opens (or re-closes) its
-                        // menu and never reaches the pane underneath.
+                        // A press ON a corner control arms click-vs-drag: a
+                        // clean release opens the menu, motion past the
+                        // threshold becomes a layout drag. Either way the
+                        // press never reaches the pane underneath.
                         if *button == MouseButton::Left {
                             if let Some(idx) = self.plate_corner_at(self.cursor_x, self.cursor_y) {
-                                self.open_plate_menu(idx);
+                                self.corner_press = Some((idx, self.cursor_x, self.cursor_y));
                                 return true;
                             }
                         }
@@ -4654,6 +4724,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 AppDrag::SpreadsheetResize { .. }
                                 | AppDrag::SpreadsheetResizeLeft { .. }
                                 | AppDrag::SpreadsheetResizeRight { .. } => SPREADSHEET_IDX,
+                                AppDrag::CornerLayout { idx, .. } => idx,
                             };
                             {
                                 let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
@@ -4662,9 +4733,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             self.sync_layout();
                             // Both of these resized the network pane, so the node
                             // offsets need the same refresh.
-                            if matches!(drag, AppDrag::NetworkResize { .. } | AppDrag::SpreadsheetResizeLeft { .. }) {
+                            if matches!(
+                                drag,
+                                AppDrag::NetworkResize { .. }
+                                    | AppDrag::SpreadsheetResizeLeft { .. }
+                                    | AppDrag::CornerLayout { idx: NETWORK_PANEL_IDX, .. }
+                            ) {
                                 self.read_panel_offsets();
                             }
+                            changed = true;
+                        }
+                        // A corner-dot press that never became a drag is a
+                        // click: open that plate's menu now, on release.
+                        if let Some((idx, _, _)) = self.corner_press.take() {
+                            self.open_plate_menu(idx);
                             changed = true;
                         }
                         if self.drag_widget.is_some() {
