@@ -1747,8 +1747,21 @@ impl State {
         names
     }
 
+    /// Where a file chooser should open: the loaded project's parent directory
+    /// (the current working context — sibling projects live there), or None to
+    /// let cce-files use its remembered location. Passing it also skips the
+    /// chooser's remembered-dir restore outright.
+    pub(crate) fn chooser_start_dir(&self) -> Option<std::path::PathBuf> {
+        self.loaded_project_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .filter(|d| d.is_dir())
+            .map(|d| d.to_path_buf())
+    }
+
     pub fn open_file_chooser(&self) {
         let Some(sender) = self.event_sender.clone() else { return };
+        let start_dir = self.chooser_start_dir();
         std::thread::spawn(move || {
             use std::process::{Command, Stdio};
 
@@ -1786,6 +1799,7 @@ impl State {
 
             let child = match Command::new(exe_path)
                 .arg("--select")
+                .args(start_dir.as_deref())
                 .stdout(Stdio::piped())
                 .spawn()
             {
@@ -1815,6 +1829,7 @@ impl State {
 
     pub fn save_file_chooser(&self) {
         let Some(sender) = self.event_sender.clone() else { return };
+        let start_dir = self.chooser_start_dir();
         std::thread::spawn(move || {
             use std::process::{Command, Stdio};
 
@@ -1852,6 +1867,7 @@ impl State {
 
             let child = match Command::new(exe_path)
                 .arg("--save")
+                .args(start_dir.as_deref())
                 .stdout(Stdio::piped())
                 .spawn()
             {

@@ -69,6 +69,21 @@ mod tests {
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
     use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
 
+    /// The choosers open in the loaded project's parent — the "current view" —
+    /// and fall back to cce-files' remembered location only when nothing is
+    /// loaded (a scratch project has no place to point at).
+    #[test]
+    fn test_chooser_opens_at_the_loaded_projects_parent() {
+        let mut state = State::new(false);
+        assert_eq!(state.chooser_start_dir(), None, "scratch project must not pin a dir");
+
+        let dir = std::env::temp_dir().join("cce-designer-test-projects").join("gears");
+        std::fs::create_dir_all(&dir).unwrap();
+        state.loaded_project_path = Some(dir.clone());
+        assert_eq!(state.chooser_start_dir().as_deref(), dir.parent(),
+            "chooser must start where the current project lives");
+    }
+
     /// The default-project pointer must survive the KDL round trip state.kdl
     /// actually goes through — serde alone passing means nothing if
     /// json_to_kdl_string / parse_kdl_to_json drop or retype the field.
