@@ -162,6 +162,19 @@ The `zcce_inspector_v1` integration (window-position tracking + widget-state
 streaming to cce-test-interface) was dropped in the engine migration; the HTTP API
 is the introspection surface.
 
+### The Session node
+
+Session-wide settings live under one permanent root node: `Session` (node type
+`session`) contains the Main/View/Guides/Render utility subnets that used to
+sit flat in `/`. `ensure_menubar_subnets` creates it and MIGRATES root-level
+settings nodes from older saves into it (moved, not recreated — params
+survive). It cannot be deleted: `delete_node` refuses the `session` type (the
+one gate every deletion route funnels through), the context menu omits Delete,
+and the graph draws it without a geometry toggle. `State::session_node()` /
+`in_settings_dir()` are the accessors — the latter walks the whole
+`current_path`, since a first-segment check stopped working the day the
+settings nodes gained a parent.
+
 ### App-written settings: `~/.config/cce/cce-designer/state.kdl`
 
 `default_project` in state.kdl points at the project the main window opens on

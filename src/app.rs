@@ -146,7 +146,7 @@ impl FsNode {
     /// of them learned about new container types: subnet-like types by name,
     /// otherwise anything that actually has children.
     pub fn is_enterable(&self) -> bool {
-        matches!(self.node_type.as_str(), "node" | "utility" | "simnet")
+        matches!(self.node_type.as_str(), "node" | "utility" | "simnet" | "session")
             || !self.children.is_empty()
     }
 }
@@ -964,7 +964,10 @@ impl State {
         }
         opts.push("Other".to_string());
 
-        if let Some(main_node) = self.fs_root.children.iter_mut().find(|c| c.name == "Main") {
+        let main_node = self
+            .session_node_mut()
+            .and_then(|s| s.children.iter_mut().find(|c| c.name == "Main"));
+        if let Some(main_node) = main_node {
             if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Open") {
                 p.options = opts;
                 if !p.options.contains(&p.default) {
@@ -1260,6 +1263,37 @@ impl State {
             return;
         }
         self.splitter_layout.clamp(self.width, self.detached_circular_network);
+    }
+
+    /// The Session node: the permanent root container for the session-wide
+    /// settings nodes (Main/View/Guides/Render). `ensure_menubar_subnets`
+    /// guarantees it exists, so `None` only before the first ensure.
+    pub fn session_node(&self) -> Option<&FsNode> {
+        self.fs_root.children.iter().find(|c| c.node_type == "session")
+    }
+
+    pub fn session_node_mut(&mut self) -> Option<&mut FsNode> {
+        self.fs_root.children.iter_mut().find(|c| c.node_type == "session")
+    }
+
+    /// Is the network currently inside a settings directory (the Session node
+    /// or any utility node)? Geometry templates are refused there. Checks the
+    /// whole path, not `current_path[0]` — the settings nodes live NESTED
+    /// under Session now, so the old first-segment check would miss them.
+    pub fn in_settings_dir(&self) -> bool {
+        let mut node = &self.fs_root;
+        for &idx in &self.current_path {
+            match node.children.get(idx) {
+                Some(child) => {
+                    if matches!(child.node_type.as_str(), "utility" | "session") {
+                        return true;
+                    }
+                    node = child;
+                }
+                None => return false,
+            }
+        }
+        false
     }
 
     pub fn current_dir(&self) -> &FsNode {
@@ -1907,8 +1941,7 @@ impl State {
         let Some(sender) = self.event_sender.clone() else { return };
         // In a utility dir geometry templates are rejected at placement —
         // don't offer them.
-        let in_utility = !self.current_path.is_empty()
-            && self.fs_root.children[self.current_path[0]].node_type == "utility";
+        let in_utility = self.in_settings_dir();
         let items: String = self
             .node_templates
             .iter()
@@ -1947,7 +1980,15 @@ impl State {
             let dir = self.current_dir();
             let Some(node) = dir.children.get(slot) else { return };
             let enterable = node.is_enterable();
-            (node.node_type == "utility", node.geometry_visible, enterable)
+            (
+                matches!(node.node_type.as_str(), "utility" | "session"),
+                node.geometry_visible,
+                enterable,
+            )
+        };
+        let deletable = {
+            let dir = self.current_dir();
+            dir.children.get(slot).map(|n| n.node_type != "session").unwrap_or(false)
         };
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<NodeMenuAction> = Vec::new();
@@ -1959,8 +2000,10 @@ impl State {
             options.push(if geom_visible { "Hide Geometry" } else { "Show Geometry" }.to_string());
             actions.push(NodeMenuAction::ToggleGeometry);
         }
-        options.push("Delete".to_string());
-        actions.push(NodeMenuAction::Delete);
+        if deletable {
+            options.push("Delete".to_string());
+            actions.push(NodeMenuAction::Delete);
+        }
 
         let target = self.slots.get_dyn(CONTENT_IDX).base().id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
@@ -2415,6 +2458,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
     pub fn delete_node(&mut self, slot: usize) -> bool {
         let len = self.current_dir().children.len();
+        // The Session node is permanent: every deletion route (context menu,
+        // Delete key, MCP) funnels through here, so this is the one gate.
+        if slot < len && self.current_dir().children[slot].node_type == "session" {
+            return false;
+        }
         if slot < len {
             self.current_dir_mut().children.remove(slot);
             if let Some(sel_idx) = self.graph().selected_node() {

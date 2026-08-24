@@ -770,7 +770,7 @@ impl State {
                 if let Some(idx) = template_idx {
                     let mut node = state.node_templates[idx].node.clone();
                     let mut allowed = true;
-                    let is_in_utility = !state.current_path.is_empty() && state.fs_root.children[state.current_path[0]].node_type == "utility";
+                    let is_in_utility = state.in_settings_dir();
                     if is_in_utility {
                         if crate::geometry::is_geometry_node_type(&node.node_type) {
                             allowed = false;
@@ -800,6 +800,11 @@ impl State {
                 }
             }
             McpAction::DeleteNode { slot } => {
+                if slot < state.current_dir().children.len()
+                    && state.current_dir().children[slot].node_type == "session"
+                {
+                    return Err("The Session node is permanent and cannot be deleted".to_string());
+                }
                 if state.delete_node(slot) {
                     needs_redraw = true;
                     Ok("Node deleted".to_string())

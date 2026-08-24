@@ -397,8 +397,55 @@ impl State {
         // Retain only the Main utility subnet, removing the rest
         self.fs_root.children.retain(|c| c.name != "Network" && c.name != "Viewport" && c.name != "Parameters" && c.name != "Spreadsheet");
 
+        // The Session node: the permanent root container for the session-wide
+        // settings nodes (Main/View/Guides/Render). Older saves carried the
+        // four at the root — they are MOVED in, params intact, so an old
+        // project's values survive as the seeds. The node itself is
+        // undeletable (delete_node refuses the "session" type).
+        let mut migrated: Vec<FsNode> = Vec::new();
+        {
+            let mut idx = 0;
+            while idx < self.fs_root.children.len() {
+                let c = &self.fs_root.children[idx];
+                if c.node_type == "utility"
+                    && matches!(c.name.as_str(), "Main" | "View" | "Guides" | "Render")
+                {
+                    migrated.push(self.fs_root.children.remove(idx));
+                } else {
+                    idx += 1;
+                }
+            }
+        }
+        let session_idx = match self.fs_root.children.iter().position(|c| c.node_type == "session" || c.name == "Session") {
+            Some(i) => {
+                self.fs_root.children[i].node_type = "session".to_string();
+                i
+            }
+            None => {
+                self.fs_root.children.push(FsNode {
+                    id: crate::app::generate_node_id(),
+                    name: "Session".to_string(),
+                    node_type: "session".to_string(),
+                    children: vec![],
+                    params: vec![],
+                    geometry_visible: true,
+                    position: (0.0, 0.0),
+                    inputs: 0,
+                    outputs: 0,
+                });
+                self.fs_root.children.len() - 1
+            }
+        };
+        for node in migrated {
+            let session = &mut self.fs_root.children[session_idx];
+            if !session.children.iter().any(|c| c.name == node.name) {
+                session.children.push(node);
+            }
+        }
+        let session = &mut self.fs_root.children[session_idx];
+
         // 1. Main subnet
-        let main_node = find_or_create_subnet(&mut self.fs_root, "Main", "utility", (0.0, 0.0));
+        let main_node = find_or_create_subnet(session, "Main", "utility", (0.0, 0.0));
         main_node.children.clear();
 
         ensure_param(main_node, "File", "section", "", &[], None, None, None);
@@ -580,7 +627,7 @@ impl State {
         // node; the header menu items stay as command access). Pane state is
         // session-owned and never applied from the project, so the toggles
         // seed and refresh from live state.
-        let view_node = find_or_create_subnet(&mut self.fs_root, "View", "utility", (0.0, 2.0));
+        let view_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "View", "utility", (0.0, 2.0));
         view_node.children.clear();
         ensure_param(view_node, "Panes", "section", "", &[], None, None, None);
         ensure_param(view_node, "Show Network Pane", "toggle", bool_str(show_network), &[], None, None, None);
@@ -611,7 +658,7 @@ impl State {
         // migrated off Main). The utility column keeps one empty cell between
         // nodes: Main (0,0), View (0,2), Guides (0,4), Render (0,6); older
         // saves parked at prior defaults slide to the spaced slots.
-        let guides_node = find_or_create_subnet(&mut self.fs_root, "Guides", "utility", (0.0, 4.0));
+        let guides_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "Guides", "utility", (0.0, 4.0));
         if guides_node.position == (0.0, 1.0) || guides_node.position == (0.0, 2.0) {
             guides_node.position = (0.0, 4.0);
         }
@@ -646,7 +693,7 @@ impl State {
         // Main. Toggles reflect live state so a reopened project shows real
         // switches. Two rows below Guides (the spaced column); older saves
         // parked at the prior defaults slide down.
-        let render_node = find_or_create_subnet(&mut self.fs_root, "Render", "utility", (0.0, 6.0));
+        let render_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "Render", "utility", (0.0, 6.0));
         if render_node.position == (0.0, 1.0) || render_node.position == (0.0, 2.0) || render_node.position == (0.0, 4.0) {
             render_node.position = (0.0, 6.0);
         }
@@ -754,8 +801,14 @@ impl State {
     }
 
     pub(crate) fn apply_settings_from_menubar_subnets(&mut self) {
-        if let Some(guides_idx) = self.fs_root.children.iter().position(|c| c.name == "Guides") {
-            let params = self.fs_root.children[guides_idx].params.clone();
+        let session_params = |root: &FsNode, name: &str| -> Option<Vec<ParamDef>> {
+            root.children
+                .iter()
+                .find(|c| c.node_type == "session")
+                .and_then(|s| s.children.iter().find(|c| c.name == name))
+                .map(|n| n.params.clone())
+        };
+        if let Some(params) = session_params(&self.fs_root, "Guides") {
             for p in &params {
                 match p.name.as_str() {
                     "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
@@ -768,8 +821,7 @@ impl State {
                 }
             }
         }
-        if let Some(main_idx) = self.fs_root.children.iter().position(|c| c.name == "Main") {
-            let params = self.fs_root.children[main_idx].params.clone();
+        if let Some(params) = session_params(&self.fs_root, "Main") {
             for p in &params {
                 match p.name.as_str() {
                     // Network Settings
@@ -818,8 +870,7 @@ impl State {
             }
         }
 
-        if let Some(render_idx) = self.fs_root.children.iter().position(|c| c.name == "Render") {
-            let params = self.fs_root.children[render_idx].params.clone();
+        if let Some(params) = session_params(&self.fs_root, "Render") {
             for p in &params {
                 match p.name.as_str() {
                     "Show Wireframe" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe = val; }

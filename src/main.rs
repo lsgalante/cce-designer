@@ -107,7 +107,8 @@ mod tests {
     fn test_main_node_offers_set_as_default() {
         let mut state = State::new(false);
         state.ensure_menubar_subnets();
-        let main = state.fs_root.children.iter().find(|c| c.name == "Main").expect("Main node");
+        let (s_idx, m_idx) = session_and_main(&state);
+        let main = &state.fs_root.children[s_idx].children[m_idx];
         let names: Vec<&str> = main.params.iter().map(|p| p.name.as_str()).collect();
         let idx = names.iter().position(|n| *n == "Set As Default").expect("Set As Default param");
         let save_as = names.iter().position(|n| *n == "Save As").unwrap();
@@ -345,7 +346,7 @@ mod tests {
     fn test_legacy_style_params_are_dropped_from_main() {
         let mut state = State::new(false);
         state.ensure_menubar_subnets();
-        let main_idx = state.fs_root.children.iter().position(|c| c.name == "Main").expect("Main node");
+        let (s_idx, main_idx) = session_and_main(&state);
 
         // Re-seed the params exactly as a pre-removal save carries them.
         for (name, ty, val) in [
@@ -354,7 +355,7 @@ mod tests {
             ("Edge Profile", "ramp", "smooth;0.000:0.000,1.000:1.000"),
             ("Plate Color", "rgba", "#11223344"),
         ] {
-            state.fs_root.children[main_idx].params.push(crate::app::ParamDef {
+            state.fs_root.children[s_idx].children[main_idx].params.push(crate::app::ParamDef {
                 name: name.to_string(),
                 label: String::new(),
                 param_type: ty.to_string(),
@@ -367,7 +368,8 @@ mod tests {
         }
 
         state.ensure_menubar_subnets();
-        let names: Vec<&str> = state.fs_root.children[main_idx]
+        let (s_idx, main_idx) = session_and_main(&state);
+        let names: Vec<&str> = state.fs_root.children[s_idx].children[main_idx]
             .params.iter().map(|p| p.name.as_str()).collect();
         for retired in ["Style", "Bevel Profile", "Edge Profile", "Plate Color"] {
             assert!(!names.contains(&retired), "retired style param survived load: {retired} in {names:?}");
@@ -391,6 +393,81 @@ mod tests {
         for (i, idx) in roster.iter().enumerate() {
             assert_eq!(i, *idx, "slot #{i} expanded to index {idx}");
         }
+    }
+
+    /// The settings nodes live inside the permanent Session node now; tests
+    /// that need Main resolve it through there.
+    fn session_and_main(state: &State) -> (usize, usize) {
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").expect("Session node");
+        let m_idx = state.fs_root.children[s_idx].children.iter().position(|c| c.name == "Main").expect("Main inside Session");
+        (s_idx, m_idx)
+    }
+
+    /// The Session node: exists at root, typed "session", holds exactly the
+    /// four settings nodes, and refuses deletion through the one gate every
+    /// deletion route funnels into.
+    #[test]
+    fn test_session_node_exists_and_cannot_be_deleted() {
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").expect("Session node at root");
+        let session = &state.fs_root.children[s_idx];
+        assert_eq!(session.name, "Session");
+        let names: Vec<&str> = session.children.iter().map(|c| c.name.as_str()).collect();
+        for expected in ["Main", "View", "Guides", "Render"] {
+            assert!(names.contains(&expected), "Session is missing {expected}: {names:?}");
+        }
+        // None of the four remain at root.
+        for c in &state.fs_root.children {
+            assert!(
+                !(c.node_type == "utility" && matches!(c.name.as_str(), "Main" | "View" | "Guides" | "Render")),
+                "settings node '{}' still at root", c.name
+            );
+        }
+
+        let before = state.fs_root.children.len();
+        assert!(!state.delete_node(s_idx), "delete_node deleted the Session node");
+        assert_eq!(state.fs_root.children.len(), before, "Session vanished anyway");
+        assert!(state.fs_root.children[s_idx].node_type == "session");
+    }
+
+    /// An old save carries Main/View/Guides/Render at the root with the user's
+    /// values in their params — migration must MOVE them (values intact), not
+    /// recreate them fresh.
+    #[test]
+    fn test_old_saves_migrate_settings_nodes_into_session() {
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+
+        // Simulate the old shape: pull the four back out to root, drop the
+        // Session node, and plant a probe param ensure doesn't own — the live-
+        // synced toggles are rewritten from app state by design, so only a
+        // foreign param can distinguish MOVED (probe survives) from RECREATED
+        // (probe gone).
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").unwrap();
+        let mut session = state.fs_root.children.remove(s_idx);
+        for mut child in session.children.drain(..) {
+            if child.name == "Guides" {
+                child.params.push(crate::app::ParamDef {
+                    name: "migration probe".to_string(),
+                    label: String::new(),
+                    param_type: "text".to_string(),
+                    default: "survived".to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                });
+            }
+            state.fs_root.children.push(child);
+        }
+
+        state.ensure_menubar_subnets();
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").expect("Session recreated");
+        let guides = state.fs_root.children[s_idx].children.iter().find(|c| c.name == "Guides").expect("Guides migrated in");
+        let v = guides.params.iter().find(|p| p.name == "migration probe").map(|p| p.default.as_str());
+        assert_eq!(v, Some("survived"), "migration recreated Guides instead of moving it");
     }
 
     #[test]
@@ -1310,8 +1387,10 @@ mod tests {
         // beneath the params pane's "Open" dropdown bled through it.
         let mut state = State::new(false);
         state.ensure_menubar_subnets();
-        let main_idx = state.fs_root.children.iter().position(|c| c.name == "Main").expect("Main node");
-        state.graph_mut().set_selected_node(Some(main_idx));
+        let (s_idx, m_idx) = session_and_main(&state);
+        state.current_path.push(s_idx);
+        state.on_path_changed();
+        state.graph_mut().set_selected_node(Some(m_idx));
         state.sync_parameters_pane();
 
         {
