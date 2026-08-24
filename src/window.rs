@@ -664,6 +664,9 @@ impl State {
         let res = match action {
             McpAction::Up => {
                 if state.move_up() {
+                    // on_path_changed clears the selection but leaves the param
+                    // pane to process_window_event's tail, which MCP bypasses.
+                    state.sync_parameters_pane();
                     needs_redraw = true;
                     Ok("Moved up".to_string())
                 } else {
@@ -675,6 +678,7 @@ impl State {
                 if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "utility" || !dir.children[slot].children.is_empty()) {
                     state.current_path.push(slot);
                     state.on_path_changed();
+                    state.sync_parameters_pane();
                     needs_redraw = true;
                     Ok("Entered subnet".to_string())
                 } else {
@@ -708,6 +712,10 @@ impl State {
                         state.sync_grid_settings();
                         state.sync_nodes();
                         state.rebuild_scene_geometry();
+                        // Interactively the edit originates IN the param pane;
+                        // here it must be pushed back or a selected node's pane
+                        // keeps showing the old value.
+                        state.sync_parameters_pane();
                         needs_redraw = true;
                         Ok("Parameter updated".to_string())
                     } else {
@@ -809,6 +817,9 @@ impl State {
                     return Err("The Session node is permanent and cannot be deleted".to_string());
                 }
                 if state.delete_node(slot) {
+                    // delete_node clears/shifts the selection; the param pane
+                    // resync normally comes from process_window_event's tail.
+                    state.sync_parameters_pane();
                     needs_redraw = true;
                     Ok("Node deleted".to_string())
                 } else {
@@ -820,6 +831,9 @@ impl State {
                 if slot < len {
                     state.current_dir_mut().children[slot].name = new_name;
                     state.sync_nodes();
+                    // Connections reference nodes by name (Input params), so a
+                    // rename changes downstream evaluation.
+                    state.rebuild_scene_geometry();
                     needs_redraw = true;
                     Ok("Node renamed".to_string())
                 } else {
@@ -856,6 +870,10 @@ impl State {
                     };
                     state.current_dir_mut().children[slot].params.push(param);
                     state.sync_nodes();
+                    // Params feed kernel evaluation and the param pane shows
+                    // the selected node's list — same rationale as SetParam.
+                    state.rebuild_scene_geometry();
+                    state.sync_parameters_pane();
                     needs_redraw = true;
                     Ok("Parameter added".to_string())
                 } else {
@@ -869,6 +887,8 @@ impl State {
                     if let Some(pos) = params.iter().position(|p| p.name == name) {
                         params.remove(pos);
                         state.sync_nodes();
+                        state.rebuild_scene_geometry();
+                        state.sync_parameters_pane();
                         needs_redraw = true;
                         Ok("Parameter deleted".to_string())
                     } else {
@@ -960,6 +980,11 @@ impl State {
                 if state.execute_menu_action(&label) {
                     // The arms relayout themselves but render() draws the last
                     // uploaded buffer (same ritual as ToggleCircularPane).
+                    // The interactive menu dispatch follows its pane-show arms
+                    // with sync_nodes; execute_menu_action's copies don't, so a
+                    // spreadsheet shown here would keep stale contents without
+                    // this (the cache makes it a no-op when nothing changed).
+                    state.sync_nodes();
                     needs_redraw = true;
                     Ok(format!("Menu action executed: {}", label.replace(['"', '\\'], "'")))
                 } else {
