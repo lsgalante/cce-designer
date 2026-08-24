@@ -684,9 +684,12 @@ impl State {
             McpAction::Select { slot } => {
                 if slot < state.current_dir().children.len() {
                     // Same effect as clicking the node: it becomes the selected node and
-                    // its params populate the parameter pane.
+                    // its params populate the parameter pane. A click also reaches
+                    // sync_nodes via process_window_event's changed-path, which is
+                    // what refreshes the spreadsheet — this path must call it itself.
                     state.graph_mut().set_selected_node(Some(slot));
                     state.sync_parameters_pane();
+                    state.sync_nodes();
                     needs_redraw = true;
                     Ok("Node selected".to_string())
                 } else {
