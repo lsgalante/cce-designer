@@ -1336,6 +1336,10 @@ impl State {
                 if let Some(child) = dir.children.get_mut(slot_idx) {
                     let mut param_changed = false;
                     let mut triggered_buttons = Vec::new();
+                    // Params whose pane DISPLAY needs resetting without any
+                    // action firing (the Open dropdown snapping back to
+                    // "- Select -" — its action is file_to_open's, below).
+                    let mut display_resets: Vec<String> = Vec::new();
                     let mut pane_actions = Vec::new();
                     for (u_name, u_val, _) in &updated_params {
                         // The params pane reports its display key (label when
@@ -1371,15 +1375,20 @@ impl State {
                                 if p.name == "Open" && p.default != "- Select -" && !p.default.is_empty() {
                                     file_to_open = Some(p.default.clone());
                                     p.default = "- Select -".to_string();
-                                    triggered_buttons.push("Open".to_string());
+                                    // Display reset ONLY — never into
+                                    // triggered_buttons, whose entries get
+                                    // executed as menu actions: "Open" there
+                                    // opened the file chooser ON TOP of
+                                    // loading the picked recent file.
+                                    display_resets.push("Open".to_string());
                                 }
                             }
                         }
                     }
 
-                    if !triggered_buttons.is_empty() {
+                    if !triggered_buttons.is_empty() || !display_resets.is_empty() {
                         let mut disp_params = self.param().node_params();
-                        for btn_name in &triggered_buttons {
+                        for btn_name in triggered_buttons.iter().chain(display_resets.iter()) {
                             if let Some(pos) = disp_params.iter().position(|p| p.0 == *btn_name) {
                                 disp_params[pos].1 = if btn_name == "Open" { "- Select -".to_string() } else { "".to_string() };
                             }
