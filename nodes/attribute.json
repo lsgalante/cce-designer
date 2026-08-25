@@ -1,0 +1,43 @@
+{
+ "name": "Attribute",
+ "type": "attribute",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  {
+   "name": "Input",
+   "type": "text",
+   "default": ""
+  },
+  {
+   "name": "Operation",
+   "type": "choice:Create,Modify,Delete",
+   "default": "Create"
+  },
+  {
+   "name": "Attribute Name",
+   "type": "text",
+   "default": "attr1"
+  },
+  {
+   "name": "Type",
+   "type": "choice:Float,Float2,Float3,Float4",
+   "default": "Float"
+  },
+  {
+   "name": "Value",
+   "type": "text",
+   "default": "1.00"
+  },
+  {
+   "name": "Combine",
+   "type": "choice:Set,Add,Multiply",
+   "default": "Set"
+  },
+  {
+   "name": "Group",
+   "type": "text",
+   "default": ""
+  }
+ ]
+}

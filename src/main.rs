@@ -946,6 +946,191 @@ mod tests {
         assert_eq!(markers.len() % 240, 0);
     }
 
+    /// The Attribute node's three operations over a sphere: Create tags every
+    /// vertex, Modify combines into existing tags (and reaches the Pos/Col
+    /// built-ins), Delete removes them, a Group name restricts the edit to
+    /// tagged vertices, and a bad Value passes the geometry through with an
+    /// error instead of eating it.
+    #[test]
+    fn test_attribute_node_operations() {
+        let templates_root = crate::app::load_fs_tree();
+        let find = |name: &str| {
+            templates_root
+                .children
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("{name} template should be loaded"))
+        };
+        let instance = |template: &FsNode, id: &str, name: &str, params: &[(&str, &str)]| {
+            let mut inst = template.clone();
+            inst.id = id.to_string();
+            inst.name = name.to_string();
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            for (pname, val) in params {
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
+                    val.to_string();
+            }
+            inst
+        };
+        let root_with = |children: Vec<FsNode>| FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children,
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+        let eval = |root: &FsNode, idx: usize| -> (Option<Geometry>, Option<String>) {
+            let mut visited = Vec::new();
+            let mut ocl_err = None;
+            let geom = crate::geometry::generate_single_node_geometry_with_errors(
+                root,
+                &root.children[idx],
+                &mut visited,
+                &mut ocl_err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+            );
+            (geom, ocl_err)
+        };
+
+        let sphere_t = find("Sphere");
+        let attr_t = find("Attribute");
+        let group_t = find("Group");
+
+        // Baseline sphere, for the Col comparison below.
+        let base_root = root_with(vec![instance(sphere_t, "s", "Sphere 1", &[])]);
+        let (base, err) = eval(&base_root, 0);
+        let base = base.expect("baseline sphere");
+        assert!(err.is_none());
+
+        // Create → Modify (multiply) → Delete, as a three-node chain.
+        let root = root_with(vec![
+            instance(sphere_t, "s", "Sphere 1", &[]),
+            instance(attr_t, "a1", "Attr 1", &[
+                ("Input", "Sphere 1"),
+                ("Operation", "Create"),
+                ("Attribute Name", "mass"),
+                ("Type", "Float"),
+                ("Value", "2.50"),
+            ]),
+            instance(attr_t, "a2", "Attr 2", &[
+                ("Input", "Attr 1"),
+                ("Operation", "Modify"),
+                ("Attribute Name", "mass"),
+                ("Combine", "Multiply"),
+                ("Value", "2.00"),
+            ]),
+            instance(attr_t, "a3", "Attr 3", &[
+                ("Input", "Attr 2"),
+                ("Operation", "Delete"),
+                ("Attribute Name", "mass"),
+            ]),
+        ]);
+        let (geom, err) = eval(&root, 1);
+        let geom = geom.expect("Create");
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(geom.vertices.len(), base.vertices.len());
+        assert!(geom.vertices.iter().all(|v| matches!(
+            v.attributes.get("mass"),
+            Some(GAttribute::Float(x)) if (x - 2.5).abs() < 1e-6
+        )));
+        let (geom, err) = eval(&root, 2);
+        let geom = geom.expect("Modify");
+        assert!(err.is_none(), "{err:?}");
+        assert!(geom.vertices.iter().all(|v| matches!(
+            v.attributes.get("mass"),
+            Some(GAttribute::Float(x)) if (x - 5.0).abs() < 1e-6
+        )));
+        let (geom, err) = eval(&root, 3);
+        let geom = geom.expect("Delete");
+        assert!(err.is_none(), "{err:?}");
+        assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
+
+        // Modify the Col built-in: multiply by a broadcast 0.5 halves every
+        // channel relative to the baseline.
+        let root = root_with(vec![
+            instance(sphere_t, "s", "Sphere 1", &[]),
+            instance(attr_t, "a1", "Tint", &[
+                ("Input", "Sphere 1"),
+                ("Operation", "Modify"),
+                ("Attribute Name", "Col"),
+                ("Combine", "Multiply"),
+                ("Value", "0.50"),
+            ]),
+        ]);
+        let (geom, err) = eval(&root, 1);
+        let geom = geom.expect("Col modify");
+        assert!(err.is_none(), "{err:?}");
+        for (v, b) in geom.vertices.iter().zip(&base.vertices) {
+            for k in 0..3 {
+                assert!((v.col[k] - b.col[k] * 0.5).abs() < 1e-5);
+            }
+        }
+
+        // Modify Pos with Add displaces the geometry upward.
+        let root = root_with(vec![
+            instance(sphere_t, "s", "Sphere 1", &[]),
+            instance(attr_t, "a1", "Lift", &[
+                ("Input", "Sphere 1"),
+                ("Operation", "Modify"),
+                ("Attribute Name", "Pos"),
+                ("Combine", "Add"),
+                ("Value", "0.00:0.10:0.00"),
+            ]),
+        ]);
+        let (geom, err) = eval(&root, 1);
+        let geom = geom.expect("Pos modify");
+        assert!(err.is_none(), "{err:?}");
+        for (v, b) in geom.vertices.iter().zip(&base.vertices) {
+            assert!((v.pos[1] - (b.pos[1] + 0.1)).abs() < 1e-5);
+        }
+
+        // A Group name restricts Create to the tagged vertices.
+        let root = root_with(vec![
+            instance(sphere_t, "s", "Sphere 1", &[]),
+            instance(group_t, "g", "Group 1", &[
+                ("Input", "Sphere 1"),
+                ("Center", "0.00:0.80:0.00"),
+                ("Size", "2.00:0.50:2.00"),
+            ]),
+            instance(attr_t, "a1", "Attr 1", &[
+                ("Input", "Group 1"),
+                ("Operation", "Create"),
+                ("Attribute Name", "mass"),
+                ("Value", "1.00"),
+                ("Group", "group1"),
+            ]),
+        ]);
+        let (geom, err) = eval(&root, 2);
+        let geom = geom.expect("grouped Create");
+        assert!(err.is_none(), "{err:?}");
+        let tagged = geom.vertices.iter().filter(|v| v.attributes.contains_key("mass")).count();
+        let members = geom.vertices.iter().filter(|v| v.attributes.contains_key("group:group1")).count();
+        assert!(tagged > 0 && tagged < geom.vertices.len());
+        assert_eq!(tagged, members, "Create must land exactly on the group");
+
+        // A bad Value surfaces an error and passes the geometry through.
+        let root = root_with(vec![
+            instance(sphere_t, "s", "Sphere 1", &[]),
+            instance(attr_t, "a1", "Attr 1", &[
+                ("Input", "Sphere 1"),
+                ("Operation", "Create"),
+                ("Attribute Name", "mass"),
+                ("Value", "abc"),
+            ]),
+        ]);
+        let (geom, err) = eval(&root, 1);
+        let geom = geom.expect("bad Value still passes geometry through");
+        assert!(err.is_some(), "bad Value must surface an error");
+        assert_eq!(geom.vertices.len(), base.vertices.len());
+        assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
+    }
+
     /// The Plane template mirrors the Sphere subnet (an opencl node feeding an
     /// output node); its kernel generates a divs x divs grid on XZ at y = 0,
     /// with the Size param as the side length.

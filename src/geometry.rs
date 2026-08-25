@@ -486,6 +486,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_scatter_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("group") {
         resolve_group_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("attribute") {
+        resolve_attribute_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("opencl") {
         resolve_opencl_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("simnet") {
@@ -671,6 +673,177 @@ pub fn resolve_group_geometry_with_errors(
                 }
             }
         }
+    }
+    Some(geom)
+}
+
+/// The Attribute node: pass the input geometry through, running one
+/// attribute edit over it. Operation picks the edit —
+///
+/// - **Create** inserts `Attribute Name` on every affected vertex as the
+///   chosen Type parsed from Value, overwriting an existing tag.
+/// - **Modify** combines Value into vertices that already carry the
+///   attribute (Combine = Set / Add / Multiply, componentwise). The
+///   built-ins `Pos` and `Col` are reachable by name here (Float3), so the
+///   node can displace or tint geometry; they cannot be created or deleted.
+/// - **Delete** removes the attribute.
+///
+/// Value splits on `:`/`,`/space like every vector param; a single-component
+/// Value broadcasts across wider types (`0.5` scales a Float3 uniformly). A
+/// non-empty Group name restricts every operation to the vertices a Group
+/// node tagged `group:<name>`, composing the two nodes. Errors (bad Value,
+/// component mismatch, editing a built-in) surface on the status line and
+/// pass the geometry through unchanged.
+pub fn resolve_attribute_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Geometry> {
+    // No visited guard here: `generate_single_node_geometry_with_errors`
+    // pushes the target's id before dispatching to this resolver, so a local
+    // `visited.contains` check would see it and refuse every call (the trap
+    // that broke this node's first draft).
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let name = node_param_str(target, "Attribute Name", "attr1").trim().to_string();
+    if name.is_empty() {
+        return Some(geom);
+    }
+    let op = node_param_str(target, "Operation", "Create").to_lowercase();
+    let combine_mode = node_param_str(target, "Combine", "Set").to_lowercase();
+    let builtin = name.eq_ignore_ascii_case("Pos") || name.eq_ignore_ascii_case("Col");
+
+    let mut fail = String::new();
+    let group = node_param_str(target, "Group", "");
+    let group_attr = {
+        let g = group.trim();
+        (!g.is_empty()).then(|| format!("group:{}", g))
+    };
+    let affected =
+        |v: &GVertex| group_attr.as_ref().map_or(true, |ga| v.attributes.contains_key(ga));
+
+    // Value, as raw components. Delete never reads it; Create/Modify reject
+    // the edit outright when any component fails to parse.
+    let value_str = node_param_str(target, "Value", "");
+    let raw: Vec<&str> = value_str
+        .split(|c| c == ':' || c == ',' || c == ' ')
+        .filter(|p| !p.is_empty())
+        .collect();
+    let comps: Vec<f32> = raw.iter().filter_map(|p| p.parse::<f32>().ok()).collect();
+    let value_ok = !comps.is_empty() && comps.len() == raw.len();
+    // Value resized to an attribute's width: exact match passes through, a
+    // single component broadcasts, anything else is a mismatch.
+    let fit = |n: usize| -> Option<Vec<f32>> {
+        if comps.len() == n {
+            Some(comps.clone())
+        } else if comps.len() == 1 {
+            Some(vec![comps[0]; n])
+        } else {
+            None
+        }
+    };
+    let combine = |dst: &mut [f32], src: &[f32]| {
+        for (d, s) in dst.iter_mut().zip(src) {
+            match combine_mode.as_str() {
+                "add" => *d += s,
+                "multiply" => *d *= s,
+                _ => *d = *s,
+            }
+        }
+    };
+
+    match op.as_str() {
+        "delete" => {
+            if builtin {
+                fail = format!("'{}' is built-in and cannot be deleted", name);
+            } else {
+                for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
+                    v.attributes.remove(&name);
+                }
+            }
+        }
+        "modify" => {
+            if !value_ok {
+                fail = format!("Value '{}' does not parse as numbers", value_str);
+            } else if builtin {
+                match fit(3) {
+                    Some(src) => {
+                        let tint_col = name.eq_ignore_ascii_case("Col");
+                        for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
+                            if tint_col {
+                                combine(&mut v.col, &src);
+                            } else {
+                                combine(&mut v.pos, &src);
+                            }
+                        }
+                    }
+                    None => fail = format!("Value '{}' does not fit Float3 '{}'", value_str, name),
+                }
+            } else {
+                for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
+                    let Some(existing) = v.attributes.get_mut(&name) else { continue };
+                    let src = match existing {
+                        GAttribute::Float(_) => fit(1),
+                        GAttribute::Float2(_) => fit(2),
+                        GAttribute::Float3(_) => fit(3),
+                        GAttribute::Float4(_) => fit(4),
+                    };
+                    let Some(src) = src else {
+                        fail = format!("Value '{}' does not fit '{}'", value_str, name);
+                        break;
+                    };
+                    match existing {
+                        GAttribute::Float(x) => combine(std::slice::from_mut(x), &src),
+                        GAttribute::Float2(x) => combine(x, &src),
+                        GAttribute::Float3(x) => combine(x, &src),
+                        GAttribute::Float4(x) => combine(x, &src),
+                    }
+                }
+            }
+        }
+        // Create (the default).
+        _ => {
+            if builtin {
+                fail = format!("'{}' is built-in and cannot be created", name);
+            } else if !value_ok {
+                fail = format!("Value '{}' does not parse as numbers", value_str);
+            } else {
+                let ty = node_param_str(target, "Type", "Float").to_lowercase();
+                let width = match ty.as_str() {
+                    "float2" => 2,
+                    "float3" => 3,
+                    "float4" => 4,
+                    _ => 1,
+                };
+                match fit(width) {
+                    Some(src) => {
+                        let make = || match width {
+                            2 => GAttribute::Float2([src[0], src[1]]),
+                            3 => GAttribute::Float3([src[0], src[1], src[2]]),
+                            4 => GAttribute::Float4([src[0], src[1], src[2], src[3]]),
+                            _ => GAttribute::Float(src[0]),
+                        };
+                        for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
+                            v.attributes.insert(name.clone(), make());
+                        }
+                    }
+                    None => {
+                        fail = format!("Value '{}' does not fit {}", value_str, ty);
+                    }
+                }
+            }
+        }
+    }
+
+    if !fail.is_empty() && ocl_error.is_none() {
+        *ocl_error = Some(format!("Attribute '{}': {}", target.name, fail));
     }
     Some(geom)
 }
@@ -1396,6 +1569,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "output"
         || nt == "scatter"
         || nt == "group"
+        || nt == "attribute"
         || nt == "simnet"
 }
 
@@ -1474,6 +1648,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_group_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("attribute") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_attribute_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(geom);
                 }
             }
