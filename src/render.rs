@@ -856,7 +856,7 @@ impl State {
         // Per-node meta overlays ride the same rebuild: markers and point
         // numbers for nodes whose meta child asks for them.
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
-        let (markers, labels, wires) = {
+        let (markers, labels, wires, normals) = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             collect_meta_overlays(&self.fs_root, self.meta_marker_size, &mut sim)
         };
@@ -864,6 +864,7 @@ impl State {
         self.meta_marker_verts = markers;
         self.meta_number_labels = labels;
         self.meta_wire_verts = wires;
+        self.meta_normal_verts = normals;
         self.meta_points_dirty = true;
     }
 
@@ -899,10 +900,16 @@ pub(crate) fn collect_meta_overlays(
     root: &FsNode,
     point_size: f32,
     sim: &mut crate::geometry::EvalSim,
-) -> (Vec<crate::geometry::Vertex3D>, Vec<([f32; 3], u32)>, Vec<crate::geometry::Vertex3D>) {
+) -> (
+    Vec<crate::geometry::Vertex3D>,
+    Vec<([f32; 3], u32)>,
+    Vec<crate::geometry::Vertex3D>,
+    Vec<crate::geometry::Vertex3D>,
+) {
     let mut markers = Vec::new();
     let mut labels = Vec::new();
     let mut wires = Vec::new();
+    let mut normals = Vec::new();
     fn visit(
         root: &FsNode,
         node: &FsNode,
@@ -911,13 +918,15 @@ pub(crate) fn collect_meta_overlays(
         markers: &mut Vec<crate::geometry::Vertex3D>,
         labels: &mut Vec<([f32; 3], u32)>,
         wires: &mut Vec<crate::geometry::Vertex3D>,
+        normals: &mut Vec<crate::geometry::Vertex3D>,
         sim: &mut crate::geometry::EvalSim,
     ) {
         let is_visible = parent_visible && node.geometry_visible;
         let want_markers = is_visible && crate::app::meta_pref(node, "Point Markers");
         let want_numbers = is_visible && crate::app::meta_pref(node, "Point Numbers");
         let want_wires = is_visible && crate::app::meta_pref(node, "Wireframe");
-        if want_markers || want_numbers || want_wires {
+        let want_normals = is_visible && crate::app::meta_pref(node, "Point Normals");
+        if want_markers || want_numbers || want_wires || want_normals {
             let mut visited = Vec::new();
             let mut err = None;
             if let Some(geom) = crate::geometry::generate_single_node_geometry_with_errors(
@@ -950,6 +959,47 @@ pub(crate) fn collect_meta_overlays(
                         cce_ui::colors::to_linear_rgb([0.85, 0.85, 1.0]),
                     ));
                 }
+                if want_normals {
+                    // Smooth vertex normals from topology: per distinct
+                    // position, the normalized sum of touching triangles'
+                    // face normals. On this repo's meshes cross(B-A, C-A)
+                    // points INWARD (see the node-template kernel notes), so
+                    // it is negated for outward whiskers. The kernel outputs'
+                    // Norm attribute is a default up-vector — useless here.
+                    use glam::Vec3;
+                    let quant = |p: &[f32; 3]| {
+                        (
+                            (p[0] * 1000.0).round() as i32,
+                            (p[1] * 1000.0).round() as i32,
+                            (p[2] * 1000.0).round() as i32,
+                        )
+                    };
+                    let mut acc: std::collections::HashMap<(i32, i32, i32), ([f32; 3], Vec3)> =
+                        std::collections::HashMap::new();
+                    for tri in geom.vertices.chunks_exact(3) {
+                        let a = Vec3::from_array(tri[0].pos);
+                        let b = Vec3::from_array(tri[1].pos);
+                        let c = Vec3::from_array(tri[2].pos);
+                        let n = -(b - a).cross(c - a);
+                        if n.length_squared() <= 1e-12 {
+                            continue;
+                        }
+                        for v in tri {
+                            acc.entry(quant(&v.pos)).or_insert((v.pos, Vec3::ZERO)).1 += n;
+                        }
+                    }
+                    let len = point_size * 4.0;
+                    let color = cce_ui::colors::to_linear_rgb([0.45, 0.8, 1.0]);
+                    for (pos, sum) in acc.values() {
+                        let n = sum.normalize_or_zero();
+                        if n == Vec3::ZERO {
+                            continue;
+                        }
+                        let tip = Vec3::from_array(*pos) + n * len;
+                        normals.push(crate::geometry::Vertex3D { position: *pos, color });
+                        normals.push(crate::geometry::Vertex3D { position: tip.to_array(), color });
+                    }
+                }
                 if want_numbers {
                     let mut seen = std::collections::HashSet::new();
                     for (i, v) in geom.vertices.iter().enumerate() {
@@ -966,11 +1016,11 @@ pub(crate) fn collect_meta_overlays(
             }
         }
         for c in &node.children {
-            visit(root, c, is_visible, point_size, markers, labels, wires, sim);
+            visit(root, c, is_visible, point_size, markers, labels, wires, normals, sim);
         }
     }
     for c in &root.children {
-        visit(root, c, true, point_size, &mut markers, &mut labels, &mut wires, sim);
+        visit(root, c, true, point_size, &mut markers, &mut labels, &mut wires, &mut normals, sim);
     }
     // A dense mesh can label tens of thousands of points; the text pass is
     // per-frame, so cap it rather than melt the frame rate.
@@ -978,5 +1028,5 @@ pub(crate) fn collect_meta_overlays(
     if labels.len() > MAX_LABELS {
         labels.truncate(MAX_LABELS);
     }
-    (markers, labels, wires)
+    (markers, labels, wires, normals)
 }

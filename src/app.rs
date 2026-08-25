@@ -327,9 +327,12 @@ pub fn ensure_meta_on(node: &mut FsNode) {
             });
         }
         let meta = node.children.iter_mut().find(|c| c.node_type == "meta").unwrap();
-        for (name, default) in
-            [("Point Markers", "false"), ("Point Numbers", "false"), ("Wireframe", "false")]
-        {
+        for (name, default) in [
+            ("Point Markers", "false"),
+            ("Point Numbers", "false"),
+            ("Point Normals", "false"),
+            ("Wireframe", "false"),
+        ] {
             if !meta.params.iter().any(|p| p.name == name) {
                 meta.params.push(ParamDef {
                     name: name.to_string(),
@@ -809,6 +812,8 @@ pub struct SceneMeshes {
     pub meta_points: cce_ui::vk::MeshId,
     /// Per-node meta "Wireframe" overlay (LINE_LIST edge pairs).
     pub meta_wires: cce_ui::vk::MeshId,
+    /// Per-node meta "Point Normals" overlay (LINE_LIST whiskers).
+    pub meta_normals: cce_ui::vk::MeshId,
 }
 
 /// A left-press on the detached circular window's chrome that becomes an
@@ -1083,6 +1088,11 @@ pub struct State {
     /// triangles, drawn as a wire pass over the scene fill.
     pub meta_wire_verts: Vec<Vertex3D>,
     pub meta_wire_count: u32,
+    /// Per-node meta "Point Normals": LINE_LIST whiskers from each distinct
+    /// point along its smooth vertex normal (computed from topology — the
+    /// kernel outputs carry only a default up-normal attribute).
+    pub meta_normal_verts: Vec<Vertex3D>,
+    pub meta_normal_count: u32,
     /// World-unit radius of the meta "Point Markers" overlay — the Guides
     /// subnet's "Point Marker Size" control (stored there in thousandths).
     pub meta_marker_size: f32,
@@ -3265,6 +3275,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             meta_number_labels: Vec::new(),
             meta_wire_verts: Vec::new(),
             meta_wire_count: 0,
+            meta_normal_verts: Vec::new(),
+            meta_normal_count: 0,
             meta_marker_size: 0.02,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
@@ -5823,6 +5835,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.meta_point_count = self.meta_marker_verts.len() as u32;
             renderer.update_mesh(meshes.meta_wires, bytemuck::cast_slice(&self.meta_wire_verts));
             self.meta_wire_count = self.meta_wire_verts.len() as u32;
+            renderer
+                .update_mesh(meshes.meta_normals, bytemuck::cast_slice(&self.meta_normal_verts));
+            self.meta_normal_count = self.meta_normal_verts.len() as u32;
             self.viewport_dirty = true;
         }
     }
@@ -5850,6 +5865,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             group_points: renderer.create_mesh(&[]),
             meta_points: renderer.create_mesh(&[]),
             meta_wires: renderer.create_mesh(&[]),
+            meta_normals: renderer.create_mesh(&[]),
         });
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush.
@@ -6056,6 +6072,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         // to the flagged nodes' edges, in geometry colors.
                         if self.meta_wire_count > 0 {
                             draws.push(SceneDraw { mesh: meshes.meta_wires, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: self.wire_width, wire_base_width: 0.0 });
+                        }
+                        // Per-node meta Point Normals: thin cyan whiskers,
+                        // width deliberately fixed (a chunky Wire Width is a
+                        // wireframe styling choice, not a normals one).
+                        if self.meta_normal_count > 0 {
+                            draws.push(SceneDraw { mesh: meshes.meta_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
