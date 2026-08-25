@@ -1131,6 +1131,70 @@ mod tests {
         assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
     }
 
+    /// The Plane template's construction controls: Rows/Columns set the grid
+    /// tessellation (vertex count = rows * columns * 6 — coverage the
+    /// long-standing spinboxes never had), and the Center X/Y/Z channels
+    /// place the plane like the Sphere's do.
+    #[test]
+    fn test_plane_construction_controls() {
+        let templates_root = crate::app::load_fs_tree();
+        let plane_t = templates_root.children.iter().find(|t| t.name == "Plane").unwrap();
+        let build = |params: &[(&str, &str)]| {
+            let mut inst = plane_t.clone();
+            inst.id = "p".to_string();
+            inst.name = "Plane 1".to_string();
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            for (pname, val) in params {
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
+                    val.to_string();
+            }
+            let root = FsNode {
+                id: "root".to_string(),
+                name: "root".to_string(),
+                node_type: "node".to_string(),
+                children: vec![inst],
+                params: vec![],
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 0,
+                outputs: 0,
+            };
+            let mut visited = Vec::new();
+            let mut err = None;
+            let mut cache = crate::geometry::SimCache::default();
+            let geom = crate::geometry::generate_single_node_geometry_with_errors(
+                &root,
+                &root.children[0],
+                &mut visited,
+                &mut err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
+            ).expect("plane generation failed");
+            assert!(err.is_none(), "{err:?}");
+            geom
+        };
+
+        // Defaults: a 16x16 grid at the origin, flat on y = 0.
+        let base = build(&[]);
+        assert_eq!(base.vertices.len(), 16 * 16 * 6);
+        assert!(base.vertices.iter().all(|v| v.pos[1].abs() < 1e-6));
+
+        // Resolution: 3 columns x 2 rows.
+        assert_eq!(build(&[("Rows", "2"), ("Columns", "3")]).vertices.len(), 3 * 2 * 6);
+
+        // Center: lifts to y = 0.3 and shifts x by 1 (span [0.5, 1.5]).
+        let moved = build(&[("Center X", "1.0"), ("Center Y", "0.3")]);
+        let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
+        for v in &moved.vertices {
+            assert!((v.pos[1] - 0.3).abs() < 1e-5);
+            min_x = min_x.min(v.pos[0]);
+            max_x = max_x.max(v.pos[0]);
+        }
+        assert!((min_x - 0.5).abs() < 0.01, "min x {min_x}");
+        assert!((max_x - 1.5).abs() < 0.01, "max x {max_x}");
+    }
+
     /// The loader's template merge: saved instances gain params their
     /// template grew after the save (values they already hold are kept), a
     /// subnet instance's kernel refreshes to the template's (so the new
