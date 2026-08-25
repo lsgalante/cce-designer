@@ -10,7 +10,7 @@ use std::path::Path;
 
 use cce_ui::widget::WidgetHost;
 use crate::shortcut::Action;
-use crate::app::{State, CustomEvent, McpAction, TouchPhase, get_next_visible_pane, Project, ProjectViewState, ParamDef, param_display};
+use crate::app::{State, CustomEvent, McpAction, TouchPhase, get_next_visible_pane, Project, ProjectViewState, ParamDef};
 use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, PARAM_IDX, WIDGET_COUNT};
 
 #[derive(Debug, Clone, Copy)]
@@ -544,18 +544,9 @@ impl State {
 
                 state.sync_nodes();
 
-                // Sync Parameters pane with selected node
-                let params = if !state.is_detached_network {
-                    state.graph().selected_node().and_then(|sel_idx| {
-                        let dir = state.current_dir();
-                        if sel_idx < dir.children.len() {
-                            Some(param_display(&dir.children[sel_idx].params))
-                        } else { None }
-                    }).unwrap_or_default()
-                } else {
-                    vec![]
-                };
-                state.param_mut().set_display_params(&params);
+                // Sync Parameters pane with selected node — through the one
+                // pane-sync path, so textpick rows survive this rebuild.
+                state.sync_parameters_pane();
 
             }
 

@@ -1099,6 +1099,11 @@ pub struct State {
     /// sRGB color of the meta "Point Markers" overlay — the Guides subnet's
     /// "Point Marker Color" control (stored there as hex, like Grid Color).
     pub meta_marker_color: [f32; 3],
+    /// The param pane's completion lists — (input node name, geometry
+    /// version) → (group names, attribute names) read off that input's
+    /// evaluated geometry, feeding the textpick rows on group/attribute
+    /// params. One entry: the selected node's input.
+    pub pick_cache: Option<((String, u64), (Vec<String>, Vec<String>))>,
     /// The raster scene's model-view-projection and the viewport pane rect in
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
@@ -2075,7 +2080,98 @@ impl State {
         } else {
             vec![]
         };
+        let params = self.add_pick_lists(params);
         self.param_mut().set_display_params(&params);
+    }
+
+    /// Upgrade a selected group/attribute node's group- and attribute-name
+    /// text rows to `textpick` rows carrying the candidates read off the
+    /// node's INPUT geometry (the Houdini attribute/group chooser). Rows stay
+    /// plain text when there is no input, evaluation fails, or the list is
+    /// empty — the picker degrades to nothing rather than an empty menu.
+    fn add_pick_lists(
+        &mut self,
+        mut params: Vec<(String, String, String)>,
+    ) -> Vec<(String, String, String)> {
+        let (node_type, input_name) = {
+            if self.is_detached_network {
+                return params;
+            }
+            let Some(slot) = self.graph().selected_node() else { return params };
+            let dir = self.current_dir();
+            let Some(node) = dir.children.get(slot) else { return params };
+            let nt = node.node_type.to_lowercase();
+            if nt != "attribute" && nt != "group" {
+                return params;
+            }
+            (nt, node_param_str(node, "Input", ""))
+        };
+        if input_name.is_empty() {
+            return params;
+        }
+        let (groups, attrs) = self.input_pick_lists(&input_name);
+        for row in params.iter_mut() {
+            let list = match (node_type.as_str(), row.0.as_str()) {
+                ("attribute", "Attribute Name") => &attrs,
+                ("attribute", "Group") => &groups,
+                ("group", "Group Name") => &groups,
+                _ => continue,
+            };
+            if row.2 == "text" && !list.is_empty() {
+                row.2 = format!("textpick:{}", list.join(","));
+            }
+        }
+        params
+    }
+
+    /// The (groups, attributes) present on `input_name`'s evaluated geometry,
+    /// cached on (name, geometry version). Attribute names get the Pos/Col
+    /// built-ins appended (the Attribute node can Modify them); names carrying
+    /// a comma are dropped — they cannot ride the type spec-string.
+    fn input_pick_lists(&mut self, input_name: &str) -> (Vec<String>, Vec<String>) {
+        let key = (input_name.to_string(), self.rt_geometry_version);
+        if let Some((k, lists)) = &self.pick_cache {
+            if *k == key {
+                return lists.clone();
+            }
+        }
+        let (frame, start) = (self.sim_frame(), self.sim_start_frame());
+        let mut groups = std::collections::BTreeSet::new();
+        let mut attrs = std::collections::BTreeSet::new();
+        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        {
+            let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
+            if let Some(input_node) = find_node_by_name(&self.fs_root, input_name) {
+                let mut visited = Vec::new();
+                let mut err = None;
+                if let Some(geom) = generate_single_node_geometry_with_errors(
+                    &self.fs_root,
+                    input_node,
+                    &mut visited,
+                    &mut err,
+                    &mut sim,
+                ) {
+                    for v in &geom.vertices {
+                        for k in v.attributes.keys() {
+                            if let Some(g) = k.strip_prefix("group:") {
+                                if !g.contains(',') {
+                                    groups.insert(g.to_string());
+                                }
+                            } else if !k.contains(',') {
+                                attrs.insert(k.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.sim_cache = sim_cache;
+        let mut attrs: Vec<String> = attrs.into_iter().collect();
+        attrs.push("Pos".to_string());
+        attrs.push("Col".to_string());
+        let lists = (groups.into_iter().collect(), attrs);
+        self.pick_cache = Some((key, lists.clone()));
+        lists
     }
 
     pub fn current_path_names(&self) -> Vec<String> {
@@ -2652,17 +2748,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 p.default = format!("{:.2}:{:.2}:{:.2}", rx, ry, rz);
 
                 self.sync_nodes();
-                let params = if !self.is_detached_network {
-                    self.graph().selected_node().and_then(|sel_idx| {
-                        let dir = self.current_dir();
-                        if sel_idx < dir.children.len() {
-                            Some(param_display(&dir.children[sel_idx].params))
-                        } else { None }
-                    }).unwrap_or_default()
-                } else {
-                    vec![]
-                };
-                self.param_mut().set_display_params(&params);
+                // Through the one pane-sync path, so the pick-list upgrade
+                // (textpick rows) survives this rebuild.
+                self.sync_parameters_pane();
 
                 return true;
             }
@@ -2680,17 +2768,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             if let Some(p) = node.params.iter_mut().find(|p| p.name == "Rotation") {
                 p.default = "0.00:0.00:0.00".to_string();
                 self.sync_nodes();
-                let params = if !self.is_detached_network {
-                    self.graph().selected_node().and_then(|sel_idx| {
-                        let dir = self.current_dir();
-                        if sel_idx < dir.children.len() {
-                            Some(param_display(&dir.children[sel_idx].params))
-                        } else { None }
-                    }).unwrap_or_default()
-                } else {
-                    vec![]
-                };
-                self.param_mut().set_display_params(&params);
+                // Through the one pane-sync path, so the pick-list upgrade
+                // (textpick rows) survives this rebuild.
+                self.sync_parameters_pane();
                 return true;
             }
         }
@@ -3282,6 +3362,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             meta_normal_count: 0,
             meta_marker_size: 0.02,
             meta_marker_color: [0.85, 0.85, 1.0],
+            pick_cache: None,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             last_viewport_rt_mode: false,

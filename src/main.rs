@@ -1166,6 +1166,69 @@ mod tests {
         assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
     }
 
+    /// The param pane's attribute/group pickers: selecting an Attribute node
+    /// upgrades its name/group text rows to textpick rows whose candidates
+    /// are read off the INPUT geometry (groups from group: tags, attributes
+    /// plus the Pos/Col built-ins); a Group node with a group-less input
+    /// keeps a plain text row (no empty menu).
+    #[test]
+    fn test_param_pane_pick_lists() {
+        let templates_root = crate::app::load_fs_tree();
+        let find = |name: &str| {
+            templates_root.children.iter().find(|t| t.name == name).unwrap()
+        };
+        let instance = |template: &FsNode, id: &str, name: &str, params: &[(&str, &str)]| {
+            let mut inst = template.clone();
+            inst.id = id.to_string();
+            inst.name = name.to_string();
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            for (pname, val) in params {
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
+                    val.to_string();
+            }
+            inst
+        };
+
+        let mut state = State::new(false);
+        state.fs_root.children = vec![
+            instance(find("Sphere"), "s", "Sphere 1", &[]),
+            instance(find("Group"), "g", "Group 1", &[
+                ("Input", "Sphere 1"),
+                ("Center", "0.00:0.80:0.00"),
+                ("Size", "2.00:0.50:2.00"),
+            ]),
+            instance(find("Attribute"), "a", "Attr 1", &[("Input", "Group 1")]),
+        ];
+        state.sync_nodes();
+
+        // The Attribute node: attrs from the input (+Pos/Col), groups from
+        // the Group node it consumes.
+        state.graph_mut().set_selected_node(Some(2));
+        state.sync_parameters_pane();
+        let rows = state.param_mut().node_params();
+        let row = |name: &str| {
+            rows.iter().find(|r| r.0 == name).unwrap_or_else(|| panic!("row {name}")).2.clone()
+        };
+        let attr_ty = row("Attribute Name");
+        assert!(attr_ty.starts_with("textpick:"), "got {attr_ty}");
+        for expected in ["Norm", "UV", "Pos", "Col"] {
+            assert!(attr_ty.contains(expected), "{expected} missing from {attr_ty}");
+        }
+        assert_eq!(row("Group"), "textpick:group1");
+        // The Input row stays plain text.
+        assert_eq!(row("Input"), "text");
+
+        // The Group node's own Group Name: its input (the sphere) carries no
+        // groups, so the row degrades to plain text.
+        state.graph_mut().set_selected_node(Some(1));
+        state.sync_parameters_pane();
+        let rows = state.param_mut().node_params();
+        let gn = rows.iter().find(|r| r.0 == "Group Name").unwrap();
+        assert_eq!(gn.2, "text");
+    }
+
     /// The per-node meta (preferences) child: ensure adds it to every
     /// geometry-producing node (idempotently, restoring stripped params),
     /// leaves cameras and the Session tree alone, evaluation ignores it,
