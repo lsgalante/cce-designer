@@ -38,24 +38,17 @@ impl State {
     /// Interior corners keep the widget-scale nominal plate radius, matching
     /// the squircles of the sibling panes around them.
     fn pane_plate_radii(&self, x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
-        let nominal = cce_ui::layout::plate_corner_radius();
-        // window_corner_radius, NOT the app-merged backplate radius: the
-        // designer's config.kdl overrides the backplate radius for its own
-        // plates, but the compositor clips the window (and the desktop grid
-        // draws its cells) from the SHARED value — window-corner arcs must
-        // follow the silhouette, not the app styling.
-        let window_r = cce_ui::layout::window_corner_radius() * cce_ui::layout::corner_span_factor();
-        let e = 1.5;
-        let left = x <= e;
-        let top = y <= e;
-        let right = x + w >= self.width - e;
-        let bottom = y + h >= self.height - e;
-        (
-            if top && left { window_r } else { nominal },
-            if top && right { window_r } else { nominal },
-            if bottom && right { window_r } else { nominal },
-            if bottom && left { window_r } else { nominal },
-        )
+        // Delegates to the toolkit since RFC Phase 7b moved this math into
+        // PlateSpec: window-corner arcs follow the SHARED silhouette curve
+        // (never the app-merged plate override), interior corners the nominal
+        // plate radius. This function was the reference implementation.
+        use cce_ui::scene::paint::PlateSpec;
+        let flags = PlateSpec::window_corner_flags(
+            cce_ui::scene::layout::Rect { x, y, width: w, height: h },
+            self.width,
+            self.height,
+        );
+        PlateSpec::radii_for(flags)
     }
 
     /// The rounded-rect clip (plate rect + corner radius) a widget's content must stay
