@@ -338,7 +338,7 @@ fn main() {
     let surface_ptr = wl_surface.id().as_ptr() as *mut std::ffi::c_void;
     let pw = (app.logical_size.0 as f64 * app.scale) as u32;
     let ph = (app.logical_size.1 as f64 * app.scale) as u32;
-    let radius = cce_ui::color::backplate_corner_radius() * app.scale as f32;
+    let radius = cce_ui::color::root_plate_corner_radius() * app.scale as f32;
     app.renderer =
         Some(unsafe { VkRenderer::new(display_ptr, surface_ptr, pw, ph, radius) });
     log::info!("vk-smoke: renderer up at {pw}x{ph} (scale {})", app.scale);
