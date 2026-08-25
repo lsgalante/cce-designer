@@ -675,6 +675,19 @@ pub fn resolve_group_geometry_with_errors(
     Some(geom)
 }
 
+/// Positions of the vertices a Group node tagged into `group:<name>` — the
+/// source data for the selected-Group viewport markers. Duplicate positions
+/// (the triangle soup repeats shared corners) are left in; `points_vertices`
+/// dedupes by quantized position.
+pub fn group_member_positions(geom: &Geometry, group_name: &str) -> Vec<Vertex3D> {
+    let attr = format!("group:{}", group_name.trim());
+    geom.vertices
+        .iter()
+        .filter(|v| v.attributes.contains_key(&attr))
+        .map(|v| Vertex3D { position: v.pos, color: [0.0; 3] })
+        .collect()
+}
+
 struct PrecomputedTriangle {
     v0: Vec3,
     edge1: Vec3,

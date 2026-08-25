@@ -643,6 +643,9 @@ pub struct SceneMeshes {
     pub pivot: cce_ui::vk::MeshId,
     /// The Render node's point display (one octahedron per distinct vertex).
     pub points: cce_ui::vk::MeshId,
+    /// Selected-Group membership markers: while a Group node is selected, one
+    /// marker per vertex it tags, so the selection SHOWS the group.
+    pub group_points: cce_ui::vk::MeshId,
 }
 
 /// A left-press on the detached circular window's chrome that becomes an
@@ -896,6 +899,15 @@ pub struct State {
     pub last_viewport_render_points: bool,
     pub last_viewport_point_size: f32,
     pub last_viewport_point_color: [f32; 3],
+    /// Selected-Group membership markers: marker vertices staged CPU-side by
+    /// `sync_nodes` whenever the selection is a Group node (empty otherwise),
+    /// flushed to `meshes.group_points`; `group_point_vertex_count` gates the
+    /// draw. The key — (node id, params, geometry version, quantized point
+    /// size) — spares the re-evaluation on unrelated `sync_nodes` runs.
+    pub group_point_verts: Vec<Vertex3D>,
+    pub group_points_dirty: bool,
+    pub group_point_vertex_count: u32,
+    pub last_group_points_key: Option<(String, Vec<(String, String)>, u64, i32)>,
     pub last_viewport_rt_mode: bool,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
@@ -2647,6 +2659,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             }
         }
 
+        // Both refresh passes below evaluate against `selected_node`, which
+        // borrows self — so each computes OWNED results here and the mutation
+        // tail applies them once the borrow is dead.
+        let mut spreadsheet_update = None;
         if self.show_spreadsheet && !cache_hit {
             let mut headers = Vec::new();
             let mut rows = Vec::new();
@@ -2666,10 +2682,57 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     rows = r;
                 }
             }
+            spreadsheet_update = Some((headers, rows));
+        }
 
+        // Selected-Group viewport markers: while the selection is a Group
+        // node, evaluate it and stage a marker at every vertex it tags, so
+        // selecting the node SHOWS the group in the viewport — independent of
+        // the Highlight bake and of which node holds the display flag. The
+        // geometry version keeps the key honest against upstream edits (the
+        // scene rebuild bumps it); a non-group selection clears the markers.
+        let group_key = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")).map(|n| {
+            (
+                n.id.clone(),
+                n.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>(),
+                self.rt_geometry_version,
+                (self.point_size * 1000.0).round() as i32,
+            )
+        });
+        let mut group_update = None;
+        if group_key != self.last_group_points_key {
+            let mut marker_verts = Vec::new();
+            if let Some(node) = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")) {
+                let group_name = node_param_str(node, "Group Name", "group1");
+                let mut visited = Vec::new();
+                let mut ocl_error = None;
+                // Throwaway sim cache, as for the spreadsheet above.
+                let mut sim_cache = crate::geometry::SimCache::default();
+                let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
+                if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
+                    let members = crate::geometry::group_member_positions(&geom, &group_name);
+                    // The Highlight bake's warm accent, so the markers and the
+                    // tint read as one feature. Slightly larger than the
+                    // Render node's points so both stay legible together.
+                    marker_verts = crate::geometry::points_vertices(
+                        &members,
+                        self.point_size * 1.25,
+                        cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]),
+                    );
+                }
+            }
+            group_update = Some(marker_verts);
+        }
+
+        if let Some((headers, rows)) = spreadsheet_update {
             self.spreadsheet_mut().set_spreadsheet_data(headers, rows);
             self.last_spreadsheet_node_name = current_name;
             self.last_spreadsheet_node_params = current_params;
+        }
+        if let Some(marker_verts) = group_update {
+            self.group_point_verts = marker_verts;
+            self.group_points_dirty = true;
+            self.last_group_points_key = group_key;
         }
     }
 
@@ -3002,6 +3065,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_viewport_render_points: false,
             last_viewport_point_size: 0.0,
             last_viewport_point_color: [0.0, 0.0, 0.0],
+            group_point_verts: Vec::new(),
+            group_points_dirty: false,
+            group_point_vertex_count: 0,
+            last_group_points_key: None,
             last_viewport_rt_mode: false,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
@@ -5541,6 +5608,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 self.viewport_dirty = true;
             }
         }
+
+        // Selected-Group markers, staged by sync_nodes.
+        if self.group_points_dirty {
+            self.group_points_dirty = false;
+            renderer.update_mesh(meshes.group_points, bytemuck::cast_slice(&self.group_point_verts));
+            self.group_point_vertex_count = self.group_point_verts.len() as u32;
+            self.viewport_dirty = true;
+        }
     }
 
     /// One-time renderer setup (engine `renderer_init` hook): the persistent
@@ -5563,6 +5638,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             origin: renderer.create_mesh(bytemuck::cast_slice(&origin_verts)),
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
             points: renderer.create_mesh(&[]),
+            group_points: renderer.create_mesh(&[]),
         });
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush.
@@ -5717,6 +5793,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                     if self.render_points && self.point_vertex_count > 0 {
                         draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0 });
+                    }
+                    // Selected-Group markers: full-opacity selection feedback,
+                    // deliberately outside the Render node's Opacity.
+                    if self.group_point_vertex_count > 0 {
+                        draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.vertex_count_spheres > 0 {
                         // With wires coming, the fill is pushed back by its

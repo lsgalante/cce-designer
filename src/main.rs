@@ -864,6 +864,88 @@ mod tests {
         assert_eq!(geom2.vertices.len(), 16128);
     }
 
+    /// Group membership → viewport markers: the `group:<name>` tags a Group
+    /// node writes partition the geometry on its box, `group_member_positions`
+    /// reads exactly the tagged vertices back out, and `points_vertices`
+    /// expands them into marker geometry (what the viewport draws while the
+    /// Group node is selected).
+    #[test]
+    fn test_group_member_positions() {
+        let templates_root = crate::app::load_fs_tree();
+        let sphere_template = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
+        let group_template = templates_root
+            .children
+            .iter()
+            .find(|t| t.name == "Group")
+            .expect("Group template should be loaded");
+
+        let mut sphere_instance = sphere_template.clone();
+        sphere_instance.id = "sphere_inst".to_string();
+        sphere_instance.name = "Sphere 1".to_string();
+        for child in &mut sphere_instance.children {
+            child.id = format!("{}_{}", sphere_instance.id, child.name);
+        }
+
+        // Box over the sphere's upper half: the default sphere is radius 0.5
+        // centered at (0, 0.55, 0), so y ∈ [0.55, 1.05] selects the top
+        // hemisphere's vertices.
+        let mut group_instance = group_template.clone();
+        group_instance.id = "group_inst".to_string();
+        group_instance.name = "Group 1".to_string();
+        let set = |inst: &mut FsNode, name: &str, val: &str| {
+            inst.params.iter_mut().find(|p| p.name == name).unwrap().default = val.to_string();
+        };
+        set(&mut group_instance, "Input", "Sphere 1");
+        set(&mut group_instance, "Center", "0.00:0.80:0.00");
+        set(&mut group_instance, "Size", "2.00:0.50:2.00");
+
+        let root = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![sphere_instance, group_instance],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+
+        let mut visited = Vec::new();
+        let mut ocl_err = None;
+        let geom = crate::geometry::generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[1],
+            &mut visited,
+            &mut ocl_err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+        ).expect("Group geometry generation failed");
+        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+
+        let members = crate::geometry::group_member_positions(&geom, "group1");
+        assert!(!members.is_empty(), "the box should tag the upper hemisphere");
+        assert!(members.len() < geom.vertices.len(), "the box must not tag everything");
+        for m in &members {
+            assert!(m.position[1] >= 0.55 - 1e-4, "member below the box: y={}", m.position[1]);
+        }
+        // The tags and the box agree: every untagged vertex is outside it.
+        let tagged: usize = geom.vertices.iter().filter(|v| v.attributes.contains_key("group:group1")).count();
+        assert_eq!(tagged, members.len());
+        for v in &geom.vertices {
+            if !v.attributes.contains_key("group:group1") {
+                assert!(v.pos[1] <= 0.55 + 1e-4, "non-member inside the box: y={}", v.pos[1]);
+            }
+        }
+
+        // A name the node never wrote reads back empty.
+        assert!(crate::geometry::group_member_positions(&geom, "nope").is_empty());
+
+        // Marker expansion: 4x10 lat/lon sphere = 240 vertices per distinct point.
+        let markers = crate::geometry::points_vertices(&members, 0.025, [1.0, 0.78, 0.20]);
+        assert!(!markers.is_empty());
+        assert_eq!(markers.len() % 240, 0);
+    }
+
     /// The Plane template mirrors the Sphere subnet (an opencl node feeding an
     /// output node); its kernel generates a divs x divs grid on XZ at y = 0,
     /// with the Size param as the side length.
