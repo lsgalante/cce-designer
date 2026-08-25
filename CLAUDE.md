@@ -175,6 +175,21 @@ and the graph draws it without a geometry toggle. `State::session_node()` /
 `current_path`, since a first-segment check stopped working the day the
 settings nodes gained a parent.
 
+### The meta node (per-node preferences)
+
+Every geometry-producing node carries a **`meta` child** (node type `meta`) —
+per-node preferences, edited by entering the node and selecting it. Current
+prefs: "Point Markers" and "Point Numbers" (viewport overlays on that node's
+output; numbers project through the cached raster mvp into the 2D text pass,
+`append_meta_point_numbers`). `ensure_meta_on` / `ensure_meta_children`
+(src/app.rs) create it at instantiation and at every project load — the same
+migration pattern as the Session node — and also restore missing pref params,
+so adding a pref is one entry in `ensure_meta_on`'s list plus its consumer.
+`meta_pref(node, name)` is the read. Meta is undeletable (the `delete_node`
+gate alongside `session`), shows no geometry toggle, and is invisible to
+evaluation. Overlay data rebuilds with the scene (`collect_meta_overlays` in
+src/render.rs, walked with the scene's visibility chain).
+
 ### App-written settings: `~/.config/cce/cce-designer/state.kdl`
 
 `default_project` in state.kdl points at the project the main window opens on

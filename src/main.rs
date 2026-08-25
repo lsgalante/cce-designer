@@ -1131,6 +1131,108 @@ mod tests {
         assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
     }
 
+    /// The per-node meta (preferences) child: ensure adds it to every
+    /// geometry-producing node (idempotently, restoring stripped params),
+    /// leaves cameras and the Session tree alone, evaluation ignores it,
+    /// and the overlay walk turns its Point Markers / Point Numbers prefs
+    /// into marker geometry and index labels for visible nodes only.
+    #[test]
+    fn test_meta_node_prefs_and_overlays() {
+        let templates_root = crate::app::load_fs_tree();
+        let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
+        let camera_t = templates_root.children.iter().find(|t| t.name == "Camera").unwrap();
+
+        let mut sphere = sphere_t.clone();
+        sphere.id = "s".to_string();
+        sphere.name = "Sphere 1".to_string();
+        for child in &mut sphere.children {
+            child.id = format!("{}_{}", sphere.id, child.name);
+        }
+        let mut camera = camera_t.clone();
+        camera.id = "cam".to_string();
+        camera.name = "Camera 1".to_string();
+
+        let mut root = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![sphere, camera],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+        crate::app::ensure_meta_children(&mut root);
+
+        // The sphere gains a meta child with both prefs; so do its opencl and
+        // output stages (uniform rule: every geometry-producing node).
+        let s = &root.children[0];
+        let meta = s.children.iter().find(|c| c.node_type == "meta").expect("sphere meta");
+        assert_eq!(
+            meta.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Point Markers", "Point Numbers"]
+        );
+        assert!(meta.params.iter().all(|p| p.default == "false"));
+        let opencl = s.children.iter().find(|c| c.name == "opencl1").unwrap();
+        assert!(opencl.children.iter().any(|c| c.node_type == "meta"));
+        // The camera does not.
+        assert!(!root.children[1].children.iter().any(|c| c.node_type == "meta"));
+
+        // Idempotent, and stripped params come back.
+        let before = serde_json::to_string(&root).unwrap();
+        crate::app::ensure_meta_children(&mut root);
+        assert_eq!(before, serde_json::to_string(&root).unwrap());
+        root.children[0].children.iter_mut().find(|c| c.node_type == "meta").unwrap()
+            .params.retain(|p| p.name != "Point Numbers");
+        crate::app::ensure_meta_children(&mut root);
+        assert!(crate::app::meta_pref(&root.children[0], "Point Numbers") == false);
+        assert!(root.children[0].children.iter().find(|c| c.node_type == "meta").unwrap()
+            .params.iter().any(|p| p.name == "Point Numbers"));
+
+        // Evaluation is unaffected by the meta children.
+        let mut visited = Vec::new();
+        let mut err = None;
+        let mut cache = crate::geometry::SimCache::default();
+        let geom = crate::geometry::generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[0],
+            &mut visited,
+            &mut err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
+        ).expect("sphere with meta evaluates");
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(geom.vertices.len(), 16 * 24 * 6);
+
+        // Overlays: nothing while the prefs are off…
+        let mut cache = crate::geometry::SimCache::default();
+        let (markers, labels) = crate::render::collect_meta_overlays(
+            &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+        assert!(markers.is_empty() && labels.is_empty());
+
+        // …both overlays for the flagged sphere (240 marker verts per
+        // deduped point, labels matching the same dedupe)…
+        {
+            let meta = root.children[0].children.iter_mut()
+                .find(|c| c.node_type == "meta").unwrap();
+            for p in meta.params.iter_mut() { p.default = "true".to_string(); }
+        }
+        assert!(crate::app::meta_pref(&root.children[0], "Point Markers"));
+        let mut cache = crate::geometry::SimCache::default();
+        let (markers, labels) = crate::render::collect_meta_overlays(
+            &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+        assert!(!labels.is_empty() && labels.len() < 16 * 24 * 6);
+        assert_eq!(markers.len(), labels.len() * 240);
+        assert!(labels.iter().any(|(_, i)| *i > 0));
+
+        // …and none once the node's geometry is hidden.
+        root.children[0].geometry_visible = false;
+        let mut cache = crate::geometry::SimCache::default();
+        let (markers, labels) = crate::render::collect_meta_overlays(
+            &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+        assert!(markers.is_empty() && labels.is_empty());
+    }
+
     /// The Plane template's construction controls: Rows/Columns set the grid
     /// tessellation (vertex count = rows * columns * 6 — coverage the
     /// long-standing spinboxes never had), and the Center X/Y/Z channels

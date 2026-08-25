@@ -129,6 +129,7 @@ impl State {
             let content = fs::read_to_string(path)?;
             let mut proj: Project = serde_json::from_str(&content)?;
             crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
+            crate::app::ensure_meta_children(&mut proj.root);
             self.fs_root = proj.root;
             self.ensure_menubar_subnets();
             self.apply_settings_from_menubar_subnets();
@@ -184,6 +185,7 @@ impl State {
         let content = fs::read_to_string(&state_file_path)?;
         let mut proj: Project = serde_json::from_str(&content)?;
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
+        crate::app::ensure_meta_children(&mut proj.root);
         self.fs_root = proj.root;
         self.ensure_menubar_subnets();
         self.apply_settings_from_menubar_subnets();

@@ -171,6 +171,7 @@ impl State {
 
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
+        self.append_meta_point_numbers(&mut pc);
         self.append_popovers(&mut pc);
         self.append_dock_drag_overlay(&mut pc);
         self.append_plate_corners(&mut pc);
@@ -778,6 +779,37 @@ impl State {
         }
     }
 
+    /// The meta "Point Numbers" overlay: each collected (position, index)
+    /// label projects through the raster scene's cached mvp into 2D text,
+    /// clipped to the viewport pane. The mvp cache refreshes whenever the
+    /// camera or pane changes (`stage_frame`), so the labels track orbits;
+    /// a frame staged before the first scene staging simply draws none.
+    fn append_meta_point_numbers(&self, pc: &mut PaintCtx) {
+        if !self.show_viewport || self.meta_number_labels.is_empty() {
+            return;
+        }
+        let Some(mvp) = self.last_scene_mvp else { return };
+        let (vx, vy, vw, vh) = self.last_scene_view_rect;
+        if vw <= 0.0 || vh <= 0.0 {
+            return;
+        }
+        pc.clip(rect(vx, vy, vw, vh), |pc| {
+            for (pos, idx) in &self.meta_number_labels {
+                let clip_pos = mvp * glam::Vec4::new(pos[0], pos[1], pos[2], 1.0);
+                if clip_pos.w <= 0.0 {
+                    continue;
+                }
+                let ndc = clip_pos / clip_pos.w;
+                if ndc.x.abs() > 1.02 || ndc.y.abs() > 1.02 {
+                    continue;
+                }
+                let sx = vx + (ndc.x * 0.5 + 0.5) * vw;
+                let sy = vy + (0.5 - ndc.y * 0.5) * vh;
+                pc.text(idx.to_string(), sx + 4.0, sy - 6.0, 10.0, [0xee, 0xee, 0xff]);
+            }
+        });
+    }
+
     pub(crate) fn rebuild_scene_geometry(&mut self) {
         let mut ocl_error = None;
         // The sim cache lives on State so playing forward steps each simnet once
@@ -820,6 +852,18 @@ impl State {
         self.spheres_dirty = true;
         self.rt_geometry_version += 1;
         self.viewport_dirty = true;
+
+        // Per-node meta overlays ride the same rebuild: markers and point
+        // numbers for nodes whose meta child asks for them.
+        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let (markers, labels) = {
+            let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
+            collect_meta_overlays(&self.fs_root, self.point_size, &mut sim)
+        };
+        self.sim_cache = sim_cache;
+        self.meta_marker_verts = markers;
+        self.meta_number_labels = labels;
+        self.meta_points_dirty = true;
     }
 
     /// The path tracer's scene: the sphere geometry (and the reference cube if
@@ -842,4 +886,78 @@ impl State {
             self.slots.status.set_text(text);
         }
     }
+}
+
+/// The per-node meta (preferences) overlay walk: for every node whose `meta`
+/// child asks for Point Markers or Point Numbers — and whose geometry is
+/// visible through the same parent chain the scene walk uses — evaluate the
+/// node and collect marker geometry and/or (position, vertex index) labels.
+/// Positions dedupe the triangle soup's repeats; a label keeps the FIRST
+/// index at its position, matching the spreadsheet's vertex numbering.
+pub(crate) fn collect_meta_overlays(
+    root: &FsNode,
+    point_size: f32,
+    sim: &mut crate::geometry::EvalSim,
+) -> (Vec<crate::geometry::Vertex3D>, Vec<([f32; 3], u32)>) {
+    let mut markers = Vec::new();
+    let mut labels = Vec::new();
+    fn visit(
+        root: &FsNode,
+        node: &FsNode,
+        parent_visible: bool,
+        point_size: f32,
+        markers: &mut Vec<crate::geometry::Vertex3D>,
+        labels: &mut Vec<([f32; 3], u32)>,
+        sim: &mut crate::geometry::EvalSim,
+    ) {
+        let is_visible = parent_visible && node.geometry_visible;
+        let want_markers = is_visible && crate::app::meta_pref(node, "Point Markers");
+        let want_numbers = is_visible && crate::app::meta_pref(node, "Point Numbers");
+        if want_markers || want_numbers {
+            let mut visited = Vec::new();
+            let mut err = None;
+            if let Some(geom) = crate::geometry::generate_single_node_geometry_with_errors(
+                root, node, &mut visited, &mut err, sim,
+            ) {
+                if want_markers {
+                    let src: Vec<crate::geometry::Vertex3D> = geom
+                        .vertices
+                        .iter()
+                        .map(|v| crate::geometry::Vertex3D { position: v.pos, color: [0.0; 3] })
+                        .collect();
+                    markers.extend(crate::geometry::points_vertices(
+                        &src,
+                        point_size,
+                        cce_ui::colors::to_linear_rgb([0.85, 0.85, 1.0]),
+                    ));
+                }
+                if want_numbers {
+                    let mut seen = std::collections::HashSet::new();
+                    for (i, v) in geom.vertices.iter().enumerate() {
+                        let key = (
+                            (v.pos[0] * 1000.0).round() as i32,
+                            (v.pos[1] * 1000.0).round() as i32,
+                            (v.pos[2] * 1000.0).round() as i32,
+                        );
+                        if seen.insert(key) {
+                            labels.push((v.pos, i as u32));
+                        }
+                    }
+                }
+            }
+        }
+        for c in &node.children {
+            visit(root, c, is_visible, point_size, markers, labels, sim);
+        }
+    }
+    for c in &root.children {
+        visit(root, c, true, point_size, &mut markers, &mut labels, sim);
+    }
+    // A dense mesh can label tens of thousands of points; the text pass is
+    // per-frame, so cap it rather than melt the frame rate.
+    const MAX_LABELS: usize = 2000;
+    if labels.len() > MAX_LABELS {
+        labels.truncate(MAX_LABELS);
+    }
+    (markers, labels)
 }

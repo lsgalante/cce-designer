@@ -295,6 +295,77 @@ pub fn flatten_node_templates(root: &FsNode) -> Vec<NodeTemplate> {
     out
 }
 
+/// Whether a node gets a `meta` (per-node preferences) child: every node the
+/// user places that can produce geometry — subnet instances and the native
+/// geometry types. Cameras, settings containers, and meta itself do not.
+fn meta_eligible(node: &FsNode) -> bool {
+    node.node_type.eq_ignore_ascii_case("node")
+        || crate::geometry::is_geometry_node_type(&node.node_type)
+}
+
+/// Ensure `node` (and its subtree) carries the per-node `meta` child where
+/// eligible, and that every existing meta has the full preference set —
+/// the migration path for saved scenes, and the instantiation path for new
+/// nodes. Idempotent; never touches the Session settings tree.
+pub fn ensure_meta_on(node: &mut FsNode) {
+    if node.node_type.eq_ignore_ascii_case("session") || node.node_type.eq_ignore_ascii_case("meta")
+    {
+        return;
+    }
+    if meta_eligible(node) {
+        if !node.children.iter().any(|c| c.node_type == "meta") {
+            node.children.push(FsNode {
+                id: generate_node_id(),
+                name: "meta".to_string(),
+                node_type: "meta".to_string(),
+                children: vec![],
+                params: vec![],
+                geometry_visible: false,
+                position: (0.0, 4.0),
+                inputs: 0,
+                outputs: 0,
+            });
+        }
+        let meta = node.children.iter_mut().find(|c| c.node_type == "meta").unwrap();
+        for (name, default) in [("Point Markers", "false"), ("Point Numbers", "false")] {
+            if !meta.params.iter().any(|p| p.name == name) {
+                meta.params.push(ParamDef {
+                    name: name.to_string(),
+                    label: String::new(),
+                    param_type: "toggle".to_string(),
+                    default: default.to_string(),
+                    options: Vec::new(),
+                    min: None,
+                    max: None,
+                    step: None,
+                });
+            }
+        }
+    }
+    for c in &mut node.children {
+        ensure_meta_on(c);
+    }
+}
+
+/// [`ensure_meta_on`] over every node of a project tree (the root itself is a
+/// container, not a placed node).
+pub fn ensure_meta_children(root: &mut FsNode) {
+    for c in &mut root.children {
+        ensure_meta_on(c);
+    }
+}
+
+/// Read a boolean preference off a node's `meta` child; absent meta or
+/// absent param reads false.
+pub fn meta_pref(node: &FsNode, name: &str) -> bool {
+    node.children
+        .iter()
+        .find(|c| c.node_type == "meta")
+        .and_then(|m| m.params.iter().find(|p| p.name == name))
+        .map(|p| p.default == "true")
+        .unwrap_or(false)
+}
+
 /// Merge template evolution into a loaded project tree, so saved scenes gain
 /// controls added to a template after they were saved. Every deserialized
 /// project routes through this (file load, the detached-window sync reload,
@@ -732,6 +803,8 @@ pub struct SceneMeshes {
     /// Selected-Group membership markers: while a Group node is selected, one
     /// marker per vertex it tags, so the selection SHOWS the group.
     pub group_points: cce_ui::vk::MeshId,
+    /// Per-node meta "Point Markers" overlay.
+    pub meta_points: cce_ui::vk::MeshId,
 }
 
 /// A left-press on the detached circular window's chrome that becomes an
@@ -994,6 +1067,18 @@ pub struct State {
     pub group_points_dirty: bool,
     pub group_point_vertex_count: u32,
     pub last_group_points_key: Option<(String, Vec<(String, String)>, u64, i32)>,
+    /// Per-node meta (preferences) overlays, rebuilt with the scene: marker
+    /// geometry for nodes whose meta asks for Point Markers, and (position,
+    /// vertex index) labels for Point Numbers — the labels project through
+    /// `last_scene_mvp` into 2D text each frame.
+    pub meta_marker_verts: Vec<Vertex3D>,
+    pub meta_points_dirty: bool,
+    pub meta_point_count: u32,
+    pub meta_number_labels: Vec<([f32; 3], u32)>,
+    /// The raster scene's model-view-projection and the viewport pane rect in
+    /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
+    pub last_scene_mvp: Option<Mat4>,
+    pub last_scene_view_rect: (f32, f32, f32, f32),
     pub last_viewport_rt_mode: bool,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
@@ -2181,14 +2266,17 @@ impl State {
             let Some(node) = dir.children.get(slot) else { return };
             let enterable = node.is_enterable();
             (
-                matches!(node.node_type.as_str(), "utility" | "session"),
+                matches!(node.node_type.as_str(), "utility" | "session" | "meta"),
                 node.geometry_visible,
                 enterable,
             )
         };
         let deletable = {
             let dir = self.current_dir();
-            dir.children.get(slot).map(|n| n.node_type != "session").unwrap_or(false)
+            dir.children
+                .get(slot)
+                .map(|n| !matches!(n.node_type.as_str(), "session" | "meta"))
+                .unwrap_or(false)
         };
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<NodeMenuAction> = Vec::new();
@@ -2658,9 +2746,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
     pub fn delete_node(&mut self, slot: usize) -> bool {
         let len = self.current_dir().children.len();
-        // The Session node is permanent: every deletion route (context menu,
-        // Delete key, MCP) funnels through here, so this is the one gate.
-        if slot < len && self.current_dir().children[slot].node_type == "session" {
+        // The Session node is permanent, and so is each node's meta
+        // (preferences) child: every deletion route (context menu, Delete
+        // key, MCP) funnels through here, so this is the one gate.
+        if slot < len
+            && matches!(self.current_dir().children[slot].node_type.as_str(), "session" | "meta")
+        {
             return false;
         }
         if slot < len {
@@ -2859,6 +2950,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             if let Ok(content) = fs::read_to_string(&default_proj_path) {
                 if let Ok(mut proj) = serde_json::from_str::<Project>(&content) {
                     merge_template_defs(&mut proj.root, &node_templates);
+                    ensure_meta_children(&mut proj.root);
                     loaded_project = Some(proj);
                 }
             }
@@ -3156,6 +3248,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             group_points_dirty: false,
             group_point_vertex_count: 0,
             last_group_points_key: None,
+            meta_marker_verts: Vec::new(),
+            meta_points_dirty: false,
+            meta_point_count: 0,
+            meta_number_labels: Vec::new(),
+            last_scene_mvp: None,
+            last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             last_viewport_rt_mode: false,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
@@ -5703,6 +5801,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.group_point_vertex_count = self.group_point_verts.len() as u32;
             self.viewport_dirty = true;
         }
+
+        // Per-node meta markers, staged by rebuild_scene_geometry.
+        if self.meta_points_dirty {
+            self.meta_points_dirty = false;
+            renderer.update_mesh(meshes.meta_points, bytemuck::cast_slice(&self.meta_marker_verts));
+            self.meta_point_count = self.meta_marker_verts.len() as u32;
+            self.viewport_dirty = true;
+        }
     }
 
     /// One-time renderer setup (engine `renderer_init` hook): the persistent
@@ -5726,6 +5832,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
             points: renderer.create_mesh(&[]),
             group_points: renderer.create_mesh(&[]),
+            meta_points: renderer.create_mesh(&[]),
         });
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush.
@@ -5849,7 +5956,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     if !rt_mode {
                     let aspect = cw as f32 / ch as f32;
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
-                    let mvp = (proj * view_mat * model).to_cols_array_2d();
+                    let mvp_mat = proj * view_mat * model;
+                    let mvp = mvp_mat.to_cols_array_2d();
+                    // Cache for the 2D pass's 3D-overlay projection (point
+                    // numbers): the matrix, and the pane rect back in logical
+                    // px. Refreshed exactly when the camera/pane changes.
+                    let s = self.scale as f32;
+                    self.last_scene_mvp = Some(mvp_mat);
+                    self.last_scene_view_rect =
+                        (sx as f32 / s, sy as f32 / s, cw as f32 / s, ch as f32 / s);
 
                     // The camera-pivot marker is WORLD-FIXED at the pivot point, like
                     // the origin gizmo. Its old yaw rotation existed to keep it glued
@@ -5885,6 +6000,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     // deliberately outside the Render node's Opacity.
                     if self.group_point_vertex_count > 0 {
                         draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                    }
+                    // Per-node meta "Point Markers", same full-opacity tier.
+                    if self.meta_point_count > 0 {
+                        draws.push(SceneDraw { mesh: meshes.meta_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.vertex_count_spheres > 0 {
                         // With wires coming, the fill is pushed back by its

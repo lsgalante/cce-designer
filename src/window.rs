@@ -797,6 +797,7 @@ impl State {
                         } else {
                             node.name = state.get_lowest_unused_name(&node.name);
                         }
+                        crate::app::ensure_meta_on(&mut node);
                         state.current_dir_mut().children.push(node);
                         state.sync_nodes();
                         state.rebuild_positions();
