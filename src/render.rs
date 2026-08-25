@@ -733,14 +733,12 @@ impl State {
     fn append_plate_corners(&self, pc: &mut PaintCtx) {
         let hovered = self.plate_corner_at(self.cursor_x, self.cursor_y);
         for idx in crate::plate_corner::PLATE_SLOTS {
-            let Some((cx, cy)) = self.plate_corner_center(idx) else { continue };
-            let mut r = crate::plate_corner::CORNER_R;
-            if hovered == Some(idx) || self.plate_menu_slot == Some(idx) {
-                r *= 1.15;
-            }
-            let fill = cce_ui::colors::plate_border_color()
-                .unwrap_or([0.55, 0.58, 0.66, 0.85]);
-            pc.circle(cx, cy, r, fill);
+            let Some(c) = self.plate_corner_center(idx) else { continue };
+            cce_ui::widget::plate_dock::draw_corner_dot(
+                pc,
+                c,
+                hovered == Some(idx) || self.plate_menu_slot == Some(idx),
+            );
         }
     }
 
