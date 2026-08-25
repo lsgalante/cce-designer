@@ -201,6 +201,18 @@ checkout. Templates are resolved recursively: a template's children reference ot
 templates by `type`, merged with param overrides (`load_fs_tree` in `src/app.rs`).
 Missing referenced templates panic at load.
 
+Saved instances are self-contained copies, but the loader merges template
+evolution into them (`merge_template_defs` in `src/app.rs`, run on every
+project deserialization including thumbnails): missing params are appended,
+existing ones keep their value but take the template's UI metadata, and subnet
+templates (Sphere/Plane/Extrude) refresh their children's `Code` outright —
+**the template owns the surface and implementation, the instance owns its
+values.** A kernel hand-edited inside a template instance reverts on load;
+custom kernels belong in bare OpenCL nodes, which the merge never touches.
+Native nodes match their template by type, subnet instances by name
+("Sphere 3" → "Sphere") plus a full child name/type match; the merge never
+injects or deletes children and never rewrites files on disk.
+
 ## Repo hygiene
 
 `scratch/` holds ad-hoc debug scripts/logs and `screenshot*.png` at the root are
