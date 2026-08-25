@@ -4542,8 +4542,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 // An armed corner-dot press becomes a layout drag once it
                 // moves; stubbed (collapsed/detached) panes stay click-only.
                 if let Some((idx, px, py)) = self.corner_press {
-                    let moved = (self.cursor_x - px).abs().max((self.cursor_y - py).abs());
-                    if moved > 4.0 {
+                    if cce_ui::widget::plate_dock::press_becomes_drag(
+                        (px, py),
+                        (self.cursor_x, self.cursor_y),
+                    ) {
                         self.corner_press = None;
                         if !self.pane_is_stubbed(idx) && idx != PLAYBAR_IDX {
                             self.app_drag = Some(AppDrag::DockDrag { idx });

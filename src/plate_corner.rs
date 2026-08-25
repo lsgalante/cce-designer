@@ -16,15 +16,11 @@ use crate::app::State;
 use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT};
 
 /// Radius of the control itself.
-pub const CORNER_R: f32 = 8.0;
-
-/// Centre inset from the plate's top-right corner, on both axes. Clears the
-/// plate's own corner arc at the radii the DE ships.
-pub const CORNER_INSET: f32 = 14.0;
-
-/// A plate needs at least this much room before it earns a corner control —
-/// below it the trigger would cover the pane it belongs to.
-const MIN_PLATE_SPAN: f32 = 3.0 * CORNER_INSET;
+// The affordance's geometry and protocol are toolkit-owned since cce-ui RFC
+// Phase 7c generalized this file's machinery (`cce_ui::widget::plate_dock`);
+// the constants re-export so the designer's draw/hit code keeps its names.
+pub use cce_ui::widget::plate_dock::{CORNER_INSET, CORNER_R, MIN_PLATE_SPAN};
+use cce_ui::widget::plate_dock::{self, PlateDockAction, PlateDockState};
 
 /// The plates that carry a corner control. The viewport is deliberately absent:
 /// its "plate" is the window-spanning lip, so a top-right control would sit on
@@ -71,21 +67,9 @@ impl State {
             return Some((c.x + d, c.y - d));
         }
 
-        let (x, y, pw, ph) = w.rect();
-        if pw < MIN_PLATE_SPAN {
-            return None;
-        }
-        if self.pane_is_stubbed(idx) {
-            // A stub is BUILT to carry the control, and is shorter than the
-            // minimum span a full pane must clear — applying that guard here
-            // deleted the only control that can bring the pane back, whether it
-            // was collapsed or detached.
-            return Some((x + pw - CORNER_INSET, y + ph / 2.0));
-        }
-        if ph < MIN_PLATE_SPAN {
-            return None;
-        }
-        Some((x + pw - CORNER_INSET, y + CORNER_INSET))
+        // Rect-based placement is toolkit-owned (stub exemption included);
+        // only the circular-pane arc above stays designer policy.
+        plate_dock::corner_center(w.rect(), self.pane_is_stubbed(idx))
     }
 
     /// The plate whose corner control is under `(px, py)`, if any. Searched in
@@ -93,10 +77,8 @@ impl State {
     /// the user sees on top.
     pub fn plate_corner_at(&self, px: f32, py: f32) -> Option<usize> {
         PLATE_SLOTS.iter().rev().copied().find(|&idx| {
-            self.plate_corner_center(idx).is_some_and(|(cx, cy)| {
-                let (dx, dy) = (px - cx, py - cy);
-                dx * dx + dy * dy <= CORNER_R * CORNER_R
-            })
+            self.plate_corner_center(idx)
+                .is_some_and(|c| plate_dock::corner_hit(c, px, py))
         })
     }
 }
@@ -119,31 +101,30 @@ impl State {
     pub fn open_plate_menu(&mut self, idx: usize) {
         let Some((cx, cy)) = self.plate_corner_center(idx) else { return };
 
+        // The standard rows come from the toolkit protocol (Reattach-only for
+        // a detached pane's stub, Collapse/Expand, Detach when allowed); the
+        // designer appends its app rows after.
+        let state = PlateDockState {
+            collapsed: self.collapsed_panes[idx],
+            detached: self.pane_is_detached(idx),
+        };
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<PlateMenuAction> = Vec::new();
-
-        // A detached pane lives in another window: collapsing the stub it left
-        // behind would mean nothing, so the only thing to offer is taking it back.
-        if self.pane_is_detached(idx) {
-            let target = self.slots.get_dyn(idx).base().id();
-            cce_ui::widget::context_menu::show(
-                cx - CORNER_R,
-                cy + CORNER_R,
-                vec!["Reattach".to_string()],
-                0,
-                target,
-            );
-            self.plate_menu_slot = Some(idx);
-            self.plate_menu_actions = vec![PlateMenuAction::Reattach];
-            return;
+        for (label, action) in plate_dock::standard_menu(state, self.plate_can_detach(idx)) {
+            options.push(label);
+            actions.push(match action {
+                PlateDockAction::Collapse => PlateMenuAction::Collapse,
+                PlateDockAction::Expand => PlateMenuAction::Expand,
+                PlateDockAction::Detach => PlateMenuAction::Detach,
+                PlateDockAction::Reattach => PlateMenuAction::Reattach,
+            });
         }
-
-        if self.collapsed_panes[idx] {
-            options.push("Expand".to_string());
-            actions.push(PlateMenuAction::Expand);
-        } else {
-            options.push("Collapse".to_string());
-            actions.push(PlateMenuAction::Collapse);
+        if state.detached {
+            let target = self.slots.get_dyn(idx).base().id();
+            cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 0, target);
+            self.plate_menu_slot = Some(idx);
+            self.plate_menu_actions = actions;
+            return;
         }
 
         if idx == SPREADSHEET_IDX && !self.collapsed_panes[idx] {
@@ -157,11 +138,6 @@ impl State {
                 options.push("Between Panes".to_string());
                 actions.push(PlateMenuAction::BetweenPanes);
             }
-        }
-
-        if self.plate_can_detach(idx) {
-            options.push("Detach".to_string());
-            actions.push(PlateMenuAction::Detach);
         }
 
         let target = self.slots.get_dyn(idx).base().id();
@@ -283,9 +259,8 @@ impl State {
     }
 }
 
-/// Height of a collapsed plate: its title stub. Deep enough for the title text
-/// and the corner control that restores it, and no deeper.
-pub const STUB_H: f32 = 26.0;
+/// Height of a collapsed plate: its title stub (toolkit-owned since 7c).
+pub use cce_ui::widget::plate_dock::STUB_H;
 
 impl State {
     /// Rewrite the collapsed plates' rects down to their stubs.
