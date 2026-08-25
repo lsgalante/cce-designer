@@ -327,7 +327,9 @@ pub fn ensure_meta_on(node: &mut FsNode) {
             });
         }
         let meta = node.children.iter_mut().find(|c| c.node_type == "meta").unwrap();
-        for (name, default) in [("Point Markers", "false"), ("Point Numbers", "false")] {
+        for (name, default) in
+            [("Point Markers", "false"), ("Point Numbers", "false"), ("Wireframe", "false")]
+        {
             if !meta.params.iter().any(|p| p.name == name) {
                 meta.params.push(ParamDef {
                     name: name.to_string(),
@@ -805,6 +807,8 @@ pub struct SceneMeshes {
     pub group_points: cce_ui::vk::MeshId,
     /// Per-node meta "Point Markers" overlay.
     pub meta_points: cce_ui::vk::MeshId,
+    /// Per-node meta "Wireframe" overlay (LINE_LIST edge pairs).
+    pub meta_wires: cce_ui::vk::MeshId,
 }
 
 /// A left-press on the detached circular window's chrome that becomes an
@@ -1075,6 +1079,10 @@ pub struct State {
     pub meta_points_dirty: bool,
     pub meta_point_count: u32,
     pub meta_number_labels: Vec<([f32; 3], u32)>,
+    /// Per-node meta "Wireframe": LINE_LIST edge pairs of the flagged nodes'
+    /// triangles, drawn as a wire pass over the scene fill.
+    pub meta_wire_verts: Vec<Vertex3D>,
+    pub meta_wire_count: u32,
     /// The raster scene's model-view-projection and the viewport pane rect in
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
@@ -3252,6 +3260,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             meta_points_dirty: false,
             meta_point_count: 0,
             meta_number_labels: Vec::new(),
+            meta_wire_verts: Vec::new(),
+            meta_wire_count: 0,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             last_viewport_rt_mode: false,
@@ -5802,11 +5812,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.viewport_dirty = true;
         }
 
-        // Per-node meta markers, staged by rebuild_scene_geometry.
+        // Per-node meta markers and wires, staged by rebuild_scene_geometry.
         if self.meta_points_dirty {
             self.meta_points_dirty = false;
             renderer.update_mesh(meshes.meta_points, bytemuck::cast_slice(&self.meta_marker_verts));
             self.meta_point_count = self.meta_marker_verts.len() as u32;
+            renderer.update_mesh(meshes.meta_wires, bytemuck::cast_slice(&self.meta_wire_verts));
+            self.meta_wire_count = self.meta_wire_verts.len() as u32;
             self.viewport_dirty = true;
         }
     }
@@ -5833,6 +5845,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             points: renderer.create_mesh(&[]),
             group_points: renderer.create_mesh(&[]),
             meta_points: renderer.create_mesh(&[]),
+            meta_wires: renderer.create_mesh(&[]),
         });
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush.
@@ -6006,9 +6019,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         draws.push(SceneDraw { mesh: meshes.meta_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.vertex_count_spheres > 0 {
-                        // With wires coming, the fill is pushed back by its
-                        // slope-scaled offset so the lattice reads solid.
-                        let base = if self.wireframe { self.wire_width } else { 0.0 };
+                        // With wires coming — the global toggle's or any
+                        // node's meta Wireframe — the fill is pushed back by
+                        // its slope-scaled offset so the lattice reads solid.
+                        let base = if self.wireframe || self.meta_wire_count > 0 {
+                            self.wire_width
+                        } else {
+                            0.0
+                        };
                         draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base });
                         if self.wireframe {
                             // The wire pass rides ON TOP of the fill (never
@@ -6029,6 +6047,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             };
                             let wire_alpha = self.wire_color[3].clamp(0.0, 1.0);
                             draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0 });
+                        }
+                        // Per-node meta Wireframe: the same wire pass, scoped
+                        // to the flagged nodes' edges, in geometry colors.
+                        if self.meta_wire_count > 0 {
+                            draws.push(SceneDraw { mesh: meshes.meta_wires, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: self.wire_width, wire_base_width: 0.0 });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);

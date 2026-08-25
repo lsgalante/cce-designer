@@ -1171,7 +1171,7 @@ mod tests {
         let meta = s.children.iter().find(|c| c.node_type == "meta").expect("sphere meta");
         assert_eq!(
             meta.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-            ["Point Markers", "Point Numbers"]
+            ["Point Markers", "Point Numbers", "Wireframe"]
         );
         assert!(meta.params.iter().all(|p| p.default == "false"));
         let opencl = s.children.iter().find(|c| c.name == "opencl1").unwrap();
@@ -1206,31 +1206,34 @@ mod tests {
 
         // Overlays: nothing while the prefs are off…
         let mut cache = crate::geometry::SimCache::default();
-        let (markers, labels) = crate::render::collect_meta_overlays(
+        let (markers, labels, wires) = crate::render::collect_meta_overlays(
             &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
-        assert!(markers.is_empty() && labels.is_empty());
+        assert!(markers.is_empty() && labels.is_empty() && wires.is_empty());
 
-        // …both overlays for the flagged sphere (240 marker verts per
-        // deduped point, labels matching the same dedupe)…
+        // …all three overlays for the flagged sphere: 240 marker verts per
+        // deduped point, labels matching the same dedupe, and one LINE_LIST
+        // pair per triangle edge (2304 verts = 768 triangles = 4608 pairs).
         {
             let meta = root.children[0].children.iter_mut()
                 .find(|c| c.node_type == "meta").unwrap();
             for p in meta.params.iter_mut() { p.default = "true".to_string(); }
         }
         assert!(crate::app::meta_pref(&root.children[0], "Point Markers"));
+        assert!(crate::app::meta_pref(&root.children[0], "Wireframe"));
         let mut cache = crate::geometry::SimCache::default();
-        let (markers, labels) = crate::render::collect_meta_overlays(
+        let (markers, labels, wires) = crate::render::collect_meta_overlays(
             &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
         assert!(!labels.is_empty() && labels.len() < 16 * 24 * 6);
         assert_eq!(markers.len(), labels.len() * 240);
         assert!(labels.iter().any(|(_, i)| *i > 0));
+        assert_eq!(wires.len(), (16 * 24 * 6 / 3) * 6);
 
         // …and none once the node's geometry is hidden.
         root.children[0].geometry_visible = false;
         let mut cache = crate::geometry::SimCache::default();
-        let (markers, labels) = crate::render::collect_meta_overlays(
+        let (markers, labels, wires) = crate::render::collect_meta_overlays(
             &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
-        assert!(markers.is_empty() && labels.is_empty());
+        assert!(markers.is_empty() && labels.is_empty() && wires.is_empty());
     }
 
     /// The Plane template's construction controls: Rows/Columns set the grid

@@ -856,13 +856,14 @@ impl State {
         // Per-node meta overlays ride the same rebuild: markers and point
         // numbers for nodes whose meta child asks for them.
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
-        let (markers, labels) = {
+        let (markers, labels, wires) = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             collect_meta_overlays(&self.fs_root, self.point_size, &mut sim)
         };
         self.sim_cache = sim_cache;
         self.meta_marker_verts = markers;
         self.meta_number_labels = labels;
+        self.meta_wire_verts = wires;
         self.meta_points_dirty = true;
     }
 
@@ -898,9 +899,10 @@ pub(crate) fn collect_meta_overlays(
     root: &FsNode,
     point_size: f32,
     sim: &mut crate::geometry::EvalSim,
-) -> (Vec<crate::geometry::Vertex3D>, Vec<([f32; 3], u32)>) {
+) -> (Vec<crate::geometry::Vertex3D>, Vec<([f32; 3], u32)>, Vec<crate::geometry::Vertex3D>) {
     let mut markers = Vec::new();
     let mut labels = Vec::new();
+    let mut wires = Vec::new();
     fn visit(
         root: &FsNode,
         node: &FsNode,
@@ -908,17 +910,34 @@ pub(crate) fn collect_meta_overlays(
         point_size: f32,
         markers: &mut Vec<crate::geometry::Vertex3D>,
         labels: &mut Vec<([f32; 3], u32)>,
+        wires: &mut Vec<crate::geometry::Vertex3D>,
         sim: &mut crate::geometry::EvalSim,
     ) {
         let is_visible = parent_visible && node.geometry_visible;
         let want_markers = is_visible && crate::app::meta_pref(node, "Point Markers");
         let want_numbers = is_visible && crate::app::meta_pref(node, "Point Numbers");
-        if want_markers || want_numbers {
+        let want_wires = is_visible && crate::app::meta_pref(node, "Wireframe");
+        if want_markers || want_numbers || want_wires {
             let mut visited = Vec::new();
             let mut err = None;
             if let Some(geom) = crate::geometry::generate_single_node_geometry_with_errors(
                 root, node, &mut visited, &mut err, sim,
             ) {
+                if want_wires {
+                    // Each triangle's three edges as LINE_LIST pairs carrying
+                    // the geometry's own colors — the sphere_edges expansion,
+                    // scoped to this node.
+                    for tri in geom.vertices.chunks_exact(3) {
+                        for (a, b) in [(0usize, 1usize), (1, 2), (2, 0)] {
+                            for v in [&tri[a], &tri[b]] {
+                                wires.push(crate::geometry::Vertex3D {
+                                    position: v.pos,
+                                    color: v.col,
+                                });
+                            }
+                        }
+                    }
+                }
                 if want_markers {
                     let src: Vec<crate::geometry::Vertex3D> = geom
                         .vertices
@@ -947,11 +966,11 @@ pub(crate) fn collect_meta_overlays(
             }
         }
         for c in &node.children {
-            visit(root, c, is_visible, point_size, markers, labels, sim);
+            visit(root, c, is_visible, point_size, markers, labels, wires, sim);
         }
     }
     for c in &root.children {
-        visit(root, c, true, point_size, &mut markers, &mut labels, sim);
+        visit(root, c, true, point_size, &mut markers, &mut labels, &mut wires, sim);
     }
     // A dense mesh can label tens of thousands of points; the text pass is
     // per-frame, so cap it rather than melt the frame rate.
@@ -959,5 +978,5 @@ pub(crate) fn collect_meta_overlays(
     if labels.len() > MAX_LABELS {
         labels.truncate(MAX_LABELS);
     }
-    (markers, labels)
+    (markers, labels, wires)
 }
