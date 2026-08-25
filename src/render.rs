@@ -809,7 +809,11 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         let geom = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            network_sphere_vertices_with_errors(&self.fs_root, &mut ocl_error, &mut sim)
+            // The viewport shows the network editor's current level, not the
+            // whole tree: the walk starts at the current directory while name
+            // resolution stays rooted at fs_root. Navigation re-scopes this
+            // through on_path_changed, which lands here.
+            network_sphere_vertices_with_errors(&self.fs_root, self.current_dir(), &mut ocl_error, &mut sim)
         };
         self.sim_cache = sim_cache;
 
@@ -825,9 +829,10 @@ impl State {
             false
         }
 
+        let displayed_opencl = has_visible_opencl(self.current_dir());
         if let Some(e) = ocl_error {
             self.update_status_text(&format!("OpenCL Error: {}", e));
-        } else if has_visible_opencl(&self.fs_root) {
+        } else if displayed_opencl {
             self.update_status_text("OpenCL kernel executed successfully.");
         } else {
             self.update_status_text("Geometry updated successfully.");
@@ -849,7 +854,9 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         let (markers, labels, wires, normals) = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            collect_meta_overlays(&self.fs_root, self.meta_marker_size, self.meta_marker_color, &mut sim)
+            // Same scoping as the scene walk above: overlays annotate what is
+            // on screen, so they walk the same current level.
+            collect_meta_overlays(&self.fs_root, self.current_dir(), self.meta_marker_size, self.meta_marker_color, &mut sim)
         };
         self.sim_cache = sim_cache;
         self.meta_marker_verts = markers;
@@ -887,8 +894,12 @@ impl State {
 /// node and collect marker geometry and/or (position, vertex index) labels.
 /// Positions dedupe the triangle soup's repeats; a label keeps the FIRST
 /// index at its position, matching the spreadsheet's vertex numbering.
+/// `start` scopes the walk to the displayed network level (the scene walk's
+/// contract — pass `root` for both to cover the whole tree); evaluation
+/// stays rooted at `root`.
 pub(crate) fn collect_meta_overlays(
     root: &FsNode,
+    start: &FsNode,
     point_size: f32,
     marker_color: [f32; 3],
     sim: &mut crate::geometry::EvalSim,
@@ -1012,7 +1023,7 @@ pub(crate) fn collect_meta_overlays(
             visit(root, c, is_visible, point_size, marker_color, markers, labels, wires, normals, sim);
         }
     }
-    for c in &root.children {
+    for c in &start.children {
         visit(root, c, true, point_size, marker_color, &mut markers, &mut labels, &mut wires, &mut normals, sim);
     }
     // A dense mesh can label tens of thousands of points; the text pass is

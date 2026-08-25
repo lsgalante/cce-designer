@@ -1305,7 +1305,7 @@ mod tests {
         // Overlays: nothing while the prefs are off…
         let mut cache = crate::geometry::SimCache::default();
         let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+            &root, &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
         assert!(markers.is_empty() && labels.is_empty() && wires.is_empty() && normals.is_empty());
 
         // …all four overlays for the flagged sphere: 240 marker verts per
@@ -1320,7 +1320,7 @@ mod tests {
         assert!(crate::app::meta_pref(&root.children[0], "Wireframe"));
         let mut cache = crate::geometry::SimCache::default();
         let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+            &root, &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
         assert!(!labels.is_empty() && labels.len() < 16 * 24 * 6);
         assert_eq!(markers.len(), labels.len() * 240);
         assert!(labels.iter().any(|(_, i)| *i > 0));
@@ -1348,7 +1348,7 @@ mod tests {
         root.children[0].geometry_visible = false;
         let mut cache = crate::geometry::SimCache::default();
         let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+            &root, &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
         assert!(markers.is_empty() && labels.is_empty() && wires.is_empty() && normals.is_empty());
     }
 

@@ -1567,11 +1567,18 @@ pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
     let mut err = None;
     let mut cache = SimCache::default();
     let mut sim = EvalSim::new(0, 0, &mut cache);
-    network_sphere_vertices_with_errors(root, &mut err, &mut sim)
+    network_sphere_vertices_with_errors(root, root, &mut err, &mut sim)
 }
 
+/// Collect the scene's geometry by walking `start`'s children. `start` is the
+/// network level the viewport displays — the network editor's current
+/// directory — while `root` stays the evaluation root: resolvers look inputs
+/// up by name from `root`, so a chain inside the displayed level still
+/// resolves references exactly as it does when drawn from the top. Pass
+/// `root` for both to draw the whole scene (thumbnails do).
 pub fn network_sphere_vertices_with_errors(
     root: &FsNode,
+    start: &FsNode,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Geometry {
@@ -1678,7 +1685,7 @@ pub fn network_sphere_vertices_with_errors(
 
     let mut out = Geometry::new();
     let mut count = 0;
-    for child in &root.children {
+    for child in &start.children {
         visit(root, child, true, &mut count, &mut out, ocl_error, sim);
     }
     out
@@ -2580,6 +2587,32 @@ mod simnet_tests {
             geometry_visible: true,
             position: (0.0, 0.0),
         }
+    }
+
+    /// The scene walk draws the level it is STARTED at — the network editor's
+    /// current directory — while evaluation stays rooted at the tree root.
+    /// From the root a subnet's internals draw (recursion); started at the
+    /// subnet, only its own children do.
+    #[test]
+    fn test_scene_walk_scoped_to_start_level() {
+        let outer = node("id-outer", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let inner = node("id-inner", "Sphere 2", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sub = node("id-sub", "Sub 1", "node", vec![], vec![inner]);
+        let root = node("id-root", "root", "node", vec![], vec![outer, sub]);
+
+        const SPHERE: usize = 16 * 24 * 6;
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        let all = network_sphere_vertices_with_errors(&root, &root, &mut err, &mut sim);
+        assert_eq!(all.vertices.len(), 2 * SPHERE);
+
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        let scoped =
+            network_sphere_vertices_with_errors(&root, &root.children[1], &mut err, &mut sim);
+        assert_eq!(scoped.vertices.len(), SPHERE);
     }
 
     /// A simnet whose chain is one Transform: each step shifts the geometry by

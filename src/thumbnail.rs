@@ -34,7 +34,9 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>) -> Resul
     // A headless thumbnail has no timeline: simnets render at their seed.
     let mut sim_cache = crate::geometry::SimCache::default();
     let mut sim = crate::geometry::EvalSim::new(0, 0, &mut sim_cache);
-    let geom = network_sphere_vertices_with_errors(&proj.root, &mut ocl_error, &mut sim);
+    // Thumbnails always show the whole scene from the top, regardless of the
+    // network level the project was saved at: root as both eval and walk root.
+    let geom = network_sphere_vertices_with_errors(&proj.root, &proj.root, &mut ocl_error, &mut sim);
     if let Some(e) = ocl_error {
         // Non-fatal: OpenCL nodes just contribute nothing, like the viewport.
         eprintln!("thumbnail: OpenCL error (geometry partially skipped): {e}");
