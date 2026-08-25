@@ -1131,6 +1131,81 @@ mod tests {
         assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
     }
 
+    /// A Scatter consumed downstream must still evaluate: the dispatch pushes
+    /// the target id before dispatching, so a resolver-local visited guard
+    /// sees it and refuses every dispatched call — scatter geometry silently
+    /// vanished from any chain while displaying fine on its own.
+    #[test]
+    fn test_scatter_consumed_downstream() {
+        let templates_root = crate::app::load_fs_tree();
+        let find = |name: &str| {
+            templates_root.children.iter().find(|t| t.name == name).unwrap()
+        };
+        let instance = |template: &FsNode, id: &str, name: &str, params: &[(&str, &str)]| {
+            let mut inst = template.clone();
+            inst.id = id.to_string();
+            inst.name = name.to_string();
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            for (pname, val) in params {
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
+                    val.to_string();
+            }
+            inst
+        };
+        let root = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![
+                instance(find("Sphere"), "s", "Sphere 1", &[]),
+                instance(find("Scatter"), "sc", "Scatter 1", &[("Input", "Sphere 1")]),
+                instance(find("Attribute"), "a", "Attr 1", &[
+                    ("Input", "Scatter 1"),
+                    ("Operation", "Create"),
+                    ("Attribute Name", "mass"),
+                    ("Value", "1.00"),
+                ]),
+            ],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+
+        // The scatter alone works (the scene walk's direct-call path)…
+        let mut visited = Vec::new();
+        let mut err = None;
+        let mut cache = crate::geometry::SimCache::default();
+        let direct = crate::geometry::generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[1],
+            &mut visited,
+            &mut err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
+        ).expect("scatter evaluates on its own");
+        assert!(err.is_none(), "{err:?}");
+        assert!(!direct.vertices.is_empty());
+
+        // …and the SAME scatter feeding a downstream node yields the SAME
+        // points, tagged by the consumer.
+        let mut visited = Vec::new();
+        let mut err = None;
+        let mut cache = crate::geometry::SimCache::default();
+        let chained = crate::geometry::generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[2],
+            &mut visited,
+            &mut err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
+        ).expect("a node consuming a scatter must see its geometry");
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(chained.vertices.len(), direct.vertices.len());
+        assert!(chained.vertices.iter().all(|v| v.attributes.contains_key("mass")));
+    }
+
     /// The Plane template mirrors the Sphere subnet (an opencl node feeding an
     /// output node); its kernel generates a divs x divs grid on XZ at y = 0,
     /// with the Size param as the side length.

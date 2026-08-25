@@ -876,30 +876,18 @@ pub fn resolve_scatter_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Geometry> {
-    if visited.contains(&target.id) {
-        return None;
-    }
-    visited.push(target.id.clone());
-
+    // No visited guard here: `generate_single_node_geometry_with_errors`
+    // pushes the target's id before dispatching to this resolver, so a local
+    // `visited.contains` check refused every dispatched call — scatter
+    // geometry evaluated to None for the spreadsheet and for any downstream
+    // consumer, while the scene walk's direct call (fresh `visited`) kept the
+    // node LOOKING healthy. Cycles stay guarded by the dispatch itself.
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
-        visited.pop();
         return None;
     }
-    let input_node = match find_node_by_name(root, &input_name) {
-        Some(node) => node,
-        None => {
-            visited.pop();
-            return None;
-        }
-    };
-    let geom = match generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim) {
-        Some(g) => g,
-        None => {
-            visited.pop();
-            return None;
-        }
-    };
+    let input_node = find_node_by_name(root, &input_name)?;
+    let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let num_points = node_param_f32(target, "Points", 100.0) as usize;
     let radius = node_param_f32(target, "Radius", 0.02);
@@ -976,7 +964,6 @@ pub fn resolve_scatter_geometry_with_errors(
         scattered_geom
     };
 
-    visited.pop();
     Some(res)
 }
 
