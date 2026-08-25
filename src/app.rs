@@ -295,6 +295,92 @@ pub fn flatten_node_templates(root: &FsNode) -> Vec<NodeTemplate> {
     out
 }
 
+/// Merge template evolution into a loaded project tree, so saved scenes gain
+/// controls added to a template after they were saved. Every deserialized
+/// project routes through this (file load, the detached-window sync reload,
+/// the thumbnail renderer).
+///
+/// The ownership rule: **the template owns the surface and the
+/// implementation, the instance owns its values.** Per matched node, params
+/// missing from the instance are appended with template defaults; params the
+/// instance has keep their value but take the template's UI metadata (type,
+/// label, range, options). For subnet templates (type "node" with children —
+/// Sphere, Plane, Extrude), the matched children's `Code` is refreshed from
+/// the template outright, because the new params are dead weight without the
+/// kernel that reads them — which means a kernel hand-edited INSIDE a
+/// template instance reverts on load; a custom kernel belongs in a bare
+/// OpenCL node, whose Code is instance-owned and never touched here.
+///
+/// Matching is conservative: native nodes (group, attribute, scatter, …)
+/// match their template by node type exactly; subnet instances match by name
+/// ("Sphere 3" → "Sphere", so a renamed instance simply keeps its saved
+/// shape), and only merge when EVERY template child is present by name and
+/// type — a hand-built subnet that happens to share the name is left alone,
+/// and nothing is ever injected or deleted. Simnet children (the user's sim
+/// chain) are out of scope by construction: simnet is a native type.
+pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
+    fn template_for<'a>(node: &FsNode, templates: &'a [NodeTemplate]) -> Option<&'a FsNode> {
+        if node.node_type.eq_ignore_ascii_case("node") {
+            let base = node.name.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+            templates.iter().map(|t| &t.node).find(|t| {
+                t.node_type.eq_ignore_ascii_case("node")
+                    && (t.name == node.name || (!base.is_empty() && t.name == base))
+            })
+        } else {
+            templates.iter().map(|t| &t.node).find(|t| {
+                !t.node_type.eq_ignore_ascii_case("node")
+                    && t.node_type.eq_ignore_ascii_case(&node.node_type)
+            })
+        }
+    }
+    fn merge_params(node: &mut FsNode, template: &FsNode) {
+        for tp in &template.params {
+            if let Some(ip) = node.params.iter_mut().find(|p| p.name == tp.name) {
+                ip.param_type = tp.param_type.clone();
+                ip.label = tp.label.clone();
+                ip.options = tp.options.clone();
+                ip.min = tp.min;
+                ip.max = tp.max;
+                ip.step = tp.step;
+            } else {
+                node.params.push(tp.clone());
+            }
+        }
+    }
+    fn merge_node(node: &mut FsNode, templates: &[NodeTemplate]) {
+        if let Some(t) = template_for(node, templates) {
+            let owns_impl = t.node_type.eq_ignore_ascii_case("node") && !t.children.is_empty();
+            let children_match = t.children.iter().all(|tc| {
+                node.children.iter().any(|ic| ic.name == tc.name && ic.node_type == tc.node_type)
+            });
+            if !owns_impl || children_match {
+                merge_params(node, t);
+                if owns_impl {
+                    for tc in &t.children {
+                        let ic = node
+                            .children
+                            .iter_mut()
+                            .find(|ic| ic.name == tc.name && ic.node_type == tc.node_type)
+                            .expect("children_match checked above");
+                        if let Some(t_code) = tc.params.iter().find(|p| p.name == "Code") {
+                            if let Some(i_code) = ic.params.iter_mut().find(|p| p.name == "Code") {
+                                i_code.default = t_code.default.clone();
+                            }
+                        }
+                        merge_params(ic, tc);
+                    }
+                }
+            }
+        }
+        for c in &mut node.children {
+            merge_node(c, templates);
+        }
+    }
+    for c in &mut root.children {
+        merge_node(c, templates);
+    }
+}
+
 pub fn load_fs_tree() -> FsNode {
     let nodes_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("nodes");
     let mut children = Vec::new();
@@ -2771,7 +2857,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let mut loaded_project = None;
         if default_proj_path.exists() {
             if let Ok(content) = fs::read_to_string(&default_proj_path) {
-                if let Ok(proj) = serde_json::from_str::<Project>(&content) {
+                if let Ok(mut proj) = serde_json::from_str::<Project>(&content) {
+                    merge_template_defs(&mut proj.root, &node_templates);
                     loaded_project = Some(proj);
                 }
             }

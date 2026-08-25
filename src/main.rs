@@ -1131,6 +1131,106 @@ mod tests {
         assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
     }
 
+    /// The loader's template merge: saved instances gain params their
+    /// template grew after the save (values they already hold are kept), a
+    /// subnet instance's kernel refreshes to the template's (so the new
+    /// params actually work), and non-template lookalikes are left alone.
+    #[test]
+    fn test_loader_merges_new_template_params() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
+        let group_t = templates_root.children.iter().find(|t| t.name == "Group").unwrap();
+
+        // An "old save": a Sphere instance from before the construction
+        // controls — only Radius (with a user value), and a stale kernel.
+        let mut old_sphere = sphere_t.clone();
+        old_sphere.id = "s".to_string();
+        old_sphere.name = "Sphere 3".to_string();
+        for child in &mut old_sphere.children {
+            child.id = format!("{}_{}", old_sphere.id, child.name);
+        }
+        old_sphere.params.retain(|p| p.name == "Radius");
+        old_sphere.params[0].default = "0.70".to_string();
+        let opencl = old_sphere.children.iter_mut().find(|c| c.name == "opencl1").unwrap();
+        opencl.params.iter_mut().find(|p| p.name == "Code").unwrap().default =
+            "OLD KERNEL".to_string();
+
+        // An old Group missing a later-added param, with a kept value.
+        let mut old_group = group_t.clone();
+        old_group.id = "g".to_string();
+        old_group.name = "My Region".to_string(); // renamed: native nodes match by TYPE
+        old_group.params.retain(|p| p.name != "Highlight");
+        old_group.params.iter_mut().find(|p| p.name == "Center").unwrap().default =
+            "0.00:0.80:0.00".to_string();
+
+        // A hand-built subnet that happens to share the Sphere name.
+        let lookalike = FsNode {
+            id: "fake".to_string(),
+            name: "Sphere 9".to_string(),
+            node_type: "node".to_string(),
+            children: vec![],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+
+        let mut root = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![old_sphere, old_group, lookalike],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+        crate::app::merge_template_defs(&mut root, &templates);
+
+        // Sphere: new params appended with template defaults, value kept,
+        // kernel refreshed.
+        let s = &root.children[0];
+        let names: Vec<&str> = s.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Radius", "Rows", "Columns", "Center X", "Center Y", "Center Z"]);
+        assert_eq!(s.params[0].default, "0.70", "instance value survives");
+        let code = &s.children.iter().find(|c| c.name == "opencl1").unwrap()
+            .params.iter().find(|p| p.name == "Code").unwrap().default;
+        assert!(code.contains("chi(\"Rows\""), "kernel refreshed from template");
+
+        // And the merged instance evaluates with the new controls live.
+        let mut merged_sphere_root = root.clone();
+        merged_sphere_root.children.truncate(1);
+        merged_sphere_root.children[0].params.iter_mut()
+            .find(|p| p.name == "Rows").unwrap().default = "4".to_string();
+        merged_sphere_root.children[0].params.iter_mut()
+            .find(|p| p.name == "Columns").unwrap().default = "6".to_string();
+        let mut visited = Vec::new();
+        let mut err = None;
+        let mut cache = crate::geometry::SimCache::default();
+        let geom = crate::geometry::generate_single_node_geometry_with_errors(
+            &merged_sphere_root,
+            &merged_sphere_root.children[0],
+            &mut visited,
+            &mut err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
+        ).expect("merged sphere evaluates");
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(geom.vertices.len(), 4 * 6 * 6);
+
+        // Group (renamed, matched by type): Highlight restored, value kept.
+        let g = &root.children[1];
+        assert!(g.params.iter().any(|p| p.name == "Highlight" && p.default == "true"));
+        assert_eq!(g.params.iter().find(|p| p.name == "Center").unwrap().default, "0.00:0.80:0.00");
+
+        // Lookalike: untouched — no params gained, no children injected.
+        let l = &root.children[2];
+        assert!(l.params.is_empty());
+        assert!(l.children.is_empty());
+    }
+
     /// The Sphere template's construction controls: Rows/Columns set the
     /// lat/lon tessellation (vertex count = rows * columns * 6), Center X/Y/Z
     /// place the sphere, and the defaults keep the historical 16x24 sphere at

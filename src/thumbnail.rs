@@ -23,8 +23,12 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>) -> Resul
     let state_file = if project.is_dir() { project.join("state.json") } else { project.to_path_buf() };
     let content = std::fs::read_to_string(&state_file)
         .map_err(|e| format!("read {}: {e}", state_file.display()))?;
-    let proj: Project =
+    let mut proj: Project =
         serde_json::from_str(&content).map_err(|e| format!("parse {}: {e}", state_file.display()))?;
+    // Same template merge the app applies on load, so a thumbnail of an old
+    // scene shows what opening it would show.
+    let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
+    crate::app::merge_template_defs(&mut proj.root, &templates);
 
     let mut ocl_error = None;
     // A headless thumbnail has no timeline: simnets render at their seed.

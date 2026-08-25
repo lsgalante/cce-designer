@@ -127,7 +127,8 @@ impl State {
     pub(crate) fn load_from_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if path.file_name().map_or(false, |n| n == "default_project.json") {
             let content = fs::read_to_string(path)?;
-            let proj: Project = serde_json::from_str(&content)?;
+            let mut proj: Project = serde_json::from_str(&content)?;
+            crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
             self.fs_root = proj.root;
             self.ensure_menubar_subnets();
             self.apply_settings_from_menubar_subnets();
@@ -181,7 +182,8 @@ impl State {
         };
 
         let content = fs::read_to_string(&state_file_path)?;
-        let proj: Project = serde_json::from_str(&content)?;
+        let mut proj: Project = serde_json::from_str(&content)?;
+        crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         self.fs_root = proj.root;
         self.ensure_menubar_subnets();
         self.apply_settings_from_menubar_subnets();
