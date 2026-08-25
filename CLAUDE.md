@@ -162,18 +162,23 @@ The `zcce_inspector_v1` integration (window-position tracking + widget-state
 streaming to cce-test-interface) was dropped in the engine migration; the HTTP API
 is the introspection surface.
 
-### The Session node
+### The root meta node (nee Session)
 
-Session-wide settings live under one permanent root node: `Session` (node type
-`session`) contains the Main/View/Guides/Render utility subnets that used to
-sit flat in `/`. `ensure_menubar_subnets` creates it and MIGRATES root-level
-settings nodes from older saves into it (moved, not recreated — params
-survive). It cannot be deleted: `delete_node` refuses the `session` type (the
-one gate every deletion route funnels through), the context menu omits Delete,
-and the graph draws it without a geometry toggle. `State::session_node()` /
-`in_settings_dir()` are the accessors — the latter walks the whole
-`current_path`, since a first-segment check stopped working the day the
-settings nodes gained a parent.
+Session-wide settings live under one permanent root node: `meta` (node type
+`meta` — retyped/renamed from the old `Session`/`session` on load, children
+intact) contains the Main/View/Guides/Render utility subnets that used to
+sit flat in `/`. It is the root network's counterpart of every node's
+per-node `meta` child, but still a subnet. `ensure_menubar_subnets` creates
+it and MIGRATES older saves into it (root-level settings nodes moved, not
+recreated — params survive; a `session`-typed container retypes in place).
+It cannot be deleted: `delete_node` refuses the `meta` (and legacy
+`session`) type — the one gate every deletion route funnels through — the
+context menu omits Delete, and the graph draws it without a geometry
+toggle. `State::session_node()` / `in_settings_dir()` are the accessors —
+the latter walks the whole `current_path`, since a first-segment check
+stopped working the day the settings nodes gained a parent. Guides holds
+"Point Marker Size" (thousandths of a world unit), driving the per-node
+meta Point Markers overlay via `State::meta_marker_size`.
 
 ### The meta node (per-node preferences)
 

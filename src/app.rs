@@ -1083,6 +1083,9 @@ pub struct State {
     /// triangles, drawn as a wire pass over the scene fill.
     pub meta_wire_verts: Vec<Vertex3D>,
     pub meta_wire_count: u32,
+    /// World-unit radius of the meta "Point Markers" overlay — the Guides
+    /// subnet's "Point Marker Size" control (stored there in thousandths).
+    pub meta_marker_size: f32,
     /// The raster scene's model-view-projection and the viewport pane rect in
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
@@ -1553,11 +1556,11 @@ impl State {
     /// settings nodes (Main/View/Guides/Render). `ensure_menubar_subnets`
     /// guarantees it exists, so `None` only before the first ensure.
     pub fn session_node(&self) -> Option<&FsNode> {
-        self.fs_root.children.iter().find(|c| c.node_type == "session")
+        self.fs_root.children.iter().find(|c| c.node_type == "meta")
     }
 
     pub fn session_node_mut(&mut self) -> Option<&mut FsNode> {
-        self.fs_root.children.iter_mut().find(|c| c.node_type == "session")
+        self.fs_root.children.iter_mut().find(|c| c.node_type == "meta")
     }
 
     /// Is the network currently inside a settings directory (the Session node
@@ -1569,7 +1572,7 @@ impl State {
         for &idx in &self.current_path {
             match node.children.get(idx) {
                 Some(child) => {
-                    if matches!(child.node_type.as_str(), "utility" | "session") {
+                    if matches!(child.node_type.as_str(), "utility" | "session" | "meta") {
                         return true;
                     }
                     node = child;
@@ -3262,6 +3265,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             meta_number_labels: Vec::new(),
             meta_wire_verts: Vec::new(),
             meta_wire_count: 0,
+            meta_marker_size: 0.02,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             last_viewport_rt_mode: false,

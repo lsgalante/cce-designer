@@ -813,9 +813,12 @@ impl State {
             }
             McpAction::DeleteNode { slot } => {
                 if slot < state.current_dir().children.len()
-                    && state.current_dir().children[slot].node_type == "session"
+                    && matches!(
+                        state.current_dir().children[slot].node_type.as_str(),
+                        "session" | "meta"
+                    )
                 {
-                    return Err("The Session node is permanent and cannot be deleted".to_string());
+                    return Err("Meta nodes are permanent and cannot be deleted".to_string());
                 }
                 if state.delete_node(slot) {
                     // delete_node clears/shifts the selection; the param pane

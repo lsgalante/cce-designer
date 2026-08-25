@@ -463,25 +463,26 @@ mod tests {
         }
     }
 
-    /// The settings nodes live inside the permanent Session node now; tests
-    /// that need Main resolve it through there.
+    /// The settings nodes live inside the permanent root meta node (nee
+    /// Session) now; tests that need Main resolve it through there.
     fn session_and_main(state: &State) -> (usize, usize) {
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").expect("Session node");
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta node");
         let m_idx = state.fs_root.children[s_idx].children.iter().position(|c| c.name == "Main").expect("Main inside Session");
         (s_idx, m_idx)
     }
 
-    /// The Session node: exists at root, typed "session", holds exactly the
-    /// four settings nodes, and refuses deletion through the one gate every
-    /// deletion route funnels into.
+    /// The root meta node (nee Session): exists at root, typed "meta" but
+    /// still a subnet, holds exactly the four settings nodes, and refuses
+    /// deletion through the one gate every deletion route funnels into.
     #[test]
     fn test_session_node_exists_and_cannot_be_deleted() {
         let mut state = State::new(false);
         state.ensure_menubar_subnets();
 
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").expect("Session node at root");
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta node");
         let session = &state.fs_root.children[s_idx];
-        assert_eq!(session.name, "Session");
+        assert_eq!(session.name, "meta");
+        assert!(session.is_enterable(), "the root meta stays a subnet");
         let names: Vec<&str> = session.children.iter().map(|c| c.name.as_str()).collect();
         for expected in ["Main", "View", "Guides", "Render"] {
             assert!(names.contains(&expected), "Session is missing {expected}: {names:?}");
@@ -495,9 +496,36 @@ mod tests {
         }
 
         let before = state.fs_root.children.len();
-        assert!(!state.delete_node(s_idx), "delete_node deleted the Session node");
-        assert_eq!(state.fs_root.children.len(), before, "Session vanished anyway");
-        assert!(state.fs_root.children[s_idx].node_type == "session");
+        assert!(!state.delete_node(s_idx), "delete_node deleted the root meta node");
+        assert_eq!(state.fs_root.children.len(), before, "root meta vanished anyway");
+        assert!(state.fs_root.children[s_idx].node_type == "meta");
+
+        // An old save's "session"-typed container retypes to meta in place,
+        // children intact.
+        state.fs_root.children[s_idx].node_type = "session".to_string();
+        state.fs_root.children[s_idx].name = "Session".to_string();
+        state.ensure_menubar_subnets();
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta")
+            .expect("session retyped to meta");
+        assert_eq!(state.fs_root.children[s_idx].name, "meta");
+        let names: Vec<&str> =
+            state.fs_root.children[s_idx].children.iter().map(|c| c.name.as_str()).collect();
+        for expected in ["Main", "View", "Guides", "Render"] {
+            assert!(names.contains(&expected), "retype lost {expected}: {names:?}");
+        }
+
+        // Guides carries the Point Marker Size control (thousandths), and
+        // applying the settings drives the overlay size.
+        {
+            let guides = state.fs_root.children[s_idx].children.iter_mut()
+                .find(|c| c.name == "Guides").unwrap();
+            let p = guides.params.iter_mut().find(|p| p.name == "Point Marker Size")
+                .expect("Guides has Point Marker Size");
+            assert_eq!(p.default, "20", "default = 0.02 world units");
+            p.default = "50".to_string();
+        }
+        state.apply_settings_from_menubar_subnets();
+        assert!((state.meta_marker_size - 0.05).abs() < 1e-6);
     }
 
     /// An old save carries Main/View/Guides/Render at the root with the user's
@@ -513,7 +541,7 @@ mod tests {
         // synced toggles are rewritten from app state by design, so only a
         // foreign param can distinguish MOVED (probe survives) from RECREATED
         // (probe gone).
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").unwrap();
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").unwrap();
         let mut session = state.fs_root.children.remove(s_idx);
         for mut child in session.children.drain(..) {
             if child.name == "Guides" {
@@ -532,7 +560,7 @@ mod tests {
         }
 
         state.ensure_menubar_subnets();
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "session").expect("Session recreated");
+        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta recreated");
         let guides = state.fs_root.children[s_idx].children.iter().find(|c| c.name == "Guides").expect("Guides migrated in");
         let v = guides.params.iter().find(|p| p.name == "migration probe").map(|p| p.default.as_str());
         assert_eq!(v, Some("survived"), "migration recreated Guides instead of moving it");

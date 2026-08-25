@@ -858,7 +858,7 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         let (markers, labels, wires) = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            collect_meta_overlays(&self.fs_root, self.point_size, &mut sim)
+            collect_meta_overlays(&self.fs_root, self.meta_marker_size, &mut sim)
         };
         self.sim_cache = sim_cache;
         self.meta_marker_verts = markers;

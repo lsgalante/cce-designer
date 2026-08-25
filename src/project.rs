@@ -401,11 +401,13 @@ impl State {
         // Retain only the Main utility subnet, removing the rest
         self.fs_root.children.retain(|c| c.name != "Network" && c.name != "Viewport" && c.name != "Parameters" && c.name != "Spreadsheet");
 
-        // The Session node: the permanent root container for the session-wide
-        // settings nodes (Main/View/Guides/Render). Older saves carried the
-        // four at the root — they are MOVED in, params intact, so an old
-        // project's values survive as the seeds. The node itself is
-        // undeletable (delete_node refuses the "session" type).
+        // The root meta node: the permanent root container for the
+        // session-wide settings nodes (Main/View/Guides/Render) — the root
+        // network's counterpart of every node's per-node `meta` child, and
+        // still a subnet. It began life as the "Session" node; older saves
+        // carry it typed "session" (or the four settings nodes flat at the
+        // root) and are migrated — retyped/renamed, params intact. The node
+        // itself is undeletable (delete_node refuses the "meta" type).
         let mut migrated: Vec<FsNode> = Vec::new();
         {
             let mut idx = 0;
@@ -420,16 +422,22 @@ impl State {
                 }
             }
         }
-        let session_idx = match self.fs_root.children.iter().position(|c| c.node_type == "session" || c.name == "Session") {
+        let session_idx = match self
+            .fs_root
+            .children
+            .iter()
+            .position(|c| matches!(c.node_type.as_str(), "session" | "meta") || c.name == "Session")
+        {
             Some(i) => {
-                self.fs_root.children[i].node_type = "session".to_string();
+                self.fs_root.children[i].node_type = "meta".to_string();
+                self.fs_root.children[i].name = "meta".to_string();
                 i
             }
             None => {
                 self.fs_root.children.push(FsNode {
                     id: crate::app::generate_node_id(),
-                    name: "Session".to_string(),
-                    node_type: "session".to_string(),
+                    name: "meta".to_string(),
+                    node_type: "meta".to_string(),
                     children: vec![],
                     params: vec![],
                     geometry_visible: true,
@@ -679,6 +687,10 @@ impl State {
         ensure_param(guides_node, "Origin Guide Size", "spinbox", &origin_size_seed, &[], Some(1.0), Some(50.0), Some(1.0));
         let grid_color_seed = migrated_grid_color.unwrap_or_else(|| color_to_hex(vp_grid_color));
         ensure_param(guides_node, "Grid Color", "color", &grid_color_seed, &[], None, None, None);
+        // Size of the per-node meta "Point Markers" overlay, in thousandths
+        // (the Grid Thickness convention): 20 = 0.02 world units.
+        let marker_size_seed = ((self.meta_marker_size * 1000.0).round() as i32).to_string();
+        ensure_param(guides_node, "Point Marker Size", "spinbox", &marker_size_seed, &[], Some(5.0), Some(100.0), Some(1.0));
         for p in guides_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Grid Guide" => set_toggle(p, vp_show_grid),
@@ -808,7 +820,7 @@ impl State {
         let session_params = |root: &FsNode, name: &str| -> Option<Vec<ParamDef>> {
             root.children
                 .iter()
-                .find(|c| c.node_type == "session")
+                .find(|c| c.node_type == "meta")
                 .and_then(|s| s.children.iter().find(|c| c.name == name))
                 .map(|n| n.params.clone())
         };
@@ -821,6 +833,15 @@ impl State {
                     "Grid Thickness" => if let Ok(val) = p.default.parse::<f32>() { self.grid_thickness = val / 1000.0; }
                     "Origin Guide Size" => if let Ok(val) = p.default.parse::<f32>() { self.origin_size = val / 10.0; }
                     "Grid Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_mut().grid_color = col; }
+                    "Point Marker Size" => if let Ok(val) = p.default.parse::<f32>() {
+                        let size = val / 1000.0;
+                        if (size - self.meta_marker_size).abs() > 1e-6 {
+                            self.meta_marker_size = size;
+                            // The marker geometry bakes the radius in, so a
+                            // size change re-collects the overlays.
+                            self.rebuild_scene_geometry();
+                        }
+                    }
                     _ => {}
                 }
             }
