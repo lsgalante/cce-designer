@@ -1131,6 +1131,72 @@ mod tests {
         assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
     }
 
+    /// The Sphere template's construction controls: Rows/Columns set the
+    /// lat/lon tessellation (vertex count = rows * columns * 6), Center X/Y/Z
+    /// place the sphere, and the defaults keep the historical 16x24 sphere at
+    /// (0, 0.55, 0) byte-identical (the extrude test's 2304-vertex baseline).
+    #[test]
+    fn test_sphere_construction_controls() {
+        let templates_root = crate::app::load_fs_tree();
+        let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
+        let build = |params: &[(&str, &str)]| {
+            let mut inst = sphere_t.clone();
+            inst.id = "s".to_string();
+            inst.name = "Sphere 1".to_string();
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            for (pname, val) in params {
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
+                    val.to_string();
+            }
+            let root = FsNode {
+                id: "root".to_string(),
+                name: "root".to_string(),
+                node_type: "node".to_string(),
+                children: vec![inst],
+                params: vec![],
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 0,
+                outputs: 0,
+            };
+            let mut visited = Vec::new();
+            let mut err = None;
+            let mut cache = crate::geometry::SimCache::default();
+            let geom = crate::geometry::generate_single_node_geometry_with_errors(
+                &root,
+                &root.children[0],
+                &mut visited,
+                &mut err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
+            ).expect("sphere generation failed");
+            assert!(err.is_none(), "{err:?}");
+            geom
+        };
+
+        // Defaults: the historical 16x24 sphere.
+        assert_eq!(build(&[]).vertices.len(), 16 * 24 * 6);
+
+        // A coarse 4x6 tessellation.
+        let coarse = build(&[("Rows", "4"), ("Columns", "6")]);
+        assert_eq!(coarse.vertices.len(), 4 * 6 * 6);
+
+        // Center X shifts the whole sphere: default spans x in [-0.5, 0.5],
+        // shifted spans [0.5, 1.5].
+        let shifted = build(&[("Center X", "1.0")]);
+        let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
+        for v in &shifted.vertices {
+            min_x = min_x.min(v.pos[0]);
+            max_x = max_x.max(v.pos[0]);
+        }
+        assert!((min_x - 0.5).abs() < 0.01, "min x {min_x}");
+        assert!((max_x - 1.5).abs() < 0.01, "max x {max_x}");
+
+        // Degenerate resolutions clamp instead of emitting nothing.
+        assert_eq!(build(&[("Rows", "0"), ("Columns", "0")]).vertices.len(), 2 * 3 * 6);
+    }
+
     /// A Scatter consumed downstream must still evaluate: the dispatch pushes
     /// the target id before dispatching, so a resolver-local visited guard
     /// sees it and refuses every dispatched call — scatter geometry silently
