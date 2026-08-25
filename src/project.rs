@@ -691,6 +691,8 @@ impl State {
         // (the Grid Thickness convention): 20 = 0.02 world units.
         let marker_size_seed = ((self.meta_marker_size * 1000.0).round() as i32).to_string();
         ensure_param(guides_node, "Point Marker Size", "spinbox", &marker_size_seed, &[], Some(5.0), Some(100.0), Some(1.0));
+        let marker_color_seed = color_to_hex(self.meta_marker_color);
+        ensure_param(guides_node, "Point Marker Color", "color", &marker_color_seed, &[], None, None, None);
         for p in guides_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Grid Guide" => set_toggle(p, vp_show_grid),
@@ -839,6 +841,13 @@ impl State {
                             self.meta_marker_size = size;
                             // The marker geometry bakes the radius in, so a
                             // size change re-collects the overlays.
+                            self.rebuild_scene_geometry();
+                        }
+                    }
+                    "Point Marker Color" => if let Some(col) = hex_to_color(&p.default) {
+                        if col != self.meta_marker_color {
+                            self.meta_marker_color = col;
+                            // Baked into the marker verts, like the radius.
                             self.rebuild_scene_geometry();
                         }
                     }

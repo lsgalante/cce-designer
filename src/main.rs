@@ -523,9 +523,16 @@ mod tests {
                 .expect("Guides has Point Marker Size");
             assert_eq!(p.default, "20", "default = 0.02 world units");
             p.default = "50".to_string();
+            let c = guides.params.iter_mut().find(|p| p.name == "Point Marker Color")
+                .expect("Guides has Point Marker Color");
+            assert_eq!(c.param_type, "color");
+            c.default = "#ff8000".to_string();
         }
         state.apply_settings_from_menubar_subnets();
         assert!((state.meta_marker_size - 0.05).abs() < 1e-6);
+        assert!((state.meta_marker_color[0] - 1.0).abs() < 0.01);
+        assert!((state.meta_marker_color[1] - 0.5).abs() < 0.01);
+        assert!((state.meta_marker_color[2] - 0.0).abs() < 0.01);
     }
 
     /// An old save carries Main/View/Guides/Render at the root with the user's
@@ -1235,7 +1242,7 @@ mod tests {
         // Overlays: nothing while the prefs are off…
         let mut cache = crate::geometry::SimCache::default();
         let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+            &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
         assert!(markers.is_empty() && labels.is_empty() && wires.is_empty() && normals.is_empty());
 
         // …all four overlays for the flagged sphere: 240 marker verts per
@@ -1250,10 +1257,13 @@ mod tests {
         assert!(crate::app::meta_pref(&root.children[0], "Wireframe"));
         let mut cache = crate::geometry::SimCache::default();
         let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+            &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
         assert!(!labels.is_empty() && labels.len() < 16 * 24 * 6);
         assert_eq!(markers.len(), labels.len() * 240);
         assert!(labels.iter().any(|(_, i)| *i > 0));
+        // The marker color parameter flows into the vertices (linearized).
+        let expect = cce_ui::colors::to_linear_rgb([1.0, 0.5, 0.0]);
+        assert!(markers.iter().all(|v| v.color == expect));
         assert_eq!(wires.len(), (16 * 24 * 6 / 3) * 6);
         // Normals: one whisker per distinct point, pointing OUT of the
         // sphere (center (0, 0.55, 0)) — this pins the winding/negation
@@ -1275,7 +1285,7 @@ mod tests {
         root.children[0].geometry_visible = false;
         let mut cache = crate::geometry::SimCache::default();
         let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, 0.02, &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
+            &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
         assert!(markers.is_empty() && labels.is_empty() && wires.is_empty() && normals.is_empty());
     }
 

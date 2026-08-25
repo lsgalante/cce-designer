@@ -1096,6 +1096,9 @@ pub struct State {
     /// World-unit radius of the meta "Point Markers" overlay — the Guides
     /// subnet's "Point Marker Size" control (stored there in thousandths).
     pub meta_marker_size: f32,
+    /// sRGB color of the meta "Point Markers" overlay — the Guides subnet's
+    /// "Point Marker Color" control (stored there as hex, like Grid Color).
+    pub meta_marker_color: [f32; 3],
     /// The raster scene's model-view-projection and the viewport pane rect in
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
@@ -3278,6 +3281,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             meta_normal_verts: Vec::new(),
             meta_normal_count: 0,
             meta_marker_size: 0.02,
+            meta_marker_color: [0.85, 0.85, 1.0],
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             last_viewport_rt_mode: false,

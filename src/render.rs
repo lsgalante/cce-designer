@@ -858,7 +858,7 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         let (markers, labels, wires, normals) = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            collect_meta_overlays(&self.fs_root, self.meta_marker_size, &mut sim)
+            collect_meta_overlays(&self.fs_root, self.meta_marker_size, self.meta_marker_color, &mut sim)
         };
         self.sim_cache = sim_cache;
         self.meta_marker_verts = markers;
@@ -899,6 +899,7 @@ impl State {
 pub(crate) fn collect_meta_overlays(
     root: &FsNode,
     point_size: f32,
+    marker_color: [f32; 3],
     sim: &mut crate::geometry::EvalSim,
 ) -> (
     Vec<crate::geometry::Vertex3D>,
@@ -915,6 +916,7 @@ pub(crate) fn collect_meta_overlays(
         node: &FsNode,
         parent_visible: bool,
         point_size: f32,
+        marker_color: [f32; 3],
         markers: &mut Vec<crate::geometry::Vertex3D>,
         labels: &mut Vec<([f32; 3], u32)>,
         wires: &mut Vec<crate::geometry::Vertex3D>,
@@ -956,7 +958,7 @@ pub(crate) fn collect_meta_overlays(
                     markers.extend(crate::geometry::points_vertices(
                         &src,
                         point_size,
-                        cce_ui::colors::to_linear_rgb([0.85, 0.85, 1.0]),
+                        cce_ui::colors::to_linear_rgb(marker_color),
                     ));
                 }
                 if want_normals {
@@ -1016,11 +1018,11 @@ pub(crate) fn collect_meta_overlays(
             }
         }
         for c in &node.children {
-            visit(root, c, is_visible, point_size, markers, labels, wires, normals, sim);
+            visit(root, c, is_visible, point_size, marker_color, markers, labels, wires, normals, sim);
         }
     }
     for c in &root.children {
-        visit(root, c, true, point_size, &mut markers, &mut labels, &mut wires, &mut normals, sim);
+        visit(root, c, true, point_size, marker_color, &mut markers, &mut labels, &mut wires, &mut normals, sim);
     }
     // A dense mesh can label tens of thousands of points; the text pass is
     // per-frame, so cap it rather than melt the frame rate.
