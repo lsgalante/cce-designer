@@ -275,6 +275,18 @@ impl State {
             // drops the widget's Text prims, and the labels keep coming from
             // append_frame_text like every other slot — no doubling.
             w.paint_self(&self.ui_context, pc);
+        } else if idx == SPREADSHEET_IDX {
+            // Modern-paint pane: the plate from the designer (span-widened
+            // radii + focus tint), then Spreadsheet::paint authors the grid —
+            // header band, zebra rows, separators, dividers, scrollbar. The
+            // fall-through used to draw the same quads via the reverse bridge
+            // (extra_quads); painting directly keeps the widget's emission
+            // order authoritative. Not a subtree painter: paint_self drops
+            // the Text prims and appends the own-labels bridge (header + cell
+            // labels), so append_frame_text skips this slot.
+            let (wx, wy, ww2, wh2) = w.rect();
+            append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
+            w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {
             // The scene viewer's lip is the window's own backplate edge: the
             // 3D canvas is full-bleed (CANVAS_IDX covers the window; the other
@@ -622,11 +634,11 @@ impl State {
                 continue;
             }
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
-            // The playbar's and params pane's text is already in the geometry
-            // pass (paint_self — see paint_widget's PLAYBAR_IDX / PARAM_IDX
-            // branches: subtree text for the playbar, the own-labels bridge
-            // with per-row fonts and code-box bounds for the params).
-            if is_menubar || i == PLAYBAR_IDX || i == PARAM_IDX {
+            // Panes on the paint_self path carry their text in the geometry
+            // pass already (see paint_widget: subtree text for the playbar,
+            // the own-labels bridge for the params and spreadsheet panes) —
+            // drawing them here again would double it.
+            if is_menubar || i == PLAYBAR_IDX || i == PARAM_IDX || i == SPREADSHEET_IDX {
                 continue;
             }
             let is_node = i == CONTENT_IDX;
