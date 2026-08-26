@@ -836,6 +836,17 @@ pub struct PendingWindowDrag {
     pub action: cce_ui::engine::WindowAction,
 }
 
+/// Animated drop-target glow (see [`State::drop_glow`]).
+#[derive(Debug, Clone, Copy)]
+pub struct DropGlow {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// 0..1 — scales the whole feather's alpha profile.
+    pub alpha: f32,
+}
+
 pub struct State {
     /// Window title; the engine polls `Application::settings` and applies it.
     pub title: String,
@@ -999,6 +1010,12 @@ pub struct State {
     pub last_autosave_time: std::time::Instant,
     pub active_menu_cloud_pid: Option<u32>,
     pub active_menu_cloud_idx: Option<(usize, usize)>,
+    /// The drop-target glow's animation state: position glides toward the
+    /// cell an in-flight node drag will land on, alpha fades in on drag
+    /// start and out after release (the glow lingers at its last cell while
+    /// fading). None once fully faded. Advanced in [`State::tick_frame`],
+    /// drawn by the CONTENT branch in render.rs.
+    pub drop_glow: Option<DropGlow>,
     pub uniform_background: bool,
     pub network_opacity: f32,
     /// Node-domain opacity (style.surface.graph.node.opacity) — independent of
@@ -3296,6 +3313,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             // Cells and gaps render as ONE surface (the graph's bg_color is
             // the cell tint): the checkerboard grout is off by design; the
             // drop-target glow (render.rs) carries the only cell highlight.
+            drop_glow: None,
             uniform_background: true,
             network_opacity: 0.95,
             node_opacity: 1.0,
@@ -5683,6 +5701,48 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let now = Instant::now();
         self.last_frame = now;
 
+        // Drop-target glow animation: exponential smoothing toward the live
+        // target — the position GLIDES between cells, alpha fades in while a
+        // drag is in flight and out after it ends (lingering at the last
+        // cell). Exponential rates are frame-rate independent.
+        let mut glow_animating = false;
+        {
+            let target = self.graph().drop_target_cell_rect();
+            let ease = |k: f32| 1.0 - (-k * dt.max(1e-4)).exp();
+            match (&mut self.drop_glow, target) {
+                (Some(g), Some((tx, ty, tw, th))) => {
+                    let move_f = ease(18.0);
+                    g.x += (tx - g.x) * move_f;
+                    g.y += (ty - g.y) * move_f;
+                    g.w += (tw - g.w) * move_f;
+                    g.h += (th - g.h) * move_f;
+                    g.alpha += (1.0 - g.alpha) * ease(14.0);
+                    glow_animating = (tx - g.x).abs() > 0.3
+                        || (ty - g.y).abs() > 0.3
+                        || g.alpha < 0.995;
+                    if !glow_animating {
+                        g.x = tx;
+                        g.y = ty;
+                        g.alpha = 1.0;
+                    }
+                    // A settled glow still needs redraws only while the drag
+                    // moves it — PointerMove frames cover that.
+                }
+                (Some(g), None) => {
+                    g.alpha -= g.alpha * ease(10.0);
+                    if g.alpha < 0.02 {
+                        self.drop_glow = None;
+                    }
+                    glow_animating = true;
+                }
+                (None, Some((tx, ty, tw, th))) => {
+                    self.drop_glow = Some(DropGlow { x: tx, y: ty, w: tw, h: th, alpha: 0.0 });
+                    glow_animating = true;
+                }
+                (None, None) => {}
+            }
+        }
+
         // A simnet's geometry is a function of the frame, so advancing the
         // timeline invalidates the scene the way editing a node does. Gated on
         // the graph actually containing one: without this, every frame of
@@ -5908,7 +5968,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.read_panel_offsets();
         }
 
-        tick_changed || panned || reclaimed
+        tick_changed || panned || reclaimed || glow_animating
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.
