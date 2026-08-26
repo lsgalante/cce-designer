@@ -656,9 +656,9 @@ mod tests {
         assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowDown)), Some(Action::PlayPauseReverse));
     }
 
-    /// The two play toggles are per-direction: same-direction press pauses,
-    /// other-direction press redirects without stopping — and the reverse
-    /// tick runs the frame counter down, wrapping start→end.
+    /// Either play toggle pauses a moving timeline; direction only chooses
+    /// what starts from a stop — and the reverse tick runs the frame counter
+    /// down, wrapping start→end.
     #[test]
     fn test_reverse_playback_semantics_and_wrap() {
         let mut state = State::new(false);
@@ -669,17 +669,18 @@ mod tests {
             assert!(pb.playing && pb.reversed, "Down from stopped plays in reverse");
         }
         state.execute_action(Action::PlayPause);
+        assert!(!state.slots.playbar.inner().playing, "Up while reverse-playing pauses");
+        state.execute_action(Action::PlayPause);
         {
             let pb = state.slots.playbar.inner();
-            assert!(pb.playing && !pb.reversed, "Up while reversed redirects forward, not pause");
+            assert!(pb.playing && !pb.reversed, "Up from stopped plays forward");
         }
         state.execute_action(Action::PlayPauseReverse);
-        {
-            let pb = state.slots.playbar.inner();
-            assert!(pb.playing && pb.reversed, "Down while forward redirects to reverse");
-        }
+        assert!(!state.slots.playbar.inner().playing, "Down while forward-playing pauses");
         state.execute_action(Action::PlayPauseReverse);
-        assert!(!state.slots.playbar.inner().playing, "Down while reversed pauses");
+        assert!(state.slots.playbar.inner().reversed, "Down from stopped is reverse again");
+        state.execute_action(Action::PlayPauseReverse);
+        assert!(!state.slots.playbar.inner().playing, "same-direction press pauses");
 
         {
             let pb = state.slots.playbar.inner_mut();

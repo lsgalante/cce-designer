@@ -4244,26 +4244,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 );
                 self.sync_pane_focus();
             }
-            // The two play toggles are per-direction: a press in the OTHER
-            // direction while playing redirects instead of pausing (Up while
-            // reverse-playing plays forward, and vice versa) — matching the
-            // usual up/down transport feel.
-            Action::PlayPause => {
+            // Either play toggle PAUSES while anything is playing — direction
+            // only chooses what starts from a stop. (Redirect-without-stopping
+            // was tried and rejected: a moving timeline should always stop on
+            // the first transport press.)
+            Action::PlayPause | Action::PlayPauseReverse => {
                 let pb = self.slots.playbar.inner_mut();
-                if pb.playing && !pb.reversed {
+                if pb.playing {
                     pb.playing = false;
                 } else {
                     pb.playing = true;
-                    pb.reversed = false;
-                }
-            }
-            Action::PlayPauseReverse => {
-                let pb = self.slots.playbar.inner_mut();
-                if pb.playing && pb.reversed {
-                    pb.playing = false;
-                } else {
-                    pb.playing = true;
-                    pb.reversed = true;
+                    pb.reversed = action == Action::PlayPauseReverse;
                 }
             }
             // Whole-frame stepping off the ROUNDED current frame: during
