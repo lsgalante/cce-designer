@@ -16,6 +16,9 @@ pub enum Action {
     SaveAs,
     NextContext,
     PrevContext,
+    PlayPause,
+    FrameNext,
+    FramePrev,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

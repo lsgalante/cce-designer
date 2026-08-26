@@ -594,6 +594,24 @@ mod tests {
         assert_eq!(m.match_action(&ctrl_shift, &lower), Some(Action::SaveAs));
     }
 
+    /// The playbar transport chords: plain arrows drive the timeline (Up =
+    /// play/pause, Left/Right = step), and a held modifier must NOT match —
+    /// modified arrows stay free for other bindings.
+    #[test]
+    fn test_playbar_transport_keys() {
+        use cce_ui::widget::{Key, NamedKey};
+        let mut m = ShortcutManager::new();
+        m.register("Up", Action::PlayPause).unwrap();
+        m.register("Right", Action::FrameNext).unwrap();
+        m.register("Left", Action::FramePrev).unwrap();
+        let plain = crate::app::ModifiersState::default();
+        let ctrl = crate::app::ModifiersState { ctrl: true, ..Default::default() };
+        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowUp)), Some(Action::PlayPause));
+        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowRight)), Some(Action::FrameNext));
+        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowLeft)), Some(Action::FramePrev));
+        assert_eq!(m.match_action(&ctrl, &Key::Named(NamedKey::ArrowUp)), None);
+    }
+
     #[test]
     fn test_load_default_project() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");

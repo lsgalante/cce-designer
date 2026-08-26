@@ -3166,6 +3166,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             register("save_document_as", "Ctrl+Shift+s", Action::SaveAs);
             register("next_context", "Ctrl+Tab", Action::NextContext);
             register("previous_context", "Ctrl+Shift+Tab", Action::PrevContext);
+            register("play_pause", "Up", Action::PlayPause);
+            register("frame_next", "Right", Action::FrameNext);
+            register("frame_prev", "Left", Action::FramePrev);
         }
 
         let mut state = Self {
@@ -4225,6 +4228,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     action == Action::PrevContext,
                 );
                 self.sync_pane_focus();
+            }
+            Action::PlayPause => {
+                let pb = self.slots.playbar.inner_mut();
+                pb.playing = !pb.playing;
+            }
+            // Whole-frame stepping off the ROUNDED current frame: during
+            // playback the playhead sits between frames, and stepping from
+            // the fractional value would land off the frame grid. The scene
+            // rebuild follows from tick_frame's last_sim_frame diff.
+            Action::FrameNext | Action::FramePrev => {
+                let step = if action == Action::FrameNext { 1.0 } else { -1.0 };
+                let pb = self.slots.playbar.inner_mut();
+                pb.current_frame = (pb.current_frame.round() + step).clamp(pb.start_frame, pb.end_frame);
             }
         }
         if settings_changed {
@@ -5313,6 +5329,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     return true;
                 }
 
+                // Playbar transport dispatches ahead of every remaining key
+                // path so the timeline answers from any pane ("all contexts").
+                // It sits AFTER the param pane's chance on purpose: a focused
+                // text/code field consumed the arrows above for its caret.
+                if event.state == ElementState::Pressed {
+                    if let Some(action @ (Action::PlayPause | Action::FrameNext | Action::FramePrev)) =
+                        self.shortcut_manager.match_action(&self.modifiers, &event.logical_key)
+                    {
+                        self.execute_action(action);
+                        return true;
+                    }
+                }
+
                 if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) {
                     self.graph_mut().cancel_connecting();
                     return true;
@@ -5325,19 +5354,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                         let mut delta = None;
 
+                        // Grid-cursor movement is hjkl-only: the arrows belong
+                        // to the playbar transport (dispatched above), in every
+                        // pane and context.
                         match &event.logical_key {
-                            Key::Named(NamedKey::ArrowUp) => {
-                                delta = Some((0, -1));
-                            }
-                            Key::Named(NamedKey::ArrowDown) => {
-                                delta = Some((0, 1));
-                            }
-                            Key::Named(NamedKey::ArrowLeft) => {
-                                delta = Some((-1, 0));
-                            }
-                            Key::Named(NamedKey::ArrowRight) => {
-                                delta = Some((1, 0));
-                            }
                             Key::Character(s) => {
                                 match s.as_str() {
                                     "k" | "K" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
