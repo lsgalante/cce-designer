@@ -165,6 +165,16 @@ pub struct ProjectViewState {
     pub current_path: Vec<usize>,
     #[serde(default)]
     pub selected_node: Option<usize>,
+    /// Collapsed plate panes by name ("network", "parameters", "spreadsheet",
+    /// "playbar"). Absent from older saves — an empty list expands everything,
+    /// so loading is deterministic either way.
+    #[serde(default)]
+    pub collapsed_panes: Vec<String>,
+    /// Splitter positions as fractions of the window width (splitter1,
+    /// splitter2), so a project restores its column proportions at any
+    /// window size. None in older saves keeps the live positions.
+    #[serde(default)]
+    pub splitters: Option<(f32, f32)>,
 }
 
 fn default_camera() -> String {

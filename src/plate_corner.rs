@@ -304,6 +304,29 @@ pub fn pane_detach_flag(idx: usize) -> Option<&'static str> {
     }
 }
 
+/// The stable external name of a plate pane — the identity used by the MCP
+/// pane tools and by pane state persisted in project files.
+pub fn pane_name_from_slot(idx: usize) -> Option<&'static str> {
+    match idx {
+        NETWORK_PANEL_IDX => Some("network"),
+        PARAM_IDX => Some("parameters"),
+        SPREADSHEET_IDX => Some("spreadsheet"),
+        PLAYBAR_IDX => Some("playbar"),
+        _ => None,
+    }
+}
+
+/// The inverse of [`pane_name_from_slot`], accepting the "params" shorthand.
+pub fn pane_slot_from_name(name: &str) -> Option<usize> {
+    match name.to_ascii_lowercase().as_str() {
+        "network" => Some(NETWORK_PANEL_IDX),
+        "parameters" | "params" => Some(PARAM_IDX),
+        "spreadsheet" => Some(SPREADSHEET_IDX),
+        "playbar" => Some(PLAYBAR_IDX),
+        _ => None,
+    }
+}
+
 /// The pane an argv entry asks for, if any — the inverse of [`pane_detach_flag`].
 pub fn pane_from_detach_flag(arg: &str) -> Option<usize> {
     PLATE_SLOTS

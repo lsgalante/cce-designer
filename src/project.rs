@@ -80,17 +80,50 @@ impl State {
 
 
 
+    /// The view-state block every save and snapshot shares. Pane visibility
+    /// is NOT here — it lives in the root meta node's View subnet params,
+    /// which ride `fs_root` into the file; this carries the rest of the pane
+    /// state (collapse + splitter proportions) beside the camera/pan fields.
+    pub(crate) fn project_view_state(&self) -> ProjectViewState {
+        let collapsed_panes = crate::plate_corner::PLATE_SLOTS
+            .iter()
+            .filter(|&&i| self.collapsed_panes[i])
+            .filter_map(|&i| crate::plate_corner::pane_name_from_slot(i))
+            .map(str::to_string)
+            .collect();
+        let splitters = if self.width > 1.0 {
+            Some((
+                self.splitter_layout.splitter1_x / self.width,
+                self.splitter_layout.splitter2_x / self.width,
+            ))
+        } else {
+            None
+        };
+        ProjectViewState {
+            active_camera: self.active_camera.clone(),
+            pan: (self.pan_x, self.pan_y),
+            current_path: self.current_path.clone(),
+            selected_node: self.graph().selected_node(),
+            collapsed_panes,
+            splitters,
+        }
+    }
+
     pub(crate) fn save_to_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        // The View subnet params mirror the live pane flags, but nothing
+        // refreshes them on a pane toggle — sync the mirror now so the saved
+        // tree carries the pane state that is actually on screen. Main window
+        // only: a detached pane window writing the sync channel would stamp
+        // its single-pane layout into the file, and the main window's next
+        // reload would apply it (the load side is gated the same way).
+        if !self.is_detached_network && self.detached_pane.is_none() {
+            self.ensure_menubar_subnets();
+        }
         if path.file_name().map_or(false, |n| n == "default_project.json") {
             let proj = Project {
                 name: "Default Project".to_string(),
                 root: self.fs_root.clone(),
-                view_state: ProjectViewState {
-                    active_camera: self.active_camera.clone(),
-                    pan: (self.pan_x, self.pan_y),
-                    current_path: self.current_path.clone(),
-                    selected_node: self.graph().selected_node(),
-                },
+                view_state: self.project_view_state(),
             };
             let content = serde_json::to_string_pretty(&proj)?;
             fs::write(path, content)?;
@@ -111,17 +144,70 @@ impl State {
         let proj = Project {
             name: project_name,
             root: self.fs_root.clone(),
-            view_state: ProjectViewState {
-                active_camera: self.active_camera.clone(),
-                pan: (self.pan_x, self.pan_y),
-                current_path: self.current_path.clone(),
-                selected_node: self.graph().selected_node(),
-            },
+            view_state: self.project_view_state(),
         };
         let content = serde_json::to_string_pretty(&proj)?;
         fs::write(&state_file_path, content)?;
         self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
         Ok(())
+    }
+
+    /// The pane-visibility toggles as saved in a project tree's meta→View
+    /// subnet. Read them off the LOADED tree before `ensure_menubar_subnets`
+    /// runs — it refreshes those params from live state, clobbering what the
+    /// file said.
+    fn project_pane_visibility(root: &FsNode) -> Vec<(String, bool)> {
+        root.children
+            .iter()
+            .find(|c| c.node_type == "meta")
+            .and_then(|m| m.children.iter().find(|c| c.name == "View"))
+            .map(|v| {
+                v.params
+                    .iter()
+                    .filter(|p| p.param_type == "toggle" && p.name.starts_with("Show ") && p.name.ends_with(" Pane"))
+                    .filter_map(|p| p.default.parse::<bool>().ok().map(|b| (p.name.clone(), b)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Apply a loaded project's pane state: visibility diffs fire the same
+    /// menu actions the View toggles use (slots, checkmarks, focus fixup all
+    /// included), then collapse and splitter proportions. Main window only —
+    /// detached windows own their single-pane layout, and the sync channel
+    /// must not re-shape them.
+    fn apply_pane_state_from_project(&mut self, visibility: &[(String, bool)], vs: &ProjectViewState) {
+        if self.is_detached_network || self.detached_pane.is_some() {
+            return;
+        }
+        for (name, desired) in visibility {
+            let cur = match name.as_str() {
+                "Show Network Pane" => Some(self.show_network),
+                "Show Viewport Pane" => Some(self.show_viewport),
+                "Show Parameters Pane" => Some(self.show_parameters),
+                "Show Spreadsheet Pane" => Some(self.show_spreadsheet),
+                "Show Playbar Pane" => Some(self.show_playbar),
+                _ => None,
+            };
+            if cur == Some(!*desired) {
+                self.execute_menu_action(name);
+            }
+        }
+        // Absent names expand: an older save (no collapse list) loads with
+        // every pane open rather than inheriting this session's collapses.
+        for &idx in crate::plate_corner::PLATE_SLOTS.iter() {
+            let desired = crate::plate_corner::pane_name_from_slot(idx)
+                .map_or(false, |n| vs.collapsed_panes.iter().any(|c| c == n));
+            self.set_pane_collapsed(idx, desired);
+        }
+        if let Some((f1, f2)) = vs.splitters {
+            if self.width > 1.0 && f1 > 0.02 && f2 < 0.98 && f1 < f2 {
+                self.splitter_layout.splitter1_x = f1 * self.width;
+                self.splitter_layout.splitter2_x = f2 * self.width;
+                self.rebuild_positions();
+                self.apply_layout();
+            }
+        }
     }
 
     pub(crate) fn load_from_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -130,9 +216,11 @@ impl State {
             let mut proj: Project = serde_json::from_str(&content)?;
             crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
             crate::app::ensure_meta_children(&mut proj.root);
+            let saved_pane_vis = Self::project_pane_visibility(&proj.root);
             self.fs_root = proj.root;
             self.ensure_menubar_subnets();
             self.apply_settings_from_menubar_subnets();
+            self.apply_pane_state_from_project(&saved_pane_vis, &proj.view_state);
             self.active_camera = proj.view_state.active_camera;
             self.pan_x = proj.view_state.pan.0;
             self.pan_y = proj.view_state.pan.1;
@@ -186,9 +274,11 @@ impl State {
         let mut proj: Project = serde_json::from_str(&content)?;
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         crate::app::ensure_meta_children(&mut proj.root);
+        let saved_pane_vis = Self::project_pane_visibility(&proj.root);
         self.fs_root = proj.root;
         self.ensure_menubar_subnets();
         self.apply_settings_from_menubar_subnets();
+        self.apply_pane_state_from_project(&saved_pane_vis, &proj.view_state);
         self.active_camera = proj.view_state.active_camera;
         self.pan_x = proj.view_state.pan.0;
         self.pan_y = proj.view_state.pan.1;
@@ -636,9 +726,12 @@ impl State {
 
         // 2. View subnet — the pane-visibility switches, migrated off Main's
         // View section (the Guides pattern: a setting's home is a utility
-        // node; the header menu items stay as command access). Pane state is
-        // session-owned and never applied from the project, so the toggles
-        // seed and refresh from live state.
+        // node; the header menu items stay as command access). The toggles
+        // refresh from live state — mid-session, the live flags are the
+        // authority — but they are ALSO the persisted pane state: save_to_file
+        // syncs this mirror before cloning the tree, and load_from_file reads
+        // the loaded values (before this refresh clobbers them) and applies
+        // the diffs via apply_pane_state_from_project.
         let view_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "View", "utility", (0.0, 2.0));
         view_node.children.clear();
         ensure_param(view_node, "Panes", "section", "", &[], None, None, None);

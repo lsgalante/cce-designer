@@ -608,12 +608,7 @@ impl State {
         Project {
             name: "Project".to_string(),
             root: self.fs_root.clone(),
-            view_state: ProjectViewState {
-                active_camera: self.active_camera.clone(),
-                pan: (self.pan_x, self.pan_y),
-                current_path: self.current_path.clone(),
-                selected_node: self.graph().selected_node(),
-            },
+            view_state: self.project_view_state(),
         }
     }
 
@@ -905,25 +900,15 @@ impl State {
                 }
             }
             McpAction::SetPaneCollapsed { pane, collapsed } => {
-                let idx = match pane.to_ascii_lowercase().as_str() {
-                    "network" => crate::slots::NETWORK_PANEL_IDX,
-                    "parameters" | "params" => crate::slots::PARAM_IDX,
-                    "spreadsheet" => crate::slots::SPREADSHEET_IDX,
-                    "playbar" => crate::slots::PLAYBAR_IDX,
-                    other => return Err(format!("unknown pane: {other}")),
-                };
+                let idx = crate::plate_corner::pane_slot_from_name(&pane)
+                    .ok_or_else(|| format!("unknown pane: {pane}"))?;
                 state.set_pane_collapsed(idx, collapsed);
                 needs_redraw = true;
                 Ok(format!("{pane} collapsed={collapsed}"))
             }
             McpAction::SetPaneDetached { pane, detached } => {
-                let idx = match pane.to_ascii_lowercase().as_str() {
-                    "network" => crate::slots::NETWORK_PANEL_IDX,
-                    "parameters" | "params" => crate::slots::PARAM_IDX,
-                    "spreadsheet" => crate::slots::SPREADSHEET_IDX,
-                    "playbar" => crate::slots::PLAYBAR_IDX,
-                    other => return Err(format!("unknown pane: {other}")),
-                };
+                let idx = crate::plate_corner::pane_slot_from_name(&pane)
+                    .ok_or_else(|| format!("unknown pane: {pane}"))?;
                 state.set_pane_detached(idx, detached);
                 needs_redraw = true;
                 Ok(format!("{pane} detached={}", state.pane_is_detached(idx)))

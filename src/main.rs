@@ -594,6 +594,48 @@ mod tests {
         assert_eq!(m.match_action(&ctrl_shift, &lower), Some(Action::SaveAs));
     }
 
+    /// Pane state rides save files: visibility through the meta→View subnet
+    /// params (synced at save, applied on load), collapse and splitter
+    /// proportions through view_state. A fresh State loading the file must
+    /// come out shaped like the one that saved it.
+    #[test]
+    fn test_pane_state_round_trips_through_save() {
+        use crate::slots::PARAM_IDX;
+        let dir = std::env::temp_dir().join(format!("cce-designer-pane-state-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut a = State::new(false);
+        a.width = 1600.0;
+        a.ensure_menubar_subnets();
+        assert!(a.show_viewport && !a.show_spreadsheet, "test assumes the default pane set");
+        a.execute_menu_action("Show Viewport Pane");
+        a.execute_menu_action("Show Spreadsheet Pane");
+        a.set_pane_collapsed(PARAM_IDX, true);
+        a.splitter_layout.splitter1_x = 400.0;
+        a.splitter_layout.splitter2_x = 1200.0;
+        a.save_to_file(&dir).expect("save");
+
+        let mut b = State::new(false);
+        b.width = 800.0;
+        b.ensure_menubar_subnets();
+        b.load_from_file(&dir).expect("load");
+        assert!(!b.show_viewport, "viewport hidden in the save must load hidden");
+        assert!(b.show_spreadsheet, "spreadsheet shown in the save must load shown");
+        assert!(b.collapsed_panes[PARAM_IDX], "param pane collapse must round-trip");
+        assert!((b.splitter_layout.splitter1_x - 200.0).abs() < 1.0,
+            "splitters restore as fractions: 400/1600 of an 800-wide window = 200, got {}",
+            b.splitter_layout.splitter1_x);
+
+        // A detached pane window must ignore the same file's pane state.
+        let mut d = State::new(true);
+        d.ensure_menubar_subnets();
+        let vp_before = d.show_viewport;
+        d.load_from_file(&dir).expect("load detached");
+        assert_eq!(d.show_viewport, vp_before, "detached windows keep their own pane layout");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// The playbar transport chords: plain arrows drive the timeline (Up =
     /// play/pause, Left/Right = step), and a held modifier must NOT match —
     /// modified arrows stay free for other bindings.
@@ -1830,6 +1872,7 @@ mod tests {
             pan: (1.5, -2.5),
             current_path: vec![0],
             selected_node: Some(2),
+            ..Default::default()
         };
         let proj = Project {
             name: "Test Project".to_string(),
