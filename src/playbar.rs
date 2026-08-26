@@ -13,6 +13,10 @@ use cce_ui::widget::*;
 #[derive(Debug, Clone)]
 pub struct Playbar {
     pub playing: bool,
+    /// Playback direction while `playing`: reverse runs the frame counter
+    /// down and wraps start→end. Simnets re-solve from their seed on every
+    /// backward frame (steps are not invertible), exactly like scrubbing.
+    pub reversed: bool,
     pub current_frame: f32,
     pub start_frame: f32,
     pub end_frame: f32,
@@ -30,6 +34,7 @@ impl Playbar {
     pub fn new() -> Adapted<Playbar> {
         Adapted::new(Self {
             playing: false,
+            reversed: false,
             current_frame: 1.0,
             start_frame: 1.0,
             end_frame: 240.0,
@@ -232,7 +237,13 @@ impl Input for Playbar {
                 ElementState::Pressed => {
                     let b = self.button_rect(rect);
                     if *x >= b.x && *x <= b.x + b.width && *y >= b.y && *y <= b.y + b.height {
+                        // The button is the FORWARD transport: playing (either
+                        // direction) pauses; paused starts forward. Reverse is
+                        // the Down-arrow chord's domain.
                         self.playing = !self.playing;
+                        if self.playing {
+                            self.reversed = false;
+                        }
                         return true;
                     }
                     let t = self.track_rect(rect);
@@ -263,10 +274,15 @@ impl Input for Playbar {
         if !self.playing {
             return false;
         }
-        self.current_frame += dt * self.fps;
+        let dir = if self.reversed { -1.0 } else { 1.0 };
+        self.current_frame += dir * dt * self.fps;
+        let range = (self.end_frame - self.start_frame).max(1.0);
         if self.current_frame > self.end_frame {
-            let range = (self.end_frame - self.start_frame).max(1.0);
             self.current_frame = self.start_frame + (self.current_frame - self.start_frame) % range;
+        } else if self.current_frame < self.start_frame {
+            // The reverse wrap, mirroring the forward one: run off the start,
+            // come back in from the end.
+            self.current_frame = self.end_frame - (self.start_frame - self.current_frame) % range;
         }
         true
     }

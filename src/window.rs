@@ -630,6 +630,7 @@ impl State {
             v["playbar"] = serde_json::json!({
                 "frame": pb.current_frame.round() as i64,
                 "playing": pb.playing,
+                "reversed": pb.reversed,
                 "start_frame": pb.start_frame.round() as i64,
                 "end_frame": pb.end_frame.round() as i64,
             });

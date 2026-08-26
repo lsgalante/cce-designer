@@ -3177,6 +3177,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             register("next_context", "Ctrl+Tab", Action::NextContext);
             register("previous_context", "Ctrl+Shift+Tab", Action::PrevContext);
             register("play_pause", "Up", Action::PlayPause);
+            register("play_pause_reverse", "Down", Action::PlayPauseReverse);
             register("frame_next", "Right", Action::FrameNext);
             register("frame_prev", "Left", Action::FramePrev);
         }
@@ -4243,9 +4244,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 );
                 self.sync_pane_focus();
             }
+            // The two play toggles are per-direction: a press in the OTHER
+            // direction while playing redirects instead of pausing (Up while
+            // reverse-playing plays forward, and vice versa) — matching the
+            // usual up/down transport feel.
             Action::PlayPause => {
                 let pb = self.slots.playbar.inner_mut();
-                pb.playing = !pb.playing;
+                if pb.playing && !pb.reversed {
+                    pb.playing = false;
+                } else {
+                    pb.playing = true;
+                    pb.reversed = false;
+                }
+            }
+            Action::PlayPauseReverse => {
+                let pb = self.slots.playbar.inner_mut();
+                if pb.playing && pb.reversed {
+                    pb.playing = false;
+                } else {
+                    pb.playing = true;
+                    pb.reversed = true;
+                }
             }
             // Whole-frame stepping off the ROUNDED current frame: during
             // playback the playhead sits between frames, and stepping from
@@ -5352,11 +5371,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 // path so the timeline answers from any pane ("all contexts").
                 // It sits AFTER the param pane's chance on purpose: a focused
                 // text/code field consumed the arrows above for its caret.
+                // Steps auto-repeat (holding Right scrubs); the play toggles
+                // fire once per physical press, or a held key would flicker
+                // play/pause at the repeat rate.
                 if event.state == ElementState::Pressed {
-                    if let Some(action @ (Action::PlayPause | Action::FrameNext | Action::FramePrev)) =
+                    if let Some(action @ (Action::PlayPause | Action::PlayPauseReverse | Action::FrameNext | Action::FramePrev)) =
                         self.shortcut_manager.match_action(&self.modifiers, &event.logical_key)
                     {
-                        self.execute_action(action);
+                        let is_toggle = matches!(action, Action::PlayPause | Action::PlayPauseReverse);
+                        if !(is_toggle && event.repeat) {
+                            self.execute_action(action);
+                        }
                         return true;
                     }
                 }

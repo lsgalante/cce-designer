@@ -652,6 +652,48 @@ mod tests {
         assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowRight)), Some(Action::FrameNext));
         assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowLeft)), Some(Action::FramePrev));
         assert_eq!(m.match_action(&ctrl, &Key::Named(NamedKey::ArrowUp)), None);
+        m.register("Down", Action::PlayPauseReverse).unwrap();
+        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowDown)), Some(Action::PlayPauseReverse));
+    }
+
+    /// The two play toggles are per-direction: same-direction press pauses,
+    /// other-direction press redirects without stopping — and the reverse
+    /// tick runs the frame counter down, wrapping start→end.
+    #[test]
+    fn test_reverse_playback_semantics_and_wrap() {
+        let mut state = State::new(false);
+
+        state.execute_action(Action::PlayPauseReverse);
+        {
+            let pb = state.slots.playbar.inner();
+            assert!(pb.playing && pb.reversed, "Down from stopped plays in reverse");
+        }
+        state.execute_action(Action::PlayPause);
+        {
+            let pb = state.slots.playbar.inner();
+            assert!(pb.playing && !pb.reversed, "Up while reversed redirects forward, not pause");
+        }
+        state.execute_action(Action::PlayPauseReverse);
+        {
+            let pb = state.slots.playbar.inner();
+            assert!(pb.playing && pb.reversed, "Down while forward redirects to reverse");
+        }
+        state.execute_action(Action::PlayPauseReverse);
+        assert!(!state.slots.playbar.inner().playing, "Down while reversed pauses");
+
+        {
+            let pb = state.slots.playbar.inner_mut();
+            pb.playing = true;
+            pb.reversed = true;
+            pb.current_frame = 1.5;
+        }
+        let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 30.0 };
+        let moved =
+            cce_ui::widget::Input::tick(state.slots.playbar.inner_mut(), 0.1, rect);
+        assert!(moved, "reverse playback advances the frame");
+        let f = state.slots.playbar.inner().current_frame;
+        assert!(f > 200.0, "running off the start wraps to the end, got {f}");
+        assert!(state.slots.playbar.inner().playing, "the wrap does not stop playback");
     }
 
     #[test]

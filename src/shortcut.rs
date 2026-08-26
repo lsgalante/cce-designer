@@ -17,6 +17,7 @@ pub enum Action {
     NextContext,
     PrevContext,
     PlayPause,
+    PlayPauseReverse,
     FrameNext,
     FramePrev,
 }
