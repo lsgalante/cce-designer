@@ -401,12 +401,17 @@ impl State {
                     });
                 }
             }
-        } else {
-            // The params scrollbar sinks behind the pane plate when idle and rises above the
-            // pane content when active (dragged / recently scrolled / hovered). It straddles
-            // the plate here rather than riding the pane's `extra_quads`, so its depth can
-            // change without touching the rest of the pane chrome.
-            let param_scrollbar = if idx == PARAM_IDX {
+        } else if idx == PARAM_IDX {
+            // Modern-paint pane: ParametersBg::paint_ui (via paint_self)
+            // authors the complete row chrome — wells, arcs, reliefs, throat
+            // fillets, thumb spheres, scene rows, flat quads — plus the
+            // fonted labels from the own-labels bridge, so append_frame_text
+            // skips this slot. The pane keeps three designer-owned pieces:
+            // the plate (span-widened radii + focus tint), the viewport clip
+            // (a clip inside the widget would not survive paint_self's
+            // replay), and the scrollbar straddle — idle it sinks behind the
+            // translucent plate, active it rides above the content.
+            let param_scrollbar = {
                 let pb = self
                     .slots
                     .param
@@ -418,11 +423,7 @@ impl State {
                 } else {
                     None
                 }
-            } else {
-                None
             };
-
-            // Idle: draw the scrollbar first so the translucent pane plate settles over it.
             // Track and thumb are pills — half-width radius on the DE corner
             // family (squircle when corner_shape > 2), like the nodes.
             if let Some((quads, false)) = &param_scrollbar {
@@ -434,64 +435,26 @@ impl State {
             let (wx, wy, ww2, wh2) = w.rect();
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
 
-            // The params pane serves its chrome through the legacy plain-quad view,
-            // which carries flat quads only — the controls' rounded-rect backgrounds
-            // (textbox/dropdown/button/toggle/color) come from the rounded view and the
-            // section outlines' corner fillets from the arc view, drawn under the flat
-            // chrome and clipped to the pane's scroll viewport.
-            if idx == PARAM_IDX {
-                let (px, py, pw, ph) = self.positions[PARAM_IDX];
-                let view = rect(px, py + 4.0, pw, (ph - 8.0).max(0.0));
-                let param_bg = self
-                    .slots
-                    .param
-                    .as_any()
-                    .downcast_ref::<cce_ui::widget::ParametersBg>()
-                    .expect("PARAM_IDX must be a ParametersBg");
-                pc.clip(view, |pc| {
-                    for (qx, qy, qw, qh, qr, qc, corners) in param_bg.rounded_quads(&self.ui_context) {
-                        pc.rounded_rect(rect(qx, qy, qw, qh), qr, corners, qc);
-                    }
-                    for (acx, acy, ar, at, a0, a1, ac) in param_bg.arcs() {
-                        pc.arc(acx, acy, ar, at, a0, a1, ac);
-                    }
-                    // The controls' relief steps (control_relief styling), after the
-                    // flat quads so the walls shade the fills they cross.
-                    for (rx, ry, rw, rh, radii, rd, raised, edges) in param_bg.reliefs() {
-                        if raised {
-                            pc.boss_edges(rect(rx, ry, rw, rh), radii, rd, edges);
-                        } else {
-                            pc.recess_edges(rect(rx, ry, rw, rh), radii, rd, edges);
-                        }
-                    }
-                    // The section carves' concave throat fillets — the inside
-                    // corners the box reliefs can't round.
-                    for (fcx, fcy, fr, fd, fs) in param_bg.section_fillets() {
-                        pc.concave_fillet(fcx, fcy, fr, fd, fs, false);
-                    }
-                    // The slider thumbs (Prim::Sphere — no flat view carries
-                    // them), after the reliefs so the knob rides the carve.
-                    for (scx, scy, sr, sc) in param_bg.spheres() {
-                        pc.sphere(scx, scy, sr, sc);
-                    }
-                    // Scene-path rows (ramp curves) — geometry no flat view
-                    // carries; drawn last so they sit over the section wells.
-                    param_bg.paint_scene_rows(pc);
-                });
+            let (px, py, pw, ph) = self.positions[PARAM_IDX];
+            let view = rect(px, py + 4.0, pw, (ph - 8.0).max(0.0));
+            pc.clip(view, |pc| {
+                w.paint_self(&self.ui_context, pc);
+            });
+
+            if let Some((quads, true)) = &param_scrollbar {
+                for &(qx, qy, qw, qh, qc) in quads {
+                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+                }
             }
+        } else {
+            let (wx, wy, ww2, wh2) = w.rect();
+            append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
 
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
                 pc.quad(rect(qx, qy, qw, qh), qc);
             }
             for (cx, cy, cr, cc) in w.extra_circles() {
                 pc.circle(cx, cy, cr, cc);
-            }
-
-            // Active: draw the scrollbar last so it rides above the pane content and plate.
-            if let Some((quads, true)) = &param_scrollbar {
-                for &(qx, qy, qw, qh, qc) in quads {
-                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
-                }
             }
         }
 
@@ -659,9 +622,11 @@ impl State {
                 continue;
             }
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
-            // The playbar's text is already in the geometry pass (subtree
-            // painter via paint_self — see paint_widget's PLAYBAR_IDX branch).
-            if is_menubar || i == PLAYBAR_IDX {
+            // The playbar's and params pane's text is already in the geometry
+            // pass (paint_self — see paint_widget's PLAYBAR_IDX / PARAM_IDX
+            // branches: subtree text for the playbar, the own-labels bridge
+            // with per-row fonts and code-box bounds for the params).
+            if is_menubar || i == PLAYBAR_IDX || i == PARAM_IDX {
                 continue;
             }
             let is_node = i == CONTENT_IDX;
