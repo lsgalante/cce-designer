@@ -145,7 +145,11 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
   simnet subtree + seed, so edits restart the sim, and backward scrubs restart
   from the seed (steps are not invertible). The scene walk does NOT recurse
   into a simnet's children — that would draw one un-iterated pass of the chain
-  on top of the solved result. Frame changes invalidate the scene only when the
+  on top of the solved result; dived INTO a simnet, the walk draws the solved
+  state instead (toggled by the output child's geometry flag), and at any
+  displayed level `input`/`output` children draw their resolved geometry (top
+  level of the walk only, so outer views don't draw subnet chains twice).
+  Frame changes invalidate the scene only when the
   graph `contains_simnet`. Each OpenCL node's kernel code is
   preprocessed: `chf("name", default)` / `chi` / `chv` calls are parsed into dynamic
   UI parameters (`parse_dynamic_params`) and rewritten to `param_values[i]` reads

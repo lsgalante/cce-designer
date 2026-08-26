@@ -1576,13 +1576,39 @@ pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
 /// up by name from `root`, so a chain inside the displayed level still
 /// resolves references exactly as it does when drawn from the top. Pass
 /// `root` for both to draw the whole scene (thumbnails do).
+///
+/// Two interior-display rules apply only to the displayed level itself:
+/// started AT a simnet the walk draws the solved state instead of the step
+/// chain, and `input`/`output` children draw their resolved geometry — but
+/// only as direct children of `start`, so viewing a subnet from OUTSIDE
+/// still draws its internals exactly once (via recursion, as before).
 pub fn network_sphere_vertices_with_errors(
     root: &FsNode,
     start: &FsNode,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Geometry {
-    fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>, sim: &mut EvalSim) {
+    // Inside a simnet the chain is the simulation STEP; drawing its nodes
+    // would show one un-iterated pass of the chain. The interior view is the
+    // solved state at the current frame — the same geometry the parent level
+    // draws for the simnet — toggled by the output child's geometry flag.
+    if start.node_type.eq_ignore_ascii_case("simnet") {
+        let mut out = Geometry::new();
+        let display_on = start
+            .children
+            .iter()
+            .find(|c| c.node_type.eq_ignore_ascii_case("output"))
+            .map(|o| o.geometry_visible)
+            .unwrap_or(true);
+        if display_on {
+            let mut visited = Vec::new();
+            if let Some(geom) = resolve_simnet_geometry_with_errors(root, start, &mut visited, ocl_error, sim) {
+                out.merge(geom);
+            }
+        }
+        return out;
+    }
+    fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, top: bool, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>, sim: &mut EvalSim) {
         let is_visible = parent_visible && node.geometry_visible;
         if node.node_type.eq_ignore_ascii_case("sphere") {
             let idx = *count;
@@ -1677,16 +1703,34 @@ pub fn network_sphere_vertices_with_errors(
             // would merge one un-iterated pass of the chain alongside the
             // solved result — the sim would draw itself twice, once wrong.
             return;
+        } else if top
+            && (node.node_type.eq_ignore_ascii_case("input")
+                || node.node_type.eq_ignore_ascii_case("output"))
+        {
+            // Interior display: dived into a subnet whose chain ends at the
+            // pass-through nodes, the input draws the incoming geometry and
+            // the output draws the chain's result — otherwise a subnet with
+            // no generator inside shows an empty viewport. Top level only:
+            // from outside, a subnet's internals already draw by recursion,
+            // and adding these would draw the chain a second time. Not
+            // counted — `count` stays aligned with find_sphere_index.
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(geom);
+                }
+            }
+            return;
         }
         for child in &node.children {
-            visit(root, child, is_visible, count, out, ocl_error, sim);
+            visit(root, child, is_visible, false, count, out, ocl_error, sim);
         }
     }
 
     let mut out = Geometry::new();
     let mut count = 0;
     for child in &start.children {
-        visit(root, child, true, &mut count, &mut out, ocl_error, sim);
+        visit(root, child, true, true, &mut count, &mut out, ocl_error, sim);
     }
     out
 }
@@ -2750,5 +2794,65 @@ mod simnet_tests {
         let moved = min_x(&g) - base;
         assert!((moved - 8.0).abs() < 1e-4,
             "stale cache: expected 4 steps of +2.0 = 8, got {moved}");
+    }
+
+    /// Dived INTO a simnet the walk draws the solved state — its children are
+    /// the step chain, which has no draw arms (a fresh simnet is only
+    /// input/output), so the interior used to render an empty viewport even
+    /// though the sim resolved fine from the parent level.
+    #[test]
+    fn test_scene_walk_inside_a_simnet_draws_the_solved_state() {
+        let root = stepping_graph();
+        let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap();
+        let base = min_x(&solve_at(&root, 1));
+
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(4, 1, &mut cache);
+        let mut err = None;
+        let interior = network_sphere_vertices_with_errors(&root, sim_node, &mut err, &mut sim);
+        assert!(!interior.vertices.is_empty(), "simnet interior rendered empty");
+        let moved = min_x(&interior) - base;
+        assert!((moved - 3.0).abs() < 1e-4, "frame 4 = 3 steps of +1.0, got {moved}");
+
+        // The output child's geometry toggle is the interior display switch.
+        let mut hidden = root.clone();
+        hidden.children.iter_mut().find(|c| c.node_type == "simnet").unwrap()
+            .children.iter_mut().find(|c| c.node_type == "output").unwrap()
+            .geometry_visible = false;
+        let sim_node = hidden.children.iter().find(|c| c.node_type == "simnet").unwrap();
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(4, 1, &mut cache);
+        let mut err = None;
+        let toggled = network_sphere_vertices_with_errors(&hidden, sim_node, &mut err, &mut sim);
+        assert!(toggled.vertices.is_empty(), "output toggle off should hide the solved state");
+    }
+
+    /// Dived into a pass-through subnet (input → output, no generator) the
+    /// interior draws the resolved chain instead of nothing. Top level only:
+    /// from the root the subnet's internals draw exactly as before, so the
+    /// arms add no second copy to outer views.
+    #[test]
+    fn test_scene_walk_draws_passthrough_subnet_interior() {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("Input", "input1")], vec![]);
+        let sub = node("id-sub", "Subnet 1", "node", vec![param("Input", "Sphere 1")],
+            vec![inner_input, inner_output]);
+        let root = node("id-root", "root", "node", vec![], vec![sphere, sub]);
+
+        const SPHERE: usize = 16 * 24 * 6;
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        let all = network_sphere_vertices_with_errors(&root, &root, &mut err, &mut sim);
+        assert_eq!(all.vertices.len(), SPHERE, "outer view must not gain a copy from the arms");
+
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        let interior =
+            network_sphere_vertices_with_errors(&root, &root.children[1], &mut err, &mut sim);
+        assert_eq!(interior.vertices.len(), 2 * SPHERE,
+            "input draws the seed and output draws the chain result");
     }
 }
