@@ -266,6 +266,15 @@ impl State {
             let (wx, wy, ww2, wh2) = w.rect();
             append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
+        } else if idx == BREADCRUMB_IDX {
+            // Modern-paint control: Breadcrumb's whole look lives in its
+            // Paint::paint() (the cce-ui restyle — per-segment plates on the
+            // dropdown's relief, slanted seams) and it serves NO legacy views,
+            // so the fall-through branch rendered bare labels on the network
+            // plate. Unlike the playbar it is not a subtree painter: paint_self
+            // drops the widget's Text prims, and the labels keep coming from
+            // append_frame_text like every other slot — no doubling.
+            w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {
             // The scene viewer's lip is the window's own backplate edge: the
             // 3D canvas is full-bleed (CANVAS_IDX covers the window; the other
