@@ -3948,9 +3948,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 
                 let mb_h = 0.0;
                 let bc_h = if self.show_network { BREADCRUMB_H } else { 0.0 };
-                let content_h = (ph - mb_h - bc_h).max(0.0);
+                // The breadcrumb HOVERS over the graph: its strip rect stays
+                // (the widget lays its run out in it, and hit() claims only
+                // the segments), but the content spans the full plate — no
+                // reserved titlebar band above the cells.
+                let content_h = (ph - mb_h).max(0.0);
 
-                self.positions[CONTENT_IDX] = (px, py + mb_h + bc_h, pw, content_h);
+                self.positions[CONTENT_IDX] = (px, py + mb_h, pw, content_h);
                 self.positions[NETWORK_PANEL_IDX] = (px, py, pw, ph);
                 self.slots.network_panel.set_rect(px, py, pw, ph);
                 if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
@@ -5038,6 +5042,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     -4
                                 } else if i == PARAM_IDX {
                                     -3
+                                } else if i == BREADCRUMB_IDX {
+                                    // Floats over the graph (the content spans the full plate);
+                                    // its refined hit() claims only the segment run, so this
+                                    // priority never shadows the graph elsewhere in the strip.
+                                    1
                                 } else {
                                     self.slots.get_dyn_mut(i).z_index()
                                 };
