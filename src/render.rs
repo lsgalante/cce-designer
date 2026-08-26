@@ -278,12 +278,10 @@ impl State {
         } else if idx == SPREADSHEET_IDX {
             // Modern-paint pane: the plate from the designer (span-widened
             // radii + focus tint), then Spreadsheet::paint authors the grid —
-            // header band, zebra rows, separators, dividers, scrollbar. The
-            // fall-through used to draw the same quads via the reverse bridge
-            // (extra_quads); painting directly keeps the widget's emission
-            // order authoritative. Not a subtree painter: paint_self drops
-            // the Text prims and appends the own-labels bridge (header + cell
-            // labels), so append_frame_text skips this slot.
+            // header band, zebra rows, separators, dividers, scrollbar. A
+            // subtree painter since cce-ui@f1cd939: its text passes through
+            // paint_self verbatim, carrying the per-column clamp bounds the
+            // own-labels bridge would drop; append_frame_text skips the slot.
             let (wx, wy, ww2, wh2) = w.rect();
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
@@ -635,8 +633,8 @@ impl State {
             }
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
             // Panes on the paint_self path carry their text in the geometry
-            // pass already (see paint_widget: subtree text for the playbar,
-            // the own-labels bridge for the params and spreadsheet panes) —
+            // pass already (see paint_widget: subtree text for the playbar
+            // and spreadsheet, the own-labels bridge for the params pane) —
             // drawing them here again would double it.
             if is_menubar || i == PLAYBAR_IDX || i == PARAM_IDX || i == SPREADSHEET_IDX {
                 continue;
