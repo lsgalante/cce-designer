@@ -372,6 +372,21 @@ impl State {
                         pc.quad(rect(qx, qy, qw, qh), qc);
                     }
                 }
+                // Drop-target glow: while a node drag is in flight, the cell
+                // it will land on wears a faint light-pink halo — layered
+                // expansions under the node bodies, so with grid snap on
+                // (node covering the cell exactly) the glow reads as a ring
+                // emanating around the dragged body.
+                if let Some((gx, gy, gw, gh)) = self.graph().drop_target_cell_rect() {
+                    for (grow, alpha) in [(10.0f32, 0.05f32), (5.0, 0.08), (0.0, 0.11)] {
+                        pc.rounded_rect(
+                            rect(gx - grow, gy - grow, gw + 2.0 * grow, gh + 2.0 * grow),
+                            cell_r + grow,
+                            (true, true, true, true),
+                            [1.0, 0.72, 0.80, alpha],
+                        );
+                    }
+                }
                 for (qx, qy, qw, qh, highlighted) in bodies {
                     if highlighted {
                         pc.bevel_tinted(rect(qx, qy, qw, qh), radii, node_fill, node_bevel, hl_tint);

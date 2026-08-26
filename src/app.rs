@@ -3293,7 +3293,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             last_autosave_time: std::time::Instant::now(),
             active_menu_cloud_pid: None,
             active_menu_cloud_idx: None,
-            uniform_background: false,
+            // Cells and gaps render as ONE surface (the graph's bg_color is
+            // the cell tint): the checkerboard grout is off by design; the
+            // drop-target glow (render.rs) carries the only cell highlight.
+            uniform_background: true,
             network_opacity: 0.95,
             node_opacity: 1.0,
             last_design_mod_time: {
