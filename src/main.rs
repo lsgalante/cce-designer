@@ -767,6 +767,120 @@ mod tests {
         assert_eq!(output_input.default, "opencl1");
     }
 
+    /// The raster pipeline culls back faces with CCW fronts (the wgpu
+    /// convention: negative-viewport-height Y flip keeps model-space CCW =
+    /// front). A template mesh must wind CCW as seen from OUTSIDE, or the
+    /// live viewport silently shows its interior — near faces culled, far
+    /// faces drawn — which a closed symmetric mesh disguises until a
+    /// deformation makes it obvious. RT intersects both sides and never
+    /// catches this; this test is the raster-side guard.
+    #[test]
+    fn test_template_meshes_wind_ccw_outward() {
+        let templates_root = crate::app::load_fs_tree();
+        let eval_template = |name: &str| -> crate::geometry::Geometry {
+            let t = templates_root
+                .children
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("{name} template should be loaded"));
+            let mut inst = t.clone();
+            inst.id = format!("{name}-winding-inst");
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            let root = FsNode {
+                id: "root".to_string(),
+                name: "root".to_string(),
+                node_type: "node".to_string(),
+                children: vec![inst],
+                params: vec![],
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 0,
+                outputs: 0,
+            };
+            let mut visited = Vec::new();
+            let mut err = None;
+            let g = crate::geometry::generate_single_node_geometry_with_errors(
+                &root,
+                &root.children[0],
+                &mut visited,
+                &mut err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+            )
+            .expect("geometry");
+            assert!(err.is_none(), "{name}: {err:?}");
+            g
+        };
+        let tri_cross = |g: &crate::geometry::Geometry, tri: usize| -> [f32; 3] {
+            let a = g.vertices[tri * 3].pos;
+            let b = g.vertices[tri * 3 + 1].pos;
+            let d = g.vertices[tri * 3 + 2].pos;
+            let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let e2 = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+            [
+                e1[1] * e2[2] - e1[2] * e2[1],
+                e1[2] * e2[0] - e1[0] * e2[2],
+                e1[0] * e2[1] - e1[1] * e2[0],
+            ]
+        };
+
+        // Closed generators: the winding cross must point OUTWARD (away from
+        // the mesh center) on effectively every non-degenerate triangle.
+        for name in ["Sphere", "Box"] {
+            let g = eval_template(name);
+            let n = g.vertices.len() as f32;
+            let mut c = [0.0f32; 3];
+            for v in &g.vertices {
+                for k in 0..3 {
+                    c[k] += v.pos[k] / n;
+                }
+            }
+            let (mut outward, mut total) = (0usize, 0usize);
+            for tri in 0..g.vertices.len() / 3 {
+                let nrm = tri_cross(&g, tri);
+                let a = g.vertices[tri * 3].pos;
+                let b = g.vertices[tri * 3 + 1].pos;
+                let d = g.vertices[tri * 3 + 2].pos;
+                let cen = [
+                    (a[0] + b[0] + d[0]) / 3.0 - c[0],
+                    (a[1] + b[1] + d[1]) / 3.0 - c[1],
+                    (a[2] + b[2] + d[2]) / 3.0 - c[2],
+                ];
+                let dot = nrm[0] * cen[0] + nrm[1] * cen[1] + nrm[2] * cen[2];
+                if dot.abs() > 1e-12 {
+                    total += 1;
+                    if dot > 0.0 {
+                        outward += 1;
+                    }
+                }
+            }
+            let f = outward as f32 / total.max(1) as f32;
+            assert!(
+                f > 0.95,
+                "{name}: only {:.0}% of triangles wind CCW-outward — the raster viewport shows this mesh inside-out",
+                f * 100.0
+            );
+        }
+
+        // The plane's visible face is UP: the winding cross must point +Y.
+        let g = eval_template("Plane");
+        let (mut up, mut total) = (0usize, 0usize);
+        for tri in 0..g.vertices.len() / 3 {
+            let nrm = tri_cross(&g, tri);
+            if nrm[1].abs() > 1e-12 {
+                total += 1;
+                if nrm[1] > 0.0 {
+                    up += 1;
+                }
+            }
+        }
+        assert!(
+            up as f32 / total.max(1) as f32 > 0.95,
+            "Plane: winding faces down — invisible from above in the raster viewport"
+        );
+    }
+
     #[test]
     fn test_sphere_subnet_geometry_generation() {
         let templates_root = crate::app::load_fs_tree();

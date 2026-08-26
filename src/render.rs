@@ -950,9 +950,10 @@ pub(crate) fn collect_meta_overlays(
                 if want_normals {
                     // Smooth vertex normals from topology: per distinct
                     // position, the normalized sum of touching triangles'
-                    // face normals. On this repo's meshes cross(B-A, C-A)
-                    // points INWARD (see the node-template kernel notes), so
-                    // it is negated for outward whiskers. The kernel outputs'
+                    // face normals. Template meshes wind CCW seen from
+                    // outside (the raster culling convention — the sphere's
+                    // historical CW winding is fixed), so the plain
+                    // cross(B-A, C-A) points outward. The kernel outputs'
                     // Norm attribute is a default up-vector — useless here.
                     use glam::Vec3;
                     let quant = |p: &[f32; 3]| {
@@ -968,7 +969,7 @@ pub(crate) fn collect_meta_overlays(
                         let a = Vec3::from_array(tri[0].pos);
                         let b = Vec3::from_array(tri[1].pos);
                         let c = Vec3::from_array(tri[2].pos);
-                        let n = -(b - a).cross(c - a);
+                        let n = (b - a).cross(c - a);
                         if n.length_squared() <= 1e-12 {
                             continue;
                         }
