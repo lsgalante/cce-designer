@@ -2101,7 +2101,7 @@ impl State {
             let dir = self.current_dir();
             let Some(node) = dir.children.get(slot) else { return params };
             let nt = node.node_type.to_lowercase();
-            if nt != "attribute" && nt != "group" {
+            if nt != "attribute" && nt != "group" && nt != "relax" {
                 return params;
             }
             (nt, node_param_str(node, "Input", ""))
@@ -2115,6 +2115,7 @@ impl State {
                 ("attribute", "Attribute Name") => &attrs,
                 ("attribute", "Group") => &groups,
                 ("group", "Group Name") => &groups,
+                ("relax", "Pin Group") => &groups,
                 _ => continue,
             };
             if row.2 == "text" && !list.is_empty() {

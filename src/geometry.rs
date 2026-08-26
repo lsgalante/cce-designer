@@ -486,6 +486,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_scatter_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("group") {
         resolve_group_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("relax") {
+        resolve_relax_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("attribute") {
         resolve_attribute_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("opencl") {
@@ -583,15 +585,55 @@ pub fn resolve_scatter_geometry(root: &FsNode, target: &FsNode, visited: &mut Ve
     resolve_scatter_geometry_with_errors(root, target, visited, &mut err, &mut sim)
 }
 
-/// The Group node: pass the input geometry through, tagging the elements
-/// selected by an axis-aligned box (Center/Size) with a per-vertex membership
-/// attribute `group:<name>` = Float(1.0). Element Type picks the selection
-/// unit over the triangle soup — Points (per vertex), Primitives (a
-/// triangle's centroid; all three vertices tag together), Edges (a triangle
-/// edge with both endpoints inside; its two vertices tag). Membership rides
-/// GVertex::attributes so it survives merges and native filters — downstream
-/// nodes consume it by reading the same attribute. Highlight tints members
-/// toward a warm accent so the group reads in the viewport.
+/// Deterministic 64-bit PRNG step (splitmix64). Node evaluation must be a
+/// pure function of the graph, so anything "random" derives from a Seed
+/// param through this — never from a real entropy source.
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4B9B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
+/// Weld a triangle soup's coincident vertices into points: returns
+/// (point id per vertex, copies per point). Positions quantize to 1e-4 so
+/// vertices a kernel emitted from the same formula weld reliably. "Point"
+/// operations (random point groups, the relax solver) act on welded points
+/// and fan back out to every copy — moving one copy of a shared corner
+/// without its siblings would tear the surface.
+fn weld_points(positions: &[[f32; 3]]) -> (Vec<usize>, Vec<Vec<usize>>) {
+    let mut key_to_point: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    let mut point_of = Vec::with_capacity(positions.len());
+    let mut copies: Vec<Vec<usize>> = Vec::new();
+    for (i, p) in positions.iter().enumerate() {
+        let key = (
+            (p[0] as f64 * 1e4).round() as i64,
+            (p[1] as f64 * 1e4).round() as i64,
+            (p[2] as f64 * 1e4).round() as i64,
+        );
+        let id = *key_to_point.entry(key).or_insert_with(|| {
+            copies.push(Vec::new());
+            copies.len() - 1
+        });
+        point_of.push(id);
+        copies[id].push(i);
+    }
+    (point_of, copies)
+}
+
+/// The Group node: pass the input geometry through, tagging the selected
+/// elements with a per-vertex membership attribute `group:<name>` =
+/// Float(1.0). Element Type picks the selection unit over the triangle
+/// soup — Points (per vertex), Primitives (a triangle; all three vertices
+/// tag together), Edges (a triangle edge; its two vertices tag). Mode picks
+/// the selector: Box selects by an axis-aligned box (Center/Size); Random
+/// draws Count elements deterministically from Seed — for Points it draws
+/// welded points (coincident vertices tag together, so "one random point"
+/// is one surface point, not one loose corner of a triangle). Membership
+/// rides GVertex::attributes so it survives merges and native filters —
+/// downstream nodes consume it by reading the same attribute. Highlight
+/// tints members toward a warm accent so the group reads in the viewport.
 pub fn resolve_group_geometry_with_errors(
     root: &FsNode,
     target: &FsNode,
@@ -622,37 +664,81 @@ pub fn resolve_group_geometry_with_errors(
 
     let n = geom.vertices.len();
     let mut member = vec![false; n];
-    match etype.as_str() {
-        "primitives" => {
-            for tri in 0..n / 3 {
-                let b = tri * 3;
-                let centroid = [
-                    (geom.vertices[b].pos[0] + geom.vertices[b + 1].pos[0] + geom.vertices[b + 2].pos[0]) / 3.0,
-                    (geom.vertices[b].pos[1] + geom.vertices[b + 1].pos[1] + geom.vertices[b + 2].pos[1]) / 3.0,
-                    (geom.vertices[b].pos[2] + geom.vertices[b + 1].pos[2] + geom.vertices[b + 2].pos[2]) / 3.0,
-                ];
-                if inside(&centroid) {
-                    member[b] = true;
-                    member[b + 1] = true;
-                    member[b + 2] = true;
+    let mode = node_param_str(target, "Mode", "Box").to_lowercase();
+    if mode == "random" {
+        let count = node_param_f32(target, "Count", 1.0).max(0.0) as usize;
+        // Seed offsets the stream, and the element type joins it so switching
+        // type reshuffles instead of replaying the same index sequence.
+        let mut rng = node_param_f32(target, "Seed", 0.0) as u64 ^ 0xCCE0;
+        // Partial Fisher-Yates: draw `count` distinct indices out of `m`.
+        let mut draw = |m: usize, count: usize| -> Vec<usize> {
+            let mut idx: Vec<usize> = (0..m).collect();
+            let take = count.min(m);
+            for i in 0..take {
+                let j = i + (splitmix64(&mut rng) as usize) % (m - i);
+                idx.swap(i, j);
+            }
+            idx.truncate(take);
+            idx
+        };
+        match etype.as_str() {
+            "primitives" => {
+                for tri in draw(n / 3, count) {
+                    for k in 0..3 {
+                        member[tri * 3 + k] = true;
+                    }
                 }
             }
-        }
-        "edges" => {
-            for tri in 0..n / 3 {
-                let b = tri * 3;
-                for (a, c) in [(0usize, 1usize), (1, 2), (2, 0)] {
-                    if inside(&geom.vertices[b + a].pos) && inside(&geom.vertices[b + c].pos) {
-                        member[b + a] = true;
-                        member[b + c] = true;
+            "edges" => {
+                for e in draw((n / 3) * 3, count) {
+                    let (tri, side) = (e / 3, e % 3);
+                    member[tri * 3 + side] = true;
+                    member[tri * 3 + (side + 1) % 3] = true;
+                }
+            }
+            _ => {
+                let positions: Vec<[f32; 3]> = geom.vertices.iter().map(|v| v.pos).collect();
+                let (_, copies) = weld_points(&positions);
+                for pt in draw(copies.len(), count) {
+                    for &i in &copies[pt] {
+                        member[i] = true;
                     }
                 }
             }
         }
-        _ => {
-            for (i, v) in geom.vertices.iter().enumerate() {
-                if inside(&v.pos) {
-                    member[i] = true;
+    } else {
+        match etype.as_str() {
+            "primitives" => {
+                for tri in 0..n / 3 {
+                    let b = tri * 3;
+                    let centroid = [
+                        (geom.vertices[b].pos[0] + geom.vertices[b + 1].pos[0] + geom.vertices[b + 2].pos[0]) / 3.0,
+                        (geom.vertices[b].pos[1] + geom.vertices[b + 1].pos[1] + geom.vertices[b + 2].pos[1]) / 3.0,
+                        (geom.vertices[b].pos[2] + geom.vertices[b + 1].pos[2] + geom.vertices[b + 2].pos[2]) / 3.0,
+                    ];
+                    if inside(&centroid) {
+                        member[b] = true;
+                        member[b + 1] = true;
+                        member[b + 2] = true;
+                    }
+                }
+            }
+            "edges" => {
+                for tri in 0..n / 3 {
+                    let b = tri * 3;
+                    for (a, c) in [(0usize, 1usize), (1, 2), (2, 0)] {
+                        if inside(&geom.vertices[b + a].pos) && inside(&geom.vertices[b + c].pos) {
+                            member[b + a] = true;
+                            member[b + c] = true;
+                        }
+                    }
+                }
+            }
+            _ => {
+                for (i, v) in geom.vertices.iter().enumerate() {
+                    if inside(&v.pos) {
+                        member[i] = true;
+                    }
                 }
             }
         }
@@ -672,6 +758,117 @@ pub fn resolve_group_geometry_with_errors(
                     v.col[k] = v.col[k] * 0.35 + acc[k] * 0.65;
                 }
             }
+        }
+    }
+    Some(geom)
+}
+
+/// The Relax node: an edge-length constraint solver — the organic-tissue
+/// response. Pass the input geometry through, then move every welded point
+/// toward restoring the edge lengths of the `Rest` geometry (a node name,
+/// evaluated like a second input; inside a simnet, `input1` — the previous
+/// sim state). Vertices carrying `group:<Pin Group>` are pinned: they keep
+/// their input position and push everyone else instead — chain a
+/// displacement over that group first and this node spreads it through the
+/// surface with a stiffness-shaped falloff. Iterations Gauss–Seidel passes
+/// over the unique edges; Stiffness scales each correction. With no Rest,
+/// an unresolvable Rest, or a Rest whose vertex count differs from the
+/// input's, the geometry passes through unchanged — there is nothing
+/// coherent to restore toward.
+///
+/// No visited guard here (the dispatch already pushed this node's id — the
+/// same trap Attribute documents below). Rest is evaluated as a second
+/// chain off `root`, which is legal mid-solve: the feedback stack, not the
+/// call graph, is what makes an `input` node yield the previous state.
+pub fn resolve_relax_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Geometry> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let rest_name = node_param_str(target, "Rest", "");
+    let rest_name = rest_name.trim();
+    if rest_name.is_empty() {
+        return Some(geom);
+    }
+    let Some(rest_node) = find_node_by_name(root, rest_name) else { return Some(geom) };
+    let Some(rest) = generate_single_node_geometry_with_errors(root, rest_node, visited, ocl_error, sim) else {
+        return Some(geom);
+    };
+    if rest.vertices.len() != geom.vertices.len() || geom.vertices.is_empty() {
+        return Some(geom);
+    }
+
+    let stiffness = node_param_f32(target, "Stiffness", 0.5).clamp(0.0, 1.0);
+    let iterations = node_param_f32(target, "Iterations", 8.0).max(1.0) as usize;
+    let pin = node_param_str(target, "Pin Group", "").trim().to_string();
+    let pin_attr = format!("group:{}", pin);
+
+    // Weld on REST positions: the input may already carry this step's
+    // displacement, and the weld must not split a point the pull moved.
+    let rest_pos: Vec<[f32; 3]> = rest.vertices.iter().map(|v| v.pos).collect();
+    let (point_of, copies) = weld_points(&rest_pos);
+    let m = copies.len();
+    let mut pos: Vec<Vec3> = copies.iter().map(|c| Vec3::from(geom.vertices[c[0]].pos)).collect();
+    let mut pinned = vec![false; m];
+    if !pin.is_empty() {
+        for (i, v) in geom.vertices.iter().enumerate() {
+            if v.attributes.contains_key(&pin_attr) {
+                pinned[point_of[i]] = true;
+            }
+        }
+    }
+
+    // Unique edges over welded points; rest length from the rest shape.
+    let mut edges: Vec<(usize, usize, f32)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for tri in 0..point_of.len() / 3 {
+        let b = tri * 3;
+        for (a, c) in [(0usize, 1usize), (1, 2), (2, 0)] {
+            let (pa, pc) = (point_of[b + a], point_of[b + c]);
+            if pa == pc {
+                continue;
+            }
+            let key = (pa.min(pc), pa.max(pc));
+            if seen.insert(key) {
+                let ra = Vec3::from(rest.vertices[copies[key.0][0]].pos);
+                let rc = Vec3::from(rest.vertices[copies[key.1][0]].pos);
+                edges.push((key.0, key.1, (rc - ra).length()));
+            }
+        }
+    }
+
+    for _ in 0..iterations {
+        for &(a, b, rest_len) in &edges {
+            let d = pos[b] - pos[a];
+            let len = d.length();
+            if len < 1e-6 {
+                continue;
+            }
+            let corr = d * ((len - rest_len) / len * 0.5 * stiffness);
+            match (pinned[a], pinned[b]) {
+                (false, false) => {
+                    pos[a] += corr;
+                    pos[b] -= corr;
+                }
+                (true, false) => pos[b] -= corr * 2.0,
+                (false, true) => pos[a] += corr * 2.0,
+                (true, true) => {}
+            }
+        }
+    }
+
+    for (pt, c) in copies.iter().enumerate() {
+        for &i in c {
+            geom.vertices[i].pos = pos[pt].to_array();
         }
     }
     Some(geom)
@@ -1556,6 +1753,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "output"
         || nt == "scatter"
         || nt == "group"
+        || nt == "relax"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -1677,6 +1875,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_attribute_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("relax") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_relax_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(geom);
                 }
             }
@@ -2854,5 +3061,133 @@ mod simnet_tests {
             network_sphere_vertices_with_errors(&root, &root.children[1], &mut err, &mut sim);
         assert_eq!(interior.vertices.len(), 2 * SPHERE,
             "input draws the seed and output draws the chain result");
+    }
+
+    fn eval(root: &FsNode, name: &str) -> Geometry {
+        let target = root.children.iter().find(|c| c.name == name).unwrap();
+        let mut visited = Vec::new();
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        generate_single_node_geometry_with_errors(root, target, &mut visited, &mut err, &mut sim)
+            .expect("node evaluates")
+    }
+
+    /// Random point groups draw from WELDED points: one random point tags
+    /// every coincident vertex copy, deterministically from Seed.
+    #[test]
+    fn test_group_random_point_is_welded_and_deterministic() {
+        let make_root = |seed: &str| {
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let group = node(
+                "id-group",
+                "Group 1",
+                "group",
+                vec![
+                    param("Input", "Sphere 1"),
+                    param("Group Name", "pull"),
+                    param("Mode", "Random"),
+                    param("Count", "1"),
+                    param("Seed", seed),
+                    param("Highlight", "false"),
+                ],
+                vec![],
+            );
+            node("id-root", "root", "node", vec![], vec![sphere, group])
+        };
+
+        let g = eval(&make_root("7"), "Group 1");
+        let tagged: Vec<usize> = (0..g.vertices.len())
+            .filter(|&i| g.vertices[i].attributes.contains_key("group:pull"))
+            .collect();
+        assert!(!tagged.is_empty(), "random mode selected nothing");
+        let anchor = g.vertices[tagged[0]].pos;
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
+        for &i in &tagged {
+            assert!(near(g.vertices[i].pos, anchor), "one random point must be ONE welded position");
+        }
+        for (i, v) in g.vertices.iter().enumerate() {
+            if near(v.pos, anchor) {
+                assert!(tagged.contains(&i), "a coincident copy was left untagged (would tear the surface)");
+            }
+        }
+
+        let again = eval(&make_root("7"), "Group 1");
+        let tagged_again: Vec<usize> = (0..again.vertices.len())
+            .filter(|&i| again.vertices[i].attributes.contains_key("group:pull"))
+            .collect();
+        assert_eq!(tagged, tagged_again, "same Seed must select the same point");
+    }
+
+    /// The tissue chain: pull one random point with an Attribute Pos edit,
+    /// then Relax against the pre-pull shape with the point pinned — the
+    /// point keeps its pulled position, neighbors follow part of the way.
+    #[test]
+    fn test_relax_spreads_a_pinned_pull() {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let group = node(
+            "id-group",
+            "Group 1",
+            "group",
+            vec![
+                param("Input", "Sphere 1"),
+                param("Group Name", "pull"),
+                param("Mode", "Random"),
+                param("Count", "1"),
+                param("Seed", "3"),
+                param("Highlight", "false"),
+            ],
+            vec![],
+        );
+        let pull = node(
+            "id-pull",
+            "Pull 1",
+            "attribute",
+            vec![
+                param("Input", "Group 1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "Pos"),
+                param("Value", "0.00:0.50:0.00"),
+                param("Combine", "Add"),
+                param("Group", "pull"),
+            ],
+            vec![],
+        );
+        let relax = node(
+            "id-relax",
+            "Relax 1",
+            "relax",
+            vec![
+                param("Input", "Pull 1"),
+                param("Rest", "Group 1"),
+                param("Pin Group", "pull"),
+                param("Stiffness", "0.50"),
+                param("Iterations", "8"),
+            ],
+            vec![],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere, group, pull, relax]);
+
+        let base = eval(&root, "Group 1");
+        let pulled = eval(&root, "Pull 1");
+        let relaxed = eval(&root, "Relax 1");
+        assert_eq!(relaxed.vertices.len(), base.vertices.len());
+
+        let dist = |a: [f32; 3], b: [f32; 3]| -> f32 {
+            a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt()
+        };
+        let mut max_response: f32 = 0.0;
+        for i in 0..base.vertices.len() {
+            let moved = dist(relaxed.vertices[i].pos, base.vertices[i].pos);
+            if base.vertices[i].attributes.contains_key("group:pull") {
+                assert!(dist(relaxed.vertices[i].pos, pulled.vertices[i].pos) < 1e-4,
+                    "the pinned point must keep its pulled position");
+            } else {
+                assert!(moved <= 0.5 + 1e-3, "a neighbor overshot the pull itself");
+                max_response = max_response.max(moved);
+            }
+        }
+        assert!(max_response > 0.01,
+            "no neighbor responded to the pull (relax did nothing), max {max_response}");
     }
 }

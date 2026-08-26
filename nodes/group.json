@@ -20,6 +20,27 @@
       "default": "Points"
     },
     {
+      "name": "Mode",
+      "type": "choice:Box,Random",
+      "default": "Box"
+    },
+    {
+      "name": "Count",
+      "type": "spinbox",
+      "default": "1",
+      "min": 1.0,
+      "max": 500.0,
+      "step": 1.0
+    },
+    {
+      "name": "Seed",
+      "type": "spinbox",
+      "default": "0",
+      "min": 0.0,
+      "max": 999.0,
+      "step": 1.0
+    },
+    {
       "name": "Center",
       "type": "float3",
       "default": "0.00:0.00:0.00",

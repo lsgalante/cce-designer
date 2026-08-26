@@ -1,0 +1,27 @@
+{
+  "name": "Relax",
+  "type": "relax",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" },
+    { "name": "Rest", "default": "", "type": "text" },
+    { "name": "Pin Group", "default": "", "type": "text" },
+    {
+      "name": "Stiffness",
+      "type": "slider",
+      "default": "0.50",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05
+    },
+    {
+      "name": "Iterations",
+      "type": "spinbox",
+      "default": "8",
+      "min": 1.0,
+      "max": 50.0,
+      "step": 1.0
+    }
+  ]
+}
