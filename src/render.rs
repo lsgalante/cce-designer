@@ -374,27 +374,18 @@ impl State {
                 }
                 // Drop-target glow, from the ANIMATED state (tick_frame owns
                 // it): position glides between cells, alpha fades in/out.
-                // The feather is many thin layers on a quadratic spacing —
-                // dense rings near the cell, sparse far out — so cumulative
-                // coverage falls off smoothly, a vignette rather than steps.
-                // Drawn under the node bodies: with grid snap the glow reads
-                // as a soft aura around the dragged body.
+                // One Prim::Glow — per-vertex-alpha rings the GPU
+                // interpolates, a genuinely smooth vignette (the stacked-rect
+                // version banded visibly). Drawn under the node bodies: with
+                // grid snap the glow reads as a soft aura around the dragged
+                // body.
                 if let Some(g) = self.drop_glow {
-                    const LAYERS: usize = 14;
-                    const REACH: f32 = 30.0;
-                    for i in (0..LAYERS).rev() {
-                        let t = i as f32 / (LAYERS - 1) as f32;
-                        let grow = REACH * t * t;
-                        // Inner layers carry slightly more weight so the core
-                        // stays warm while the rim dissolves.
-                        let layer_a = g.alpha * 0.020 * (1.0 - 0.5 * t);
-                        pc.rounded_rect(
-                            rect(g.x - grow, g.y - grow, g.w + 2.0 * grow, g.h + 2.0 * grow),
-                            cell_r + grow,
-                            (true, true, true, true),
-                            [1.0, 0.72, 0.80, layer_a],
-                        );
-                    }
+                    pc.glow(
+                        rect(g.x, g.y, g.w, g.h),
+                        cell_r,
+                        30.0,
+                        [1.0, 0.72, 0.80, 0.18 * g.alpha],
+                    );
                 }
                 for (qx, qy, qw, qh, highlighted) in bodies {
                     if highlighted {
