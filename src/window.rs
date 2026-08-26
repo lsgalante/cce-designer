@@ -626,8 +626,19 @@ impl State {
         needs_redraw: &mut bool,
     ) -> Result<serde_json::Value, String> {
         if call.name == "get_state" {
-            return serde_json::to_value(self.project_snapshot())
-                .map_err(|e| format!("failed to serialize state: {e}"));
+            let mut v = serde_json::to_value(self.project_snapshot())
+                .map_err(|e| format!("failed to serialize state: {e}"))?;
+            // Additive sibling of the project fields: the playbar is app
+            // state, not project state, so it must not enter the Project
+            // struct (the save format) — but automation needs to read it.
+            let pb = self.slots.playbar.inner();
+            v["playbar"] = serde_json::json!({
+                "frame": pb.current_frame.round() as i64,
+                "playing": pb.playing,
+                "start_frame": pb.start_frame.round() as i64,
+                "end_frame": pb.end_frame.round() as i64,
+            });
+            return Ok(v);
         }
         let mut req = if call.arguments.is_object() {
             call.arguments.clone()
