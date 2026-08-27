@@ -289,18 +289,21 @@ impl State {
             // The scene viewer's lip is the window's own backplate edge: the
             // 3D canvas is full-bleed (CANVAS_IDX covers the window; the other
             // panes float over it), so the lip spans the WHOLE window with the
-            // window radius on all four corners (pane_plate_radii on the full
-            // rect — the SHARED silhouette value, concentric with the
-            // compositor clip). Under control_relief it is a Boss rim — the
-            // fill-less relief of the plated panes (a real Bevel would own
-            // fill AND roll together: a transparent fill kills the roll, and
-            // the params fill would frost the scene behind its blur marker);
-            // focus marks through the rim's specular tint. Without
-            // control_relief it degrades to the flat plate-border stroke,
-            // exactly a bordered plate's outline→relief degradation, and
-            // append_context_border owns the focus ring. (The relief band's
-            // SDF contours pull a hair inside the true superellipse at this
-            // radius — known, accepted; the flat stroke traces it exactly.)
+            // window radius on all four corners (the SHARED silhouette value,
+            // concentric with the compositor clip). Under control_relief it is
+            // the fill-less ROLL OVERLAY (negative-depth Plate): exactly the
+            // roll other windows' root plates wear — same width, profile,
+            // crest and specular, full band inside the silhouette — screened
+            // over the 3D scene, since a filled Plate would cover it (and a
+            // frosting fill would blur it). It replaced the Boss rim, whose
+            // boundary-straddling wall lost its outer half to the compositor
+            // clip: the visible band ran half a roll wide and started at
+            // mid-slope. Focus adds the fill-less tinted Bevel — the wrapped
+            // accent glint on the same silhouette, the network cursor's prim —
+            // matching the focused plates' treatment (shading unchanged, glint
+            // in accent). Without control_relief it degrades to the flat
+            // plate-border stroke, exactly a bordered plate's outline→relief
+            // degradation, and append_context_border owns the focus ring.
             if let Some(bc) = cce_ui::colors::plate_border_color() {
                 let (px, py, pw, ph) = (0.0, 0.0, self.width, self.height);
                 if pw > 0.0 && ph > 0.0 {
@@ -308,14 +311,19 @@ impl State {
                     let radii = self.pane_plate_radii(px, py, pw, ph);
                     if cce_ui::layout::control_relief() {
                         // Window-edge roll width, NOT plate_bevel_width: the lip
-                        // is the window's own backplate edge, so it matches the
-                        // root plates of other windows (style.surface.relief
-                        // width), not the designer's interior pane plates.
+                        // matches the root plates of other windows
+                        // (style.surface.relief width), not the designer's
+                        // interior pane plates.
                         let depth = cce_ui::layout::bevel_width();
+                        pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
+                            rect: vp_rect,
+                            color: [0.0; 4],
+                            blur: false,
+                            window_corners: (true, true, true, true),
+                            depth: -depth,
+                        });
                         if let Some(tint) = self.plate_focus_tint(idx) {
-                            pc.boss_edges_tinted(vp_rect, radii, depth, (true, true, true, true), tint);
-                        } else {
-                            pc.boss_edges(vp_rect, radii, depth, (true, true, true, true));
+                            pc.bevel_tinted(vp_rect, radii, [0.0; 4], depth, tint);
                         }
                     } else {
                         pc.border(vp_rect, radii, [0.0; 4], bc, cce_ui::colors::plate_border_thickness());
