@@ -412,17 +412,21 @@ impl State {
                 let cy = py + self.grid_cursor_row as f32 * (self.grid_size_y + self.gap_row_h) + self.pan_y;
                 let cw = self.grid_size_x;
                 let ch = self.grid_size_y;
-                let thickness = 2.0;
-                let mut color = colors::highlight_primary_color();
-                color[3] = 0.9;
+                // The cursor is the focus language: the same wrapped,
+                // accent-tinted glint the selected plates wear, as a
+                // standalone boss ring (the tinted free-carve path renders
+                // the specular line alone). Depth = the plates' bevel width,
+                // so the band's inset and width match theirs exactly.
+                let color = colors::highlight_primary_color();
+                let tint = [color[0], color[1], color[2]];
+                let depth = cce_ui::colors::plate_bevel_width();
                 if self.graph().is_node_rect(cx, cy, cw, ch) {
                     let r = cce_ui::layout::graph_node_corner_radius();
-                    pc.border(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], color, thickness);
+                    pc.boss_edges_tinted(rect(cx, cy, cw, ch), (r, r, r, r), depth, (true, true, true, true), tint);
                 } else {
-                    // The empty-cell cursor follows the cells' superellipse arcs.
                     let r = self.graph().cell_corner_radius();
                     pc.clip(clip, |pc| {
-                        pc.border(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], color, thickness);
+                        pc.boss_edges_tinted(rect(cx, cy, cw, ch), (r, r, r, r), depth, (true, true, true, true), tint);
                     });
                 }
             }
