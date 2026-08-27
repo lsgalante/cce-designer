@@ -307,7 +307,11 @@ impl State {
                     let vp_rect = rect(px, py, pw, ph);
                     let radii = self.pane_plate_radii(px, py, pw, ph);
                     if cce_ui::layout::control_relief() {
-                        let depth = cce_ui::colors::plate_bevel_width();
+                        // Window-edge roll width, NOT plate_bevel_width: the lip
+                        // is the window's own backplate edge, so it matches the
+                        // root plates of other windows (style.surface.relief
+                        // width), not the designer's interior pane plates.
+                        let depth = cce_ui::layout::bevel_width();
                         if let Some(tint) = self.plate_focus_tint(idx) {
                             pc.boss_edges_tinted(vp_rect, radii, depth, (true, true, true, true), tint);
                         } else {
