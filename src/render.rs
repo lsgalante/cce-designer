@@ -412,21 +412,22 @@ impl State {
                 let cy = py + self.grid_cursor_row as f32 * (self.grid_size_y + self.gap_row_h) + self.pan_y;
                 let cw = self.grid_size_x;
                 let ch = self.grid_size_y;
-                // The cursor is the focus language: the same wrapped,
-                // accent-tinted glint the selected plates wear, as a
-                // standalone boss ring (the tinted free-carve path renders
-                // the specular line alone). Depth = the plates' bevel width,
-                // so the band's inset and width match theirs exactly.
+                // The cursor is the focus language: a FILL-LESS tinted plate
+                // (transparent bevel + accent tint), which the shader renders
+                // as the wrapped glint alone — the plate roll's own specular
+                // line, so it traces the SAME superellipse silhouette, radius
+                // family, and inset as the nodes and panes. Depth = the
+                // plates' bevel width for a matching band.
                 let color = colors::highlight_primary_color();
                 let tint = [color[0], color[1], color[2]];
                 let depth = cce_ui::colors::plate_bevel_width();
                 if self.graph().is_node_rect(cx, cy, cw, ch) {
                     let r = cce_ui::layout::graph_node_corner_radius();
-                    pc.boss_edges_tinted(rect(cx, cy, cw, ch), (r, r, r, r), depth, (true, true, true, true), tint);
+                    pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], depth, tint);
                 } else {
                     let r = self.graph().cell_corner_radius();
                     pc.clip(clip, |pc| {
-                        pc.boss_edges_tinted(rect(cx, cy, cw, ch), (r, r, r, r), depth, (true, true, true, true), tint);
+                        pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], depth, tint);
                     });
                 }
             }
