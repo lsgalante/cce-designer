@@ -129,7 +129,6 @@ pub struct FsNode {
     pub children: Vec<FsNode>,
     #[serde(default)]
     pub params: Vec<ParamDef>,
-    #[serde(skip)]
     #[serde(default = "default_node_geometry_visible")]
     pub geometry_visible: bool,
     #[serde(default = "default_node_position")]

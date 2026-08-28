@@ -102,6 +102,39 @@ mod tests {
         assert_eq!(DesignSettings::from_kdl_str(&none_kdl).default_project, None);
     }
 
+    /// The node View toggle is project data: it survives the JSON round trip
+    /// and counts as an unsaved change (the title asterisk). It was
+    /// `#[serde(skip)]`, which silently discarded every toggle on save and
+    /// kept `has_unsaved_changes` blind to it.
+    #[test]
+    fn test_view_toggle_is_project_data() {
+        let node = FsNode {
+            id: "t".to_string(),
+            name: "t".to_string(),
+            node_type: "node".to_string(),
+            children: vec![],
+            params: vec![],
+            geometry_visible: false,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        let back: FsNode =
+            serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        assert!(!back.geometry_visible, "View toggle lost in the JSON round trip");
+
+        // Absence still defaults on, so pre-existing saves load unchanged.
+        let legacy: FsNode = serde_json::from_str(r#"{"name":"n"}"#).unwrap();
+        assert!(legacy.geometry_visible);
+
+        let mut state = State::new(false);
+        state.fs_root.children.push(back);
+        state.last_saved_root_json = serde_json::to_string(&state.fs_root).unwrap();
+        assert!(!state.has_unsaved_changes());
+        state.fs_root.children.last_mut().unwrap().geometry_visible = true;
+        assert!(state.has_unsaved_changes(), "the toggle must dirty the title");
+    }
+
     /// The button must exist on Main, inside the File section, before Exit.
     #[test]
     fn test_main_node_offers_set_as_default() {
