@@ -3995,7 +3995,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
                 self.positions[VIEWPORT_IDX] = (col_c_x, vp_y, col_c_w, vp_h);
                 self.positions[RIGHT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-                self.positions[BREADCRUMB_IDX] = (px, py + mb_h, pw, bc_h);
+                // The raised run floats clear of the plate's edge: offset past
+                // the plate's rolled lip (bevel_width) plus the run's own boss
+                // roll, so the two shadings never overlap — flush at the corner
+                // they read as one clipped lump, not a part in front of a plate.
+                let bc_pad = cce_ui::layout::bevel_width()
+                    + cce_ui::layout::bevel_width().min(BREADCRUMB_H * 0.2);
+                self.positions[BREADCRUMB_IDX] =
+                    (px + bc_pad, py + mb_h + bc_pad, (pw - 2.0 * bc_pad).max(0.0), bc_h);
                 self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
 
                 self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
