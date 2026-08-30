@@ -5448,6 +5448,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 }
 
                 if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) {
+                    // An open context menu — node, viewport, or plate-corner,
+                    // all riding the shared context_menu thread-local — takes
+                    // Escape ahead of connection-cancel. They were
+                    // mouse-dismiss only, which left Escape wired to a
+                    // cancel_connecting the user could not see happening.
+                    if cce_ui::widget::context_menu::is_visible() {
+                        if self.node_menu_open() {
+                            self.close_node_menu();
+                        } else if self.viewport_menu_open() {
+                            self.close_viewport_menu();
+                        } else {
+                            self.close_plate_menu();
+                        }
+                        return true;
+                    }
                     self.graph_mut().cancel_connecting();
                     return true;
                 }
