@@ -1,0 +1,39 @@
+{
+  "name": "Collision",
+  "type": "collision",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" },
+    { "name": "Collider", "default": "", "type": "text" },
+    {
+      "name": "Method",
+      "type": "choice:Inside,Proximity",
+      "default": "Inside"
+    },
+    {
+      "name": "Distance",
+      "type": "slider",
+      "default": "0.05",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.005
+    },
+    {
+      "name": "Element Type",
+      "type": "choice:Points,Primitives",
+      "default": "Points"
+    },
+    { "name": "Group Name", "default": "collisions", "type": "text" },
+    {
+      "name": "Invert",
+      "type": "toggle",
+      "default": "false"
+    },
+    {
+      "name": "Highlight",
+      "type": "toggle",
+      "default": "true"
+    }
+  ]
+}

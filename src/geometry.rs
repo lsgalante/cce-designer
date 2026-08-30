@@ -33,7 +33,6 @@ impl SimpleRng {
     }
 }
 
-#[allow(dead_code)]
 fn ray_triangle_intersect(
     origin: Vec3,
     dir: Vec3,
@@ -486,6 +485,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_scatter_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("group") {
         resolve_group_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("collision") {
+        resolve_collision_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("relax") {
         resolve_relax_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("attribute") {
@@ -754,6 +755,174 @@ pub fn resolve_group_geometry_with_errors(
             v.attributes.insert(attr.clone(), GAttribute::Float(1.0));
             if highlight {
                 let acc = [1.0, 0.78, 0.20];
+                for k in 0..3 {
+                    v.col[k] = v.col[k] * 0.35 + acc[k] * 0.65;
+                }
+            }
+        }
+    }
+    Some(geom)
+}
+
+/// Squared distance from `p` to triangle `(a, b, c)` — closest point via the
+/// Voronoi-region walk (Ericson, Real-Time Collision Detection §5.1.5).
+fn point_triangle_distance_sq(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f32 {
+    let ab = b - a;
+    let ac = c - a;
+    let ap = p - a;
+    let d1 = ab.dot(ap);
+    let d2 = ac.dot(ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return ap.length_squared();
+    }
+    let bp = p - b;
+    let d3 = ab.dot(bp);
+    let d4 = ac.dot(bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return bp.length_squared();
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return (ap - ab * v).length_squared();
+    }
+    let cp = p - c;
+    let d5 = ab.dot(cp);
+    let d6 = ac.dot(cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return cp.length_squared();
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return (ap - ac * w).length_squared();
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (bp - (c - b) * w).length_squared();
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    (ap - ab * v - ac * w).length_squared()
+}
+
+/// The Collision node: marks the elements of `Input` that collide with the
+/// `Collider` node's geometry (a node name, evaluated like a second input —
+/// the Relax `Rest` pattern), as the group `group:<Group Name>` (the Group
+/// node's convention, so downstream group pickers — Relax's Pin Group, the
+/// Attribute node's Group — list it automatically). Two methods:
+/// - "Inside": parity ray cast against the collider's triangles — the
+///   element is enclosed by the collider's volume. Meaningful against
+///   closed meshes; an open surface reads as inside from one of its sides.
+/// - "Proximity": within `Distance` of the collider's surface (closest
+///   point on any triangle) — touching counts, containment not required.
+///
+/// Points mark per WELDED point — every copy of a position marks together,
+/// which is also one test per distinct position instead of per corner;
+/// primitives test their centroid, matching the Group node's box test.
+/// With no Collider, an unresolvable one, or one with no triangles, the
+/// input passes through unchanged — half-configured nodes stay visible.
+///
+/// No visited guard here (the dispatch already pushed this node's id — the
+/// Relax/Attribute trap); the Collider is a second chain off `root`.
+pub fn resolve_collision_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Geometry> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let collider_name = node_param_str(target, "Collider", "");
+    let collider_name = collider_name.trim();
+    if collider_name.is_empty() {
+        return Some(geom);
+    }
+    let Some(collider_node) = find_node_by_name(root, collider_name) else { return Some(geom) };
+    let Some(collider) = generate_single_node_geometry_with_errors(root, collider_node, visited, ocl_error, sim) else {
+        return Some(geom);
+    };
+    if collider.vertices.len() < 3 || geom.vertices.is_empty() {
+        return Some(geom);
+    }
+
+    let tris: Vec<[Vec3; 3]> = collider
+        .vertices
+        .chunks_exact(3)
+        .map(|t| [Vec3::from(t[0].pos), Vec3::from(t[1].pos), Vec3::from(t[2].pos)])
+        .collect();
+
+    let method = node_param_str(target, "Method", "Inside").to_lowercase();
+    let distance = node_param_f32(target, "Distance", 0.05).max(0.0);
+    // Fixed irrational-ish direction, NOT axis-aligned: the template meshes
+    // tessellate on the axes, and a ray along one skims edge-on through
+    // whole fans of triangles, double-counting crossings.
+    let ray_dir = Vec3::new(0.9174771, 0.3369154, 0.2095338).normalize();
+    let hit = |p: &[f32; 3]| -> bool {
+        let pt = Vec3::from(*p);
+        if method == "proximity" {
+            let d2 = distance * distance;
+            tris.iter().any(|t| point_triangle_distance_sq(pt, t[0], t[1], t[2]) <= d2)
+        } else {
+            let crossings = tris
+                .iter()
+                .filter(|t| ray_triangle_intersect(pt, ray_dir, t[0], t[1], t[2]).is_some())
+                .count();
+            crossings % 2 == 1
+        }
+    };
+
+    let n = geom.vertices.len();
+    let mut member = vec![false; n];
+    let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
+    if etype == "primitives" {
+        for tri in 0..n / 3 {
+            let b = tri * 3;
+            let centroid = [
+                (geom.vertices[b].pos[0] + geom.vertices[b + 1].pos[0] + geom.vertices[b + 2].pos[0]) / 3.0,
+                (geom.vertices[b].pos[1] + geom.vertices[b + 1].pos[1] + geom.vertices[b + 2].pos[1]) / 3.0,
+                (geom.vertices[b].pos[2] + geom.vertices[b + 1].pos[2] + geom.vertices[b + 2].pos[2]) / 3.0,
+            ];
+            if hit(&centroid) {
+                member[b] = true;
+                member[b + 1] = true;
+                member[b + 2] = true;
+            }
+        }
+    } else {
+        let positions: Vec<[f32; 3]> = geom.vertices.iter().map(|v| v.pos).collect();
+        let (_, copies) = weld_points(&positions);
+        for c in &copies {
+            if hit(&positions[c[0]]) {
+                for &i in c {
+                    member[i] = true;
+                }
+            }
+        }
+    }
+    if node_param_str(target, "Invert", "false") == "true" {
+        for m in member.iter_mut() {
+            *m = !*m;
+        }
+    }
+
+    let group_name = node_param_str(target, "Group Name", "collisions");
+    let attr = format!("group:{}", group_name.trim());
+    let highlight = node_param_str(target, "Highlight", "true") == "true";
+    for (i, v) in geom.vertices.iter_mut().enumerate() {
+        if member[i] {
+            v.attributes.insert(attr.clone(), GAttribute::Float(1.0));
+            if highlight {
+                // Contact reads as red — distinct from the Group node's amber.
+                let acc = [1.0, 0.30, 0.24];
                 for k in 0..3 {
                     v.col[k] = v.col[k] * 0.35 + acc[k] * 0.65;
                 }
@@ -1753,6 +1922,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "output"
         || nt == "scatter"
         || nt == "group"
+        || nt == "collision"
         || nt == "relax"
         || nt == "attribute"
         || nt == "simnet"
@@ -1884,6 +2054,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_relax_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("collision") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_collision_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(geom);
                 }
             }
@@ -3117,6 +3296,85 @@ mod simnet_tests {
             .filter(|&i| again.vertices[i].attributes.contains_key("group:pull"))
             .collect();
         assert_eq!(tagged, tagged_again, "same Seed must select the same point");
+    }
+
+    /// The Collision node's Inside method marks exactly the input points
+    /// enclosed by the collider's volume — the group written where two
+    /// spheres overlap, absent everywhere clearly outside — and an
+    /// unconfigured Collider passes the input through untouched.
+    #[test]
+    fn test_collision_inside_marks_enclosed_points() {
+        let build = |collider: &str, method: &str| {
+            let s1 = node("id-s1", "Sphere 1", "sphere", vec![param("Radius", "0.7")], vec![]);
+            let s2 = node("id-s2", "Sphere 2", "sphere", vec![param("Radius", "0.7")], vec![]);
+            let col = node(
+                "id-col",
+                "Collision 1",
+                "collision",
+                vec![
+                    param("Input", "Sphere 1"),
+                    param("Collider", collider),
+                    param("Method", method),
+                    param("Group Name", "collisions"),
+                    param("Highlight", "false"),
+                ],
+                vec![],
+            );
+            node("id-root", "root", "node", vec![], vec![s1, s2, col])
+        };
+
+        // The collider's center, measured: the tessellation is
+        // center-symmetric, so the vertex mean is the center.
+        let root = build("Sphere 2", "Inside");
+        let s2_geom = eval(&root, "Sphere 2");
+        let n2 = s2_geom.vertices.len() as f32;
+        let mut c2 = [0.0f32; 3];
+        for v in &s2_geom.vertices {
+            for k in 0..3 {
+                c2[k] += v.pos[k] / n2;
+            }
+        }
+
+        let g = eval(&root, "Collision 1");
+        let dist = |p: [f32; 3]| {
+            ((p[0] - c2[0]).powi(2) + (p[1] - c2[1]).powi(2) + (p[2] - c2[2]).powi(2)).sqrt()
+        };
+        let mut tagged = 0usize;
+        for v in &g.vertices {
+            let has = v.attributes.contains_key("group:collisions");
+            if dist(v.pos) < 0.7 - 1e-3 {
+                assert!(has, "enclosed point untagged at {:?}", v.pos);
+                tagged += 1;
+            } else if dist(v.pos) > 0.7 + 1e-2 {
+                assert!(!has, "outside point tagged at {:?}", v.pos);
+            }
+        }
+        assert!(tagged > 0, "overlapping spheres must tag the overlap cap");
+        assert!(tagged < g.vertices.len(), "only the cap is enclosed, not the whole sphere");
+
+        // Proximity is a SURFACE band, not containment: every tagged point
+        // sits within Distance of the collider's surface, and with the two
+        // spheres interpenetrating the band is non-empty.
+        let prox = eval(&build("Sphere 2", "Proximity"), "Collision 1");
+        let mut band = 0usize;
+        for v in &prox.vertices {
+            if v.attributes.contains_key("group:collisions") {
+                assert!(
+                    (dist(v.pos) - 0.7).abs() <= 0.05 + 1e-2,
+                    "proximity tag outside the band at {:?}",
+                    v.pos
+                );
+                band += 1;
+            }
+        }
+        assert!(band > 0, "a 0.05 band around an intersecting surface must catch boundary points");
+
+        // No collider configured: pass-through, nothing tagged.
+        let clean = eval(&build("", "Inside"), "Collision 1");
+        assert!(
+            clean.vertices.iter().all(|v| !v.attributes.contains_key("group:collisions")),
+            "an unconfigured collider must not write the group"
+        );
     }
 
     /// The tissue chain: pull one random point with an Attribute Pos edit,
