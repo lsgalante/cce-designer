@@ -5363,6 +5363,43 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     }
                 }
 
+                // A node dropped onto a wire splices in between its ends:
+                // the dragged node inherits the wire's upstream as its
+                // Input, and the wire's downstream node re-aims its Input
+                // at the dragged node. Both rewires or neither — a splice
+                // that only cut the wire would silently orphan downstream.
+                if let Some((mid_id, src_name, dest_id)) = self.graph_mut().take_pending_splice() {
+                    let dir = self.current_dir_mut();
+                    let mid_name = dir
+                        .children
+                        .iter()
+                        .find(|c| c.id == mid_id)
+                        .map(|c| c.name.clone());
+                    let both_rewirable = mid_name.is_some()
+                        && dir.children.iter().any(|c| {
+                            c.id == dest_id && c.params.iter().any(|p| p.name == "Input")
+                        })
+                        && dir.children.iter().any(|c| {
+                            c.id == mid_id && c.params.iter().any(|p| p.name == "Input")
+                        });
+                    if let (Some(mid_name), true) = (mid_name, both_rewirable) {
+                        if let Some(mid) = dir.children.iter_mut().find(|c| c.id == mid_id) {
+                            if let Some(p) = mid.params.iter_mut().find(|p| p.name == "Input") {
+                                p.default = src_name;
+                            }
+                        }
+                        if let Some(dest) = dir.children.iter_mut().find(|c| c.id == dest_id) {
+                            if let Some(p) = dest.params.iter_mut().find(|p| p.name == "Input") {
+                                p.default = mid_name;
+                            }
+                        }
+                        self.sync_nodes();
+                        self.rebuild_scene_geometry();
+                        self.sync_parameters_pane();
+                        changed = true;
+                    }
+                }
+
 
 
                 if self.focused_widget != old_focus {
