@@ -169,13 +169,15 @@ impl State {
         self.append_dock_drag_overlay(&mut pc);
         self.append_plate_corners(&mut pc);
 
-        // The node right-click context menu floats above everything (drawn last).
+        // The context menu (node/viewport right-click AND the plate corner
+        // menus — one shared state) floats above everything, drawn last as
+        // the toolkit's lit plate: rounded, translucent, frosted — the
+        // material every other floating surface wears. NOT the legacy
+        // extra_quads loop, which is the square opaque pre-frost look.
         // Its labels carry bounds equal to the menu rect so the engine's text-
         // occlusion clamp (which registers the menu rect) exempts them.
         if cce_ui::widget::context_menu::is_visible() {
-            for (qx, qy, qw, qh, qc) in cce_ui::widget::context_menu::extra_quads() {
-                pc.quad(rect(qx, qy, qw, qh), qc);
-            }
+            cce_ui::widget::context_menu::paint(&mut pc);
             let mx = cce_ui::widget::context_menu::x();
             let my = cce_ui::widget::context_menu::y();
             let bounds = Some([
