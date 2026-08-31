@@ -627,6 +627,44 @@ mod tests {
         assert_eq!(m.match_action(&ctrl_shift, &lower), Some(Action::SaveAs));
     }
 
+    /// Plates support tabs: a pane pulled into another dock rides it as a
+    /// tab (one laid out, the rest waiting), switching fronts a waiting tab,
+    /// splitting moves the active one back out to the empty dock, and the
+    /// arrangement rides the project view state active-first.
+    #[test]
+    fn test_plate_tabs_share_a_dock() {
+        use crate::app::{Dock, NO_PANE};
+        use crate::slots::{PARAM_IDX, SPREADSHEET_IDX};
+        let mut state = State::new(false);
+
+        // Pull the spreadsheet into the right dock: it fronts, the params
+        // wait as a tab, and the bottom dock empties.
+        state.add_dock_tab(Dock::Right, SPREADSHEET_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Right), SPREADSHEET_IDX);
+        assert!(state.dock_tabs[Dock::Right as usize].contains(&PARAM_IDX));
+        assert_eq!(state.pane_in_dock(Dock::Bottom), NO_PANE);
+        // The waiting tab is laid out nowhere but keeps its home dock.
+        assert_eq!(state.dock_of_pane(PARAM_IDX), None);
+        assert_eq!(state.tab_dock_of_pane(PARAM_IDX), Some(Dock::Right));
+
+        // Switching fronts the waiting tab without evicting the other.
+        state.show_dock_tab(Dock::Right, PARAM_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Right), PARAM_IDX);
+        assert!(state.dock_tabs[Dock::Right as usize].contains(&SPREADSHEET_IDX));
+
+        // The view state carries the groups, active first.
+        let vs = state.project_view_state();
+        assert_eq!(vs.dock_tabs[1][0], "parameters");
+        assert!(vs.dock_tabs[1].contains(&"spreadsheet".to_string()));
+        assert!(vs.dock_tabs[2].is_empty());
+
+        // Splitting moves the active pane to the empty dock; the tab left
+        // behind fronts.
+        state.split_dock_tab(PARAM_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Bottom), PARAM_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Right), SPREADSHEET_IDX);
+    }
+
     /// Pane state rides save files: visibility through the meta→View subnet
     /// params (synced at save, applied on load), collapse and splitter
     /// proportions through view_state. A fresh State loading the file must

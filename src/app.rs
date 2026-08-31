@@ -174,6 +174,12 @@ pub struct ProjectViewState {
     /// window size. None in older saves keeps the live positions.
     #[serde(default)]
     pub splitters: Option<(f32, f32)>,
+    /// The docks' tab groups, Left/Right/Bottom order, pane names with the
+    /// ACTIVE tab first. Empty (older saves) keeps the default one-pane-per-
+    /// dock arrangement; a list that does not name each docked pane exactly
+    /// once across the three groups is ignored the same way.
+    #[serde(default)]
+    pub dock_tabs: Vec<Vec<String>>,
 }
 
 fn default_camera() -> String {
@@ -770,6 +776,11 @@ pub enum Dock {
     Bottom,
 }
 
+/// `dock_panes` entry for a dock whose tabs were all pulled elsewhere: no
+/// slot index, so `pane_shown` reads it as hidden and the dock lays out
+/// nothing. Never a valid `positions[..]` index.
+pub const NO_PANE: usize = usize::MAX;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AppDrag {
     NetworkResize { dir: ResizeDirection, start_rect: (f32, f32, f32, f32), start_mouse: (f32, f32) },
@@ -919,7 +930,15 @@ pub struct State {
     /// or drag-repositions-plate: `(slot, press_x, press_y)`.
     pub corner_press: Option<(usize, f32, f32)>,
     /// Dock occupancy, indexed Left/Right/Bottom. Swapped by dot drags.
+    /// With tabs this names each dock's ACTIVE pane — always a member of the
+    /// dock's `dock_tabs` list — or [`NO_PANE`] for a dock whose tabs were
+    /// all pulled elsewhere.
     pub dock_panes: [usize; 3],
+    /// The panes tabbed into each dock, indexed Left/Right/Bottom. One dock
+    /// rect, several panes: only the active one (`dock_panes`) is laid out;
+    /// the rest wait as tabs, switched and moved through the plate corner
+    /// menus. Every docked pane lives in exactly ONE dock's list.
+    pub dock_tabs: [Vec<usize>; 3],
     /// The dock a live DockDrag would drop into — the render pass highlights it.
     pub dock_drag_target: Option<Dock>,
 
@@ -1491,15 +1510,75 @@ impl State {
 
     /// Move a plate to a dock, swapping with the pane that held it. The
     /// dock-owned dimensions stay put, so the geometry survives the swap.
+    /// With tabs, the whole GROUPS trade places — a dot drag moves the
+    /// plate and every tab riding it, exactly what the drag shows moving.
     pub fn move_pane_to_dock(&mut self, slot: usize, dock: Dock) {
         let Some(from) = self.dock_of_pane(slot) else { return };
         if from == dock {
             return;
         }
         self.dock_panes.swap(from as usize, dock as usize);
+        self.dock_tabs.swap(from as usize, dock as usize);
         self.rebuild_positions();
         self.apply_layout();
         self.read_panel_offsets();
+    }
+
+    /// The dock whose TAB LIST holds `slot` — its home whether or not it is
+    /// the active tab there ([`Self::dock_of_pane`] finds only actives).
+    pub fn tab_dock_of_pane(&self, slot: usize) -> Option<Dock> {
+        [Dock::Left, Dock::Right, Dock::Bottom]
+            .into_iter()
+            .find(|&d| self.dock_tabs[d as usize].contains(&slot))
+    }
+
+    /// Bring one of a dock's tabs to the front (the corner menu's tab switch).
+    pub fn show_dock_tab(&mut self, dock: Dock, slot: usize) {
+        if !self.dock_tabs[dock as usize].contains(&slot) || self.dock_panes[dock as usize] == slot {
+            return;
+        }
+        self.dock_panes[dock as usize] = slot;
+        self.rebuild_positions();
+        self.apply_layout();
+        self.read_panel_offsets();
+    }
+
+    /// Pull `slot` out of its current dock and tab it into `dock`, active.
+    /// The dock it leaves fronts its next remaining tab, or empties
+    /// ([`NO_PANE`]) — its rect stays reserved by the dock-owned dimensions
+    /// either way, ready for a tab to move back.
+    pub fn add_dock_tab(&mut self, dock: Dock, slot: usize) {
+        let Some(from) = self.tab_dock_of_pane(slot) else { return };
+        if from == dock {
+            self.show_dock_tab(dock, slot);
+            return;
+        }
+        let f = from as usize;
+        self.dock_tabs[f].retain(|&s| s != slot);
+        if self.dock_panes[f] == slot {
+            self.dock_panes[f] = self.dock_tabs[f].first().copied().unwrap_or(NO_PANE);
+        }
+        self.dock_tabs[dock as usize].push(slot);
+        self.dock_panes[dock as usize] = slot;
+        self.rebuild_positions();
+        self.apply_layout();
+        self.read_panel_offsets();
+    }
+
+    /// Move the active tab of `slot`'s dock out to the first EMPTY dock —
+    /// the corner menu's inverse of Add Tab. No empty dock, no move (with
+    /// three panes on three docks, one is empty whenever any dock holds two).
+    pub fn split_dock_tab(&mut self, slot: usize) {
+        if self.tab_dock_of_pane(slot).is_none() {
+            return;
+        }
+        let Some(empty) = [Dock::Left, Dock::Right, Dock::Bottom]
+            .into_iter()
+            .find(|&d| self.dock_tabs[d as usize].is_empty())
+        else {
+            return;
+        };
+        self.add_dock_tab(empty, slot);
     }
 
     pub fn floating_spreadsheet_rect(&self) -> (f32, f32, f32, f32) {
@@ -3246,6 +3325,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             collapsed_panes: [false; WIDGET_COUNT],
             corner_press: None,
             dock_panes: [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX],
+            dock_tabs: [
+                vec![NETWORK_PANEL_IDX],
+                vec![PARAM_IDX],
+                vec![SPREADSHEET_IDX],
+            ],
             dock_drag_target: None,
             drag_widget: None,
             drag_press_cursor: None,

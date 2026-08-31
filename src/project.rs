@@ -99,6 +99,25 @@ impl State {
         } else {
             None
         };
+        // Each dock's tabs by name, active first — the order the loader
+        // reads back (first = front).
+        let dock_tabs = (0..3)
+            .map(|d| {
+                let active = self.dock_panes[d];
+                let mut names: Vec<String> = Vec::new();
+                if let Some(n) = crate::plate_corner::pane_name_from_slot(active) {
+                    names.push(n.to_string());
+                }
+                for &t in &self.dock_tabs[d] {
+                    if t != active {
+                        if let Some(n) = crate::plate_corner::pane_name_from_slot(t) {
+                            names.push(n.to_string());
+                        }
+                    }
+                }
+                names
+            })
+            .collect();
         ProjectViewState {
             active_camera: self.active_camera.clone(),
             pan: (self.pan_x, self.pan_y),
@@ -106,6 +125,7 @@ impl State {
             selected_node: self.graph().selected_node(),
             collapsed_panes,
             splitters,
+            dock_tabs,
         }
     }
 
@@ -199,6 +219,39 @@ impl State {
             let desired = crate::plate_corner::pane_name_from_slot(idx)
                 .map_or(false, |n| vs.collapsed_panes.iter().any(|c| c == n));
             self.set_pane_collapsed(idx, desired);
+        }
+        // Dock tab groups: accepted only whole — three lists whose names
+        // resolve and cover each docked pane exactly once. Anything else
+        // (older saves' empty list included) keeps the current arrangement
+        // rather than loading half a layout.
+        if vs.dock_tabs.len() == 3 {
+            let resolved: Vec<Vec<usize>> = vs
+                .dock_tabs
+                .iter()
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|n| crate::plate_corner::pane_slot_from_name(n))
+                        .collect()
+                })
+                .collect();
+            let mut all: Vec<usize> = resolved.iter().flatten().copied().collect();
+            all.sort_unstable();
+            let mut expected = vec![
+                crate::slots::NETWORK_PANEL_IDX,
+                crate::slots::PARAM_IDX,
+                crate::slots::SPREADSHEET_IDX,
+            ];
+            expected.sort_unstable();
+            if all == expected {
+                for d in 0..3 {
+                    self.dock_tabs[d] = resolved[d].clone();
+                    self.dock_panes[d] =
+                        resolved[d].first().copied().unwrap_or(crate::app::NO_PANE);
+                }
+                self.rebuild_positions();
+                self.apply_layout();
+            }
         }
         if let Some((f1, f2)) = vs.splitters {
             if self.width > 1.0 && f1 > 0.02 && f2 < 0.98 && f1 < f2 {

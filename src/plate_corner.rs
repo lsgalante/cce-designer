@@ -42,6 +42,12 @@ pub enum PlateMenuAction {
     FullWidth,
     /// Spreadsheet: back to the strip between the network and params panes.
     BetweenPanes,
+    /// Bring this dock's named tab to the front.
+    ShowTab(usize),
+    /// Pull the named pane out of its dock and tab it into this one, active.
+    AddTab(usize),
+    /// Move this pane out of its shared dock into the first empty one.
+    SplitTab,
 }
 
 impl State {
@@ -140,6 +146,32 @@ impl State {
             }
         }
 
+        // Tabs — only on docked plates (the playbar's strip is not a dock).
+        // The dock's other tabs switch to the front; panes docked elsewhere
+        // can be pulled in as tabs; a pane sharing its dock can move back
+        // out to the empty dock its arrival left behind.
+        if let Some(d) = self.dock_of_pane(idx) {
+            for &t in &self.dock_tabs[d as usize] {
+                if t != idx {
+                    options.push(format!("Tab: {}", plate_title(t)));
+                    actions.push(PlateMenuAction::ShowTab(t));
+                }
+            }
+            for other in [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX] {
+                if other != idx
+                    && !self.dock_tabs[d as usize].contains(&other)
+                    && !self.pane_is_detached(other)
+                {
+                    options.push(format!("Add Tab: {}", plate_title(other)));
+                    actions.push(PlateMenuAction::AddTab(other));
+                }
+            }
+            if self.dock_tabs[d as usize].len() > 1 {
+                options.push("Move To Own Plate".to_string());
+                actions.push(PlateMenuAction::SplitTab);
+            }
+        }
+
         let target = self.slots.get_dyn(idx).base().id();
         cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 0, target);
         self.plate_menu_slot = Some(idx);
@@ -184,6 +216,17 @@ impl State {
             PlateMenuAction::Reattach => self.reattach_plate(idx),
             PlateMenuAction::FullWidth => self.set_spreadsheet_full_width(true),
             PlateMenuAction::BetweenPanes => self.set_spreadsheet_full_width(false),
+            PlateMenuAction::ShowTab(t) => {
+                if let Some(d) = self.dock_of_pane(idx) {
+                    self.show_dock_tab(d, t);
+                }
+            }
+            PlateMenuAction::AddTab(o) => {
+                if let Some(d) = self.dock_of_pane(idx) {
+                    self.add_dock_tab(d, o);
+                }
+            }
+            PlateMenuAction::SplitTab => self.split_dock_tab(idx),
         }
     }
 
