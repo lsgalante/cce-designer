@@ -64,6 +64,10 @@ pub enum PlateMenuAction {
     SplitTab,
     /// Remove a closable pane (the second network editor) from the docks.
     CloseTab,
+    /// Bind this pane to whichever editor takes the last node click.
+    PinFollow,
+    /// Bind this pane to one editor (CONTENT_IDX / CONTENT2_IDX).
+    PinTo(usize),
     /// A "-" row: engraved, inert — keeps `plate_menu_actions` aligned with
     /// the option rows so a click on the line dispatches nothing.
     Separator,
@@ -176,6 +180,30 @@ impl State {
                 options.push("Between Panes".to_string());
                 actions.push(PlateMenuAction::BetweenPanes);
             }
+        }
+
+        // Selection binding — the params pane and spreadsheet can pin to
+        // one editor (the viewport's right-click radio, on the plates that
+        // follow selection). Only while a second editor exists: with one,
+        // following IS pinned.
+        if (idx == PARAM_IDX || idx == SPREADSHEET_IDX)
+            && self.tab_dock_of_pane(NETWORK_PANEL2_IDX).is_some()
+        {
+            separate(&mut options, &mut actions);
+            let pin = if idx == PARAM_IDX { self.params_pin } else { self.spreadsheet_pin };
+            let mark = |on: bool| if on { "●" } else { "○" };
+            options.push(format!("{} Follow Active Editor", mark(pin.is_none())));
+            actions.push(PlateMenuAction::PinFollow);
+            options.push(format!(
+                "{} Pin: Network",
+                mark(pin == Some(crate::slots::CONTENT_IDX))
+            ));
+            actions.push(PlateMenuAction::PinTo(crate::slots::CONTENT_IDX));
+            options.push(format!(
+                "{} Pin: Network 2",
+                mark(pin == Some(crate::slots::CONTENT2_IDX))
+            ));
+            actions.push(PlateMenuAction::PinTo(crate::slots::CONTENT2_IDX));
         }
 
         // Tabs — only on docked plates (the playbar's strip is not a dock).
@@ -316,7 +344,26 @@ impl State {
             PlateMenuAction::BackToMain => self.open_plate_menu(idx),
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
             PlateMenuAction::CloseTab => self.close_dock_tab(idx),
+            PlateMenuAction::PinFollow => self.set_pane_pin(idx, None),
+            PlateMenuAction::PinTo(e) => self.set_pane_pin(idx, Some(e)),
             PlateMenuAction::Separator => {}
+        }
+    }
+
+    /// Apply a plate's selection-binding pick and refresh what it feeds.
+    fn set_pane_pin(&mut self, idx: usize, pin: Option<usize>) {
+        match idx {
+            PARAM_IDX => {
+                self.params_pin = pin;
+                self.sync_parameters_pane();
+            }
+            SPREADSHEET_IDX => {
+                self.spreadsheet_pin = pin;
+                // The spreadsheet refresh lives in sync_nodes, keyed by the
+                // bound selection's node id — rebinding changes the key.
+                self.sync_nodes();
+            }
+            _ => {}
         }
     }
 

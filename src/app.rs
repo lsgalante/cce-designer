@@ -189,6 +189,12 @@ pub struct ProjectViewState {
     /// unresolvable follows the active editor.
     #[serde(default)]
     pub viewport_pin: Option<String>,
+    /// The parameters pane's pin, same encoding.
+    #[serde(default)]
+    pub params_pin: Option<String>,
+    /// The spreadsheet's pin, same encoding.
+    #[serde(default)]
+    pub spreadsheet_pin: Option<String>,
 }
 
 fn default_camera() -> String {
@@ -910,6 +916,12 @@ pub struct State {
     /// CONTENT2_IDX) locks the scene to that editor's level regardless of
     /// where clicks land. Set from the viewport's right-click menu.
     pub viewport_pin: Option<usize>,
+    /// The parameters pane's pin — same shape, set from its plate's corner
+    /// menu. Pinned, the pane shows and edits the pinned editor's selection
+    /// no matter where clicks land.
+    pub params_pin: Option<usize>,
+    /// The spreadsheet's pin — same shape, set from its plate's corner menu.
+    pub spreadsheet_pin: Option<usize>,
     pub node_clipboard: Option<FsNode>,
     pub last_click: Option<(Instant, usize)>,
     pub last_frame: Instant,
@@ -1610,8 +1622,10 @@ impl State {
         let Some(from) = self.tab_dock_of_pane(slot) else { return };
         // A closed editor cannot hold the viewport or the params pane.
         if slot == crate::slots::NETWORK_PANEL2_IDX {
-            if self.viewport_pin == Some(crate::slots::CONTENT2_IDX) {
-                self.viewport_pin = None;
+            for pin in [&mut self.viewport_pin, &mut self.params_pin, &mut self.spreadsheet_pin] {
+                if *pin == Some(crate::slots::CONTENT2_IDX) {
+                    *pin = None;
+                }
             }
             if self.param_editor == crate::slots::CONTENT2_IDX {
                 self.param_editor = CONTENT_IDX;
@@ -1812,9 +1826,9 @@ impl State {
         node
     }
 
-    /// The selected slot in the editor the parameters pane follows.
-    pub fn param_editor_selected(&self) -> Option<usize> {
-        if self.param_editor == crate::slots::CONTENT2_IDX {
+    /// One editor's selected slot (CONTENT_IDX / CONTENT2_IDX).
+    pub fn editor_selected_of(&self, editor: usize) -> Option<usize> {
+        if editor == crate::slots::CONTENT2_IDX {
             use cce_ui::widget::GraphController as _;
             self.slots.content2.selected_node()
         } else {
@@ -1822,23 +1836,49 @@ impl State {
         }
     }
 
-    /// The level that editor is showing — where its selection resolves.
-    pub fn param_editor_dir(&self) -> &FsNode {
-        if self.param_editor == crate::slots::CONTENT2_IDX {
+    /// One editor's displayed level.
+    pub fn editor_dir_of(&self, editor: usize) -> &FsNode {
+        if editor == crate::slots::CONTENT2_IDX {
             self.dir_at(&self.current_path2)
         } else {
             self.current_dir()
         }
     }
 
-    /// [`Self::param_editor_dir`], mutable — the param writeback target.
-    pub fn param_editor_dir_mut(&mut self) -> &mut FsNode {
-        if self.param_editor == crate::slots::CONTENT2_IDX {
+    /// [`Self::editor_dir_of`], mutable.
+    pub fn editor_dir_of_mut(&mut self, editor: usize) -> &mut FsNode {
+        if editor == crate::slots::CONTENT2_IDX {
             let p2 = self.current_path2.clone();
             self.dir_at_mut(&p2)
         } else {
             self.current_dir_mut()
         }
+    }
+
+    /// The editor the parameters pane is bound to: its pin, else the active
+    /// (last-clicked) editor.
+    pub fn params_editor(&self) -> usize {
+        self.params_pin.unwrap_or(self.param_editor)
+    }
+
+    /// The editor the spreadsheet is bound to — same resolution.
+    pub fn spreadsheet_editor(&self) -> usize {
+        self.spreadsheet_pin.unwrap_or(self.param_editor)
+    }
+
+    /// The selected slot in the editor the parameters pane follows.
+    pub fn param_editor_selected(&self) -> Option<usize> {
+        self.editor_selected_of(self.params_editor())
+    }
+
+    /// The level that editor is showing — where its selection resolves.
+    pub fn param_editor_dir(&self) -> &FsNode {
+        self.editor_dir_of(self.params_editor())
+    }
+
+    /// [`Self::param_editor_dir`], mutable — the param writeback target.
+    pub fn param_editor_dir_mut(&mut self) -> &mut FsNode {
+        self.editor_dir_of_mut(self.params_editor())
     }
 
     /// The editor whose level the VIEWPORT renders: the pin when set, else
@@ -3221,13 +3261,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let path_strs = self.current_path_names();
         self.path_mut().set_path(&path_strs);
 
-        // The spreadsheet (and the group markers below) follow the SAME
-        // selection the parameters pane does: whichever editor took the
-        // last node click, at its own level.
+        // The spreadsheet (and the group markers with it) read the
+        // SPREADSHEET's binding: its pin when set, else the active editor —
+        // exactly the parameters pane's rule with its own pin.
         let mut selected_node = None;
         if !self.is_detached_network {
-            if let Some(slot_idx) = self.param_editor_selected() {
-                let dir = self.param_editor_dir();
+            let se = self.spreadsheet_editor();
+            if let Some(slot_idx) = self.editor_selected_of(se) {
+                let dir = self.editor_dir_of(se);
                 if slot_idx < dir.children.len() {
                     selected_node = Some(&dir.children[slot_idx]);
                 }
@@ -3523,6 +3564,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             current_path2: Vec::new(),
             param_editor: CONTENT_IDX,
             viewport_pin: None,
+            params_pin: None,
+            spreadsheet_pin: None,
             node_clipboard: None,
             last_click: None,
             last_frame: Instant::now(),
@@ -4695,7 +4738,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     }
 
     pub fn sync_cursor_and_selection(&mut self) {
-        if self.focused_pane != LEFT_MENUBAR_IDX {
+        // The grid cursor is PANE 1's concept: both network editors share
+        // the LEFT_MENUBAR focus domain, so without the param_editor gate a
+        // click in the second editor ran this and forced pane 1's selection
+        // to whatever sat under its cursor cell — wiping the selection a
+        // pinned params pane or spreadsheet was reading.
+        if self.focused_pane != LEFT_MENUBAR_IDX || self.param_editor != CONTENT_IDX {
             return;
         }
         let dir = self.current_dir();

@@ -127,11 +127,31 @@ impl State {
             splitters,
             dock_tabs,
             current_path2: self.current_path2.clone(),
-            viewport_pin: match self.viewport_pin {
-                Some(crate::slots::CONTENT2_IDX) => Some("network2".to_string()),
-                Some(_) => Some("network".to_string()),
-                None => None,
-            },
+            viewport_pin: Self::pin_name(self.viewport_pin),
+            params_pin: Self::pin_name(self.params_pin),
+            spreadsheet_pin: Self::pin_name(self.spreadsheet_pin),
+        }
+    }
+
+    /// A pin as its saved pane name.
+    fn pin_name(pin: Option<usize>) -> Option<String> {
+        match pin {
+            Some(crate::slots::CONTENT2_IDX) => Some("network2".to_string()),
+            Some(_) => Some("network".to_string()),
+            None => None,
+        }
+    }
+
+    /// The inverse: a saved pin name, honored only when its editor exists.
+    fn pin_from_name(&self, name: Option<&str>) -> Option<usize> {
+        match name {
+            Some("network") => Some(crate::slots::CONTENT_IDX),
+            Some("network2")
+                if self.tab_dock_of_pane(crate::slots::NETWORK_PANEL2_IDX).is_some() =>
+            {
+                Some(crate::slots::CONTENT2_IDX)
+            }
+            _ => None,
         }
     }
 
@@ -269,17 +289,11 @@ impl State {
         // a stale save must degrade to the deepest valid ancestor.
         self.current_path2 = vs.current_path2.clone();
         self.clamp_path2();
-        // The viewport pin: "network2" only holds if the loaded arrangement
-        // actually carries the second editor.
-        self.viewport_pin = match vs.viewport_pin.as_deref() {
-            Some("network") => Some(crate::slots::CONTENT_IDX),
-            Some("network2")
-                if self.tab_dock_of_pane(crate::slots::NETWORK_PANEL2_IDX).is_some() =>
-            {
-                Some(crate::slots::CONTENT2_IDX)
-            }
-            _ => None,
-        };
+        // Pins: "network2" only holds if the loaded arrangement actually
+        // carries the second editor.
+        self.viewport_pin = self.pin_from_name(vs.viewport_pin.as_deref());
+        self.params_pin = self.pin_from_name(vs.params_pin.as_deref());
+        self.spreadsheet_pin = self.pin_from_name(vs.spreadsheet_pin.as_deref());
         if let Some((f1, f2)) = vs.splitters {
             if self.width > 1.0 && f1 > 0.02 && f2 < 0.98 && f1 < f2 {
                 self.splitter_layout.splitter1_x = f1 * self.width;

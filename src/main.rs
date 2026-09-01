@@ -701,6 +701,63 @@ mod tests {
     }
 
 
+    /// Pinning: the spreadsheet bound to pane 1 keeps reading pane 1's
+    /// selection while clicks land in the second editor, and the cursor-
+    /// selection sync no longer wipes pane 1's selection on second-editor
+    /// interactions (the regression that made pins look broken).
+    #[test]
+    fn test_pane_pins_bind_selection_sources() {
+        use crate::app::Dock;
+        use crate::slots::{CONTENT2_IDX, CONTENT_IDX, LEFT_MENUBAR_IDX, NETWORK_PANEL2_IDX};
+        use cce_ui::widget::GraphController as _;
+        let mut state = State::new(false);
+        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
+
+        let sphere = state.fs_root.children.iter().position(|c| c.name == "Sphere 1").unwrap();
+        let camera = state.fs_root.children.iter().position(|c| c.name == "Camera 1").unwrap();
+
+        // Pane 1 selects the sphere; the spreadsheet pins to pane 1.
+        state.graph_mut().set_selected_node(Some(sphere));
+        state.spreadsheet_pin = Some(CONTENT_IDX);
+        // A click in the second editor selects the camera and takes the
+        // active-editor role.
+        state.slots.content2.set_selected_node(Some(camera));
+        state.param_editor = CONTENT2_IDX;
+
+        // The params pane (unpinned) follows the second editor...
+        assert_eq!(state.param_editor_selected(), Some(camera));
+        // ...the spreadsheet's binding stays on pane 1's sphere.
+        let se = state.spreadsheet_editor();
+        assert_eq!(se, CONTENT_IDX);
+        assert_eq!(state.editor_selected_of(se), Some(sphere));
+
+        // The cursor-selection sync must NOT wipe pane 1's selection while
+        // the second editor is active — the grid cursor is pane 1's concept.
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.grid_cursor_col = -50;
+        state.grid_cursor_row = -50;
+        state.sync_cursor_and_selection();
+        assert_eq!(
+            state.graph().selected_node(),
+            Some(sphere),
+            "second-editor activity must not clear pane 1's selection"
+        );
+
+        // And the spreadsheet refresh keys off the pinned selection.
+        state.show_spreadsheet = true;
+        state.sync_nodes();
+        let sphere_id = state.fs_root.children[sphere].id.clone();
+        assert_eq!(
+            state.last_spreadsheet_node_name.as_deref(),
+            Some(sphere_id.as_str()),
+            "spreadsheet must refresh against the PINNED editor's selection"
+        );
+
+        // A params pin binds the pane the other way.
+        state.params_pin = Some(CONTENT_IDX);
+        assert_eq!(state.param_editor_selected(), Some(sphere));
+    }
+
     /// Pane state rides save files: visibility through the meta→View subnet
     /// params (synced at save, applied on load), collapse and splitter
     /// proportions through view_state. A fresh State loading the file must
