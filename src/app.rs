@@ -892,6 +892,10 @@ pub struct State {
     /// two graph views dive independently. Always valid against `fs_root`
     /// (every structural edit re-clamps it); starts at root.
     pub current_path2: Vec<usize>,
+    /// The editor whose SELECTION feeds the parameters pane (and the param
+    /// writeback): CONTENT_IDX or CONTENT2_IDX — whichever took the last
+    /// node click. Selection itself stays per-editor.
+    pub param_editor: usize,
     pub node_clipboard: Option<FsNode>,
     pub last_click: Option<(Instant, usize)>,
     pub last_frame: Instant,
@@ -1783,6 +1787,35 @@ impl State {
         node
     }
 
+    /// The selected slot in the editor the parameters pane follows.
+    pub fn param_editor_selected(&self) -> Option<usize> {
+        if self.param_editor == crate::slots::CONTENT2_IDX {
+            use cce_ui::widget::GraphController as _;
+            self.slots.content2.selected_node()
+        } else {
+            self.graph().selected_node()
+        }
+    }
+
+    /// The level that editor is showing — where its selection resolves.
+    pub fn param_editor_dir(&self) -> &FsNode {
+        if self.param_editor == crate::slots::CONTENT2_IDX {
+            self.dir_at(&self.current_path2)
+        } else {
+            self.current_dir()
+        }
+    }
+
+    /// [`Self::param_editor_dir`], mutable — the param writeback target.
+    pub fn param_editor_dir_mut(&mut self) -> &mut FsNode {
+        if self.param_editor == crate::slots::CONTENT2_IDX {
+            let p2 = self.current_path2.clone();
+            self.dir_at_mut(&p2)
+        } else {
+            self.current_dir_mut()
+        }
+    }
+
     /// Truncate the second editor's path to its valid prefix — run after any
     /// structural edit, so `dir_at` clamping and the drawn breadcrumb agree.
     pub fn clamp_path2(&mut self) {
@@ -1815,12 +1848,12 @@ impl State {
     pub fn sync_parameters_to_project(&mut self) {
         let mut file_to_open = None;
         if !self.is_detached_network {
-            if let Some(slot_idx) = self.graph().selected_node() {
+            if let Some(slot_idx) = self.param_editor_selected() {
                 let updated_params = self.param().node_params();
                 // Live pane state, so a pane toggle only fires the visibility
                 // action when it actually flips relative to what's on screen.
                 let cur_show = (self.show_network, self.show_viewport, self.show_parameters, self.show_spreadsheet, self.show_playbar);
-                let dir = self.current_dir_mut();
+                let dir = self.param_editor_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot_idx) {
                     let mut param_changed = false;
                     let mut triggered_buttons = Vec::new();
@@ -2228,7 +2261,7 @@ impl State {
             ("Show Reference Cube", self.viewport().show_cube),
             ("Show Origin Axes", self.viewport().show_origin),
         ];
-        let dir = self.current_dir_mut();
+        let dir = self.param_editor_dir_mut();
         let Some(child) = dir.children.get_mut(slot_idx) else { return };
         let live: &[(&str, bool)] = match child.name.as_str() {
             "Main" => &live_main,
@@ -2244,14 +2277,17 @@ impl State {
     }
 
     pub fn sync_parameters_pane(&mut self) {
+        // Selection reads through the param-editor accessors: whichever
+        // network editor took the last node click feeds the pane, at ITS
+        // level — no matter the tab.
         if !self.is_detached_network {
-            if let Some(slot_idx) = self.graph().selected_node() {
+            if let Some(slot_idx) = self.param_editor_selected() {
                 self.refresh_main_node_live_toggles(slot_idx);
             }
         }
         let params = if !self.is_detached_network {
-            if let Some(slot_idx) = self.graph().selected_node() {
-                let dir = self.current_dir();
+            if let Some(slot_idx) = self.param_editor_selected() {
+                let dir = self.param_editor_dir();
                 if slot_idx < dir.children.len() {
                     param_display(&dir.children[slot_idx].params)
                 } else {
@@ -2280,8 +2316,8 @@ impl State {
             if self.is_detached_network {
                 return params;
             }
-            let Some(slot) = self.graph().selected_node() else { return params };
-            let dir = self.current_dir();
+            let Some(slot) = self.param_editor_selected() else { return params };
+            let dir = self.param_editor_dir();
             let Some(node) = dir.children.get(slot) else { return params };
             let nt = node.node_type.to_lowercase();
             if nt != "attribute" && nt != "group" && nt != "relax" {
@@ -3410,6 +3446,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             node_templates,
             current_path,
             current_path2: Vec::new(),
+            param_editor: CONTENT_IDX,
             node_clipboard: None,
             last_click: None,
             last_frame: Instant::now(),
@@ -5475,7 +5512,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                     self.focused_widget = None;
                                 }
                             }
+                            if i == crate::slots::CONTENT2_IDX {
+                                // A node click in the SECOND editor hands the
+                                // parameters pane to its selection.
+                                self.param_editor = crate::slots::CONTENT2_IDX;
+                                self.sync_parameters_pane();
+                            }
                             if i == CONTENT_IDX {
+                                self.param_editor = CONTENT_IDX;
                                 self.sync_parameters_pane();
                                 if let Some(slot_idx) = self.graph().selected_node() {
                                     let dir = self.current_dir();
