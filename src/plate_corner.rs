@@ -178,14 +178,15 @@ impl State {
         // can be pulled in as tabs; a pane sharing its dock can move back
         // out to the empty dock its arrival left behind.
         if let Some(d) = self.dock_of_pane(idx) {
-            let switch_rows: Vec<usize> =
-                self.dock_tabs[d as usize].iter().copied().filter(|&t| t != idx).collect();
-            if !switch_rows.is_empty() {
-                separate(&mut options, &mut actions);
-                for t in switch_rows {
-                    options.push(format!("Tab: {}", plate_title(t)));
-                    actions.push(PlateMenuAction::ShowTab(t));
-                }
+            // The dock's tabs as a RADIO group: every tab listed, the front
+            // one marked. Clicking the marked row is a no-op (show_dock_tab
+            // declines the already-active slot), so the list reads as state,
+            // not just as actions.
+            separate(&mut options, &mut actions);
+            for &t in &self.dock_tabs[d as usize] {
+                let mark = if t == idx { "●" } else { "○" };
+                options.push(format!("{mark} {}", plate_title(t)));
+                actions.push(PlateMenuAction::ShowTab(t));
             }
             let mut managed = false;
             for other in TAB_CANDIDATES {
