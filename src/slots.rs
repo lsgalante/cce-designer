@@ -106,6 +106,13 @@ widget_roster! {
     SPREADSHEET_MENUBAR_IDX: spreadsheet_menubar: MenuBar,
     NETWORK_PANEL_IDX:       network_panel:       PassivePlate,
     PLAYBAR_IDX:             playbar:             Playbar,
+    // The second network editor (plate + graph + breadcrumb): an independent
+    // VIEW of the same project with its own current path, created and placed
+    // through the plate corner menus' tab rows. Appended so the established
+    // slot indexes stay stable.
+    NETWORK_PANEL2_IDX:      network_panel2:      PassivePlate,
+    CONTENT2_IDX:            content2:            Graph,
+    BREADCRUMB2_IDX:         breadcrumb2:         Breadcrumb,
 }
 
 impl WidgetSlots {

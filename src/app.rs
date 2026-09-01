@@ -883,6 +883,10 @@ pub struct State {
     pub fs_root: FsNode,
     pub node_templates: Vec<NodeTemplate>,
     pub current_path: Vec<usize>,
+    /// The SECOND network editor's own path — the point of having one: the
+    /// two graph views dive independently. Always valid against `fs_root`
+    /// (every structural edit re-clamps it); starts at root.
+    pub current_path2: Vec<usize>,
     pub node_clipboard: Option<FsNode>,
     pub last_click: Option<(Instant, usize)>,
     pub last_frame: Instant,
@@ -1469,6 +1473,9 @@ impl State {
             PARAM_IDX => self.show_parameters,
             SPREADSHEET_IDX => self.show_spreadsheet,
             PLAYBAR_IDX => self.show_playbar,
+            // The second network editor has no View-menu flag: being placed
+            // in a dock's tab list IS its existence.
+            crate::slots::NETWORK_PANEL2_IDX => true,
             _ => false,
         }
     }
@@ -1519,9 +1526,19 @@ impl State {
         }
         self.dock_panes.swap(from as usize, dock as usize);
         self.dock_tabs.swap(from as usize, dock as usize);
+        self.after_dock_change();
+    }
+
+    /// The full re-sync a dock/tab change needs: layout, panel offsets, the
+    /// graphs' grid origins (they follow their pane rects), and the node
+    /// lists — a fronted pane must not wait for the next unrelated event to
+    /// fill in.
+    fn after_dock_change(&mut self) {
         self.rebuild_positions();
         self.apply_layout();
         self.read_panel_offsets();
+        self.sync_grid_settings();
+        self.sync_nodes();
     }
 
     /// The dock whose TAB LIST holds `slot` — its home whether or not it is
@@ -1538,31 +1555,42 @@ impl State {
             return;
         }
         self.dock_panes[dock as usize] = slot;
-        self.rebuild_positions();
-        self.apply_layout();
-        self.read_panel_offsets();
+        self.after_dock_change();
     }
 
-    /// Pull `slot` out of its current dock and tab it into `dock`, active.
-    /// The dock it leaves fronts its next remaining tab, or empties
-    /// ([`NO_PANE`]) — its rect stays reserved by the dock-owned dimensions
-    /// either way, ready for a tab to move back.
+    /// Pull `slot` out of its current dock (if it has one — an unplaced pane
+    /// like a fresh second network editor simply joins) and tab it into
+    /// `dock`, active. The dock it leaves fronts its next remaining tab, or
+    /// empties ([`NO_PANE`]) — its rect stays reserved by the dock-owned
+    /// dimensions either way, ready for a tab to move back.
     pub fn add_dock_tab(&mut self, dock: Dock, slot: usize) {
-        let Some(from) = self.tab_dock_of_pane(slot) else { return };
-        if from == dock {
-            self.show_dock_tab(dock, slot);
-            return;
+        if let Some(from) = self.tab_dock_of_pane(slot) {
+            if from == dock {
+                self.show_dock_tab(dock, slot);
+                return;
+            }
+            let f = from as usize;
+            self.dock_tabs[f].retain(|&s| s != slot);
+            if self.dock_panes[f] == slot {
+                self.dock_panes[f] = self.dock_tabs[f].first().copied().unwrap_or(NO_PANE);
+            }
         }
+        self.dock_tabs[dock as usize].push(slot);
+        self.dock_panes[dock as usize] = slot;
+        self.after_dock_change();
+    }
+
+    /// Remove a CLOSABLE pane (the second network editor) from the docks
+    /// entirely — it stops existing until a tab row re-adds it. Its dock
+    /// fronts the next tab or empties.
+    pub fn close_dock_tab(&mut self, slot: usize) {
+        let Some(from) = self.tab_dock_of_pane(slot) else { return };
         let f = from as usize;
         self.dock_tabs[f].retain(|&s| s != slot);
         if self.dock_panes[f] == slot {
             self.dock_panes[f] = self.dock_tabs[f].first().copied().unwrap_or(NO_PANE);
         }
-        self.dock_tabs[dock as usize].push(slot);
-        self.dock_panes[dock as usize] = slot;
-        self.rebuild_positions();
-        self.apply_layout();
-        self.read_panel_offsets();
+        self.after_dock_change();
     }
 
     /// Move the active tab of `slot`'s dock out to the first EMPTY dock —
@@ -1720,6 +1748,51 @@ impl State {
             node = &mut node.children[i];
         }
         node
+    }
+
+    /// The node a path addresses, CLAMPED: each step that no longer exists
+    /// ends the walk, so a stale second-editor path degrades to the deepest
+    /// still-valid ancestor instead of indexing out of bounds after a
+    /// structural edit made in the other view.
+    pub fn dir_at(&self, path: &[usize]) -> &FsNode {
+        let mut node = &self.fs_root;
+        for &i in path {
+            match node.children.get(i) {
+                Some(child) => node = child,
+                None => break,
+            }
+        }
+        node
+    }
+
+    /// [`Self::dir_at`], mutable — same clamping walk.
+    pub fn dir_at_mut(&mut self, path: &[usize]) -> &mut FsNode {
+        let mut node = &mut self.fs_root;
+        for &i in path {
+            if i < node.children.len() {
+                node = &mut node.children[i];
+            } else {
+                break;
+            }
+        }
+        node
+    }
+
+    /// Truncate the second editor's path to its valid prefix — run after any
+    /// structural edit, so `dir_at` clamping and the drawn breadcrumb agree.
+    pub fn clamp_path2(&mut self) {
+        let mut node = &self.fs_root;
+        let mut valid = 0;
+        for &i in &self.current_path2 {
+            match node.children.get(i) {
+                Some(child) => {
+                    node = child;
+                    valid += 1;
+                }
+                None => break,
+            }
+        }
+        self.current_path2.truncate(valid);
     }
 
     pub fn get_lowest_unused_name(&self, base_name: &str) -> String {
@@ -2281,9 +2354,15 @@ impl State {
     }
 
     pub fn current_path_names(&self) -> Vec<String> {
+        self.path_names_at(&self.current_path)
+    }
+
+    /// Segment names along `path` (skipping steps that no longer resolve —
+    /// the same clamping `dir_at` walks with).
+    pub fn path_names_at(&self, path: &[usize]) -> Vec<String> {
         let mut node = &self.fs_root;
         let mut names = Vec::new();
-        for &i in &self.current_path {
+        for &i in path {
             if let Some(child) = node.children.get(i) {
                 names.push(child.name.clone());
                 node = child;
@@ -2985,9 +3064,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         }
     }
 
-    pub fn sync_nodes(&mut self) {
-        let graph_nodes: Vec<GraphNode> = self.current_dir().children.iter().map(|c| {
-            GraphNode {
+    /// One level's children as the graph widget's rows.
+    fn graph_nodes_of(dir: &FsNode) -> Vec<GraphNode> {
+        dir.children
+            .iter()
+            .map(|c| GraphNode {
                 id: c.id.clone(),
                 name: c.name.clone(),
                 position: c.position,
@@ -2996,9 +3077,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 node_type: c.node_type.clone(),
                 inputs: c.inputs,
                 outputs: c.outputs,
-            }
-        }).collect();
+            })
+            .collect()
+    }
+
+    pub fn sync_nodes(&mut self) {
+        let graph_nodes = Self::graph_nodes_of(self.current_dir());
         self.graph_mut().set_nodes(&graph_nodes);
+
+        // The second network editor views ITS OWN level.
+        self.clamp_path2();
+        let nodes2 = Self::graph_nodes_of(self.dir_at(&self.current_path2.clone()));
+        use cce_ui::widget::GraphController as _;
+        self.slots.content2.set_nodes(&nodes2);
+        let names2 = self.path_names_at(&self.current_path2.clone());
+        use cce_ui::widget::PathController as _;
+        self.slots.breadcrumb2.set_path(&names2);
 
         let camera_nodes: Vec<String> = self.current_dir().children.iter()
             .filter(|c| c.node_type == "camera")
@@ -3237,6 +3331,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 pb.set_visible(false);
                 pb
             },
+            network_panel2: PassivePlate::new(),
+            content2: Graph::new(),
+            breadcrumb2: {
+                let mut bc = Breadcrumb::new();
+                bc.set_raised(true);
+                bc
+            },
         });
 
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
@@ -3303,6 +3404,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             fs_root: fs_root.clone(),
             node_templates,
             current_path,
+            current_path2: Vec::new(),
             node_clipboard: None,
             last_click: None,
             last_frame: Instant::now(),
@@ -3578,6 +3680,32 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
             plate.set_network_opacity(self.network_opacity);
         }
+
+        // The second editor's graph reads the SAME display settings but its
+        // OWN rect as origin (no pan of its own yet — the rect is the view).
+        let (qx, qy, _, _) = self.positions[crate::slots::CONTENT2_IDX];
+        {
+            use cce_ui::widget::GraphController as _;
+            let g2 = &mut *self.slots.content2;
+            g2.set_show_network_grid(network_grid_visible);
+            g2.set_grid_sizes(grid_size_x, grid_size_y);
+            g2.set_skipped_sizes(gap_row_h, gap_col_w);
+            g2.set_grid_origin(qx, qy);
+            g2.set_grid_snap_enabled(grid_snap_enabled);
+        }
+        if let Some(g2) = self.slots.content2.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
+            g2.set_uniform_background(self.uniform_background);
+            g2.set_network_opacity(self.network_opacity);
+            g2.set_node_opacity(self.node_opacity);
+            g2.set_cell_color(self.cell_color);
+            g2.set_gap_color(self.gap_color);
+        }
+        if let Some(bc2) = self.slots.breadcrumb2.as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
+            bc2.set_network_opacity(self.network_opacity);
+        }
+        if let Some(plate) = self.slots.network_panel2.as_any_mut().downcast_mut::<PassivePlate>() {
+            plate.set_network_opacity(self.network_opacity);
+        }
     }
 
     pub fn update_inertial_settings(&mut self) {
@@ -3736,6 +3864,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         self.menu_mut(LEFT_MENUBAR_IDX).set_center_items(center_items);
 
         let body_h = self.body_h();
+
+        // The second network editor exists only in the floating branch,
+        // which re-lays it below; zeroing here keeps the circular and
+        // detached branches (which predate it) from leaving stale rects.
+        for slot in [
+            crate::slots::NETWORK_PANEL2_IDX,
+            crate::slots::CONTENT2_IDX,
+            crate::slots::BREADCRUMB2_IDX,
+        ] {
+            self.positions[slot] = (0.0, 0.0, 0.0, 0.0);
+            self.slots.get_dyn_mut(slot).set_visible(false);
+        }
 
         if self.is_detached_network {
             let cx = self.width / 2.0;
@@ -4098,6 +4238,30 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     self.positions[SPREADSHEET_IDX].3,
                 );
 
+                // The second network editor: the pane-1 arrangement against
+                // its own dock rect (plate, full-plate graph, hovering
+                // breadcrumb at the same lip offset). Zero when unplaced or
+                // waiting as a tab — rect_for already answers that.
+                let (qx, qy, qw, qh) = rect_for(crate::slots::NETWORK_PANEL2_IDX, self);
+                self.positions[crate::slots::NETWORK_PANEL2_IDX] = (qx, qy, qw, qh);
+                self.slots.network_panel2.set_rect(qx, qy, qw, qh);
+                if let Some(plate) =
+                    self.slots.network_panel2.as_any_mut().downcast_mut::<PassivePlate>()
+                {
+                    plate.set_curved_circle(None);
+                }
+                self.positions[crate::slots::CONTENT2_IDX] = (qx, qy, qw, qh);
+                let bc2 = if qw > 0.0 { BREADCRUMB_H } else { 0.0 };
+                self.positions[crate::slots::BREADCRUMB2_IDX] =
+                    (qx + bc_pad, qy + bc_pad, (qw - 2.0 * bc_pad).max(0.0), bc2);
+                for (slot, on) in [
+                    (crate::slots::NETWORK_PANEL2_IDX, qw > 0.0),
+                    (crate::slots::CONTENT2_IDX, qw > 0.0),
+                    (crate::slots::BREADCRUMB2_IDX, qw > 0.0),
+                ] {
+                    self.slots.get_dyn_mut(slot).set_visible(on);
+                }
+
                 self.positions[CANVAS_IDX] = (0.0, 0.0, self.width, body_h);
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
@@ -4107,20 +4271,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     (0.0, 0.0, 0.0, 0.0)
                 };
 
+                // Tab-aware visibility: a pane WAITING in a dock's tab list
+                // is hidden regardless of its View flag — a zero rect alone
+                // does not stop the text pass, so a waiting editor's labels
+                // would paint over whichever pane fronted.
+                let net_active = self.dock_of_pane(NETWORK_PANEL_IDX).is_some();
+                let par_active = self.dock_of_pane(PARAM_IDX).is_some();
+                let ss_active = self.dock_of_pane(SPREADSHEET_IDX).is_some();
                 self.slots.header.set_visible(false);
                 self.slots.status.set_visible(false);
                 self.slots.playbar.set_visible(self.show_playbar);
-                self.slots.content.set_visible(self.show_network);
-                self.slots.network_panel.set_visible(self.show_network);
+                self.slots.content.set_visible(self.show_network && net_active);
+                self.slots.network_panel.set_visible(self.show_network && net_active);
                 self.slots.left_menubar.set_visible(false);
-                self.slots.breadcrumb.set_visible(self.show_network);
+                self.slots.breadcrumb.set_visible(self.show_network && net_active);
                 self.slots.splitter1.set_visible(false);
                 self.slots.splitter2.set_visible(false);
                 self.slots.viewport.set_visible(viewport_visible);
                 self.slots.right_menubar.set_visible(false);
-                self.slots.param.set_visible(right_visible);
+                self.slots.param.set_visible(right_visible && par_active);
                 self.slots.param_menubar.set_visible(false);
-                self.slots.spreadsheet.set_visible(spreadsheet_visible);
+                self.slots.spreadsheet.set_visible(spreadsheet_visible && ss_active);
                 self.slots.spreadsheet_menubar.set_visible(false);
             }
         }
@@ -5160,8 +5331,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if click_target.is_none() {
                             let mut hit_order: Vec<usize> = (0..WIDGET_COUNT).collect();
                             hit_order.sort_by_key(|&i| {
-                                let z = if i == NETWORK_PANEL_IDX {
+                                let z = if i == NETWORK_PANEL_IDX || i == crate::slots::NETWORK_PANEL2_IDX {
+                                    // Plates sort behind their content, or the
+                                    // stable sort hands the plate every press
+                                    // and the graph never hears a click.
                                     -5
+                                } else if i == crate::slots::BREADCRUMB2_IDX {
+                                    1
                                 } else if i == VIEWPORT_IDX {
                                     // Below PARAM_IDX: the params pane floats over the viewport,
                                     // and the old shared -4 tier let the stable sort's index order
@@ -5186,7 +5362,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         // Determine new focused pane
                         let mut new_pane = None;
                         if let Some(i) = click_target {
-                            if i == LEFT_MENUBAR_IDX || i == CONTENT_IDX || i == CANVAS_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX {
+                            if i == LEFT_MENUBAR_IDX
+                                || i == CONTENT_IDX
+                                || i == CANVAS_IDX
+                                || i == BREADCRUMB_IDX
+                                || i == NETWORK_PANEL_IDX
+                                || i == crate::slots::CONTENT2_IDX
+                                || i == crate::slots::BREADCRUMB2_IDX
+                                || i == crate::slots::NETWORK_PANEL2_IDX
+                            {
                                 new_pane = Some(LEFT_MENUBAR_IDX);
                             } else if i == RIGHT_MENUBAR_IDX || i == VIEWPORT_IDX {
                                 new_pane = Some(RIGHT_MENUBAR_IDX);
@@ -5396,6 +5580,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 self.update_panel_bounds();
+                            } else if idx == crate::slots::CONTENT2_IDX {
+                                // The second editor's node drags write back to
+                                // ITS level, or the next sync snaps them home.
+                                {
+                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                }
+                                use cce_ui::widget::GraphController as _;
+                                let updated_nodes = self.slots.content2.get_nodes();
+                                let p2 = self.current_path2.clone();
+                                let dir = self.dir_at_mut(&p2);
+                                for (i, node) in updated_nodes.iter().enumerate() {
+                                    if let Some(child) = dir.children.get_mut(i) {
+                                        child.position = node.position;
+                                    }
+                                }
                             } else {
                                 {
                                     let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
@@ -5481,6 +5681,82 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         self.rebuild_scene_geometry();
                         self.sync_parameters_pane();
                         changed = true;
+                    }
+                }
+
+                // The SECOND network editor's drains — the same handshakes,
+                // against ITS OWN level (`current_path2` via the clamping
+                // dir_at walk). Selection stays pane-1's affair for now: the
+                // params pane follows the primary editor.
+                {
+                    use cce_ui::widget::GraphController as _;
+                    if let Some((i, visible)) = self.slots.content2.take_node_geom_toggle() {
+                        let p2 = self.current_path2.clone();
+                        let dir = self.dir_at_mut(&p2);
+                        if i < dir.children.len() {
+                            dir.children[i].geometry_visible = visible;
+                            self.rebuild_scene_geometry();
+                            changed = true;
+                        }
+                    }
+                    if let Some((input_node_id, output_node_name)) =
+                        self.slots.content2.take_pending_connection()
+                    {
+                        let p2 = self.current_path2.clone();
+                        let dir = self.dir_at_mut(&p2);
+                        if let Some(child) = dir.children.iter_mut().find(|c| c.id == input_node_id) {
+                            if let Some(p) = child.params.iter_mut().find(|p| p.name == "Input") {
+                                p.default = output_node_name;
+                                self.sync_nodes();
+                                self.rebuild_scene_geometry();
+                                self.sync_parameters_pane();
+                                changed = true;
+                            }
+                        }
+                    }
+                    if let Some((mid_id, src_name, dest_id)) =
+                        self.slots.content2.take_pending_splice()
+                    {
+                        let p2 = self.current_path2.clone();
+                        let dir = self.dir_at_mut(&p2);
+                        let mid_name = dir
+                            .children
+                            .iter()
+                            .find(|c| c.id == mid_id)
+                            .map(|c| c.name.clone());
+                        let both = mid_name.is_some()
+                            && dir.children.iter().any(|c| {
+                                c.id == dest_id && c.params.iter().any(|p| p.name == "Input")
+                            })
+                            && dir.children.iter().any(|c| {
+                                c.id == mid_id && c.params.iter().any(|p| p.name == "Input")
+                            });
+                        if let (Some(mid_name), true) = (mid_name, both) {
+                            if let Some(mid) = dir.children.iter_mut().find(|c| c.id == mid_id) {
+                                if let Some(p) = mid.params.iter_mut().find(|p| p.name == "Input") {
+                                    p.default = src_name;
+                                }
+                            }
+                            if let Some(dest) = dir.children.iter_mut().find(|c| c.id == dest_id) {
+                                if let Some(p) = dest.params.iter_mut().find(|p| p.name == "Input") {
+                                    p.default = mid_name;
+                                }
+                            }
+                            self.sync_nodes();
+                            self.rebuild_scene_geometry();
+                            self.sync_parameters_pane();
+                            changed = true;
+                        }
+                    }
+                    if let Some(dir_idx) = self.slots.content2.double_clicked_node() {
+                        self.slots.content2.clear_double_clicked_node();
+                        let p2 = self.current_path2.clone();
+                        let dir = self.dir_at(&p2);
+                        if dir_idx < dir.children.len() && dir.children[dir_idx].is_enterable() {
+                            self.current_path2.push(dir_idx);
+                            self.sync_nodes();
+                            changed = true;
+                        }
                     }
                 }
 

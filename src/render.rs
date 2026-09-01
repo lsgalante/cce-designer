@@ -65,6 +65,9 @@ impl State {
             CONTENT_IDX | BREADCRUMB_IDX if !self.circular_network_pane => {
                 self.positions[NETWORK_PANEL_IDX]
             }
+            crate::slots::CONTENT2_IDX | crate::slots::BREADCRUMB2_IDX => {
+                self.positions[crate::slots::NETWORK_PANEL2_IDX]
+            }
             PARAM_IDX => self.positions[PARAM_IDX],
             SPREADSHEET_IDX => self.positions[SPREADSHEET_IDX],
             _ => return None,
@@ -119,9 +122,12 @@ impl State {
 
         let mut draw_order: Vec<usize> = (0..WIDGET_COUNT).collect();
         draw_order.sort_by_key(|&i| {
-            let base_key = if i == VIEWPORT_IDX || i == NETWORK_PANEL_IDX {
+            let base_key = if i == VIEWPORT_IDX
+                || i == NETWORK_PANEL_IDX
+                || i == crate::slots::NETWORK_PANEL2_IDX
+            {
                 -5
-            } else if i == CONTENT_IDX || i == PARAM_IDX {
+            } else if i == CONTENT_IDX || i == crate::slots::CONTENT2_IDX || i == PARAM_IDX {
                 -4
             } else if i == HEADER_IDX
                 || i == LEFT_MENUBAR_IDX
@@ -268,7 +274,7 @@ impl State {
             let (wx, wy, ww2, wh2) = w.rect();
             append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
-        } else if idx == BREADCRUMB_IDX {
+        } else if idx == BREADCRUMB_IDX || idx == crate::slots::BREADCRUMB2_IDX {
             // Modern-paint control: Breadcrumb's whole look lives in its
             // Paint::paint() (the cce-ui restyle — per-segment plates on the
             // dropdown's relief, slanted seams) and it serves NO legacy views,
@@ -338,8 +344,19 @@ impl State {
             for (cx, cy, cr, cc) in w.extra_circles() {
                 pc.circle(cx, cy, cr, cc);
             }
-        } else if idx == CONTENT_IDX {
-            if !self.circular_network_pane {
+        } else if idx == CONTENT_IDX || idx == crate::slots::CONTENT2_IDX {
+            let second = idx == crate::slots::CONTENT2_IDX;
+            // The passed-in `clip` is PANE 1's content rect (computed once,
+            // before the walk) — zero whenever pane 1 waits as a tab. The
+            // second editor clips to its OWN rect or its whole graph
+            // vanishes with pane 1's.
+            let clip = if second {
+                let (cx2, cy2, cw2, ch2) = self.positions[crate::slots::CONTENT2_IDX];
+                rect(cx2, cy2, cw2, ch2)
+            } else {
+                clip
+            };
+            if second || !self.circular_network_pane {
                 let (wx, wy, ww2, wh2) = w.rect();
                 append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             }
@@ -369,13 +386,16 @@ impl State {
 
                 // Grid cells arrive tagged with their surviving corners and draw
                 // as superellipse tiles, like the desktop grid; everything else
-                // stays a flat quad.
-                let cell_r = self.graph().cell_corner_radius();
+                // stays a flat quad. `g` is THIS pane's graph — the second
+                // editor paints its own widget's geometry through the same body.
+                let g: &dyn cce_ui::widget::GraphController =
+                    if second { &*self.slots.content2 } else { self.graph() };
+                let cell_r = g.cell_corner_radius();
                 let mut bodies: Vec<(f32, f32, f32, f32, bool)> = Vec::new();
                 let mut overlays: Vec<(f32, f32, f32, f32, [f32; 4])> = Vec::new();
                 let mut seen_node = false;
-                for (qx, qy, qw, qh, qc, cell) in self.graph().geometry_quads_tagged(clip) {
-                    if self.graph().is_node_rect(qx, qy, qw, qh) {
+                for (qx, qy, qw, qh, qc, cell) in g.geometry_quads_tagged(clip) {
+                    if g.is_node_rect(qx, qy, qw, qh) {
                         seen_node = true;
                         bodies.push((qx, qy, qw, qh, same_rgb(qc, sel) || same_rgb(qc, drag)));
                     } else if seen_node {
@@ -393,13 +413,15 @@ impl State {
                 // version banded visibly). Drawn under the node bodies: with
                 // grid snap the glow reads as a soft aura around the dragged
                 // body.
-                if let Some(g) = self.drop_glow {
-                    pc.glow(
-                        rect(g.x, g.y, g.w, g.h),
-                        cell_r,
-                        30.0,
-                        [1.0, 0.72, 0.80, 0.18 * g.alpha],
-                    );
+                if let Some(gl) = self.drop_glow {
+                    if !second {
+                        pc.glow(
+                            rect(gl.x, gl.y, gl.w, gl.h),
+                            cell_r,
+                            30.0,
+                            [1.0, 0.72, 0.80, 0.18 * gl.alpha],
+                        );
+                    }
                 }
                 for (qx, qy, qw, qh, highlighted) in bodies {
                     if highlighted {
@@ -419,7 +441,7 @@ impl State {
                 }
             }
 
-            if show_cursor {
+            if show_cursor && !second {
                 let px = self.positions[CONTENT_IDX].0;
                 let py = self.positions[CONTENT_IDX].1;
                 let cx = px + self.grid_cursor_col as f32 * (self.grid_size_x + self.gap_col_w) + self.pan_x;

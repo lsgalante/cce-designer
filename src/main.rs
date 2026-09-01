@@ -489,6 +489,7 @@ mod tests {
             SPLITTER2_IDX, PARAM_IDX, CANVAS_IDX, LEFT_MENUBAR_IDX,
             RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, STATUS_IDX, BREADCRUMB_IDX,
             SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
+            NETWORK_PANEL2_IDX, CONTENT2_IDX, BREADCRUMB2_IDX,
         ];
         assert_eq!(roster.len(), WIDGET_COUNT, "roster length vs WIDGET_COUNT");
         for (i, idx) in roster.iter().enumerate() {
@@ -664,6 +665,41 @@ mod tests {
         assert_eq!(state.pane_in_dock(Dock::Bottom), PARAM_IDX);
         assert_eq!(state.pane_in_dock(Dock::Right), SPREADSHEET_IDX);
     }
+
+    /// The second network editor: joins a dock from nowhere through the tab
+    /// machinery, dives on its OWN path while the primary stays put, clamps
+    /// a stale path instead of panicking, and Close removes it entirely.
+    #[test]
+    fn test_second_network_editor_has_its_own_path() {
+        use crate::app::Dock;
+        use crate::slots::{NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX};
+        let mut state = State::new(false);
+        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL2_IDX), None, "starts unplaced");
+
+        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX);
+        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Left));
+
+        let sphere = state
+            .fs_root
+            .children
+            .iter()
+            .position(|c| c.name == "Sphere 1")
+            .expect("default project has Sphere 1");
+        state.current_path2 = vec![sphere];
+        state.sync_nodes();
+        assert!(state.current_path.is_empty(), "primary path must not follow");
+        assert_eq!(state.path_names_at(&state.current_path2), vec!["Sphere 1".to_string()]);
+
+        state.current_path2 = vec![99];
+        state.sync_nodes();
+        assert!(state.current_path2.is_empty(), "a stale path clamps, never indexes");
+
+        state.close_dock_tab(NETWORK_PANEL2_IDX);
+        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL2_IDX), None);
+        assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL_IDX);
+    }
+
 
     /// Pane state rides save files: visibility through the meta→View subnet
     /// params (synced at save, applied on load), collapse and splitter

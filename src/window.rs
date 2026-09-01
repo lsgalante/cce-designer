@@ -60,6 +60,18 @@ impl State {
                 }
             }
 
+            // The second network editor's breadcrumb navigates ITS path.
+            {
+                use cce_ui::widget::PathController as _;
+                if let Some(seg) = state.slots.breadcrumb2.path_click() {
+                    if seg < state.current_path2.len() {
+                        state.current_path2.truncate(seg);
+                        state.sync_nodes();
+                        changed = true;
+                    }
+                }
+            }
+
             if let Some(action) = state.pending_action.take() {
                 state.execute_action(action);
                 changed = true;

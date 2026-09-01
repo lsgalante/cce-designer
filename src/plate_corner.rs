@@ -13,7 +13,9 @@
 //! here on a fully-round radius so the trough reads as a ring.
 
 use crate::app::State;
-use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT};
+use crate::slots::{
+    NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT,
+};
 
 /// Radius of the control itself.
 // The affordance's geometry and protocol are toolkit-owned since cce-ui RFC
@@ -25,7 +27,14 @@ use cce_ui::widget::plate_dock::{self, PlateDockAction, PlateDockState};
 /// The plates that carry a corner control. The viewport is deliberately absent:
 /// its "plate" is the window-spanning lip, so a top-right control would sit on
 /// the window corner rather than on a pane.
-pub const PLATE_SLOTS: [usize; 4] = [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX];
+pub const PLATE_SLOTS: [usize; 5] =
+    [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX, NETWORK_PANEL2_IDX];
+
+/// The panes the tab rows offer — the dockable set. The playbar's strip is
+/// not a dock, and the second network editor joins as the first CLOSABLE
+/// pane: unplaced it simply does not exist.
+pub const TAB_CANDIDATES: [usize; 4] =
+    [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, NETWORK_PANEL2_IDX];
 
 /// What the corner menu can do to its plate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +57,8 @@ pub enum PlateMenuAction {
     AddTab(usize),
     /// Move this pane out of its shared dock into the first empty one.
     SplitTab,
+    /// Remove a closable pane (the second network editor) from the docks.
+    CloseTab,
 }
 
 impl State {
@@ -96,6 +107,7 @@ pub fn plate_title(idx: usize) -> &'static str {
         PARAM_IDX => "Parameters",
         SPREADSHEET_IDX => "Spreadsheet",
         PLAYBAR_IDX => "Playbar",
+        NETWORK_PANEL2_IDX => "Network 2",
         _ => "Pane",
     }
 }
@@ -157,7 +169,7 @@ impl State {
                     actions.push(PlateMenuAction::ShowTab(t));
                 }
             }
-            for other in [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX] {
+            for other in TAB_CANDIDATES {
                 if other != idx
                     && !self.dock_tabs[d as usize].contains(&other)
                     && !self.pane_is_detached(other)
@@ -169,6 +181,10 @@ impl State {
             if self.dock_tabs[d as usize].len() > 1 {
                 options.push("Move To Own Plate".to_string());
                 actions.push(PlateMenuAction::SplitTab);
+            }
+            if idx == NETWORK_PANEL2_IDX {
+                options.push("Close Tab".to_string());
+                actions.push(PlateMenuAction::CloseTab);
             }
         }
 
@@ -227,6 +243,7 @@ impl State {
                 }
             }
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
+            PlateMenuAction::CloseTab => self.close_dock_tab(idx),
         }
     }
 
@@ -355,6 +372,7 @@ pub fn pane_name_from_slot(idx: usize) -> Option<&'static str> {
         PARAM_IDX => Some("parameters"),
         SPREADSHEET_IDX => Some("spreadsheet"),
         PLAYBAR_IDX => Some("playbar"),
+        NETWORK_PANEL2_IDX => Some("network2"),
         _ => None,
     }
 }
@@ -366,6 +384,7 @@ pub fn pane_slot_from_name(name: &str) -> Option<usize> {
         "parameters" | "params" => Some(PARAM_IDX),
         "spreadsheet" => Some(SPREADSHEET_IDX),
         "playbar" => Some(PLAYBAR_IDX),
+        "network2" => Some(NETWORK_PANEL2_IDX),
         _ => None,
     }
 }
@@ -441,6 +460,12 @@ impl State {
         self.positions[idx] = (x, y, w, STUB_H.min(h));
         if idx == NETWORK_PANEL_IDX {
             for child in [crate::slots::CONTENT_IDX, crate::slots::BREADCRUMB_IDX] {
+                self.positions[child] = (0.0, 0.0, 0.0, 0.0);
+                self.slots.get_dyn_mut(child).set_visible(false);
+            }
+        }
+        if idx == NETWORK_PANEL2_IDX {
+            for child in [crate::slots::CONTENT2_IDX, crate::slots::BREADCRUMB2_IDX] {
                 self.positions[child] = (0.0, 0.0, 0.0, 0.0);
                 self.slots.get_dyn_mut(child).set_visible(false);
             }
