@@ -861,11 +861,12 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         let geom = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            // The viewport shows the network editor's current level, not the
-            // whole tree: the walk starts at the current directory while name
-            // resolution stays rooted at fs_root. Navigation re-scopes this
-            // through on_path_changed, which lands here.
-            network_sphere_vertices_with_errors(&self.fs_root, self.current_dir(), &mut ocl_error, &mut sim)
+            // The viewport shows the ACTIVE editor's level — whichever
+            // network editor took the last node click (the param_editor, so
+            // the viewport, params pane and spreadsheet agree on what is
+            // being looked at) — while name resolution stays rooted at
+            // fs_root. Navigation in either editor re-scopes this.
+            network_sphere_vertices_with_errors(&self.fs_root, self.param_editor_dir(), &mut ocl_error, &mut sim)
         };
         self.sim_cache = sim_cache;
 
@@ -881,7 +882,7 @@ impl State {
             false
         }
 
-        let displayed_opencl = has_visible_opencl(self.current_dir());
+        let displayed_opencl = has_visible_opencl(self.param_editor_dir());
         if let Some(e) = ocl_error {
             self.update_status_text(&format!("OpenCL Error: {}", e));
         } else if displayed_opencl {
@@ -908,7 +909,7 @@ impl State {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             // Same scoping as the scene walk above: overlays annotate what is
             // on screen, so they walk the same current level.
-            collect_meta_overlays(&self.fs_root, self.current_dir(), self.meta_marker_size, self.meta_marker_color, &mut sim)
+            collect_meta_overlays(&self.fs_root, self.param_editor_dir(), self.meta_marker_size, self.meta_marker_color, &mut sim)
         };
         self.sim_cache = sim_cache;
         self.meta_marker_verts = markers;

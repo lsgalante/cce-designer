@@ -5520,12 +5520,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             }
                             if i == crate::slots::CONTENT2_IDX {
                                 // A node click in the SECOND editor hands the
-                                // parameters pane to its selection.
-                                self.param_editor = crate::slots::CONTENT2_IDX;
+                                // parameters pane (and the viewport's level)
+                                // to it.
+                                if self.param_editor != crate::slots::CONTENT2_IDX {
+                                    self.param_editor = crate::slots::CONTENT2_IDX;
+                                    self.rebuild_scene_geometry();
+                                }
                                 self.sync_parameters_pane();
                             }
                             if i == CONTENT_IDX {
-                                self.param_editor = CONTENT_IDX;
+                                if self.param_editor != CONTENT_IDX {
+                                    self.param_editor = CONTENT_IDX;
+                                    self.rebuild_scene_geometry();
+                                }
                                 self.sync_parameters_pane();
                                 if let Some(slot_idx) = self.graph().selected_node() {
                                     let dir = self.current_dir();
@@ -5810,6 +5817,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if dir_idx < dir.children.len() && dir.children[dir_idx].is_enterable() {
                             self.current_path2.push(dir_idx);
                             self.sync_nodes();
+                            // The viewport tracks the active editor's level.
+                            if self.param_editor == crate::slots::CONTENT2_IDX {
+                                self.rebuild_scene_geometry();
+                            }
                             changed = true;
                         }
                     }

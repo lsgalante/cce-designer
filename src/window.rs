@@ -67,6 +67,10 @@ impl State {
                     if seg < state.current_path2.len() {
                         state.current_path2.truncate(seg);
                         state.sync_nodes();
+                        // The viewport tracks the active editor's level.
+                        if state.param_editor == crate::slots::CONTENT2_IDX {
+                            state.rebuild_scene_geometry();
+                        }
                         changed = true;
                     }
                 }
