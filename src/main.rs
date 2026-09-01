@@ -720,6 +720,16 @@ mod tests {
         a.set_pane_collapsed(PARAM_IDX, true);
         a.splitter_layout.splitter1_x = 400.0;
         a.splitter_layout.splitter2_x = 1200.0;
+        // Tab state: a second network editor tabbed beside the first (and
+        // fronted), dived one level down its own path.
+        a.add_dock_tab(crate::app::Dock::Left, crate::slots::NETWORK_PANEL2_IDX);
+        let sphere = a
+            .fs_root
+            .children
+            .iter()
+            .position(|c| c.name == "Sphere 1")
+            .expect("default project has Sphere 1");
+        a.current_path2 = vec![sphere];
         a.save_to_file(&dir).expect("save");
 
         let mut b = State::new(false);
@@ -732,6 +742,19 @@ mod tests {
         assert!((b.splitter_layout.splitter1_x - 200.0).abs() < 1.0,
             "splitters restore as fractions: 400/1600 of an 800-wide window = 200, got {}",
             b.splitter_layout.splitter1_x);
+        // The tab arrangement rides the file: the second editor exists,
+        // fronted in the left dock with the primary waiting, on its own path.
+        assert_eq!(
+            b.pane_in_dock(crate::app::Dock::Left),
+            crate::slots::NETWORK_PANEL2_IDX,
+            "the fronted second editor must load fronted"
+        );
+        assert_eq!(
+            b.tab_dock_of_pane(crate::slots::NETWORK_PANEL_IDX),
+            Some(crate::app::Dock::Left),
+            "the primary must load as the waiting tab"
+        );
+        assert_eq!(b.current_path2, vec![sphere], "the second editor's path must round-trip");
 
         // A detached pane window must ignore the same file's pane state.
         let mut d = State::new(true);

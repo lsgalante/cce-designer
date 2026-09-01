@@ -176,10 +176,15 @@ pub struct ProjectViewState {
     pub splitters: Option<(f32, f32)>,
     /// The docks' tab groups, Left/Right/Bottom order, pane names with the
     /// ACTIVE tab first. Empty (older saves) keeps the default one-pane-per-
-    /// dock arrangement; a list that does not name each docked pane exactly
-    /// once across the three groups is ignored the same way.
+    /// dock arrangement; a list that does not name each core docked pane
+    /// exactly once (plus "network2" at most once — its presence recreates
+    /// the second editor) is ignored the same way.
     #[serde(default)]
     pub dock_tabs: Vec<Vec<String>>,
+    /// The second network editor's own path. Clamped on load, so a save
+    /// whose tree changed shape degrades to the deepest valid ancestor.
+    #[serde(default)]
+    pub current_path2: Vec<usize>,
 }
 
 fn default_camera() -> String {

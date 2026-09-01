@@ -126,6 +126,7 @@ impl State {
             collapsed_panes,
             splitters,
             dock_tabs,
+            current_path2: self.current_path2.clone(),
         }
     }
 
@@ -221,9 +222,12 @@ impl State {
             self.set_pane_collapsed(idx, desired);
         }
         // Dock tab groups: accepted only whole — three lists whose names
-        // resolve and cover each docked pane exactly once. Anything else
-        // (older saves' empty list included) keeps the current arrangement
-        // rather than loading half a layout.
+        // resolve, cover each CORE docked pane exactly once, and carry the
+        // second network editor at most once (its presence in a list is what
+        // recreates it; absent, it stays closed — including replacing a live
+        // one, since the file's arrangement is the arrangement). Anything
+        // else (older saves' empty list included) keeps the current layout
+        // rather than loading half of one.
         if vs.dock_tabs.len() == 3 {
             let resolved: Vec<Vec<usize>> = vs
                 .dock_tabs
@@ -235,15 +239,18 @@ impl State {
                         .collect()
                 })
                 .collect();
-            let mut all: Vec<usize> = resolved.iter().flatten().copied().collect();
-            all.sort_unstable();
+            let all: Vec<usize> = resolved.iter().flatten().copied().collect();
+            let n2 = crate::slots::NETWORK_PANEL2_IDX;
+            let n2_count = all.iter().filter(|&&s| s == n2).count();
+            let mut core: Vec<usize> = all.iter().copied().filter(|&s| s != n2).collect();
+            core.sort_unstable();
             let mut expected = vec![
                 crate::slots::NETWORK_PANEL_IDX,
                 crate::slots::PARAM_IDX,
                 crate::slots::SPREADSHEET_IDX,
             ];
             expected.sort_unstable();
-            if all == expected {
+            if core == expected && n2_count <= 1 {
                 for d in 0..3 {
                     self.dock_tabs[d] = resolved[d].clone();
                     self.dock_panes[d] =
@@ -253,6 +260,10 @@ impl State {
                 self.apply_layout();
             }
         }
+        // The second editor's own path, clamped against the loaded tree —
+        // a stale save must degrade to the deepest valid ancestor.
+        self.current_path2 = vs.current_path2.clone();
+        self.clamp_path2();
         if let Some((f1, f2)) = vs.splitters {
             if self.width > 1.0 && f1 > 0.02 && f2 < 0.98 && f1 < f2 {
                 self.splitter_layout.splitter1_x = f1 * self.width;
