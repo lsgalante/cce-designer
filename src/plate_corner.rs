@@ -55,6 +55,9 @@ pub enum PlateMenuAction {
     ShowTab(usize),
     /// Pull the named pane out of its dock and tab it into this one, active.
     AddTab(usize),
+    /// Swap the menu for the Add Tab page — the list of panes that can be
+    /// pulled in ([`State::open_plate_add_tab_menu`]).
+    AddTabMenu,
     /// Move this pane out of its shared dock into the first empty one.
     SplitTab,
     /// Remove a closable pane (the second network editor) from the docks.
@@ -189,31 +192,26 @@ impl State {
                 actions.push(PlateMenuAction::ShowTab(t));
             }
             let mut managed = false;
-            for other in TAB_CANDIDATES {
-                if other != idx
-                    && !self.dock_tabs[d as usize].contains(&other)
-                    && !self.pane_is_detached(other)
-                {
-                    if !managed {
-                        separate(&mut options, &mut actions);
-                        managed = true;
-                    }
-                    options.push(format!("Add Tab: {}", plate_title(other)));
-                    actions.push(PlateMenuAction::AddTab(other));
-                }
-            }
-            if self.dock_tabs[d as usize].len() > 1 {
+            let mut manage_row = |options: &mut Vec<String>, actions: &mut Vec<PlateMenuAction>| {
                 if !managed {
-                    separate(&mut options, &mut actions);
+                    separate(options, actions);
                     managed = true;
                 }
+            };
+            // ONE "Add Tab" row: clicking it swaps the menu for the page of
+            // addable panes, instead of one row per candidate here.
+            if !self.plate_add_tab_candidates(idx, d).is_empty() {
+                manage_row(&mut options, &mut actions);
+                options.push("Add Tab".to_string());
+                actions.push(PlateMenuAction::AddTabMenu);
+            }
+            if self.dock_tabs[d as usize].len() > 1 {
+                manage_row(&mut options, &mut actions);
                 options.push("Move To Own Plate".to_string());
                 actions.push(PlateMenuAction::SplitTab);
             }
             if idx == NETWORK_PANEL2_IDX {
-                if !managed {
-                    separate(&mut options, &mut actions);
-                }
+                manage_row(&mut options, &mut actions);
                 options.push("Close Tab".to_string());
                 actions.push(PlateMenuAction::CloseTab);
             }
@@ -221,6 +219,41 @@ impl State {
 
         let target = self.slots.get_dyn(idx).base().id();
         cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 0, target);
+        self.plate_menu_slot = Some(idx);
+        self.plate_menu_actions = actions;
+    }
+
+    /// The panes a plate's Add Tab page can offer: docked (or dockable)
+    /// elsewhere, not already in this dock's list, not detached.
+    fn plate_add_tab_candidates(&self, idx: usize, d: crate::app::Dock) -> Vec<usize> {
+        TAB_CANDIDATES
+            .into_iter()
+            .filter(|&other| {
+                other != idx
+                    && !self.dock_tabs[d as usize].contains(&other)
+                    && !self.pane_is_detached(other)
+            })
+            .collect()
+    }
+
+    /// The Add Tab page: swaps the corner menu in place for the list of
+    /// addable panes, under a dimmed header row. Same anchor, same click
+    /// contract — a second PAGE of the one menu, not a second menu.
+    pub fn open_plate_add_tab_menu(&mut self, idx: usize) {
+        let Some((cx, cy)) = self.plate_corner_center(idx) else { return };
+        let Some(d) = self.dock_of_pane(idx) else { return };
+        let candidates = self.plate_add_tab_candidates(idx, d);
+        if candidates.is_empty() {
+            return;
+        }
+        let mut options = vec!["Add Tab".to_string()];
+        let mut actions = vec![PlateMenuAction::Separator];
+        for other in candidates {
+            options.push(plate_title(other).to_string());
+            actions.push(PlateMenuAction::AddTab(other));
+        }
+        let target = self.slots.get_dyn(idx).base().id();
+        cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 1, target);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
     }
@@ -273,6 +306,7 @@ impl State {
                     self.add_dock_tab(d, o);
                 }
             }
+            PlateMenuAction::AddTabMenu => self.open_plate_add_tab_menu(idx),
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
             PlateMenuAction::CloseTab => self.close_dock_tab(idx),
             PlateMenuAction::Separator => {}
