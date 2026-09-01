@@ -3152,10 +3152,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let path_strs = self.current_path_names();
         self.path_mut().set_path(&path_strs);
 
+        // The spreadsheet (and the group markers below) follow the SAME
+        // selection the parameters pane does: whichever editor took the
+        // last node click, at its own level.
         let mut selected_node = None;
         if !self.is_detached_network {
-            if let Some(slot_idx) = self.graph().selected_node() {
-                let dir = self.current_dir();
+            if let Some(slot_idx) = self.param_editor_selected() {
+                let dir = self.param_editor_dir();
                 if slot_idx < dir.children.len() {
                     selected_node = Some(&dir.children[slot_idx]);
                 }
@@ -3166,11 +3169,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let sim_frame = self.sim_frame();
         let sim_start = self.sim_start_frame();
         let mut cache_hit = false;
+        // Keyed by node ID, not name: names repeat across levels (every
+        // Sphere subnet holds an "opencl1"), and with two editors selecting
+        // at different levels a name key stale-hits across them.
         let mut current_name = None;
         let mut current_params = None;
 
         if let Some(node) = selected_node {
-            current_name = Some(node.name.clone());
+            current_name = Some(node.id.clone());
             current_params = Some(node.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>());
             if self.last_spreadsheet_node_name == current_name && self.last_spreadsheet_node_params == current_params {
                 cache_hit = true;
