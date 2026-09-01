@@ -592,6 +592,11 @@ impl State {
             NETWORK_PANEL_IDX | CONTENT_IDX => {
                 self.focused_pane == LEFT_MENUBAR_IDX && !self.circular_network_pane
             }
+            // The second network editor shares the network focus domain —
+            // whichever of the two is FRONTED wears the ring when it holds.
+            crate::slots::NETWORK_PANEL2_IDX | crate::slots::CONTENT2_IDX => {
+                self.focused_pane == LEFT_MENUBAR_IDX
+            }
             VIEWPORT_IDX => self.focused_pane == RIGHT_MENUBAR_IDX,
             PARAM_IDX => self.focused_pane == PARAM_MENUBAR_IDX,
             SPREADSHEET_IDX => self.focused_pane == SPREADSHEET_MENUBAR_IDX,
@@ -637,7 +642,14 @@ impl State {
                     return;
                 }
                 color[3] *= self.network_opacity;
-                self.positions[NETWORK_PANEL_IDX]
+                // Whichever network editor is FRONTED owns the ring — pane
+                // 1's rect is zero while it waits as a tab.
+                let p2 = self.positions[crate::slots::NETWORK_PANEL2_IDX];
+                if p2.2 > 0.0 && self.positions[NETWORK_PANEL_IDX].2 <= 0.0 {
+                    p2
+                } else {
+                    self.positions[NETWORK_PANEL_IDX]
+                }
             }
             RIGHT_MENUBAR_IDX => {
                 if !self.show_viewport || relief {
