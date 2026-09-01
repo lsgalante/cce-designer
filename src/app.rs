@@ -185,6 +185,10 @@ pub struct ProjectViewState {
     /// whose tree changed shape degrades to the deepest valid ancestor.
     #[serde(default)]
     pub current_path2: Vec<usize>,
+    /// The viewport pin as a pane name ("network"/"network2"); absent or
+    /// unresolvable follows the active editor.
+    #[serde(default)]
+    pub viewport_pin: Option<String>,
 }
 
 fn default_camera() -> String {
@@ -216,6 +220,12 @@ pub enum NodeMenuAction {
 pub enum ViewportMenuAction {
     /// Move the active camera so the visible node geometry fills the view.
     FrameAll,
+    /// Follow whichever editor took the last node click (the default).
+    PinFollow,
+    /// Lock the viewport to one editor's level (CONTENT_IDX / CONTENT2_IDX).
+    PinTo(usize),
+    /// A "-" row: engraved, inert.
+    Separator,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -896,6 +906,10 @@ pub struct State {
     /// writeback): CONTENT_IDX or CONTENT2_IDX — whichever took the last
     /// node click. Selection itself stays per-editor.
     pub param_editor: usize,
+    /// The viewport's pin: None follows `param_editor`; Some(CONTENT_IDX /
+    /// CONTENT2_IDX) locks the scene to that editor's level regardless of
+    /// where clicks land. Set from the viewport's right-click menu.
+    pub viewport_pin: Option<usize>,
     pub node_clipboard: Option<FsNode>,
     pub last_click: Option<(Instant, usize)>,
     pub last_frame: Instant,
@@ -1594,6 +1608,17 @@ impl State {
     /// fronts the next tab or empties.
     pub fn close_dock_tab(&mut self, slot: usize) {
         let Some(from) = self.tab_dock_of_pane(slot) else { return };
+        // A closed editor cannot hold the viewport or the params pane.
+        if slot == crate::slots::NETWORK_PANEL2_IDX {
+            if self.viewport_pin == Some(crate::slots::CONTENT2_IDX) {
+                self.viewport_pin = None;
+            }
+            if self.param_editor == crate::slots::CONTENT2_IDX {
+                self.param_editor = CONTENT_IDX;
+            }
+            self.rebuild_scene_geometry();
+            self.sync_parameters_pane();
+        }
         let f = from as usize;
         self.dock_tabs[f].retain(|&s| s != slot);
         if self.dock_panes[f] == slot {
@@ -1813,6 +1838,21 @@ impl State {
             self.dir_at_mut(&p2)
         } else {
             self.current_dir_mut()
+        }
+    }
+
+    /// The editor whose level the VIEWPORT renders: the pin when set, else
+    /// the active (last-clicked) editor.
+    pub fn viewport_editor(&self) -> usize {
+        self.viewport_pin.unwrap_or(self.param_editor)
+    }
+
+    /// The level the viewport renders — [`Self::viewport_editor`]'s dir.
+    pub fn viewport_editor_dir(&self) -> &FsNode {
+        if self.viewport_editor() == crate::slots::CONTENT2_IDX {
+            self.dir_at(&self.current_path2)
+        } else {
+            self.current_dir()
         }
     }
 
@@ -2764,8 +2804,28 @@ impl State {
 
     /// Open the viewport right-click context menu at the cursor.
     fn open_viewport_context_menu(&mut self) {
-        let options = vec!["Frame All".to_string()];
-        let actions = vec![ViewportMenuAction::FrameAll];
+        let mut options = vec!["Frame All".to_string()];
+        let mut actions = vec![ViewportMenuAction::FrameAll];
+        // The viewport's editor binding, as a radio group: follow the active
+        // editor, or pin to one. Pin rows appear only while a second editor
+        // exists — with one editor, following IS pinned.
+        if self.tab_dock_of_pane(crate::slots::NETWORK_PANEL2_IDX).is_some() {
+            options.push("-".to_string());
+            actions.push(ViewportMenuAction::Separator);
+            let mark = |on: bool| if on { "●" } else { "○" };
+            options.push(format!("{} Follow Active Editor", mark(self.viewport_pin.is_none())));
+            actions.push(ViewportMenuAction::PinFollow);
+            options.push(format!(
+                "{} Pin: Network",
+                mark(self.viewport_pin == Some(CONTENT_IDX))
+            ));
+            actions.push(ViewportMenuAction::PinTo(CONTENT_IDX));
+            options.push(format!(
+                "{} Pin: Network 2",
+                mark(self.viewport_pin == Some(crate::slots::CONTENT2_IDX))
+            ));
+            actions.push(ViewportMenuAction::PinTo(crate::slots::CONTENT2_IDX));
+        }
         let target = self.slots.viewport.id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
         self.viewport_menu_active = true;
@@ -2798,6 +2858,15 @@ impl State {
                     ViewportMenuAction::FrameAll => {
                         self.frame_all();
                     }
+                    ViewportMenuAction::PinFollow => {
+                        self.viewport_pin = None;
+                        self.rebuild_scene_geometry();
+                    }
+                    ViewportMenuAction::PinTo(e) => {
+                        self.viewport_pin = Some(e);
+                        self.rebuild_scene_geometry();
+                    }
+                    ViewportMenuAction::Separator => {}
                 }
             }
             return true;
@@ -3453,6 +3522,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             current_path,
             current_path2: Vec::new(),
             param_editor: CONTENT_IDX,
+            viewport_pin: None,
             node_clipboard: None,
             last_click: None,
             last_frame: Instant::now(),
@@ -5524,14 +5594,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 // to it.
                                 if self.param_editor != crate::slots::CONTENT2_IDX {
                                     self.param_editor = crate::slots::CONTENT2_IDX;
-                                    self.rebuild_scene_geometry();
+                                    if self.viewport_pin.is_none() {
+                                        self.rebuild_scene_geometry();
+                                    }
                                 }
                                 self.sync_parameters_pane();
                             }
                             if i == CONTENT_IDX {
                                 if self.param_editor != CONTENT_IDX {
                                     self.param_editor = CONTENT_IDX;
-                                    self.rebuild_scene_geometry();
+                                    if self.viewport_pin.is_none() {
+                                        self.rebuild_scene_geometry();
+                                    }
                                 }
                                 self.sync_parameters_pane();
                                 if let Some(slot_idx) = self.graph().selected_node() {
@@ -5817,8 +5891,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if dir_idx < dir.children.len() && dir.children[dir_idx].is_enterable() {
                             self.current_path2.push(dir_idx);
                             self.sync_nodes();
-                            // The viewport tracks the active editor's level.
-                            if self.param_editor == crate::slots::CONTENT2_IDX {
+                            // The viewport tracks its editor's level.
+                            if self.viewport_editor() == crate::slots::CONTENT2_IDX {
                                 self.rebuild_scene_geometry();
                             }
                             changed = true;
