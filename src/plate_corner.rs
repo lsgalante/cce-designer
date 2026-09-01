@@ -58,6 +58,8 @@ pub enum PlateMenuAction {
     /// Swap the menu for the Add Tab page — the list of panes that can be
     /// pulled in ([`State::open_plate_add_tab_menu`]).
     AddTabMenu,
+    /// The Add Tab page's Back row: swap the main menu page back in.
+    BackToMain,
     /// Move this pane out of its shared dock into the first empty one.
     SplitTab,
     /// Remove a closable pane (the second network editor) from the docks.
@@ -252,6 +254,10 @@ impl State {
             options.push(plate_title(other).to_string());
             actions.push(PlateMenuAction::AddTab(other));
         }
+        options.push("-".to_string());
+        actions.push(PlateMenuAction::Separator);
+        options.push("‹ Back".to_string());
+        actions.push(PlateMenuAction::BackToMain);
         let target = self.slots.get_dyn(idx).base().id();
         cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 1, target);
         self.plate_menu_slot = Some(idx);
@@ -307,6 +313,7 @@ impl State {
                 }
             }
             PlateMenuAction::AddTabMenu => self.open_plate_add_tab_menu(idx),
+            PlateMenuAction::BackToMain => self.open_plate_menu(idx),
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
             PlateMenuAction::CloseTab => self.close_dock_tab(idx),
             PlateMenuAction::Separator => {}
