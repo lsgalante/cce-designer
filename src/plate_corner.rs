@@ -59,6 +59,9 @@ pub enum PlateMenuAction {
     SplitTab,
     /// Remove a closable pane (the second network editor) from the docks.
     CloseTab,
+    /// A "-" row: engraved, inert — keeps `plate_menu_actions` aligned with
+    /// the option rows so a click on the line dispatches nothing.
+    Separator,
 }
 
 impl State {
@@ -145,7 +148,19 @@ impl State {
             return;
         }
 
+        // Group boundaries are engraved separators ("-" rows — the toolkit
+        // convention): window actions | layout spans | tab switching | tab
+        // management. Pushed lazily so a group that contributes nothing
+        // leaves no orphaned line.
+        let mut separate = |options: &mut Vec<String>, actions: &mut Vec<PlateMenuAction>| {
+            if !options.is_empty() && options.last().map(String::as_str) != Some("-") {
+                options.push("-".to_string());
+                actions.push(PlateMenuAction::Separator);
+            }
+        };
+
         if idx == SPREADSHEET_IDX && !self.collapsed_panes[idx] {
+            separate(&mut options, &mut actions);
             // Layout spans: full-width is the playbar treatment; the neighbors'
             // bottoms rise to make room via the tuck interlock.
             if !(self.spreadsheet_tucks_left() && self.spreadsheet_tucks_right()) {
@@ -163,26 +178,41 @@ impl State {
         // can be pulled in as tabs; a pane sharing its dock can move back
         // out to the empty dock its arrival left behind.
         if let Some(d) = self.dock_of_pane(idx) {
-            for &t in &self.dock_tabs[d as usize] {
-                if t != idx {
+            let switch_rows: Vec<usize> =
+                self.dock_tabs[d as usize].iter().copied().filter(|&t| t != idx).collect();
+            if !switch_rows.is_empty() {
+                separate(&mut options, &mut actions);
+                for t in switch_rows {
                     options.push(format!("Tab: {}", plate_title(t)));
                     actions.push(PlateMenuAction::ShowTab(t));
                 }
             }
+            let mut managed = false;
             for other in TAB_CANDIDATES {
                 if other != idx
                     && !self.dock_tabs[d as usize].contains(&other)
                     && !self.pane_is_detached(other)
                 {
+                    if !managed {
+                        separate(&mut options, &mut actions);
+                        managed = true;
+                    }
                     options.push(format!("Add Tab: {}", plate_title(other)));
                     actions.push(PlateMenuAction::AddTab(other));
                 }
             }
             if self.dock_tabs[d as usize].len() > 1 {
+                if !managed {
+                    separate(&mut options, &mut actions);
+                    managed = true;
+                }
                 options.push("Move To Own Plate".to_string());
                 actions.push(PlateMenuAction::SplitTab);
             }
             if idx == NETWORK_PANEL2_IDX {
+                if !managed {
+                    separate(&mut options, &mut actions);
+                }
                 options.push("Close Tab".to_string());
                 actions.push(PlateMenuAction::CloseTab);
             }
@@ -244,6 +274,7 @@ impl State {
             }
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
             PlateMenuAction::CloseTab => self.close_dock_tab(idx),
+            PlateMenuAction::Separator => {}
         }
     }
 
