@@ -1,0 +1,111 @@
+{
+ "name": "Curve",
+ "type": "node",
+ "inputs": 0,
+ "outputs": 1,
+ "params": [
+  {
+   "name": "Point 1 X",
+   "default": "-0.75",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 1 Y",
+   "default": "0.05",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 1 Z",
+   "default": "0.0",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 2 X",
+   "default": "-0.25",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 2 Y",
+   "default": "1.05",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 2 Z",
+   "default": "0.0",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 3 X",
+   "default": "0.25",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 3 Y",
+   "default": "0.05",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 3 Z",
+   "default": "0.0",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 4 X",
+   "default": "0.75",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 4 Y",
+   "default": "1.05",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Point 4 Z",
+   "default": "0.0",
+   "type": "slider:-2:2"
+  },
+  {
+   "name": "Segments",
+   "default": "24",
+   "type": "spinbox",
+   "min": 1,
+   "max": 256,
+   "step": 1
+  },
+  {
+   "name": "Thickness",
+   "default": "0.02",
+   "type": "slider"
+  }
+ ],
+ "children": [
+  {
+   "name": "opencl1",
+   "type": "opencl",
+   "params": [
+    {
+     "name": "Code",
+     "default": "void add_seg(float x0, float y0, float z0, float x1, float y1, float z1, float thickness, __global float* out_pos, __global float* out_col, int* count, int max_vertices) {\n    float dx = x1 - x0;\n    float dy = y1 - y0;\n    float dz = z1 - z0;\n    float len = sqrt(dx*dx + dy*dy + dz*dz);\n    if (len < 0.00001f) { return; }\n    dx /= len;\n    dy /= len;\n    dz /= len;\n    float upx = 1.0f;\n    float upy = 0.0f;\n    float upz = 0.0f;\n    if (fabs(dx) > 0.9f) {\n        upx = 0.0f;\n        upy = 1.0f;\n    }\n    float ux = dy * upz - dz * upy;\n    float uy = dz * upx - dx * upz;\n    float uz = dx * upy - dy * upx;\n    float ulen = sqrt(ux*ux + uy*uy + uz*uz);\n    if (ulen < 0.00001f) { return; }\n    ux /= ulen;\n    uy /= ulen;\n    uz /= ulen;\n    float vx = dy * uz - dz * uy;\n    float vy = dz * ux - dx * uz;\n    float vz = dx * uy - dy * ux;\n    float h = thickness * 0.5f;\n    float su[4] = {-1.0f, 1.0f, 1.0f, -1.0f};\n    float sv[4] = {-1.0f, -1.0f, 1.0f, 1.0f};\n    float cx[8];\n    float cy[8];\n    float cz[8];\n    for (int i = 0; i < 4; i++) {\n        float ox = h * (su[i] * ux + sv[i] * vx);\n        float oy = h * (su[i] * uy + sv[i] * vy);\n        float oz = h * (su[i] * uz + sv[i] * vz);\n        cx[i] = x0 + ox;\n        cy[i] = y0 + oy;\n        cz[i] = z0 + oz;\n        cx[i + 4] = x1 + ox;\n        cy[i + 4] = y1 + oy;\n        cz[i + 4] = z1 + oz;\n    }\n    int tri[36] = {\n        0, 2, 1, 0, 3, 2,\n        4, 5, 6, 4, 6, 7,\n        0, 1, 5, 0, 5, 4,\n        1, 2, 6, 1, 6, 5,\n        2, 3, 7, 2, 7, 6,\n        3, 0, 4, 3, 4, 7\n    };\n    float r = 0.5f + dx * 0.5f;\n    float g = 0.5f + dy * 0.5f;\n    float b = 0.5f + dz * 0.5f;\n    int start = *count;\n    for (int i = 0; i < 36; i++) {\n        int idx = start + i;\n        if (idx < max_vertices) {\n            int c = tri[i];\n            out_pos[idx * 3 + 0] = cx[c];\n            out_pos[idx * 3 + 1] = cy[c];\n            out_pos[idx * 3 + 2] = cz[c];\n            out_col[idx * 3 + 0] = r;\n            out_col[idx * 3 + 1] = g;\n            out_col[idx * 3 + 2] = b;\n        }\n    }\n    *count = start + 36;\n}\n\n__kernel void process(__global const float* in_pos, __global const float* in_col, int in_count, __global float* out_pos, __global float* out_col, __global int* out_count, int max_vertices) {\n    int id = get_global_id(0);\n    if (id == 0) {\n        float p0x = chf(\"Point 1 X\", -0.75f);\n        float p0y = chf(\"Point 1 Y\", 0.05f);\n        float p0z = chf(\"Point 1 Z\", 0.0f);\n        float p1x = chf(\"Point 2 X\", -0.25f);\n        float p1y = chf(\"Point 2 Y\", 1.05f);\n        float p1z = chf(\"Point 2 Z\", 0.0f);\n        float p2x = chf(\"Point 3 X\", 0.25f);\n        float p2y = chf(\"Point 3 Y\", 0.05f);\n        float p2z = chf(\"Point 3 Z\", 0.0f);\n        float p3x = chf(\"Point 4 X\", 0.75f);\n        float p3y = chf(\"Point 4 Y\", 1.05f);\n        float p3z = chf(\"Point 4 Z\", 0.0f);\n        int segments = chi(\"Segments\", 24);\n        if (segments < 1) { segments = 1; }\n        if (segments > 256) { segments = 256; }\n        float thickness = chf(\"Thickness\", 0.02f);\n        int count = 0;\n        float prev_x = p0x;\n        float prev_y = p0y;\n        float prev_z = p0z;\n        for (int i = 0; i < segments; i++) {\n            float t = (float)(i + 1) / (float)segments;\n            float s = 1.0f - t;\n            float b0 = s * s * s;\n            float b1 = 3.0f * s * s * t;\n            float b2 = 3.0f * s * t * t;\n            float b3 = t * t * t;\n            float x = b0 * p0x + b1 * p1x + b2 * p2x + b3 * p3x;\n            float y = b0 * p0y + b1 * p1y + b2 * p2y + b3 * p3y;\n            float z = b0 * p0z + b1 * p1z + b2 * p2z + b3 * p3z;\n            add_seg(prev_x, prev_y, prev_z, x, y, z, thickness, out_pos, out_col, &count, max_vertices);\n            prev_x = x;\n            prev_y = y;\n            prev_z = z;\n        }\n        *out_count = count;\n    }\n}"
+    }
+   ],
+   "position": [
+    4.0,
+    2.0
+   ]
+  },
+  {
+   "name": "output1",
+   "type": "output",
+   "params": [
+    {
+     "name": "Input",
+     "default": "opencl1"
+    }
+   ],
+   "position": [
+    4.0,
+    3.0
+   ]
+  }
+ ]
+}

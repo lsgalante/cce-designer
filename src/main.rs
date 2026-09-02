@@ -1218,6 +1218,95 @@ mod tests {
         assert!((max_dist_2 - 1.0).abs() < 0.01, "Expected radius around 1.0, got {}", max_dist_2);
     }
 
+    /// The Curve template: a subnet (opencl -> output) whose kernel samples a
+    /// cubic Bézier through the four control-point params and emits each of
+    /// the "Segments" spans as a 36-vertex oriented box strip.
+    #[test]
+    fn test_curve_subnet_geometry_generation() {
+        let templates_root = crate::app::load_fs_tree();
+        let curve_template = templates_root
+            .children
+            .iter()
+            .find(|t| t.name == "Curve")
+            .expect("Curve template should be loaded");
+
+        assert_eq!(curve_template.children.len(), 2);
+        let opencl1 = curve_template.children.iter().find(|c| c.name == "opencl1").unwrap();
+        assert_eq!(opencl1.node_type, "opencl");
+        let output1 = curve_template.children.iter().find(|c| c.name == "output1").unwrap();
+        assert_eq!(output1.node_type, "output");
+
+        let mut curve_instance = curve_template.clone();
+        curve_instance.id = "curve_inst".to_string();
+        for child in &mut curve_instance.children {
+            child.id = format!("{}_{}", curve_instance.id, child.name);
+        }
+
+        let root = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![curve_instance],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+
+        let mut visited = Vec::new();
+        let mut ocl_err = None;
+        let geom = crate::geometry::generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[0],
+            &mut visited,
+            &mut ocl_err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+        ).expect("Geometry generation failed");
+
+        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+        // 24 default segments x 36 vertices per segment box.
+        assert_eq!(geom.vertices.len(), 864);
+        for v in &geom.vertices {
+            assert!(v.pos.iter().all(|c| c.is_finite()), "curve produced non-finite positions");
+        }
+
+        // Halving Segments halves the strip.
+        let mut curve_instance_2 = curve_template.clone();
+        curve_instance_2.id = "curve_inst_2".to_string();
+        for child in &mut curve_instance_2.children {
+            child.id = format!("{}_{}", curve_instance_2.id, child.name);
+        }
+        if let Some(seg_param) = curve_instance_2.params.iter_mut().find(|p| p.name == "Segments") {
+            seg_param.default = "12".to_string();
+        }
+
+        let root_2 = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![curve_instance_2],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+
+        let mut visited_2 = Vec::new();
+        let mut ocl_err_2 = None;
+        let geom_2 = crate::geometry::generate_single_node_geometry_with_errors(
+            &root_2,
+            &root_2.children[0],
+            &mut visited_2,
+            &mut ocl_err_2,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+        ).expect("Geometry generation failed");
+
+        assert!(ocl_err_2.is_none(), "OpenCL compilation error: {:?}", ocl_err_2);
+        assert_eq!(geom_2.vertices.len(), 432);
+    }
+
     /// The Extrude template: a subnet (input -> opencl -> output) whose kernel
     /// offsets each input triangle along its face normal and stitches side
     /// walls. Per input triangle it emits top (3) + walls (18) + base (3) =
