@@ -794,6 +794,9 @@ impl State {
                 });
                 if let Some(idx) = template_idx {
                     let mut node = state.node_templates[idx].node.clone();
+                    // Fresh ids, like paste: a verbatim clone shares the
+                    // template's ids across every instance.
+                    crate::app::regenerate_node_ids(&mut node);
                     let mut allowed = true;
                     let is_in_utility = state.in_settings_dir();
                     if is_in_utility {

@@ -150,6 +150,17 @@ impl FsNode {
     }
 }
 
+/// Fresh ids for a node and its whole subtree — required whenever an
+/// existing tree is cloned into the graph (paste, template instantiation),
+/// because everything keyed by id (the eval cycle guard, sim caches, the
+/// curve viewer state's node binding) assumes ids are unique.
+pub(crate) fn regenerate_node_ids(n: &mut FsNode) {
+    n.id = generate_node_id();
+    for child in &mut n.children {
+        regenerate_node_ids(child);
+    }
+}
+
 fn default_node_type() -> String { "node".to_string() }
 fn default_node_geometry_visible() -> bool { true }
 fn default_node_position() -> (f32, f32) { (0.0, 0.0) }
@@ -217,6 +228,8 @@ pub enum NodeMenuAction {
     Enter,
     /// Flip the node's geometry visibility (utility nodes excluded).
     ToggleGeometry,
+    /// Enter/exit the curve viewer state (curve nodes only).
+    EditCurve,
     /// Remove the node.
     Delete,
 }
@@ -1192,6 +1205,8 @@ pub struct State {
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
     pub last_scene_view_rect: (f32, f32, f32, f32),
+    /// The active curve viewer state (viewport point editing), if any.
+    pub curve_tool: Option<crate::curve_tool::CurveTool>,
     pub last_viewport_rt_mode: bool,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
@@ -2687,14 +2702,25 @@ impl State {
     /// items are contextual: Enter (dive into the subnet) for enterable nodes,
     /// Show/Hide Geometry for non-utility nodes, and Delete always.
     fn open_node_context_menu(&mut self, slot: usize) {
-        let (is_utility, geom_visible, enterable) = {
+        let (is_utility, geom_visible, enterable, curve_editing) = {
             let dir = self.current_dir();
             let Some(node) = dir.children.get(slot) else { return };
             let enterable = node.is_enterable();
+            // None: not a curve; Some(bool): a curve, editing or not.
+            let curve_editing = node
+                .node_type
+                .eq_ignore_ascii_case("curve")
+                .then(|| {
+                    self.curve_tool
+                        .as_ref()
+                        .map(|t| t.node_id == node.id)
+                        .unwrap_or(false)
+                });
             (
                 matches!(node.node_type.as_str(), "utility" | "session" | "meta"),
                 node.geometry_visible,
                 enterable,
+                curve_editing,
             )
         };
         let deletable = {
@@ -2713,6 +2739,10 @@ impl State {
         if !is_utility {
             options.push(if geom_visible { "Hide Geometry" } else { "Show Geometry" }.to_string());
             actions.push(NodeMenuAction::ToggleGeometry);
+        }
+        if let Some(editing) = curve_editing {
+            options.push(if editing { "Stop Editing Points" } else { "Edit Points" }.to_string());
+            actions.push(NodeMenuAction::EditCurve);
         }
         if deletable {
             options.push("Delete".to_string());
@@ -2926,6 +2956,9 @@ impl State {
             NodeMenuAction::ToggleGeometry => {
                 let mut redraw = false;
                 let _ = self.apply_action(McpAction::ToggleGeometry { slot }, &mut redraw);
+            }
+            NodeMenuAction::EditCurve => {
+                self.toggle_curve_tool(slot);
             }
             NodeMenuAction::Delete => {
                 self.delete_node(slot);
@@ -3753,6 +3786,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             pick_cache: None,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
+            curve_tool: None,
             last_viewport_rt_mode: false,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
@@ -5034,6 +5068,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     changed = true;
                 }
 
+                // An in-flight curve-tool grab eats motion ahead of every
+                // other drag: the grabbed control point tracks the cursor.
+                if self.curve_tool_drag_motion() {
+                    return true;
+                }
+
                 // An armed corner-dot press becomes a layout drag once it
                 // moves; stubbed (collapsed/detached) panes stay click-only.
                 if let Some((idx, px, py)) = self.corner_press {
@@ -5460,6 +5500,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             }
                         }
 
+                        // The curve viewer state takes the viewport press
+                        // ahead of the context menu and the click cascade:
+                        // left grabs or adds a control point, right on a
+                        // handle deletes it (right elsewhere still opens the
+                        // viewport menu below).
+                        if self.curve_tool.is_some()
+                            && self.cursor_in_viewport()
+                            && !in_circle_network_pane
+                        {
+                            if *button == MouseButton::Left {
+                                if self.curve_tool_press() {
+                                    return true;
+                                }
+                            } else if *button == MouseButton::Right
+                                && self.curve_tool_delete_at_cursor()
+                            {
+                                return true;
+                            }
+                        }
+
                         if *button == MouseButton::Right {
                             self.close_node_menu();
                             self.close_viewport_menu();
@@ -5684,6 +5744,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
+                        if self.curve_tool_release() {
+                            changed = true;
+                        }
                         if let Some(drag) = self.app_drag.take() {
                             // App-mode drag teardown. The DragEnd send is kept from the old
                             // shared teardown for faithfulness — the pane widget never began
@@ -6011,7 +6074,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         }
                         return true;
                     }
+                    // The curve viewer state exits on Escape, ahead of
+                    // connection-cancel — leaving point-edit mode is the
+                    // more immediate "get me out" while it is active.
+                    if self.curve_tool.is_some() {
+                        self.curve_tool = None;
+                        return true;
+                    }
                     self.graph_mut().cancel_connecting();
+                    return true;
+                }
+                // Delete/Backspace removes the curve tool's selected control
+                // point. Ahead of the network pane's node-delete, which only
+                // runs when no tool selection consumed the key; after the
+                // param pane's shot above, so a focused text field keeps
+                // Backspace for its caret.
+                if event.state == ElementState::Pressed
+                    && (event.logical_key == Key::Named(NamedKey::Delete)
+                        || event.logical_key == Key::Named(NamedKey::Backspace))
+                    && self.curve_tool_delete_selected()
+                {
                     return true;
                 }
                 let mut changed = false;
@@ -6248,13 +6330,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                         "v" | "V" => {
                                             if let Some(ref clipboard_node) = self.node_clipboard {
                                                 let mut node = clipboard_node.clone();
-                                                fn regenerate_ids(n: &mut FsNode) {
-                                                    n.id = generate_node_id();
-                                                    for child in &mut n.children {
-                                                        regenerate_ids(child);
-                                                    }
-                                                }
-                                                regenerate_ids(&mut node);
+                                                regenerate_node_ids(&mut node);
                                                 let start_x = self.grid_cursor_col as f32;
                                                 let start_y = self.grid_cursor_row as f32;
                                                 let (nx, ny) = self.find_empty_cell(start_x, start_y, None);

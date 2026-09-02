@@ -1644,27 +1644,6 @@ mod template_tests {
         }
     }
 
-    #[test]
-    fn cpu_runs_the_curve_template() {
-        let (code, params) = template_kernel("Curve");
-        let mut g = Geometry::new();
-        run_kernel_cpu(&code, &mut g, &params).expect("curve kernel");
-        // 24 segments, each a 36-vertex box: the default Bézier degenerates
-        // nowhere, so every segment emits.
-        assert_eq!(g.vertices.len(), 864);
-        for v in &g.vertices {
-            assert!(v.pos.iter().all(|c| c.is_finite()), "curve produced non-finite positions");
-        }
-        // The strip starts at Point 1 and ends at Point 4 (within a half
-        // thickness of the sampled centerline).
-        let near = |v: &GVertex, p: [f32; 3]| {
-            let d = (0..3).map(|k| (v.pos[k] - p[k]).powi(2)).sum::<f32>().sqrt();
-            d < 0.1
-        };
-        assert!(g.vertices.iter().any(|v| near(v, [-0.75, 0.05, 0.0])), "curve does not reach Point 1");
-        assert!(g.vertices.iter().any(|v| near(v, [0.75, 1.05, 0.0])), "curve does not reach Point 4");
-    }
-
     /// The reference test proper: byte-level agreement with OpenCL on every
     /// shipped kernel. Skips silently where no platform exists — the absolute
     /// tests above still cover the CPU side there.
@@ -1675,7 +1654,6 @@ mod template_tests {
             ("Plane", Geometry::new()),
             ("Box", Geometry::new()),
             ("Extrude", triangle()),
-            ("Curve", Geometry::new()),
         ] {
             let (code, params) = template_kernel(name);
 

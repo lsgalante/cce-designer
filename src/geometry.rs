@@ -279,6 +279,86 @@ pub fn line_vertices(start: Vec3, end: Vec3, thickness: f32) -> Geometry {
     Geometry { vertices }
 }
 
+/// Parse a curve node's "Points" param: control points as `x y z` triples
+/// separated by `;`. Commas are accepted alongside whitespace inside a
+/// triple; chunks that don't yield exactly three numbers are skipped, so a
+/// half-typed point in the params pane degrades to "not there yet" instead
+/// of corrupting its neighbors.
+pub fn parse_curve_points(s: &str) -> Vec<Vec3> {
+    s.split(';')
+        .filter_map(|chunk| {
+            let n: Vec<f32> = chunk
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .filter(|t| !t.is_empty())
+                .map(|t| t.parse::<f32>())
+                .collect::<Result<_, _>>()
+                .ok()?;
+            if n.len() == 3 && n.iter().all(|v| v.is_finite()) {
+                Some(Vec3::new(n[0], n[1], n[2]))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The inverse of [`parse_curve_points`] — what the curve viewer state
+/// writes back into the "Points" param.
+pub fn format_curve_points(pts: &[Vec3]) -> String {
+    pts.iter()
+        .map(|p| format!("{} {} {}", p.x, p.y, p.z))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Uniform Catmull-Rom through the control points, `segs` samples per span,
+/// endpoints clamped (the first/last point doubles as its own neighbor). The
+/// result includes the first control point and passes through every control
+/// point at span boundaries. Fewer than two points sample as themselves.
+pub fn sample_catmull_rom(pts: &[Vec3], segs: usize) -> Vec<Vec3> {
+    if pts.len() < 2 {
+        return pts.to_vec();
+    }
+    let segs = segs.max(1);
+    let mut out = Vec::with_capacity((pts.len() - 1) * segs + 1);
+    out.push(pts[0]);
+    for i in 0..pts.len() - 1 {
+        let p0 = if i == 0 { pts[0] } else { pts[i - 1] };
+        let p1 = pts[i];
+        let p2 = pts[i + 1];
+        let p3 = if i + 2 < pts.len() { pts[i + 2] } else { pts[pts.len() - 1] };
+        for s in 1..=segs {
+            let t = s as f32 / segs as f32;
+            let t2 = t * t;
+            let t3 = t2 * t;
+            out.push(
+                0.5 * ((2.0 * p1)
+                    + (-p0 + p2) * t
+                    + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                    + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3),
+            );
+        }
+    }
+    out
+}
+
+/// The native `curve` node: a Catmull-Rom strip through the "Points" param,
+/// each sampled span an oriented box via [`line_vertices`]. Points are
+/// absolute world coordinates — deliberately not offset by the grid index
+/// the other primitives use, because the curve viewer state edits them in
+/// world space.
+pub fn curve_geometry(node: &FsNode) -> Geometry {
+    let pts = parse_curve_points(&node_param_str(node, "Points", ""));
+    let segs = node_param_f32(node, "Segments", 8.0).max(1.0) as usize;
+    let thickness = node_param_f32(node, "Thickness", 0.02).max(0.001);
+    let samples = sample_catmull_rom(&pts, segs);
+    let mut geom = Geometry::new();
+    for w in samples.windows(2) {
+        geom.merge(line_vertices(w[0], w[1], thickness));
+    }
+    geom
+}
+
 pub fn node_param_f32(node: &FsNode, name: &str, fallback: f32) -> f32 {
     node.params.iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
@@ -463,6 +543,8 @@ pub fn generate_single_node_geometry_with_errors(
         let thickness = node_param_f32(target, "Thickness", 0.02);
         let end = start + Vec3::new(0.0, length, 0.0);
         Some(line_vertices(start, end, thickness))
+    } else if target.node_type.eq_ignore_ascii_case("curve") {
+        Some(curve_geometry(target))
     } else if target.node_type.eq_ignore_ascii_case("add") {
         let idx = find_sphere_index(root, target)?;
         let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
@@ -1914,6 +1996,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
     let nt = node_type.to_lowercase();
     nt == "sphere"
         || nt == "line"
+        || nt == "curve"
         || nt == "add"
         || nt == "transform"
         || nt == "opencl"
@@ -1994,6 +2077,12 @@ pub fn network_sphere_vertices_with_errors(
                 let thickness = node_param_f32(node, "Thickness", 0.02);
                 let end = start + Vec3::new(0.0, length, 0.0);
                 out.merge(line_vertices(start, end, thickness));
+            }
+        } else if node.node_type.eq_ignore_ascii_case("curve") {
+            // Absolute world coordinates: no grid-index placement, and
+            // `count` untouched so find_sphere_index stays aligned.
+            if is_visible {
+                out.merge(curve_geometry(node));
             }
         } else if node.node_type.eq_ignore_ascii_case("add") {
             let idx = *count;

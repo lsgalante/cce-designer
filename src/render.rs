@@ -171,6 +171,7 @@ impl State {
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
         self.append_meta_point_numbers(&mut pc);
+        self.append_curve_tool_overlay(&mut pc);
         self.append_popovers(&mut pc);
         self.append_dock_drag_overlay(&mut pc);
         self.append_plate_corners(&mut pc);
@@ -849,6 +850,42 @@ impl State {
                 let sx = vx + (ndc.x * 0.5 + 0.5) * vw;
                 let sy = vy + (0.5 - ndc.y * 0.5) * vh;
                 pc.text(idx.to_string(), sx + 4.0, sy - 6.0, 10.0, [0xee, 0xee, 0xff]);
+            }
+        });
+    }
+
+    /// The curve viewer state's handles: each control point projected
+    /// through the cached scene mvp (like the point numbers above), drawn as
+    /// a ringed dot with its index, the control cage as faint segments
+    /// between them. Selected point draws larger and brighter.
+    fn append_curve_tool_overlay(&self, pc: &mut PaintCtx) {
+        let Some(tool) = &self.curve_tool else { return };
+        if !self.show_viewport {
+            return;
+        }
+        let handles = self.curve_tool_handles();
+        let (vx, vy, vw, vh) = self.last_scene_view_rect;
+        if vw <= 0.0 || vh <= 0.0 {
+            return;
+        }
+        pc.clip(rect(vx, vy, vw, vh), |pc| {
+            for pair in handles.windows(2) {
+                let (_, x0, y0, _) = pair[0];
+                let (_, x1, y1, _) = pair[1];
+                pc.vector(x0, y0, x1, y1, 1.0, [1.0, 1.0, 1.0, 0.25], cce_ui::scene::paint::Cap::Round);
+            }
+            for (i, sx, sy, _z) in &handles {
+                let selected = tool.selected == Some(*i);
+                let r = if selected { 6.0 } else { 4.5 };
+                // Dark ring behind for contrast against any scene.
+                pc.circle(*sx, *sy, r + 1.5, [0.0, 0.0, 0.0, 0.6]);
+                let col = if selected {
+                    [1.0, 0.92, 0.55, 1.0]
+                } else {
+                    [1.0, 0.78, 0.20, 1.0]
+                };
+                pc.circle(*sx, *sy, r, col);
+                pc.text((i + 1).to_string(), sx + 8.0, sy - 6.0, 10.0, [0xff, 0xe6, 0xa0]);
             }
         });
     }

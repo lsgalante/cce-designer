@@ -1,6 +1,7 @@
 
 pub mod app;
 pub mod application;
+pub mod curve_tool;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
@@ -1218,93 +1219,186 @@ mod tests {
         assert!((max_dist_2 - 1.0).abs() < 0.01, "Expected radius around 1.0, got {}", max_dist_2);
     }
 
-    /// The Curve template: a subnet (opencl -> output) whose kernel samples a
-    /// cubic Bézier through the four control-point params and emits each of
-    /// the "Segments" spans as a 36-vertex oriented box strip.
+    /// The native curve node: a Catmull-Rom strip through the "Points"
+    /// param, each sampled span an oriented 36-vertex box.
     #[test]
-    fn test_curve_subnet_geometry_generation() {
+    fn test_curve_native_geometry_generation() {
         let templates_root = crate::app::load_fs_tree();
         let curve_template = templates_root
             .children
             .iter()
             .find(|t| t.name == "Curve")
             .expect("Curve template should be loaded");
+        assert_eq!(curve_template.node_type, "curve");
+        assert!(curve_template.children.is_empty(), "native curve has no subnet children");
 
-        assert_eq!(curve_template.children.len(), 2);
-        let opencl1 = curve_template.children.iter().find(|c| c.name == "opencl1").unwrap();
-        assert_eq!(opencl1.node_type, "opencl");
-        let output1 = curve_template.children.iter().find(|c| c.name == "output1").unwrap();
-        assert_eq!(output1.node_type, "output");
-
-        let mut curve_instance = curve_template.clone();
-        curve_instance.id = "curve_inst".to_string();
-        for child in &mut curve_instance.children {
-            child.id = format!("{}_{}", curve_instance.id, child.name);
-        }
-
-        let root = FsNode {
+        let make_root = |instance: FsNode| FsNode {
             id: "root".to_string(),
             name: "root".to_string(),
             node_type: "node".to_string(),
-            children: vec![curve_instance],
+            children: vec![instance],
             params: vec![],
             geometry_visible: true,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
         };
+        let eval = |root: &FsNode| {
+            let mut visited = Vec::new();
+            crate::geometry::generate_single_node_geometry(root, &root.children[0], &mut visited)
+                .expect("Geometry generation failed")
+        };
 
-        let mut visited = Vec::new();
-        let mut ocl_err = None;
-        let geom = crate::geometry::generate_single_node_geometry_with_errors(
-            &root,
-            &root.children[0],
-            &mut visited,
-            &mut ocl_err,
-            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
-        ).expect("Geometry generation failed");
-
-        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
-        // 24 default segments x 36 vertices per segment box.
+        // Default: 4 points, 8 segments per span → 3*8 spans × 36 vertices.
+        let mut instance = curve_template.clone();
+        instance.id = "curve_inst".to_string();
+        let geom = eval(&make_root(instance.clone()));
         assert_eq!(geom.vertices.len(), 864);
         for v in &geom.vertices {
             assert!(v.pos.iter().all(|c| c.is_finite()), "curve produced non-finite positions");
         }
-
-        // Halving Segments halves the strip.
-        let mut curve_instance_2 = curve_template.clone();
-        curve_instance_2.id = "curve_inst_2".to_string();
-        for child in &mut curve_instance_2.children {
-            child.id = format!("{}_{}", curve_instance_2.id, child.name);
-        }
-        if let Some(seg_param) = curve_instance_2.params.iter_mut().find(|p| p.name == "Segments") {
-            seg_param.default = "12".to_string();
-        }
-
-        let root_2 = FsNode {
-            id: "root".to_string(),
-            name: "root".to_string(),
-            node_type: "node".to_string(),
-            children: vec![curve_instance_2],
-            params: vec![],
-            geometry_visible: true,
-            position: (0.0, 0.0),
-            inputs: 0,
-            outputs: 0,
+        // The strip reaches both endpoint control points.
+        let near = |g: &crate::geometry::Geometry, p: [f32; 3]| {
+            g.vertices.iter().any(|v| {
+                (0..3).map(|k| (v.pos[k] - p[k]).powi(2)).sum::<f32>().sqrt() < 0.1
+            })
         };
+        assert!(near(&geom, [-0.75, 0.05, 0.0]), "curve does not reach its first point");
+        assert!(near(&geom, [0.75, 1.05, 0.0]), "curve does not reach its last point");
 
-        let mut visited_2 = Vec::new();
-        let mut ocl_err_2 = None;
-        let geom_2 = crate::geometry::generate_single_node_geometry_with_errors(
-            &root_2,
-            &root_2.children[0],
-            &mut visited_2,
-            &mut ocl_err_2,
-            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
-        ).expect("Geometry generation failed");
+        // Two points: one span, 8 boxes. The scene walk agrees with the
+        // single-node path.
+        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().default =
+            "0 0 0; 1 0 0".to_string();
+        let root = make_root(instance.clone());
+        assert_eq!(eval(&root).vertices.len(), 288);
+        assert_eq!(
+            crate::geometry::network_sphere_vertices(&root).vertices.len(),
+            288,
+            "scene walk and single-node eval disagree"
+        );
 
-        assert!(ocl_err_2.is_none(), "OpenCL compilation error: {:?}", ocl_err_2);
-        assert_eq!(geom_2.vertices.len(), 432);
+        // No parseable points: empty geometry, not a panic.
+        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().default =
+            "not points".to_string();
+        assert_eq!(eval(&make_root(instance)).vertices.len(), 0);
+    }
+
+    /// Points round-trip through the "Points" param format; malformed
+    /// chunks are skipped rather than corrupting neighbors; the sampled
+    /// Catmull-Rom passes through every control point at span boundaries.
+    #[test]
+    fn test_curve_points_parse_and_sampling() {
+        use crate::geometry::{format_curve_points, parse_curve_points, sample_catmull_rom};
+
+        let pts = vec![
+            Vec3::new(-0.75, 0.05, 0.0),
+            Vec3::new(0.25, 1.5, -0.5),
+            Vec3::new(2.0, -1.0, 3.25),
+        ];
+        assert_eq!(parse_curve_points(&format_curve_points(&pts)), pts);
+
+        // Commas allowed, garbage and half-typed triples skipped.
+        let parsed = parse_curve_points("1, 2, 3; nope; 4 5; ; 6 7 8");
+        assert_eq!(parsed, vec![Vec3::new(1.0, 2.0, 3.0), Vec3::new(6.0, 7.0, 8.0)]);
+
+        let segs = 4;
+        let samples = sample_catmull_rom(&pts, segs);
+        assert_eq!(samples.len(), (pts.len() - 1) * segs + 1);
+        for (i, p) in pts.iter().enumerate() {
+            let s = samples[i * segs];
+            assert!((s - *p).length() < 1e-5, "sample {} misses control point {}", i * segs, i);
+        }
+        // Degenerate inputs sample as themselves.
+        assert_eq!(sample_catmull_rom(&[], segs).len(), 0);
+        assert_eq!(sample_catmull_rom(&pts[..1], segs), pts[..1].to_vec());
+    }
+
+    /// The curve viewer state end-to-end, headless: grab-and-drag moves a
+    /// control point on its own depth plane, a press on empty space appends
+    /// a point there, right-press and Delete remove points — all through
+    /// the real press/motion/release handlers, against an identity mvp
+    /// (world x/y map linearly onto a 100×100 pane).
+    #[test]
+    fn test_curve_tool_add_move_delete() {
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Curve".to_string(), name: None, x: 0.0, y: 0.0 },
+                &mut redraw,
+            )
+            .expect("add curve node");
+        let slot = state.current_dir().children.len() - 1;
+        assert_eq!(state.current_dir().children[slot].node_type, "curve");
+
+        // A second instance gets its own id (AddNode regenerates like
+        // paste) — the tool binds by id, so shared ids would edit the
+        // wrong node.
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Curve".to_string(), name: None, x: 2.0, y: 0.0 },
+                &mut redraw,
+            )
+            .expect("add second curve node");
+        let slot2 = state.current_dir().children.len() - 1;
+        assert_ne!(
+            state.current_dir().children[slot].id,
+            state.current_dir().children[slot2].id,
+            "template instances must not share ids"
+        );
+
+        state.toggle_curve_tool(slot);
+        assert!(state.curve_tool.is_some());
+
+        state.last_scene_mvp = Some(Mat4::IDENTITY);
+        state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+        let sx = |x: f32| 50.0 + x * 50.0;
+        let sy = |y: f32| 50.0 - y * 50.0;
+        let points_of = |state: &State, slot: usize| {
+            crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
+                &state.current_dir().children[slot],
+                "Points",
+                "",
+            ))
+        };
+        let default_first = points_of(&state, slot)[0];
+
+        // Grab the first point and drag it to the pane center → (0, 0, z).
+        state.cursor_x = sx(default_first.x);
+        state.cursor_y = sy(default_first.y);
+        assert!(state.curve_tool_press(), "press on a handle must grab");
+        state.cursor_x = 50.0;
+        state.cursor_y = 50.0;
+        assert!(state.curve_tool_drag_motion());
+        assert!(state.curve_tool_release());
+        let pts = points_of(&state, slot);
+        assert!(pts[0].length() < 1e-4, "dragged point should sit at the origin, got {:?}", pts[0]);
+        // The other curve is untouched.
+        assert_eq!(points_of(&state, slot2)[0], default_first);
+
+        // Press on empty space appends a point there (at the last point's
+        // depth — z=0 here) and immediately drags it.
+        state.cursor_x = 90.0;
+        state.cursor_y = 90.0;
+        assert!(state.curve_tool_press());
+        let pts = points_of(&state, slot);
+        assert_eq!(pts.len(), 5);
+        assert!((pts[4] - Vec3::new(0.8, -0.8, 0.0)).length() < 1e-4, "added at {:?}", pts[4]);
+        assert!(state.curve_tool_release());
+
+        // Delete the (selected) new point, then right-press-delete the one
+        // parked at the pane center.
+        assert!(state.curve_tool_delete_selected());
+        assert_eq!(points_of(&state, slot).len(), 4);
+        state.cursor_x = 50.0;
+        state.cursor_y = 50.0;
+        assert!(state.curve_tool_delete_at_cursor());
+        assert_eq!(points_of(&state, slot).len(), 3);
+
+        // Toggling on the same node exits the state.
+        state.toggle_curve_tool(slot);
+        assert!(state.curve_tool.is_none());
     }
 
     /// The Extrude template: a subnet (input -> opencl -> output) whose kernel
