@@ -468,6 +468,20 @@ pub fn meta_pref(node: &FsNode, name: &str) -> bool {
 /// and nothing is ever injected or deleted. Simnet children (the user's sim
 /// chain) are out of scope by construction: simnet is a native type.
 pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
+    // Legacy retypes, session->meta style: renamed native types are rewritten
+    // in place (params and name intact) BEFORE matching, so old saves find the
+    // renamed template and gain its new params through the normal merge.
+    // "add" became "points" (2026-09, gaining the Shape param).
+    fn retype_legacy(node: &mut FsNode) {
+        if node.node_type.eq_ignore_ascii_case("add") {
+            node.node_type = "points".to_string();
+        }
+        for c in &mut node.children {
+            retype_legacy(c);
+        }
+    }
+    retype_legacy(root);
+
     fn template_for<'a>(node: &FsNode, templates: &'a [NodeTemplate]) -> Option<&'a FsNode> {
         if node.node_type.eq_ignore_ascii_case("node") {
             let base = node.name.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();

@@ -545,22 +545,10 @@ pub fn generate_single_node_geometry_with_errors(
         Some(line_vertices(start, end, thickness))
     } else if target.node_type.eq_ignore_ascii_case("curve") {
         Some(curve_geometry(target))
-    } else if target.node_type.eq_ignore_ascii_case("add") {
+    } else if target.node_type.eq_ignore_ascii_case("points") {
         let idx = find_sphere_index(root, target)?;
         let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-        let num_points = node_param_f32(target, "Points", 100.0) as i32;
-        let mut geom = Geometry::new();
-        for i in 0..num_points {
-            let t = i as f32 / num_points.max(1) as f32;
-            let angle = t * std::f32::consts::TAU * 3.0;
-            let r = 0.4 * t;
-            let px = center.x + r * angle.cos();
-            let py = center.y + t * 0.5 - 0.25;
-            let pz = center.z + r * angle.sin();
-            let pt_center = Vec3::new(px, py, pz);
-            geom.merge(sphere_vertices_res(pt_center, 0.02, 6, 8));
-        }
-        Some(geom)
+        Some(points_node_geometry(target, center))
     } else if target.node_type.eq_ignore_ascii_case("transform") {
         resolve_transform_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("scatter") {
@@ -1997,7 +1985,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
     nt == "sphere"
         || nt == "line"
         || nt == "curve"
-        || nt == "add"
+        || nt == "points"
         || nt == "transform"
         || nt == "opencl"
         || nt == "box"
@@ -2084,22 +2072,12 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 out.merge(curve_geometry(node));
             }
-        } else if node.node_type.eq_ignore_ascii_case("add") {
+        } else if node.node_type.eq_ignore_ascii_case("points") {
             let idx = *count;
             *count += 1;
             if is_visible {
                 let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                let num_points = node_param_f32(node, "Points", 100.0) as i32;
-                for i in 0..num_points {
-                    let t = i as f32 / num_points.max(1) as f32;
-                    let angle = t * std::f32::consts::TAU * 3.0;
-                    let r = 0.4 * t;
-                    let px = center.x + r * angle.cos();
-                    let py = center.y + t * 0.5 - 0.25;
-                    let pz = center.z + r * angle.sin();
-                    let pt_center = Vec3::new(px, py, pz);
-                    out.merge(sphere_vertices_res(pt_center, 0.02, 6, 8));
-                }
+                out.merge(points_node_geometry(node, center));
             }
         } else if node.node_type.eq_ignore_ascii_case("transform") {
             let _idx = *count;
@@ -2210,12 +2188,46 @@ pub fn network_sphere_vertices_with_errors(
     out
 }
 
+/// The Points node's cloud (type "points", nee "add"): `Points` markers
+/// arranged by the `Shape` param around `center`. One function for both
+/// consumers — the single-node resolver and the scene walk — so the two
+/// renderings can never drift apart.
+pub fn points_node_geometry(node: &FsNode, center: Vec3) -> Geometry {
+    let num_points = node_param_f32(node, "Points", 100.0) as i32;
+    let shape = node_param_str(node, "Shape", "None");
+    let mut geom = Geometry::new();
+    for i in 0..num_points {
+        let t = i as f32 / num_points.max(1) as f32;
+        let offset = match shape.as_str() {
+            "Spiral" => {
+                let angle = t * std::f32::consts::TAU * 3.0;
+                let r = 0.4 * t;
+                Vec3::new(r * angle.cos(), t * 0.5 - 0.25, r * angle.sin())
+            }
+            "Line" => Vec3::new(t - 0.5, 0.0, 0.0),
+            "Circle" => {
+                let angle = t * std::f32::consts::TAU;
+                Vec3::new(0.4 * angle.cos(), 0.0, 0.4 * angle.sin())
+            }
+            "Grid" => {
+                let side = (num_points as f32).sqrt().ceil().max(1.0) as i32;
+                let step = if side > 1 { 0.8 / (side - 1) as f32 } else { 0.0 };
+                Vec3::new((i % side) as f32 * step - 0.4, 0.0, (i / side) as f32 * step - 0.4)
+            }
+            // "None" and anything unrecognized: every point at the same spot.
+            _ => Vec3::ZERO,
+        };
+        geom.merge(sphere_vertices_res(center + offset, 0.02, 6, 8));
+    }
+    geom
+}
+
 pub fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {
     fn visit(node: &FsNode, target: &FsNode, count: &mut usize) -> Option<usize> {
         let is_target = std::ptr::eq(node, target);
         if node.node_type.eq_ignore_ascii_case("sphere") 
             || node.node_type.eq_ignore_ascii_case("line") 
-            || node.node_type.eq_ignore_ascii_case("add")
+            || node.node_type.eq_ignore_ascii_case("points")
             || node.node_type.eq_ignore_ascii_case("transform")
             || node.node_type.eq_ignore_ascii_case("opencl")
             || node.node_type.eq_ignore_ascii_case("scatter") {
@@ -2590,13 +2602,13 @@ mod tests {
     }
 
     #[test]
-    fn test_add_node_points() {
-        let add_node = FsNode {
-            id: "id Add points test".to_string(),
+    fn test_points_node_shapes() {
+        let points_node = |shape: &str| FsNode {
+            id: format!("id Points {shape} test"),
             inputs: 1,
             outputs: 1,
-            name: "Add points test".to_string(),
-            node_type: "add".to_string(),
+            name: "Points test".to_string(),
+            node_type: "points".to_string(),
             children: vec![],
             params: vec![
                 ParamDef {
@@ -2608,7 +2620,17 @@ mod tests {
                     min: Some(1.0),
                     max: Some(10.0),
                     step: Some(1.0),
-                }
+                },
+                ParamDef {
+                    name: "Shape".to_string(),
+                    label: String::new(),
+                    param_type: "choice:None,Spiral,Line,Circle,Grid".to_string(),
+                    default: shape.to_string(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                },
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -2619,13 +2641,37 @@ mod tests {
             outputs: 1,
             name: "root".to_string(),
             node_type: "node".to_string(),
-            children: vec![add_node],
+            children: vec![points_node("None")],
             params: vec![],
             geometry_visible: true,
             position: (0.0, 0.0),
         };
         let geom = network_sphere_vertices(&root);
         assert_eq!(geom.vertices.len(), 5 * 288);
+
+        // Shape "None": every point sits in the same spot, so all five marker
+        // spheres cover an identical (tiny) extent. A spread shape must not.
+        let extent = |g: &Geometry| {
+            let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for v in &g.vertices {
+                min = min.min(Vec3::from_array(v.pos));
+                max = max.max(Vec3::from_array(v.pos));
+            }
+            max - min
+        };
+        let none = points_node_geometry(&points_node("None"), Vec3::ZERO);
+        let e = extent(&none);
+        assert!(e.length() < 0.1, "None must collapse to one spot, extent {e:?}");
+
+        for shape in ["Spiral", "Line", "Circle", "Grid"] {
+            let g = points_node_geometry(&points_node(shape), Vec3::ZERO);
+            assert_eq!(g.vertices.len(), 5 * 288, "{shape}");
+            assert!(
+                extent(&g).length() > 0.3,
+                "{shape} must spread its points, extent {:?}",
+                extent(&g)
+            );
+        }
     }
 
     #[test]

@@ -204,6 +204,35 @@ mod tests {
         );
     }
 
+    /// Legacy "add" nodes retype to "points" on load (the session->meta
+    /// pattern) and gain the renamed template's Shape param through the
+    /// normal merge, keeping their own name and saved param values.
+    #[test]
+    fn test_add_node_migrates_to_points() {
+        let legacy: FsNode = serde_json::from_str(
+            r#"{"name":"Add 3","type":"add","params":[
+                {"name":"Points","type":"spinbox","default":"250"}
+            ]}"#,
+        )
+        .unwrap();
+        let mut root: FsNode = serde_json::from_str(r#"{"name":"root"}"#).unwrap();
+        root.children.push(legacy);
+        let templates = crate::app::load_fs_tree();
+        let templates: Vec<crate::app::NodeTemplate> = templates
+            .children
+            .iter()
+            .map(|c| crate::app::NodeTemplate { label: c.name.clone(), node: c.clone() })
+            .collect();
+        crate::app::merge_template_defs(&mut root, &templates);
+        let node = &root.children[0];
+        assert_eq!(node.node_type, "points");
+        assert_eq!(node.name, "Add 3", "instance name is the wire identity — never rewritten");
+        let points = node.params.iter().find(|p| p.name == "Points").unwrap();
+        assert_eq!(points.default, "250", "instance owns its values");
+        let shape = node.params.iter().find(|p| p.name == "Shape").expect("Shape appended");
+        assert_eq!(shape.default, "None");
+    }
+
     /// The button must exist on Main, inside the File section, before Exit.
     #[test]
     fn test_main_node_offers_set_as_default() {

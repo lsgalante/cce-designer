@@ -1,6 +1,6 @@
 {
-  "name": "Add",
-  "type": "add",
+  "name": "Points",
+  "type": "points",
   "inputs": 0,
   "outputs": 1,
   "params": [
@@ -11,6 +11,11 @@
       "min": 10.0,
       "max": 5000.0,
       "step": 10.0
+    },
+    {
+      "name": "Shape",
+      "type": "choice:None,Spiral,Line,Circle,Grid",
+      "default": "None"
     }
   ]
 }
