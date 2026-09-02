@@ -148,6 +148,25 @@ impl FsNode {
         matches!(self.node_type.as_str(), "node" | "utility" | "simnet" | "session")
             || !self.children.is_empty()
     }
+
+    /// Set one child's geometry visibility. Enabling is EXCLUSIVE within the
+    /// directory — at most one node per path shows its geometry, so turning a
+    /// node on turns every sibling off (a display flag, not a per-node render
+    /// flag). Disabling touches only the named child. Every toggle route
+    /// (keyboard `e`, the graph widgets' click toggles, MCP/context-menu
+    /// ToggleGeometry) must go through here or the invariant silently rots.
+    pub fn set_child_geometry_visible(&mut self, slot: usize, visible: bool) {
+        if slot >= self.children.len() {
+            return;
+        }
+        if visible {
+            for (i, child) in self.children.iter_mut().enumerate() {
+                child.geometry_visible = i == slot;
+            }
+        } else {
+            self.children[slot].geometry_visible = false;
+        }
+    }
 }
 
 /// Fresh ids for a node and its whole subtree — required whenever an
@@ -5881,7 +5900,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
 
                 if let Some((i, visible)) = self.graph_mut().take_node_geom_toggle() {
-                    self.current_dir_mut().children[i].geometry_visible = visible;
+                    self.current_dir_mut().set_child_geometry_visible(i, visible);
+                    // The widget only flipped its own copy of the clicked node;
+                    // the exclusivity rule may have cleared siblings (in both
+                    // editors' views), so push the model back out.
+                    self.sync_nodes();
                     self.rebuild_scene_geometry();
                     changed = true;
                 }
@@ -5946,7 +5969,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         let p2 = self.current_path2.clone();
                         let dir = self.dir_at_mut(&p2);
                         if i < dir.children.len() {
-                            dir.children[i].geometry_visible = visible;
+                            dir.set_child_geometry_visible(i, visible);
+                            self.sync_nodes();
                             self.rebuild_scene_geometry();
                             changed = true;
                         }
@@ -6174,7 +6198,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                                     let dir = self.current_dir();
                                                     if slot_idx < dir.children.len() && dir.children[slot_idx].node_type != "utility" {
                                                         let visible = !dir.children[slot_idx].geometry_visible;
-                                                        self.current_dir_mut().children[slot_idx].geometry_visible = visible;
+                                                        self.current_dir_mut().set_child_geometry_visible(slot_idx, visible);
                                                         self.sync_nodes();
                                                         self.rebuild_scene_geometry();
                                                         changed = true;

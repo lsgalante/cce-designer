@@ -136,6 +136,52 @@ mod tests {
         assert!(state.has_unsaved_changes(), "the toggle must dirty the title");
     }
 
+    /// Geometry visibility is exclusive per directory: enabling one node's
+    /// display turns every sibling's off (a display flag, not a per-node
+    /// render flag), while disabling touches only that node. All toggle
+    /// routes (keyboard `e`, the graph click toggles, MCP ToggleGeometry)
+    /// funnel through `set_child_geometry_visible`.
+    #[test]
+    fn test_geometry_visibility_is_exclusive_per_directory() {
+        let child = |name: &str| FsNode {
+            id: name.to_string(),
+            name: name.to_string(),
+            node_type: "opencl".to_string(),
+            children: vec![],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        let mut dir = FsNode {
+            id: "root".to_string(),
+            name: "root".to_string(),
+            node_type: "node".to_string(),
+            children: vec![child("a"), child("b"), child("c")],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+
+        // Enabling slot 1 clears its siblings, even ones already visible.
+        dir.set_child_geometry_visible(1, true);
+        let vis: Vec<bool> = dir.children.iter().map(|c| c.geometry_visible).collect();
+        assert_eq!(vis, [false, true, false]);
+
+        // Disabling is not exclusive — only the named node changes.
+        dir.set_child_geometry_visible(1, false);
+        let vis: Vec<bool> = dir.children.iter().map(|c| c.geometry_visible).collect();
+        assert_eq!(vis, [false, false, false]);
+
+        // Out-of-bounds is a no-op, never a panic or a sibling sweep.
+        dir.children[2].geometry_visible = true;
+        dir.set_child_geometry_visible(9, true);
+        assert!(dir.children[2].geometry_visible);
+    }
+
     /// The button must exist on Main, inside the File section, before Exit.
     #[test]
     fn test_main_node_offers_set_as_default() {

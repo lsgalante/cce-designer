@@ -777,7 +777,7 @@ impl State {
                         Err("Cannot toggle geometry visibility on utility nodes".to_string())
                     } else {
                         let visible = !state.current_dir().children[slot].geometry_visible;
-                        state.current_dir_mut().children[slot].geometry_visible = visible;
+                        state.current_dir_mut().set_child_geometry_visible(slot, visible);
                         state.sync_nodes();
                         state.rebuild_scene_geometry();
                         needs_redraw = true;
