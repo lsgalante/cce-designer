@@ -279,6 +279,11 @@ pub enum McpAction {
     /// Move the playhead. Simnets solve up to this frame, so it is the only way
     /// to drive a simulation without dragging the playbar.
     SetFrame { frame: f32 },
+    /// Replace a curve node's control points wholesale — the automation
+    /// counterpart of the curve viewer state's move/add/delete. Structured
+    /// [x, y, z] triples rather than the "Points" param string, so agents
+    /// never have to know the serialization.
+    CurveSetPoints { slot: usize, points: Vec<[f32; 3]> },
 }
 
 #[derive(Debug, Clone)]

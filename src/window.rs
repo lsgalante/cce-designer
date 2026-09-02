@@ -942,6 +942,33 @@ impl State {
                 needs_redraw = true;
                 Ok(format!("frame={clamped}"))
             }
+            McpAction::CurveSetPoints { slot, points } => {
+                if points.iter().flatten().any(|c| !c.is_finite()) {
+                    return Err("Points must be finite numbers".to_string());
+                }
+                let dir = state.current_dir_mut();
+                let Some(child) = dir.children.get_mut(slot) else {
+                    return Err("Slot index out of bounds".to_string());
+                };
+                if !child.node_type.eq_ignore_ascii_case("curve") {
+                    return Err(format!(
+                        "Node in slot {slot} is '{}', not a curve",
+                        child.node_type
+                    ));
+                }
+                let pts: Vec<glam::Vec3> =
+                    points.iter().map(|p| glam::Vec3::new(p[0], p[1], p[2])).collect();
+                let Some(p) = child.params.iter_mut().find(|p| p.name == "Points") else {
+                    return Err("Curve node has no Points param".to_string());
+                };
+                p.default = crate::geometry::format_curve_points(&pts);
+                // Same resync sequence as SetParam / the viewer state.
+                state.sync_nodes();
+                state.rebuild_scene_geometry();
+                state.sync_parameters_pane();
+                needs_redraw = true;
+                Ok(format!("Curve points set ({})", pts.len()))
+            }
             McpAction::ToggleCircularPane => {
                 state.circular_network_pane = !state.circular_network_pane;
                 let val = state.circular_network_pane;

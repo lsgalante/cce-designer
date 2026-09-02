@@ -1314,6 +1314,66 @@ mod tests {
         assert_eq!(sample_catmull_rom(&pts[..1], segs), pts[..1].to_vec());
     }
 
+    /// The curve_set_points MCP action: replaces a curve node's whole point
+    /// list from structured triples, refuses non-curve slots and non-finite
+    /// coordinates, and round-trips through the same param the viewer state
+    /// and params pane edit.
+    #[test]
+    fn test_curve_set_points_mcp_action() {
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Curve".to_string(), name: None, x: 0.0, y: 0.0 },
+                &mut redraw,
+            )
+            .expect("add curve node");
+        let slot = state.current_dir().children.len() - 1;
+
+        state
+            .apply_action(
+                McpAction::CurveSetPoints {
+                    slot,
+                    points: vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [-1.5, 0.5, 0.25]],
+                },
+                &mut redraw,
+            )
+            .expect("set curve points");
+        let pts = crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
+            &state.current_dir().children[slot],
+            "Points",
+            "",
+        ));
+        assert_eq!(
+            pts,
+            vec![Vec3::ZERO, Vec3::new(1.0, 2.0, 3.0), Vec3::new(-1.5, 0.5, 0.25)]
+        );
+
+        // Slot 0 is the default project's camera — not a curve.
+        assert!(state
+            .apply_action(
+                McpAction::CurveSetPoints { slot: 0, points: vec![[0.0, 0.0, 0.0]] },
+                &mut redraw,
+            )
+            .is_err());
+        // Non-finite coordinates are refused, and the list stays intact.
+        assert!(state
+            .apply_action(
+                McpAction::CurveSetPoints { slot, points: vec![[f32::NAN, 0.0, 0.0]] },
+                &mut redraw,
+            )
+            .is_err());
+        assert_eq!(
+            crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
+                &state.current_dir().children[slot],
+                "Points",
+                "",
+            ))
+            .len(),
+            3
+        );
+    }
+
     /// The curve viewer state end-to-end, headless: grab-and-drag moves a
     /// control point on its own depth plane, a press on empty space appends
     /// a point there, right-press and Delete remove points — all through
@@ -2924,6 +2984,7 @@ mod tests {
                         Some("number") => serde_json::json!(0.0),
                         Some("string") => serde_json::json!("x"),
                         Some("boolean") => serde_json::json!(false),
+                        Some("array") => serde_json::json!([]),
                         other => panic!("{}.{}: unhandled schema type {:?}", tool.name, key, other),
                     };
                     args.insert(key.clone(), dummy);

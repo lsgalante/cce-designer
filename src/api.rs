@@ -210,6 +210,22 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
             }),
         ),
         tool(
+            "curve_set_points",
+            "Replace a curve node's control points (world-space [x, y, z] triples). The Catmull-Rom strip re-evaluates immediately.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "slot": { "type": "integer", "description": "Node index in the current directory; must be a curve node" },
+                    "points": {
+                        "type": "array",
+                        "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                        "description": "Control points as [x, y, z] triples; replaces the whole list",
+                    },
+                },
+                "required": ["slot", "points"],
+            }),
+        ),
+        tool(
             "menu_click",
             "Click a menubar item by indices (widget_idx must be a menubar widget slot).",
             json!({
