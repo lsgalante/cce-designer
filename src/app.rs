@@ -6364,6 +6364,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                                 let start_y = self.grid_cursor_row as f32;
                                                 let (nx, ny) = self.find_empty_cell(start_x, start_y, None);
                                                 node.position = (nx, ny);
+                                                // Added = hidden, same as AddNode: a
+                                                // paste of a displayed node must not
+                                                // become a second visible sibling.
+                                                node.geometry_visible = false;
                                                 self.current_dir_mut().children.push(node);
                                                 self.grid_cursor_col = nx as i32;
                                                 self.grid_cursor_row = ny as i32;

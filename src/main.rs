@@ -182,6 +182,28 @@ mod tests {
         assert!(dir.children[2].geometry_visible);
     }
 
+    /// A newly added node arrives with its display flag OFF: under the
+    /// one-visible-per-directory rule, showing geometry is an explicit act,
+    /// never a side effect of adding. Template children keep their own flags
+    /// (a subnet's internal chain still displays once the parent is enabled).
+    #[test]
+    fn test_added_nodes_start_hidden() {
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Sphere".to_string(), name: None, x: 5.0, y: 5.0 },
+                &mut redraw,
+            )
+            .expect("add sphere node");
+        let added = state.current_dir().children.last().unwrap();
+        assert!(!added.geometry_visible, "added node must start hidden");
+        assert!(
+            added.children.iter().any(|c| c.geometry_visible),
+            "the template's internal chain must keep its own flags"
+        );
+    }
+
     /// The button must exist on Main, inside the File section, before Exit.
     #[test]
     fn test_main_node_offers_set_as_default() {

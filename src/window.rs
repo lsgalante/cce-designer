@@ -815,6 +815,12 @@ impl State {
                             node.name = state.get_lowest_unused_name(&node.name);
                         }
                         crate::app::ensure_meta_on(&mut node);
+                        // New nodes arrive with their display flag OFF: the
+                        // one-visible-per-directory rule means showing is an
+                        // explicit act ('e', the click toggle), never a side
+                        // effect of adding. Top-level flag only — a subnet
+                        // template's internal chain keeps its own flags.
+                        node.geometry_visible = false;
                         state.current_dir_mut().children.push(node);
                         state.sync_nodes();
                         state.rebuild_positions();
