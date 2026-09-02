@@ -159,6 +159,20 @@ gone from cce-ui with the wgpu path).
   from output nodes; OpenCL failures are collected, not fatal.
 - `src/viewport_3d.rs` — app-owned `Viewport3D` widget (camera orbit/zoom, inertial
   scroll, `rt_mode` flag switching the pane to the `cce_ui::vk` compute path tracer).
+- `src/curve_tool.rs` — the curve viewer state (Houdini-style viewport point
+  editing for the native `curve` node; "Edit Points" in the node context menu).
+  The pattern for any future viewer state: project world positions to handles
+  through `State::last_scene_mvp` + `last_scene_view_rect` (both LOGICAL px,
+  the rect is divided by scale where it is cached — same path as the meta
+  Point Numbers overlay), hit-test against `cursor_x/y`, drag by unprojecting
+  the cursor at the grabbed point's captured NDC depth, and write edits back
+  through the SetParam resync sequence (`sync_nodes` + `rebuild_scene_geometry`
+  + `sync_parameters_pane`). Input hooks live in `handle_event`: presses
+  intercept in the MouseInput arm ahead of the viewport context menu (gated on
+  `cursor_in_viewport() && !in_network_pane`, so the network plate keeps its
+  clicks where they overlap), motion at the top of CursorMoved, Escape ahead of
+  connection-cancel. The tool binds the node by ID and deactivates lazily when
+  the id no longer resolves to a curve.
 - `src/project.rs` — save/load. A project is a **directory containing `state.json`**
   (`Project { name, root: FsNode, view_state }`); `default_project.json` in the crate
   root is special-cased as a single file and doubles as the detached-window sync channel.
