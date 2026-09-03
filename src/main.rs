@@ -1558,6 +1558,124 @@ mod tests {
         assert!(state.curve_tool.is_none());
     }
 
+    /// Undo/redo in the curve viewer state: one entry per gesture (a drag
+    /// records once on its first motion, an add-and-drag once, a delete
+    /// once; a grab released without moving records nothing), undo walks
+    /// back through them, redo forward, and a fresh gesture after an undo
+    /// drops the redo branch. Same identity-mvp setup as the tool test.
+    #[test]
+    fn test_curve_tool_undo_redo() {
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Curve".to_string(), name: None, x: 0.0, y: 0.0 },
+                &mut redraw,
+            )
+            .expect("add curve node");
+        let slot = state.current_dir().children.len() - 1;
+        state.toggle_curve_tool(slot);
+        state.last_scene_mvp = Some(Mat4::IDENTITY);
+        state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+        let sx = |x: f32| 50.0 + x * 50.0;
+        let sy = |y: f32| 50.0 - y * 50.0;
+        let points_of = |state: &State| {
+            crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
+                &state.current_dir().children[slot],
+                "Points",
+                "",
+            ))
+        };
+        let history = |state: &State| {
+            let t = state.curve_tool.as_ref().expect("tool active");
+            (t.undo.len(), t.redo.len())
+        };
+
+        let initial = points_of(&state);
+        assert!(!state.curve_tool_undo(), "nothing to undo yet");
+        assert!(!state.curve_tool_redo(), "nothing to redo yet");
+
+        // Grab and release without moving: no history.
+        state.cursor_x = sx(initial[0].x);
+        state.cursor_y = sy(initial[0].y);
+        assert!(state.curve_tool_press());
+        assert!(state.curve_tool_release());
+        assert_eq!(history(&state), (0, 0));
+
+        // Gesture 1: drag the first point to the pane center, over several
+        // motion events — still one entry.
+        assert!(state.curve_tool_press());
+        for (x, y) in [(55.0, 55.0), (52.0, 52.0), (50.0, 50.0)] {
+            state.cursor_x = x;
+            state.cursor_y = y;
+            assert!(state.curve_tool_drag_motion());
+        }
+        assert!(state.curve_tool_release());
+        let after_drag = points_of(&state);
+        assert!(after_drag[0].length() < 1e-4);
+        assert_eq!(history(&state), (1, 0));
+
+        // Gesture 2: add a point (press on empty space + drag + release).
+        state.cursor_x = 90.0;
+        state.cursor_y = 90.0;
+        assert!(state.curve_tool_press());
+        state.cursor_x = 85.0;
+        state.cursor_y = 85.0;
+        assert!(state.curve_tool_drag_motion());
+        assert!(state.curve_tool_release());
+        let after_add = points_of(&state);
+        assert_eq!(after_add.len(), initial.len() + 1);
+        assert_eq!(history(&state), (2, 0));
+
+        // Gesture 3: delete the selected (new) point.
+        assert!(state.curve_tool_delete_selected());
+        let after_delete = points_of(&state);
+        assert_eq!(after_delete.len(), initial.len());
+        assert_eq!(history(&state), (3, 0));
+
+        // Undo walks back through all three.
+        assert!(state.curve_tool_undo());
+        assert_eq!(points_of(&state), after_add);
+        assert!(state.curve_tool_undo());
+        assert_eq!(points_of(&state), after_drag);
+        assert!(state.curve_tool_undo());
+        assert_eq!(points_of(&state), initial);
+        assert_eq!(history(&state), (0, 3));
+        assert!(!state.curve_tool_undo(), "history exhausted");
+
+        // Redo walks forward again.
+        assert!(state.curve_tool_redo());
+        assert_eq!(points_of(&state), after_drag);
+        assert!(state.curve_tool_redo());
+        assert_eq!(points_of(&state), after_add);
+        assert_eq!(history(&state), (2, 1));
+
+        // A new gesture after an undo forks: the redo branch is gone.
+        state.cursor_x = 50.0;
+        state.cursor_y = 50.0;
+        assert!(state.curve_tool_delete_at_cursor());
+        assert_eq!(history(&state), (3, 0));
+        assert!(!state.curve_tool_redo());
+
+        // Undo mid-drag abandons the drag and clamps the selection.
+        let pts = points_of(&state);
+        state.cursor_x = sx(pts[pts.len() - 1].x);
+        state.cursor_y = sy(pts[pts.len() - 1].y);
+        assert!(state.curve_tool_press());
+        state.cursor_x += 5.0;
+        assert!(state.curve_tool_drag_motion());
+        assert!(state.curve_tool_undo());
+        let tool = state.curve_tool.as_ref().unwrap();
+        assert!(tool.drag.is_none());
+        assert!(tool.selected.map(|i| i < points_of(&state).len()).unwrap_or(true));
+        assert!(!state.curve_tool_drag_motion(), "no drag survives an undo");
+
+        // Leaving the state drops its history.
+        state.toggle_curve_tool(slot);
+        assert!(state.curve_tool.is_none());
+        assert!(!state.curve_tool_undo());
+    }
+
     /// The Extrude template: a subnet (input -> opencl -> output) whose kernel
     /// offsets each input triangle along its face normal and stitches side
     /// walls. Per input triangle it emits top (3) + walls (18) + base (3) =

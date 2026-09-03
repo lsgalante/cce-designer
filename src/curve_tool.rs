@@ -12,6 +12,14 @@
 //!   depth of the last control point, and immediately drags it;
 //! - **right press on a handle** deletes that point; Delete/Backspace deletes
 //!   the selected (last-clicked) one;
+//! - **Ctrl+Z / Ctrl+Shift+Z** undo and redo, one gesture at a time: a whole
+//!   drag is one step (recorded on the first motion after a grab, so a click
+//!   that never moves records nothing), an add-and-drag is one step, a delete
+//!   is one step. The history is snapshots of the point list, held on the tool
+//!   itself — it lives exactly as long as the state does. Edits that arrive
+//!   from outside the tool (the params pane, `curve_set_points` over MCP) are
+//!   not recorded, but an undo still restores the list as it was before the
+//!   last tool gesture, whatever happened since;
 //! - **Escape** exits the state.
 //!
 //! Edits write the node's "Points" param through the same resync sequence as
@@ -27,6 +35,9 @@ use glam::{Mat4, Vec3, Vec4};
 /// How close (logical px) a press must land to a projected handle to grab it.
 pub const HANDLE_HIT_RADIUS: f32 = 10.0;
 
+/// Undo depth kept per tool session; older snapshots fall off the front.
+pub const HISTORY_LIMIT: usize = 256;
+
 pub struct CurveTool {
     /// Id of the curve node being edited.
     pub node_id: String,
@@ -34,13 +45,38 @@ pub struct CurveTool {
     pub selected: Option<usize>,
     /// An in-flight drag, if a press grabbed (or just added) a handle.
     pub drag: Option<CurveDrag>,
+    /// Point lists as they were before each recorded gesture, oldest first.
+    pub undo: Vec<Vec<Vec3>>,
+    /// Point lists undone and not yet redone, oldest first. Cleared by any
+    /// new gesture.
+    pub redo: Vec<Vec<Vec3>>,
 }
 
-#[derive(Clone, Copy)]
+impl CurveTool {
+    pub fn new(node_id: String) -> Self {
+        CurveTool { node_id, selected: None, drag: None, undo: Vec::new(), redo: Vec::new() }
+    }
+
+    /// Record `before` as the state to return to on the next undo. Any new
+    /// gesture forks the history, so the redo stack goes.
+    fn record(&mut self, before: Vec<Vec3>) {
+        self.undo.push(before);
+        self.redo.clear();
+        if self.undo.len() > HISTORY_LIMIT {
+            let excess = self.undo.len() - HISTORY_LIMIT;
+            self.undo.drain(..excess);
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct CurveDrag {
     pub point: usize,
     /// NDC depth captured at grab time; motion unprojects onto this plane.
     pub ndc_z: f32,
+    /// The point list before the grab, until the first motion records it.
+    /// A grab that releases without moving leaves no history entry.
+    pub before: Option<Vec<Vec3>>,
 }
 
 /// World → (screen x, screen y, ndc z) through the cached scene mvp.
@@ -117,7 +153,7 @@ impl State {
         if self.curve_tool.as_ref().map(|t| t.node_id == id).unwrap_or(false) {
             self.curve_tool = None;
         } else {
-            self.curve_tool = Some(CurveTool { node_id: id, selected: None, drag: None });
+            self.curve_tool = Some(CurveTool::new(id));
         }
     }
 
@@ -196,7 +232,7 @@ impl State {
         if let Some((idx, ndc_z)) = self.curve_tool_handle_at_cursor() {
             let tool = self.curve_tool.as_mut().expect("checked above");
             tool.selected = Some(idx);
-            tool.drag = Some(CurveDrag { point: idx, ndc_z });
+            tool.drag = Some(CurveDrag { point: idx, ndc_z, before: Some(pts) });
             return true;
         }
         // Empty space: add a point. Depth comes from the last control point
@@ -217,12 +253,16 @@ impl State {
         let Some(world) = unproject_point(&mvp, view, self.cursor_x, self.cursor_y, ndc_z) else {
             return true;
         };
+        let before = pts.clone();
         pts.push(world);
         let idx = pts.len() - 1;
         self.set_curve_points(&node_id, &pts);
         if let Some(tool) = self.curve_tool.as_mut() {
+            // The add is the recorded step; the drag that follows it is
+            // part of the same gesture, so `before` stays None.
+            tool.record(before);
             tool.selected = Some(idx);
-            tool.drag = Some(CurveDrag { point: idx, ndc_z });
+            tool.drag = Some(CurveDrag { point: idx, ndc_z, before: None });
         }
         true
     }
@@ -230,7 +270,7 @@ impl State {
     /// Pointer motion during a grab: the point tracks the cursor on the
     /// camera-facing plane at its grab depth.
     pub(crate) fn curve_tool_drag_motion(&mut self) -> bool {
-        let Some(drag) = self.curve_tool.as_ref().and_then(|t| t.drag) else {
+        let Some(drag) = self.curve_tool.as_ref().and_then(|t| t.drag.clone()) else {
             return false;
         };
         let Some(mvp) = self.last_scene_mvp else {
@@ -250,6 +290,11 @@ impl State {
             return false;
         };
         pts[drag.point] = world;
+        if let Some(tool) = self.curve_tool.as_mut() {
+            if let Some(before) = tool.drag.as_mut().and_then(|d| d.before.take()) {
+                tool.record(before);
+            }
+        }
         self.set_curve_points(&node_id, &pts);
         true
     }
@@ -295,9 +340,11 @@ impl State {
         if idx >= pts.len() {
             return false;
         }
+        let before = pts.clone();
         pts.remove(idx);
         self.set_curve_points(&node_id, &pts);
         if let Some(tool) = self.curve_tool.as_mut() {
+            tool.record(before);
             tool.drag = None;
             // Keep a neighbor selected so repeated Delete walks the curve.
             tool.selected = if pts.is_empty() {
@@ -306,6 +353,48 @@ impl State {
                 Some(idx.min(pts.len() - 1))
             };
         }
+        true
+    }
+
+    /// Ctrl+Z: return the points to how they were before the last recorded
+    /// gesture. Consumes only when the tool is active and has history.
+    pub(crate) fn curve_tool_undo(&mut self) -> bool {
+        self.curve_tool_step(true)
+    }
+
+    /// Ctrl+Shift+Z: reapply the last undone gesture.
+    pub(crate) fn curve_tool_redo(&mut self) -> bool {
+        self.curve_tool_step(false)
+    }
+
+    fn curve_tool_step(&mut self, undo: bool) -> bool {
+        let Some(tool) = &self.curve_tool else {
+            return false;
+        };
+        let node_id = tool.node_id.clone();
+        let Some(current) = self.curve_node_points(&node_id) else {
+            self.curve_tool = None;
+            return false;
+        };
+        let tool = self.curve_tool.as_mut().expect("checked above");
+        let (from, to) = if undo {
+            (&mut tool.undo, &mut tool.redo)
+        } else {
+            (&mut tool.redo, &mut tool.undo)
+        };
+        let Some(target) = from.pop() else {
+            return false;
+        };
+        to.push(current);
+        // A step mid-drag abandons the drag: the grabbed index may not
+        // exist in the restored list, and the pointer no longer means
+        // anything to it.
+        tool.drag = None;
+        tool.selected = match tool.selected {
+            Some(i) if !target.is_empty() => Some(i.min(target.len() - 1)),
+            _ => None,
+        };
+        self.set_curve_points(&node_id, &target);
         true
     }
 }

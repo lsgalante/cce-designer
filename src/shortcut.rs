@@ -20,6 +20,8 @@ pub enum Action {
     PlayPauseReverse,
     FrameNext,
     FramePrev,
+    Undo,
+    Redo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

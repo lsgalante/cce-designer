@@ -172,7 +172,12 @@ gone from cce-ui with the wgpu path).
   `cursor_in_viewport() && !in_network_pane`, so the network plate keeps its
   clicks where they overlap), motion at the top of CursorMoved, Escape ahead of
   connection-cancel. The tool binds the node by ID and deactivates lazily when
-  the id no longer resolves to a curve.
+  the id no longer resolves to a curve. Undo/redo (`Action::Undo`/`Redo`,
+  `Ctrl+Z`/`Ctrl+Shift+Z` via input.kdl `undo`/`redo`, and Edit ▸ Undo/Redo)
+  are point-list snapshots on the tool, one per gesture — a drag records on
+  its first motion, so a no-move click leaves nothing. There is no
+  project-wide history yet; `execute_action` is where one would be consulted
+  after the tool declines.
 - `src/project.rs` — save/load. A project is a **directory containing `state.json`**
   (`Project { name, root: FsNode, view_state }`); `default_project.json` in the crate
   root is special-cased as a single file and doubles as the detached-window sync channel.
