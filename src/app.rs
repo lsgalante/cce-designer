@@ -3616,8 +3616,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             register("play_pause_reverse", "Down", Action::PlayPauseReverse);
             register("frame_next", "Right", Action::FrameNext);
             register("frame_prev", "Left", Action::FramePrev);
-            register("undo", "Ctrl+z", Action::Undo);
-            register("redo", "Ctrl+Shift+z", Action::Redo);
         }
 
         let mut state = Self {
@@ -4643,9 +4641,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         let mut settings_changed = false;
         match action {
             // Undo/Redo reach whichever editing state owns a history. The
-            // curve viewer state is the only one so far; when the app grows
-            // a project-wide history this is where it would be consulted
-            // after the tool declines.
+            // chords arrive through `Application::undo` / `redo` (the
+            // toolkit routes them, after the focused text box's turn); the
+            // Edit menu rows come here directly. The curve viewer state is
+            // the only history so far; a project-wide one would be consulted
+            // here after the tool declines.
             Action::Undo => {
                 self.curve_tool_undo();
             }
@@ -6156,19 +6156,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                     && self.curve_tool_delete_selected()
                 {
                     return true;
-                }
-                // Undo/Redo dispatch from any pane, like the transport above
-                // and after the param pane's shot for the same reason. Today
-                // the only history is the curve viewer state's; with no tool
-                // active the chord is consumed and does nothing, rather than
-                // falling through to become a stray "z" somewhere.
-                if event.state == ElementState::Pressed {
-                    if let Some(action @ (Action::Undo | Action::Redo)) =
-                        self.shortcut_manager.match_action(&self.modifiers, &event.logical_key)
-                    {
-                        self.execute_action(action);
-                        return true;
-                    }
                 }
                 let mut changed = false;
                 if event.state == ElementState::Pressed {

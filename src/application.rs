@@ -315,6 +315,24 @@ impl Application for State {
         true
     }
 
+    /// The toolkit's undo/redo routing lands here once no focused text box
+    /// wanted the chord. Only the curve viewer state has a history today.
+    fn undo(&mut self, needs_rebuild: &mut bool) -> bool {
+        let taken = self.curve_tool_undo();
+        if taken {
+            *needs_rebuild = true;
+        }
+        taken
+    }
+
+    fn redo(&mut self, needs_rebuild: &mut bool) -> bool {
+        let taken = self.curve_tool_redo();
+        if taken {
+            *needs_rebuild = true;
+        }
+        taken
+    }
+
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<CustomEvent> {
         self.sync_modifiers_from_ctx();
         let ev = WindowEvent::KeyboardInput { event: event.clone() };

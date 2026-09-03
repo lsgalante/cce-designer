@@ -172,10 +172,13 @@ gone from cce-ui with the wgpu path).
   `cursor_in_viewport() && !in_network_pane`, so the network plate keeps its
   clicks where they overlap), motion at the top of CursorMoved, Escape ahead of
   connection-cancel. The tool binds the node by ID and deactivates lazily when
-  the id no longer resolves to a curve. Undo/redo (`Action::Undo`/`Redo`,
-  `Ctrl+Z`/`Ctrl+Shift+Z` via input.kdl `undo`/`redo`, and Edit ▸ Undo/Redo)
-  are point-list snapshots on the tool, one per gesture — a drag records on
-  its first motion, so a no-move click leaves nothing. There is no
+  the id no longer resolves to a curve. Undo/redo is a
+  `cce_ui::history::History` of point-list snapshots on the tool, one per
+  gesture (a drag opens a gesture its first motion commits, so a no-move
+  click leaves nothing). The chords are the toolkit's (`undo`/`redo` in
+  input.kdl, routed by the runner to `Application::undo`/`redo` in
+  `application.rs` after the focused text box declines); Edit ▸ Undo/Redo
+  reach the same code through `Action::Undo`/`Redo`. There is no
   project-wide history yet; `execute_action` is where one would be consulted
   after the tool declines.
 - `src/project.rs` — save/load. A project is a **directory containing `state.json`**

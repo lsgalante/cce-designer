@@ -1588,7 +1588,7 @@ mod tests {
         };
         let history = |state: &State| {
             let t = state.curve_tool.as_ref().expect("tool active");
-            (t.undo.len(), t.redo.len())
+            (t.history.undo_len(), t.history.redo_len())
         };
 
         let initial = points_of(&state);
