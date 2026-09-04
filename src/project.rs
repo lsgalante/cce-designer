@@ -322,9 +322,6 @@ impl State {
             self.pan_velocity_y = 0.0;
             self.last_frame_pan_x = self.pan_x;
             self.last_frame_pan_y = self.pan_y;
-            self.is_scrolling_trackpad = false;
-            self.scroll_accum_x = 0.0;
-            self.scroll_accum_y = 0.0;
             self.current_path = proj.view_state.current_path;
 
             let sel = proj.view_state.selected_node;
@@ -380,9 +377,6 @@ impl State {
         self.pan_velocity_y = 0.0;
         self.last_frame_pan_x = self.pan_x;
         self.last_frame_pan_y = self.pan_y;
-        self.is_scrolling_trackpad = false;
-        self.scroll_accum_x = 0.0;
-        self.scroll_accum_y = 0.0;
         self.current_path = proj.view_state.current_path;
 
         let sel = proj.view_state.selected_node;
@@ -471,9 +465,6 @@ impl State {
         self.pan_velocity_y = 0.0;
         self.last_frame_pan_x = 0.0;
         self.last_frame_pan_y = 0.0;
-        self.is_scrolling_trackpad = false;
-        self.scroll_accum_x = 0.0;
-        self.scroll_accum_y = 0.0;
         self.current_path.clear();
         self.grid_cursor_col = 0;
         self.grid_cursor_row = 0;

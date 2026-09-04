@@ -16,7 +16,7 @@ use cce_ui::widget::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use wayland_client::QueueHandle;
 
 use crate::api::start_mcp_server;
-use crate::app::{CustomEvent, PendingWindowDrag, State, TouchPhase};
+use crate::app::{CustomEvent, PendingWindowDrag, State};
 use crate::slots::LEFT_MENUBAR_IDX;
 use crate::window::{LocalPosition, WindowEvent};
 
@@ -293,10 +293,7 @@ impl Application for State {
         self.sync_modifiers_from_ctx();
         self.cursor_x = pos.x;
         self.cursor_y = pos.y;
-        let ev = WindowEvent::MouseWheel {
-            delta: delta.clone(),
-            phase: TouchPhase::Moved,
-        };
+        let ev = WindowEvent::MouseWheel { delta: delta.clone() };
         if self.process_window_event(ev) {
             *needs_rebuild = true;
         }

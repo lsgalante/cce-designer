@@ -48,14 +48,6 @@ use cce_ui::vk::{SceneDraw, TextSpan};
 use cce_ui::engine::Vertex;
 use crate::window::WindowEvent;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TouchPhase {
-    Started,
-    Moved,
-    Ended,
-    Cancelled,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ModifiersState {
     pub ctrl: bool,
@@ -975,7 +967,6 @@ pub struct State {
     pub spreadsheet_pin: Option<usize>,
     pub node_clipboard: Option<FsNode>,
     pub last_click: Option<(Instant, usize)>,
-    pub last_frame: Instant,
 
     pub shortcut_manager: ShortcutManager,
     pub pending_action: Option<Action>,
@@ -1062,6 +1053,10 @@ pub struct State {
 
     pub pan_x: f32,
     pub pan_y: f32,
+    /// Drag-release fling only (middle / space+left drag over the network
+    /// pane): tracked while `is_panning`, integrated by the kinetic slide in
+    /// `tick_frame`. Wheel and trackpad panning no longer feed it — that
+    /// motion is the Graph widget's own `ScrollMotion` (glide / coast).
     pub pan_velocity_x: f32,
     pub pan_velocity_y: f32,
     pub last_frame_pan_x: f32,
@@ -1078,10 +1073,6 @@ pub struct State {
     pub show_parameters: bool,
     pub show_spreadsheet: bool,
     pub show_playbar: bool,
-    pub is_scrolling_trackpad: bool,
-    pub last_scroll_time: Instant,
-    pub scroll_accum_x: f32,
-    pub scroll_accum_y: f32,
     pub last_spreadsheet_node_name: Option<String>,
     pub last_spreadsheet_node_params: Option<Vec<(String, String)>>,
     pub grid_thickness: f32,
@@ -3200,9 +3191,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         self.pan_velocity_y = 0.0;
         self.last_frame_pan_x = 0.0;
         self.last_frame_pan_y = 0.0;
-        self.is_scrolling_trackpad = false;
-        self.scroll_accum_x = 0.0;
-        self.scroll_accum_y = 0.0;
         self.grid_cursor_col = 0;
         self.grid_cursor_row = 0;
         self.sync_grid_settings();
@@ -3645,7 +3633,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             spreadsheet_pin: None,
             node_clipboard: None,
             last_click: None,
-            last_frame: Instant::now(),
             shortcut_manager,
             pending_action: None,
             exit_requested: false,
@@ -3709,16 +3696,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             show_parameters: true,
             show_spreadsheet: false,
             show_playbar: false,
-            is_scrolling_trackpad: false,
-            last_scroll_time: Instant::now(),
-            scroll_accum_x: 0.0,
-            scroll_accum_y: 0.0,
             last_spreadsheet_node_name: None,
             last_spreadsheet_node_params: None,
             grid_thickness: settings.viewport.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
             // Config-owned; update_inertial_settings overwrites these from
-            // config.kdl's input.inertial right after construction.
+            // config.kdl's input.inertial right after construction. They
+            // shape the drag-release fling and the unrouted wheel fallback
+            // only — routed wheel/trackpad panning is tuned by cce-ui's
+            // smooth-scroll settings (input.kdl) inside the Graph widget.
             graph_scroll_speed: 1.0,
             graph_inertial_scroll: true,
             graph_scroll_friction: 0.90,
@@ -3974,6 +3960,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         
         // Scroll behavior is config-owned (input.inertial in config.kdl) —
         // state.kdl carries no copy, so config edits always take effect.
+        // Graph-side these shape the drag-release fling and the unrouted
+        // wheel fallback; the routed wheel/trackpad pan is the Graph widget's
+        // ScrollMotion, tuned by cce-ui's smooth-scroll keys in input.kdl.
         self.graph_scroll_speed = speed;
         self.graph_inertial_scroll = enabled;
         self.graph_scroll_friction = friction;
@@ -4031,9 +4020,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     pub fn zoom(&mut self, factor: f32, center: Option<(f32, f32)>) {
         self.pan_velocity_x = 0.0;
         self.pan_velocity_y = 0.0;
-        self.is_scrolling_trackpad = false;
-        self.scroll_accum_x = 0.0;
-        self.scroll_accum_y = 0.0;
         let old_gx = self.grid_size_x;
         let old_gy = self.grid_size_y;
 
@@ -4919,7 +4905,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         match event {
-            WindowEvent::MouseWheel { delta, phase, .. } => {
+            WindowEvent::MouseWheel { delta } => {
                 let in_network_pane = self.in_network_pane();
                 // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
@@ -4977,32 +4963,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                                 let (gx, gy) = cce_ui::widget::GraphController::grid_origin(
                                     w.as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph"),
                                 );
-                                let prev_pan_x = self.pan_x;
-                                let prev_pan_y = self.pan_y;
+                                // The Graph owns wheel→pan motion (cce-ui's
+                                // ScrollMotion: notches glide, a trackpad
+                                // tracks 1:1 and its flick coasts). Adopt
+                                // wherever it moved the origin; the glide and
+                                // coast advance in Graph::tick and are read
+                                // back in tick_frame. A wheel also ends any
+                                // drag-release fling still sliding.
                                 self.pan_x = gx - active_node_area_x;
                                 self.pan_y = gy - active_node_area_y;
-                                
-                                let dx = prev_pan_x - self.pan_x;
-                                let dy = prev_pan_y - self.pan_y;
-                                
-                                let dt_scroll = Instant::now().duration_since(self.last_frame).as_secs_f32().min(0.1);
-                                let vel_x = if dt_scroll > 1e-4 { -dx / dt_scroll } else { -dx * 60.0 };
-                                let vel_y = if dt_scroll > 1e-4 { -dy / dt_scroll } else { -dy * 60.0 };
-                                self.pan_velocity_x = self.pan_velocity_x * 0.4 + vel_x * 0.6;
-                                self.pan_velocity_y = self.pan_velocity_y * 0.4 + vel_y * 0.6;
-
-                                self.is_scrolling_trackpad = match delta {
-                                    MouseScrollDelta::LineDelta(_, _) => false,
-                                    MouseScrollDelta::PixelDelta(_) => match phase {
-                                        TouchPhase::Started | TouchPhase::Moved => true,
-                                        TouchPhase::Ended | TouchPhase::Cancelled => false,
-                                    }
-                                };
-                                if self.is_scrolling_trackpad {
-                                    self.last_scroll_time = Instant::now();
-                                    self.scroll_accum_x += dx;
-                                    self.scroll_accum_y += dy;
-                                }
+                                self.pan_velocity_x = 0.0;
+                                self.pan_velocity_y = 0.0;
                                 needs_sync_grid = true;
                             }
                             break;
@@ -5047,37 +5018,24 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                             false
                         }
                     } else {
-                        match delta {
+                        // The pane hit but the Graph widget did not take the
+                        // wheel (circular-pane hit shape wider than its rect,
+                        // or a hidden graph): a plain instant pan.
+                        let (dx, dy) = match delta {
                             MouseScrollDelta::LineDelta(x, y) => {
-                                let dx = *x * 30.0 * self.graph_scroll_speed;
-                                let dy = *y * 30.0 * self.graph_scroll_speed;
-                                self.pan_x -= dx;
-                                self.pan_y -= dy;
-                                self.is_scrolling_trackpad = false;
-                                let dt_scroll = Instant::now().duration_since(self.last_frame).as_secs_f32().min(0.1);
-                                let vel_x = if dt_scroll > 1e-4 { -dx / dt_scroll } else { -dx * 60.0 };
-                                let vel_y = if dt_scroll > 1e-4 { -dy / dt_scroll } else { -dy * 60.0 };
-                                self.pan_velocity_x = self.pan_velocity_x * 0.4 + vel_x * 0.6;
-                                self.pan_velocity_y = self.pan_velocity_y * 0.4 + vel_y * 0.6;
-                                self.sync_grid_settings();
-                                true
+                                (*x * 30.0 * self.graph_scroll_speed, *y * 30.0 * self.graph_scroll_speed)
                             }
-                            MouseScrollDelta::PixelDelta(pos) => {
-                                let dx = (pos.x as f32 / self.scale as f32) * self.graph_scroll_speed;
-                                let dy = (pos.y as f32 / self.scale as f32) * self.graph_scroll_speed;
-                                self.pan_x -= dx;
-                                self.pan_y -= dy;
-                                self.is_scrolling_trackpad = match phase {
-                                    TouchPhase::Started | TouchPhase::Moved => true,
-                                    TouchPhase::Ended | TouchPhase::Cancelled => false,
-                                };
-                                self.last_scroll_time = Instant::now();
-                                self.scroll_accum_x += dx;
-                                self.scroll_accum_y += dy;
-                                self.sync_grid_settings();
-                                true
-                            }
-                        }
+                            MouseScrollDelta::PixelDelta(pos) => (
+                                (pos.x as f32 / self.scale as f32) * self.graph_scroll_speed,
+                                (pos.y as f32 / self.scale as f32) * self.graph_scroll_speed,
+                            ),
+                        };
+                        self.pan_x -= dx;
+                        self.pan_y -= dy;
+                        self.pan_velocity_x = 0.0;
+                        self.pan_velocity_y = 0.0;
+                        self.sync_grid_settings();
+                        true
                     }
                 } else if in_viewport && self.modifiers.control_key() {
                     // Ctrl+wheel zoom over the 3D viewport. The routed pass
@@ -5309,9 +5267,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if *btn_state == ElementState::Pressed {
                     self.pan_velocity_x = 0.0;
                     self.pan_velocity_y = 0.0;
-                    self.is_scrolling_trackpad = false;
-                    self.scroll_accum_x = 0.0;
-                    self.scroll_accum_y = 0.0;
 
                     self.viewport_mut().reset_velocity();
                 }
@@ -6192,9 +6147,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                         if let Some((dc, dr)) = delta {
                             self.pan_velocity_x = 0.0;
                             self.pan_velocity_y = 0.0;
-                            self.is_scrolling_trackpad = false;
-                            self.scroll_accum_x = 0.0;
-                            self.scroll_accum_y = 0.0;
                             if is_alt_key {
                                 let active_nodes = self.current_dir().children.len();
                                 let node_idx_at_cursor = self.current_dir().children.iter().take(active_nodes).position(|child| {
@@ -6452,7 +6404,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
     /// a rebuild. The render half lives in [`State::stage_frame`].
     pub fn tick_frame(&mut self, dt: f32) -> bool {
         let now = Instant::now();
-        self.last_frame = now;
 
         // Drop-target glow animation: exponential smoothing toward the live
         // target — the position GLIDES between cells, alpha fades in while a
@@ -6584,22 +6535,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             self.last_frame_pan_y = self.pan_y;
         }
 
-        // Trackpad scrolling velocity tracking & timeout detection
-        if self.is_scrolling_trackpad {
-            if now.duration_since(self.last_scroll_time).as_secs_f32() > 0.05 {
-                self.is_scrolling_trackpad = false;
-            } else if dt > 1e-5 {
-                let vel_x = -self.scroll_accum_x / dt;
-                let vel_y = -self.scroll_accum_y / dt;
-                self.pan_velocity_x = self.pan_velocity_x * 0.4 + vel_x * 0.6;
-                self.pan_velocity_y = self.pan_velocity_y * 0.4 + vel_y * 0.6;
-            }
-            self.scroll_accum_x = 0.0;
-            self.scroll_accum_y = 0.0;
-        }
-
         let mut tick_changed = false;
         let mut param_ticked = false;
+        let mut graph_ticked = false;
         let ctx = &mut self.ui_context;
         for i in 0..WIDGET_COUNT {
             if self.slots.get_dyn_mut(i).tick(dt, ctx) {
@@ -6607,6 +6545,33 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
                 if i == PARAM_IDX {
                     param_ticked = true;
                 }
+                if i == CONTENT_IDX {
+                    graph_ticked = true;
+                }
+            }
+        }
+        // Every slot (and, through the adapter, its embedded children) was
+        // just ticked by hand. The runner ticks the context's tick_receivers
+        // right after Application::tick, which would tick the Graph,
+        // Spreadsheet and every TextBox a second time per frame — their
+        // ScrollMotion integrates dt, so a double tick runs each glide and
+        // coast at double speed. Drain the roster so the runner's pass is a
+        // no-op; paint re-registers the slots before the next frame.
+        self.ui_context.tick_receivers.clear();
+        if graph_ticked {
+            // Graph::tick advanced its wheel glide / trackpad coast: adopt the
+            // origin it moved to, as the wheel path does, so a later
+            // sync_grid_settings cannot snap the canvas back to a stale pan.
+            let (ax, ay, _, _) = self.positions[CONTENT_IDX];
+            let (gx, gy) = self.graph().grid_origin();
+            let (nx, ny) = (gx - ax, gy - ay);
+            if nx != self.pan_x || ny != self.pan_y {
+                self.pan_x = nx;
+                self.pan_y = ny;
+                self.sync_grid_settings();
+                self.rebuild_positions();
+                self.apply_layout();
+                self.update_panel_bounds();
             }
         }
         // Live-streaming param widgets (the color picker's --stream lines)
@@ -6631,8 +6596,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
 
         self.update_recent_files_layout();
 
-        // Panning kinetic slide
-        if !self.is_panning && !self.is_scrolling_trackpad && (self.pan_velocity_x.abs() > 0.01 || self.pan_velocity_y.abs() > 0.01) {
+        // Drag-release fling: the velocity a middle / space+left drag had
+        // when the button went up keeps the canvas sliding under friction.
+        // (Wheel and trackpad motion coast inside the Graph widget instead.)
+        if !self.is_panning && (self.pan_velocity_x.abs() > 0.01 || self.pan_velocity_y.abs() > 0.01) {
             if !self.graph_inertial_scroll {
                 self.pan_velocity_x = 0.0;
                 self.pan_velocity_y = 0.0;
@@ -6705,9 +6672,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         if panned {
             self.pan_velocity_x = 0.0;
             self.pan_velocity_y = 0.0;
-            self.is_scrolling_trackpad = false;
-            self.scroll_accum_x = 0.0;
-            self.scroll_accum_y = 0.0;
             self.sync_grid_settings();
             if let Some(idx) = self.drag_widget {
                 self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());

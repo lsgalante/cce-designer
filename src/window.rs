@@ -10,7 +10,7 @@ use std::path::Path;
 
 use cce_ui::widget::WidgetHost;
 use crate::shortcut::Action;
-use crate::app::{State, CustomEvent, McpAction, TouchPhase, get_next_visible_pane, Project, ParamDef};
+use crate::app::{State, CustomEvent, McpAction, get_next_visible_pane, Project, ParamDef};
 use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, PARAM_IDX, WIDGET_COUNT};
 
 #[derive(Debug, Clone, Copy)]
@@ -20,7 +20,7 @@ pub struct LocalPosition {
 }
 
 pub enum WindowEvent {
-    MouseWheel { delta: cce_ui::widget::MouseScrollDelta, phase: TouchPhase },
+    MouseWheel { delta: cce_ui::widget::MouseScrollDelta },
     CursorMoved { position: LocalPosition },
     MouseInput { state: cce_ui::widget::ElementState, button: cce_ui::widget::MouseButton },
     KeyboardInput { event: cce_ui::widget::KeyEvent },
