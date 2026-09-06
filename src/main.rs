@@ -977,6 +977,41 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A dragged plate edge is an unsaved change — the save file carries the
+    /// plate geometry, so the title's asterisk must follow it, and clear on
+    /// save. A window resize alone must NOT dirty it.
+    #[test]
+    fn test_plate_resize_dirties_the_title_until_saved() {
+        let dir = std::env::temp_dir().join(format!("cce-designer-plate-dirty-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+        // The tree baseline is taken before the meta-node migrations run
+        // (startup's project load re-baselines); this test is about the
+        // layout half, so baseline here.
+        state.mark_saved();
+        assert!(!state.has_unsaved_changes());
+        state.resize(1600.0, 900.0, 1.0);
+        assert!(!state.has_unsaved_changes(), "a window resize is not an edit");
+
+        state.floating_param_width += 60.0;
+        state.rebuild_positions();
+        state.update_window_title();
+        assert!(state.has_unsaved_changes(), "a plate resize must dirty the title");
+        assert!(state.title.ends_with('*'), "title: {}", state.title);
+
+        state.save_to_file(&dir).expect("save");
+        assert!(!state.has_unsaved_changes(), "saving clears it");
+        state.update_window_title(); // the event loop's refresh, after the save event
+        assert!(!state.title.ends_with('*'), "title: {}", state.title);
+
+        state.set_pane_collapsed(crate::slots::PARAM_IDX, true);
+        assert!(state.has_unsaved_changes(), "a collapse is saved state too");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// The playbar transport chords: plain arrows drive the timeline (Up =
     /// play/pause, Left/Right = step), and a held modifier must NOT match —
     /// modified arrows stay free for other bindings.

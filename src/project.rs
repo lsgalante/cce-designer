@@ -185,7 +185,7 @@ impl State {
             };
             let content = serde_json::to_string_pretty(&proj)?;
             fs::write(path, content)?;
-            self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+            self.mark_saved();
             return Ok(());
         }
 
@@ -206,7 +206,7 @@ impl State {
         };
         let content = serde_json::to_string_pretty(&proj)?;
         fs::write(&state_file_path, content)?;
-        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+        self.mark_saved();
         Ok(())
     }
 
@@ -375,7 +375,7 @@ impl State {
             self.apply_layout();
             self.update_panel_bounds();
             self.loaded_project_path = None;
-            self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+            self.mark_saved();
             self.update_window_title();
             return Ok(());
         }
@@ -431,7 +431,7 @@ impl State {
         self.apply_layout();
         self.update_panel_bounds();
         self.loaded_project_path = Some(project_dir);
-        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+        self.mark_saved();
         self.update_window_title();
         Ok(())
     }
@@ -512,7 +512,7 @@ impl State {
         self.apply_layout();
         self.update_panel_bounds();
         self.loaded_project_path = None;
-        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+        self.mark_saved();
         self.update_window_title();
     }
 

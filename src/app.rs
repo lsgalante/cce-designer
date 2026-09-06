@@ -1162,6 +1162,11 @@ pub struct State {
     /// which reconstructs DesignSettings from live state — can carry it.
     pub default_project_setting: Option<String>,
     pub last_saved_root_json: String,
+    /// The pane layout as of the last save — [`State::pane_layout_json`] —
+    /// so a dragged plate edge, a collapse or a re-dock dirties the title
+    /// like an edit to the tree: the save file carries them, so unsaved
+    /// they are unsaved changes.
+    pub last_saved_layout_json: String,
     pub recent_files: Vec<std::path::PathBuf>,
     pub viewport_dirty: bool,
     pub last_status_text: String,
@@ -1332,11 +1337,46 @@ impl State {
     pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController { self.slots.path_mut() }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        if let Ok(current_json) = serde_json::to_string(&self.fs_root) {
-            current_json != self.last_saved_root_json
-        } else {
-            false
-        }
+        let tree_changed = match serde_json::to_string(&self.fs_root) {
+            Ok(current_json) => current_json != self.last_saved_root_json,
+            Err(_) => false,
+        };
+        tree_changed || self.pane_layout_json() != self.last_saved_layout_json
+    }
+
+    /// The pane layout the save file carries, keyed for the unsaved-changes
+    /// check: what `project_view_state` records MINUS navigation (pan, path,
+    /// selection, camera — moving around a project is not editing it).
+    /// Plates key in px, which a window resize leaves alone; splitters as
+    /// rounded fractions, which a resize scales proportionally — so
+    /// resizing the window dirties nothing.
+    pub fn pane_layout_json(&self) -> String {
+        let vs = self.project_view_state();
+        let splitters = vs.splitters.map(|(a, b)| ((a * 1000.0).round(), (b * 1000.0).round()));
+        let plates = (
+            self.floating_network_layout.2.round(),
+            self.floating_param_width.round(),
+            self.floating_spreadsheet_height.round(),
+            self.floating_spreadsheet_inset_left.round(),
+            self.floating_spreadsheet_inset_right.round(),
+        );
+        serde_json::to_string(&(
+            vs.collapsed_panes,
+            splitters,
+            vs.dock_tabs,
+            vs.viewport_pin,
+            vs.params_pin,
+            vs.spreadsheet_pin,
+            plates,
+        ))
+        .unwrap_or_default()
+    }
+
+    /// Record the live tree and pane layout as the saved baseline — every
+    /// save and load path calls this, so the title's asterisk clears.
+    pub fn mark_saved(&mut self) {
+        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
+        self.last_saved_layout_json = self.pane_layout_json();
     }
 
 
@@ -3784,6 +3824,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             loaded_project_path: None,
             default_project_setting: settings.default_project.clone(),
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
+            last_saved_layout_json: String::new(),
             recent_files,
             viewport_dirty: true,
             last_status_text: String::new(),
@@ -3891,6 +3932,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             let ptr = w as *mut (dyn WidgetHost + 'static);
             state.ui_context.register_widget(id, ptr);
         }
+        // The layout baseline waits for the layout pass above (it clamps the
+        // plate fields), and the title computed earlier must be re-read
+        // against it or a fresh window opens starred.
+        state.last_saved_layout_json = state.pane_layout_json();
+        state.update_window_title();
         state
     }
 
