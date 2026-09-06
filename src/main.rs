@@ -921,6 +921,62 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Plate geometry rides save files too: every edge the user can drag —
+    /// the network and parameter plate widths, the spreadsheet's height and
+    /// its tucks under both neighbors — comes back at the size it was saved
+    /// at, and, as fractions, scales onto a differently sized window.
+    #[test]
+    fn test_plate_geometry_round_trips_through_save() {
+        let dir = std::env::temp_dir().join(format!("cce-designer-plate-geometry-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut a = State::new(false);
+        a.resize(1600.0, 900.0, 1.0);
+        a.ensure_menubar_subnets();
+        a.execute_menu_action("Show Spreadsheet Pane");
+        assert!(a.show_spreadsheet);
+        a.floating_network_layout.2 = 520.0;
+        a.floating_param_width = 360.0;
+        a.floating_spreadsheet_height = 300.0;
+        a.set_spreadsheet_full_width(true);
+        a.rebuild_positions();
+        let insets = (a.floating_spreadsheet_inset_left, a.floating_spreadsheet_inset_right);
+        assert!(insets.0 > 0.0 && insets.1 > 0.0, "full width must set both tucks");
+        assert!((a.floating_network_layout.2 - 520.0).abs() < 0.5 && (a.floating_param_width - 360.0).abs() < 0.5);
+        a.save_to_file(&dir).expect("save");
+
+        let plates = a.project_view_state().plates.expect("a sized window records its plates");
+        assert!((plates.network_width - 520.0 / 1600.0).abs() < 1e-4, "widths save as window fractions");
+
+        let mut b = State::new(false);
+        b.resize(1600.0, 900.0, 1.0);
+        b.ensure_menubar_subnets();
+        b.load_from_file(&dir).expect("load");
+        assert!((b.floating_network_layout.2 - 520.0).abs() < 0.5, "network width: {}", b.floating_network_layout.2);
+        assert!((b.floating_param_width - 360.0).abs() < 0.5, "param width: {}", b.floating_param_width);
+        assert!((b.floating_spreadsheet_height - 300.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
+        assert!((b.floating_spreadsheet_inset_left - insets.0).abs() < 0.5 && (b.floating_spreadsheet_inset_right - insets.1).abs() < 0.5,
+            "tucks: {:?} vs {:?}", (b.floating_spreadsheet_inset_left, b.floating_spreadsheet_inset_right), insets);
+        assert!(b.spreadsheet_tucks_left() && b.spreadsheet_tucks_right(), "the full-width tuck must load tucked");
+
+        // Half the window: the same fractions land at half the pixels.
+        let mut c = State::new(false);
+        c.resize(800.0, 450.0, 1.0);
+        c.ensure_menubar_subnets();
+        c.load_from_file(&dir).expect("load half-size");
+        assert!((c.floating_network_layout.2 - 260.0).abs() < 0.5, "scaled network width: {}", c.floating_network_layout.2);
+        assert!((c.floating_param_width - 180.0).abs() < 0.5, "scaled param width: {}", c.floating_param_width);
+
+        // A detached pane window keeps its own plates.
+        let mut d = State::new(true);
+        d.ensure_menubar_subnets();
+        let before = d.floating_param_width;
+        d.load_from_file(&dir).expect("load detached");
+        assert_eq!(d.floating_param_width, before);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// The playbar transport chords: plain arrows drive the timeline (Up =
     /// play/pause, Left/Right = step), and a held modifier must NOT match —
     /// modified arrows stay free for other bindings.

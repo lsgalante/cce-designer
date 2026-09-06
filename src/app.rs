@@ -217,6 +217,29 @@ pub struct ProjectViewState {
     /// The spreadsheet's pin, same encoding.
     #[serde(default)]
     pub spreadsheet_pin: Option<String>,
+    /// The floating layout's plate geometry — every edge the user can drag
+    /// — as window fractions, so a project restores its plate sizes and
+    /// positions at any window size (the splitter convention). Absent in
+    /// older saves keeps the live geometry.
+    #[serde(default)]
+    pub plates: Option<PlateGeometry>,
+}
+
+/// The user-dragged plate edges of the floating layout, each as a fraction
+/// of the window dimension it spans: widths and side insets of the width,
+/// the spreadsheet height of the height. The remaining plate coordinates
+/// (the network plate's top-left, the parameter plate's right anchor, the
+/// spreadsheet's bottom) are derived by `rebuild_positions`, so these five
+/// numbers fix every plate's size and position.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+pub struct PlateGeometry {
+    pub network_width: f32,
+    pub params_width: f32,
+    pub spreadsheet_height: f32,
+    /// How far the spreadsheet's left/right edge tucks under its neighbor
+    /// (0 = flush beside it) — see `floating_spreadsheet_inset_left`.
+    pub spreadsheet_inset_left: f32,
+    pub spreadsheet_inset_right: f32,
 }
 
 fn default_camera() -> String {

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::app::{State, Project, FsNode, ProjectViewState, ParamDef};
+use crate::app::{State, Project, FsNode, ProjectViewState, PlateGeometry, ParamDef};
 use crate::slots::CONTENT_IDX;
 
 fn color_to_hex(rgb: [f32; 3]) -> String {
@@ -118,6 +118,17 @@ impl State {
                 names
             })
             .collect();
+        let plates = if self.width > 1.0 && self.height > 1.0 {
+            Some(PlateGeometry {
+                network_width: self.floating_network_layout.2 / self.width,
+                params_width: self.floating_param_width / self.width,
+                spreadsheet_height: self.floating_spreadsheet_height / self.height,
+                spreadsheet_inset_left: self.floating_spreadsheet_inset_left / self.width,
+                spreadsheet_inset_right: self.floating_spreadsheet_inset_right / self.width,
+            })
+        } else {
+            None
+        };
         ProjectViewState {
             active_camera: self.active_camera.clone(),
             pan: (self.pan_x, self.pan_y),
@@ -130,6 +141,7 @@ impl State {
             viewport_pin: Self::pin_name(self.viewport_pin),
             params_pin: Self::pin_name(self.params_pin),
             spreadsheet_pin: Self::pin_name(self.spreadsheet_pin),
+            plates,
         }
     }
 
@@ -298,6 +310,23 @@ impl State {
             if self.width > 1.0 && f1 > 0.02 && f2 < 0.98 && f1 < f2 {
                 self.splitter_layout.splitter1_x = f1 * self.width;
                 self.splitter_layout.splitter2_x = f2 * self.width;
+                self.rebuild_positions();
+                self.apply_layout();
+            }
+        }
+        // Plate geometry: the fractions scale back onto this window, and
+        // the layout pass clamps them exactly as a drag would (minimum
+        // widths, the spreadsheet's tuck limits). A save with a nonsense
+        // value keeps the live geometry rather than loading half of one.
+        if let Some(pg) = vs.plates {
+            let sane = |f: f32| f.is_finite() && (0.0..=1.0).contains(&f);
+            let all = [pg.network_width, pg.params_width, pg.spreadsheet_height, pg.spreadsheet_inset_left, pg.spreadsheet_inset_right];
+            if self.width > 1.0 && self.height > 1.0 && all.iter().all(|&f| sane(f)) {
+                self.floating_network_layout.2 = pg.network_width * self.width;
+                self.floating_param_width = pg.params_width * self.width;
+                self.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
+                self.floating_spreadsheet_inset_left = pg.spreadsheet_inset_left * self.width;
+                self.floating_spreadsheet_inset_right = pg.spreadsheet_inset_right * self.width;
                 self.rebuild_positions();
                 self.apply_layout();
             }
