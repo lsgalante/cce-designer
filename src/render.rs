@@ -33,7 +33,7 @@ fn merge_bounds(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
 impl State {
     /// Per-corner plate radii for a pane rect: a corner that sits ON a window
     /// corner is this pane's share of the window silhouette — the compositor
-    /// clips the window at the span-widened backplate arc, so the pane wears
+    /// clips the window at the span-widened root plate arc, so the pane wears
     /// that arc there (what a full-window root plate does in one piece).
     /// Interior corners keep the widget-scale nominal plate radius, matching
     /// the squircles of the sibling panes around them.
@@ -142,7 +142,7 @@ impl State {
             (self.has_any_open_menu(i), base_key)
         });
 
-        // Root Backplate DISSOLVED (Phase 6as): register the widgets (registry consumers:
+        // root plate container DISSOLVED (Phase 6as): register the widgets (registry consumers:
         // coverage/parent walks) and paint each top-level widget directly in sorted order.
         self.ui_context.clear_hierarchy();
         let widget_ptrs: Vec<*mut (dyn WidgetHost + 'static)> = (0..WIDGET_COUNT)
@@ -295,7 +295,7 @@ impl State {
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {
-            // The scene viewer's lip is the window's own backplate edge: the
+            // The scene viewer's lip is the window's own root plate edge: the
             // 3D canvas is full-bleed (CANVAS_IDX covers the window; the other
             // panes float over it), so the lip spans the WHOLE window with the
             // window radius on all four corners (the SHARED silhouette value,
@@ -656,7 +656,7 @@ impl State {
                 if !self.show_viewport || relief {
                     return;
                 }
-                // The scene viewer's rim is the whole window backplate (see the
+                // The scene viewer's rim is the whole window root plate (see the
                 // VIEWPORT_IDX paint branch); its focus highlight follows it.
                 (0.0, 0.0, self.width, self.height)
             }
