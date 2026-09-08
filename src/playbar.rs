@@ -147,34 +147,20 @@ impl Paint for Playbar {
             ctx.vector(x2, y2, x0, y0, 1.5, icon, Cap::Round);
         }
 
-        // Timeline track: the Slider recessed-track look — under control_relief
-        // the carve alone defines the channel and the fill sits on its floor.
+        // Timeline track: the toolkit's band (the one slider style) — a band the
+        // width of the track with its swell at the playhead, in its own shaded
+        // well, drawn by the Slider's painter.
         let track = self.track_rect(rect);
-        let tr = cce_ui::layout::slider_corner_radius().min(track.height * 0.5);
-        let recess_t = cce_ui::layout::bevel_width().min(track.height * 0.2);
-        if !relief {
-            ctx.rounded_rect(track, tr, (true, true, true, true), colors::slider_track());
-        }
-        if let Some(fill) = colors::slider_fill() {
-            let (fx, fy, fmax_w, fh) = if relief {
-                let inset = recess_t * 0.5;
-                (track.x + inset, track.y + inset, track.width - 2.0 * inset, track.height - 2.0 * inset)
-            } else {
-                (track.x, track.y, track.width, track.height)
-            };
-            let fill_w = (self.t() * fmax_w).max(0.0);
-            if fill_w > 0.5 {
-                ctx.rounded_rect(
-                    Rect { x: fx, y: fy, width: fill_w, height: fh },
-                    tr.min(fh / 2.0),
-                    (true, true, true, true),
-                    fill,
-                );
-            }
-        }
-        if relief {
-            ctx.recess(track, (tr, tr, tr, tr), recess_t);
-        }
+        let px = track.x + self.t() * track.width;
+        let band_color = if self.dragging { colors::slider_thumb_drag() } else { colors::slider_thumb() };
+        cce_ui::widget::input::slider::paint_band_shape(
+            ctx,
+            track.x,
+            track.width,
+            track.y + track.height * 0.5,
+            band_color,
+            &|x| cce_ui::widget::input::slider::band_profile(track.x, track.width, track.height, x, &[px], None),
+        );
 
         // Tick marks: frame steps on the 1-2-5 ladder, grown until minors sit
         // >=6px apart. Every 5th step is a major — taller, brighter, and
@@ -212,8 +198,7 @@ impl Paint for Playbar {
             f += step;
         }
 
-        // Playhead: a full-height line over the track, in the DE accent.
-        let px = track.x + self.t() * track.width;
+        // Playhead: a full-height line over the swell, in the DE accent.
         ctx.quad(Rect { x: px - 1.0, y: track.y - 3.0, width: 2.0, height: track.height + 6.0 }, accent);
 
         // Frame readout.
