@@ -273,6 +273,9 @@ pub enum NodeMenuAction {
 pub enum ViewportMenuAction {
     /// Move the active camera so the visible node geometry fills the view.
     FrameAll,
+    /// Put the pivot plane at true size: one world unit (the Guides "World
+    /// Unit") spans its real length on this display.
+    OneToOne,
     /// Follow whichever editor took the last node click (the default).
     PinFollow,
     /// Lock the viewport to one editor's level (CONTENT_IDX / CONTENT2_IDX).
@@ -1253,6 +1256,12 @@ pub struct State {
     /// sRGB color of the meta "Point Markers" overlay — the Guides subnet's
     /// "Point Marker Color" control (stored there as hex, like Grid Color).
     pub meta_marker_color: [f32; 3],
+    /// What one world unit IS — the Guides subnet's "World Unit" choice
+    /// (mm / cm / m / in), persisted with the project. Geometry never
+    /// converts; this is the declaration that lets the viewport state its
+    /// scale against the display metric (`cce_ui::units`) and `View 1:1`
+    /// put the pivot plane at true size.
+    pub world_unit: cce_ui::units::Unit,
     /// The param pane's completion lists — (input node name, geometry
     /// version) → (group names, attribute names) read off that input's
     /// evaluated geometry, feeding the textpick rows on group/attribute
@@ -2924,7 +2933,7 @@ impl State {
         if self.active_camera == "Default Camera" {
             // Fixed eye ray through the origin — fit with zoom alone.
             let base_len = Vec3::new(2.5, 1.8, 2.5).length();
-            self.viewport_mut().zoom = (dist / base_len).clamp(0.05, 20.0);
+            self.viewport_mut().zoom = (dist / base_len).clamp(0.05, crate::viewport_3d::Viewport3D::MAX_ZOOM);
             self.viewport_mut().reset_velocity();
         } else {
             let camera_name = self.active_camera.clone();
@@ -2970,10 +2979,87 @@ impl State {
         self.sync_parameters_pane();
     }
 
+    /// One world unit in millimetres, per the Guides "World Unit".
+    pub fn world_unit_mm(&self) -> f32 {
+        let m = cce_ui::units::metric();
+        cce_ui::units::Len::new(1.0, self.world_unit).convert(cce_ui::units::Unit::Mm, &m).value
+    }
+
+    /// Camera distance to the pivot plane at which the view is 1:1 — one
+    /// world unit on that plane covers its real length on this display.
+    /// `get_matrices` is a perspective with vertical FOV 0.9 rad, so the
+    /// plane at distance D spans 2·D·tan(0.45) world units over the pane's
+    /// height in logical px, and the display metric says how many mm each
+    /// of those px is.
+    fn one_to_one_distance(&self) -> f32 {
+        let m = cce_ui::units::metric();
+        let vh_logical = (self.last_viewport_height.max(1) as f32) / (self.scale as f32).max(0.001);
+        let unit_mm = self.world_unit_mm().max(1e-6);
+        m.mm_per_px() * vh_logical / (2.0 * 0.45f32.tan() * unit_mm)
+    }
+
+    /// The view's scale on the pivot plane: how many millimetres of world
+    /// one millimetre of screen shows (1.0 = true size, 2.0 = half size).
+    pub fn view_scale_ratio(&self) -> f32 {
+        let m = cce_ui::units::metric();
+        let vh_logical = (self.last_viewport_height.max(1) as f32) / (self.scale as f32).max(0.001);
+        let base = self.last_viewport_camera_pos - self.last_viewport_pivot;
+        let d = base.length().max(1e-4) * self.last_viewport_zoom;
+        let world_mm_per_px = 2.0 * d * 0.45f32.tan() / vh_logical.max(1.0) * self.world_unit_mm();
+        world_mm_per_px / m.mm_per_px().max(1e-6)
+    }
+
+    /// `View 1:1`: move the active camera along its own eye ray so the
+    /// pivot plane sits at [`Self::one_to_one_distance`]. The default camera
+    /// zooms (its eye ray is fixed through the origin); a camera node has its
+    /// Position rewritten, as Frame All does. The zoom clamp can refuse a
+    /// very large or small unit — then the readout shows what was reached.
+    pub fn view_one_to_one(&mut self) {
+        let dist = self.one_to_one_distance();
+        if self.active_camera == "Default Camera" {
+            let base_len = Vec3::new(2.5, 1.8, 2.5).length();
+            self.viewport_mut().zoom = (dist / base_len).clamp(0.05, crate::viewport_3d::Viewport3D::MAX_ZOOM);
+            self.viewport_mut().reset_velocity();
+        } else {
+            let camera_name = self.active_camera.clone();
+            let dir = self.current_dir_mut();
+            if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
+                let parse3 = |s: &str| -> Option<Vec3> {
+                    let parts: Vec<&str> = s
+                        .split(|c| c == ':' || c == ',' || c == ' ')
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if parts.len() >= 3 {
+                        if let (Ok(x), Ok(y), Ok(z)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                            return Some(Vec3::new(x, y, z));
+                        }
+                    }
+                    None
+                };
+                let pos = node.params.iter().find(|p| p.name == "Position")
+                    .and_then(|p| parse3(&p.default))
+                    .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
+                let piv = node.params.iter().find(|p| p.name == "Pivot")
+                    .and_then(|p| parse3(&p.default))
+                    .unwrap_or(Vec3::ZERO);
+                let offset = pos - piv;
+                let dir_unit = if offset.length() > 1e-4 { offset.normalize() } else { Vec3::new(2.5, 1.8, 2.5).normalize() };
+                let new_pos = piv + dir_unit * dist;
+                if let Some(p) = node.params.iter_mut().find(|p| p.name == "Position") {
+                    p.default = format!("{:.3}:{:.3}:{:.3}", new_pos.x, new_pos.y, new_pos.z);
+                }
+                self.viewport_mut().zoom = 1.0;
+                self.viewport_mut().reset_velocity();
+            }
+        }
+        self.viewport_dirty = true;
+        self.sync_parameters_pane();
+    }
+
     /// Open the viewport right-click context menu at the cursor.
     fn open_viewport_context_menu(&mut self) {
-        let mut options = vec!["Frame All".to_string()];
-        let mut actions = vec![ViewportMenuAction::FrameAll];
+        let mut options = vec!["Frame All".to_string(), "View 1:1".to_string()];
+        let mut actions = vec![ViewportMenuAction::FrameAll, ViewportMenuAction::OneToOne];
         // The viewport's editor binding, as a radio group: follow the active
         // editor, or pin to one. Pin rows appear only while a second editor
         // exists — with one editor, following IS pinned.
@@ -3025,6 +3111,9 @@ impl State {
                 match action {
                     ViewportMenuAction::FrameAll => {
                         self.frame_all();
+                    }
+                    ViewportMenuAction::OneToOne => {
+                        self.view_one_to_one();
                     }
                     ViewportMenuAction::PinFollow => {
                         self.viewport_pin = None;
@@ -3877,6 +3966,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
             meta_normal_count: 0,
             meta_marker_size: 0.02,
             meta_marker_color: [0.85, 0.85, 1.0],
+            world_unit: cce_ui::units::Unit::Mm,
             pick_cache: None,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),

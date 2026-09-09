@@ -603,6 +603,40 @@ mod tests {
         (s_idx, m_idx)
     }
 
+    /// `View 1:1` puts the pivot plane at true size: afterwards one world
+    /// unit spans its real length on the display, so the readout's ratio
+    /// is 1. Exercised on the default camera (zoom) at a centimetre world
+    /// unit; the cached viewport state the readout reads is set by hand,
+    /// as the render pass would.
+    #[test]
+    fn view_one_to_one_reaches_true_scale() {
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+        state.world_unit = cce_ui::units::Unit::Cm;
+        // The default camera's eye ray is fixed, so 1:1 is a zoom — the one
+        // number the readout's cached state can follow here without a
+        // render pass (a camera node's Position rewrite is cached by one).
+        state.active_camera = "Default Camera".to_string();
+        state.scale = 1.0;
+        state.last_viewport_width = 1200;
+        state.last_viewport_height = 800;
+        state.last_viewport_camera_pos = Vec3::new(2.5, 1.8, 2.5);
+        state.last_viewport_pivot = Vec3::ZERO;
+        state.last_viewport_zoom = state.viewport().zoom;
+        let before = state.view_scale_ratio();
+        state.view_one_to_one();
+        state.last_viewport_zoom = state.viewport().zoom;
+        let after = state.view_scale_ratio();
+        assert!((after - 1.0).abs() < 1e-3, "ratio {after} (was {before})");
+        assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
+        // A millimetre unit needs the camera ~10× farther; still reachable.
+        state.world_unit = cce_ui::units::Unit::Mm;
+        state.view_one_to_one();
+        state.last_viewport_zoom = state.viewport().zoom;
+        let mm = state.view_scale_ratio();
+        assert!((mm - 1.0).abs() < 1e-3, "mm ratio {mm}");
+    }
+
     /// The root meta node (nee Session): exists at root, typed "meta" but
     /// still a subnet, holds exactly the four settings nodes, and refuses
     /// deletion through the one gate every deletion route funnels into.
@@ -659,8 +693,15 @@ mod tests {
                 .expect("Guides has Point Marker Color");
             assert_eq!(c.param_type, "color");
             c.default = "#ff8000".to_string();
+            let u = guides.params.iter_mut().find(|p| p.name == "World Unit")
+                .expect("Guides has World Unit");
+            assert_eq!(u.param_type, "choice");
+            assert_eq!(u.default, "mm", "a world unit is a millimetre until declared otherwise");
+            u.default = "cm".to_string();
         }
         state.apply_settings_from_menubar_subnets();
+        assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
+        assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
         assert!((state.meta_marker_size - 0.05).abs() < 1e-6);
         assert!((state.meta_marker_color[0] - 1.0).abs() < 0.01);
         assert!((state.meta_marker_color[1] - 0.5).abs() < 0.01);

@@ -132,12 +132,16 @@ impl Viewport3D {
     /// semantics), applied 1:1 — spreading fingers 2x halves the camera
     /// distance. Feeds the same accumulator as the ctrl-wheel zoom so the
     /// release inertia matches.
+    /// The zoom range. The top is generous because `View 1:1` on a small
+    /// world unit needs the camera far out; the far plane follows it.
+    pub const MAX_ZOOM: f32 = 400.0;
+
     pub fn pinch_zoom(&mut self, factor: f32) {
         if factor <= 0.0 {
             return;
         }
         let dy = factor.ln();
-        self.zoom = (self.zoom * (-dy).exp()).clamp(0.05, 20.0);
+        self.zoom = (self.zoom * (-dy).exp()).clamp(0.05, Self::MAX_ZOOM);
         self.is_zooming = true;
         self.last_zoom_time = std::time::Instant::now();
         self.zoom_accum += dy;
@@ -175,7 +179,11 @@ impl Viewport3D {
 
         // Geometry stays stationary in world space; the camera does the moving.
         let model = Mat4::IDENTITY;
-        let proj = Mat4::perspective_rh(0.9, aspect, 0.1, 100.0);
+        // The far plane follows the camera out: `View 1:1` on a millimetre
+        // world unit parks the camera a few hundred units away, and a fixed
+        // 100 would clip the pivot itself.
+        let far = (distance * self.zoom * 4.0).max(100.0);
+        let proj = Mat4::perspective_rh(0.9, aspect, 0.1, far);
 
         (proj, view_mat, model)
     }
@@ -207,7 +215,7 @@ impl cce_ui::widget::Input for Viewport3D {
                 MouseScrollDelta::LineDelta(_x, y) => {
                     let dy = *y * 0.15 * self.scroll_speed;
                     self.zoom *= (-dy).exp();
-                    self.zoom = self.zoom.clamp(0.05, 20.0);
+                    self.zoom = self.zoom.clamp(0.05, Self::MAX_ZOOM);
                     self.is_zooming = false;
                     
                     let dt = 0.016;
@@ -217,7 +225,7 @@ impl cce_ui::widget::Input for Viewport3D {
                 MouseScrollDelta::PixelDelta(pos) => {
                     let dy = (pos.y as f32 / scale) * 0.005 * self.scroll_speed;
                     self.zoom *= (-dy).exp();
-                    self.zoom = self.zoom.clamp(0.05, 20.0);
+                    self.zoom = self.zoom.clamp(0.05, Self::MAX_ZOOM);
                     self.is_zooming = true;
                     self.last_zoom_time = std::time::Instant::now();
                     self.zoom_accum += dy;
@@ -348,7 +356,7 @@ impl cce_ui::widget::Input for Viewport3D {
             } else {
                 let d_zoom = self.zoom_velocity * dt;
                 self.zoom *= (-d_zoom).exp();
-                self.zoom = self.zoom.clamp(0.05, 20.0);
+                self.zoom = self.zoom.clamp(0.05, Self::MAX_ZOOM);
 
                 let decay = self.scroll_friction.powf(dt * 60.0);
                 self.zoom_velocity *= decay;

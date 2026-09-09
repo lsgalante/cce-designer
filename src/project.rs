@@ -900,6 +900,9 @@ impl State {
         ensure_param(guides_node, "Point Marker Size", "spinbox", &marker_size_seed, &[], Some(5.0), Some(100.0), Some(1.0));
         let marker_color_seed = color_to_hex(self.meta_marker_color);
         ensure_param(guides_node, "Point Marker Color", "color", &marker_color_seed, &[], None, None, None);
+        // What a world unit is in the real world. The geometry never
+        // converts; the viewport's scale readout and `View 1:1` do.
+        ensure_param(guides_node, "World Unit", "choice", self.world_unit.suffix(), &["mm", "cm", "m", "in"], None, None, None);
         for p in guides_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Grid Guide" => set_toggle(p, vp_show_grid),
@@ -1056,6 +1059,12 @@ impl State {
                             self.meta_marker_color = col;
                             // Baked into the marker verts, like the radius.
                             self.rebuild_scene_geometry();
+                        }
+                    }
+                    "World Unit" => if let Some(u) = cce_ui::units::Unit::parse(&p.default) {
+                        if u != self.world_unit {
+                            self.world_unit = u;
+                            self.viewport_dirty = true;
                         }
                     }
                     _ => {}

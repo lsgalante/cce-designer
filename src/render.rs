@@ -171,6 +171,7 @@ impl State {
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
         self.append_meta_point_numbers(&mut pc);
+        self.append_scale_readout(&mut pc);
         self.append_curve_tool_overlay(&mut pc);
         self.append_popovers(&mut pc);
         self.append_dock_drag_overlay(&mut pc);
@@ -851,6 +852,41 @@ impl State {
                 let sy = vy + (0.5 - ndc.y * 0.5) * vh;
                 pc.text(idx.to_string(), sx + 4.0, sy - 6.0, 10.0, [0xee, 0xee, 0xff]);
             }
+        });
+    }
+
+    /// The view's scale on the pivot plane, bottom-left of the pane: `1:2.3`
+    /// (the world shown at less than true size), `2.3:1` (magnified), or
+    /// `1:1`, with what one world unit is and how long it shows. Marked when
+    /// the display metric is only assumed — then the millimetres are the
+    /// CSS 96 ppi guess, not a measurement.
+    fn append_scale_readout(&self, pc: &mut PaintCtx) {
+        if !self.show_viewport {
+            return;
+        }
+        let (vx, vy, vw, vh) = self.last_scene_view_rect;
+        if vw <= 0.0 || vh <= 0.0 {
+            return;
+        }
+        let r = self.view_scale_ratio();
+        if !r.is_finite() || r <= 0.0 {
+            return;
+        }
+        let ratio = if (r - 1.0).abs() < 0.01 {
+            "1:1".to_string()
+        } else if r > 1.0 {
+            format!("1:{}", cce_ui::units::fmt_num((r * 100.0).round() / 100.0))
+        } else {
+            format!("{}:1", cce_ui::units::fmt_num((100.0 / r).round() / 100.0))
+        };
+        let m = cce_ui::units::metric();
+        let shown_mm = self.world_unit_mm() / r;
+        let mut text = format!("{ratio}  ·  1 {} = {} mm on screen", self.world_unit.suffix(), cce_ui::units::fmt_num((shown_mm * 100.0).round() / 100.0));
+        if !m.is_real() {
+            text.push_str("  ·  metric assumed");
+        }
+        pc.clip(rect(vx, vy, vw, vh), |pc| {
+            pc.text(text, vx + 8.0, vy + vh - 16.0, 10.0, [0xaa, 0xaa, 0xbb]);
         });
     }
 

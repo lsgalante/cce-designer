@@ -206,7 +206,17 @@ toggle. `State::session_node()` / `in_settings_dir()` are the accessors —
 the latter walks the whole `current_path`, since a first-segment check
 stopped working the day the settings nodes gained a parent. Guides holds
 "Point Marker Size" (thousandths of a world unit), driving the per-node
-meta Point Markers overlay via `State::meta_marker_size`.
+meta Point Markers overlay via `State::meta_marker_size`, and **"World Unit"**
+(a `choice`: mm / cm / m / in, `State::world_unit`) — what one world unit IS.
+Geometry never converts; the declaration feeds two things through the display
+metric (`cce_ui::units`): the viewport's bottom-left **scale readout**
+(`append_scale_readout`: `1:2.3`, `1 mm = 0.43 mm on screen`, marked when the
+metric is only assumed) and the viewport context menu's **View 1:1**
+(`view_one_to_one`), which moves the active camera along its eye ray so the
+pivot plane shows one world unit at its true length — the default camera by
+zoom, a camera node by rewriting its Position, as Frame All does. The
+projection is a perspective (vertical FOV 0.9 rad), so 1:1 holds on the
+pivot plane only; `view_scale_ratio` is the readout's number.
 
 ### The meta node (per-node preferences)
 
