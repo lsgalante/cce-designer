@@ -212,6 +212,17 @@ impl Application for State {
         }
     }
 
+    /// `poll_shared_project` watches the project file's mtime for a detached
+    /// pane's edits — nothing the runner can be woken by — so while a pane is
+    /// detached the loop may not sleep past this between ticks.
+    fn idle_poll_interval(&self) -> Option<std::time::Duration> {
+        let syncing = self.is_detached_network
+            || self.detached_circular_network
+            || self.detached_pane.is_some()
+            || self.detached_panes.iter().any(|d| *d);
+        syncing.then(|| std::time::Duration::from_millis(250))
+    }
+
     fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
         if self.tick_frame(dt) {
             *needs_rebuild = true;
