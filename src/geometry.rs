@@ -1358,6 +1358,8 @@ pub(crate) fn apply_analysis(geom: &mut Detail, target: &FsNode, ocl_error: &mut
     let average = if n == 0 { 0.0 } else { sum / n as f32 };
     let spread = max - min;
 
+    // A measurement is derivative by definition: it describes this step's
+    // state, and carrying one into the next would be describing the past.
     for (suffix, value) in [
         ("min", min),
         ("max", max),
@@ -1366,8 +1368,11 @@ pub(crate) fn apply_analysis(geom: &mut Detail, target: &FsNode, ocl_error: &mut
         ("spread", spread),
         ("count", n as f32),
     ] {
-        geom.detail_mut()
-            .create(&format!("{}_{}", label, suffix), AttribValue::Float(value));
+        geom.detail_mut().create_kind(
+            &format!("{}_{}", label, suffix),
+            AttribValue::Float(value),
+            crate::detail::AttribKind::Derivative,
+        );
     }
 }
 
@@ -1415,7 +1420,10 @@ pub(crate) fn apply_time(geom: &mut Detail, target: &FsNode, frame: i32) {
     } else {
         t
     };
-    geom.detail_mut().create(&name, AttribValue::Float(t));
+    // Also derivative: it is a function of the frame, so every step computes
+    // it afresh and none of them should inherit it.
+    geom.detail_mut()
+        .create_kind(&name, AttribValue::Float(t), crate::detail::AttribKind::Derivative);
 }
 
 /// Smooth point normals: for each point, the normalized sum of the face
@@ -2234,7 +2242,17 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                     Some(src) => {
                         let zero = components_attrib(ty, &vec![0.0; ty.components()]);
                         let value = components_attrib(ty, &src);
-                        geom.points_mut().create(&name, zero);
+                        // Declared where the author knows the answer: at the
+                        // point of creation, not in a list somewhere else that
+                        // has to be kept in step.
+                        let kind = if node_param_str(target, "Kind", "Live")
+                            .eq_ignore_ascii_case("derivative")
+                        {
+                            crate::detail::AttribKind::Derivative
+                        } else {
+                            crate::detail::AttribKind::Live
+                        };
+                        geom.points_mut().create_kind(&name, zero, kind);
                         for &p in &affected {
                             let _ = geom.points_mut().set_value(&name, p, value);
                         }
@@ -4747,12 +4765,28 @@ pub fn resolve_simnet_geometry_with_errors(
     };
 
     while done < due {
+        // The step boundary, and the contract that makes a chain composable:
+        //
+        // Going in, every Derivative attribute is zeroed. The chain is
+        // expected to rebuild them from live data this step, and one it
+        // forgets reads zero rather than quietly carrying last step's value
+        // forward — which is the failure that looks like a physics bug and
+        // is not one.
+        state.clear_derivatives();
+        let prev = state.clone();
+
         sim.feedback.push((target.id.clone(), state));
         let stepped = generate_single_node_geometry_with_errors(root, &output_node, visited, ocl_error, sim);
         let fed_back = sim.feedback.pop().map(|(_, g)| g);
         // A step that yields nothing (an unwired chain, a failed kernel) holds
         // the previous state rather than collapsing the sim to empty geometry.
         state = stepped.or(fed_back).unwrap_or_default();
+
+        // Coming out, any Live attribute the chain DROPPED is restored from
+        // the previous state by point identity. A node that rebuilds geometry
+        // mid-chain — a kernel generator today, a remesh in Phase 3 — no
+        // longer silently takes the simulation's memory with it.
+        state.restore_live_from(&prev);
         done += 1;
     }
 
@@ -5618,6 +5652,72 @@ mod simnet_tests {
 
     fn min_x(g: &Detail) -> f32 {
         g.positions().iter().map(|p| p[0]).fold(f32::INFINITY, f32::min)
+    }
+
+    /// A sim whose step adds 1 to `acc` every frame. The seed declares `acc`
+    /// with the given kind, which is the only difference between the two runs.
+    fn accumulating_graph(kind: &str) -> FsNode {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let seed = node(
+            "id-seed",
+            "Seed 1",
+            "attribute",
+            vec![
+                param("Input", "Sphere 1"),
+                param("Operation", "Create"),
+                param("Attribute Name", "acc"),
+                param("Type", "Float"),
+                param("Value", "0.00"),
+                param("Kind", kind),
+            ],
+            vec![],
+        );
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let step = node(
+            "id-step",
+            "step1",
+            "attribute",
+            vec![
+                param("Input", "input1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "acc"),
+                param("Combine", "Add"),
+                param("Value", "1.00"),
+            ],
+            vec![],
+        );
+        let inner_output = node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]);
+        let sim = node(
+            "id-sim",
+            "Simnet 1",
+            "simnet",
+            vec![param("Input", "Seed 1")],
+            vec![inner_input, step, inner_output],
+        );
+        node("id-root", "root", "node", vec![], vec![sphere, seed, sim])
+    }
+
+    #[test]
+    fn test_live_data_accumulates_across_steps_and_derivative_data_does_not() {
+        let acc = |root: &FsNode, frame: i32| -> f32 {
+            solve_at(root, frame).points().value("acc", 0).unwrap().as_f32()
+        };
+
+        // Live data "runs like a stream through the simulation": each step
+        // reads what the last one wrote, so five steps of +1 is 5.
+        let live = accumulating_graph("Live");
+        assert_eq!(acc(&live, 1), 0.0, "the start frame is the seed");
+        assert_eq!(acc(&live, 4), 3.0);
+        assert_eq!(acc(&live, 6), 5.0);
+
+        // Derivative data is "calculated anew every frame": the boundary zeroes
+        // it before the chain runs, so every step starts from nothing and the
+        // answer is 1 however long the sim runs. Same graph, same chain — the
+        // ONLY difference is what the attribute was declared to be.
+        let derived = accumulating_graph("Derivative");
+        assert_eq!(acc(&derived, 4), 1.0);
+        assert_eq!(acc(&derived, 6), 1.0);
+        assert_eq!(acc(&derived, 60), 1.0);
     }
 
     #[test]

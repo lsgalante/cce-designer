@@ -83,6 +83,11 @@
    "name": "Target",
    "type": "choice:Sum,Maximum,Range",
    "default": "Maximum"
+  },
+  {
+   "name": "Kind",
+   "type": "choice:Live,Derivative",
+   "default": "Live"
   }
  ]
 }

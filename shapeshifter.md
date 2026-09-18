@@ -167,6 +167,17 @@ Touches: `geometry.rs`, `kernel_cpu.rs`, `nodes/*.json`.
 
 *Medium. Needs Phases 0 and 1.*
 
+> **Started.** Live and derivative data is a declared property of the
+> ATTRIBUTE (`AttribKind`), set where it is created rather than listed on the
+> solver. The step boundary zeroes every derivative attribute going in, and
+> coming out restores any live attribute the chain DROPPED, matching points by
+> identity — so a node that rebuilds geometry mid-chain no longer takes the
+> simulation's memory with it. Restoration bridges a rebuild, not a delete: an
+> unchanged point set means a missing attribute was removed on purpose.
+> Analysis and Time write derivative; the spreadsheet marks them with `~`.
+>
+> Outstanding: substeps, an explicit seed frame, a disk cache, and Visualize.
+
 `simnet` is already the Developer Solver — feedback stack, per-node cache keyed
 on the subtree, restart on edit, one step per played frame. What it lacks is a
 contract for what survives a step.

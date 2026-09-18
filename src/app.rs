@@ -3184,12 +3184,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         .filter_map(|n| geom.points().get(n).map(|a| (n.to_string(), a.ty())))
         .collect();
 
+    // A Derivative attribute wears a trailing `~`: it resets at every step
+    // boundary, and telling that apart from a value that persists is the first
+    // question you ask when a solve misbehaves.
+    let mark = |geom: &Detail, class: crate::detail::Class, name: &str| -> String {
+        match geom.store(class).kind(name) {
+            crate::detail::AttribKind::Derivative => format!("{}~", name),
+            crate::detail::AttribKind::Live => name.to_string(),
+        }
+    };
+
     for (name, ty) in &attribs {
+        let label = mark(geom, crate::detail::Class::Point, name);
         match ty.components() {
-            1 => headers.push(name.clone()),
+            1 => headers.push(label),
             n => {
                 for c in ["x", "y", "z", "w"].iter().take(n) {
-                    headers.push(format!("{}.{}", name, c));
+                    headers.push(format!("{}.{}", label, c));
                 }
             }
         }
@@ -3210,11 +3221,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         .filter_map(|n| geom.detail().get(n).map(|a| (n.to_string(), a.ty())))
         .collect();
     for (name, ty) in &detail {
+        let label = mark(geom, crate::detail::Class::Detail, name);
         match ty.components() {
-            1 => headers.push(format!("d:{}", name)),
+            1 => headers.push(format!("d:{}", label)),
             n => {
                 for c in ["x", "y", "z", "w"].iter().take(n) {
-                    headers.push(format!("d:{}.{}", name, c));
+                    headers.push(format!("d:{}.{}", label, c));
                 }
             }
         }

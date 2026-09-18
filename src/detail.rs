@@ -156,6 +156,34 @@ impl AttribValue {
     }
 }
 
+/// Whether an attribute survives a simulation step.
+///
+/// The distinction `developer.md` draws between **live data**, which "runs
+/// like a stream through the simulation", and **derivative data**, "calculated
+/// anew every frame based on live data". Houdini has no such notion — there,
+/// every attribute simply persists, and a chain that forgets to reset its
+/// scratch values accumulates them silently until the sim goes wrong in a way
+/// that looks like a physics bug.
+///
+/// Making it a property of the ATTRIBUTE rather than a list of names on the
+/// solver means the node that creates a value declares its nature at the point
+/// of creation, where the author knows the answer, instead of somewhere else
+/// that has to be kept in step.
+///
+/// [`AttribKind::Live`] is the default, because it is the one whose failure
+/// mode is visible: a value that should have been cleared and was not shows up
+/// as a drift you can watch, where a value that should have persisted and was
+/// cleared just quietly reads zero.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AttribKind {
+    /// Carried across the step boundary, by point identity where the geometry
+    /// was rebuilt underneath it.
+    #[default]
+    Live,
+    /// Zeroed at the start of every step; the chain is expected to rebuild it.
+    Derivative,
+}
+
 /// One attribute's storage: a single array covering every element of the
 /// owning class, in element order.
 #[derive(Clone, Debug, PartialEq)]
@@ -321,12 +349,16 @@ impl AttribData {
 pub struct AttribStore {
     len: usize,
     attribs: HashMap<String, AttribData>,
+    /// Only the attributes that are NOT the default kind appear here, so an
+    /// absent entry reads as [`AttribKind::Live`] and nothing has to remember
+    /// to register an ordinary attribute.
+    kinds: HashMap<String, AttribKind>,
     groups: HashMap<String, Vec<bool>>,
 }
 
 impl AttribStore {
     pub fn with_len(len: usize) -> Self {
-        Self { len, attribs: HashMap::new(), groups: HashMap::new() }
+        Self { len, attribs: HashMap::new(), kinds: HashMap::new(), groups: HashMap::new() }
     }
 
     pub fn len(&self) -> usize {
@@ -365,10 +397,75 @@ impl AttribStore {
     }
 
     /// Create (or replace) an attribute, every element set to `default`.
+    ///
+    /// The attribute is [`AttribKind::Live`]; use [`AttribStore::create_kind`]
+    /// for one the solver should clear each step. Replacing an attribute
+    /// replaces its kind too — a name reused for a different purpose is a
+    /// different attribute.
     pub fn create(&mut self, name: &str, default: AttribValue) -> &mut AttribData {
+        self.create_kind(name, default, AttribKind::Live)
+    }
+
+    /// Create (or replace) an attribute, declaring whether it survives a step.
+    pub fn create_kind(
+        &mut self,
+        name: &str,
+        default: AttribValue,
+        kind: AttribKind,
+    ) -> &mut AttribData {
         self.attribs
             .insert(name.to_string(), AttribData::filled(default, self.len));
+        match kind {
+            AttribKind::Live => self.kinds.remove(name),
+            other => self.kinds.insert(name.to_string(), other),
+        };
         self.attribs.get_mut(name).expect("just inserted")
+    }
+
+    /// Whether an attribute survives a simulation step. An attribute nobody
+    /// declared is Live.
+    pub fn kind(&self, name: &str) -> AttribKind {
+        self.kinds.get(name).copied().unwrap_or_default()
+    }
+
+    /// Declare an existing attribute's kind without disturbing its values.
+    pub fn set_kind(&mut self, name: &str, kind: AttribKind) {
+        if !self.attribs.contains_key(name) {
+            return;
+        }
+        match kind {
+            AttribKind::Live => self.kinds.remove(name),
+            other => self.kinds.insert(name.to_string(), other),
+        };
+    }
+
+    /// The names of every attribute of one kind, sorted.
+    pub fn names_of_kind(&self, kind: AttribKind) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .attribs
+            .keys()
+            .filter(|n| self.kind(n) == kind)
+            .map(|s| s.as_str())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// Zero every Derivative attribute, keeping the columns themselves — the
+    /// step that follows is expected to rebuild the values, and a reader
+    /// between the two should find the attribute present and empty rather than
+    /// missing.
+    pub fn clear_derivatives(&mut self) {
+        let names: Vec<String> = self.kinds
+            .iter()
+            .filter(|(_, &k)| k == AttribKind::Derivative)
+            .map(|(n, _)| n.clone())
+            .collect();
+        for name in names {
+            if let Some(data) = self.attribs.get_mut(&name) {
+                *data = AttribData::zeroed(data.ty(), self.len);
+            }
+        }
     }
 
     /// Create the attribute if it is absent, leaving an existing one — and its
@@ -382,6 +479,7 @@ impl AttribStore {
     }
 
     pub fn remove(&mut self, name: &str) -> Option<AttribData> {
+        self.kinds.remove(name);
         self.attribs.remove(name)
     }
 
@@ -509,7 +607,7 @@ impl AttribStore {
                 (k.clone(), picked)
             })
             .collect();
-        AttribStore { len: idx.len(), attribs, groups }
+        AttribStore { len: idx.len(), attribs, kinds: self.kinds.clone(), groups }
     }
 
     /// Append `other`'s elements. Attributes present on only one side are
@@ -534,6 +632,12 @@ impl AttribStore {
         }
         for (_, lhs) in self.attribs.iter_mut().filter(|(n, _)| !other.attribs.contains_key(*n)) {
             lhs.resize(lhs_len + rhs_len);
+        }
+
+        // A kind declared on either side sticks: the left side wins a
+        // disagreement, the same way its values do.
+        for (name, kind) in &other.kinds {
+            self.kinds.entry(name.clone()).or_insert(*kind);
         }
 
         for (name, rhs) in &other.groups {
@@ -1109,6 +1213,67 @@ impl Detail {
             hi = hi.max(v);
         }
         Some((lo, hi))
+    }
+
+    /// Zero every Derivative attribute on every class — the step boundary's
+    /// first act. See [`AttribKind`].
+    pub fn clear_derivatives(&mut self) {
+        self.points.clear_derivatives();
+        self.verts.clear_derivatives();
+        self.prims.clear_derivatives();
+        self.detail.clear_derivatives();
+    }
+
+    /// Restore this geometry's Live point attributes from `prev`, matching
+    /// points by identity.
+    ///
+    /// The other half of the contract, and the one that makes a rebuild safe
+    /// to put in the middle of a solve. When a step's chain hands back geometry
+    /// that has lost an attribute — a kernel generator that rebuilt its points,
+    /// and in Phase 3 a remesh — the values are not gone, they are in the
+    /// previous state, attached to identities. A point that survived gets its
+    /// value back; a point that is genuinely new gets the type's zero, which is
+    /// the only honest answer for a place that did not exist last step.
+    ///
+    /// Attributes the new geometry DOES carry are left alone: the chain
+    /// computed them this step and that is the whole point of running it.
+    /// Derivative attributes are not restored at all — they are meant to be
+    /// rebuilt, and carrying one across would be exactly the silent
+    /// accumulation the kind exists to prevent.
+    pub fn restore_live_from(&mut self, prev: &Detail) {
+        // Restoration bridges a REBUILD, not a deletion. If the chain handed
+        // back the same identities in the same order, it kept the geometry it
+        // was given — so an attribute that is gone was taken out on purpose,
+        // and putting it back would override the author. Only when the point
+        // set itself changed underneath is a missing attribute evidence of
+        // loss rather than intent.
+        if self.ids == prev.ids {
+            return;
+        }
+        let missing: Vec<&str> = prev
+            .points
+            .names_of_kind(AttribKind::Live)
+            .into_iter()
+            .filter(|n| !self.points.has(n))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let was: HashMap<PointId, u32> = prev.id_map();
+        for name in missing {
+            let Some(src) = prev.points.get(name) else { continue };
+            let ty = src.ty();
+            let mut data = AttribData::zeroed(ty, self.num_points());
+            for p in 0..self.num_points() {
+                let Some(id) = self.id(p) else { continue };
+                let Some(&old) = was.get(&id) else { continue };
+                if let Some(v) = src.get(old as usize) {
+                    let _ = data.set(p, v);
+                }
+            }
+            let _ = self.points.insert(name, data);
+            self.points.set_kind(name, AttribKind::Live);
+        }
     }
 
     /// Weld a triangle soup into points and triangles: coincident positions
