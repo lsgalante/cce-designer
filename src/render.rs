@@ -184,20 +184,10 @@ impl State {
         // extra_quads loop, which is the square opaque pre-frost look.
         // Its labels carry bounds equal to the menu rect so the engine's text-
         // occlusion clamp (which registers the menu rect) exempts them.
-        if cce_ui::widget::context_menu::is_visible() {
-            cce_ui::widget::context_menu::paint(&mut pc);
-            let mx = cce_ui::widget::context_menu::x();
-            let my = cce_ui::widget::context_menu::y();
-            let bounds = Some([
-                mx,
-                my,
-                mx + cce_ui::widget::context_menu::w(),
-                my + cce_ui::widget::context_menu::h(),
-            ]);
-            for l in cce_ui::widget::context_menu::text_labels() {
-                pc.text_with(l.text, l.x, l.y, l.font_size, l.color, None, bounds);
-            }
-        }
+        // One call for plate and labels: a TextLabel carries no family, so the
+        // hand-rolled `paint` + `text_labels()` pair here passed None and drew
+        // the menu in the default sans instead of the DE's menu font.
+        cce_ui::widget::context_menu::paint_with_labels(&mut pc);
 
         pc.finish()
     }
