@@ -159,6 +159,12 @@ pub fn cube_vertices() -> Vec<Vertex3D> {
     data.iter().map(|&(p, c)| Vertex3D { position: p, color: c }).collect()
 }
 
+/// A [`Detail`]'s triangles as renderer vertices — the one place the 3D scene
+/// crosses out of the geometry model.
+pub fn detail_vertices(d: &Detail) -> Vec<Vertex3D> {
+    d.triangulate(|position, color| Vertex3D { position, color })
+}
+
 /// Fan-triangulate a [`Detail`] back into the triangle soup the evaluation
 /// pipeline still speaks, carrying attributes onto every corner.
 ///
@@ -205,6 +211,60 @@ pub fn detail_to_soup(d: &Detail) -> Geometry {
         }
     }
     Geometry { vertices }
+}
+
+/// Weld a soup back into a [`Detail`], carrying its per-corner attributes onto
+/// the points they welded into (first corner wins).
+///
+/// The inverse of [`detail_to_soup`], and the other half of the migration
+/// bridge. Attribute transfer is not incidental: the kernel launcher stamps a
+/// default `Norm` and `UV` on every vertex it generates, and a weld that only
+/// took positions and colors would quietly drop them — which is exactly what
+/// the parameter pane's attribute picker reads.
+pub fn soup_to_detail(soup: &Geometry) -> Detail {
+    let positions: Vec<[f32; 3]> = soup.vertices.iter().map(|v| v.pos).collect();
+    let colors: Vec<[f32; 3]> = soup.vertices.iter().map(|v| v.col).collect();
+    let (mut d, point_of) = Detail::from_triangle_soup_with_map(&positions, &colors);
+
+    let mut names: Vec<&str> = Vec::new();
+    for v in &soup.vertices {
+        for k in v.attributes.keys() {
+            if !names.contains(&k.as_str()) {
+                names.push(k);
+            }
+        }
+    }
+    names.sort_unstable();
+
+    for name in names {
+        let mut written = vec![false; d.num_points()];
+        let mut data: Option<AttribData> = None;
+        for (corner, v) in soup.vertices.iter().enumerate() {
+            let (Some(&p), Some(val)) = (point_of.get(corner), v.attributes.get(name)) else {
+                continue;
+            };
+            let p = p as usize;
+            if std::mem::replace(&mut written[p], true) {
+                continue;
+            }
+            let value = detail_attr(val);
+            let arr = data.get_or_insert_with(|| AttribData::zeroed(value.ty(), d.num_points()));
+            let _ = arr.set(p, value);
+        }
+        if let Some(arr) = data {
+            let _ = d.points_mut().insert(name, arr);
+        }
+    }
+    d
+}
+
+fn detail_attr(v: &GAttribute) -> AttribValue {
+    match *v {
+        GAttribute::Float(x) => AttribValue::Float(x),
+        GAttribute::Float2(x) => AttribValue::Float2(x),
+        GAttribute::Float3(x) => AttribValue::Float3(x),
+        GAttribute::Float4(x) => AttribValue::Float4(x),
+    }
 }
 
 fn soup_attr(v: AttribValue) -> GAttribute {
@@ -543,7 +603,7 @@ struct SimSolve {
     key: u64,
     /// The frame `state` is the solution FOR.
     frame: i32,
-    state: Geometry,
+    state: Detail,
 }
 
 /// Per-simnet solved states, keyed by node id. Owned by the caller (the app keeps
@@ -572,7 +632,7 @@ pub struct EvalSim<'a> {
     /// having taken no steps yet.
     pub start_frame: i32,
     pub cache: &'a mut SimCache,
-    feedback: Vec<(String, Geometry)>,
+    feedback: Vec<(String, Detail)>,
 }
 
 impl<'a> EvalSim<'a> {
@@ -587,7 +647,7 @@ impl<'a> EvalSim<'a> {
     }
 
     /// The state an `input` node should yield, if its parent simnet is mid-solve.
-    fn feedback_for(&self, simnet_id: &str) -> Option<&Geometry> {
+    fn feedback_for(&self, simnet_id: &str) -> Option<&Detail> {
         self.feedback
             .iter()
             .rev()
@@ -599,15 +659,15 @@ impl<'a> EvalSim<'a> {
 /// Hash of everything a simnet's solve depends on: its own subtree (so editing any
 /// node in the chain restarts the sim) and the seed geometry (so an upstream change
 /// does too).
-fn sim_solve_key(simnet: &FsNode, seed: &Geometry) -> u64 {
+fn sim_solve_key(simnet: &FsNode, seed: &Detail) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     if let Ok(json) = serde_json::to_string(simnet) {
         json.hash(&mut h);
     }
-    seed.vertices.len().hash(&mut h);
-    for v in &seed.vertices {
-        for c in v.pos {
+    seed.num_points().hash(&mut h);
+    for p in seed.positions() {
+        for c in p {
             c.to_bits().hash(&mut h);
         }
     }
@@ -617,7 +677,7 @@ fn sim_solve_key(simnet: &FsNode, seed: &Geometry) -> u64 {
 /// Evaluate with neither error reporting nor a persistent sim cache. Any simnet
 /// reached this way solves at frame 0 — that is, shows its seed — because there
 /// is no timeline in scope to say otherwise.
-pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
+pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Detail> {
     let mut err = None;
     let mut cache = SimCache::default();
     let mut sim = EvalSim::new(0, 0, &mut cache);
@@ -630,7 +690,7 @@ pub fn generate_single_node_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     // Cycle guard by ID, not name: subnet instances share child names
     // ("output1", "opencl1"), so a name guard falsely blocks a subnet that
     // consumes another subnet's geometry (Extrude eating a Sphere never
@@ -644,20 +704,20 @@ pub fn generate_single_node_geometry_with_errors(
     let res = if target.node_type.eq_ignore_ascii_case("sphere") {
         let idx = find_sphere_index(root, target)?;
         let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-        Some(sphere_vertices(center, node_param_f32(target, "Radius", 0.5).max(0.05)))
+        Some(sphere_detail(center, node_param_f32(target, "Radius", 0.5).max(0.05), 16, 24))
     } else if target.node_type.eq_ignore_ascii_case("line") {
         let idx = find_sphere_index(root, target)?;
         let start = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
         let length = node_param_f32(target, "Length", 1.0);
         let thickness = node_param_f32(target, "Thickness", 0.02);
         let end = start + Vec3::new(0.0, length, 0.0);
-        Some(line_vertices(start, end, thickness))
+        Some(box_detail(start, end, thickness))
     } else if target.node_type.eq_ignore_ascii_case("curve") {
-        Some(curve_geometry(target))
+        Some(curve_detail(target))
     } else if target.node_type.eq_ignore_ascii_case("points") {
         let idx = find_sphere_index(root, target)?;
         let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-        Some(points_node_geometry(target, center))
+        Some(points_detail(target, center))
     } else if target.node_type.eq_ignore_ascii_case("transform") {
         resolve_transform_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("scatter") {
@@ -729,7 +789,7 @@ pub fn generate_single_node_geometry_with_errors(
     res
 }
 
-pub fn resolve_transform_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
+pub fn resolve_transform_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Detail> {
     let mut err = None;
     let mut cache = SimCache::default();
     let mut sim = EvalSim::new(0, 0, &mut cache);
@@ -742,23 +802,24 @@ pub fn resolve_transform_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
         return None;
     }
     let input_node = find_node_by_name(root, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    let translation = node_param_vec3(target, "Translation", Vec3::ZERO);
-    for v in &mut geom.vertices {
-        v.pos[0] += translation.x;
-        v.pos[1] += translation.y;
-        v.pos[2] += translation.z;
+    let translation = node_param_vec3(target, "Translation", Vec3::ZERO).to_array();
+    // Moving points changes no topology, so the cache rides along.
+    for p in geom.positions_mut() {
+        for k in 0..3 {
+            p[k] += translation[k];
+        }
     }
     Some(geom)
 }
 
-pub fn resolve_scatter_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Geometry> {
+pub fn resolve_scatter_geometry(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -> Option<Detail> {
     let mut err = None;
     let mut cache = SimCache::default();
     let mut sim = EvalSim::new(0, 0, &mut cache);
@@ -776,51 +837,35 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Weld a triangle soup's coincident vertices into points: returns
-/// (point id per vertex, copies per point). Positions quantize to 1e-4 so
-/// vertices a kernel emitted from the same formula weld reliably. "Point"
-/// operations (random point groups, the relax solver) act on welded points
-/// and fan back out to every copy — moving one copy of a shared corner
-/// without its siblings would tear the surface.
-fn weld_points(positions: &[[f32; 3]]) -> (Vec<usize>, Vec<Vec<usize>>) {
-    let mut key_to_point: HashMap<(i64, i64, i64), usize> = HashMap::new();
-    let mut point_of = Vec::with_capacity(positions.len());
-    let mut copies: Vec<Vec<usize>> = Vec::new();
-    for (i, p) in positions.iter().enumerate() {
-        let key = (
-            (p[0] as f64 * 1e4).round() as i64,
-            (p[1] as f64 * 1e4).round() as i64,
-            (p[2] as f64 * 1e4).round() as i64,
-        );
-        let id = *key_to_point.entry(key).or_insert_with(|| {
-            copies.push(Vec::new());
-            copies.len() - 1
-        });
-        point_of.push(id);
-        copies[id].push(i);
-    }
-    (point_of, copies)
-}
-
-/// The Group node: pass the input geometry through, tagging the selected
-/// elements with a per-vertex membership attribute `group:<name>` =
-/// Float(1.0). Element Type picks the selection unit over the triangle
-/// soup — Points (per vertex), Primitives (a triangle; all three vertices
-/// tag together), Edges (a triangle edge; its two vertices tag). Mode picks
-/// the selector: Box selects by an axis-aligned box (Center/Size); Random
-/// draws Count elements deterministically from Seed — for Points it draws
-/// welded points (coincident vertices tag together, so "one random point"
-/// is one surface point, not one loose corner of a triangle). Membership
-/// rides GVertex::attributes so it survives merges and native filters —
-/// downstream nodes consume it by reading the same attribute. Highlight
-/// tints members toward a warm accent so the group reads in the viewport.
+/// The Group node: pass the input geometry through, putting the selected
+/// elements in a named group.
+///
+/// Element Type picks the selection unit, and now they are real: Points are
+/// points, Primitives are primitives, Edges are the edges topology already
+/// knows about. The soup had to fake all three out of triangle-corner index
+/// arithmetic — `tri * 3 + side` — and had to weld on the spot before it could
+/// draw one random *point* rather than one random loose corner.
+///
+/// Mode picks the selector: Box selects by an axis-aligned box (Center/Size);
+/// Random draws Count elements deterministically from Seed.
+///
+/// Membership always lands in a POINT group — for Primitives and Edges, the
+/// points of the selected elements — because that is what every consumer
+/// downstream reads (Relax's Pin Group, Attribute's Group, the viewport
+/// markers), and it is what the per-vertex tagging it replaces amounted to.
+/// Selecting primitives additionally writes a prim group of the same name;
+/// groups are per-class, so the two names do not collide, and the operators
+/// that want prims are coming.
+///
+/// Highlight tints members toward a warm accent so the group reads in the
+/// viewport.
 pub fn resolve_group_geometry_with_errors(
     root: &FsNode,
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
         return None;
@@ -828,22 +873,56 @@ pub fn resolve_group_geometry_with_errors(
     let input_node = find_node_by_name(root, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let group_name = node_param_str(target, "Group Name", "group1");
-    let attr = format!("group:{}", group_name.trim());
+    let group_name = node_param_str(target, "Group Name", "group1").trim().to_string();
     let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
     let center = node_param_vec3(target, "Center", Vec3::ZERO);
     let half = node_param_vec3(target, "Size", Vec3::ONE) * 0.5;
     let invert = node_param_str(target, "Invert", "false") == "true";
     let highlight = node_param_str(target, "Highlight", "true") == "true";
 
-    let inside = |p: &[f32; 3]| -> bool {
-        (p[0] - center.x).abs() <= half.x
-            && (p[1] - center.y).abs() <= half.y
-            && (p[2] - center.z).abs() <= half.z
+    let inside = |p: Vec3| -> bool {
+        (p.x - center.x).abs() <= half.x
+            && (p.y - center.y).abs() <= half.y
+            && (p.z - center.z).abs() <= half.z
     };
 
-    let n = geom.vertices.len();
-    let mut member = vec![false; n];
+    let (member, prim_member) =
+        select_elements(&geom, &etype, target, |p| inside(p), invert);
+
+    apply_group(
+        &mut geom,
+        &group_name,
+        &member,
+        &prim_member,
+        highlight.then_some([1.0, 0.78, 0.20]),
+    );
+    Some(geom)
+}
+
+/// Which points (and, for a primitive selection, which primitives) a Group or
+/// Collision node selects. Shared because the two nodes differ only in the
+/// predicate: a box test versus a ray-cast or proximity test.
+///
+/// Returns a point mask and a primitive mask. `invert` flips the point mask,
+/// matching what the per-vertex inversion did.
+fn select_elements(
+    geom: &Detail,
+    etype: &str,
+    target: &FsNode,
+    hit: impl Fn(Vec3) -> bool,
+    invert: bool,
+) -> (Vec<bool>, Vec<bool>) {
+    let mut member = vec![false; geom.num_points()];
+    let mut prim_member = vec![false; geom.num_prims()];
+
+    let prim_centroid = |prim: usize| -> Vec3 {
+        let pts = geom.prim_points(prim);
+        if pts.is_empty() {
+            return Vec3::ZERO;
+        }
+        pts.iter().map(|&p| geom.pos(p as usize)).sum::<Vec3>() / pts.len() as f32
+    };
+
     let mode = node_param_str(target, "Mode", "Box").to_lowercase();
     if mode == "random" {
         let count = node_param_f32(target, "Count", 1.0).max(0.0) as usize;
@@ -861,86 +940,99 @@ pub fn resolve_group_geometry_with_errors(
             idx.truncate(take);
             idx
         };
-        match etype.as_str() {
+        match etype {
             "primitives" => {
-                for tri in draw(n / 3, count) {
-                    for k in 0..3 {
-                        member[tri * 3 + k] = true;
+                for prim in draw(geom.num_prims(), count) {
+                    prim_member[prim] = true;
+                    for &p in geom.prim_points(prim) {
+                        member[p as usize] = true;
                     }
                 }
             }
             "edges" => {
-                for e in draw((n / 3) * 3, count) {
-                    let (tri, side) = (e / 3, e % 3);
-                    member[tri * 3 + side] = true;
-                    member[tri * 3 + (side + 1) % 3] = true;
+                let edges = geom.edges().to_vec();
+                for e in draw(edges.len(), count) {
+                    member[edges[e][0] as usize] = true;
+                    member[edges[e][1] as usize] = true;
                 }
             }
             _ => {
-                let positions: Vec<[f32; 3]> = geom.vertices.iter().map(|v| v.pos).collect();
-                let (_, copies) = weld_points(&positions);
-                for pt in draw(copies.len(), count) {
-                    for &i in &copies[pt] {
-                        member[i] = true;
-                    }
+                for p in draw(geom.num_points(), count) {
+                    member[p] = true;
                 }
             }
         }
     } else {
-        match etype.as_str() {
+        match etype {
             "primitives" => {
-                for tri in 0..n / 3 {
-                    let b = tri * 3;
-                    let centroid = [
-                        (geom.vertices[b].pos[0] + geom.vertices[b + 1].pos[0] + geom.vertices[b + 2].pos[0]) / 3.0,
-                        (geom.vertices[b].pos[1] + geom.vertices[b + 1].pos[1] + geom.vertices[b + 2].pos[1]) / 3.0,
-                        (geom.vertices[b].pos[2] + geom.vertices[b + 1].pos[2] + geom.vertices[b + 2].pos[2]) / 3.0,
-                    ];
-                    if inside(&centroid) {
-                        member[b] = true;
-                        member[b + 1] = true;
-                        member[b + 2] = true;
-                    }
-                }
-            }
-            "edges" => {
-                for tri in 0..n / 3 {
-                    let b = tri * 3;
-                    for (a, c) in [(0usize, 1usize), (1, 2), (2, 0)] {
-                        if inside(&geom.vertices[b + a].pos) && inside(&geom.vertices[b + c].pos) {
-                            member[b + a] = true;
-                            member[b + c] = true;
+                for prim in 0..geom.num_prims() {
+                    if hit(prim_centroid(prim)) {
+                        prim_member[prim] = true;
+                        for &p in geom.prim_points(prim) {
+                            member[p as usize] = true;
                         }
                     }
                 }
             }
+            "edges" => {
+                for e in geom.edges() {
+                    let (a, b) = (e[0] as usize, e[1] as usize);
+                    if hit(geom.pos(a)) && hit(geom.pos(b)) {
+                        member[a] = true;
+                        member[b] = true;
+                    }
+                }
+            }
             _ => {
-                for (i, v) in geom.vertices.iter().enumerate() {
-                    if inside(&v.pos) {
-                        member[i] = true;
+                for p in 0..geom.num_points() {
+                    if hit(geom.pos(p)) {
+                        member[p] = true;
                     }
                 }
             }
         }
     }
+
     if invert {
         for m in member.iter_mut() {
             *m = !*m;
         }
-    }
-
-    for (i, v) in geom.vertices.iter_mut().enumerate() {
-        if member[i] {
-            v.attributes.insert(attr.clone(), GAttribute::Float(1.0));
-            if highlight {
-                let acc = [1.0, 0.78, 0.20];
-                for k in 0..3 {
-                    v.col[k] = v.col[k] * 0.35 + acc[k] * 0.65;
-                }
-            }
+        for m in prim_member.iter_mut() {
+            *m = !*m;
         }
     }
-    Some(geom)
+    (member, prim_member)
+}
+
+/// Write a selection into a named group, optionally tinting its members.
+fn apply_group(
+    geom: &mut Detail,
+    name: &str,
+    member: &[bool],
+    prim_member: &[bool],
+    highlight: Option<[f32; 3]>,
+) {
+    geom.points_mut().create_group(name);
+    for (p, _) in member.iter().enumerate().filter(|(_, &m)| m) {
+        geom.points_mut().add_to_group(name, p);
+    }
+    if prim_member.iter().any(|&m| m) {
+        geom.prims_mut().create_group(name);
+        for (prim, _) in prim_member.iter().enumerate().filter(|(_, &m)| m) {
+            geom.prims_mut().add_to_group(name, prim);
+        }
+    }
+    if let Some(acc) = highlight {
+        for (p, _) in member.iter().enumerate().filter(|(_, &m)| m) {
+            let base = geom.color(p);
+            let mixed = [
+                base[0] * 0.35 + acc[0] * 0.65,
+                base[1] * 0.35 + acc[1] * 0.65,
+                base[2] * 0.35 + acc[2] * 0.65,
+            ];
+            geom.set_color(p, mixed);
+        }
+    }
 }
 
 /// Squared distance from `p` to triangle `(a, b, c)` — closest point via the
@@ -1012,7 +1104,7 @@ pub fn resolve_collision_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
         return None;
@@ -1029,14 +1121,17 @@ pub fn resolve_collision_geometry_with_errors(
     let Some(collider) = generate_single_node_geometry_with_errors(root, collider_node, visited, ocl_error, sim) else {
         return Some(geom);
     };
-    if collider.vertices.len() < 3 || geom.vertices.is_empty() {
+    if collider.num_prims() == 0 || geom.is_empty() {
         return Some(geom);
     }
 
+    // The collider is still tested as triangles: both the ray cast and the
+    // closest-point walk are triangle routines, so a polygon is fanned here
+    // rather than each routine growing an n-gon case.
     let tris: Vec<[Vec3; 3]> = collider
-        .vertices
+        .triangulate(|pos, _| Vec3::from(pos))
         .chunks_exact(3)
-        .map(|t| [Vec3::from(t[0].pos), Vec3::from(t[1].pos), Vec3::from(t[2].pos)])
+        .map(|t| [t[0], t[1], t[2]])
         .collect();
 
     let method = node_param_str(target, "Method", "Inside").to_lowercase();
@@ -1045,8 +1140,7 @@ pub fn resolve_collision_geometry_with_errors(
     // tessellate on the axes, and a ray along one skims edge-on through
     // whole fans of triangles, double-counting crossings.
     let ray_dir = Vec3::new(0.9174771, 0.3369154, 0.2095338).normalize();
-    let hit = |p: &[f32; 3]| -> bool {
-        let pt = Vec3::from(*p);
+    let hit = |pt: Vec3| -> bool {
         if method == "proximity" {
             let d2 = distance * distance;
             tris.iter().any(|t| point_triangle_distance_sq(pt, t[0], t[1], t[2]) <= d2)
@@ -1059,55 +1153,23 @@ pub fn resolve_collision_geometry_with_errors(
         }
     };
 
-    let n = geom.vertices.len();
-    let mut member = vec![false; n];
+    // Collision has no Mode parameter, so `select_elements` takes its Box
+    // branch and applies `hit` per element — which is the whole difference
+    // between this node and Group.
     let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
-    if etype == "primitives" {
-        for tri in 0..n / 3 {
-            let b = tri * 3;
-            let centroid = [
-                (geom.vertices[b].pos[0] + geom.vertices[b + 1].pos[0] + geom.vertices[b + 2].pos[0]) / 3.0,
-                (geom.vertices[b].pos[1] + geom.vertices[b + 1].pos[1] + geom.vertices[b + 2].pos[1]) / 3.0,
-                (geom.vertices[b].pos[2] + geom.vertices[b + 1].pos[2] + geom.vertices[b + 2].pos[2]) / 3.0,
-            ];
-            if hit(&centroid) {
-                member[b] = true;
-                member[b + 1] = true;
-                member[b + 2] = true;
-            }
-        }
-    } else {
-        let positions: Vec<[f32; 3]> = geom.vertices.iter().map(|v| v.pos).collect();
-        let (_, copies) = weld_points(&positions);
-        for c in &copies {
-            if hit(&positions[c[0]]) {
-                for &i in c {
-                    member[i] = true;
-                }
-            }
-        }
-    }
-    if node_param_str(target, "Invert", "false") == "true" {
-        for m in member.iter_mut() {
-            *m = !*m;
-        }
-    }
+    let invert = node_param_str(target, "Invert", "false") == "true";
+    let (member, prim_member) = select_elements(&geom, &etype, target, hit, invert);
 
-    let group_name = node_param_str(target, "Group Name", "collisions");
-    let attr = format!("group:{}", group_name.trim());
+    let group_name = node_param_str(target, "Group Name", "collisions").trim().to_string();
     let highlight = node_param_str(target, "Highlight", "true") == "true";
-    for (i, v) in geom.vertices.iter_mut().enumerate() {
-        if member[i] {
-            v.attributes.insert(attr.clone(), GAttribute::Float(1.0));
-            if highlight {
-                // Contact reads as red — distinct from the Group node's amber.
-                let acc = [1.0, 0.30, 0.24];
-                for k in 0..3 {
-                    v.col[k] = v.col[k] * 0.35 + acc[k] * 0.65;
-                }
-            }
-        }
-    }
+    apply_group(
+        &mut geom,
+        &group_name,
+        &member,
+        &prim_member,
+        // Contact reads as red — distinct from the Group node's amber.
+        highlight.then_some([1.0, 0.30, 0.24]),
+    );
     Some(geom)
 }
 
@@ -1134,7 +1196,7 @@ pub fn resolve_relax_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     let input_name = node_param_str(target, "Input", "");
     if input_name.is_empty() {
         return None;
@@ -1151,48 +1213,38 @@ pub fn resolve_relax_geometry_with_errors(
     let Some(rest) = generate_single_node_geometry_with_errors(root, rest_node, visited, ocl_error, sim) else {
         return Some(geom);
     };
-    if rest.vertices.len() != geom.vertices.len() || geom.vertices.is_empty() {
+    if rest.num_points() != geom.num_points() || geom.is_empty() {
         return Some(geom);
     }
 
     let stiffness = node_param_f32(target, "Stiffness", 0.5).clamp(0.0, 1.0);
     let iterations = node_param_f32(target, "Iterations", 8.0).max(1.0) as usize;
     let pin = node_param_str(target, "Pin Group", "").trim().to_string();
-    let pin_attr = format!("group:{}", pin);
 
-    // Weld on REST positions: the input may already carry this step's
-    // displacement, and the weld must not split a point the pull moved.
-    let rest_pos: Vec<[f32; 3]> = rest.vertices.iter().map(|v| v.pos).collect();
-    let (point_of, copies) = weld_points(&rest_pos);
-    let m = copies.len();
-    let mut pos: Vec<Vec3> = copies.iter().map(|c| Vec3::from(geom.vertices[c[0]].pos)).collect();
-    let mut pinned = vec![false; m];
-    if !pin.is_empty() {
-        for (i, v) in geom.vertices.iter().enumerate() {
-            if v.attributes.contains_key(&pin_attr) {
-                pinned[point_of[i]] = true;
-            }
-        }
-    }
+    // The edges come from the REST shape's topology. This is where the soup
+    // cost the most: it had to weld both shapes by position and rebuild the
+    // unique edge list inside this node, every call, and weld on the rest
+    // positions specifically so that a displacement already applied to the
+    // input could not split a point apart. Points are points now, so the
+    // correspondence is just the index, and `edges()` is cached on the rest
+    // geometry for anyone else who asks.
+    let mut pos: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
+    let pinned: Vec<bool> = if pin.is_empty() {
+        vec![false; geom.num_points()]
+    } else {
+        (0..geom.num_points())
+            .map(|p| geom.points().in_group(&pin, p))
+            .collect()
+    };
 
-    // Unique edges over welded points; rest length from the rest shape.
-    let mut edges: Vec<(usize, usize, f32)> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for tri in 0..point_of.len() / 3 {
-        let b = tri * 3;
-        for (a, c) in [(0usize, 1usize), (1, 2), (2, 0)] {
-            let (pa, pc) = (point_of[b + a], point_of[b + c]);
-            if pa == pc {
-                continue;
-            }
-            let key = (pa.min(pc), pa.max(pc));
-            if seen.insert(key) {
-                let ra = Vec3::from(rest.vertices[copies[key.0][0]].pos);
-                let rc = Vec3::from(rest.vertices[copies[key.1][0]].pos);
-                edges.push((key.0, key.1, (rc - ra).length()));
-            }
-        }
-    }
+    let edges: Vec<(usize, usize, f32)> = rest
+        .edges()
+        .iter()
+        .map(|e| {
+            let (a, b) = (e[0] as usize, e[1] as usize);
+            (a, b, (rest.pos(b) - rest.pos(a)).length())
+        })
+        .collect();
 
     for _ in 0..iterations {
         for &(a, b, rest_len) in &edges {
@@ -1214,38 +1266,43 @@ pub fn resolve_relax_geometry_with_errors(
         }
     }
 
-    for (pt, c) in copies.iter().enumerate() {
-        for &i in c {
-            geom.vertices[i].pos = pos[pt].to_array();
-        }
+    for (p, v) in pos.iter().enumerate() {
+        geom.set_pos(p, *v);
     }
     Some(geom)
 }
 
-/// The Attribute node: pass the input geometry through, running one
-/// attribute edit over it. Operation picks the edit —
+/// The Attribute node: pass the input geometry through, running one attribute
+/// edit over its POINTS. Operation picks the edit —
 ///
-/// - **Create** inserts `Attribute Name` on every affected vertex as the
-///   chosen Type parsed from Value, overwriting an existing tag.
-/// - **Modify** combines Value into vertices that already carry the
-///   attribute (Combine = Set / Add / Multiply, componentwise). The
-///   built-ins `Pos` and `Col` are reachable by name here (Float3), so the
-///   node can displace or tint geometry; they cannot be created or deleted.
+/// - **Create** inserts `Attribute Name` as the chosen Type parsed from Value,
+///   overwriting an existing attribute of that name.
+/// - **Modify** combines Value into an attribute that already exists
+///   (Combine = Set / Add / Multiply, componentwise). The built-ins `Pos` and
+///   `Col` are reachable by name here (Float3), so the node can displace or
+///   tint geometry; they cannot be created or deleted.
 /// - **Delete** removes the attribute.
 ///
 /// Value splits on `:`/`,`/space like every vector param; a single-component
 /// Value broadcasts across wider types (`0.5` scales a Float3 uniformly). A
-/// non-empty Group name restricts every operation to the vertices a Group
-/// node tagged `group:<name>`, composing the two nodes. Errors (bad Value,
-/// component mismatch, editing a built-in) surface on the status line and
-/// pass the geometry through unchanged.
+/// non-empty Group name restricts every operation to the points a Group node
+/// put in it, composing the two nodes. Errors (bad Value, component mismatch,
+/// editing a built-in) surface on the status line and pass the geometry
+/// through unchanged.
+///
+/// Create and Delete are whole-attribute operations, so a Group narrows what
+/// they WRITE, not what exists: creating into a group leaves non-members at
+/// the type's zero rather than leaving them without the attribute, because a
+/// column covers its whole class. That is the one behaviour the columnar
+/// store changes here, and it is the reason a solver can read any attribute at
+/// any point without checking whether it is there.
 pub fn resolve_attribute_geometry_with_errors(
     root: &FsNode,
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     // No visited guard here: `generate_single_node_geometry_with_errors`
     // pushes the target's id before dispatching to this resolver, so a local
     // `visited.contains` check would see it and refuse every call (the trap
@@ -1263,16 +1320,16 @@ pub fn resolve_attribute_geometry_with_errors(
     }
     let op = node_param_str(target, "Operation", "Create").to_lowercase();
     let combine_mode = node_param_str(target, "Combine", "Set").to_lowercase();
-    let builtin = name.eq_ignore_ascii_case("Pos") || name.eq_ignore_ascii_case("Col");
+    let is_pos = name.eq_ignore_ascii_case("Pos");
+    let is_col = name.eq_ignore_ascii_case("Col");
+    let builtin = is_pos || is_col;
 
     let mut fail = String::new();
     let group = node_param_str(target, "Group", "");
-    let group_attr = {
-        let g = group.trim();
-        (!g.is_empty()).then(|| format!("group:{}", g))
-    };
-    let affected =
-        |v: &GVertex| group_attr.as_ref().map_or(true, |ga| v.attributes.contains_key(ga));
+    let group = group.trim().to_string();
+    let affected: Vec<usize> = (0..geom.num_points())
+        .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
+        .collect();
 
     // Value, as raw components. Delete never reads it; Create/Modify reject
     // the edit outright when any component fails to parse.
@@ -1309,9 +1366,7 @@ pub fn resolve_attribute_geometry_with_errors(
             if builtin {
                 fail = format!("'{}' is built-in and cannot be deleted", name);
             } else {
-                for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
-                    v.attributes.remove(&name);
-                }
+                geom.points_mut().remove(&name);
             }
         }
         "modify" => {
@@ -1320,36 +1375,32 @@ pub fn resolve_attribute_geometry_with_errors(
             } else if builtin {
                 match fit(3) {
                     Some(src) => {
-                        let tint_col = name.eq_ignore_ascii_case("Col");
-                        for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
-                            if tint_col {
-                                combine(&mut v.col, &src);
+                        for &p in &affected {
+                            let mut v = if is_col { geom.color(p) } else { geom.pos(p).to_array() };
+                            combine(&mut v, &src);
+                            if is_col {
+                                geom.set_color(p, v);
                             } else {
-                                combine(&mut v.pos, &src);
+                                geom.set_pos(p, Vec3::from(v));
                             }
                         }
                     }
                     None => fail = format!("Value '{}' does not fit Float3 '{}'", value_str, name),
                 }
             } else {
-                for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
-                    let Some(existing) = v.attributes.get_mut(&name) else { continue };
-                    let src = match existing {
-                        GAttribute::Float(_) => fit(1),
-                        GAttribute::Float2(_) => fit(2),
-                        GAttribute::Float3(_) => fit(3),
-                        GAttribute::Float4(_) => fit(4),
-                    };
-                    let Some(src) = src else {
-                        fail = format!("Value '{}' does not fit '{}'", value_str, name);
-                        break;
-                    };
-                    match existing {
-                        GAttribute::Float(x) => combine(std::slice::from_mut(x), &src),
-                        GAttribute::Float2(x) => combine(x, &src),
-                        GAttribute::Float3(x) => combine(x, &src),
-                        GAttribute::Float4(x) => combine(x, &src),
-                    }
+                match geom.points().get(&name).map(|a| a.ty()) {
+                    None => {}
+                    Some(ty) => match fit(ty.components()) {
+                        None => fail = format!("Value '{}' does not fit '{}'", value_str, name),
+                        Some(src) => {
+                            for &p in &affected {
+                                let Some(cur) = geom.points().value(&name, p) else { continue };
+                                let mut buf = attrib_components(cur);
+                                combine(&mut buf, &src);
+                                let _ = geom.points_mut().set_value(&name, p, components_attrib(ty, &buf));
+                            }
+                        }
+                    },
                 }
             }
         }
@@ -1360,27 +1411,23 @@ pub fn resolve_attribute_geometry_with_errors(
             } else if !value_ok {
                 fail = format!("Value '{}' does not parse as numbers", value_str);
             } else {
-                let ty = node_param_str(target, "Type", "Float").to_lowercase();
-                let width = match ty.as_str() {
-                    "float2" => 2,
-                    "float3" => 3,
-                    "float4" => 4,
-                    _ => 1,
+                let ty = match node_param_str(target, "Type", "Float").to_lowercase().as_str() {
+                    "float2" => crate::detail::AttribType::Float2,
+                    "float3" => crate::detail::AttribType::Float3,
+                    "float4" => crate::detail::AttribType::Float4,
+                    _ => crate::detail::AttribType::Float,
                 };
-                match fit(width) {
+                match fit(ty.components()) {
                     Some(src) => {
-                        let make = || match width {
-                            2 => GAttribute::Float2([src[0], src[1]]),
-                            3 => GAttribute::Float3([src[0], src[1], src[2]]),
-                            4 => GAttribute::Float4([src[0], src[1], src[2], src[3]]),
-                            _ => GAttribute::Float(src[0]),
-                        };
-                        for v in geom.vertices.iter_mut().filter(|v| affected(v)) {
-                            v.attributes.insert(name.clone(), make());
+                        let zero = components_attrib(ty, &vec![0.0; ty.components()]);
+                        let value = components_attrib(ty, &src);
+                        geom.points_mut().create(&name, zero);
+                        for &p in &affected {
+                            let _ = geom.points_mut().set_value(&name, p, value);
                         }
                     }
                     None => {
-                        fail = format!("Value '{}' does not fit {}", value_str, ty);
+                        fail = format!("Value '{}' does not fit {}", value_str, ty.name());
                     }
                 }
             }
@@ -1393,16 +1440,41 @@ pub fn resolve_attribute_geometry_with_errors(
     Some(geom)
 }
 
-/// Positions of the vertices a Group node tagged into `group:<name>` — the
-/// source data for the selected-Group viewport markers. Duplicate positions
-/// (the triangle soup repeats shared corners) are left in; `points_vertices`
-/// dedupes by quantized position.
-pub fn group_member_positions(geom: &Geometry, group_name: &str) -> Vec<Vertex3D> {
-    let attr = format!("group:{}", group_name.trim());
-    geom.vertices
-        .iter()
-        .filter(|v| v.attributes.contains_key(&attr))
-        .map(|v| Vertex3D { position: v.pos, color: [0.0; 3] })
+/// An attribute value as loose components, for the arithmetic that does not
+/// care how wide it is.
+fn attrib_components(v: AttribValue) -> Vec<f32> {
+    match v {
+        AttribValue::Float(x) => vec![x],
+        AttribValue::Float2(x) => x.to_vec(),
+        AttribValue::Float3(x) => x.to_vec(),
+        AttribValue::Float4(x) => x.to_vec(),
+        AttribValue::Int(x) => vec![x as f32],
+    }
+}
+
+/// Components back into a value of the given type, zero-padding a short slice.
+fn components_attrib(ty: crate::detail::AttribType, c: &[f32]) -> AttribValue {
+    let at = |i: usize| c.get(i).copied().unwrap_or(0.0);
+    match ty {
+        crate::detail::AttribType::Float => AttribValue::Float(at(0)),
+        crate::detail::AttribType::Float2 => AttribValue::Float2([at(0), at(1)]),
+        crate::detail::AttribType::Float3 => AttribValue::Float3([at(0), at(1), at(2)]),
+        crate::detail::AttribType::Float4 => AttribValue::Float4([at(0), at(1), at(2), at(3)]),
+        crate::detail::AttribType::Int => AttribValue::Int(at(0) as i32),
+    }
+}
+
+/// Positions of the points in a group — the source data for the
+/// selected-Group viewport markers.
+///
+/// The soup version had to hand back duplicates (it repeated every shared
+/// corner) and relied on `points_vertices` deduping by quantized position.
+/// A point group has each point once.
+pub fn group_member_positions(geom: &Detail, group_name: &str) -> Vec<Vertex3D> {
+    geom.points()
+        .group_members(group_name)
+        .into_iter()
+        .map(|p| Vertex3D { position: geom.positions()[p as usize], color: [0.0; 3] })
         .collect()
 }
 
@@ -1420,7 +1492,7 @@ pub fn resolve_scatter_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     // No visited guard here: `generate_single_node_geometry_with_errors`
     // pushes the target's id before dispatching to this resolver, so a local
     // `visited.contains` check refused every dispatched call — scatter
@@ -1442,10 +1514,8 @@ pub fn resolve_scatter_geometry_with_errors(
     let mut min_pos = Vec3::splat(f32::MAX);
     let mut max_pos = Vec3::splat(f32::MIN);
 
-    for chunk in geom.vertices.chunks_exact(3) {
-        let v0 = Vec3::from_array(chunk[0].pos);
-        let v1 = Vec3::from_array(chunk[1].pos);
-        let v2 = Vec3::from_array(chunk[2].pos);
+    for chunk in geom.triangulate(|pos, _| Vec3::from(pos)).chunks_exact(3) {
+        let (v0, v1, v2) = (chunk[0], chunk[1], chunk[2]);
 
         min_pos = min_pos.min(v0).min(v1).min(v2);
         max_pos = max_pos.max(v0).max(v1).max(v2);
@@ -1467,10 +1537,10 @@ pub fn resolve_scatter_geometry_with_errors(
     }
 
     let res = if triangles.is_empty() {
-        Geometry::new()
+        Detail::new()
     } else {
         let mut rng = SimpleRng::new(1337);
-        let mut scattered_geom = Geometry::new();
+        let mut scattered_geom = Detail::new();
         let mut found_count = 0;
         let max_attempts = (num_points * 100).max(10_000);
 
@@ -1502,7 +1572,7 @@ pub fn resolve_scatter_geometry_with_errors(
             }
 
             if intersection_count % 2 == 1 {
-                scattered_geom.merge(sphere_vertices_res(candidate, radius, 6, 8));
+                scattered_geom.merge(&sphere_detail(candidate, radius, 6, 8));
                 found_count += 1;
             }
         }
@@ -1726,9 +1796,9 @@ pub fn resolve_opencl_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     let input_name = node_param_str(target, "Input", "");
-    let mut geom = if !input_name.is_empty() {
+    let input = if !input_name.is_empty() {
         // Siblings first, exactly like the output type's lookup: subnet
         // templates (Extrude) wire their inner opencl to a child named
         // "input1", and a global-first search would resolve to the FIRST
@@ -1736,13 +1806,21 @@ pub fn resolve_opencl_geometry_with_errors(
         let sibling = find_parent_node(root, &target.id)
             .and_then(|p| p.children.iter().find(|c| c.name == input_name || c.id == input_name));
         if let Some(input_node) = sibling.or_else(|| find_node_by_name(root, &input_name)) {
-            generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim).unwrap_or_default()
+            generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
+                .unwrap_or_default()
         } else {
-            Geometry::default()
+            Detail::new()
         }
     } else {
-        Geometry::default()
+        Detail::new()
     };
+
+    // The kernel ABI is still (positions, colors) over a flat corner list, so
+    // this node — alone among the operators — flattens to a soup and comes
+    // back. Phase 1 widens the ABI to bind named attribute arrays and the
+    // round trip goes away.
+    let corner_point = input.triangulate_points();
+    let mut geom = detail_to_soup(&input);
     let code = node_param_str(target, "Code", "");
     if !code.is_empty() {
         let parsed_params = parse_dynamic_params(&code);
@@ -1802,7 +1880,33 @@ pub fn resolve_opencl_geometry_with_errors(
             }
         }
     }
-    Some(geom)
+
+    // A DEFORMER left the corner count alone, so every corner still belongs to
+    // the point it came from: write the results back in place and the input's
+    // topology, groups, attributes and point identities all survive. That
+    // matters most inside a simnet, where a kernel that re-welded its output
+    // every step would hand the solver a new set of points each frame.
+    //
+    // Where corners of one point disagree — a kernel free to move each corner
+    // independently — the first one wins, which is what deforming a surface
+    // whose points are shared has to mean.
+    //
+    // A GENERATOR built a different corner list, so there is nothing to map
+    // back onto; its output welds into fresh geometry with fresh identities,
+    // which is correct, because the points are genuinely new.
+    if geom.vertices.len() == corner_point.len() {
+        let mut result = input;
+        let mut written = vec![false; result.num_points()];
+        for (corner, v) in geom.vertices.iter().enumerate() {
+            let p = corner_point[corner] as usize;
+            if !std::mem::replace(&mut written[p], true) {
+                result.set_pos(p, Vec3::from(v.pos));
+                result.set_color(p, v.col);
+            }
+        }
+        return Some(result);
+    }
+    Some(soup_to_detail(&geom))
 }
 
 
@@ -2111,7 +2215,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
 /// The scene at the timeline's start frame, with a throwaway sim cache — every
 /// simnet shows its seed. Callers that have a timeline should build their own
 /// [`EvalSim`] and keep its [`SimCache`] across frames.
-pub fn network_sphere_vertices(root: &FsNode) -> Geometry {
+pub fn network_sphere_vertices(root: &FsNode) -> Detail {
     let mut err = None;
     let mut cache = SimCache::default();
     let mut sim = EvalSim::new(0, 0, &mut cache);
@@ -2135,13 +2239,13 @@ pub fn network_sphere_vertices_with_errors(
     start: &FsNode,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Geometry {
+) -> Detail {
     // Inside a simnet the chain is the simulation STEP; drawing its nodes
     // would show one un-iterated pass of the chain. The interior view is the
     // solved state at the current frame — the same geometry the parent level
     // draws for the simnet — toggled by the output child's geometry flag.
     if start.node_type.eq_ignore_ascii_case("simnet") {
-        let mut out = Geometry::new();
+        let mut out = Detail::new();
         let display_on = start
             .children
             .iter()
@@ -2151,19 +2255,19 @@ pub fn network_sphere_vertices_with_errors(
         if display_on {
             let mut visited = Vec::new();
             if let Some(geom) = resolve_simnet_geometry_with_errors(root, start, &mut visited, ocl_error, sim) {
-                out.merge(geom);
+                out.merge(&geom);
             }
         }
         return out;
     }
-    fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, top: bool, count: &mut usize, out: &mut Geometry, ocl_error: &mut Option<String>, sim: &mut EvalSim) {
+    fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, top: bool, count: &mut usize, out: &mut Detail, ocl_error: &mut Option<String>, sim: &mut EvalSim) {
         let is_visible = parent_visible && node.geometry_visible;
         if node.node_type.eq_ignore_ascii_case("sphere") {
             let idx = *count;
             *count += 1;
             if is_visible {
                 let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                out.merge(sphere_vertices(center, node_param_f32(node, "Radius", 0.5).max(0.05)));
+                out.merge(&sphere_detail(center, node_param_f32(node, "Radius", 0.5).max(0.05), 16, 24));
             }
         } else if node.node_type.eq_ignore_ascii_case("line") {
             let idx = *count;
@@ -2173,20 +2277,20 @@ pub fn network_sphere_vertices_with_errors(
                 let length = node_param_f32(node, "Length", 1.0);
                 let thickness = node_param_f32(node, "Thickness", 0.02);
                 let end = start + Vec3::new(0.0, length, 0.0);
-                out.merge(line_vertices(start, end, thickness));
+                out.merge(&box_detail(start, end, thickness));
             }
         } else if node.node_type.eq_ignore_ascii_case("curve") {
             // Absolute world coordinates: no grid-index placement, and
             // `count` untouched so find_sphere_index stays aligned.
             if is_visible {
-                out.merge(curve_geometry(node));
+                out.merge(&curve_detail(node));
             }
         } else if node.node_type.eq_ignore_ascii_case("points") {
             let idx = *count;
             *count += 1;
             if is_visible {
                 let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                out.merge(points_node_geometry(node, center));
+                out.merge(&points_detail(node, center));
             }
         } else if node.node_type.eq_ignore_ascii_case("transform") {
             let _idx = *count;
@@ -2194,7 +2298,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_transform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("scatter") {
@@ -2203,7 +2307,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_scatter_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("group") {
@@ -2212,7 +2316,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_group_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("attribute") {
@@ -2221,7 +2325,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_attribute_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("relax") {
@@ -2230,7 +2334,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_relax_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("collision") {
@@ -2239,7 +2343,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_collision_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("opencl") {
@@ -2248,7 +2352,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_opencl_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("simnet") {
@@ -2257,7 +2361,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_simnet_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
             // The chain inside a simnet is the simulation STEP, not scene
@@ -2279,7 +2383,7 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(geom);
+                    out.merge(&geom);
                 }
             }
             return;
@@ -2289,7 +2393,7 @@ pub fn network_sphere_vertices_with_errors(
         }
     }
 
-    let mut out = Geometry::new();
+    let mut out = Detail::new();
     let mut count = 0;
     for child in &start.children {
         visit(root, child, true, true, &mut count, &mut out, ocl_error, sim);
@@ -2632,6 +2736,15 @@ pub fn grid_vertices(thickness: f32, color: [f32; 3]) -> Vec<Vertex3D> {
 /// Spelled out because it is no longer `lat_steps * lon_steps * 6` — the two
 /// pole bands used to contribute a zero-area triangle each, and welded poles
 /// do not.
+/// Points in a welded UV sphere: the two poles plus `lat_steps - 1` rings.
+///
+/// The counterpart of [`sphere_soup_len`] on the other side of the weld, and
+/// the number every test that used to say `lat * lon * 6` now wants.
+#[cfg(test)]
+pub(crate) const fn sphere_point_len(lat_steps: usize, lon_steps: usize) -> usize {
+    2 + (lat_steps - 1) * lon_steps
+}
+
 #[cfg(test)]
 pub(crate) const fn sphere_soup_len(lat_steps: usize, lon_steps: usize) -> usize {
     (2 + (lat_steps - 2) * 2) * lon_steps * 3
@@ -2953,7 +3066,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         let geom = network_sphere_vertices(&root);
-        assert_eq!(geom.vertices.len(), 5 * super::sphere_soup_len(6, 8));
+        assert_eq!(geom.num_points(), 5 * super::sphere_point_len(6, 8));
 
         // Shape "None": every point sits in the same spot, so all five marker
         // spheres cover an identical (tiny) extent. A spread shape must not.
@@ -3051,10 +3164,10 @@ mod tests {
         // Test normal transform
         let mut visited = Vec::new();
         let geom1 = resolve_transform_geometry(&root, &transform1, &mut visited).unwrap();
-        assert!(!geom1.vertices.is_empty());
-        let avg_x = geom1.vertices.iter().map(|v| v.pos[0]).sum::<f32>() / geom1.vertices.len() as f32;
-        let avg_y = geom1.vertices.iter().map(|v| v.pos[1]).sum::<f32>() / geom1.vertices.len() as f32;
-        let avg_z = geom1.vertices.iter().map(|v| v.pos[2]).sum::<f32>() / geom1.vertices.len() as f32;
+        assert!(!geom1.is_empty());
+        let avg_x = geom1.positions().iter().map(|p| p[0]).sum::<f32>() / geom1.num_points() as f32;
+        let avg_y = geom1.positions().iter().map(|p| p[1]).sum::<f32>() / geom1.num_points() as f32;
+        let avg_z = geom1.positions().iter().map(|p| p[2]).sum::<f32>() / geom1.num_points() as f32;
         assert!((avg_x - -0.875).abs() < 0.01);
         assert!((avg_y - 2.55).abs() < 0.01);
         assert!((avg_z - 3.0).abs() < 0.01);
@@ -3105,9 +3218,9 @@ mod tests {
         };
         let mut visited = Vec::new();
         let geom2 = resolve_transform_geometry(&root_chained, &transform2, &mut visited).unwrap();
-        let avg_chained_x = geom2.vertices.iter().map(|v| v.pos[0]).sum::<f32>() / geom2.vertices.len() as f32;
-        let avg_chained_y = geom2.vertices.iter().map(|v| v.pos[1]).sum::<f32>() / geom2.vertices.len() as f32;
-        let avg_chained_z = geom2.vertices.iter().map(|v| v.pos[2]).sum::<f32>() / geom2.vertices.len() as f32;
+        let avg_chained_x = geom2.positions().iter().map(|p| p[0]).sum::<f32>() / geom2.num_points() as f32;
+        let avg_chained_y = geom2.positions().iter().map(|p| p[1]).sum::<f32>() / geom2.num_points() as f32;
+        let avg_chained_z = geom2.positions().iter().map(|p| p[2]).sum::<f32>() / geom2.num_points() as f32;
         assert!((avg_chained_x - -1.875).abs() < 0.01);
         assert!((avg_chained_y - 1.55).abs() < 0.01);
         assert!((avg_chained_z - 2.0).abs() < 0.01);
@@ -3246,11 +3359,11 @@ mod tests {
         let mut visited = Vec::new();
         let mut err = None;
         let geom = resolve_opencl_geometry_with_errors(&root, &opencl_node, &mut visited, &mut err, &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default())).unwrap();
-        assert!(!geom.vertices.is_empty());
+        assert!(!geom.is_empty());
         assert!(err.is_none());
 
         // The sphere should be translated up by 2.0 on the y axis compared to the standard sphere (which centers around y=0.55 for index 0)
-        let avg_y = geom.vertices.iter().map(|v| v.pos[1]).sum::<f32>() / geom.vertices.len() as f32;
+        let avg_y = geom.positions().iter().map(|p| p[1]).sum::<f32>() / geom.num_points() as f32;
         assert!((avg_y - 2.55).abs() < 0.01);
     }
 
@@ -3338,17 +3451,20 @@ mod tests {
         let geom = resolve_scatter_geometry(&root, &scatter, &mut visited).unwrap();
 
         // 15 scattered spheres, each a lat_steps=6, lon_steps=8 marker.
-        assert_eq!(geom.vertices.len(), 15 * super::sphere_soup_len(6, 8));
+        assert_eq!(geom.num_points(), 15 * super::sphere_point_len(6, 8));
 
         // Center of sphere at idx 0 is Vec3::new(-1.875, 0.55, 0.0). Radius = 0.5.
         // Let's check that each scattered sphere's center is indeed inside the parent sphere.
         let center = Vec3::new(-1.875, 0.55, 0.0);
-        for chunk in geom.vertices.chunks_exact(288) {
+        // Each marker is a lat=6, lon=8 sphere: two poles plus five rings of
+        // eight, and merge lays them down one after another.
+        const MARKER_POINTS: usize = 2 + (6 - 1) * 8;
+        for chunk in geom.positions().chunks_exact(MARKER_POINTS) {
             let mut sum = Vec3::ZERO;
-            for v in chunk {
-                sum += Vec3::from_array(v.pos);
+            for p in chunk {
+                sum += Vec3::from_array(*p);
             }
-            let avg = sum / 288.0;
+            let avg = sum / MARKER_POINTS as f32;
             let dist = avg.distance(center);
             assert!(dist <= 0.5, "Scattered point center {:?} (distance {}) is outside the sphere of radius 0.5", avg, dist);
         }
@@ -3370,7 +3486,7 @@ pub fn resolve_simnet_geometry_with_errors(
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
-) -> Option<Geometry> {
+) -> Option<Detail> {
     let output_node = target
         .children
         .iter()
@@ -3380,7 +3496,7 @@ pub fn resolve_simnet_geometry_with_errors(
     let seed = {
         let input_name = node_param_str(target, "Input", "");
         if input_name.is_empty() {
-            Geometry::new()
+            Detail::new()
         } else {
             find_node_by_name(root, &input_name)
                 .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
@@ -3469,19 +3585,19 @@ mod simnet_tests {
         let sub = node("id-sub", "Sub 1", "node", vec![], vec![inner]);
         let root = node("id-root", "root", "node", vec![], vec![outer, sub]);
 
-        const SPHERE: usize = super::sphere_soup_len(16, 24);
+        const SPHERE: usize = super::sphere_point_len(16, 24);
         let mut err = None;
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(0, 0, &mut cache);
         let all = network_sphere_vertices_with_errors(&root, &root, &mut err, &mut sim);
-        assert_eq!(all.vertices.len(), 2 * SPHERE);
+        assert_eq!(all.num_points(), 2 * SPHERE);
 
         let mut err = None;
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(0, 0, &mut cache);
         let scoped =
             network_sphere_vertices_with_errors(&root, &root.children[1], &mut err, &mut sim);
-        assert_eq!(scoped.vertices.len(), SPHERE);
+        assert_eq!(scoped.num_points(), SPHERE);
     }
 
     /// A simnet whose chain is one Transform: each step shifts the geometry by
@@ -3508,7 +3624,7 @@ mod simnet_tests {
         node("id-root", "root", "node", vec![], vec![sphere, sim])
     }
 
-    fn solve_at(root: &FsNode, frame: i32) -> Geometry {
+    fn solve_at(root: &FsNode, frame: i32) -> Detail {
         let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap();
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(frame, 1, &mut cache);
@@ -3518,8 +3634,8 @@ mod simnet_tests {
             .expect("simnet solves")
     }
 
-    fn min_x(g: &Geometry) -> f32 {
-        g.vertices.iter().map(|v| v.pos[0]).fold(f32::INFINITY, f32::min)
+    fn min_x(g: &Detail) -> f32 {
+        g.positions().iter().map(|p| p[0]).fold(f32::INFINITY, f32::min)
     }
 
     #[test]
@@ -3539,8 +3655,8 @@ mod simnet_tests {
         )
         .expect("seed geometry");
 
-        assert!(!seeded.vertices.is_empty(), "the sim produced nothing at its start frame");
-        assert_eq!(seeded.vertices.len(), raw.vertices.len());
+        assert!(!seeded.is_empty(), "the sim produced nothing at its start frame");
+        assert_eq!(seeded.num_points(), raw.num_points());
         assert!((min_x(&seeded) - min_x(&raw)).abs() < 1e-4,
             "at the start frame the sim has taken no steps, so it must BE the seed");
     }
@@ -3635,7 +3751,7 @@ mod simnet_tests {
         let mut sim = EvalSim::new(4, 1, &mut cache);
         let mut err = None;
         let interior = network_sphere_vertices_with_errors(&root, sim_node, &mut err, &mut sim);
-        assert!(!interior.vertices.is_empty(), "simnet interior rendered empty");
+        assert!(!interior.is_empty(), "simnet interior rendered empty");
         let moved = min_x(&interior) - base;
         assert!((moved - 3.0).abs() < 1e-4, "frame 4 = 3 steps of +1.0, got {moved}");
 
@@ -3649,7 +3765,7 @@ mod simnet_tests {
         let mut sim = EvalSim::new(4, 1, &mut cache);
         let mut err = None;
         let toggled = network_sphere_vertices_with_errors(&hidden, sim_node, &mut err, &mut sim);
-        assert!(toggled.vertices.is_empty(), "output toggle off should hide the solved state");
+        assert!(toggled.is_empty(), "output toggle off should hide the solved state");
     }
 
     /// Dived into a pass-through subnet (input → output, no generator) the
@@ -3665,23 +3781,23 @@ mod simnet_tests {
             vec![inner_input, inner_output]);
         let root = node("id-root", "root", "node", vec![], vec![sphere, sub]);
 
-        const SPHERE: usize = super::sphere_soup_len(16, 24);
+        const SPHERE: usize = super::sphere_point_len(16, 24);
         let mut err = None;
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(0, 0, &mut cache);
         let all = network_sphere_vertices_with_errors(&root, &root, &mut err, &mut sim);
-        assert_eq!(all.vertices.len(), SPHERE, "outer view must not gain a copy from the arms");
+        assert_eq!(all.num_points(), SPHERE, "outer view must not gain a copy from the arms");
 
         let mut err = None;
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(0, 0, &mut cache);
         let interior =
             network_sphere_vertices_with_errors(&root, &root.children[1], &mut err, &mut sim);
-        assert_eq!(interior.vertices.len(), 2 * SPHERE,
+        assert_eq!(interior.num_points(), 2 * SPHERE,
             "input draws the seed and output draws the chain result");
     }
 
-    fn eval(root: &FsNode, name: &str) -> Geometry {
+    fn eval(root: &FsNode, name: &str) -> Detail {
         let target = root.children.iter().find(|c| c.name == name).unwrap();
         let mut visited = Vec::new();
         let mut err = None;
@@ -3715,26 +3831,21 @@ mod simnet_tests {
         };
 
         let g = eval(&make_root("7"), "Group 1");
-        let tagged: Vec<usize> = (0..g.vertices.len())
-            .filter(|&i| g.vertices[i].attributes.contains_key("group:pull"))
-            .collect();
-        assert!(!tagged.is_empty(), "random mode selected nothing");
-        let anchor = g.vertices[tagged[0]].pos;
-        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
-        for &i in &tagged {
-            assert!(near(g.vertices[i].pos, anchor), "one random point must be ONE welded position");
-        }
-        for (i, v) in g.vertices.iter().enumerate() {
-            if near(v.pos, anchor) {
-                assert!(tagged.contains(&i), "a coincident copy was left untagged (would tear the surface)");
-            }
-        }
+        let tagged = g.points().group_members("pull");
+        // Count = 1 means ONE point. The soup version had to assert this the
+        // long way round — that every coincident copy of the drawn position was
+        // tagged too, or a downstream move would tear the surface open. There
+        // are no copies to miss now.
+        assert_eq!(tagged.len(), 1, "Count = 1 must select exactly one point");
 
         let again = eval(&make_root("7"), "Group 1");
-        let tagged_again: Vec<usize> = (0..again.vertices.len())
-            .filter(|&i| again.vertices[i].attributes.contains_key("group:pull"))
-            .collect();
-        assert_eq!(tagged, tagged_again, "same Seed must select the same point");
+        assert_eq!(
+            tagged,
+            again.points().group_members("pull"),
+            "same Seed must select the same point"
+        );
+        let other = eval(&make_root("12"), "Group 1");
+        assert_eq!(other.points().group_members("pull").len(), 1);
     }
 
     /// The Collision node's Inside method marks exactly the input points
@@ -3766,11 +3877,11 @@ mod simnet_tests {
         // center-symmetric, so the vertex mean is the center.
         let root = build("Sphere 2", "Inside");
         let s2_geom = eval(&root, "Sphere 2");
-        let n2 = s2_geom.vertices.len() as f32;
+        let n2 = s2_geom.num_points() as f32;
         let mut c2 = [0.0f32; 3];
-        for v in &s2_geom.vertices {
+        for p in s2_geom.positions() {
             for k in 0..3 {
-                c2[k] += v.pos[k] / n2;
+                c2[k] += p[k] / n2;
             }
         }
 
@@ -3779,39 +3890,38 @@ mod simnet_tests {
             ((p[0] - c2[0]).powi(2) + (p[1] - c2[1]).powi(2) + (p[2] - c2[2]).powi(2)).sqrt()
         };
         let mut tagged = 0usize;
-        for v in &g.vertices {
-            let has = v.attributes.contains_key("group:collisions");
-            if dist(v.pos) < 0.7 - 1e-3 {
-                assert!(has, "enclosed point untagged at {:?}", v.pos);
+        for (p, pos) in g.positions().iter().enumerate() {
+            let has = g.points().in_group("collisions", p);
+            if dist(*pos) < 0.7 - 1e-3 {
+                assert!(has, "enclosed point untagged at {:?}", pos);
                 tagged += 1;
-            } else if dist(v.pos) > 0.7 + 1e-2 {
-                assert!(!has, "outside point tagged at {:?}", v.pos);
+            } else if dist(*pos) > 0.7 + 1e-2 {
+                assert!(!has, "outside point tagged at {:?}", pos);
             }
         }
         assert!(tagged > 0, "overlapping spheres must tag the overlap cap");
-        assert!(tagged < g.vertices.len(), "only the cap is enclosed, not the whole sphere");
+        assert!(tagged < g.num_points(), "only the cap is enclosed, not the whole sphere");
 
         // Proximity is a SURFACE band, not containment: every tagged point
         // sits within Distance of the collider's surface, and with the two
         // spheres interpenetrating the band is non-empty.
         let prox = eval(&build("Sphere 2", "Proximity"), "Collision 1");
         let mut band = 0usize;
-        for v in &prox.vertices {
-            if v.attributes.contains_key("group:collisions") {
-                assert!(
-                    (dist(v.pos) - 0.7).abs() <= 0.05 + 1e-2,
-                    "proximity tag outside the band at {:?}",
-                    v.pos
-                );
-                band += 1;
-            }
+        for p in prox.points().group_members("collisions") {
+            let pos = prox.positions()[p as usize];
+            assert!(
+                (dist(pos) - 0.7).abs() <= 0.05 + 1e-2,
+                "proximity tag outside the band at {:?}",
+                pos
+            );
+            band += 1;
         }
         assert!(band > 0, "a 0.05 band around an intersecting surface must catch boundary points");
 
         // No collider configured: pass-through, nothing tagged.
         let clean = eval(&build("", "Inside"), "Collision 1");
         assert!(
-            clean.vertices.iter().all(|v| !v.attributes.contains_key("group:collisions")),
+            clean.points().group_members("collisions").is_empty(),
             "an unconfigured collider must not write the group"
         );
     }
@@ -3868,16 +3978,16 @@ mod simnet_tests {
         let base = eval(&root, "Group 1");
         let pulled = eval(&root, "Pull 1");
         let relaxed = eval(&root, "Relax 1");
-        assert_eq!(relaxed.vertices.len(), base.vertices.len());
+        assert_eq!(relaxed.num_points(), base.num_points());
 
         let dist = |a: [f32; 3], b: [f32; 3]| -> f32 {
             a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt()
         };
         let mut max_response: f32 = 0.0;
-        for i in 0..base.vertices.len() {
-            let moved = dist(relaxed.vertices[i].pos, base.vertices[i].pos);
-            if base.vertices[i].attributes.contains_key("group:pull") {
-                assert!(dist(relaxed.vertices[i].pos, pulled.vertices[i].pos) < 1e-4,
+        for i in 0..base.num_points() {
+            let moved = dist(relaxed.positions()[i], base.positions()[i]);
+            if base.points().in_group("pull", i) {
+                assert!(dist(relaxed.positions()[i], pulled.positions()[i]) < 1e-4,
                     "the pinned point must keep its pulled position");
             } else {
                 assert!(moved <= 0.5 + 1e-3, "a neighbor overshot the pull itself");

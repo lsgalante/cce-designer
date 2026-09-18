@@ -1239,6 +1239,7 @@ mod tests {
     #[test]
     fn test_template_meshes_wind_ccw_outward() {
         let templates_root = crate::app::load_fs_tree();
+        // Winding is a property of triangles, so this one flattens on purpose.
         let eval_template = |name: &str| -> crate::geometry::Geometry {
             let t = templates_root
                 .children
@@ -1272,7 +1273,7 @@ mod tests {
             )
             .expect("geometry");
             assert!(err.is_none(), "{name}: {err:?}");
-            g
+            crate::geometry::detail_to_soup(&g)
         };
         let tri_cross = |g: &crate::geometry::Geometry, tri: usize| -> [f32; 3] {
             let a = g.vertices[tri * 3].pos;
@@ -1389,13 +1390,13 @@ mod tests {
         ).expect("Geometry generation failed");
         
         assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
-        assert_eq!(geom.vertices.len(), 2304);
+        assert_eq!(geom.num_points(), crate::geometry::sphere_point_len(16, 24));
         
         let mut max_dist: f32 = 0.0;
-        for v in &geom.vertices {
-            let dx = v.pos[0] - 0.0;
-            let dy = v.pos[1] - 0.55;
-            let dz = v.pos[2] - 0.0;
+        for pos in geom.positions() {
+            let dx = pos[0] - 0.0;
+            let dy = pos[1] - 0.55;
+            let dz = pos[2] - 0.0;
             let dist = (dx*dx + dy*dy + dz*dz).sqrt();
             if dist > max_dist {
                 max_dist = dist;
@@ -1435,13 +1436,13 @@ mod tests {
         ).expect("Geometry generation failed");
         
         assert!(ocl_err_2.is_none(), "OpenCL compilation error: {:?}", ocl_err_2);
-        assert_eq!(geom_2.vertices.len(), 2304);
+        assert_eq!(geom_2.num_points(), crate::geometry::sphere_point_len(16, 24));
         
         let mut max_dist_2: f32 = 0.0;
-        for v in &geom_2.vertices {
-            let dx = v.pos[0] - 0.0;
-            let dy = v.pos[1] - 0.55;
-            let dz = v.pos[2] - 0.0;
+        for pos in geom_2.positions() {
+            let dx = pos[0] - 0.0;
+            let dy = pos[1] - 0.55;
+            let dz = pos[2] - 0.0;
             let dist = (dx*dx + dy*dy + dz*dz).sqrt();
             if dist > max_dist_2 {
                 max_dist_2 = dist;
@@ -1480,18 +1481,18 @@ mod tests {
                 .expect("Geometry generation failed")
         };
 
-        // Default: 4 points, 8 segments per span → 3*8 spans × 36 vertices.
+        // Default: 4 points, 8 segments per span → 3*8 spans, one box each.
         let mut instance = curve_template.clone();
         instance.id = "curve_inst".to_string();
         let geom = eval(&make_root(instance.clone()));
-        assert_eq!(geom.vertices.len(), 864);
-        for v in &geom.vertices {
-            assert!(v.pos.iter().all(|c| c.is_finite()), "curve produced non-finite positions");
+        assert_eq!(geom.num_points(), 24 * 8, "one eight-cornered box per span");
+        for pos in geom.positions() {
+            assert!(pos.iter().all(|c| c.is_finite()), "curve produced non-finite positions");
         }
         // The strip reaches both endpoint control points.
-        let near = |g: &crate::geometry::Geometry, p: [f32; 3]| {
-            g.vertices.iter().any(|v| {
-                (0..3).map(|k| (v.pos[k] - p[k]).powi(2)).sum::<f32>().sqrt() < 0.1
+        let near = |g: &crate::detail::Detail, p: [f32; 3]| {
+            g.positions().iter().any(|q| {
+                (0..3).map(|k| (q[k] - p[k]).powi(2)).sum::<f32>().sqrt() < 0.1
             })
         };
         assert!(near(&geom, [-0.75, 0.05, 0.0]), "curve does not reach its first point");
@@ -1502,17 +1503,17 @@ mod tests {
         instance.params.iter_mut().find(|p| p.name == "Points").unwrap().default =
             "0 0 0; 1 0 0".to_string();
         let root = make_root(instance.clone());
-        assert_eq!(eval(&root).vertices.len(), 288);
+        assert_eq!(eval(&root).num_points(), 8 * 8);
         assert_eq!(
-            crate::geometry::network_sphere_vertices(&root).vertices.len(),
-            288,
+            crate::geometry::network_sphere_vertices(&root).num_points(),
+            8 * 8,
             "scene walk and single-node eval disagree"
         );
 
         // No parseable points: empty geometry, not a panic.
         instance.params.iter_mut().find(|p| p.name == "Points").unwrap().default =
             "not points".to_string();
-        assert_eq!(eval(&make_root(instance)).vertices.len(), 0);
+        assert_eq!(eval(&make_root(instance)).num_points(), 0);
     }
 
     /// Points round-trip through the "Points" param format; malformed
@@ -1864,16 +1865,17 @@ mod tests {
             &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
         ).expect("Extrude geometry generation failed");
         assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
-        // 2304 sphere vertices = 768 triangles; 768 * 24 = 18432.
-        assert_eq!(geom.vertices.len(), 18432);
+        // The extrude kernel builds a wall per input triangle, so its output
+        // is a soup of loose shells; welding it is what 1850 counts.
+        assert_eq!(geom.num_points(), 1850);
 
         // Extruding a radius-0.5 sphere outward by the default 0.2 pushes the
         // farthest vertices to ~0.7 from its center.
         let mut max_dist: f32 = 0.0;
-        for v in &geom.vertices {
-            let dx = v.pos[0];
-            let dy = v.pos[1] - 0.55;
-            let dz = v.pos[2];
+        for pos in geom.positions() {
+            let dx = pos[0];
+            let dy = pos[1] - 0.55;
+            let dz = pos[2];
             max_dist = max_dist.max((dx * dx + dy * dy + dz * dz).sqrt());
         }
         assert!((max_dist - 0.7).abs() < 0.02, "Expected max extent ~0.7, got {}", max_dist);
@@ -1892,7 +1894,16 @@ mod tests {
             &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
         ).expect("Extrude geometry generation failed (no base)");
         assert!(ocl_err2.is_none(), "OpenCL compilation error: {:?}", ocl_err2);
-        assert_eq!(geom2.vertices.len(), 16128);
+        // Same POINTS as the based variant: the base cap's corners are the
+        // wall corners, so dropping the cap removes primitives, not places.
+        // The primitive count is where the two variants actually differ.
+        assert_eq!(geom2.num_points(), geom.num_points());
+        assert!(
+            geom2.num_prims() < geom.num_prims(),
+            "no-base extrude should have fewer prims: {} vs {}",
+            geom2.num_prims(),
+            geom.num_prims()
+        );
     }
 
     /// Group membership → viewport markers: the `group:<name>` tags a Group
@@ -1955,16 +1966,16 @@ mod tests {
 
         let members = crate::geometry::group_member_positions(&geom, "group1");
         assert!(!members.is_empty(), "the box should tag the upper hemisphere");
-        assert!(members.len() < geom.vertices.len(), "the box must not tag everything");
+        assert!(members.len() < geom.num_points(), "the box must not tag everything");
         for m in &members {
             assert!(m.position[1] >= 0.55 - 1e-4, "member below the box: y={}", m.position[1]);
         }
-        // The tags and the box agree: every untagged vertex is outside it.
-        let tagged: usize = geom.vertices.iter().filter(|v| v.attributes.contains_key("group:group1")).count();
-        assert_eq!(tagged, members.len());
-        for v in &geom.vertices {
-            if !v.attributes.contains_key("group:group1") {
-                assert!(v.pos[1] <= 0.55 + 1e-4, "non-member inside the box: y={}", v.pos[1]);
+        // The group and the box agree: every non-member is outside it.
+        assert_eq!(geom.points().group_len("group1"), members.len());
+        for p in 0..geom.num_points() {
+            if !geom.points().in_group("group1", p) {
+                let y = geom.positions()[p][1];
+                assert!(y <= 0.55 + 1e-4, "non-member inside the box: y={y}");
             }
         }
 
@@ -2016,7 +2027,7 @@ mod tests {
             inputs: 0,
             outputs: 0,
         };
-        let eval = |root: &FsNode, idx: usize| -> (Option<Geometry>, Option<String>) {
+        let eval = |root: &FsNode, idx: usize| -> (Option<crate::detail::Detail>, Option<String>) {
             let mut visited = Vec::new();
             let mut ocl_err = None;
             let geom = crate::geometry::generate_single_node_geometry_with_errors(
@@ -2065,22 +2076,22 @@ mod tests {
         let (geom, err) = eval(&root, 1);
         let geom = geom.expect("Create");
         assert!(err.is_none(), "{err:?}");
-        assert_eq!(geom.vertices.len(), base.vertices.len());
-        assert!(geom.vertices.iter().all(|v| matches!(
-            v.attributes.get("mass"),
-            Some(GAttribute::Float(x)) if (x - 2.5).abs() < 1e-6
+        assert_eq!(geom.num_points(), base.num_points());
+        assert!((0..geom.num_points()).all(|p| matches!(
+            geom.points().value("mass", p),
+            Some(AttribValue::Float(x)) if (x - 2.5).abs() < 1e-6
         )));
         let (geom, err) = eval(&root, 2);
         let geom = geom.expect("Modify");
         assert!(err.is_none(), "{err:?}");
-        assert!(geom.vertices.iter().all(|v| matches!(
-            v.attributes.get("mass"),
-            Some(GAttribute::Float(x)) if (x - 5.0).abs() < 1e-6
+        assert!((0..geom.num_points()).all(|p| matches!(
+            geom.points().value("mass", p),
+            Some(AttribValue::Float(x)) if (x - 5.0).abs() < 1e-6
         )));
         let (geom, err) = eval(&root, 3);
         let geom = geom.expect("Delete");
         assert!(err.is_none(), "{err:?}");
-        assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
+        assert!(!geom.points().has("mass"), "Delete removes the whole column");
 
         // Modify the Col built-in: multiply by a broadcast 0.5 halves every
         // channel relative to the baseline.
@@ -2097,9 +2108,9 @@ mod tests {
         let (geom, err) = eval(&root, 1);
         let geom = geom.expect("Col modify");
         assert!(err.is_none(), "{err:?}");
-        for (v, b) in geom.vertices.iter().zip(&base.vertices) {
+        for p in 0..geom.num_points() {
             for k in 0..3 {
-                assert!((v.col[k] - b.col[k] * 0.5).abs() < 1e-5);
+                assert!((geom.color(p)[k] - base.color(p)[k] * 0.5).abs() < 1e-5);
             }
         }
 
@@ -2117,11 +2128,11 @@ mod tests {
         let (geom, err) = eval(&root, 1);
         let geom = geom.expect("Pos modify");
         assert!(err.is_none(), "{err:?}");
-        for (v, b) in geom.vertices.iter().zip(&base.vertices) {
-            assert!((v.pos[1] - (b.pos[1] + 0.1)).abs() < 1e-5);
+        for p in 0..geom.num_points() {
+            assert!((geom.positions()[p][1] - (base.positions()[p][1] + 0.1)).abs() < 1e-5);
         }
 
-        // A Group name restricts Create to the tagged vertices.
+        // A Group name restricts what Create WRITES, not what exists.
         let root = root_with(vec![
             instance(sphere_t, "s", "Sphere 1", &[]),
             instance(group_t, "g", "Group 1", &[
@@ -2140,10 +2151,20 @@ mod tests {
         let (geom, err) = eval(&root, 2);
         let geom = geom.expect("grouped Create");
         assert!(err.is_none(), "{err:?}");
-        let tagged = geom.vertices.iter().filter(|v| v.attributes.contains_key("mass")).count();
-        let members = geom.vertices.iter().filter(|v| v.attributes.contains_key("group:group1")).count();
-        assert!(tagged > 0 && tagged < geom.vertices.len());
-        assert_eq!(tagged, members, "Create must land exactly on the group");
+        // A column covers its whole class, so the attribute exists
+        // everywhere; membership is the difference between the value and the
+        // type's zero. This is the one behaviour the columnar store changes,
+        // and it is what lets a solver read any attribute at any point.
+        let members = geom.points().group_members("group1");
+        assert!(!members.is_empty() && members.len() < geom.num_points());
+        for p in 0..geom.num_points() {
+            let want = if members.contains(&(p as u32)) { 1.0 } else { 0.0 };
+            assert_eq!(
+                geom.points().value("mass", p),
+                Some(AttribValue::Float(want)),
+                "point {p}"
+            );
+        }
 
         // A bad Value surfaces an error and passes the geometry through.
         let root = root_with(vec![
@@ -2158,8 +2179,8 @@ mod tests {
         let (geom, err) = eval(&root, 1);
         let geom = geom.expect("bad Value still passes geometry through");
         assert!(err.is_some(), "bad Value must surface an error");
-        assert_eq!(geom.vertices.len(), base.vertices.len());
-        assert!(geom.vertices.iter().all(|v| !v.attributes.contains_key("mass")));
+        assert_eq!(geom.num_points(), base.num_points());
+        assert!(!geom.points().has("mass"));
     }
 
     /// The param pane's attribute/group pickers: selecting an Attribute node
@@ -2296,7 +2317,7 @@ mod tests {
             &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
         ).expect("sphere with meta evaluates");
         assert!(err.is_none(), "{err:?}");
-        assert_eq!(geom.vertices.len(), 16 * 24 * 6);
+        assert_eq!(geom.num_points(), crate::geometry::sphere_point_len(16, 24));
 
         // Overlays: nothing while the prefs are off…
         let mut cache = crate::geometry::SimCache::default();
@@ -2305,8 +2326,9 @@ mod tests {
         assert!(markers.is_empty() && labels.is_empty() && wires.is_empty() && normals.is_empty());
 
         // …all four overlays for the flagged sphere: 240 marker verts per
-        // deduped point, labels matching the same dedupe, and one LINE_LIST
-        // pair per triangle edge (2304 verts = 768 triangles = 4608 pairs).
+        // POINT, one label per point, and one LINE_LIST pair per mesh edge.
+        // All three used to be "per distinct quantized position", reconstructed
+        // every frame; they are now just the point and edge lists.
         {
             let meta = root.children[0].children.iter_mut()
                 .find(|c| c.node_type == "meta").unwrap();
@@ -2317,13 +2339,13 @@ mod tests {
         let mut cache = crate::geometry::SimCache::default();
         let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
             &root, &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
-        assert!(!labels.is_empty() && labels.len() < 16 * 24 * 6);
+        assert_eq!(labels.len(), crate::geometry::sphere_point_len(16, 24), "one label per point");
         assert_eq!(markers.len(), labels.len() * 240);
         assert!(labels.iter().any(|(_, i)| *i > 0));
         // The marker color parameter flows into the vertices (linearized).
         let expect = cce_ui::colors::to_linear_rgb([1.0, 0.5, 0.0]);
         assert!(markers.iter().all(|v| v.color == expect));
-        assert_eq!(wires.len(), (16 * 24 * 6 / 3) * 6);
+        assert_eq!(wires.len(), geom.edges().len() * 2, "one pair per unique edge");
         // Normals: one whisker per distinct point, pointing OUT of the
         // sphere (center (0, 0.55, 0)) — this pins the winding/negation
         // convention, not just the count.
@@ -2394,19 +2416,20 @@ mod tests {
 
         // Defaults: a 16x16 grid at the origin, flat on y = 0.
         let base = build(&[]);
-        assert_eq!(base.vertices.len(), 16 * 16 * 6);
-        assert!(base.vertices.iter().all(|v| v.pos[1].abs() < 1e-6));
+        // A 16x16 cell grid shares its interior points: 17x17 of them.
+        assert_eq!(base.num_points(), 17 * 17);
+        assert!(base.positions().iter().all(|p| p[1].abs() < 1e-6));
 
         // Resolution: 3 columns x 2 rows.
-        assert_eq!(build(&[("Rows", "2"), ("Columns", "3")]).vertices.len(), 3 * 2 * 6);
+        assert_eq!(build(&[("Rows", "2"), ("Columns", "3")]).num_points(), 4 * 3);
 
         // Center: lifts to y = 0.3 and shifts x by 1 (span [0.5, 1.5]).
         let moved = build(&[("Center X", "1.0"), ("Center Y", "0.3")]);
         let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
-        for v in &moved.vertices {
-            assert!((v.pos[1] - 0.3).abs() < 1e-5);
-            min_x = min_x.min(v.pos[0]);
-            max_x = max_x.max(v.pos[0]);
+        for pos in moved.positions() {
+            assert!((pos[1] - 0.3).abs() < 1e-5);
+            min_x = min_x.min(pos[0]);
+            max_x = max_x.max(pos[0]);
         }
         assert!((min_x - 0.5).abs() < 0.01, "min x {min_x}");
         assert!((max_x - 1.5).abs() < 0.01, "max x {max_x}");
@@ -2499,7 +2522,7 @@ mod tests {
             &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
         ).expect("merged sphere evaluates");
         assert!(err.is_none(), "{err:?}");
-        assert_eq!(geom.vertices.len(), 4 * 6 * 6);
+        assert_eq!(geom.num_points(), crate::geometry::sphere_point_len(4, 6));
 
         // Group (renamed, matched by type): Highlight restored, value kept.
         let g = &root.children[1];
@@ -2557,25 +2580,28 @@ mod tests {
         };
 
         // Defaults: the historical 16x24 sphere.
-        assert_eq!(build(&[]).vertices.len(), 16 * 24 * 6);
+        assert_eq!(build(&[]).num_points(), crate::geometry::sphere_point_len(16, 24));
 
         // A coarse 4x6 tessellation.
         let coarse = build(&[("Rows", "4"), ("Columns", "6")]);
-        assert_eq!(coarse.vertices.len(), 4 * 6 * 6);
+        assert_eq!(coarse.num_points(), crate::geometry::sphere_point_len(4, 6));
 
         // Center X shifts the whole sphere: default spans x in [-0.5, 0.5],
         // shifted spans [0.5, 1.5].
         let shifted = build(&[("Center X", "1.0")]);
         let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
-        for v in &shifted.vertices {
-            min_x = min_x.min(v.pos[0]);
-            max_x = max_x.max(v.pos[0]);
+        for pos in shifted.positions() {
+            min_x = min_x.min(pos[0]);
+            max_x = max_x.max(pos[0]);
         }
         assert!((min_x - 0.5).abs() < 0.01, "min x {min_x}");
         assert!((max_x - 1.5).abs() < 0.01, "max x {max_x}");
 
         // Degenerate resolutions clamp instead of emitting nothing.
-        assert_eq!(build(&[("Rows", "0"), ("Columns", "0")]).vertices.len(), 2 * 3 * 6);
+        assert_eq!(
+            build(&[("Rows", "0"), ("Columns", "0")]).num_points(),
+            crate::geometry::sphere_point_len(2, 3)
+        );
     }
 
     /// A Scatter consumed downstream must still evaluate: the dispatch pushes
@@ -2634,7 +2660,7 @@ mod tests {
             &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
         ).expect("scatter evaluates on its own");
         assert!(err.is_none(), "{err:?}");
-        assert!(!direct.vertices.is_empty());
+        assert!(!direct.is_empty());
 
         // …and the SAME scatter feeding a downstream node yields the SAME
         // points, tagged by the consumer.
@@ -2649,8 +2675,8 @@ mod tests {
             &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
         ).expect("a node consuming a scatter must see its geometry");
         assert!(err.is_none(), "{err:?}");
-        assert_eq!(chained.vertices.len(), direct.vertices.len());
-        assert!(chained.vertices.iter().all(|v| v.attributes.contains_key("mass")));
+        assert_eq!(chained.num_points(), direct.num_points());
+        assert!(chained.points().has("mass"));
     }
 
     /// The Plane template mirrors the Sphere subnet (an opencl node feeding an
@@ -2707,27 +2733,27 @@ mod tests {
         // Defaults (Width/Length 1.0, Columns/Rows 16): a 16x16 grid of
         // two-triangle cells, flat at y = 0, spanning [-0.5, 0.5] on X and Z.
         let geom = generate(&[], "plane_inst");
-        assert_eq!(geom.vertices.len(), 16 * 16 * 6);
+        assert_eq!(geom.num_points(), 17 * 17);
         let mut max_x: f32 = 0.0;
         let mut max_z: f32 = 0.0;
-        for v in &geom.vertices {
-            assert!(v.pos[1].abs() < 1e-6, "Expected flat plane at y=0, got y={}", v.pos[1]);
-            max_x = max_x.max(v.pos[0].abs());
-            max_z = max_z.max(v.pos[2].abs());
+        for pos in geom.positions() {
+            assert!(pos[1].abs() < 1e-6, "Expected flat plane at y=0, got y={}", pos[1]);
+            max_x = max_x.max(pos[0].abs());
+            max_z = max_z.max(pos[2].abs());
         }
         assert!((max_x - 0.5).abs() < 0.01, "Expected half-width 0.5 on X, got {}", max_x);
         assert!((max_z - 0.5).abs() < 0.01, "Expected half-length 0.5 on Z, got {}", max_z);
 
         // Width and Length size their axes independently.
         let geom_2 = generate(&[("Width", "2.0"), ("Length", "3.0")], "plane_inst_2");
-        let max_x_2 = geom_2.vertices.iter().map(|v| v.pos[0].abs()).fold(0.0f32, f32::max);
-        let max_z_2 = geom_2.vertices.iter().map(|v| v.pos[2].abs()).fold(0.0f32, f32::max);
+        let max_x_2 = geom_2.positions().iter().map(|p| p[0].abs()).fold(0.0f32, f32::max);
+        let max_z_2 = geom_2.positions().iter().map(|p| p[2].abs()).fold(0.0f32, f32::max);
         assert!((max_x_2 - 1.0).abs() < 0.01, "Expected half-width 1.0 on X, got {}", max_x_2);
         assert!((max_z_2 - 1.5).abs() < 0.01, "Expected half-length 1.5 on Z, got {}", max_z_2);
 
         // Columns/Rows control the cell counts per axis.
         let geom_3 = generate(&[("Columns", "4"), ("Rows", "8")], "plane_inst_3");
-        assert_eq!(geom_3.vertices.len(), 4 * 8 * 6);
+        assert_eq!(geom_3.num_points(), 5 * 9, "a 4x8 cell grid is 5x9 points");
     }
 
     #[test]
@@ -2832,76 +2858,50 @@ mod tests {
 
     #[test]
     fn test_geometry_attributes_system() {
-        let mut attrs1 = std::collections::HashMap::new();
-        attrs1.insert("UV".to_string(), GAttribute::Float2([0.1, 0.2]));
-        attrs1.insert("ID".to_string(), GAttribute::Float(42.0));
+        // Two points, built the way the pipeline builds them.
+        let mut geom = Detail::new();
+        geom.add_point(Vec3::new(1.0, 2.0, 3.0));
+        geom.add_point(Vec3::new(4.0, 5.0, 6.0));
+        geom.set_color(0, [1.0, 0.0, 0.0]);
+        geom.set_color(1, [0.0, 1.0, 0.0]);
 
-        let v1 = GVertex {
-            pos: [1.0, 2.0, 3.0],
-            col: [1.0, 0.0, 0.0],
-            attributes: attrs1,
-        };
+        // A column covers its whole class. The soup could hold an attribute on
+        // one vertex and not the next, which is what the dashes in this
+        // spreadsheet used to mean; there is no ragged case left to render.
+        geom.points_mut().create("UV", AttribValue::Float2([0.0; 2]));
+        geom.points_mut().set_value("UV", 0, AttribValue::Float2([0.1, 0.2])).unwrap();
+        geom.points_mut().set_value("UV", 1, AttribValue::Float2([0.3, 0.4])).unwrap();
+        geom.points_mut().create("ID", AttribValue::Int(0));
+        geom.points_mut().set_value("ID", 0, AttribValue::Int(42)).unwrap();
+        geom.points_mut().create_group("pinned");
+        geom.points_mut().add_to_group("pinned", 1);
 
-        let mut attrs2 = std::collections::HashMap::new();
-        attrs2.insert("Norm".to_string(), GAttribute::Float3([0.0, 1.0, 0.0]));
-        attrs2.insert("UV".to_string(), GAttribute::Float2([0.3, 0.4]));
+        assert_eq!(geom.num_points(), 2);
+        let render_verts = crate::geometry::detail_vertices(&geom);
+        assert!(render_verts.is_empty(), "two loose points make no triangles");
 
-        let v2 = GVertex {
-            pos: [4.0, 5.0, 6.0],
-            col: [0.0, 1.0, 0.0],
-            attributes: attrs2,
-        };
+        let (headers, rows) = State::geometry_to_spreadsheet_data(&geom);
+        assert_eq!(
+            headers,
+            vec![
+                "Point", "Pos.x", "Pos.y", "Pos.z", "Col.r", "Col.g", "Col.b",
+                "ID", "UV.x", "UV.y", "g:pinned",
+            ]
+        );
 
-        let mut geom1 = Geometry { vertices: vec![v1] };
-        let geom2 = Geometry { vertices: vec![v2] };
-
-        geom1.merge(geom2);
-        assert_eq!(geom1.vertices.len(), 2);
-
-        let render_verts = geom1.to_vertex3d_vec();
-        assert_eq!(render_verts.len(), 2);
-        assert_eq!(render_verts[0].position, [1.0, 2.0, 3.0]);
-        assert_eq!(render_verts[0].color, [1.0, 0.0, 0.0]);
-        assert_eq!(render_verts[1].position, [4.0, 5.0, 6.0]);
-        assert_eq!(render_verts[1].color, [0.0, 1.0, 0.0]);
-
-        let (headers, rows) = State::geometry_to_spreadsheet_data(&geom1);
-
-        let expected_headers = vec![
-            "Vertex".to_string(),
-            "Pos.x".to_string(),
-            "Pos.y".to_string(),
-            "Pos.z".to_string(),
-            "Col.r".to_string(),
-            "Col.g".to_string(),
-            "Col.b".to_string(),
-            "ID".to_string(),
-            "Norm.x".to_string(),
-            "Norm.y".to_string(),
-            "Norm.z".to_string(),
-            "UV.x".to_string(),
-            "UV.y".to_string(),
-        ];
-        assert_eq!(headers, expected_headers);
-
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 2, "one row per point");
         assert_eq!(rows[0][0], "0");
-        assert_eq!(rows[0][1], "1.0000"); // Pos X
-        assert_eq!(rows[0][7], "42.0000"); // ID
-        assert_eq!(rows[0][8], "-"); // Norm.x
-        assert_eq!(rows[0][9], "-"); // Norm.y
-        assert_eq!(rows[0][10], "-"); // Norm.z
-        assert_eq!(rows[0][11], "0.1000"); // UV.x
-        assert_eq!(rows[0][12], "0.2000"); // UV.y
+        assert_eq!(rows[0][1], "1.0000"); // Pos.x
+        assert_eq!(rows[0][4], "1.0000"); // Col.r
+        assert_eq!(rows[0][7], "42"); // ID, an integer and printed as one
+        assert_eq!(rows[0][8], "0.1000"); // UV.x
+        assert_eq!(rows[0][10], "", "point 0 is not in the group");
 
         assert_eq!(rows[1][0], "1");
-        assert_eq!(rows[1][1], "4.0000"); // Pos X
-        assert_eq!(rows[1][7], "-"); // ID
-        assert_eq!(rows[1][8], "0.0000"); // Norm.x
-        assert_eq!(rows[1][9], "1.0000"); // Norm.y
-        assert_eq!(rows[1][10], "0.0000"); // Norm.z
-        assert_eq!(rows[1][11], "0.3000"); // UV.x
-        assert_eq!(rows[1][12], "0.4000"); // UV.y
+        assert_eq!(rows[1][1], "4.0000");
+        assert_eq!(rows[1][7], "0", "unwritten is the type's zero, not a dash");
+        assert_eq!(rows[1][9], "0.4000"); // UV.y
+        assert_eq!(rows[1][10], "1", "point 1 is in the group");
     }
 
     #[test]
@@ -2910,10 +2910,10 @@ mod tests {
         let end = Vec3::new(0.0, 1.0, 0.0);
         let geom = line_vertices(start, end, 0.02);
         
-        // A box line should contain 36 vertices (6 faces * 2 triangles * 3 vertices)
+        // A box line is 36 soup vertices: 6 faces * 2 triangles * 3 corners.
         assert_eq!(geom.vertices.len(), 36);
-        
-        // Every vertex should have "Norm" and "UV" attributes
+
+        // Every corner still carries Norm and UV through the soup adapter.
         for v in &geom.vertices {
             assert!(v.attributes.contains_key("Norm"));
             assert!(v.attributes.contains_key("UV"));

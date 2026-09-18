@@ -41,7 +41,7 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>) -> Resul
         // Non-fatal: OpenCL nodes just contribute nothing, like the viewport.
         eprintln!("thumbnail: OpenCL error (geometry partially skipped): {e}");
     }
-    let verts = geom.to_vertex3d_vec();
+    let verts = crate::geometry::detail_vertices(&geom);
     let (tris, mats) = rt_scene_from_verts(&verts);
 
     // Frame the scene: bounding sphere fit into a 0.9 rad vertical FOV from a

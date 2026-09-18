@@ -1119,6 +1119,15 @@ impl Detail {
     /// that vertices a kernel emitted from the same formula weld reliably.
     /// Color is carried onto `Cd`, taking the first copy of each welded point.
     pub fn from_triangle_soup(positions: &[[f32; 3]], colors: &[[f32; 3]]) -> Detail {
+        Self::from_triangle_soup_with_map(positions, colors).0
+    }
+
+    /// [`Detail::from_triangle_soup`], plus the point each input corner welded
+    /// onto — so a caller holding per-corner data can carry it across.
+    pub fn from_triangle_soup_with_map(
+        positions: &[[f32; 3]],
+        colors: &[[f32; 3]],
+    ) -> (Detail, Vec<u32>) {
         let mut detail = Detail::new();
         let mut key_to_point: HashMap<(i64, i64, i64), u32> = HashMap::new();
         let mut point_of: Vec<u32> = Vec::with_capacity(positions.len());
@@ -1152,7 +1161,28 @@ impl Detail {
                 .attribs
                 .insert(CD.to_string(), AttribData::Float3(cd));
         }
-        detail
+        (detail, point_of)
+    }
+
+    /// The point behind every corner [`Detail::triangulate`] emits, in the
+    /// same order.
+    ///
+    /// Lets a caller that had to flatten to triangles — the OpenCL launcher,
+    /// until the Phase 1 ABI binds attributes directly — put results back on
+    /// the points they came from instead of welding the output and losing
+    /// every identity.
+    pub fn triangulate_points(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        for prim in 0..self.num_prims() {
+            let pts = self.prim_points(prim);
+            if pts.len() < 3 {
+                continue;
+            }
+            for i in 1..pts.len() - 1 {
+                out.extend_from_slice(&[pts[0], pts[i], pts[i + 1]]);
+            }
+        }
+        out
     }
 
     /// Fan-triangulate every primitive, handing each corner to `make` as

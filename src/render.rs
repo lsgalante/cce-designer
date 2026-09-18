@@ -963,7 +963,7 @@ impl State {
             self.update_status_text("Geometry updated successfully.");
         }
 
-        let verts = geom.to_vertex3d_vec();
+        let verts = crate::geometry::detail_vertices(&geom);
         self.vertex_count_spheres = verts.len() as u32;
         // Cache for the path tracer, so RT mode never re-runs the node
         // graph / OpenCL kernels; the version bump invalidates its scene.
@@ -1062,25 +1062,29 @@ pub(crate) fn collect_meta_overlays(
                 root, node, &mut visited, &mut err, sim,
             ) {
                 if want_wires {
-                    // Each triangle's three edges as LINE_LIST pairs carrying
-                    // the geometry's own colors — the sphere_edges expansion,
-                    // scoped to this node.
-                    for tri in geom.vertices.chunks_exact(3) {
-                        for (a, b) in [(0usize, 1usize), (1, 2), (2, 0)] {
-                            for v in [&tri[a], &tri[b]] {
-                                wires.push(crate::geometry::Vertex3D {
-                                    position: v.pos,
-                                    color: v.col,
-                                });
-                            }
+                    // The geometry's own edge list as LINE_LIST pairs, carrying
+                    // its own colors. Two changes from the soup version, both
+                    // of them the topology finally being visible: an edge two
+                    // faces share is drawn once instead of twice, and a quad
+                    // shows as a quad — the fan diagonal was never an edge of
+                    // the mesh, only of its triangulation.
+                    for e in geom.edges() {
+                        for &p in e {
+                            let p = p as usize;
+                            wires.push(crate::geometry::Vertex3D {
+                                position: geom.positions()[p],
+                                color: geom.color(p),
+                            });
                         }
                     }
                 }
                 if want_markers {
+                    // One marker per point. The soup emitted one per corner and
+                    // leaned on points_vertices deduping by position.
                     let src: Vec<crate::geometry::Vertex3D> = geom
-                        .vertices
+                        .positions()
                         .iter()
-                        .map(|v| crate::geometry::Vertex3D { position: v.pos, color: [0.0; 3] })
+                        .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
                         .collect();
                     markers.extend(crate::geometry::points_vertices(
                         &src,
@@ -1089,58 +1093,51 @@ pub(crate) fn collect_meta_overlays(
                     ));
                 }
                 if want_normals {
-                    // Smooth vertex normals from topology: per distinct
-                    // position, the normalized sum of touching triangles'
-                    // face normals. Template meshes wind CCW seen from
-                    // outside (the raster culling convention — the sphere's
-                    // historical CW winding is fixed), so the plain
-                    // cross(B-A, C-A) points outward. The kernel outputs'
-                    // Norm attribute is a default up-vector — useless here.
+                    // Smooth point normals: for each point, the normalized sum
+                    // of the face normals of the primitives touching it.
+                    // Template meshes wind CCW seen from outside (the raster
+                    // culling convention), so the plain cross(B-A, C-A) points
+                    // outward. The kernel outputs' Norm attribute is a default
+                    // up-vector — useless here.
+                    //
+                    // The soup had to reconstruct "which triangles touch this
+                    // point" by hashing quantized positions, every frame. That
+                    // was a weld in all but name, and it is what point_prims
+                    // answers directly.
                     use glam::Vec3;
-                    let quant = |p: &[f32; 3]| {
-                        (
-                            (p[0] * 1000.0).round() as i32,
-                            (p[1] * 1000.0).round() as i32,
-                            (p[2] * 1000.0).round() as i32,
-                        )
-                    };
-                    let mut acc: std::collections::HashMap<(i32, i32, i32), ([f32; 3], Vec3)> =
-                        std::collections::HashMap::new();
-                    for tri in geom.vertices.chunks_exact(3) {
-                        let a = Vec3::from_array(tri[0].pos);
-                        let b = Vec3::from_array(tri[1].pos);
-                        let c = Vec3::from_array(tri[2].pos);
-                        let n = (b - a).cross(c - a);
-                        if n.length_squared() <= 1e-12 {
-                            continue;
-                        }
-                        for v in tri {
-                            acc.entry(quant(&v.pos)).or_insert((v.pos, Vec3::ZERO)).1 += n;
-                        }
-                    }
                     let len = point_size * 4.0;
                     let color = cce_ui::colors::to_linear_rgb([0.45, 0.8, 1.0]);
-                    for (pos, sum) in acc.values() {
+                    for p in 0..geom.num_points() {
+                        let mut sum = Vec3::ZERO;
+                        for &prim in geom.point_prims(p) {
+                            let pts = geom.prim_points(prim as usize);
+                            if pts.len() < 3 {
+                                continue;
+                            }
+                            let a = geom.pos(pts[0] as usize);
+                            let b = geom.pos(pts[1] as usize);
+                            let c = geom.pos(pts[2] as usize);
+                            let n = (b - a).cross(c - a);
+                            if n.length_squared() > 1e-12 {
+                                sum += n;
+                            }
+                        }
                         let n = sum.normalize_or_zero();
                         if n == Vec3::ZERO {
                             continue;
                         }
-                        let tip = Vec3::from_array(*pos) + n * len;
-                        normals.push(crate::geometry::Vertex3D { position: *pos, color });
+                        let pos = geom.positions()[p];
+                        let tip = geom.pos(p) + n * len;
+                        normals.push(crate::geometry::Vertex3D { position: pos, color });
                         normals.push(crate::geometry::Vertex3D { position: tip.to_array(), color });
                     }
                 }
                 if want_numbers {
-                    let mut seen = std::collections::HashSet::new();
-                    for (i, v) in geom.vertices.iter().enumerate() {
-                        let key = (
-                            (v.pos[0] * 1000.0).round() as i32,
-                            (v.pos[1] * 1000.0).round() as i32,
-                            (v.pos[2] * 1000.0).round() as i32,
-                        );
-                        if seen.insert(key) {
-                            labels.push((v.pos, i as u32));
-                        }
+                    // The point's index, which is now also its spreadsheet row.
+                    // The soup numbered by first-corner-at-this-position, so
+                    // the overlay and the spreadsheet disagreed.
+                    for p in 0..geom.num_points() {
+                        labels.push((geom.positions()[p], p as u32));
                     }
                 }
             }

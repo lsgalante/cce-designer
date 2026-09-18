@@ -89,12 +89,15 @@ touches none of the geometry work and can be picked up in any gap.
 
 *Largest. Blocks Phases 1, 2, 3, 4 and 6 — all of them.*
 
-> **Underway.** `src/detail.rs` holds the container — points, vertices,
+> **Mostly landed.** `src/detail.rs` holds the container — points, vertices,
 > primitives, detail; columnar attributes with integers and real groups; stable
-> `PointId`s; lazily built CSR topology. It stands alone and is fully tested;
-> nothing produces or consumes it yet. Remaining: migrate the generators, then
-> the operators, then the consumers (spreadsheet, overlays, kernel ABI), then
-> delete `geometry::Geometry`.
+> `PointId`s; lazily built CSR topology. The generators build it, every operator
+> works on it, and the pipeline's currency IS a `Detail`: the spreadsheet lists
+> points, the overlays read the point and edge lists, and `weld_points` is gone.
+>
+> What remains: the OpenCL node still flattens to a soup and back, because the
+> kernel ABI is Phase 1's job — `detail_to_soup` / `soup_to_detail` are the
+> bridge, and `geometry::Geometry` survives only to serve them.
 
 Replace the vertex list with **points, vertices, primitives and detail**, each
 carrying its own columnar attribute arrays — one `Vec<f32>` per named attribute

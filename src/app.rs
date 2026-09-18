@@ -42,6 +42,7 @@ use cce_ui::colors;
 use glam::{Mat4, Vec3};
 
 use crate::geometry::*;
+use crate::detail::Detail;
 use crate::slots::*;
 use crate::shortcut::{ShortcutManager, Action};
 use cce_ui::vk::{SceneDraw, TextSpan};
@@ -2573,15 +2574,17 @@ impl State {
                     &mut err,
                     &mut sim,
                 ) {
-                    for v in &geom.vertices {
-                        for k in v.attributes.keys() {
-                            if let Some(g) = k.strip_prefix("group:") {
-                                if !g.contains(',') {
-                                    groups.insert(g.to_string());
-                                }
-                            } else if !k.contains(',') {
-                                attrs.insert(k.clone());
-                            }
+                    // Groups and attributes are separate namespaces now, so
+                    // the menus read each directly instead of sifting a
+                    // "group:" prefix out of one attribute map.
+                    for g in geom.points().group_names() {
+                        if !g.contains(',') {
+                            groups.insert(g.to_string());
+                        }
+                    }
+                    for a in geom.points().names() {
+                        if !a.contains(',') {
+                            attrs.insert(a.to_string());
                         }
                     }
                 }
@@ -3154,9 +3157,14 @@ impl State {
     }
 
 
-pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec<Vec<String>>) {
+pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<Vec<String>>) {
+    // One row per POINT, not per triangle corner. The soup listed the same
+    // place once for every face touching it — a sphere came to 2304 rows for
+    // 362 places — and the row number meant nothing a user could point at.
+    // It is now the point index, which is also what the Point Numbers overlay
+    // draws.
     let mut headers = vec![
-        "Vertex".to_string(),
+        "Point".to_string(),
         "Pos.x".to_string(),
         "Pos.y".to_string(),
         "Pos.z".to_string(),
@@ -3165,87 +3173,70 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Geometry) -> (Vec<String>, Vec
         "Col.b".to_string(),
     ];
 
-    let mut custom_keys = std::collections::BTreeSet::new();
-    for v in &geom.vertices {
-        for k in v.attributes.keys() {
-            custom_keys.insert(k.clone());
-        }
-    }
-    let custom_keys: Vec<String> = custom_keys.into_iter().collect();
+    // Columnar storage means the columns are known up front, from the store
+    // rather than from a scan of every element's map. `names()` is sorted, so
+    // they hold still between frames.
+    let attribs: Vec<(String, crate::detail::AttribType)> = geom
+        .points()
+        .names()
+        .into_iter()
+        .filter(|n| *n != crate::detail::CD)
+        .filter_map(|n| geom.points().get(n).map(|a| (n.to_string(), a.ty())))
+        .collect();
 
-    for key in &custom_keys {
-        if let Some(val) = geom.vertices.iter().find_map(|v| v.attributes.get(key)) {
-            match val {
-                GAttribute::Float(_) => {
-                    headers.push(key.clone());
-                }
-                GAttribute::Float2(_) => {
-                    headers.push(format!("{}.x", key));
-                    headers.push(format!("{}.y", key));
-                }
-                GAttribute::Float3(_) => {
-                    headers.push(format!("{}.x", key));
-                    headers.push(format!("{}.y", key));
-                    headers.push(format!("{}.z", key));
-                }
-                GAttribute::Float4(_) => {
-                    headers.push(format!("{}.x", key));
-                    headers.push(format!("{}.y", key));
-                    headers.push(format!("{}.z", key));
-                    headers.push(format!("{}.w", key));
+    for (name, ty) in &attribs {
+        match ty.components() {
+            1 => headers.push(name.clone()),
+            n => {
+                for c in ["x", "y", "z", "w"].iter().take(n) {
+                    headers.push(format!("{}.{}", name, c));
                 }
             }
         }
+    }
+
+    let groups = geom.points().group_names();
+    for g in &groups {
+        headers.push(format!("g:{}", g));
     }
 
     let mut rows = Vec::new();
-    for (i, v) in geom.vertices.iter().enumerate() {
+    for p in 0..geom.num_points() {
+        let pos = geom.positions()[p];
+        let col = geom.color(p);
         let mut row = vec![
-            i.to_string(),
-            format!("{:.4}", v.pos[0]),
-            format!("{:.4}", v.pos[1]),
-            format!("{:.4}", v.pos[2]),
-            format!("{:.4}", v.col[0]),
-            format!("{:.4}", v.col[1]),
-            format!("{:.4}", v.col[2]),
+            p.to_string(),
+            format!("{:.4}", pos[0]),
+            format!("{:.4}", pos[1]),
+            format!("{:.4}", pos[2]),
+            format!("{:.4}", col[0]),
+            format!("{:.4}", col[1]),
+            format!("{:.4}", col[2]),
         ];
 
-        for key in &custom_keys {
-            if let Some(val) = v.attributes.get(key) {
-                match val {
-                    GAttribute::Float(f) => {
-                        row.push(format!("{:.4}", f));
-                    }
-                    GAttribute::Float2(arr) => {
-                        row.push(format!("{:.4}", arr[0]));
-                        row.push(format!("{:.4}", arr[1]));
-                    }
-                    GAttribute::Float3(arr) => {
-                        row.push(format!("{:.4}", arr[0]));
-                        row.push(format!("{:.4}", arr[1]));
-                        row.push(format!("{:.4}", arr[2]));
-                    }
-                    GAttribute::Float4(arr) => {
-                        row.push(format!("{:.4}", arr[0]));
-                        row.push(format!("{:.4}", arr[1]));
-                        row.push(format!("{:.4}", arr[2]));
-                        row.push(format!("{:.4}", arr[3]));
-                    }
+        for (name, ty) in &attribs {
+            // A column covers its whole class, so there is no "this element
+            // does not have it" case left to render as a dash.
+            match geom.points().value(name, p) {
+                Some(crate::detail::AttribValue::Float(f)) => row.push(format!("{:.4}", f)),
+                Some(crate::detail::AttribValue::Int(i)) => row.push(i.to_string()),
+                Some(crate::detail::AttribValue::Float2(a)) => {
+                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
                 }
-            } else {
-                if let Some(val) = geom.vertices.iter().find_map(|v| v.attributes.get(key)) {
-                    let count = match val {
-                        GAttribute::Float(_) => 1,
-                        GAttribute::Float2(_) => 2,
-                        GAttribute::Float3(_) => 3,
-                        GAttribute::Float4(_) => 4,
-                    };
-                    for _ in 0..count {
-                        row.push("-".to_string());
-                    }
+                Some(crate::detail::AttribValue::Float3(a)) => {
+                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
                 }
+                Some(crate::detail::AttribValue::Float4(a)) => {
+                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
+                }
+                None => row.extend(std::iter::repeat("-".to_string()).take(ty.components())),
             }
         }
+
+        for g in &groups {
+            row.push(if geom.points().in_group(g, p) { "1".to_string() } else { String::new() });
+        }
+
         rows.push(row);
     }
 
