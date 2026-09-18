@@ -385,6 +385,26 @@ impl AttribStore {
         self.attribs.remove(name)
     }
 
+    /// Install a whole array as an attribute, which is how a generator that
+    /// computed every value in one pass writes them — one move instead of an
+    /// element-at-a-time walk.
+    ///
+    /// A length mismatch is refused rather than padded: an array that does not
+    /// line up with its class is a caller bug, and silently zero-filling it
+    /// would put the wrong value on every element after the first mistake.
+    pub fn insert(&mut self, name: &str, data: AttribData) -> Result<(), String> {
+        if data.len() != self.len {
+            return Err(format!(
+                "attribute {:?} has {} entries, the class has {}",
+                name,
+                data.len(),
+                self.len
+            ));
+        }
+        self.attribs.insert(name.to_string(), data);
+        Ok(())
+    }
+
     pub fn value(&self, name: &str, i: usize) -> Option<AttribValue> {
         self.attribs.get(name).and_then(|a| a.get(i))
     }

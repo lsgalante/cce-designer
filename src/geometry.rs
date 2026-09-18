@@ -9,6 +9,7 @@ use opencl3::kernel::{Kernel, ExecuteKernel};
 use opencl3::memory::{Buffer as ClBuffer, CL_MEM_READ_WRITE};
 use opencl3::types::{cl_float, cl_int, CL_TRUE};
 use glam::Vec3;
+use crate::detail::{AttribData, AttribValue, Detail, CD};
 
 struct SimpleRng {
     state: u32,
@@ -158,29 +159,140 @@ pub fn cube_vertices() -> Vec<Vertex3D> {
     data.iter().map(|&(p, c)| Vertex3D { position: p, color: c }).collect()
 }
 
-pub fn sphere_vertices_res(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usize) -> Geometry {
-    let mut vertices = Vec::new();
+/// Fan-triangulate a [`Detail`] back into the triangle soup the evaluation
+/// pipeline still speaks, carrying attributes onto every corner.
+///
+/// **This is the migration bridge, and it is meant to die.** Generators build
+/// real geometry now; the resolvers, the spreadsheet and the kernel launcher
+/// have not been converted yet, so each generator's public entry point still
+/// hands them a soup. When the pipeline's currency becomes `Detail`, this
+/// function and the adapters calling it go with it.
+///
+/// Point and vertex attributes both land on the corner, vertex winning a name
+/// clash — a vertex attribute is by definition the more specific answer for
+/// that corner. `Cd` is dropped from the attribute map because the soup keeps
+/// color in its own field. Integers widen to floats, the soup's `GAttribute`
+/// having no integer case; nothing round-trips back through here, so the
+/// narrowing is one-way and harmless.
+pub fn detail_to_soup(d: &Detail) -> Geometry {
+    let point_attrs: Vec<&str> = d.points().names().into_iter().filter(|n| *n != CD).collect();
+    let vert_attrs = d.verts().names();
 
-    for lat in 0..lat_steps {
-        let theta0 = std::f32::consts::PI * lat as f32 / lat_steps as f32;
-        let theta1 = std::f32::consts::PI * (lat + 1) as f32 / lat_steps as f32;
-        for lon in 0..lon_steps {
-            let phi0 = std::f32::consts::TAU * lon as f32 / lon_steps as f32;
-            let phi1 = std::f32::consts::TAU * (lon + 1) as f32 / lon_steps as f32;
-            let p00 = sphere_point(center, radius, theta0, phi0);
-            let p10 = sphere_point(center, radius, theta1, phi0);
-            let p11 = sphere_point(center, radius, theta1, phi1);
-            let p01 = sphere_point(center, radius, theta0, phi1);
-            vertices.push(sphere_vertex(center, p00));
-            vertices.push(sphere_vertex(center, p10));
-            vertices.push(sphere_vertex(center, p11));
-            vertices.push(sphere_vertex(center, p00));
-            vertices.push(sphere_vertex(center, p11));
-            vertices.push(sphere_vertex(center, p01));
+    let mut vertices = Vec::new();
+    for prim in 0..d.num_prims() {
+        let verts = d.prim_verts(prim);
+        let pts = d.prim_points(prim);
+        if pts.len() < 3 {
+            continue;
+        }
+        for i in 1..pts.len() - 1 {
+            for corner in [0, i, i + 1] {
+                let p = pts[corner] as usize;
+                let v = verts.start + corner;
+                let mut attributes = HashMap::new();
+                for name in &point_attrs {
+                    if let Some(val) = d.points().value(name, p) {
+                        attributes.insert(name.to_string(), soup_attr(val));
+                    }
+                }
+                for name in &vert_attrs {
+                    if let Some(val) = d.verts().value(name, v) {
+                        attributes.insert(name.to_string(), soup_attr(val));
+                    }
+                }
+                vertices.push(GVertex { pos: d.positions()[p], col: d.color(p), attributes });
+            }
         }
     }
-
     Geometry { vertices }
+}
+
+fn soup_attr(v: AttribValue) -> GAttribute {
+    match v {
+        AttribValue::Float(x) => GAttribute::Float(x),
+        AttribValue::Float2(x) => GAttribute::Float2(x),
+        AttribValue::Float3(x) => GAttribute::Float3(x),
+        AttribValue::Float4(x) => GAttribute::Float4(x),
+        AttribValue::Int(x) => GAttribute::Float(x as f32),
+    }
+}
+
+/// A UV sphere as shared points and quads.
+///
+/// The poles are ONE point each, not a ring of coincident copies, and the
+/// seam at phi = 0 closes onto itself — so every interior point has valence 4
+/// and the surface is genuinely connected. The soup this replaced could
+/// express neither: it emitted `lat_steps * lon_steps * 6` loose corners, of
+/// which the two pole bands were zero-area triangles.
+///
+/// `Norm` and `UV` are POINT attributes, computed from the surface normal
+/// exactly as before. Both are pure functions of the normal, so a welded point
+/// has one answer — including at the seam, where the old per-corner UVs
+/// already agreed because they were derived from the normal rather than from
+/// phi.
+pub fn sphere_detail(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usize) -> Detail {
+    let lat_steps = lat_steps.max(2);
+    let lon_steps = lon_steps.max(3);
+    let mut d = Detail::new();
+
+    let north = d.add_point(sphere_point(center, radius, 0.0, 0.0));
+    let mut rings: Vec<Vec<u32>> = Vec::with_capacity(lat_steps - 1);
+    for lat in 1..lat_steps {
+        let theta = std::f32::consts::PI * lat as f32 / lat_steps as f32;
+        let ring = (0..lon_steps)
+            .map(|lon| {
+                let phi = std::f32::consts::TAU * lon as f32 / lon_steps as f32;
+                d.add_point(sphere_point(center, radius, theta, phi))
+            })
+            .collect();
+        rings.push(ring);
+    }
+    let south = d.add_point(sphere_point(center, radius, std::f32::consts::PI, 0.0));
+
+    // Winding follows the soup's exactly, so the fan in `Detail::triangulate`
+    // reproduces the old triangles corner for corner — minus the degenerate
+    // pole pair, which is why a sphere is now 2*lon_steps triangles lighter.
+    let wrap = |lon: usize| (lon + 1) % lon_steps;
+    for lon in 0..lon_steps {
+        d.add_prim(&[north, rings[0][lon], rings[0][wrap(lon)]]);
+    }
+    for lat in 1..lat_steps - 1 {
+        let (a, b) = (&rings[lat - 1], &rings[lat]);
+        for lon in 0..lon_steps {
+            d.add_prim(&[a[lon], b[lon], b[wrap(lon)], a[wrap(lon)]]);
+        }
+    }
+    let last = &rings[lat_steps - 2];
+    for lon in 0..lon_steps {
+        d.add_prim(&[last[lon], south, last[wrap(lon)]]);
+    }
+
+    let n: Vec<Vec3> = (0..d.num_points())
+        .map(|p| (d.pos(p) - center).normalize_or_zero())
+        .collect();
+    let norms = n.iter().map(|n| n.to_array()).collect();
+    let uvs = n
+        .iter()
+        .map(|n| {
+            [
+                0.5 + n.z.atan2(n.x) / std::f32::consts::TAU,
+                0.5 - n.y.asin() / std::f32::consts::PI,
+            ]
+        })
+        .collect();
+    let cds = n
+        .iter()
+        .map(|n| [0.35 + n.x.abs() * 0.35, 0.45 + n.y.abs() * 0.35, 0.85])
+        .collect();
+    let points = d.points_mut();
+    let _ = points.insert("Norm", AttribData::Float3(norms));
+    let _ = points.insert("UV", AttribData::Float2(uvs));
+    let _ = points.insert(CD, AttribData::Float3(cds));
+    d
+}
+
+pub fn sphere_vertices_res(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usize) -> Geometry {
+    detail_to_soup(&sphere_detail(center, radius, lat_steps, lon_steps))
 }
 
 pub fn sphere_vertices(center: Vec3, radius: f32) -> Geometry {
@@ -195,32 +307,20 @@ fn sphere_point(center: Vec3, radius: f32, theta: f32, phi: f32) -> Vec3 {
     )
 }
 
-fn sphere_vertex(center: Vec3, point: Vec3) -> GVertex {
-    let n = (point - center).normalize_or_zero();
-    let u = 0.5 + n.z.atan2(n.x) / std::f32::consts::TAU;
-    let v = 0.5 - n.y.asin() / std::f32::consts::PI;
-
-    let pos = point.to_array();
-    let col = [0.35 + n.x.abs() * 0.35, 0.45 + n.y.abs() * 0.35, 0.85];
-
-    let mut attributes = HashMap::new();
-    attributes.insert("Norm".to_string(), GAttribute::Float3(n.to_array()));
-    attributes.insert("UV".to_string(), GAttribute::Float2([u, v]));
-
-    GVertex {
-        pos,
-        col,
-        attributes,
-    }
-}
-
-pub fn line_vertices(start: Vec3, end: Vec3, thickness: f32) -> Geometry {
-    let mut vertices = Vec::new();
+/// A line as a box: eight shared corner points and six quads.
+///
+/// Where the sphere's normals live on points because the surface is smooth,
+/// a box's live on VERTICES — three faces meet at every corner with three
+/// different normals, and a point attribute could only hold one of them. This
+/// is what the vertex class is for, and the soup had no way to say it: it
+/// stored 36 corners so that it could store 36 normals.
+pub fn box_detail(start: Vec3, end: Vec3, thickness: f32) -> Detail {
+    let mut d = Detail::new();
     let dir = (end - start).normalize_or_zero();
     if dir.length_squared() < 0.0001 {
-        return Geometry { vertices };
+        return d;
     }
-    
+
     // Find two orthogonal vectors to dir
     let up = if dir.x.abs() > 0.9 { Vec3::Y } else { Vec3::X };
     let u = dir.cross(up).normalize();
@@ -239,44 +339,43 @@ pub fn line_vertices(start: Vec3, end: Vec3, thickness: f32) -> Geometry {
     let c6 = end + t * u + t * v;
     let c7 = end - t * u + t * v;
     
-    // Helper to add a triangle face
-    let mut add_quad = |p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, normal: Vec3, color: [f32; 3]| {
-        let make_vertex = |p: Vec3| {
-            let mut attributes = HashMap::new();
-            attributes.insert("Norm".to_string(), GAttribute::Float3(normal.to_array()));
-            attributes.insert("UV".to_string(), GAttribute::Float2([0.0, 0.0]));
-            GVertex {
-                pos: p.to_array(),
-                col: color,
-                attributes,
-            }
-        };
-        // Triangle 1: p0, p1, p2
-        vertices.push(make_vertex(p0));
-        vertices.push(make_vertex(p1));
-        vertices.push(make_vertex(p2));
-        // Triangle 2: p0, p2, p3
-        vertices.push(make_vertex(p0));
-        vertices.push(make_vertex(p2));
-        vertices.push(make_vertex(p3));
-    };
+    let corners = [c0, c1, c2, c3, c4, c5, c6, c7];
+    for c in corners {
+        d.add_point(c);
+    }
 
-    let col = [0.85, 0.45, 0.35]; // distinct color for lines
-    
-    // Front face (start cap)
-    add_quad(c0, c1, c2, c3, -dir, col);
-    // Back face (end cap)
-    add_quad(c5, c4, c7, c6, dir, col);
-    // Left face
-    add_quad(c4, c0, c3, c7, -u, col);
-    // Right face
-    add_quad(c1, c5, c6, c2, u, col);
-    // Top face
-    add_quad(c3, c2, c6, c7, v, col);
-    // Bottom face
-    add_quad(c0, c4, c5, c1, -v, col);
+    // Face winding is the soup's: each `add_quad(p0, p1, p2, p3)` emitted
+    // (p0, p1, p2) then (p0, p2, p3), which is exactly a fan over the quad.
+    let faces: [([u32; 4], Vec3); 6] = [
+        ([0, 1, 2, 3], -dir), // start cap
+        ([5, 4, 7, 6], dir),  // end cap
+        ([4, 0, 3, 7], -u),   // left
+        ([1, 5, 6, 2], u),    // right
+        ([3, 2, 6, 7], v),    // top
+        ([0, 4, 5, 1], -v),   // bottom
+    ];
+    for (quad, _) in &faces {
+        d.add_prim(quad);
+    }
 
-    Geometry { vertices }
+    let mut norms = Vec::with_capacity(d.num_verts());
+    for (_, normal) in &faces {
+        norms.extend(std::iter::repeat(normal.to_array()).take(4));
+    }
+    let (num_verts, num_points) = (d.num_verts(), d.num_points());
+    let _ = d.verts_mut().insert("Norm", AttribData::Float3(norms));
+    let _ = d
+        .verts_mut()
+        .insert("UV", AttribData::Float2(vec![[0.0, 0.0]; num_verts]));
+    // A distinct color for lines.
+    let _ = d
+        .points_mut()
+        .insert(CD, AttribData::Float3(vec![[0.85, 0.45, 0.35]; num_points]));
+    d
+}
+
+pub fn line_vertices(start: Vec3, end: Vec3, thickness: f32) -> Geometry {
+    detail_to_soup(&box_detail(start, end, thickness))
 }
 
 /// Parse a curve node's "Points" param: control points as `x y z` triples
@@ -347,16 +446,26 @@ pub fn sample_catmull_rom(pts: &[Vec3], segs: usize) -> Vec<Vec3> {
 /// absolute world coordinates — deliberately not offset by the grid index
 /// the other primitives use, because the curve viewer state edits them in
 /// world space.
-pub fn curve_geometry(node: &FsNode) -> Geometry {
+/// The curve node's geometry: one box per sampled span.
+///
+/// The spans stay separate pieces — consecutive boxes meet but do not share
+/// points, exactly as the soup had it. Welding them would fuse the curve into
+/// one surface, which is a modeling decision the node has never made and is
+/// not this migration's to make.
+pub fn curve_detail(node: &FsNode) -> Detail {
     let pts = parse_curve_points(&node_param_str(node, "Points", ""));
     let segs = node_param_f32(node, "Segments", 8.0).max(1.0) as usize;
     let thickness = node_param_f32(node, "Thickness", 0.02).max(0.001);
     let samples = sample_catmull_rom(&pts, segs);
-    let mut geom = Geometry::new();
+    let mut d = Detail::new();
     for w in samples.windows(2) {
-        geom.merge(line_vertices(w[0], w[1], thickness));
+        d.merge(&box_detail(w[0], w[1], thickness));
     }
-    geom
+    d
+}
+
+pub fn curve_geometry(node: &FsNode) -> Geometry {
+    detail_to_soup(&curve_detail(node))
 }
 
 pub fn node_param_f32(node: &FsNode, name: &str, fallback: f32) -> f32 {
@@ -2193,9 +2302,18 @@ pub fn network_sphere_vertices_with_errors(
 /// consumers — the single-node resolver and the scene walk — so the two
 /// renderings can never drift apart.
 pub fn points_node_geometry(node: &FsNode, center: Vec3) -> Geometry {
+    detail_to_soup(&points_detail(node, center))
+}
+
+/// The Points node: a marker sphere at each generated location.
+///
+/// Every marker stays its own piece — `merge` reallocates identities, so two
+/// markers that happen to land on the same spot are still two points with two
+/// identities rather than one welded blob.
+pub fn points_detail(node: &FsNode, center: Vec3) -> Detail {
     let num_points = node_param_f32(node, "Points", 100.0) as i32;
     let shape = node_param_str(node, "Shape", "None");
-    let mut geom = Geometry::new();
+    let mut d = Detail::new();
     for i in 0..num_points {
         let t = i as f32 / num_points.max(1) as f32;
         let offset = match shape.as_str() {
@@ -2217,9 +2335,9 @@ pub fn points_node_geometry(node: &FsNode, center: Vec3) -> Geometry {
             // "None" and anything unrecognized: every point at the same spot.
             _ => Vec3::ZERO,
         };
-        geom.merge(sphere_vertices_res(center + offset, 0.02, 6, 8));
+        d.merge(&sphere_detail(center + offset, 0.02, 6, 8));
     }
-    geom
+    d
 }
 
 pub fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {
@@ -2508,9 +2626,197 @@ pub fn grid_vertices(thickness: f32, color: [f32; 3]) -> Vec<Vertex3D> {
     geom.to_vertex3d_vec()
 }
 
+/// How many soup vertices a welded UV sphere fans out to: two pole bands of
+/// triangles, `lat_steps - 2` bands of quads, three vertices per triangle.
+///
+/// Spelled out because it is no longer `lat_steps * lon_steps * 6` — the two
+/// pole bands used to contribute a zero-area triangle each, and welded poles
+/// do not.
+#[cfg(test)]
+pub(crate) const fn sphere_soup_len(lat_steps: usize, lon_steps: usize) -> usize {
+    (2 + (lat_steps - 2) * 2) * lon_steps * 3
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The soup generator the welded sphere replaced, kept verbatim so the
+    /// migration can be checked against it rather than against a remembered
+    /// vertex count.
+    #[cfg(test)]
+    fn sphere_soup_before_welding(
+        center: Vec3,
+        radius: f32,
+        lat_steps: usize,
+        lon_steps: usize,
+    ) -> Vec<[f32; 3]> {
+        let mut v = Vec::new();
+        for lat in 0..lat_steps {
+            let theta0 = std::f32::consts::PI * lat as f32 / lat_steps as f32;
+            let theta1 = std::f32::consts::PI * (lat + 1) as f32 / lat_steps as f32;
+            for lon in 0..lon_steps {
+                let phi0 = std::f32::consts::TAU * lon as f32 / lon_steps as f32;
+                let phi1 = std::f32::consts::TAU * (lon + 1) as f32 / lon_steps as f32;
+                let p00 = sphere_point(center, radius, theta0, phi0);
+                let p10 = sphere_point(center, radius, theta1, phi0);
+                let p11 = sphere_point(center, radius, theta1, phi1);
+                let p01 = sphere_point(center, radius, theta0, phi1);
+                for p in [p00, p10, p11, p00, p11, p01] {
+                    v.push(p.to_array());
+                }
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn test_welded_sphere_reproduces_the_soup_it_replaced() {
+        let (center, radius, lat, lon) = (Vec3::new(0.1, 0.2, 0.3), 0.7, 16, 24);
+        let before = sphere_soup_before_welding(center, radius, lat, lon);
+        let after: Vec<[f32; 3]> = sphere_vertices_res(center, radius, lat, lon)
+            .vertices
+            .iter()
+            .map(|v| v.pos)
+            .collect();
+
+        // Drop the triangles the old generator emitted with two corners in the
+        // same place: the pole bands. They drew nothing, and a zero-area
+        // triangle has no normal for a later remesh to use.
+        let d = |a: [f32; 3], b: [f32; 3]| {
+            ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+        };
+        let kept: Vec<[f32; 3]> = before
+            .chunks_exact(3)
+            .filter(|t| d(t[0], t[1]) > 1e-6 && d(t[1], t[2]) > 1e-6 && d(t[0], t[2]) > 1e-6)
+            .flatten()
+            .copied()
+            .collect();
+
+        assert_eq!(before.len(), lat * lon * 6);
+        assert_eq!(kept.len(), sphere_soup_len(lat, lon), "only the pole bands go");
+        assert_eq!(after.len(), kept.len());
+        for (i, (a, b)) in after.iter().zip(kept.iter()).enumerate() {
+            // Not bit-identical, and the difference is the point: the soup
+            // computed its seam corner at phi = TAU and its south pole once per
+            // longitude, so the surface had a ~1e-7 crack down it. The welded
+            // sphere computes each of those places once.
+            assert!(d(*a, *b) < 1e-5, "corner {i}: {a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn test_welded_sphere_shares_its_poles_and_closes_its_seam() {
+        let (lat, lon) = (16, 24);
+        let d = sphere_detail(Vec3::ZERO, 1.0, lat, lon);
+
+        // Two poles plus the interior rings — not lat*lon*6 loose corners.
+        assert_eq!(d.num_points(), 2 + (lat - 1) * lon);
+        assert_eq!(d.num_prims(), lat * lon, "one band row per latitude");
+
+        // A pole is one point that every triangle of its band meets.
+        assert_eq!(d.point_prims(0).len(), lon);
+        assert_eq!(d.topology().valence(0), lon);
+
+        // Every interior point has four neighbours, including the ones on the
+        // seam — which is what "the seam closed" means. The soup could not
+        // express this at all.
+        let seam = 1; // first point of the first ring, at phi = 0
+        assert_eq!(d.topology().valence(seam), 4);
+        assert_eq!(
+            d.point_prims(seam).len(),
+            4,
+            "two triangles of the pole band and two quads below it"
+        );
+        for p in 1 + lon..d.num_points() - 1 - lon {
+            assert_eq!(d.topology().valence(p), 4, "interior point {p}");
+        }
+    }
+
+    #[test]
+    fn test_box_keeps_normals_on_vertices_because_its_edges_are_hard() {
+        let d = box_detail(Vec3::ZERO, Vec3::Y, 0.02);
+        assert_eq!(d.num_points(), 8, "a box has eight corners, not 36");
+        assert_eq!(d.num_prims(), 6);
+        assert_eq!(d.num_verts(), 24);
+
+        // Three faces meet at every corner with three different normals, so
+        // the normal cannot live on the point. This is what the vertex class
+        // is for.
+        assert!(d.verts().has("Norm"));
+        assert!(!d.points().has("Norm"));
+        assert_eq!(d.point_prims(0).len(), 3);
+        assert_eq!(d.topology().valence(0), 3);
+
+        let normals: Vec<[f32; 3]> = (0..d.num_verts())
+            .filter_map(|v| match d.verts().value("Norm", v) {
+                Some(crate::detail::AttribValue::Float3(n)) => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(normals.len(), 24);
+        let corner_0_normals: Vec<[f32; 3]> = (0..d.num_prims())
+            .filter(|&p| d.prim_points(p).contains(&0))
+            .filter_map(|p| match d.verts().value("Norm", d.prim_verts(p).start) {
+                Some(crate::detail::AttribValue::Float3(n)) => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(corner_0_normals.len(), 3);
+        assert!(
+            corner_0_normals[0] != corner_0_normals[1],
+            "the faces meeting at a corner disagree: {corner_0_normals:?}"
+        );
+
+        // The soup adapter still hands every corner both attributes, which is
+        // what the rest of the pipeline still reads.
+        let soup = line_vertices(Vec3::ZERO, Vec3::Y, 0.02);
+        assert_eq!(soup.vertices.len(), 36);
+        assert!(soup
+            .vertices
+            .iter()
+            .all(|v| v.attributes.contains_key("Norm") && v.attributes.contains_key("UV")));
+    }
+
+    #[test]
+    fn test_curve_spans_stay_separate_pieces() {
+        let node = FsNode {
+            id: "c".into(),
+            name: "Curve".into(),
+            node_type: "curve".into(),
+            children: vec![],
+            params: [("Points", "0 0 0; 1 0 0"), ("Segments", "2"), ("Thickness", "0.02")]
+                .into_iter()
+                .map(|(name, default)| ParamDef {
+                    name: name.to_string(),
+                    label: String::new(),
+                    param_type: "text".to_string(),
+                    default: default.to_string(),
+                    options: Vec::new(),
+                    min: None,
+                    max: None,
+                    step: None,
+                })
+                .collect(),
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 1,
+        };
+        let d = curve_detail(&node);
+        // Two sampled spans, one box each. Consecutive boxes touch but are not
+        // welded — fusing the curve into one surface is a modeling decision the
+        // node has never made.
+        assert_eq!(d.num_prims(), 12, "two boxes of six faces");
+        assert_eq!(d.num_points(), 16, "eight corners each, nothing shared");
+        assert_eq!(detail_to_soup(&d).vertices.len(), 72);
+
+        // Every point still has its own identity across the merge.
+        let mut ids = d.ids().to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 16);
+    }
 
     #[test]
     fn test_opencl_deformer_mode() {
@@ -2647,7 +2953,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         let geom = network_sphere_vertices(&root);
-        assert_eq!(geom.vertices.len(), 5 * 288);
+        assert_eq!(geom.vertices.len(), 5 * super::sphere_soup_len(6, 8));
 
         // Shape "None": every point sits in the same spot, so all five marker
         // spheres cover an identical (tiny) extent. A spread shape must not.
@@ -2665,7 +2971,7 @@ mod tests {
 
         for shape in ["Spiral", "Line", "Circle", "Grid"] {
             let g = points_node_geometry(&points_node(shape), Vec3::ZERO);
-            assert_eq!(g.vertices.len(), 5 * 288, "{shape}");
+            assert_eq!(g.vertices.len(), 5 * super::sphere_soup_len(6, 8), "{shape}");
             assert!(
                 extent(&g).length() > 0.3,
                 "{shape} must spread its points, extent {:?}",
@@ -3031,10 +3337,8 @@ mod tests {
         let mut visited = Vec::new();
         let geom = resolve_scatter_geometry(&root, &scatter, &mut visited).unwrap();
 
-        // 15 scattered spheres. Each sphere with lat_steps=6, lon_steps=8 has:
-        // 6 * 8 = 48 quads. Each quad has 6 vertices. 48 * 6 = 288 vertices.
-        // 15 * 288 = 4320 vertices.
-        assert_eq!(geom.vertices.len(), 15 * 288);
+        // 15 scattered spheres, each a lat_steps=6, lon_steps=8 marker.
+        assert_eq!(geom.vertices.len(), 15 * super::sphere_soup_len(6, 8));
 
         // Center of sphere at idx 0 is Vec3::new(-1.875, 0.55, 0.0). Radius = 0.5.
         // Let's check that each scattered sphere's center is indeed inside the parent sphere.
@@ -3165,7 +3469,7 @@ mod simnet_tests {
         let sub = node("id-sub", "Sub 1", "node", vec![], vec![inner]);
         let root = node("id-root", "root", "node", vec![], vec![outer, sub]);
 
-        const SPHERE: usize = 16 * 24 * 6;
+        const SPHERE: usize = super::sphere_soup_len(16, 24);
         let mut err = None;
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(0, 0, &mut cache);
@@ -3361,7 +3665,7 @@ mod simnet_tests {
             vec![inner_input, inner_output]);
         let root = node("id-root", "root", "node", vec![], vec![sphere, sub]);
 
-        const SPHERE: usize = 16 * 24 * 6;
+        const SPHERE: usize = super::sphere_soup_len(16, 24);
         let mut err = None;
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(0, 0, &mut cache);
