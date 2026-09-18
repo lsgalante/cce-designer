@@ -1,0 +1,314 @@
+# Shapeshifter in cce-designer
+
+Proposal v0 | September 2026
+
+Bringing the Developer, Immutable Methods and GEM toolsets out of `hou-control`
+and into this app — which is mostly not a porting job. It is one data-structure
+decision, then about ten nodes that do the work of fifty.
+
+The source material is `~/Dropbox/src/hou-control`: its `developer.md` (the
+Shapeshifter design document), `otls-audit.md` (every HDA, its parameters, and
+which of them nothing reads) and `shortcomings.md`.
+
+## What each side already has
+
+The plugin is three tool families on top of an interaction layer. The app is a
+working procedural pipeline with no vocabulary yet. They meet in fewer places
+than the node counts suggest.
+
+**hou-control, today**
+
+- ~50 `developer_*` HDAs — attribute solvers, surface development, the Solver
+  and its Vis tabs.
+- ~90 `im_*` HDAs — the general modeling vocabulary across Create, Topology,
+  Move, Filter, Analysis, Layout.
+- ~30 `gem_*` HDAs — mold, sprue, build area, supports, plus a COP family for
+  printed output.
+- 8.8k lines of `hc` — keycam navigator, HC Panel, hotkey JSON, network editor,
+  settings schema.
+
+**cce-designer, today**
+
+- Graph evaluation with feedback — `simnet` already iterates a chain, caches per
+  frame, and restarts on edit.
+- Two kernel backends — OpenCL, plus the CPU interpreter in `src/kernel_cpu.rs`
+  that is the semantic reference.
+- The panes — network, parameters, spreadsheet, playbar, viewport; detachable,
+  pinnable, saved in the project.
+- Declared world units — mm/cm/m/in, a scale readout, View 1:1.
+
+**Not there yet**
+
+- Points, primitives and detail — there is only a vertex list.
+- Any notion of a neighbour, an edge, or a stable point id.
+- Attributes on the GPU — kernels see positions and colors, nothing else.
+- Remeshing, collision, volumes, mesh export.
+- A command palette, a hotkey file, a viewer-state framework beyond the one
+  curve tool.
+
+## The one thing that blocks everything
+
+Every operator in the Developer set is a statement about a point and its
+neighbours. Diffuse averages toward neighbours. Migrate moves value along edges
+and the sender loses what the target gains. Concentrate sharpens against
+neighbours. Lead turns each vector toward the neighbouring vector that disagrees
+most. Analysis writes the spread of edge lengths.
+
+`src/geometry.rs`:
+
+```rust
+pub struct Geometry {
+    pub vertices: Vec<GVertex>,   // a triangle soup
+}
+
+pub struct GVertex {
+    pub pos: [f32; 3],
+    pub col: [f32; 3],
+    pub attributes: HashMap<String, GAttribute>,   // per triangle corner
+}
+```
+
+Three corners of a triangle are three unrelated entries. A point shared by six
+faces appears six times with six independent copies of every attribute. There is
+no way to ask what a point's neighbours are, no edge to measure, and no identity
+that survives a frame. Groups are faked as `group:name` keys in the attribute
+map; attributes are `Float` through `Float4` only, so there are no integers for
+counters or ids.
+
+Nothing in Phases 1 through 3 can be written against this, and a workaround —
+welding on demand inside each operator — would put an O(n log n) rebuild inside
+every node of a chain that runs once per simulation step. So the proposal starts
+there, and the first phase is the expensive one.
+
+## Phases
+
+Ordered by dependency, not by appeal. Phase 5 is deliberately detached — it
+touches none of the geometry work and can be picked up in any gap.
+
+### Phase 0 — A real geometry model
+
+*Largest. Blocks Phases 1, 2, 3, 4 and 6 — all of them.*
+
+Replace the vertex list with **points, vertices, primitives and detail**, each
+carrying its own columnar attribute arrays — one `Vec<f32>` per named attribute
+rather than a `HashMap` per corner. Columnar is not a nicety here: it is the
+shape a GPU buffer already wants, so Phase 1 becomes a pointer instead of a
+marshalling pass.
+
+Three things ride along. A **stable `id`** on points, allocated once and
+preserved through every operator that does not create points — the thing every
+solver needs and the thing a triangle soup can never have. A **lazily built
+topology cache** (point→point, point→prim, edge list) invalidated on topology
+change, so a chain of ten attribute nodes builds it once. And **real groups and
+integer attributes**, retiring the `group:` key convention.
+
+Triangulation becomes a render concern: `to_vertex3d_vec` is already the
+boundary, and the raster and RT paths keep consuming triangles.
+
+Touches: `geometry.rs`, `kernel_cpu.rs`, `render.rs`, `curve_tool.rs`, the
+Spreadsheet, the meta overlays, `project.rs`.
+
+### Phase 1 — Attribute algebra, and attributes on the GPU
+
+*Large. Needs Phase 0. Blocks Phases 2 and 3.*
+
+Widen the kernel ABI from `(in_pos, in_col, out_pos, out_col, params)` to
+**named attribute buffers bound by the node**, plus the topology arrays as
+read-only buffers so a kernel can walk neighbours. This is the change that has
+to land in both backends at once — the OpenCL launcher and the CPU interpreter
+that `cpu_matches_opencl_on_every_shipped_kernel` holds it to.
+
+On top of it, the attribute vocabulary: **Initialize, Remap, Clip, Composite,
+Promote, Analysis** and the `time` family — and one `neighbour` node whose Mode
+covers Diffuse, Concentrate, Migrate, Bleed, Align and Lead, over a
+Neighbourhood of connectivity, radius or global. That single node is most of the
+`developer_*` set.
+
+Touches: `geometry.rs`, `kernel_cpu.rs`, `nodes/*.json`.
+
+### Phase 2 — The solver contract
+
+*Medium. Needs Phases 0 and 1.*
+
+`simnet` is already the Developer Solver — feedback stack, per-node cache keyed
+on the subtree, restart on edit, one step per played frame. What it lacks is a
+contract for what survives a step.
+
+Make **live and derivative data a first-class distinction** rather than a
+convention: an attribute is declared live (carried across the step boundary by
+id) or derivative (zeroed at the start of every step). Derivative attributes
+then cost nothing to get wrong, and a remesh in the middle of a chain has a
+defined answer for every attribute it did not create — which is exactly what
+`Surface Remesh` feeding `Develop` needs.
+
+Then: substeps, an explicit seed frame, a disk cache so a long solve survives a
+restart, and **Visualize** — attribute-to-color through ramps, several
+composited at once, and vectors drawn as markers. The per-node `meta` overlays
+already do the projection work this needs.
+
+Touches: `geometry.rs`, `app.rs`, `render.rs`, `playbar.rs`.
+
+### Phase 3 — Surface development
+
+*Large. Needs Phases 0, 1 and 2.*
+
+`Develop` is easy — displace along the normal by a development attribute.
+**Remesh is the hard one**, and it is load-bearing: without topology that keeps
+primitives proportional to surface area, every growth sim degenerates within a
+few dozen frames. Incremental remeshing (split long edges, collapse short ones,
+flip toward valence 6, tangential relaxation, project back to the input surface)
+is well-trodden ground and should be its own module with its own tests, not a
+node body.
+
+Around it: `Subdivide`, `Adapt`, `Open`, and collision — `Detangle` as point
+repulsion between non-neighbours to a thickness, and `Suture` resolving against
+the previous frame and fusing what keeps colliding. Both want the spatial index
+Phase 0's topology cache should already own.
+
+Touches: a new `remesh.rs`, `geometry.rs`, `nodes/*.json`.
+
+### Phase 4 — The modeling set
+
+*Wide, shallow. Needs Phase 0. Runs parallel with Phases 2 and 3.*
+
+The `im_*` family, which is the part that looks biggest and is actually the
+easiest — ninety nodes, most of them a screenful once points and prims exist.
+Sequence it by what the Developer chain consumes rather than by category:
+**Group, Select, Cull, Transform, Soft Transform, Relax, Copy, Scatter, Bounds,
+Distance, Neighbours, Connectivity, Normal** first, the Create primitives next,
+then Analysis and Visualize.
+
+`otls-audit.md` is the parameter spec — it lists every node's parm count and
+flags the 74 unread parameters on `gem_build_area` and the dead ones elsewhere.
+Port the surface you meant, not the one that accumulated.
+
+Touches: `geometry.rs`, `nodes/*.json`.
+
+### Phase 5 — The interaction layer
+
+*Medium. Needs nothing — start any time.*
+
+Independent of all the geometry work, and the place where the app gets to be
+better rather than equal. A **command palette** on the HC Panel's model — fuzzy
+search over every action, contextual to the focused pane — which in Houdini
+exists partly because there is no API to open the native tab menu. Here it is
+just a widget.
+
+A **hotkey file** (kdl, alongside `state.kdl`) with conflict resolution,
+extending `shortcut.rs`. **Keyboard graph navigation** and auto-layout in the
+network pane. And a **viewer-state framework** generalized out of
+`curve_tool.rs`, which CLAUDE.md already names as the pattern: handles,
+snapping, a HUD, per-gesture undo. The keycam navigator is a viewer state on
+that framework.
+
+One thing gets deleted rather than ported. `hcviewregions.py` publishes pane
+rectangles to `ccectl` so the compositor can synthesize a view drag from a
+two-finger swipe, because a trackpad gesture never survives Xwayland. A native
+Wayland client receives the gesture directly.
+
+Touches: `shortcut.rs`, `app.rs`, `slots.rs`, `cce-ui`.
+
+### Phase 6 — GEM and manufacturing
+
+*Largest. Needs Phases 0 and 3.*
+
+Furthest out because it needs infrastructure nothing else does: a **volume
+representation** (SDF or sparse grid) for shelling, offsetting and boolean work,
+without which mold, sprue and support tooling has nothing to stand on. Then
+**mesh export** — STL and OBJ, which the app cannot do at all today.
+
+The COP family (`gem_page`, `gem_border`, `gem_grid`, `gem_text_box`,
+`gem_graph`) is a second context entirely — 2D, printed output — and is best
+treated as a separate surface rather than smuggled into the geometry graph.
+
+The groundwork that already landed is the right groundwork: a declared world
+unit, a scale readout and View 1:1 are precisely what a manufacturing tool needs
+and what the Developer set does not care about.
+
+Touches: a new `volume.rs`, a new `export.rs`, a 2D page context.
+
+## Fifty operators, ten nodes
+
+The HDA count is an artifact of Houdini's economics — a variant is cheaper as a
+new asset than as a new parameter, so the families split and then had to be
+merged back. Starting fresh, the merge is the starting point. The Scalar and
+Vector families already collapsed into one in September 2026.
+
+| Node in cce-designer | Absorbs | From |
+|---|---|---|
+| `attribute` | Attribute Initialize, Constant, Clip, Remap, Combine, Composite, Promote, Select, Normalize, Weight | 10 → 1 |
+| `neighbour` | Diffuse, Concentrate, Migrate, Bleed, Align, Lead, Charge — one Mode, one Neighbourhood | 7 → 1 |
+| `gradient` | Gradient, Rotate, Direction | 3 → 1 |
+| `analysis` | Analysis, Measure, Metamax, Time Analysis, Region Center | 5 → 1 |
+| `time` | Time, Time Ramp, Time Switch | 3 → 1 |
+| `develop` | Develop, Cull, Expire, Vitality, ID, Release | 6 → 1 |
+| `remesh` | Surface Remesh, Surface Subdivide, Surface Adapt, Surface Open | 4 → 1 |
+| `collide` | Surface Detangle, Surface Suture | 2 → 1 |
+| `visualize` | Visualize, and the Solver's Vis tabs | 2 → 1 |
+| `simnet` (exists) | Developer Solver, Submute Begin, Submute End | 3 → 0 |
+| **Developer set** | **Nine new nodes, one already written** | **45 → 9** |
+
+## Decisions to settle first
+
+Four of these change what Phase 0 and Phase 1 look like, so they are worth
+settling before the geometry model is written rather than after.
+
+**1. Keep two kernel backends?** OpenCL plus a CPU interpreter means every ABI
+change lands twice, and Phase 1 widens the ABI substantially. The interpreter
+earns its keep as the semantic reference and keeps the suite green headless —
+but it is a C-subset tree-walker with no vector types, and neighbour traversal
+will strain it.
+*Leaning:* keep both, but stop growing the kernel language — express
+neighbourhood operators as native Rust evaluators and reserve kernels for
+per-point math.
+
+**2. Native nodes or editable templates?** Sphere, Plane and Extrude are subnet
+templates whose kernel code the loader owns — a hand-edit inside an instance
+reverts on load. Native nodes are Rust and not user-editable at all. The
+Developer set could go either way, and which one decides whether a new operator
+can be prototyped without a rebuild.
+*Leaning:* native for anything touching topology; templates for the per-point
+ops, so the experimentation surface stays open where it is cheap.
+
+**3. How far does the attribute type system go?** Today: `Float` through
+`Float4`. The Developer set needs integers (counters, ids, Vitality's ages) and
+something dictionary-shaped — `Analysis` writes `<attr>_info` holding a range.
+Adding integers is small; adding a dict type reaches into the spreadsheet, the
+kernel ABI and serialization.
+*Leaning:* integers and real groups in Phase 0. Replace the dictionary with
+named detail attributes (`attr_min`, `attr_max`) unless there is a use for
+nesting.
+
+**4. Does existing work need to come across?** An HDA is VEX plus a SOP subnet;
+neither has an equivalent here, so an importer would be a compiler for two
+languages the app does not speak. If there are `.hip` scenes that must keep
+running, that changes the priority order considerably.
+*Leaning:* no importer. Rebuild the handful of setups worth keeping once the
+vocabulary exists.
+
+## What not to port
+
+- **Houdini wrappers.** `developer_measure` is the Measure SOP with a promotion;
+  `im_skeletonize`, `im_shortest_path` and the VDB nodes are thin skins over
+  serious Houdini implementations. Each is a research project on its own — take
+  them only where a chain actually needs one.
+- **Dead on arrival.** `im_pose` and `im_sample` both failed to cook in
+  `otls-audit.md`, and `developer_charge`, `im_bend`, `im_manipulator` and
+  `im_scaffold` carry no read parameters at all. Do not carry forward what never
+  worked.
+- **Version forks.** Eleven operators ship as two or three live versions
+  (`im_attractor` at 0.9, 1.0 and 1.1; `im_select` at 1.0 and 2.0). Port the
+  newest, once.
+- **The unbuilt list.** Energize, Edge Analysis, Analyze Change and Region were
+  ideas without nodes in the first draft and still are. They belong in the
+  design, not the port.
+
+## Summary
+
+Phase 0 is most of the risk and none of the fun. Phases 1 and 2 are where the
+app starts doing something Houdini does not. Phase 6 is far enough out that it
+should not influence any decision made now.
+
+For a smaller first cut: Phase 0 plus the `neighbour` node alone is enough to
+run a diffusion on a sphere and see it — which is the point at which the rest of
+this becomes worth arguing about.
