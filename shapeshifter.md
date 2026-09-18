@@ -89,6 +89,13 @@ touches none of the geometry work and can be picked up in any gap.
 
 *Largest. Blocks Phases 1, 2, 3, 4 and 6 — all of them.*
 
+> **Underway.** `src/detail.rs` holds the container — points, vertices,
+> primitives, detail; columnar attributes with integers and real groups; stable
+> `PointId`s; lazily built CSR topology. It stands alone and is fully tested;
+> nothing produces or consumes it yet. Remaining: migrate the generators, then
+> the operators, then the consumers (spreadsheet, overlays, kernel ABI), then
+> delete `geometry::Geometry`.
+
 Replace the vertex list with **points, vertices, primitives and detail**, each
 carrying its own columnar attribute arrays — one `Vec<f32>` per named attribute
 rather than a `HashMap` per corner. Columnar is not a nicety here: it is the
