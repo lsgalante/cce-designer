@@ -728,6 +728,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_collision_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("relax") {
         resolve_relax_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("neighbour") {
+        resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("attribute") {
         resolve_attribute_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("opencl") {
@@ -1270,6 +1272,285 @@ pub fn resolve_relax_geometry_with_errors(
         geom.set_pos(p, *v);
     }
     Some(geom)
+}
+
+/// Which points a neighbourhood operator treats as a point's neighbours.
+enum Hood {
+    /// Points reachable within N edge rings. The mesh's own connectivity, and
+    /// the only one of the three that respects a surface: two points a
+    /// hair's breadth apart across a fold are not neighbours.
+    Connectivity(usize),
+    /// Points within a world-space distance, fold or no fold.
+    Radius(f32),
+    /// Every point. Not a neighbourhood so much as the limit of one — the
+    /// "global" reading of Diffuse and Concentrate, where the thing a value
+    /// moves toward is the whole geometry's average.
+    Global,
+}
+
+/// The Neighbour node: one operator family over an attribute and the points
+/// around each point.
+///
+/// Four Modes, all of them "a value and the values near it":
+///
+/// - **Diffuse** moves each value toward the average of its neighbours.
+/// - **Concentrate** moves it away — the same quantity with the sign flipped,
+///   which sharpens a gradient instead of smoothing it.
+/// - **Migrate** pushes value along a per-point Direction vector. Neighbours
+///   in front of a point receive; the point loses exactly what they gain, so
+///   the total is conserved and value is transported rather than created.
+/// - **Bleed** decays toward zero. It has no neighbours in it at all, but it
+///   belongs to the family: it is what the others compose with to keep a
+///   simulation from saturating, and separating it would make the chain
+///   longer without making it clearer. Neighbourhood is ignored.
+///
+/// Every mode works componentwise on any attribute type, so one node covers a
+/// float, an integer count and a vector — integers round on the way back so a
+/// counter stays whole. Amount scales the whole edit and is the natural
+/// per-frame rate inside a simnet.
+///
+/// This is the node the proposal's table collapses seven Houdini operators
+/// into (Diffuse, Concentrate, Migrate, Bleed, plus the Align/Lead/Charge
+/// vector steering still to come), and it is deliberately a native Rust
+/// evaluator rather than a kernel: it walks topology, which the kernel
+/// language's C subset has no way to express.
+pub fn resolve_neighbour_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_neighbour(&mut geom, target, ocl_error);
+    Some(geom)
+}
+
+/// The Neighbour operator itself, over geometry already in hand.
+///
+/// Split from the resolver so the operator can be exercised on geometry a test
+/// controls, rather than only on whatever a graph happens to produce.
+pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
+    let name = node_param_str(target, "Attribute", "").trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    let Some(ty) = geom.points().get(&name).map(|a| a.ty()) else {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!(
+                "Neighbour '{}': no point attribute named '{}'",
+                target.name, name
+            ));
+        }
+        return;
+    };
+
+    let n = geom.num_points();
+    let k = ty.components();
+    let amount = node_param_f32(target, "Amount", 0.5).clamp(0.0, 1.0);
+    let mode = node_param_str(target, "Mode", "Diffuse").to_lowercase();
+
+    // The attribute as a flat n x k matrix of components, so one body serves
+    // every type. Integers ride through as floats and round on the way back.
+    let mut val: Vec<f32> = Vec::with_capacity(n * k);
+    for p in 0..n {
+        let comps = geom
+            .points()
+            .value(&name, p)
+            .map(attrib_components)
+            .unwrap_or_else(|| vec![0.0; k]);
+        for c in 0..k {
+            val.push(comps.get(c).copied().unwrap_or(0.0));
+        }
+    }
+
+    // A Group narrows which points are EDITED. Their neighbours are still read
+    // from the whole geometry — a diffusion that could only see inside its own
+    // group would bend away from the boundary rather than across it.
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let edits: Vec<bool> = (0..n)
+        .map(|p| group.is_empty() || geom.points().in_group(&group, p))
+        .collect();
+
+    let hood = match node_param_str(target, "Neighbourhood", "Connectivity").to_lowercase().as_str() {
+        "radius" => Hood::Radius(node_param_f32(target, "Radius", 0.2).max(0.0)),
+        "global" => Hood::Global,
+        _ => Hood::Connectivity(node_param_f32(target, "Rings", 1.0).max(1.0) as usize),
+    };
+
+    let mut out = val.clone();
+    match mode.as_str() {
+        "bleed" => {
+            for p in (0..n).filter(|&p| edits[p]) {
+                for c in 0..k {
+                    out[p * k + c] = val[p * k + c] * (1.0 - amount);
+                }
+            }
+        }
+        "migrate" => {
+            let dir_name = node_param_str(target, "Direction", "");
+            let dir_name = dir_name.trim().to_string();
+            if dir_name.is_empty() || !geom.points().has(&dir_name) {
+                if ocl_error.is_none() {
+                    *ocl_error = Some(format!(
+                        "Neighbour '{}': Migrate needs a Direction attribute",
+                        target.name
+                    ));
+                }
+                return;
+            }
+            // Each point hands a fraction of its value to the neighbours that
+            // lie in front of it, split by how squarely they face the
+            // direction. The sender is debited exactly the sum of the credits,
+            // which is what makes this transport rather than growth.
+            for p in (0..n).filter(|&p| edits[p]) {
+                let dir = geom
+                    .points()
+                    .value(&dir_name, p)
+                    .map(|v| v.as_vec3())
+                    .unwrap_or(Vec3::ZERO)
+                    .normalize_or_zero();
+                if dir == Vec3::ZERO {
+                    continue;
+                }
+                let here = geom.pos(p);
+                let nbrs = neighbours_of(geom, p, &hood);
+                let weights: Vec<(usize, f32)> = nbrs
+                    .iter()
+                    .filter_map(|&q| {
+                        let q = q as usize;
+                        let to = (geom.pos(q) - here).normalize_or_zero();
+                        let w = to.dot(dir);
+                        (w > 0.0).then_some((q, w))
+                    })
+                    .collect();
+                let total: f32 = weights.iter().map(|(_, w)| w).sum();
+                if total <= 0.0 {
+                    continue;
+                }
+                for c in 0..k {
+                    let moved = val[p * k + c] * amount;
+                    out[p * k + c] -= moved;
+                    for (q, w) in &weights {
+                        out[q * k + c] += moved * (w / total);
+                    }
+                }
+            }
+        }
+        // Diffuse and Concentrate are one operation and its negation: the
+        // distance to the neighbourhood's average, travelled toward it or
+        // away from it.
+        other => {
+            let sign = if other == "concentrate" { -1.0 } else { 1.0 };
+            // A point is never its own neighbour, under any of the three
+            // rules — so the global case is the total MINUS this point, over
+            // the other n-1. Getting that wrong is invisible on a spread-out
+            // attribute and glaring on a spike: a lone high point would
+            // average partly with itself and refuse to come down. It also
+            // keeps the rules continuous with each other, so a radius wide
+            // enough to cover the geometry behaves like Global rather than
+            // almost like it.
+            let global_total: Option<Vec<f32>> = matches!(hood, Hood::Global).then(|| {
+                let mut total = vec![0.0; k];
+                for p in 0..n {
+                    for c in 0..k {
+                        total[c] += val[p * k + c];
+                    }
+                }
+                total
+            });
+
+            for p in (0..n).filter(|&p| edits[p]) {
+                let mean: Vec<f32> = match &global_total {
+                    Some(total) => {
+                        if n < 2 {
+                            continue;
+                        }
+                        (0..k)
+                            .map(|c| (total[c] - val[p * k + c]) / (n - 1) as f32)
+                            .collect()
+                    }
+                    None => {
+                        let nbrs = neighbours_of(geom, p, &hood);
+                        if nbrs.is_empty() {
+                            continue;
+                        }
+                        let mut mean = vec![0.0; k];
+                        for &q in &nbrs {
+                            for c in 0..k {
+                                mean[c] += val[q as usize * k + c];
+                            }
+                        }
+                        for m in mean.iter_mut() {
+                            *m /= nbrs.len() as f32;
+                        }
+                        mean
+                    }
+                };
+                for c in 0..k {
+                    let v = val[p * k + c];
+                    out[p * k + c] = v + sign * amount * (mean[c] - v);
+                }
+            }
+        }
+    }
+
+    for p in 0..n {
+        let comps = &out[p * k..p * k + k];
+        let _ = geom
+            .points_mut()
+            .set_value(&name, p, components_attrib(ty, comps));
+    }
+}
+
+/// The points around `p` under one neighbourhood rule, never including `p`.
+fn neighbours_of(geom: &Detail, p: usize, hood: &Hood) -> Vec<u32> {
+    match *hood {
+        Hood::Connectivity(1) => geom.point_neighbours(p).to_vec(),
+        Hood::Connectivity(rings) => {
+            // Breadth-first over the edge graph. Each ring is the frontier of
+            // the last, so the cost is the size of the neighbourhood rather
+            // than of the geometry.
+            let mut seen = vec![false; geom.num_points()];
+            seen[p] = true;
+            let mut frontier = vec![p as u32];
+            let mut out = Vec::new();
+            for _ in 0..rings {
+                let mut next = Vec::new();
+                for &q in &frontier {
+                    for &r in geom.point_neighbours(q as usize) {
+                        if !std::mem::replace(&mut seen[r as usize], true) {
+                            next.push(r);
+                            out.push(r);
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    break;
+                }
+                frontier = next;
+            }
+            out.sort_unstable();
+            out
+        }
+        // Brute force, and knowingly so: a uniform grid is worth building when
+        // a node needs it on geometry this does not comfortably handle, and
+        // Phase 3's collision work will need the same index.
+        Hood::Radius(r) => {
+            let here = geom.pos(p);
+            let r2 = r * r;
+            (0..geom.num_points() as u32)
+                .filter(|&q| q as usize != p && (geom.pos(q as usize) - here).length_squared() <= r2)
+                .collect()
+        }
+        Hood::Global => (0..geom.num_points() as u32).filter(|&q| q as usize != p).collect(),
+    }
 }
 
 /// The Attribute node: pass the input geometry through, running one attribute
@@ -2463,6 +2744,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "group"
         || nt == "collision"
         || nt == "relax"
+        || nt == "neighbour"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -2589,6 +2871,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_relax_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("neighbour") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_neighbour_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
@@ -3927,6 +4218,244 @@ mod simnet_tests {
             geometry_visible: true,
             position: (0.0, 0.0),
         }
+    }
+
+    /// A sphere, one point given a spike of `mass`, then a Neighbour node.
+    /// Returns (before, after) so a test can compare the two directly.
+    fn neighbour_chain(extra: &[(&str, &str)]) -> (Detail, Detail) {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let seed = node(
+            "id-seed",
+            "Seed 1",
+            "attribute",
+            vec![
+                param("Input", "Sphere 1"),
+                param("Operation", "Create"),
+                param("Attribute Name", "mass"),
+                param("Type", "Float"),
+                param("Value", "0.00"),
+            ],
+            vec![],
+        );
+        let mut params = vec![
+            param("Input", "Seed 1"),
+            param("Attribute", "mass"),
+            param("Amount", "0.50"),
+        ];
+        for (k, v) in extra {
+            match params.iter_mut().find(|p| p.name == *k) {
+                Some(p) => p.default = v.to_string(),
+                None => params.push(param(k, v)),
+            }
+        }
+        let nbr = node("id-nbr", "Neighbour 1", "neighbour", params, vec![]);
+        let root = node("id-root", "root", "node", vec![], vec![sphere, seed, nbr]);
+
+        let eval = |name: &str| -> Detail {
+            let target = root.children.iter().find(|c| c.name == name).unwrap();
+            let mut visited = Vec::new();
+            let mut err = None;
+            let mut cache = SimCache::default();
+            let mut sim = EvalSim::new(0, 0, &mut cache);
+            generate_single_node_geometry_with_errors(&root, target, &mut visited, &mut err, &mut sim)
+                .expect(name)
+        };
+        // Spike one point by hand: the interesting behaviour is what happens
+        // to a value that is not already uniform.
+        let mut before = eval("Seed 1");
+        before.points_mut().set_value("mass", 0, AttribValue::Float(10.0)).unwrap();
+        (before, eval("Neighbour 1"))
+    }
+
+    /// Evaluate a Neighbour node over geometry whose `mass` is already spiked,
+    /// bypassing the graph so the spike survives.
+    fn run_neighbour(before: &Detail, params: &[(&str, &str)]) -> Detail {
+        let mut geom = before.clone();
+        let mut params_vec = vec![param("Input", "In"), param("Attribute", "mass")];
+        for (k, v) in params {
+            match params_vec.iter_mut().find(|p| p.name == *k) {
+                Some(p) => p.default = v.to_string(),
+                None => params_vec.push(param(k, v)),
+            }
+        }
+        let nbr = node("id-n", "N", "neighbour", params_vec, vec![]);
+        apply_neighbour(&mut geom, &nbr, &mut None);
+        geom
+    }
+
+    #[test]
+    fn test_neighbour_diffuse_spreads_a_spike_and_conserves_nothing_in_particular() {
+        let (before, _) = neighbour_chain(&[]);
+        let spike_nbrs: Vec<u32> = before.point_neighbours(0).to_vec();
+        assert!(!spike_nbrs.is_empty());
+
+        let after = run_neighbour(&before, &[("Mode", "Diffuse"), ("Amount", "0.50")]);
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+
+        // The spike falls toward its neighbours' average (zero) by Amount, and
+        // each neighbour rises toward an average that now includes the spike.
+        assert!((mass(&after, 0) - 5.0).abs() < 1e-4, "spike did not decay: {}", mass(&after, 0));
+        for &q in &spike_nbrs {
+            assert!(mass(&after, q as usize) > 0.0, "neighbour {q} did not receive");
+        }
+        // A point far from the spike is untouched at one ring.
+        let far = (0..before.num_points())
+            .find(|&p| p != 0 && !spike_nbrs.contains(&(p as u32)) && !before.point_neighbours(p).contains(&0))
+            .unwrap();
+        assert_eq!(mass(&after, far), 0.0, "diffusion reached past its ring");
+    }
+
+    #[test]
+    fn test_neighbour_concentrate_is_diffuse_with_the_sign_flipped() {
+        let (before, _) = neighbour_chain(&[]);
+        let diffused = run_neighbour(&before, &[("Mode", "Diffuse"), ("Amount", "0.40")]);
+        let sharpened = run_neighbour(&before, &[("Mode", "Concentrate"), ("Amount", "0.40")]);
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+
+        // Same distance from the starting value, opposite directions.
+        for p in 0..before.num_points() {
+            let base = mass(&before, p);
+            let d = mass(&diffused, p) - base;
+            let c = mass(&sharpened, p) - base;
+            assert!((d + c).abs() < 1e-4, "point {p}: {d} vs {c}");
+        }
+        assert!(mass(&sharpened, 0) > mass(&before, 0), "the spike must sharpen");
+    }
+
+    #[test]
+    fn test_neighbour_migrate_conserves_the_total() {
+        let (mut before, _) = neighbour_chain(&[]);
+        // Everything flows one way.
+        before.points_mut().create("dir", AttribValue::Float3([0.0, 1.0, 0.0]));
+        for p in 0..before.num_points() {
+            before.points_mut().set_value("mass", p, AttribValue::Float(1.0)).unwrap();
+        }
+        let total = |d: &Detail| -> f32 {
+            (0..d.num_points()).map(|p| d.points().value("mass", p).unwrap().as_f32()).sum()
+        };
+        let sum_before = total(&before);
+
+        let after = run_neighbour(
+            &before,
+            &[("Mode", "Migrate"), ("Direction", "dir"), ("Amount", "0.50")],
+        );
+
+        // The sender loses exactly what the receivers gain — that is what makes
+        // this transport rather than growth, and it is the property a tissue
+        // sim leans on when it moves a nutrient around a surface.
+        assert!(
+            (total(&after) - sum_before).abs() < 1e-3,
+            "migrate leaked: {} -> {}",
+            sum_before,
+            total(&after)
+        );
+        // And it actually moved: the topmost point, with nothing above it to
+        // give to, should have gained without giving.
+        let top = (0..before.num_points())
+            .max_by(|&a, &b| before.pos(a).y.partial_cmp(&before.pos(b).y).unwrap())
+            .unwrap();
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+        assert!(mass(&after, top) > mass(&before, top), "nothing accumulated downstream");
+    }
+
+    #[test]
+    fn test_neighbour_bleed_decays_toward_zero_and_ignores_the_hood() {
+        let (before, _) = neighbour_chain(&[]);
+        let after = run_neighbour(&before, &[("Mode", "Bleed"), ("Amount", "0.25")]);
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+        assert!((mass(&after, 0) - 7.5).abs() < 1e-4);
+        // Applying it repeatedly approaches zero without crossing it.
+        let mut g = before.clone();
+        for _ in 0..40 {
+            g = run_neighbour(&g, &[("Mode", "Bleed"), ("Amount", "0.25")]);
+        }
+        assert!(mass(&g, 0) > 0.0 && mass(&g, 0) < 1e-3, "{}", mass(&g, 0));
+    }
+
+    #[test]
+    fn test_neighbour_hoods_differ_and_rings_reach_further() {
+        let (before, _) = neighbour_chain(&[]);
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+        let touched = |d: &Detail| (0..d.num_points()).filter(|&p| mass(d, p) != 0.0).count();
+
+        let one = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Connectivity"), ("Rings", "1")]);
+        let two = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Connectivity"), ("Rings", "2")]);
+        assert!(touched(&two) > touched(&one), "a second ring must reach further");
+
+        // Global reaches everything: every point but the spike rises off zero.
+        let global = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Global"), ("Amount", "1.00")]);
+        assert_eq!(touched(&global), before.num_points() - 1);
+        // The spike lands on exactly zero, because a point is not its own
+        // neighbour and every OTHER point holds zero.
+        assert_eq!(mass(&global, 0), 0.0);
+
+        // Radius ignores connectivity, and the rules are continuous with each
+        // other: a radius wide enough to swallow the sphere IS Global. That
+        // only holds because neither includes the point itself.
+        let wide = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Radius"), ("Radius", "5.00"), ("Amount", "1.00")]);
+        for p in 0..before.num_points() {
+            assert!((mass(&wide, p) - mass(&global, p)).abs() < 1e-6, "point {p}");
+        }
+        let none = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Radius"), ("Radius", "0.00")]);
+        assert_eq!(touched(&none), 1, "no neighbours means no change");
+    }
+
+    #[test]
+    fn test_neighbour_group_narrows_the_edit_not_the_reading() {
+        let (mut before, _) = neighbour_chain(&[]);
+        // Only the spike's first neighbour may be edited.
+        let q = before.point_neighbours(0)[0] as usize;
+        before.points_mut().create_group("inner");
+        before.points_mut().add_to_group("inner", q);
+
+        let after = run_neighbour(&before, &[("Mode", "Diffuse"), ("Group", "inner"), ("Amount", "1.00")]);
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+
+        assert_eq!(mass(&after, 0), 10.0, "a point outside the group is not edited");
+        // But the edited point still READ the spike, which is outside the
+        // group — a diffusion that could only see its own group would bend
+        // away from the boundary instead of across it.
+        assert!(mass(&after, q) > 0.0, "the group member saw its neighbour outside the group");
+    }
+
+    #[test]
+    fn test_neighbour_works_componentwise_on_vectors_and_keeps_integers_whole() {
+        let (before, _) = neighbour_chain(&[]);
+        let mut g = before.clone();
+        g.points_mut().create("vel", AttribValue::Float3([0.0; 3]));
+        g.points_mut().set_value("vel", 0, AttribValue::Float3([3.0, 6.0, 9.0])).unwrap();
+        g.points_mut().create("count", AttribValue::Int(0));
+        g.points_mut().set_value("count", 0, AttribValue::Int(10)).unwrap();
+
+        let v = run_neighbour(&g, &[("Attribute", "vel"), ("Mode", "Bleed"), ("Amount", "0.50")]);
+        assert_eq!(
+            v.points().value("vel", 0),
+            Some(AttribValue::Float3([1.5, 3.0, 4.5])),
+            "every component decays alike"
+        );
+
+        let c = run_neighbour(&g, &[("Attribute", "count"), ("Mode", "Bleed"), ("Amount", "0.25")]);
+        // An integer count stays an integer: 10 * 0.75 = 7.5 rounds rather
+        // than silently becoming a float nobody can index with.
+        assert!(matches!(c.points().value("count", 0), Some(AttribValue::Int(_))));
+        assert_eq!(c.points().value("count", 0), Some(AttribValue::Int(7)));
+    }
+
+    #[test]
+    fn test_neighbour_reports_a_missing_attribute_and_passes_geometry_through() {
+        let (before, _) = neighbour_chain(&[]);
+        let mut err = None;
+        let mut geom = before.clone();
+        let nbr = node(
+            "id-n",
+            "N",
+            "neighbour",
+            vec![param("Input", "In"), param("Attribute", "nope")],
+            vec![],
+        );
+        apply_neighbour(&mut geom, &nbr, &mut err);
+        assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+        assert_eq!(geom.num_points(), before.num_points(), "geometry passes through");
     }
 
     /// The scene walk draws the level it is STARTED at — the network editor's

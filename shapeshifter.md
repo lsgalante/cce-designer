@@ -129,9 +129,14 @@ Spreadsheet, the meta overlays, `project.rs`.
 > each other by a cross-backend test. A deformer no longer flattens or welds,
 > so topology, groups and point identities pass through untouched.
 >
-> Outstanding: the generator ABI (still a corner list out), the topology
-> buffers, vector attributes — which need the CPU interpreter to grow vector
-> types — and the attribute vocabulary nodes themselves.
+> The `neighbour` node is in, as a native Rust evaluator: Diffuse,
+> Concentrate, Migrate and Bleed over a Neighbourhood of connectivity rings,
+> radius or global, componentwise on any attribute type. Per decision 1 the
+> neighbourhood walk stays out of the kernel language.
+>
+> Outstanding: the generator ABI (still a corner list out), the vector
+> steering modes (Align, Lead, Charge), and the rest of the attribute
+> vocabulary — Initialize, Remap, Clip, Composite, Promote, Analysis, Time.
 
 Widen the kernel ABI from `(in_pos, in_col, out_pos, out_col, params)` to
 **named attribute buffers bound by the node**, plus the topology arrays as
@@ -259,6 +264,7 @@ Vector families already collapsed into one in September 2026.
 |---|---|---|
 | `attribute` | Attribute Initialize, Constant, Clip, Remap, Combine, Composite, Promote, Select, Normalize, Weight | 10 → 1 |
 | `neighbour` | Diffuse, Concentrate, Migrate, Bleed, Align, Lead, Charge — one Mode, one Neighbourhood | 7 → 1 |
+| | *(first four landed; the vector steering modes remain)* | |
 | `gradient` | Gradient, Rotate, Direction | 3 → 1 |
 | `analysis` | Analysis, Measure, Metamax, Time Analysis, Region Center | 5 → 1 |
 | `time` | Time, Time Ramp, Time Switch | 3 → 1 |
