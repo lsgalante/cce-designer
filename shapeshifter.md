@@ -95,9 +95,9 @@ touches none of the geometry work and can be picked up in any gap.
 > works on it, and the pipeline's currency IS a `Detail`: the spreadsheet lists
 > points, the overlays read the point and edge lists, and `weld_points` is gone.
 >
-> What remains: the OpenCL node still flattens to a soup and back, because the
-> kernel ABI is Phase 1's job — `detail_to_soup` / `soup_to_detail` are the
-> bridge, and `geometry::Geometry` survives only to serve them.
+> What remains: kernel GENERATORS still emit a corner list that welds on the
+> way back, so `detail_to_soup` / `soup_to_detail` and `geometry::Geometry`
+> survive to serve them. Deformers no longer go near a soup (see Phase 1).
 
 Replace the vertex list with **points, vertices, primitives and detail**, each
 carrying its own columnar attribute arrays — one `Vec<f32>` per named attribute
@@ -121,6 +121,17 @@ Spreadsheet, the meta overlays, `project.rs`.
 ### Phase 1 — Attribute algebra, and attributes on the GPU
 
 *Large. Needs Phase 0. Blocks Phases 2 and 3.*
+
+> **Started.** The ABI is widened for DEFORMERS: the work item is a point, not
+> a triangle corner, and a kernel reaches named float attributes through
+> buffers of its own — `attrf("mass", i)` reads, `setattrf("mass", i, v)`
+> writes, naming one creates it. Landed in both backends together and held to
+> each other by a cross-backend test. A deformer no longer flattens or welds,
+> so topology, groups and point identities pass through untouched.
+>
+> Outstanding: the generator ABI (still a corner list out), the topology
+> buffers, vector attributes — which need the CPU interpreter to grow vector
+> types — and the attribute vocabulary nodes themselves.
 
 Widen the kernel ABI from `(in_pos, in_col, out_pos, out_col, params)` to
 **named attribute buffers bound by the node**, plus the topology arrays as

@@ -1582,7 +1582,50 @@ pub fn resolve_scatter_geometry_with_errors(
     Some(res)
 }
 
-fn rewrite_kernel_signature(code: &str) -> String {
+/// The point attributes a kernel names, in first-use order — one buffer each,
+/// bound after `param_values`.
+///
+/// A kernel reaches an attribute the same way it reaches a parameter: by name,
+/// through a call the preprocessor rewrites. `attrf("mass", i)` reads point
+/// `i`'s float attribute and `setattrf("mass", i, v)` writes it. The name is
+/// the declaration — an attribute the geometry does not carry is created,
+/// zeroed, so a kernel can produce one.
+pub fn parse_attr_refs(code: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for call in ["attrf(", "setattrf("] {
+        let mut from = 0;
+        while let Some(pos) = code[from..].find(call) {
+            let at = from + pos;
+            // `setattrf(` also contains `attrf(`; only count the outer one.
+            let is_inner = call == "attrf(" && at >= 3 && &code[at - 3..at] == "set";
+            from = at + call.len();
+            if is_inner {
+                continue;
+            }
+            let Some(name) = quoted_arg(&code[from..]) else { continue };
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// The first single- or double-quoted string in an argument list.
+fn quoted_arg(args: &str) -> Option<String> {
+    let q = args.find(|c| c == '"' || c == '\'')?;
+    let quote = args.as_bytes()[q] as char;
+    let rest = &args[q + 1..];
+    let end = rest.find(quote)?;
+    let name = &rest[..end];
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Append arguments to `process`'s parameter list, in binding order.
+fn rewrite_kernel_signature_with(code: &str, extra: &[String]) -> String {
+    if extra.is_empty() {
+        return code.to_string();
+    }
     let bytes = code.as_bytes();
     if let Some(process_idx) = code.find("process") {
         let mut idx = process_idx + "process".len();
@@ -1605,13 +1648,9 @@ fn rewrite_kernel_signature(code: &str) -> String {
                 let closing_paren_idx = end_args - 1;
                 let before = &code[..closing_paren_idx];
                 let after = &code[closing_paren_idx..];
-                let args_str = &code[start_args..closing_paren_idx].trim();
-                let insertion = if args_str.is_empty() {
-                    "__global const float* param_values"
-                } else {
-                    ", __global const float* param_values"
-                };
-                return format!("{}{}{}", before, insertion, after);
+                let args_str = code[start_args..closing_paren_idx].trim();
+                let sep = if args_str.is_empty() { "" } else { ", " };
+                return format!("{}{}{}{}", before, sep, extra.join(", "), after);
             }
         }
     }
@@ -1620,7 +1659,8 @@ fn rewrite_kernel_signature(code: &str) -> String {
 
 pub fn preprocess_opencl_code(code: &str) -> String {
     let parsed_params = parse_dynamic_params(code);
-    if parsed_params.is_empty() {
+    let attrs = parse_attr_refs(code);
+    if parsed_params.is_empty() && attrs.is_empty() {
         return code.to_string();
     }
 
@@ -1635,7 +1675,25 @@ pub fn preprocess_opencl_code(code: &str) -> String {
         }
     }
 
-    let mut processed = rewrite_kernel_signature(code);
+    // Binding order, and therefore signature order: the fixed arguments, then
+    // `param_values` if the kernel names any parameter, then one buffer per
+    // attribute it names. Both launchers bind positionally against exactly
+    // this list.
+    let mut extra: Vec<String> = Vec::new();
+    if !parsed_params.is_empty() {
+        extra.push("__global const float* param_values".to_string());
+    }
+    for i in 0..attrs.len() {
+        extra.push(format!("__global float* attr_{}", i));
+    }
+    let mut processed = rewrite_kernel_signature_with(code, &extra);
+
+    // Attribute access rewrites before parameter ones: `attrf("mass", chi("k"))`
+    // is legal, and the parameter pass would otherwise rewrite inside a call
+    // this pass still needs to find by name.
+    for (slot, name) in attrs.iter().enumerate() {
+        processed = rewrite_attr_calls(&processed, name, slot);
+    }
 
     let prefixes = [("chf", "slider"), ("chi", "spinbox"), ("chv", "float3"), ("chb", "toggle")];
     for &(prefix, _) in &prefixes {
@@ -1657,28 +1715,22 @@ pub fn preprocess_opencl_code(code: &str) -> String {
                 let full_match = &processed[pos..end_pos];
                 let args_str = &processed[start_idx..end_pos - 1];
                 let mut replacement = None;
-                if let Some(first_quote_pos) = args_str.find(|c| c == '"' || c == '\'') {
-                    let quote_char = args_str.chars().nth(first_quote_pos).unwrap();
-                    if let Some(second_quote_pos) = args_str[first_quote_pos + 1..].find(quote_char) {
-                        let name = &args_str[first_quote_pos + 1..first_quote_pos + 1 + second_quote_pos];
-                        if !name.is_empty() {
-                            if let Some(&flat_idx) = param_indices.get(name) {
-                                match prefix {
-                                    "chf" => {
-                                        replacement = Some(format!("param_values[{}]", flat_idx));
-                                    }
-                                    "chi" | "chb" => {
-                                        replacement = Some(format!("((int)param_values[{}])", flat_idx));
-                                    }
-                                    "chv" => {
-                                        replacement = Some(format!(
-                                            "(float3)(param_values[{}], param_values[{}], param_values[{}])",
-                                            flat_idx, flat_idx + 1, flat_idx + 2
-                                        ));
-                                    }
-                                    _ => {}
-                                }
+                if let Some(name) = quoted_arg(args_str) {
+                    if let Some(&flat_idx) = param_indices.get(&name) {
+                        match prefix {
+                            "chf" => {
+                                replacement = Some(format!("param_values[{}]", flat_idx));
                             }
+                            "chi" | "chb" => {
+                                replacement = Some(format!("((int)param_values[{}])", flat_idx));
+                            }
+                            "chv" => {
+                                replacement = Some(format!(
+                                    "(float3)(param_values[{}], param_values[{}], param_values[{}])",
+                                    flat_idx, flat_idx + 1, flat_idx + 2
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1693,6 +1745,102 @@ pub fn preprocess_opencl_code(code: &str) -> String {
         }
     }
     processed
+}
+
+/// Rewrite one attribute's reads and writes into indexing on its buffer.
+///
+/// `attrf("mass", E)` becomes `attr_N[E]` and `setattrf("mass", I, V)` becomes
+/// `attr_N[I] = (V)` — an assignment expression, so it reads as a statement
+/// where the kernel wrote one and still composes where it did not.
+fn rewrite_attr_calls(code: &str, name: &str, slot: usize) -> String {
+    let mut out = code.to_string();
+    for setter in [true, false] {
+        let call = if setter { "setattrf(" } else { "attrf(" };
+        let mut from = 0;
+        loop {
+            let Some(pos) = out[from..].find(call) else { break };
+            let at = from + pos;
+            if !setter && at >= 3 && &out[at - 3..at] == "set" {
+                from = at + call.len();
+                continue;
+            }
+            let args_start = at + call.len();
+            let Some(args_end) = matching_paren(&out, args_start) else { break };
+            let args = &out[args_start..args_end];
+            let Some(found) = quoted_arg(args) else {
+                from = args_end + 1;
+                continue;
+            };
+            if found != name {
+                from = args_end + 1;
+                continue;
+            }
+            // Arguments after the name, split at the top level so an index
+            // expression containing a comma inside parentheses stays whole.
+            let after_name = match args.find(',') {
+                Some(c) => &args[c + 1..],
+                None => "",
+            };
+            let parts = split_top_level(after_name);
+            let replacement = if setter {
+                match (parts.first(), parts.get(1)) {
+                    (Some(i), Some(v)) => format!("attr_{}[{}] = ({})", slot, i.trim(), v.trim()),
+                    _ => "0".to_string(),
+                }
+            } else {
+                match parts.first() {
+                    Some(i) => format!("attr_{}[{}]", slot, i.trim()),
+                    None => "0".to_string(),
+                }
+            };
+            out.replace_range(at..args_end + 1, &replacement);
+            from = at + replacement.len();
+        }
+    }
+    out
+}
+
+/// Index just past the `(` at `open`, of its matching `)`.
+fn matching_paren(s: &str, open: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 1;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split on commas that are not inside parentheses or brackets.
+fn split_top_level(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start <= s.len() {
+        parts.push(&s[start..]);
+    }
+    parts.retain(|p| !p.trim().is_empty());
+    parts
 }
 
 pub fn parse_dynamic_params(code: &str) -> Vec<ParamDef> {
@@ -1798,7 +1946,7 @@ pub fn resolve_opencl_geometry_with_errors(
     sim: &mut EvalSim,
 ) -> Option<Detail> {
     let input_name = node_param_str(target, "Input", "");
-    let input = if !input_name.is_empty() {
+    let mut input = if !input_name.is_empty() {
         // Siblings first, exactly like the output type's lookup: subnet
         // templates (Extrude) wire their inner opencl to a child named
         // "input1", and a global-first search would resolve to the FIRST
@@ -1815,12 +1963,6 @@ pub fn resolve_opencl_geometry_with_errors(
         Detail::new()
     };
 
-    // The kernel ABI is still (positions, colors) over a flat corner list, so
-    // this node — alone among the operators — flattens to a soup and comes
-    // back. Phase 1 widens the ABI to bind named attribute arrays and the
-    // round trip goes away.
-    let corner_point = input.triangulate_points();
-    let mut geom = detail_to_soup(&input);
     let code = node_param_str(target, "Code", "");
     if !code.is_empty() {
         let parsed_params = parse_dynamic_params(&code);
@@ -1855,6 +1997,28 @@ pub fn resolve_opencl_geometry_with_errors(
         }
 
         let processed_code = preprocess_opencl_code(&code);
+        let is_generator = code.contains("out_count");
+
+        // A DEFORMER runs over POINTS. It never sees a triangle, so topology,
+        // groups and point identities pass through untouched — the flatten,
+        // weld and "first corner wins" reconciliation this used to need are
+        // all gone. Inside a simnet that is the difference between a solver
+        // that can follow a point across frames and one that cannot.
+        if !is_generator {
+            let result = run_kernel_on_detail(&processed_code, &mut input, &flat_values);
+            if let Err(e) = result {
+                if ocl_error.is_none() {
+                    *ocl_error = Some(e);
+                }
+            }
+            return Some(input);
+        }
+
+        // A GENERATOR builds a new corner list, so it still speaks soup and
+        // its output welds into fresh geometry with fresh identities. Widening
+        // the generator ABI to emit points and primitives directly is the
+        // piece of Phase 1 still outstanding.
+        let mut geom = detail_to_soup(&input);
         // CPU reference backend (kernel_cpu): forced via CCE_KERNEL_CPU=1, and
         // the automatic fallback when there is no OpenCL platform at all — the
         // state this machine reached silently when nvidia-open fell out of
@@ -1879,34 +2043,10 @@ pub fn resolve_opencl_geometry_with_errors(
                 *ocl_error = Some(e);
             }
         }
+        return Some(soup_to_detail(&geom));
     }
 
-    // A DEFORMER left the corner count alone, so every corner still belongs to
-    // the point it came from: write the results back in place and the input's
-    // topology, groups, attributes and point identities all survive. That
-    // matters most inside a simnet, where a kernel that re-welded its output
-    // every step would hand the solver a new set of points each frame.
-    //
-    // Where corners of one point disagree — a kernel free to move each corner
-    // independently — the first one wins, which is what deforming a surface
-    // whose points are shared has to mean.
-    //
-    // A GENERATOR built a different corner list, so there is nothing to map
-    // back onto; its output welds into fresh geometry with fresh identities,
-    // which is correct, because the points are genuinely new.
-    if geom.vertices.len() == corner_point.len() {
-        let mut result = input;
-        let mut written = vec![false; result.num_points()];
-        for (corner, v) in geom.vertices.iter().enumerate() {
-            let p = corner_point[corner] as usize;
-            if !std::mem::replace(&mut written[p], true) {
-                result.set_pos(p, Vec3::from(v.pos));
-                result.set_color(p, v.col);
-            }
-        }
-        return Some(result);
-    }
-    Some(soup_to_detail(&geom))
+    Some(input)
 }
 
 
@@ -2124,72 +2264,187 @@ pub fn run_opencl_kernel_with_params(code: &str, geom: &mut Geometry, params: &[
             });
         }
     } else {
-        let count = geom.vertices.len();
-
-        // Prepare flat position and color buffers
-        let mut pos_data: Vec<cl_float> = Vec::with_capacity(count * 3);
-        let mut col_data: Vec<cl_float> = Vec::with_capacity(count * 3);
+        let mut pos_data: Vec<cl_float> = Vec::with_capacity(geom.vertices.len() * 3);
+        let mut col_data: Vec<cl_float> = Vec::with_capacity(geom.vertices.len() * 3);
         for v in &geom.vertices {
             pos_data.extend_from_slice(&v.pos);
             col_data.extend_from_slice(&v.col);
         }
-
-        // Create device buffers
-        let mut pos_buf = unsafe {
-            ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, count * 3, std::ptr::null_mut())
-                .map_err(|e| format!("Failed to create positions buffer: {:?}", e))?
-        };
-        let mut col_buf = unsafe {
-            ClBuffer::<cl_float>::create(&context, CL_MEM_READ_WRITE, count * 3, std::ptr::null_mut())
-                .map_err(|e| format!("Failed to create colors buffer: {:?}", e))?
-        };
-
-        // Write data to device
-        let _write_pos_event = unsafe {
-            queue.enqueue_write_buffer(&mut pos_buf, CL_TRUE, 0, &pos_data, &[])
-                .map_err(|e| format!("Failed to write positions buffer: {:?}", e))?
-        };
-        let _write_col_event = unsafe {
-            queue.enqueue_write_buffer(&mut col_buf, CL_TRUE, 0, &col_data, &[])
-                .map_err(|e| format!("Failed to write colors buffer: {:?}", e))?
-        };
-
-        // Execute kernel
-        let mut exec = ExecuteKernel::new(kernel);
-        let kernel_event = unsafe {
-            exec.set_arg(&pos_buf)
-                .set_arg(&col_buf)
-                .set_arg(&(count as cl_int));
-
-            let num_args = kernel.num_args().unwrap_or(0);
-            if num_args >= 4 {
-                exec.set_arg(&param_values_buf);
-            }
-
-            exec.set_global_work_size(count)
-                .enqueue_nd_range(&queue)
-                .map_err(|e| format!("Failed to enqueue kernel: {:?}", e))?
-        };
-
-        kernel_event.wait().map_err(|e| format!("Failed to wait for kernel: {:?}", e))?;
-
-        // Read data back from device
-        let _read_pos_event = unsafe {
-            queue.enqueue_read_buffer(&pos_buf, CL_TRUE, 0, &mut pos_data, &[])
-                .map_err(|e| format!("Failed to read positions buffer: {:?}", e))?
-        };
-        let _read_col_event = unsafe {
-            queue.enqueue_read_buffer(&col_buf, CL_TRUE, 0, &mut col_data, &[])
-                .map_err(|e| format!("Failed to read colors buffer: {:?}", e))?
-        };
-
-        // Write back to Geometry
+        let count = geom.vertices.len();
+        drop(cache_guard);
+        run_deformer_flat(code, &mut pos_data, &mut col_data, count, &mut [], params)?;
         for i in 0..count {
             geom.vertices[i].pos = [pos_data[i * 3], pos_data[i * 3 + 1], pos_data[i * 3 + 2]];
             geom.vertices[i].col = [col_data[i * 3], col_data[i * 3 + 1], col_data[i * 3 + 2]];
         }
+        return Ok(());
     }
 
+    Ok(())
+}
+
+/// Run a deformer kernel over flat per-element buffers, reading everything back
+/// in place.
+///
+/// `pos` and `col` hold three floats per element; each entry of `attrs` holds
+/// one, and they bind in the order [`parse_attr_refs`] found them — which is
+/// the order [`preprocess_opencl_code`] appended them to the signature.
+///
+/// The one implementation behind both the soup path (which binds no
+/// attributes) and the point-native path.
+fn run_deformer_flat(
+    code: &str,
+    pos: &mut Vec<cl_float>,
+    col: &mut Vec<cl_float>,
+    count: usize,
+    attrs: &mut [(String, Vec<cl_float>)],
+    params: &[f32],
+) -> Result<(), String> {
+    if count == 0 {
+        return Ok(());
+    }
+    let mut cache_guard = OPENCL_CACHE
+        .get_or_init(|| std::sync::Mutex::new(init_opencl()))
+        .lock()
+        .map_err(|e| format!("Failed to lock OpenCL cache: {:?}", e))?;
+    let cache = cache_guard.as_mut().ok_or_else(|| "No OpenCL platforms/devices found".to_string())?;
+
+    if !cache.kernels.contains_key(code) {
+        let mut program = Program::create_from_source(&cache.context, code)
+            .map_err(|e| format!("Failed to create Program: {:?}", e))?;
+        if let Err(e) = program.build(&[cache.device.id()], "") {
+            let log = program
+                .get_build_log(cache.device.id())
+                .unwrap_or_else(|_| "Failed to retrieve build log".to_string());
+            return Err(format!("OpenCL JIT compilation error: {}\nLog:\n{}", e, log));
+        }
+        let kernel = Kernel::create(&program, "process")
+            .map_err(|e| format!("Failed to create kernel 'process': {:?}", e))?;
+        cache.kernels.insert(code.to_string(), kernel);
+    }
+    let kernel = cache.kernels.get(code).unwrap();
+    let (context, queue) = (&cache.context, &cache.queue);
+
+    let mut param_data = params.to_vec();
+    if param_data.is_empty() {
+        param_data.push(0.0);
+    }
+
+    let mut make = |data: &[cl_float]| -> Result<ClBuffer<cl_float>, String> {
+        let mut buf = unsafe {
+            ClBuffer::<cl_float>::create(context, CL_MEM_READ_WRITE, data.len().max(1), std::ptr::null_mut())
+                .map_err(|e| format!("Failed to create buffer: {:?}", e))?
+        };
+        unsafe {
+            queue
+                .enqueue_write_buffer(&mut buf, CL_TRUE, 0, data, &[])
+                .map_err(|e| format!("Failed to write buffer: {:?}", e))?
+        };
+        Ok(buf)
+    };
+
+    let mut pos_buf = make(pos)?;
+    let mut col_buf = make(col)?;
+    let mut param_buf = make(&param_data)?;
+    let mut attr_bufs: Vec<ClBuffer<cl_float>> = Vec::with_capacity(attrs.len());
+    for (_, data) in attrs.iter() {
+        attr_bufs.push(make(data)?);
+    }
+
+    let mut exec = ExecuteKernel::new(kernel);
+    let kernel_event = unsafe {
+        exec.set_arg(&pos_buf).set_arg(&col_buf).set_arg(&(count as cl_int));
+        // The signature carries param_values only when the kernel names a
+        // parameter, so the attribute buffers slide up one slot when it does
+        // not. Arity is the authority, exactly as it was for the old
+        // `num_args >= 4` check.
+        let num_args = kernel.num_args().unwrap_or(0) as usize;
+        if num_args > 3 + attrs.len() {
+            exec.set_arg(&param_buf);
+        }
+        for buf in &attr_bufs {
+            exec.set_arg(buf);
+        }
+        exec.set_global_work_size(count)
+            .enqueue_nd_range(queue)
+            .map_err(|e| format!("Failed to enqueue kernel: {:?}", e))?
+    };
+    kernel_event.wait().map_err(|e| format!("Failed to wait for kernel: {:?}", e))?;
+
+    unsafe {
+        queue
+            .enqueue_read_buffer(&mut pos_buf, CL_TRUE, 0, pos, &[])
+            .map_err(|e| format!("Failed to read positions buffer: {:?}", e))?;
+        queue
+            .enqueue_read_buffer(&mut col_buf, CL_TRUE, 0, col, &[])
+            .map_err(|e| format!("Failed to read colors buffer: {:?}", e))?;
+        for (buf, (_, data)) in attr_bufs.iter().zip(attrs.iter_mut()) {
+            queue
+                .enqueue_read_buffer(buf, CL_TRUE, 0, data, &[])
+                .map_err(|e| format!("Failed to read attribute buffer: {:?}", e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Run a DEFORMER kernel over a [`Detail`]'s points.
+///
+/// This is the Phase 1 ABI: the work item is a POINT, not a triangle corner,
+/// and the kernel reaches named attributes through buffers of its own. Two
+/// things follow. A deformer no longer flattens and welds — topology, groups
+/// and point identities are simply untouched, because the kernel never saw
+/// them. And "the first corner wins", which the soup round trip had to invent
+/// where corners of one point disagreed, stops being a question: there is one
+/// value per point because there is one point.
+///
+/// An attribute the kernel names but the geometry lacks is created and zeroed:
+/// naming it is the declaration.
+pub fn run_kernel_on_detail(code: &str, geom: &mut Detail, params: &[f32]) -> Result<(), String> {
+    let count = geom.num_points();
+    if count == 0 {
+        return Ok(());
+    }
+    let mut pos: Vec<cl_float> = bytemuck::cast_slice(geom.positions()).to_vec();
+    let mut col: Vec<cl_float> = Vec::with_capacity(count * 3);
+    for p in 0..count {
+        col.extend_from_slice(&geom.color(p));
+    }
+
+    let names = parse_attr_refs(code);
+    let mut attrs: Vec<(String, Vec<cl_float>)> = Vec::with_capacity(names.len());
+    for name in &names {
+        let data = match geom.points().get(name) {
+            Some(AttribData::Float(v)) => v.clone(),
+            Some(other) => (0..count)
+                .map(|p| other.get(p).map(|v| v.as_f32()).unwrap_or(0.0))
+                .collect(),
+            None => vec![0.0; count],
+        };
+        attrs.push((name.clone(), data));
+    }
+
+    let run = if crate::kernel_cpu::forced() {
+        crate::kernel_cpu::run_deformer_cpu(code, &mut pos, &mut col, count, &mut attrs, params)
+    } else {
+        match run_deformer_flat(code, &mut pos, &mut col, count, &mut attrs, params) {
+            Err(e) if e.contains("No OpenCL platforms/devices found") => {
+                note_cpu_fallback_once();
+                crate::kernel_cpu::run_deformer_cpu(code, &mut pos, &mut col, count, &mut attrs, params)
+            }
+            r => r,
+        }
+    };
+    run?;
+
+    for (p, slot) in geom.positions_mut().iter_mut().enumerate() {
+        *slot = [pos[p * 3], pos[p * 3 + 1], pos[p * 3 + 2]];
+    }
+    for p in 0..count {
+        geom.set_color(p, [col[p * 3], col[p * 3 + 1], col[p * 3 + 2]]);
+    }
+    for (name, data) in attrs {
+        let _ = geom.points_mut().insert(&name, AttribData::Float(data));
+    }
     Ok(())
 }
 
@@ -2781,6 +3036,106 @@ mod tests {
             }
         }
         v
+    }
+
+    /// A deformer that grows a named attribute and displaces by it — the
+    /// smallest kernel that needs the Phase 1 ABI.
+    const ATTR_KERNEL: &str = r#"
+        __kernel void process(__global float* pos, __global float* col, int count) {
+            int id = get_global_id(0);
+            if (id < count) {
+                setattrf("mass", id, attrf("mass", id) + 2.0f);
+                pos[id * 3 + 1] += attrf("mass", id);
+            }
+        }
+    "#;
+
+    #[test]
+    fn test_kernel_names_its_attributes_and_they_become_buffers() {
+        assert_eq!(parse_attr_refs(ATTR_KERNEL), vec!["mass".to_string()]);
+        // `setattrf(` contains `attrf(`; the outer call must not be counted
+        // twice, or the second buffer would shift every later binding.
+        assert_eq!(parse_attr_refs(r#"setattrf("a", i, 1.0f);"#), vec!["a".to_string()]);
+
+        let out = preprocess_opencl_code(ATTR_KERNEL);
+        assert!(out.contains("__global float* attr_0"), "{out}");
+        assert!(out.contains("attr_0[id] = (attr_0[id] + 2.0f)"), "{out}");
+        assert!(!out.contains("attrf("), "every call is rewritten: {out}");
+        // No ch* parameters here, so param_values is absent and the attribute
+        // buffer takes the fourth slot. The launchers read arity to tell.
+        assert!(!out.contains("param_values"), "{out}");
+    }
+
+    #[test]
+    fn test_deformer_runs_over_points_and_keeps_the_geometry_whole() {
+        let mut d = sphere_detail(Vec3::ZERO, 1.0, 6, 8);
+        d.points_mut().create_group("keep");
+        d.points_mut().add_to_group("keep", 3);
+        let before_ids = d.ids().to_vec();
+        let before_prims = d.num_prims();
+        let before_y: Vec<f32> = d.positions().iter().map(|p| p[1]).collect();
+
+        let code = preprocess_opencl_code(ATTR_KERNEL);
+        let count = d.num_points();
+        let mut pos: Vec<f32> = bytemuck::cast_slice(d.positions()).to_vec();
+        let mut col: Vec<f32> = (0..count).flat_map(|p| d.color(p)).collect();
+        let mut attrs = vec![("mass".to_string(), vec![0.0f32; count])];
+        crate::kernel_cpu::run_deformer_cpu(&code, &mut pos, &mut col, count, &mut attrs, &[]).unwrap();
+
+        // One work item per POINT, not per triangle corner: 42 points where the
+        // soup would have handed the kernel 240 corners and then had to decide
+        // which corner's answer a shared point takes.
+        assert_eq!(count, 42);
+        assert_eq!(attrs[0].1, vec![2.0f32; 42], "the kernel created and wrote the attribute");
+        for p in 0..count {
+            assert!((pos[p * 3 + 1] - (before_y[p] + 2.0)).abs() < 1e-5, "point {p}");
+        }
+
+        // Write back through the real entry point and check the geometry is
+        // otherwise untouched — this is what the soup round trip could not do.
+        for (p, slot) in d.positions_mut().iter_mut().enumerate() {
+            *slot = [pos[p * 3], pos[p * 3 + 1], pos[p * 3 + 2]];
+        }
+        let _ = d.points_mut().insert("mass", AttribData::Float(attrs[0].1.clone()));
+        assert_eq!(d.ids(), &before_ids[..], "identities survive a deformer");
+        assert_eq!(d.num_prims(), before_prims, "topology survives a deformer");
+        assert_eq!(d.points().group_members("keep"), vec![3], "groups survive a deformer");
+        assert_eq!(d.points().value("mass", 0), Some(AttribValue::Float(2.0)));
+    }
+
+    #[test]
+    fn test_attribute_abi_matches_across_both_backends() {
+        if opencl3::platform::get_platforms().unwrap_or_default().is_empty() {
+            println!("Skipping cross-backend attribute ABI test: no OpenCL platform");
+            return;
+        }
+        let d = sphere_detail(Vec3::ZERO, 1.0, 6, 8);
+        let code = preprocess_opencl_code(ATTR_KERNEL);
+        let count = d.num_points();
+        let base_pos: Vec<f32> = bytemuck::cast_slice(d.positions()).to_vec();
+        let base_col: Vec<f32> = (0..count).flat_map(|p| d.color(p)).collect();
+
+        let run = |gpu: bool| -> (Vec<f32>, Vec<f32>) {
+            let (mut pos, mut col) = (base_pos.clone(), base_col.clone());
+            let mut attrs = vec![("mass".to_string(), vec![0.5f32; count])];
+            if gpu {
+                run_deformer_flat(&code, &mut pos, &mut col, count, &mut attrs, &[]).unwrap();
+            } else {
+                crate::kernel_cpu::run_deformer_cpu(&code, &mut pos, &mut col, count, &mut attrs, &[])
+                    .unwrap();
+            }
+            (pos, attrs.remove(0).1)
+        };
+
+        let (gpu_pos, gpu_mass) = run(true);
+        let (cpu_pos, cpu_mass) = run(false);
+        // The interpreter is the semantic reference, so the widened ABI has to
+        // bind the same arguments to the same slots on both sides.
+        assert_eq!(gpu_mass, cpu_mass);
+        for (i, (a, b)) in gpu_pos.iter().zip(cpu_pos.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-5, "component {i}: {a} vs {b}");
+        }
+        assert_eq!(gpu_mass, vec![2.5f32; count], "an existing attribute is read, not reset");
     }
 
     #[test]

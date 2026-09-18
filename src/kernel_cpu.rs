@@ -586,6 +586,9 @@ enum BufId {
     Params,
     RwPos,
     RwCol,
+    /// One of the kernel's named attribute buffers, by binding slot — the
+    /// Phase 1 ABI's addition. See `geometry::parse_attr_refs`.
+    Attr(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -657,6 +660,7 @@ struct Bufs<'a> {
     rw_pos: Vec<f32>,
     rw_col: Vec<f32>,
     params: &'a [f32],
+    attrs: Vec<Vec<f32>>,
 }
 
 struct Interp<'a> {
@@ -710,6 +714,14 @@ impl<'a> Interp<'a> {
             BufId::Params => Val::F(self.bufs.params.get(idx).copied().unwrap_or(0.0)),
             BufId::RwPos => Val::F(self.bufs.rw_pos.get(idx).copied().unwrap_or(0.0)),
             BufId::RwCol => Val::F(self.bufs.rw_col.get(idx).copied().unwrap_or(0.0)),
+            BufId::Attr(slot) => Val::F(
+                self.bufs
+                    .attrs
+                    .get(slot)
+                    .and_then(|a| a.get(idx))
+                    .copied()
+                    .unwrap_or(0.0),
+            ),
         }
     }
     fn buf_write(&mut self, id: BufId, idx: usize, v: Val) {
@@ -737,6 +749,11 @@ impl<'a> Interp<'a> {
             }
             BufId::RwCol => {
                 if let Some(slot) = self.bufs.rw_col.get_mut(idx) {
+                    *slot = v.as_f();
+                }
+            }
+            BufId::Attr(slot) => {
+                if let Some(slot) = self.bufs.attrs.get_mut(slot).and_then(|a| a.get_mut(idx)) {
                     *slot = v.as_f();
                 }
             }
@@ -1256,6 +1273,103 @@ fn bin_arith(op: &str, a: Val, b: Val) -> Result<Val, String> {
 /// argument binding, same `max_vertices`, same output rebuild with the default
 /// Norm/UV attributes. The `process` entry point runs once per work item with
 /// `get_global_id(0)` = the item index, exactly as the ND-range launch does.
+/// CPU twin of `geometry::run_deformer_flat`: same flat buffers, same binding
+/// order, same read-back in place.
+///
+/// The two backends share the kernel language, so they have to share the ABI
+/// too — `cpu_matches_opencl_on_every_shipped_kernel` is only meaningful while
+/// they bind the same arguments to the same slots.
+pub fn run_deformer_cpu(
+    code: &str,
+    pos: &mut [f32],
+    col: &mut [f32],
+    count: usize,
+    attrs: &mut [(String, Vec<f32>)],
+    params: &[f32],
+) -> Result<(), String> {
+    if count == 0 {
+        return Ok(());
+    }
+    let toks = lex(code)?;
+    let mut parser = Parser { toks, pos: 0 };
+    let fns = parser.parse_program()?;
+    let process = fns.get("process").ok_or("kernel_cpu: no 'process' kernel")?;
+    let arity = process.params.len();
+    let pnames: Vec<(String, bool)> = process
+        .params
+        .iter()
+        .map(|p| (p.name.clone(), p.is_ptr))
+        .collect();
+
+    let mut param_data = params.to_vec();
+    if param_data.is_empty() {
+        param_data.push(0.0);
+    }
+
+    // Binding order mirrors the OpenCL launcher exactly: the three fixed
+    // arguments, `param_values` only when the arity says the kernel declared
+    // it, then one buffer per named attribute.
+    let mut binds: Vec<Val> = vec![
+        Val::P(PtrV::Buf(BufId::RwPos)),
+        Val::P(PtrV::Buf(BufId::RwCol)),
+        Val::I(count as i64),
+    ];
+    if arity > 3 + attrs.len() {
+        binds.push(Val::P(PtrV::Buf(BufId::Params)));
+    }
+    for slot in 0..attrs.len() {
+        binds.push(Val::P(PtrV::Buf(BufId::Attr(slot))));
+    }
+    let n_bind = binds.len().min(arity);
+
+    let mut bufs = Bufs {
+        in_pos: &[],
+        in_col: &[],
+        out_pos: Vec::new(),
+        out_col: Vec::new(),
+        out_count: 0,
+        rw_pos: pos.to_vec(),
+        rw_col: col.to_vec(),
+        params: &param_data,
+        attrs: attrs.iter().map(|(_, v)| v.clone()).collect(),
+    };
+
+    let mut steps = 0u64;
+    for id in 0..count {
+        let mut interp = Interp {
+            fns: &fns,
+            slots: Vec::new(),
+            scopes: vec![HashMap::new()],
+            bufs: std::mem::replace(
+                &mut bufs,
+                Bufs { in_pos: &[], in_col: &[], out_pos: Vec::new(), out_col: Vec::new(), out_count: 0, rw_pos: Vec::new(), rw_col: Vec::new(), params: &[], attrs: Vec::new() },
+            ),
+            global_id: id,
+            steps,
+            budget: STEP_BUDGET,
+        };
+        for (i, (name, is_ptr)) in pnames.iter().enumerate().take(n_bind) {
+            let data = match binds[i] {
+                Val::P(p) if *is_ptr => SlotData::Ptr(p),
+                Val::I(n) => SlotData::I(n),
+                Val::F(f) => SlotData::F(f),
+                Val::P(p) => SlotData::Ptr(p),
+            };
+            interp.declare(name, data);
+        }
+        interp.run_block(&process.body)?;
+        steps = interp.steps;
+        bufs = interp.bufs;
+    }
+
+    pos.copy_from_slice(&bufs.rw_pos);
+    col.copy_from_slice(&bufs.rw_col);
+    for ((_, dst), src) in attrs.iter_mut().zip(bufs.attrs.into_iter()) {
+        *dst = src;
+    }
+    Ok(())
+}
+
 pub fn run_kernel_cpu(code: &str, geom: &mut Geometry, params: &[f32]) -> Result<(), String> {
     run_kernel_cpu_with_budget(code, geom, params, STEP_BUDGET)
 }
@@ -1311,6 +1425,7 @@ fn run_kernel_cpu_with_budget(code: &str, geom: &mut Geometry, params: &[f32], b
             rw_pos: Vec::new(),
             rw_col: Vec::new(),
             params: &param_data,
+            attrs: Vec::new(),
         };
 
         let global = count.max(1);
@@ -1322,7 +1437,7 @@ fn run_kernel_cpu_with_budget(code: &str, geom: &mut Geometry, params: &[f32], b
                 scopes: vec![HashMap::new()],
                 bufs: std::mem::replace(
                     &mut bufs,
-                    Bufs { in_pos: &[], in_col: &[], out_pos: Vec::new(), out_col: Vec::new(), out_count: 0, rw_pos: Vec::new(), rw_col: Vec::new(), params: &[] },
+                    Bufs { in_pos: &[], in_col: &[], out_pos: Vec::new(), out_col: Vec::new(), out_count: 0, rw_pos: Vec::new(), rw_col: Vec::new(), params: &[], attrs: Vec::new() },
                 ),
                 global_id: id,
                 steps,
@@ -1373,6 +1488,7 @@ fn run_kernel_cpu_with_budget(code: &str, geom: &mut Geometry, params: &[f32], b
             rw_pos: in_pos.clone(),
             rw_col: in_col.clone(),
             params: &param_data,
+            attrs: Vec::new(),
         };
 
         let mut steps = 0u64;
@@ -1383,7 +1499,7 @@ fn run_kernel_cpu_with_budget(code: &str, geom: &mut Geometry, params: &[f32], b
                 scopes: vec![HashMap::new()],
                 bufs: std::mem::replace(
                     &mut bufs,
-                    Bufs { in_pos: &[], in_col: &[], out_pos: Vec::new(), out_col: Vec::new(), out_count: 0, rw_pos: Vec::new(), rw_col: Vec::new(), params: &[] },
+                    Bufs { in_pos: &[], in_col: &[], out_pos: Vec::new(), out_col: Vec::new(), out_count: 0, rw_pos: Vec::new(), rw_col: Vec::new(), params: &[], attrs: Vec::new() },
                 ),
                 global_id: id,
                 steps,
