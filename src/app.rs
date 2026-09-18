@@ -3200,6 +3200,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         headers.push(format!("g:{}", g));
     }
 
+    // Detail attributes ride along as `d:` columns, constant down the table —
+    // which is what a detail attribute IS. Without this the Analysis node
+    // would write its answers somewhere nothing could show them.
+    let detail: Vec<(String, crate::detail::AttribType)> = geom
+        .detail()
+        .names()
+        .into_iter()
+        .filter_map(|n| geom.detail().get(n).map(|a| (n.to_string(), a.ty())))
+        .collect();
+    for (name, ty) in &detail {
+        match ty.components() {
+            1 => headers.push(format!("d:{}", name)),
+            n => {
+                for c in ["x", "y", "z", "w"].iter().take(n) {
+                    headers.push(format!("d:{}.{}", name, c));
+                }
+            }
+        }
+    }
+
     let mut rows = Vec::new();
     for p in 0..geom.num_points() {
         let pos = geom.positions()[p];
@@ -3235,6 +3255,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
         for g in &groups {
             row.push(if geom.points().in_group(g, p) { "1".to_string() } else { String::new() });
+        }
+
+        for (name, ty) in &detail {
+            match geom.detail().value(name, 0) {
+                Some(crate::detail::AttribValue::Float(f)) => row.push(format!("{:.4}", f)),
+                Some(crate::detail::AttribValue::Int(i)) => row.push(i.to_string()),
+                Some(crate::detail::AttribValue::Float2(a)) => {
+                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
+                }
+                Some(crate::detail::AttribValue::Float3(a)) => {
+                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
+                }
+                Some(crate::detail::AttribValue::Float4(a)) => {
+                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
+                }
+                None => row.extend(std::iter::repeat("-".to_string()).take(ty.components())),
+            }
         }
 
         rows.push(row);

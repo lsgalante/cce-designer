@@ -11,7 +11,7 @@
   },
   {
    "name": "Operation",
-   "type": "choice:Create,Modify,Delete",
+   "type": "choice:Create,Modify,Delete,Remap,Clip,Normalize,Composite,Promote",
    "default": "Create"
   },
   {
@@ -38,6 +38,51 @@
    "name": "Group",
    "type": "text",
    "default": ""
+  },
+  {
+   "name": "From Min",
+   "type": "text",
+   "default": "0.00"
+  },
+  {
+   "name": "From Max",
+   "type": "text",
+   "default": "1.00"
+  },
+  {
+   "name": "To Min",
+   "type": "text",
+   "default": "0.00"
+  },
+  {
+   "name": "To Max",
+   "type": "text",
+   "default": "1.00"
+  },
+  {
+   "name": "Source B",
+   "type": "text",
+   "default": ""
+  },
+  {
+   "name": "Combine Op",
+   "type": "choice:Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
+   "default": "Add"
+  },
+  {
+   "name": "To Class",
+   "type": "choice:Detail,Point",
+   "default": "Detail"
+  },
+  {
+   "name": "Method",
+   "type": "choice:Average,Sum,Minimum,Maximum,First",
+   "default": "Average"
+  },
+  {
+   "name": "Target",
+   "type": "choice:Sum,Maximum,Range",
+   "default": "Maximum"
   }
  ]
 }

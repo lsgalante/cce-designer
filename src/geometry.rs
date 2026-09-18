@@ -730,6 +730,10 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_relax_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("neighbour") {
         resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("time") {
+        resolve_time_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("analysis") {
+        resolve_analysis_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("attribute") {
         resolve_attribute_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("opencl") {
@@ -1274,6 +1278,146 @@ pub fn resolve_relax_geometry_with_errors(
     Some(geom)
 }
 
+/// The Analysis node: measure an attribute (or the mesh's edge lengths) and
+/// write the result to DETAIL attributes.
+///
+/// This is what the detail class is for, and why the port needed no dictionary
+/// type. Houdini's Analysis writes an `<attr>_info` dictionary holding min,
+/// max, sum, average and spread; here those are five ordinary detail
+/// attributes named `<attr>_min` … `<attr>_spread`, which the Attribute node's
+/// Promote and Remap can read back without anything learning to index a dict.
+///
+/// Measuring edge lengths instead of an attribute is the same reduction over a
+/// different column, and it is the measurement a remesher steers by — so it
+/// shares the node rather than getting one of its own.
+pub fn resolve_analysis_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_analysis(&mut geom, target, ocl_error);
+    Some(geom)
+}
+
+pub(crate) fn apply_analysis(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
+    let edges = node_param_str(target, "Source", "Attribute").eq_ignore_ascii_case("edge lengths");
+    let name = node_param_str(target, "Attribute", "").trim().to_string();
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+
+    // The column to reduce, and the name its answers hang off.
+    let (label, values) = if edges {
+        let lengths: Vec<f32> = geom
+            .edges()
+            .iter()
+            .map(|e| (geom.pos(e[1] as usize) - geom.pos(e[0] as usize)).length())
+            .collect();
+        ("edges".to_string(), lengths)
+    } else {
+        if name.is_empty() {
+            return;
+        }
+        if !geom.points().has(&name) {
+            if ocl_error.is_none() {
+                *ocl_error = Some(format!(
+                    "Analysis '{}': no point attribute named '{}'",
+                    target.name, name
+                ));
+            }
+            return;
+        }
+        let vals: Vec<f32> = (0..geom.num_points())
+            .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
+            .filter_map(|p| geom.points().value(&name, p))
+            .map(|v| v.as_f32())
+            .collect();
+        (name.clone(), vals)
+    };
+
+    // Nothing to measure is not an error — an empty group or a point cloud
+    // with no edges is a legitimate state mid-chain. The answers are zeroed so
+    // a downstream reader still finds the attributes it expects.
+    let n = values.len();
+    let (min, max, sum) = if n == 0 {
+        (0.0, 0.0, 0.0)
+    } else {
+        (
+            values.iter().copied().fold(f32::INFINITY, f32::min),
+            values.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            values.iter().sum::<f32>(),
+        )
+    };
+    let average = if n == 0 { 0.0 } else { sum / n as f32 };
+    let spread = max - min;
+
+    for (suffix, value) in [
+        ("min", min),
+        ("max", max),
+        ("sum", sum),
+        ("average", average),
+        ("spread", spread),
+        ("count", n as f32),
+    ] {
+        geom.detail_mut()
+            .create(&format!("{}_{}", label, suffix), AttribValue::Float(value));
+    }
+}
+
+/// The Time node: a detail attribute running 0 to 1 across a frame range.
+///
+/// The simplest node in the set and the one that makes a simnet's chain able
+/// to know where it is: everything time-varying downstream reads this rather
+/// than each node growing its own frame parameters. It reads the frame off the
+/// evaluation, so a scrub moves it and a cached solve does not.
+pub fn resolve_time_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let frame = sim.frame;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_time(&mut geom, target, frame);
+    Some(geom)
+}
+
+pub(crate) fn apply_time(geom: &mut Detail, target: &FsNode, frame: i32) {
+    let name = node_param_str(target, "Attribute", "t").trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    let start = node_param_f32(target, "Start Frame", 1.0);
+    let end = node_param_f32(target, "End Frame", 100.0);
+    let span = end - start;
+    // A zero-length range is 1.0 from its first frame on, not a division by
+    // zero: "the whole range has elapsed" is the only reading that composes.
+    let t = if span.abs() < 1e-9 {
+        if frame as f32 >= start { 1.0 } else { 0.0 }
+    } else {
+        (frame as f32 - start) / span
+    };
+    let t = if node_param_str(target, "Clamp", "true") == "true" {
+        t.clamp(0.0, 1.0)
+    } else {
+        t
+    };
+    geom.detail_mut().create(&name, AttribValue::Float(t));
+}
+
 /// Which points a neighbourhood operator treats as a point's neighbours.
 enum Hood {
     /// Points reachable within N edge rings. The mesh's own connectivity, and
@@ -1594,10 +1738,16 @@ pub fn resolve_attribute_geometry_with_errors(
     }
     let input_node = find_node_by_name(root, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_attribute(&mut geom, target, ocl_error);
+    Some(geom)
+}
 
+/// The Attribute operator itself, over geometry already in hand — split from
+/// the resolver for the same reason `apply_neighbour` is.
+pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
     let name = node_param_str(target, "Attribute Name", "attr1").trim().to_string();
     if name.is_empty() {
-        return Some(geom);
+        return;
     }
     let op = node_param_str(target, "Operation", "Create").to_lowercase();
     let combine_mode = node_param_str(target, "Combine", "Set").to_lowercase();
@@ -1685,6 +1835,156 @@ pub fn resolve_attribute_geometry_with_errors(
                 }
             }
         }
+        // Fit a range onto another range, optionally through a clamp. The
+        // workhorse: a simulation attribute measured by Analysis is almost
+        // always remapped before anything reads it.
+        "remap" => {
+            let (f0, f1) = (
+                node_param_f32(target, "From Min", 0.0),
+                node_param_f32(target, "From Max", 1.0),
+            );
+            let (t0, t1) = (
+                node_param_f32(target, "To Min", 0.0),
+                node_param_f32(target, "To Max", 1.0),
+            );
+            let span = f1 - f0;
+            if span.abs() < 1e-9 {
+                fail = format!("From Min and From Max are both {}", f0);
+            } else {
+                edit_components(geom, &name, &affected, |v| {
+                    t0 + (v - f0) / span * (t1 - t0)
+                });
+            }
+        }
+        // Clamp into a range. From Min / From Max name the bounds, so Remap
+        // and Clip read the same way and chain without renaming anything.
+        "clip" => {
+            let (lo, hi) = (
+                node_param_f32(target, "From Min", 0.0),
+                node_param_f32(target, "From Max", 1.0),
+            );
+            let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+            edit_components(geom, &name, &affected, |v| v.clamp(lo, hi));
+        }
+        // Rescale so the attribute's sum, maximum or range hits To Max.
+        // Unlike Remap this MEASURES first, so it needs no knowledge of what
+        // the values happen to be — which is what makes it survive a
+        // simulation whose range moves every frame.
+        "normalize" => {
+            let vals: Vec<f32> = affected
+                .iter()
+                .filter_map(|&p| geom.points().value(&name, p))
+                .map(|v| v.as_f32())
+                .collect();
+            let goal = node_param_f32(target, "To Max", 1.0);
+            let measure = match node_param_str(target, "Target", "Maximum").to_lowercase().as_str() {
+                "sum" => vals.iter().sum::<f32>(),
+                "range" => {
+                    let hi = vals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                    let lo = vals.iter().copied().fold(f32::INFINITY, f32::min);
+                    hi - lo
+                }
+                _ => vals.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            };
+            if !measure.is_finite() || measure.abs() < 1e-9 {
+                fail = format!("nothing to normalize: the measure is {}", measure);
+            } else {
+                let k = goal / measure;
+                edit_components(geom, &name, &affected, |v| v * k);
+            }
+        }
+        // Fold a second attribute into this one, componentwise. Dot, Distance
+        // and Length collapse to a scalar written into every component, since
+        // the destination keeps its own type.
+        "composite" => {
+            let b_name = node_param_str(target, "Source B", "");
+            let b_name = b_name.trim().to_string();
+            if !geom.points().has(&b_name) {
+                fail = format!("Source B '{}' is not a point attribute", b_name);
+            } else {
+                let op = node_param_str(target, "Combine Op", "Add").to_lowercase();
+                let Some(ty) = geom.points().get(&name).map(|a| a.ty()) else {
+                    *ocl_error = Some(format!("Attribute '{}': '{}' is missing", target.name, name));
+                    return;
+                };
+                let k = ty.components();
+                for &p in &affected {
+                    let a = geom.points().value(&name, p).map(attrib_components).unwrap_or_default();
+                    let b = geom.points().value(&b_name, p).map(attrib_components).unwrap_or_default();
+                    let at = |v: &Vec<f32>, i: usize| v.get(i).copied().unwrap_or(0.0);
+                    let out: Vec<f32> = match op.as_str() {
+                        "dot" => {
+                            let d: f32 = (0..k.max(b.len())).map(|i| at(&a, i) * at(&b, i)).sum();
+                            vec![d; k]
+                        }
+                        "distance" => {
+                            let d: f32 = (0..k.max(b.len()))
+                                .map(|i| (at(&a, i) - at(&b, i)).powi(2))
+                                .sum::<f32>()
+                                .sqrt();
+                            vec![d; k]
+                        }
+                        "length" => {
+                            let d: f32 =
+                                (0..b.len()).map(|i| at(&b, i).powi(2)).sum::<f32>().sqrt();
+                            vec![d; k]
+                        }
+                        _ => (0..k)
+                            .map(|i| {
+                                let (x, y) = (at(&a, i), at(&b, i));
+                                match op.as_str() {
+                                    "subtract" => x - y,
+                                    "multiply" => x * y,
+                                    // Division by zero yields the numerator
+                                    // rather than an infinity that poisons
+                                    // every later frame of a solve.
+                                    "divide" => if y.abs() < 1e-9 { x } else { x / y },
+                                    "minimum" => x.min(y),
+                                    "maximum" => x.max(y),
+                                    "average" => (x + y) * 0.5,
+                                    "difference" => (x - y).abs(),
+                                    _ => x + y,
+                                }
+                            })
+                            .collect(),
+                    };
+                    let _ = geom.points_mut().set_value(&name, p, components_attrib(ty, &out));
+                }
+            }
+        }
+        // Move an attribute between classes. Point to Detail is the reduction
+        // Analysis does by hand; Detail to Point is how a measured constant
+        // gets back into per-point arithmetic.
+        "promote" => {
+            let to_detail =
+                node_param_str(target, "To Class", "Detail").eq_ignore_ascii_case("detail");
+            let method = node_param_str(target, "Method", "Average").to_lowercase();
+            if to_detail {
+                match geom.points().get(&name).map(|a| a.ty()) {
+                    None => fail = format!("'{}' is not a point attribute", name),
+                    Some(ty) => {
+                        let k = ty.components();
+                        let rows: Vec<Vec<f32>> = (0..geom.num_points())
+                            .filter_map(|p| geom.points().value(&name, p))
+                            .map(attrib_components)
+                            .collect();
+                        let reduced = reduce_rows(&rows, k, &method);
+                        geom.detail_mut().create(&name, components_attrib(ty, &reduced));
+                    }
+                }
+            } else {
+                match geom.detail().get(&name).map(|a| a.ty()) {
+                    None => fail = format!("'{}' is not a detail attribute", name),
+                    Some(ty) => {
+                        let v = geom
+                            .detail()
+                            .value(&name, 0)
+                            .unwrap_or(components_attrib(ty, &[0.0]));
+                        geom.points_mut().create(&name, v);
+                    }
+                }
+            }
+        }
         // Create (the default).
         _ => {
             if builtin {
@@ -1718,7 +2018,40 @@ pub fn resolve_attribute_geometry_with_errors(
     if !fail.is_empty() && ocl_error.is_none() {
         *ocl_error = Some(format!("Attribute '{}': {}", target.name, fail));
     }
-    Some(geom)
+}
+
+/// Apply a scalar function to every component of `name` on the given points.
+///
+/// One place for the "same arithmetic, any width" shape that Remap, Clip and
+/// Normalize all have — a float takes it once, a vector takes it per
+/// component, an integer rounds on the way back.
+fn edit_components(geom: &mut Detail, name: &str, points: &[usize], f: impl Fn(f32) -> f32) {
+    let Some(ty) = geom.points().get(name).map(|a| a.ty()) else { return };
+    for &p in points {
+        let Some(cur) = geom.points().value(name, p) else { continue };
+        let out: Vec<f32> = attrib_components(cur).into_iter().map(&f).collect();
+        let _ = geom.points_mut().set_value(name, p, components_attrib(ty, &out));
+    }
+}
+
+/// Reduce a column of component rows to one row, componentwise.
+fn reduce_rows(rows: &[Vec<f32>], k: usize, method: &str) -> Vec<f32> {
+    (0..k)
+        .map(|c| {
+            let col = rows.iter().map(|r| r.get(c).copied().unwrap_or(0.0));
+            match method {
+                "sum" => col.sum(),
+                "minimum" => col.fold(f32::INFINITY, f32::min),
+                "maximum" => col.fold(f32::NEG_INFINITY, f32::max),
+                "first" => rows.first().and_then(|r| r.get(c)).copied().unwrap_or(0.0),
+                _ => {
+                    let n = rows.len().max(1) as f32;
+                    col.sum::<f32>() / n
+                }
+            }
+        })
+        .map(|v: f32| if v.is_finite() { v } else { 0.0 })
+        .collect()
 }
 
 /// An attribute value as loose components, for the arithmetic that does not
@@ -2745,6 +3078,8 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "collision"
         || nt == "relax"
         || nt == "neighbour"
+        || nt == "time"
+        || nt == "analysis"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -2880,6 +3215,24 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_neighbour_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("time") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_time_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("analysis") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_analysis_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
@@ -4218,6 +4571,286 @@ mod simnet_tests {
             geometry_visible: true,
             position: (0.0, 0.0),
         }
+    }
+
+    /// Apply one Attribute-node operation to geometry in hand.
+    fn run_attr(before: &Detail, params: &[(&str, &str)]) -> (Detail, Option<String>) {
+        let mut geom = before.clone();
+        let mut ps = vec![param("Input", "In"), param("Attribute Name", "mass")];
+        for (k, v) in params {
+            match ps.iter_mut().find(|p| p.name == *k) {
+                Some(p) => p.default = v.to_string(),
+                None => ps.push(param(k, v)),
+            }
+        }
+        let n = node("id-a", "A", "attribute", ps, vec![]);
+        let mut err = None;
+        apply_attribute(&mut geom, &n, &mut err);
+        (geom, err)
+    }
+
+    /// A sphere whose `mass` ramps 0, 1, 2 … across its points.
+    fn ramped_mass() -> Detail {
+        let mut d = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        d.points_mut().create("mass", AttribValue::Float(0.0));
+        for p in 0..d.num_points() {
+            d.points_mut()
+                .set_value("mass", p, AttribValue::Float(p as f32))
+                .unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn test_attribute_remap_and_clip_share_their_range_parameters() {
+        let before = ramped_mass();
+        let n = before.num_points();
+        let last = (n - 1) as f32;
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+
+        let (remapped, err) = run_attr(
+            &before,
+            &[
+                ("Operation", "Remap"),
+                ("From Min", "0.00"),
+                ("From Max", &last.to_string()),
+                ("To Min", "0.00"),
+                ("To Max", "1.00"),
+            ],
+        );
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(mass(&remapped, 0), 0.0);
+        assert!((mass(&remapped, n - 1) - 1.0).abs() < 1e-5);
+
+        // Clip reads the same From Min / From Max, so the two chain without
+        // renaming anything between them.
+        let (clipped, err) = run_attr(
+            &before,
+            &[("Operation", "Clip"), ("From Min", "2.00"), ("From Max", "5.00")],
+        );
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(mass(&clipped, 0), 2.0);
+        assert_eq!(mass(&clipped, 3), 3.0);
+        assert_eq!(mass(&clipped, n - 1), 5.0);
+
+        // A degenerate source range is refused rather than dividing by zero.
+        let (_, err) = run_attr(
+            &before,
+            &[("Operation", "Remap"), ("From Min", "1.00"), ("From Max", "1.00")],
+        );
+        assert!(err.is_some(), "a zero-width source range must be reported");
+    }
+
+    #[test]
+    fn test_attribute_normalize_measures_before_it_scales() {
+        let before = ramped_mass();
+        let n = before.num_points();
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+        let sum = |d: &Detail| (0..n).map(|p| mass(d, p)).sum::<f32>();
+
+        // Unlike Remap, Normalize needs no knowledge of the values — which is
+        // what lets it sit in a solve whose range moves every frame.
+        let (by_max, err) = run_attr(&before, &[("Operation", "Normalize"), ("Target", "Maximum"), ("To Max", "1.00")]);
+        assert!(err.is_none(), "{err:?}");
+        assert!((mass(&by_max, n - 1) - 1.0).abs() < 1e-5);
+
+        let (by_sum, _) = run_attr(&before, &[("Operation", "Normalize"), ("Target", "Sum"), ("To Max", "1.00")]);
+        assert!((sum(&by_sum) - 1.0).abs() < 1e-4, "sum is {}", sum(&by_sum));
+
+        // An all-zero attribute has no scale to hit, and says so instead of
+        // filling the geometry with infinities.
+        let mut flat = before.clone();
+        flat.points_mut().create("mass", AttribValue::Float(0.0));
+        let (_, err) = run_attr(&flat, &[("Operation", "Normalize")]);
+        assert!(err.is_some(), "normalizing nothing must be reported");
+    }
+
+    #[test]
+    fn test_attribute_composite_folds_a_second_attribute_in() {
+        let mut before = ramped_mass();
+        before.points_mut().create("other", AttribValue::Float(2.0));
+
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+        for (op, want) in [("Multiply", 6.0), ("Add", 5.0), ("Subtract", 1.0), ("Maximum", 3.0)] {
+            let (g, err) = run_attr(
+                &before,
+                &[("Operation", "Composite"), ("Source B", "other"), ("Combine Op", op)],
+            );
+            assert!(err.is_none(), "{op}: {err:?}");
+            assert_eq!(mass(&g, 3), want, "{op}");
+        }
+
+        // Dividing by zero yields the numerator rather than an infinity that
+        // would poison every later frame of a solve.
+        let mut zeroed = before.clone();
+        zeroed.points_mut().create("other", AttribValue::Float(0.0));
+        let (g, _) = run_attr(
+            &zeroed,
+            &[("Operation", "Composite"), ("Source B", "other"), ("Combine Op", "Divide")],
+        );
+        assert_eq!(mass(&g, 3), 3.0);
+
+        let (_, err) = run_attr(
+            &before,
+            &[("Operation", "Composite"), ("Source B", "nope"), ("Combine Op", "Add")],
+        );
+        assert!(err.is_some(), "a missing Source B must be reported");
+    }
+
+    #[test]
+    fn test_analysis_writes_its_answers_to_detail_attributes() {
+        let before = ramped_mass();
+        let n = before.num_points();
+        let mut geom = before.clone();
+        let an = node(
+            "id-an",
+            "An",
+            "analysis",
+            vec![param("Input", "In"), param("Source", "Attribute"), param("Attribute", "mass")],
+            vec![],
+        );
+        let mut err = None;
+        apply_analysis(&mut geom, &an, &mut err);
+        assert!(err.is_none(), "{err:?}");
+
+        let d = |name: &str| geom.detail().value(name, 0).unwrap().as_f32();
+        // Five ordinary detail attributes where Houdini writes one dictionary.
+        // Nothing had to learn to index a dict, and the spreadsheet shows them
+        // as `d:` columns for free.
+        assert_eq!(d("mass_min"), 0.0);
+        assert_eq!(d("mass_max"), (n - 1) as f32);
+        assert_eq!(d("mass_count"), n as f32);
+        assert_eq!(d("mass_sum"), (0..n).map(|p| p as f32).sum::<f32>());
+        assert!((d("mass_average") - d("mass_sum") / n as f32).abs() < 1e-4);
+        assert_eq!(d("mass_spread"), d("mass_max") - d("mass_min"));
+
+        // Edge lengths are the same reduction over a different column — the
+        // measurement a remesher steers by.
+        let mut edges = before.clone();
+        let an = node(
+            "id-an",
+            "An",
+            "analysis",
+            vec![param("Input", "In"), param("Source", "Edge Lengths")],
+            vec![],
+        );
+        apply_analysis(&mut edges, &an, &mut None);
+        assert_eq!(
+            edges.detail().value("edges_count", 0).unwrap().as_f32(),
+            before.edges().len() as f32
+        );
+        assert!(edges.detail().value("edges_average", 0).unwrap().as_f32() > 0.0);
+
+        // A missing attribute is reported, and the geometry still passes.
+        let mut miss = before.clone();
+        let an = node(
+            "id-an",
+            "An",
+            "analysis",
+            vec![param("Input", "In"), param("Attribute", "nope")],
+            vec![],
+        );
+        let mut err = None;
+        apply_analysis(&mut miss, &an, &mut err);
+        assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+    }
+
+    #[test]
+    fn test_measure_then_remap_is_the_chain_the_detail_class_exists_for() {
+        // Analysis measures, Promote lifts the answer back to points, and
+        // Composite divides by it — a normalization that survives a range
+        // moving every frame, assembled from the vocabulary rather than
+        // hard-coded into a node.
+        let mut geom = ramped_mass();
+        let n = geom.num_points();
+
+        apply_analysis(
+            &mut geom,
+            &node("a", "A", "analysis", vec![param("Attribute", "mass")], vec![]),
+            &mut None,
+        );
+        let measured_max = geom.detail().value("mass_max", 0).unwrap().as_f32();
+        assert_eq!(measured_max, (n - 1) as f32);
+
+        let (geom, err) = run_attr(
+            &geom,
+            &[("Operation", "Promote"), ("Attribute Name", "mass_max"), ("To Class", "Point")],
+        );
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(
+            geom.points().value("mass_max", 0),
+            Some(AttribValue::Float(measured_max)),
+            "the measurement is per-point now"
+        );
+
+        let (geom, err) = run_attr(
+            &geom,
+            &[("Operation", "Composite"), ("Source B", "mass_max"), ("Combine Op", "Divide")],
+        );
+        assert!(err.is_none(), "{err:?}");
+        let mass = |p: usize| geom.points().value("mass", p).unwrap().as_f32();
+        assert_eq!(mass(0), 0.0);
+        assert!((mass(n - 1) - 1.0).abs() < 1e-5, "{}", mass(n - 1));
+    }
+
+    #[test]
+    fn test_promote_reduces_points_to_one_detail_row() {
+        let before = ramped_mass();
+        let n = before.num_points();
+        for (method, want) in [
+            ("Average", (0..n).map(|p| p as f32).sum::<f32>() / n as f32),
+            ("Sum", (0..n).map(|p| p as f32).sum::<f32>()),
+            ("Minimum", 0.0),
+            ("Maximum", (n - 1) as f32),
+            ("First", 0.0),
+        ] {
+            let (g, err) = run_attr(
+                &before,
+                &[("Operation", "Promote"), ("To Class", "Detail"), ("Method", method)],
+            );
+            assert!(err.is_none(), "{method}: {err:?}");
+            let got = g.detail().value("mass", 0).unwrap().as_f32();
+            assert!((got - want).abs() < 1e-3, "{method}: {got} vs {want}");
+            assert_eq!(g.detail().len(), 1, "detail stays one row");
+        }
+    }
+
+    #[test]
+    fn test_time_reads_the_frame_off_the_evaluation() {
+        let before = ramped_mass();
+        let tn = node(
+            "id-t",
+            "T",
+            "time",
+            vec![param("Attribute", "t"), param("Start Frame", "1"), param("End Frame", "11")],
+            vec![],
+        );
+        let t_at = |frame: i32| {
+            let mut g = before.clone();
+            apply_time(&mut g, &tn, frame);
+            g.detail().value("t", 0).unwrap().as_f32()
+        };
+        assert_eq!(t_at(1), 0.0);
+        assert!((t_at(6) - 0.5).abs() < 1e-5);
+        assert_eq!(t_at(11), 1.0);
+        // Clamped by default, so a scrub past the end holds rather than
+        // running the chain off into values it was never shaped for.
+        assert_eq!(t_at(50), 1.0);
+        assert_eq!(t_at(-20), 0.0);
+
+        // A zero-length range reads as "elapsed", not as a division by zero.
+        let degenerate = node(
+            "id-t",
+            "T",
+            "time",
+            vec![param("Attribute", "t"), param("Start Frame", "5"), param("End Frame", "5")],
+            vec![],
+        );
+        let mut g = before.clone();
+        apply_time(&mut g, &degenerate, 5);
+        assert_eq!(g.detail().value("t", 0).unwrap().as_f32(), 1.0);
+        apply_time(&mut g, &degenerate, 4);
+        assert_eq!(g.detail().value("t", 0).unwrap().as_f32(), 0.0);
     }
 
     /// A sphere, one point given a spike of `mass`, then a Neighbour node.

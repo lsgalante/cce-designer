@@ -2875,6 +2875,9 @@ mod tests {
         geom.points_mut().set_value("ID", 0, AttribValue::Int(42)).unwrap();
         geom.points_mut().create_group("pinned");
         geom.points_mut().add_to_group("pinned", 1);
+        // A detail attribute — what Analysis writes — shows as a `d:` column,
+        // constant down the table, which is what a detail attribute is.
+        geom.detail_mut().create("mass_max", AttribValue::Float(9.5));
 
         assert_eq!(geom.num_points(), 2);
         let render_verts = crate::geometry::detail_vertices(&geom);
@@ -2885,7 +2888,7 @@ mod tests {
             headers,
             vec![
                 "Point", "Pos.x", "Pos.y", "Pos.z", "Col.r", "Col.g", "Col.b",
-                "ID", "UV.x", "UV.y", "g:pinned",
+                "ID", "UV.x", "UV.y", "g:pinned", "d:mass_max",
             ]
         );
 
@@ -2902,6 +2905,8 @@ mod tests {
         assert_eq!(rows[1][7], "0", "unwritten is the type's zero, not a dash");
         assert_eq!(rows[1][9], "0.4000"); // UV.y
         assert_eq!(rows[1][10], "1", "point 1 is in the group");
+        assert_eq!(rows[0][11], "9.5000");
+        assert_eq!(rows[1][11], "9.5000", "a detail value repeats down the column");
     }
 
     #[test]

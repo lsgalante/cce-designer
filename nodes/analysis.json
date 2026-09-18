@@ -1,0 +1,12 @@
+{
+ "name": "Analysis",
+ "type": "analysis",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Source", "type": "choice:Attribute,Edge Lengths", "default": "Attribute" },
+  { "name": "Attribute", "type": "text", "default": "mass" },
+  { "name": "Group", "type": "text", "default": "" }
+ ]
+}

@@ -134,9 +134,15 @@ Spreadsheet, the meta overlays, `project.rs`.
 > radius or global, componentwise on any attribute type. Per decision 1 the
 > neighbourhood walk stays out of the kernel language.
 >
-> Outstanding: the generator ABI (still a corner list out), the vector
-> steering modes (Align, Lead, Charge), and the rest of the attribute
-> vocabulary — Initialize, Remap, Clip, Composite, Promote, Analysis, Time.
+> The attribute vocabulary is in too. `attribute` grew Remap, Clip, Normalize,
+> Composite and Promote alongside Create/Modify/Delete; `analysis` writes min,
+> max, sum, average, spread and count to DETAIL attributes — five ordinary
+> attributes where Houdini writes an `<attr>_info` dictionary, which is
+> decision 3 paying off; `time` runs 0 to 1 across a frame range. The
+> spreadsheet shows detail attributes as `d:` columns.
+>
+> Outstanding: the generator ABI (still a corner list out) and the vector
+> steering modes (Align, Lead, Charge).
 
 Widen the kernel ABI from `(in_pos, in_col, out_pos, out_col, params)` to
 **named attribute buffers bound by the node**, plus the topology arrays as
@@ -263,6 +269,7 @@ Vector families already collapsed into one in September 2026.
 | Node in cce-designer | Absorbs | From |
 |---|---|---|
 | `attribute` | Attribute Initialize, Constant, Clip, Remap, Combine, Composite, Promote, Select, Normalize, Weight | 10 → 1 |
+| | *(landed)* | |
 | `neighbour` | Diffuse, Concentrate, Migrate, Bleed, Align, Lead, Charge — one Mode, one Neighbourhood | 7 → 1 |
 | | *(first four landed; the vector steering modes remain)* | |
 | `gradient` | Gradient, Rotate, Direction | 3 → 1 |

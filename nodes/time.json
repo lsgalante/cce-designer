@@ -1,0 +1,13 @@
+{
+ "name": "Time",
+ "type": "time",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Attribute", "type": "text", "default": "t" },
+  { "name": "Start Frame", "type": "spinbox", "default": "1", "min": -9999.0, "max": 9999.0, "step": 1.0 },
+  { "name": "End Frame", "type": "spinbox", "default": "100", "min": -9999.0, "max": 9999.0, "step": 1.0 },
+  { "name": "Clamp", "type": "choice:true,false", "default": "true" }
+ ]
+}
