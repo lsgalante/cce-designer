@@ -1418,6 +1418,35 @@ pub(crate) fn apply_time(geom: &mut Detail, target: &FsNode, frame: i32) {
     geom.detail_mut().create(&name, AttribValue::Float(t));
 }
 
+/// Smooth point normals: for each point, the normalized sum of the face
+/// normals of the primitives touching it.
+///
+/// Shared because two callers want the same answer — the viewport's normal
+/// whiskers and Align's surface-tangent target — and a normal that disagreed
+/// between what you see and what an operator steers by would be a miserable
+/// thing to debug.
+pub fn point_normals(geom: &Detail) -> Vec<Vec3> {
+    (0..geom.num_points())
+        .map(|p| {
+            let mut sum = Vec3::ZERO;
+            for &prim in geom.point_prims(p) {
+                let pts = geom.prim_points(prim as usize);
+                if pts.len() < 3 {
+                    continue;
+                }
+                let a = geom.pos(pts[0] as usize);
+                let b = geom.pos(pts[1] as usize);
+                let c = geom.pos(pts[2] as usize);
+                let n = (b - a).cross(c - a);
+                if n.length_squared() > 1e-12 {
+                    sum += n;
+                }
+            }
+            sum.normalize_or_zero()
+        })
+        .collect()
+}
+
 /// Which points a neighbourhood operator treats as a point's neighbours.
 enum Hood {
     /// Points reachable within N edge rings. The mesh's own connectivity, and
@@ -1587,6 +1616,141 @@ pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                 }
             }
         }
+        // The vector-steering modes. Where Diffuse and Migrate move a
+        // QUANTITY between points, these turn a DIRECTION and leave its
+        // magnitude alone — a vector attribute carries a heading and a
+        // strength, and steering is a statement about the heading only.
+        "align" | "lead" => {
+            if k < 2 {
+                if ocl_error.is_none() {
+                    *ocl_error = Some(format!(
+                        "Neighbour '{}': {} steers a direction, and '{}' is scalar",
+                        target.name, mode, name
+                    ));
+                }
+            } else {
+                let read = |val: &[f32], p: usize| {
+                    Vec3::new(val[p * k], val[p * k + 1], if k > 2 { val[p * k + 2] } else { 0.0 })
+                };
+                let src_name = node_param_str(target, "Source", "");
+                let src_name = src_name.trim().to_string();
+
+                let targets: Vec<Vec3> = if mode == "align" {
+                    let kind = node_param_str(target, "Target", "Local Average").to_lowercase();
+                    align_targets(geom, &val, &hood, &kind, target, &src_name, &read)
+                } else {
+                    // Lead: each point turns toward the neighbouring vector
+                    // that disagrees with it MOST, scaled by an influence
+                    // attribute. Not a typo for "agrees" — the dissenter
+                    // leads, which is what makes a reorientation propagate
+                    // across a surface instead of settling on the spot.
+                    (0..n)
+                        .map(|p| {
+                            let v = read(&val, p).normalize_or_zero();
+                            if v == Vec3::ZERO {
+                                return Vec3::ZERO;
+                            }
+                            let mut best = (0.0f32, Vec3::ZERO);
+                            for &q in &neighbours_of(geom, p, &hood) {
+                                let w = read(&val, q as usize);
+                                if w.normalize_or_zero() == Vec3::ZERO {
+                                    continue;
+                                }
+                                let influence = if src_name.is_empty() {
+                                    1.0
+                                } else {
+                                    geom.points()
+                                        .value(&src_name, q as usize)
+                                        .map(|x| x.as_f32())
+                                        .unwrap_or(0.0)
+                                };
+                                let score = (1.0 - v.dot(w.normalize_or_zero())) * influence;
+                                if score > best.0 {
+                                    best = (score, w);
+                                }
+                            }
+                            best.1
+                        })
+                        .collect()
+                };
+
+                for p in (0..n).filter(|&p| edits[p]) {
+                    let v = read(&val, p);
+                    let len = v.length();
+                    // A target has to be big enough to MEAN a direction. The
+                    // case that forces this is Surface Tangent on a vector
+                    // already normal to the surface: the projection is zero in
+                    // exact arithmetic and a few parts in 10^7 in practice, so
+                    // an exact-zero guard lets it through and normalizing turns
+                    // pure float error into a heading. Judged against the
+                    // vector being steered, since that sets the scale.
+                    if targets[p].length() <= 1e-6 * len.max(1.0) {
+                        continue;
+                    }
+                    let (dir, goal) = (v.normalize_or_zero(), targets[p].normalize_or_zero());
+                    if dir == Vec3::ZERO || goal == Vec3::ZERO {
+                        continue;
+                    }
+                    // Turning a vector onto one exactly opposite has no
+                    // shortest arc, and the midpoint of the blend is the zero
+                    // vector. Leaving it be is the only answer that does not
+                    // invent a direction.
+                    let turned = dir.lerp(goal, amount).normalize_or_zero();
+                    if turned == Vec3::ZERO {
+                        continue;
+                    }
+                    let out_v = turned * len;
+                    out[p * k] = out_v.x;
+                    out[p * k + 1] = out_v.y;
+                    if k > 2 {
+                        out[p * k + 2] = out_v.z;
+                    }
+                }
+            }
+        }
+        // Charge: accumulate, and discharge to the neighbours on crossing a
+        // threshold.
+        //
+        // NOTE: this is not a port. `developer_charge` is an empty shell in
+        // hou-control — two parameters, `release` and `amount`, neither of
+        // them read by anything inside it — so there is no behaviour to carry
+        // across, only a name and a pair of parameter names. What is written
+        // here is the reading those two names most plainly suggest, and the
+        // one that earns its place beside the others: Bleed loses value,
+        // Migrate transports it, and Charge stores it until there is enough to
+        // spend. Integrate-and-fire, which is how an excitable medium makes a
+        // wave out of a gradient.
+        "charge" => {
+            let release = node_param_f32(target, "Release", 1.0);
+            for p in (0..n).filter(|&p| edits[p]) {
+                for c in 0..k {
+                    out[p * k + c] = val[p * k + c] + amount;
+                }
+            }
+            if release > 0.0 {
+                // Who fires is decided from the post-accumulation snapshot,
+                // not from `out` as it is being written: otherwise a point
+                // that received a neighbour's discharge could fire in the same
+                // pass, and the result would depend on point order.
+                let charged = out.clone();
+                for p in (0..n).filter(|&p| edits[p]) {
+                    for c in 0..k {
+                        if charged[p * k + c] < release {
+                            continue;
+                        }
+                        let nbrs = neighbours_of(geom, p, &hood);
+                        if nbrs.is_empty() {
+                            continue;
+                        }
+                        let share = charged[p * k + c] / nbrs.len() as f32;
+                        out[p * k + c] -= charged[p * k + c];
+                        for &q in &nbrs {
+                            out[q as usize * k + c] += share;
+                        }
+                    }
+                }
+            }
+        }
         // Diffuse and Concentrate are one operation and its negation: the
         // distance to the neighbourhood's average, travelled toward it or
         // away from it.
@@ -1650,6 +1814,74 @@ pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         let _ = geom
             .points_mut()
             .set_value(&name, p, components_attrib(ty, comps));
+    }
+}
+
+/// The vector each point should be steered toward, under one Align target.
+///
+/// The five targets are the ones the plugin's Align lists, and they are five
+/// different answers to "agree with what": the neighbours, the whole
+/// geometry, a fixed heading, another attribute, or the surface itself.
+#[allow(clippy::too_many_arguments)]
+fn align_targets(
+    geom: &Detail,
+    val: &[f32],
+    hood: &Hood,
+    kind: &str,
+    target: &FsNode,
+    src_name: &str,
+    read: &impl Fn(&[f32], usize) -> Vec3,
+) -> Vec<Vec3> {
+    let n = geom.num_points();
+    match kind {
+        "global average" => {
+            // The mean of every OTHER point, for the same reason every
+            // neighbourhood excludes its own point: a vector that averaged
+            // partly with itself could never be turned all the way.
+            let total: Vec3 = (0..n).map(|p| read(val, p)).sum();
+            (0..n)
+                .map(|p| {
+                    if n < 2 {
+                        Vec3::ZERO
+                    } else {
+                        (total - read(val, p)) / (n - 1) as f32
+                    }
+                })
+                .collect()
+        }
+        "constant" => {
+            let c = node_param_vec3(target, "Constant", Vec3::Y);
+            vec![c; n]
+        }
+        "attribute" => (0..n)
+            .map(|p| {
+                geom.points()
+                    .value(src_name, p)
+                    .map(|v| v.as_vec3())
+                    .unwrap_or(Vec3::ZERO)
+            })
+            .collect(),
+        // The vector with its normal component removed — what is left is the
+        // part that lies in the surface. A vector already normal to the
+        // surface projects to nothing and is left alone by the caller.
+        "surface tangent" => {
+            let normals = point_normals(geom);
+            (0..n)
+                .map(|p| {
+                    let v = read(val, p);
+                    v - normals[p] * v.dot(normals[p])
+                })
+                .collect()
+        }
+        _ => (0..n)
+            .map(|p| {
+                let nbrs = neighbours_of(geom, p, hood);
+                if nbrs.is_empty() {
+                    return Vec3::ZERO;
+                }
+                nbrs.iter().map(|&q| read(val, q as usize)).sum::<Vec3>() / nbrs.len() as f32
+            })
+            .collect(),
     }
 }
 
@@ -5072,6 +5304,239 @@ mod simnet_tests {
         // than silently becoming a float nobody can index with.
         assert!(matches!(c.points().value("count", 0), Some(AttribValue::Int(_))));
         assert_eq!(c.points().value("count", 0), Some(AttribValue::Int(7)));
+    }
+
+    /// A sphere carrying a `vel` vector attribute, all pointing +Y except
+    /// point 0, which points -Y and so disagrees with everyone.
+    fn vectored() -> Detail {
+        let mut d = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        d.points_mut().create("vel", AttribValue::Float3([0.0, 2.0, 0.0]));
+        d.points_mut()
+            .set_value("vel", 0, AttribValue::Float3([0.0, -3.0, 0.0]))
+            .unwrap();
+        d
+    }
+
+    fn vel(d: &Detail, p: usize) -> Vec3 {
+        d.points().value("vel", p).unwrap().as_vec3()
+    }
+
+    #[test]
+    fn test_align_turns_a_vector_without_changing_its_length() {
+        let before = vectored();
+        // The dissenting vector is surrounded by +Y, so aligning to the local
+        // average turns it around.
+        let after = run_neighbour(
+            &before,
+            &[("Attribute", "vel"), ("Mode", "Align"), ("Target", "Local Average"), ("Amount", "1.00")],
+        );
+        assert!(vel(&after, 0).y > 0.0, "the odd one out did not turn: {:?}", vel(&after, 0));
+        // Steering is a statement about heading only: a vector attribute
+        // carries a direction AND a strength, and Align must not spend the
+        // strength.
+        assert!(
+            (vel(&after, 0).length() - 3.0).abs() < 1e-4,
+            "length changed: {}",
+            vel(&after, 0).length()
+        );
+        for p in 1..before.num_points() {
+            assert!((vel(&after, p).length() - 2.0).abs() < 1e-4, "point {p}");
+        }
+    }
+
+    #[test]
+    fn test_align_targets_are_five_different_answers_to_agree_with_what() {
+        let before = vectored();
+        let run = |extra: &[(&str, &str)]| {
+            let mut params = vec![("Attribute", "vel"), ("Mode", "Align"), ("Amount", "1.00")];
+            params.extend_from_slice(extra);
+            run_neighbour(&before, &params)
+        };
+
+        // Constant: everyone ends up pointing the same way.
+        let c = run(&[("Target", "Constant"), ("Constant", "1.00:0.00:0.00")]);
+        for p in 0..before.num_points() {
+            assert!((vel(&c, p).normalize() - Vec3::X).length() < 1e-4, "point {p}");
+        }
+
+        // Attribute: steer toward another vector attribute.
+        let mut with_goal = before.clone();
+        with_goal.points_mut().create("goal", AttribValue::Float3([0.0, 0.0, 1.0]));
+        let a = run_neighbour(
+            &with_goal,
+            &[("Attribute", "vel"), ("Mode", "Align"), ("Amount", "1.00"), ("Target", "Attribute"), ("Source", "goal")],
+        );
+        assert!((vel(&a, 5).normalize() - Vec3::Z).length() < 1e-4);
+
+        // Surface tangent: the result lies in the surface, so it is
+        // perpendicular to the point's normal.
+        let t = run(&[("Target", "Surface Tangent")]);
+        let normals = point_normals(&before);
+        let mut turned = 0usize;
+        let mut left_alone = 0usize;
+        for p in 0..before.num_points() {
+            let n = normals[p];
+            if n == Vec3::ZERO {
+                continue;
+            }
+            // A vector already parallel to the normal has NO tangent to steer
+            // onto: its projection into the surface is zero. Such a point is
+            // left as it was — the alternative is normalizing a vector made
+            // entirely of float error and calling the result a heading.
+            if vel(&before, p).normalize().dot(n).abs() > 0.999 {
+                assert_eq!(vel(&t, p), vel(&before, p), "point {p} was given a direction out of noise");
+                left_alone += 1;
+                continue;
+            }
+            assert!(
+                vel(&t, p).normalize().dot(n).abs() < 1e-3,
+                "point {p} is not tangent: {:?} vs normal {:?}",
+                vel(&t, p),
+                n
+            );
+            turned += 1;
+        }
+        assert!(turned > 0 && left_alone > 0, "{turned} turned, {left_alone} left alone");
+
+        // Global average excludes the point itself, exactly as the
+        // neighbourhoods do — otherwise the dissenter would average partly
+        // with itself and could never be turned all the way.
+        let g = run(&[("Target", "Global Average")]);
+        assert!(vel(&g, 0).y > 0.0);
+    }
+
+    #[test]
+    fn test_align_leaves_a_vector_it_cannot_turn_alone() {
+        let before = vectored();
+        // Steering onto the exact opposite has no shortest arc, and the
+        // midpoint of the blend is the zero vector. Half-way must not
+        // annihilate it.
+        let after = run_neighbour(
+            &before,
+            &[("Attribute", "vel"), ("Mode", "Align"), ("Target", "Constant"), ("Constant", "0.00:-1.00:0.00"), ("Amount", "0.50")],
+        );
+        assert!((vel(&after, 5).length() - 2.0).abs() < 1e-4, "{:?}", vel(&after, 5));
+        assert_ne!(vel(&after, 5), Vec3::ZERO);
+
+        // A scalar attribute has no direction to steer, and says so.
+        let mut err = None;
+        let mut g = before.clone();
+        let nd = node(
+            "id-n",
+            "N",
+            "neighbour",
+            vec![param("Attribute", "mass"), param("Mode", "Align")],
+            vec![],
+        );
+        g.points_mut().create("mass", AttribValue::Float(1.0));
+        apply_neighbour(&mut g, &nd, &mut err);
+        assert!(err.as_deref().unwrap_or("").contains("scalar"), "{err:?}");
+    }
+
+    #[test]
+    fn test_lead_follows_the_neighbour_that_disagrees_most() {
+        let before = vectored();
+        let spread = before.point_neighbours(0).to_vec();
+        assert!(!spread.is_empty());
+
+        let after = run_neighbour(
+            &before,
+            &[("Attribute", "vel"), ("Mode", "Lead"), ("Amount", "1.00")],
+        );
+        // The dissenter's neighbours each see one vector that disagrees with
+        // them — point 0's — so they turn onto it. That is the mechanism:
+        // the dissenter LEADS, which is what propagates a reorientation
+        // across a surface instead of settling it on the spot.
+        for &q in &spread {
+            assert!(vel(&after, q as usize).y < 0.0, "neighbour {q} did not follow the dissenter");
+            assert!((vel(&after, q as usize).length() - 2.0).abs() < 1e-4);
+        }
+        // Point 0's own neighbours all agree with each other, so the most
+        // disagreeable one among them is still +Y, and it turns to match.
+        assert!(vel(&after, 0).y > 0.0);
+
+        // An influence attribute weights the contest: silencing the dissenter
+        // leaves its neighbours alone.
+        let mut weighted = before.clone();
+        weighted.points_mut().create("clout", AttribValue::Float(1.0));
+        weighted.points_mut().set_value("clout", 0, AttribValue::Float(0.0)).unwrap();
+        let quiet = run_neighbour(
+            &weighted,
+            &[("Attribute", "vel"), ("Mode", "Lead"), ("Amount", "1.00"), ("Source", "clout")],
+        );
+        for &q in &spread {
+            assert!(vel(&quiet, q as usize).y > 0.0, "a silenced dissenter still led {q}");
+        }
+    }
+
+    #[test]
+    fn test_charge_accumulates_then_discharges_to_its_neighbours() {
+        let mut before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        before.points_mut().create("mass", AttribValue::Float(0.0));
+        let n = before.num_points();
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+        let total = |d: &Detail| (0..n).map(|p| mass(d, p)).sum::<f32>();
+
+        // Below the threshold it simply fills.
+        let charged = run_neighbour(&before, &[("Mode", "Charge"), ("Amount", "0.30"), ("Release", "1.00")]);
+        assert!((mass(&charged, 0) - 0.3).abs() < 1e-5);
+        assert!((total(&charged) - 0.3 * n as f32).abs() < 1e-3);
+
+        // Crossing it empties the point into its neighbours, conserving what
+        // was stored — the discharge moves value, only the accumulation makes
+        // it.
+        let mut primed = before.clone();
+        for p in 0..n {
+            primed.points_mut().set_value("mass", p, AttribValue::Float(0.9)).unwrap();
+        }
+        let fired = run_neighbour(&primed, &[("Mode", "Charge"), ("Amount", "0.20"), ("Release", "1.00")]);
+        let expected_after_fill = total(&primed) + 0.2 * n as f32;
+        assert!(
+            (total(&fired) - expected_after_fill).abs() < 1e-2,
+            "discharge leaked: {} vs {}",
+            total(&fired),
+            expected_after_fill
+        );
+
+        // Every point fired at once, so each emptied completely and holds
+        // exactly the shares its neighbours sent it — nothing of its own.
+        // Note that this is not 1.1 back again: a point whose neighbours have
+        // few neighbours of their own receives larger shares than it sent, and
+        // that redistribution is the point of the mode.
+        for p in 0..n {
+            let expected: f32 = primed
+                .point_neighbours(p)
+                .iter()
+                .map(|&q| 1.1 / primed.point_neighbours(q as usize).len() as f32)
+                .sum();
+            assert!(
+                (mass(&fired, p) - expected).abs() < 1e-3,
+                "point {p}: {} vs {expected}",
+                mass(&fired, p)
+            );
+        }
+    }
+
+    #[test]
+    fn test_charge_fires_from_a_snapshot_so_point_order_cannot_matter() {
+        // One point primed to fire, its neighbours empty. If firing were
+        // decided while writing, a neighbour that received the discharge could
+        // cross the threshold and fire in the same pass — and whether it did
+        // would depend on which index it happened to have.
+        let mut before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        before.points_mut().create("mass", AttribValue::Float(0.0));
+        before.points_mut().set_value("mass", 0, AttribValue::Float(5.0)).unwrap();
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+
+        let after = run_neighbour(&before, &[("Mode", "Charge"), ("Amount", "0.00"), ("Release", "1.00")]);
+        assert_eq!(mass(&after, 0), 0.0, "the primed point emptied");
+        let nbrs = before.point_neighbours(0).to_vec();
+        let share = 5.0 / nbrs.len() as f32;
+        for &q in &nbrs {
+            // Each neighbour holds exactly its share and did not itself fire,
+            // even though the share is over the threshold.
+            assert!((mass(&after, q as usize) - share).abs() < 1e-4, "neighbour {q}");
+        }
     }
 
     #[test]

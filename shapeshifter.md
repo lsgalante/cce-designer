@@ -6,7 +6,7 @@ Bringing the Developer, Immutable Methods and GEM toolsets out of `hou-control`
 and into this app — which is mostly not a porting job. It is one data-structure
 decision, then about ten nodes that do the work of fifty.
 
-The source material is `~/Dropbox/src/hou-control`: its `developer.md` (the
+The source material is `~/projects/hou-control`: its `developer.md` (the
 Shapeshifter design document), `otls-audit.md` (every HDA, its parameters, and
 which of them nothing reads) and `shortcomings.md`.
 
@@ -141,8 +141,13 @@ Spreadsheet, the meta overlays, `project.rs`.
 > decision 3 paying off; `time` runs 0 to 1 across a frame range. The
 > spreadsheet shows detail attributes as `d:` columns.
 >
-> Outstanding: the generator ABI (still a corner list out) and the vector
-> steering modes (Align, Lead, Charge).
+> Align and Lead landed too, so `neighbour` is the full 7 → 1. Charge is in
+> the node as well, but it is NOT a port: `developer_charge` is an empty shell
+> in hou-control (two parameters, neither read), so what is implemented is the
+> reading its parameter names suggest — accumulate, and discharge to the
+> neighbours on crossing a threshold. Confirm or redirect it.
+>
+> Outstanding: the generator ABI, still a corner list out.
 
 Widen the kernel ABI from `(in_pos, in_col, out_pos, out_col, params)` to
 **named attribute buffers bound by the node**, plus the topology arrays as
@@ -271,7 +276,7 @@ Vector families already collapsed into one in September 2026.
 | `attribute` | Attribute Initialize, Constant, Clip, Remap, Combine, Composite, Promote, Select, Normalize, Weight | 10 → 1 |
 | | *(landed)* | |
 | `neighbour` | Diffuse, Concentrate, Migrate, Bleed, Align, Lead, Charge — one Mode, one Neighbourhood | 7 → 1 |
-| | *(first four landed; the vector steering modes remain)* | |
+| | *(landed; Charge is a proposed reading, not a port)* | |
 | `gradient` | Gradient, Rotate, Direction | 3 → 1 |
 | `analysis` | Analysis, Measure, Metamax, Time Analysis, Region Center | 5 → 1 |
 | `time` | Time, Time Ramp, Time Switch | 3 → 1 |
@@ -329,7 +334,9 @@ vocabulary exists.
 - **Dead on arrival.** `im_pose` and `im_sample` both failed to cook in
   `otls-audit.md`, and `developer_charge`, `im_bend`, `im_manipulator` and
   `im_scaffold` carry no read parameters at all. Do not carry forward what never
-  worked.
+  worked. (`developer_charge` is the one exception taken so far: its name and
+  its two parameter names were enough to design a mode around, and that mode is
+  labelled a proposal in the code.)
 - **Version forks.** Eleven operators ship as two or three live versions
   (`im_attractor` at 0.9, 1.0 and 1.1; `im_select` at 1.0 and 2.0). Port the
   newest, once.

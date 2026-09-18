@@ -1,62 +1,85 @@
 {
-  "name": "Neighbour",
-  "type": "neighbour",
-  "inputs": 1,
-  "outputs": 1,
-  "params": [
-    {
-      "name": "Input",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "name": "Attribute",
-      "type": "text",
-      "default": "mass"
-    },
-    {
-      "name": "Mode",
-      "type": "choice:Diffuse,Concentrate,Migrate,Bleed",
-      "default": "Diffuse"
-    },
-    {
-      "name": "Neighbourhood",
-      "type": "choice:Connectivity,Radius,Global",
-      "default": "Connectivity"
-    },
-    {
-      "name": "Rings",
-      "type": "spinbox",
-      "default": "1",
-      "min": 1.0,
-      "max": 8.0,
-      "step": 1.0
-    },
-    {
-      "name": "Radius",
-      "type": "slider",
-      "default": "0.20",
-      "min": 0.0,
-      "max": 2.0,
-      "step": 0.01
-    },
-    {
-      "name": "Amount",
-      "type": "slider",
-      "default": "0.50",
-      "min": 0.0,
-      "max": 1.0,
-      "step": 0.01
-    },
-    {
-      "name": "Direction",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "name": "Group",
-      "type": "text",
-      "default": ""
-    }
-  ]
+ "name": "Neighbour",
+ "type": "neighbour",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  {
+   "name": "Input",
+   "type": "text",
+   "default": ""
+  },
+  {
+   "name": "Attribute",
+   "type": "text",
+   "default": "mass"
+  },
+  {
+   "name": "Mode",
+   "type": "choice:Diffuse,Concentrate,Migrate,Bleed,Align,Lead,Charge",
+   "default": "Diffuse"
+  },
+  {
+   "name": "Neighbourhood",
+   "type": "choice:Connectivity,Radius,Global",
+   "default": "Connectivity"
+  },
+  {
+   "name": "Rings",
+   "type": "spinbox",
+   "default": "1",
+   "min": 1.0,
+   "max": 8.0,
+   "step": 1.0
+  },
+  {
+   "name": "Radius",
+   "type": "slider",
+   "default": "0.20",
+   "min": 0.0,
+   "max": 2.0,
+   "step": 0.01
+  },
+  {
+   "name": "Amount",
+   "type": "slider",
+   "default": "0.50",
+   "min": 0.0,
+   "max": 1.0,
+   "step": 0.01
+  },
+  {
+   "name": "Direction",
+   "type": "text",
+   "default": ""
+  },
+  {
+   "name": "Group",
+   "type": "text",
+   "default": ""
+  },
+  {
+   "name": "Target",
+   "type": "choice:Local Average,Global Average,Constant,Attribute,Surface Tangent",
+   "default": "Local Average"
+  },
+  {
+   "name": "Constant",
+   "type": "text",
+   "default": "0.00:1.00:0.00"
+  },
+  {
+   "name": "Source",
+   "type": "text",
+   "default": ""
+  },
+  {
+   "name": "Release",
+   "type": "slider",
+   "default": "1.00",
+   "min": 0.0,
+   "max": 10.0,
+   "step": 0.05
+  }
+ ]
 }
