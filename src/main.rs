@@ -4646,6 +4646,61 @@ mod tests {
         assert!(state.page_dirty, "nothing would re-upload the page");
     }
 
+    /// Dragging empty scene turns the camera, at the same rate the trackpad's
+    /// pixel-delta orbit does.
+    ///
+    /// The camera had no drag gesture at all before this: `Viewport3D` handles
+    /// only `MouseWheel`, so the scene could be turned by scrolling and by
+    /// nothing else. The rate is shared with that path deliberately — a drag
+    /// and a two-finger swipe should not feel like different cameras.
+    #[test]
+    fn test_dragging_empty_scene_turns_the_camera() {
+        let mut state = State::new(false);
+        let k = State::ORBIT_RADIANS_PER_PX;
+
+        // The default camera carries its own orbit. X drag yaws, Y drag
+        // pitches, and the pitch is inverted so dragging down looks down.
+        state.active_camera = "Default Camera".to_string();
+        let (y0, x0) = (state.viewport().rotation_y, state.viewport().rotation_x);
+        state.orbit_camera_by(100.0, 40.0);
+        assert!(
+            (state.viewport().rotation_y - (y0 + 100.0 * k)).abs() < 1e-5,
+            "yaw did not follow the drag"
+        );
+        assert!(
+            (state.viewport().rotation_x - (x0 - 40.0 * k)).abs() < 1e-5,
+            "pitch did not follow the drag, or is not inverted"
+        );
+
+        // A named camera accumulates instead, for the camera NODE to pick up —
+        // the same split the scroll path makes.
+        let mut state = State::new(false);
+        state.active_camera = "Camera 1".to_string();
+        let before = (state.viewport().rotation_y, state.viewport().rotation_x);
+        state.orbit_camera_by(100.0, 40.0);
+        assert!(
+            (state.viewport().pending_yaw - 100.0 * k).abs() < 1e-5,
+            "a named camera's yaw did not accumulate"
+        );
+        assert!(
+            (state.viewport().pending_pitch - (-40.0 * k)).abs() < 1e-5,
+            "a named camera's pitch did not accumulate"
+        );
+        assert_eq!(
+            (state.viewport().rotation_y, state.viewport().rotation_x),
+            before,
+            "a named camera must not move the default camera's orbit"
+        );
+
+        // Pitch is clamped, so a long downward drag cannot roll the scene over.
+        let mut state = State::new(false);
+        state.active_camera = "Default Camera".to_string();
+        state.orbit_camera_by(0.0, -100000.0);
+        let pitch = state.viewport().rotation_x;
+        assert!(pitch.abs() < std::f32::consts::PI, "pitch ran past vertical: {pitch}");
+
+    }
+
     /// A page's raster is its physical size times its resolution — the
     /// property that makes DPI a page parameter rather than an export one.
     #[test]

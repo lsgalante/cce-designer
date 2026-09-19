@@ -1125,6 +1125,9 @@ pub struct State {
     /// first call is this process's own and every later one is a REPLACEMENT
     /// after a reconnect. Remembering is the only way to tell them apart.
     pub seen_renderer: bool,
+    /// An in-flight camera orbit drag: the cursor position the last motion was
+    /// measured from. `None` when no orbit drag is running.
+    pub orbit_drag: Option<(f32, f32)>,
     /// Set when the page raster must be re-uploaded — after a replacement
     /// renderer drops the old id. Consumed on the next tick rather than acted
     /// on in `renderer_init`, which runs before the frame has settled and
@@ -1657,6 +1660,39 @@ impl State {
 
     pub fn param_w(&self) -> f32 { self.get_col_geometries().5 }
     
+    /// Radians of camera rotation per logical pixel of drag.
+    ///
+    /// The same constant the trackpad's pixel-delta orbit uses, so a drag and a
+    /// two-finger swipe turn the scene at the same rate and the two gestures do
+    /// not feel like different cameras. A 300px drag is about 86 degrees.
+    pub const ORBIT_RADIANS_PER_PX: f32 = 0.005;
+
+    /// Turn the camera by a drag delta in logical pixels.
+    ///
+    /// Mirrors the scroll path's split: the default camera carries its own
+    /// orbit in `rotation_x`/`rotation_y`, while a named camera accumulates
+    /// into `pending_yaw`/`pending_pitch` for the node to pick up. Doing it any
+    /// other way would give a dragged camera a different meaning from a
+    /// scrolled one.
+    pub(crate) fn orbit_camera_by(&mut self, dx_px: f32, dy_px: f32) {
+        let dx = dx_px * Self::ORBIT_RADIANS_PER_PX;
+        let dy = dy_px * Self::ORBIT_RADIANS_PER_PX;
+        if self.active_camera != "Default Camera" {
+            let vp = self.viewport_mut();
+            vp.pending_yaw += dx;
+            vp.pending_pitch += -dy;
+        } else {
+            let vp = self.viewport_mut();
+            vp.rotation_y += dx;
+            vp.rotation_x -= dy;
+            vp.clamp_orbit_pitch();
+        }
+        // A drag is a direct gesture: the scene stops when the pointer does,
+        // rather than coasting the way a flicked scroll does.
+        self.viewport_mut().reset_velocity();
+        self.viewport_dirty = true;
+    }
+
     /// Whether the network is drawn as an OVERLAY on the scene rather than on
     /// its own plate: the plate switched off, in the ordinary docked layout.
     ///
@@ -4136,6 +4172,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             sim_cache: crate::geometry::SimCache::default(),
             page_image: None,
             seen_renderer: false,
+            orbit_drag: None,
             page_dirty: false,
             last_sim_frame: i32::MIN,
             plate_menu_slot: None,
@@ -6011,6 +6048,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     return true;
                 }
 
+                // An in-flight camera orbit, likewise — it was armed by a press
+                // on empty scene, so nothing else is competing for the motion.
+                if let Some((lx, ly)) = self.orbit_drag {
+                    let (dx, dy) = (self.cursor_x - lx, self.cursor_y - ly);
+                    self.orbit_drag = Some((self.cursor_x, self.cursor_y));
+                    if dx != 0.0 || dy != 0.0 {
+                        self.orbit_camera_by(dx, dy);
+                    }
+                    return true;
+                }
+
                 // An armed corner-dot press becomes a layout drag once it
                 // moves; stubbed (collapsed/detached) panes stay click-only.
                 if let Some((idx, px, py)) = self.corner_press {
@@ -6466,6 +6514,28 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             }
                         }
 
+                        // A left press on empty scene arms a camera orbit.
+                        // AFTER the viewer state above, so dragging a handle
+                        // still edits it, and after the node hit tests, so a
+                        // press on a node is still the node's — "empty" means
+                        // the scene really is what is under the cursor. The
+                        // camera otherwise turns only by scrolling, which is
+                        // the trackpad gesture; this is the mouse's.
+                        if *button == MouseButton::Left
+                            && self.cursor_in_viewport()
+                            && !in_circle_network_pane
+                            && self.app_drag.is_none()
+                        {
+                            self.orbit_drag = Some((self.cursor_x, self.cursor_y));
+                            self.focused_pane = RIGHT_MENUBAR_IDX;
+                            if let Some(old) = self.focused_widget {
+                                self.slots.get_dyn_mut(old).unfocus();
+                                self.focused_widget = None;
+                            }
+                            self.sync_pane_focus();
+                            return true;
+                        }
+
                         if *button == MouseButton::Right {
                             self.close_node_menu();
                             self.close_viewport_menu();
@@ -6690,6 +6760,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
+                        if self.orbit_drag.take().is_some() {
+                            return true;
+                        }
                         if self.viewer_tool_release() {
                             changed = true;
                         }

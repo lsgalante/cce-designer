@@ -491,14 +491,11 @@ That makes the pane's RECT useless as a hit test, and three things route off it:
 - **`cursor_in_viewport`** becomes the complement: the body, minus what the
   network holds, minus the floating panes.
 
-What changes for the user, and it is worth knowing: a plain click on empty
-space is no longer the network's. In the default docked layout nothing else
-claims it either (the scene is drawn full-bleed but the Viewport3D WIDGET's
-rect is only the centre column, which those layouts leave at zero width), so
-such a click does nothing. Deselecting by clicking empty space is the
-behaviour that costs. Giving the viewport that space was tried and reverted: it
-claimed the press and still did not orbit, and a half-working claim is worse
-than none.
+What changes for the user: a plain click on empty space is no longer the
+network's — so deselecting by clicking empty space is gone while the plate is
+off. It now ORBITS THE CAMERA instead (see below), which is what makes the
+overlay feel like a scene with a graph on it rather than a graph with a
+picture behind it.
 
 `ViewportSettings::network_plate` persists it, beside the viewport toggles
 rather than in the project's pane-state list: a pane's VISIBILITY belongs to
@@ -587,6 +584,29 @@ The command is `layout_nodes` on `Ctrl+Shift+L` rather than the bare `L`
 Houdini uses: bare hjkl is the cursor, and shift+hjkl is reserved for the
 select family this app cannot implement until the Graph widget has
 multi-selection, so taking `Shift+L` now would have to be given back later.
+
+### Dragging the scene orbits the camera
+
+`State::orbit_camera_by` turns the camera by a drag delta, armed by a left
+press that `cursor_in_viewport` says landed on scene. Before it the camera had
+NO drag gesture at all: `Viewport3D` handles only `MouseWheel`, so the scene
+turned by scrolling and by nothing else — which suits a trackpad and leaves a
+mouse with no way to look around.
+
+`ORBIT_RADIANS_PER_PX` is the trackpad's own pixel-delta constant, so a drag
+and a two-finger swipe turn the scene at the same rate rather than feeling like
+two different cameras. The default camera carries its orbit in
+`rotation_x`/`rotation_y`; a NAMED camera accumulates into
+`pending_yaw`/`pending_pitch` for its node to pick up — the same split the
+scroll path makes, so a dragged camera and a scrolled one mean the same thing.
+A drag stops when the pointer does (`reset_velocity`), unlike a flicked scroll,
+which coasts.
+
+Precedence matters and is load-bearing. The press arms AFTER the viewer state's
+own press hook, so dragging a curve handle still edits it, and after the node
+hit tests, so a press on a node still moves the node. "Empty" means the scene
+really is what is under the cursor — which, with the network overlaying the
+window, is exactly what `in_network_pane`'s node test decides.
 
 ### Commands, chords and the palette
 

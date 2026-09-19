@@ -63,7 +63,7 @@ impl Viewport3D {
 
     /// Clamp the default-camera scroll orbit short of the poles
     /// (total pitch = pitch0 - rotation_x).
-    fn clamp_orbit_pitch(&mut self) {
+    pub(crate) fn clamp_orbit_pitch(&mut self) {
         let p0 = Self::default_pitch0();
         self.rotation_x = self.rotation_x.clamp(p0 - Self::MAX_PITCH, p0 + Self::MAX_PITCH);
     }
