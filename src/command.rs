@@ -115,6 +115,29 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "command_palette", label: "Command Palette", context: Context::Always, run: Run::Key(Action::CommandPalette), default_chord: Some("Ctrl+p") },
     Command { id: "toggle_configure", label: "Configure", context: Context::Always, run: Run::Key(Action::ToggleConfigure), default_chord: Some("Ctrl+,") },
 
+    // --- Network navigation ---
+    //
+    // The plugin's scheme, ported: hjkl rather than arrows (the arrows are the
+    // playbar transport in every pane), bare to move the cursor, alt to move
+    // the node under it, ctrl to pan the view. `shift+hjkl` — extend the
+    // selection — is deliberately absent: the Graph widget carries a single
+    // `selected_node`, and a select family with nothing to extend would be
+    // four rows that quietly do what bare hjkl already does.
+    Command { id: "nav_left", label: "Cursor Left", context: Context::Network, run: Run::Key(Action::NetworkNav(-1, 0)), default_chord: Some("h") },
+    Command { id: "nav_down", label: "Cursor Down", context: Context::Network, run: Run::Key(Action::NetworkNav(0, 1)), default_chord: Some("j") },
+    Command { id: "nav_up", label: "Cursor Up", context: Context::Network, run: Run::Key(Action::NetworkNav(0, -1)), default_chord: Some("k") },
+    Command { id: "nav_right", label: "Cursor Right", context: Context::Network, run: Run::Key(Action::NetworkNav(1, 0)), default_chord: Some("l") },
+    Command { id: "move_left", label: "Move Node Left", context: Context::Network, run: Run::Key(Action::NetworkMove(-1, 0)), default_chord: Some("Alt+h") },
+    Command { id: "move_down", label: "Move Node Down", context: Context::Network, run: Run::Key(Action::NetworkMove(0, 1)), default_chord: Some("Alt+j") },
+    Command { id: "move_up", label: "Move Node Up", context: Context::Network, run: Run::Key(Action::NetworkMove(0, -1)), default_chord: Some("Alt+k") },
+    Command { id: "move_right", label: "Move Node Right", context: Context::Network, run: Run::Key(Action::NetworkMove(1, 0)), default_chord: Some("Alt+l") },
+    Command { id: "view_left", label: "Pan View Left", context: Context::Network, run: Run::Key(Action::NetworkPan(-1, 0)), default_chord: Some("Ctrl+h") },
+    Command { id: "view_down", label: "Pan View Down", context: Context::Network, run: Run::Key(Action::NetworkPan(0, 1)), default_chord: Some("Ctrl+j") },
+    Command { id: "view_up", label: "Pan View Up", context: Context::Network, run: Run::Key(Action::NetworkPan(0, -1)), default_chord: Some("Ctrl+k") },
+    Command { id: "view_right", label: "Pan View Right", context: Context::Network, run: Run::Key(Action::NetworkPan(1, 0)), default_chord: Some("Ctrl+l") },
+    Command { id: "frame_cursor", label: "Frame Cursor", context: Context::Network, run: Run::Key(Action::FrameCursor), default_chord: Some("f") },
+    Command { id: "frame_all", label: "Frame All", context: Context::Network, run: Run::Key(Action::FrameAll), default_chord: Some("Shift+f") },
+
     // --- Network ---
     Command { id: "zoom_in", label: "Zoom In", context: Context::Network, run: Run::Menu("Zoom In"), default_chord: None },
     Command { id: "zoom_out", label: "Zoom Out", context: Context::Network, run: Run::Menu("Zoom Out"), default_chord: None },
@@ -123,7 +146,10 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "detach_circular_window", label: "Detach Circular Window", context: Context::Network, run: Run::Key(Action::DetachCircularWindow), default_chord: None },
 
     // --- Viewer states ---
-    Command { id: "edit_handles", label: "Edit Handles", context: Context::Viewport, run: Run::Key(Action::ToggleViewerState), default_chord: Some("Ctrl+h") },
+    // Ctrl+Shift+H, not Ctrl+H: the ctrl+hjkl family below is the network
+    // pane's view panning, and the conflict check caught the collision the
+    // first time both existed.
+    Command { id: "edit_handles", label: "Edit Handles", context: Context::Viewport, run: Run::Key(Action::ToggleViewerState), default_chord: Some("Ctrl+Shift+h") },
     Command { id: "toggle_snap", label: "Toggle Snapping", context: Context::Viewport, run: Run::Key(Action::ToggleSnap), default_chord: Some("Ctrl+b") },
 
     // --- Viewport ---

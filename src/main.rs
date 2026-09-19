@@ -4264,6 +4264,129 @@ mod tests {
         assert!(source_for("Curve").is_some());
     }
 
+    /// Keyboard graph navigation: the plugin's hjkl families, as commands.
+    ///
+    /// Bare hjkl moves the grid cursor and therefore the selection, alt moves
+    /// the node under it, ctrl pans the view and touches neither. All of it is
+    /// gated on the network pane having focus — the bare family used to be the
+    /// one that was not, so the cursor drifted invisibly while you looked at
+    /// the viewport.
+    #[test]
+    fn test_the_network_navigation_families() {
+        use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX};
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Sphere".to_string(), name: None, x: 3.0, y: 2.0 },
+                &mut redraw,
+            )
+            .expect("add node");
+        let slot = state.current_dir().children.len() - 1;
+        assert_eq!(state.current_dir().children[slot].position, (3.0, 2.0));
+
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        state.grid_cursor_col = 3;
+        state.grid_cursor_row = 2;
+        state.sync_cursor_and_selection();
+        assert_eq!(state.graph().selected_node(), Some(slot), "the cursor should select what it sits on");
+
+        // Bare hjkl walks the cursor, and the selection follows it off the
+        // node. Up, not right: the default project already has a node at
+        // (4, 2), and navigating onto it would select that one instead —
+        // correctly, which is exactly why the empty cell has to be chosen
+        // deliberately rather than assumed.
+        assert!(state.run_command("nav_up"));
+        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), (3, 1));
+        assert_eq!(state.graph().selected_node(), None, "the cursor left the node");
+        assert!(state.run_command("nav_down"));
+        assert_eq!(state.graph().selected_node(), Some(slot), "and came back to it");
+
+        // And navigating ONTO another node selects that one.
+        let neighbour = state
+            .current_dir()
+            .children
+            .iter()
+            .position(|c| c.position == (4.0, 2.0))
+            .expect("the default project has a node at (4, 2)");
+        assert!(state.run_command("nav_right"));
+        assert_eq!(state.graph().selected_node(), Some(neighbour));
+        assert!(state.run_command("nav_left"));
+
+        // Alt moves the node AND the cursor, so a run of them drags it rather
+        // than leaving it behind on the first press.
+        assert!(state.run_command("move_down"));
+        assert_eq!(state.current_dir().children[slot].position, (3.0, 3.0));
+        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), (3, 3));
+        assert_eq!(state.graph().selected_node(), Some(slot), "the node should still be selected");
+        assert!(state.run_command("move_down"));
+        assert_eq!(state.current_dir().children[slot].position, (3.0, 4.0));
+
+        // Ctrl pans the view: the cursor, the selection and the node all stay.
+        let before = (state.pan_x, state.pan_y);
+        let cursor = (state.grid_cursor_col, state.grid_cursor_row);
+        assert!(state.run_command("view_right"));
+        assert_ne!((state.pan_x, state.pan_y), before, "the view did not pan");
+        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cursor);
+        assert_eq!(state.current_dir().children[slot].position, (3.0, 4.0));
+        assert_eq!(state.graph().selected_node(), Some(slot));
+
+        // Frame Cursor CENTRES the cursor cell, rather than only scrolling it
+        // into view when it has gone off an edge — which would make the
+        // command do nothing in the case you actually press it in.
+        state.positions[crate::slots::CONTENT_IDX] = (0.0, 0.0, 800.0, 600.0);
+        state.grid_cursor_col = 9;
+        state.grid_cursor_row = 7;
+        assert!(state.run_command("frame_cursor"));
+        let cell_x = 9.0 * (state.grid_size_x + state.gap_col_w) + state.pan_x;
+        let cell_y = 7.0 * (state.grid_size_y + state.gap_row_h) + state.pan_y;
+        assert!(
+            (cell_x + state.grid_size_x * 0.5 - 400.0).abs() < 1.0,
+            "the cursor cell is not centred horizontally: {cell_x}"
+        );
+        assert!(
+            (cell_y + state.grid_size_y * 0.5 - 300.0).abs() < 1.0,
+            "the cursor cell is not centred vertically: {cell_y}"
+        );
+
+        // Every family is gated on the network pane. With the viewport focused
+        // the commands run and do nothing, rather than moving a cursor nobody
+        // can see.
+        state.focused_pane = RIGHT_MENUBAR_IDX;
+        let cursor = (state.grid_cursor_col, state.grid_cursor_row);
+        let pos = state.current_dir().children[slot].position;
+        let pan = (state.pan_x, state.pan_y);
+        for id in ["nav_left", "nav_right", "nav_up", "nav_down", "move_left", "view_left", "frame_cursor"] {
+            assert!(state.run_command(id), "{id} should be a known command");
+        }
+        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cursor, "the cursor moved from another pane");
+        assert_eq!(state.current_dir().children[slot].position, pos, "a node moved from another pane");
+        assert_eq!((state.pan_x, state.pan_y), pan, "the view panned from another pane");
+    }
+
+    /// The navigation scheme is the plugin's, and the registry says so: hjkl
+    /// bare, alt and ctrl, plus the two framings — fourteen rows, all in the
+    /// network context, none of them colliding.
+    #[test]
+    fn test_the_navigation_scheme_matches_the_plugins() {
+        use crate::command::{by_id, Context};
+        let expected = [
+            // Uppercase because `describe` prints single letters as capitals,
+            // the way every menu in the app writes a chord.
+            ("nav_left", "H"), ("nav_down", "J"), ("nav_up", "K"), ("nav_right", "L"),
+            ("move_left", "Alt+H"), ("move_down", "Alt+J"), ("move_up", "Alt+K"), ("move_right", "Alt+L"),
+            ("view_left", "Ctrl+H"), ("view_down", "Ctrl+J"), ("view_up", "Ctrl+K"), ("view_right", "Ctrl+L"),
+            ("frame_cursor", "F"), ("frame_all", "Shift+F"),
+        ];
+        for (id, chord) in expected {
+            let cmd = by_id(id).unwrap_or_else(|| panic!("{id} is not a command"));
+            assert_eq!(cmd.context, Context::Network, "{id} is not a network command");
+            let parsed = crate::shortcut::Shortcut::parse(cmd.default_chord.expect(id)).unwrap();
+            assert_eq!(parsed.describe(), chord, "{id} is not bound where the plugin binds it");
+        }
+    }
+
     /// A page's raster is its physical size times its resolution — the
     /// property that makes DPI a page parameter rather than an export one.
     #[test]

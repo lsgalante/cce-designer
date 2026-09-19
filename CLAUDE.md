@@ -443,6 +443,41 @@ The GPU image is owned by `State::page_image` and freed when replaced;
 everything-at-once node, is deliberately not ported: it is these four chained,
 and that collapse is the whole premise of "fifty operators, ten nodes".
 
+### Keyboard graph navigation
+
+The network pane's keyboard scheme is the plugin's, ported: **hjkl rather than
+arrows** — the arrows are the playbar transport in every pane and context — bare
+to move the grid cursor, `alt` to move the node under it, `ctrl` to pan the
+view, plus `f` to frame the cursor and `shift+f` to frame everything. All
+fourteen are registry commands in `Context::Network`, so they are rebindable
+through `input.kdl` and listed in the palette.
+
+**The grid cursor IS the selection.** `sync_cursor_and_selection` selects
+whatever node sits in the cursor's cell, so navigating selects, and stepping off
+a node deselects. Every family is gated on the network pane having focus — one
+gate, in the four `network_*` methods. The bare family used to be the one that
+was NOT gated: plain h/j/k/l moved the cursor from any pane, so it drifted
+invisibly while you were looking at the viewport (the selection did not follow,
+because `sync_cursor_and_selection` has its own pane check) and was somewhere
+unexpected when you came back.
+
+`alt` moves the node AND the cursor, so a run of `alt+h` drags a node across the
+sheet rather than leaving it behind on the first press. `ctrl` pans by one CELL
+rather than a fixed pixel count, so a pan step means the same thing at every
+zoom. Frame Cursor CENTRES the cursor cell; its first version called
+`keep_cursor_in_view`, which pans only when the cursor has gone off an edge, so
+the command did nothing at all in the common case of a cursor that is visible
+but off in a corner — which is exactly when it gets pressed.
+
+`shift+hjkl` — the plugin's extend-the-selection family — is deliberately
+absent. The Graph widget carries a single `selected_node`, so four rows that
+quietly did what bare hjkl already does would be worse than the gap.
+
+Two chords moved to make room, both caught by `command::conflicts` rather than
+by hand: `edit_handles` from `Ctrl+H` to `Ctrl+Shift+H` (the ctrl+hjkl family
+owns those now), and `f` now frames the CURSOR where it used to frame
+everything, with framing everything on `shift+f` — the plugin's split.
+
 ### Commands, chords and the palette
 
 `src/command.rs` is one list of everything the app can be asked to do. Each row

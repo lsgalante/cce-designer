@@ -29,6 +29,15 @@ pub enum Action {
     ToggleSnap,
     /// Enter or leave the selected node's viewer state.
     ToggleViewerState,
+    /// Network-pane keyboard navigation, in the plugin's vim-style families:
+    /// bare hjkl moves the grid cursor, alt moves the node under it, ctrl pans
+    /// the view. The direction rides the variant so one registry row binds one
+    /// key, which is what a rebindable scheme needs.
+    NetworkNav(i32, i32),
+    NetworkMove(i32, i32),
+    NetworkPan(i32, i32),
+    FrameCursor,
+    FrameAll,
 }
 
 #[derive(Debug, Clone)]

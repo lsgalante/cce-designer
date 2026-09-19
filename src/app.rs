@@ -5116,10 +5116,222 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
     }
 
+    /// Move the grid cursor one cell, taking the selection with it.
+    ///
+    /// The cursor is the network pane's keyboard position: `sync_cursor_and_
+    /// selection` selects whatever node sits in its cell, so navigating IS
+    /// selecting. Gated on the network pane having focus — plain h/j/k/l used
+    /// to move it from any pane, which drifted the cursor invisibly while you
+    /// were looking at the viewport and put it somewhere unexpected when you
+    /// came back. Every other network key was already gated; this family was
+    /// the one that was not.
+    pub(crate) fn network_nav(&mut self, dc: i32, dr: i32) -> bool {
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            return false;
+        }
+        self.pan_velocity_x = 0.0;
+        self.pan_velocity_y = 0.0;
+        self.grid_cursor_col += dc;
+        self.grid_cursor_row += dr;
+        self.sync_cursor_and_selection();
+        self.keep_cursor_in_view();
+        true
+    }
+
+    /// Move the node under the cursor one cell, and the cursor with it — so a
+    /// run of alt+h drags a node across the sheet rather than leaving it
+    /// behind on the first press.
+    pub(crate) fn network_move_node(&mut self, dc: i32, dr: i32) -> bool {
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            return false;
+        }
+        let at_cursor = self.current_dir().children.iter().position(|child| {
+            child.position.0 as i32 == self.grid_cursor_col
+                && child.position.1 as i32 == self.grid_cursor_row
+        });
+        if let Some(idx) = at_cursor {
+            let (x, y) = self.current_dir().children[idx].position;
+            self.current_dir_mut().children[idx].position = (x + dc as f32, y + dr as f32);
+            self.sync_nodes();
+            self.sync_layout();
+        }
+        self.network_nav(dc, dr)
+    }
+
+    /// Pan the network view by one cell, leaving the cursor and the selection
+    /// alone — the ctrl+hjkl family, which had no equivalent here.
+    ///
+    /// One cell, not a fixed pixel count, so a pan step means the same thing
+    /// at every zoom level: the sheet moves by exactly one node.
+    pub(crate) fn network_pan_view(&mut self, dc: i32, dr: i32) -> bool {
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            return false;
+        }
+        self.pan_velocity_x = 0.0;
+        self.pan_velocity_y = 0.0;
+        self.pan_x -= dc as f32 * (self.grid_size_x + self.gap_col_w);
+        self.pan_y -= dr as f32 * (self.grid_size_y + self.gap_row_h);
+        self.rebuild_positions();
+        self.apply_layout();
+        self.update_panel_bounds();
+        true
+    }
+
+    /// Centre the view on the grid cursor, without changing the zoom — the
+    /// counterpart of framing everything, and what `f` means in the plugin
+    /// this is replacing.
+    ///
+    /// CENTRES rather than merely scrolling the cursor into view. The first
+    /// version called `keep_cursor_in_view`, which pans only when the cursor
+    /// has gone off the edge — so the command did nothing at all in the common
+    /// case of a cursor that is already visible but off in a corner, which is
+    /// exactly when you press it.
+    pub(crate) fn frame_cursor(&mut self) -> bool {
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            return false;
+        }
+        let (_px, _py, pw, ph) = self.positions[CONTENT_IDX];
+        if pw <= 0.0 || ph <= 0.0 {
+            return true;
+        }
+        // Pan so the cursor CELL's centre lands at the pane's centre. The
+        // cell's offset from the sheet origin is its column times the column
+        // pitch, so the pan that centres it is the pane's half-extent minus
+        // that offset, minus half a cell.
+        self.pan_x = pw * 0.5
+            - self.grid_cursor_col as f32 * (self.grid_size_x + self.gap_col_w)
+            - self.grid_size_x * 0.5;
+        self.pan_y = ph * 0.5
+            - self.grid_cursor_row as f32 * (self.grid_size_y + self.gap_row_h)
+            - self.grid_size_y * 0.5;
+        self.pan_velocity_x = 0.0;
+        self.pan_velocity_y = 0.0;
+        self.sync_grid_settings();
+        self.rebuild_positions();
+        self.apply_layout();
+        self.update_panel_bounds();
+        true
+    }
+
+    /// Fit every node in the current level into the network pane.
+    ///
+    /// Extracted verbatim from the `f` key's inline arm so the command
+    /// registry and the key run the same code — the point of the registry
+    /// being that there is one implementation behind every way of asking.
+    pub(crate) fn frame_all_nodes(&mut self) {
+            let active_nodes = self.current_dir().children.len();
+            if active_nodes == 0 {
+                self.grid_size_x = 80.0;
+                self.grid_size_y = 40.0;
+                self.gap_col_w = 20.0;
+                self.gap_row_h = 20.0;
+                self.pan_x = 20.0;
+                self.pan_y = 20.0;
+            } else {
+                let base_gx = 80.0;
+                let base_gy = 40.0;
+                let base_col_w = 20.0;
+                let base_row_h = 20.0;
+
+                let mut b_xmin = f32::MAX;
+                let mut b_xmax = f32::MIN;
+                let mut b_ymin = f32::MAX;
+                let mut b_ymax = f32::MIN;
+
+                for slot_idx in 0..active_nodes {
+                    let (col, row) = self.current_dir().children[slot_idx].position;
+                    let x_min = col * (base_gx + base_col_w);
+                    let x_max = x_min + base_gx;
+                    let y_min = row * (base_gy + base_row_h);
+                    let y_max = y_min + base_gy;
+
+                    if x_min < b_xmin { b_xmin = x_min; }
+                    if x_max > b_xmax { b_xmax = x_max; }
+                    if y_min < b_ymin { b_ymin = y_min; }
+                    if y_max > b_ymax { b_ymax = y_max; }
+                }
+
+                let w_base = b_xmax - b_xmin;
+                let h_base = b_ymax - b_ymin;
+
+                 let (_px, _py, pw, ph) = self.positions[CONTENT_IDX];
+                 let viewport_w = pw;
+                 let viewport_h = ph;
+
+                let padding = 40.0;
+                let padded_w = (viewport_w - 2.0 * padding).max(10.0);
+                let padded_h = (viewport_h - 2.0 * padding).max(10.0);
+
+                let fx = padded_w / w_base;
+                let fy = padded_h / h_base;
+                let mut f = fx.min(fy);
+
+                f = f.min(1.0).max(30.0 / base_gx);
+
+                self.grid_size_x = (base_gx * f).clamp(30.0, 500.0);
+                self.grid_size_y = (base_gy * f).clamp(15.0, 250.0);
+                self.gap_col_w = base_col_w * f;
+                self.gap_row_h = base_row_h * f;
+
+                let mut actual_xmin = f32::MAX;
+                let mut actual_xmax = f32::MIN;
+                let mut actual_ymin = f32::MAX;
+                let mut actual_ymax = f32::MIN;
+
+                for slot_idx in 0..active_nodes {
+                    let (col, row) = self.current_dir().children[slot_idx].position;
+                    let x_min = col * (self.grid_size_x + self.gap_col_w);
+                    let x_max = x_min + self.grid_size_x;
+                    let y_min = row * (self.grid_size_y + self.gap_row_h);
+                    let y_max = y_min + self.grid_size_y;
+
+                    if x_min < actual_xmin { actual_xmin = x_min; }
+                    if x_max > actual_xmax { actual_xmax = x_max; }
+                    if y_min < actual_ymin { actual_ymin = y_min; }
+                    if y_max > actual_ymax { actual_ymax = y_max; }
+                }
+
+                let actual_w = actual_xmax - actual_xmin;
+                let actual_h = actual_ymax - actual_ymin;
+
+                self.pan_x = (viewport_w - actual_w) / 2.0 - actual_xmin;
+                self.pan_y = (viewport_h - actual_h) / 2.0 - actual_ymin;
+            }
+
+            self.sync_grid_settings();
+            self.rebuild_positions();
+            self.apply_layout();
+            self.update_panel_bounds();
+        self.sync_grid_settings();
+        self.rebuild_positions();
+        self.apply_layout();
+        self.update_panel_bounds();
+    }
+
     pub fn execute_action(&mut self, action: Action) {
         let mut settings_changed = false;
         match action {
             Action::CommandPalette => self.open_command_palette(),
+            // The network navigation families. Each returns false when the
+            // network pane does not have focus, which is how one gate covers
+            // all fourteen of them.
+            Action::NetworkNav(dc, dr) => {
+                self.network_nav(dc, dr);
+            }
+            Action::NetworkMove(dc, dr) => {
+                self.network_move_node(dc, dr);
+            }
+            Action::NetworkPan(dc, dr) => {
+                self.network_pan_view(dc, dr);
+            }
+            Action::FrameCursor => {
+                self.frame_cursor();
+            }
+            Action::FrameAll => {
+                if self.focused_pane == LEFT_MENUBAR_IDX {
+                    self.frame_all_nodes();
+                }
+            }
             Action::ToggleViewerState => {
                 // The selected node, the same one the context menu's entry
                 // would act on — so the command and the menu cannot disagree
@@ -6628,56 +6840,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let mut changed = false;
                 if event.state == ElementState::Pressed {
                         let is_plain_key = !self.modifiers.control_key() && !self.modifiers.alt_key() && !self.modifiers.super_key();
-                        let is_alt_key = self.modifiers.alt_key() && !self.modifiers.control_key() && !self.modifiers.super_key();
                         let is_ctrl_only = self.modifiers.control_key() && !self.modifiers.alt_key() && !self.modifiers.super_key() && !self.modifiers.shift_key();
 
-                        let mut delta = None;
-
-                        // Grid-cursor movement is hjkl-only: the arrows belong
-                        // to the playbar transport (dispatched above), in every
-                        // pane and context.
-                        match &event.logical_key {
-                            Key::Character(s) => {
-                                match s.as_str() {
-                                    "k" | "K" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
-                                        delta = Some((0, -1));
-                                    }
-                                    "j" | "J" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
-                                        delta = Some((0, 1));
-                                    }
-                                    "h" | "H" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
-                                        delta = Some((-1, 0));
-                                    }
-                                    "l" | "L" if is_plain_key || (is_alt_key && self.focused_pane == LEFT_MENUBAR_IDX) => {
-                                        delta = Some((1, 0));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            _ => {}
-                        }
-
-                        if let Some((dc, dr)) = delta {
-                            self.pan_velocity_x = 0.0;
-                            self.pan_velocity_y = 0.0;
-                            if is_alt_key {
-                                let active_nodes = self.current_dir().children.len();
-                                let node_idx_at_cursor = self.current_dir().children.iter().take(active_nodes).position(|child| {
-                                    child.position.0 as i32 == self.grid_cursor_col && child.position.1 as i32 == self.grid_cursor_row
-                                });
-                                if let Some(idx) = node_idx_at_cursor {
-                                    let new_x = self.current_dir().children[idx].position.0 + dc as f32;
-                                    let new_y = self.current_dir().children[idx].position.1 + dr as f32;
-                                    self.current_dir_mut().children[idx].position = (new_x, new_y);
-                                    self.sync_nodes();
-                                    self.sync_layout();
-                                }
-                            }
-                            self.grid_cursor_col += dc;
-                            self.grid_cursor_row += dr;
-                            self.sync_cursor_and_selection();
-                            changed = true;
-                        } else {
+                        // The hjkl navigation families used to be decoded
+                        // here, inline and unrebindable, with the bare form
+                        // ungated so it drifted the cursor from any pane.
+                        // They are registry commands now (nav_*, move_*,
+                        // view_*, frame_*), matched with every other chord
+                        // below.
+                        {
                             if event.logical_key == Key::Named(NamedKey::Delete) {
                                 if is_plain_key && self.focused_pane == LEFT_MENUBAR_IDX {
                                     if let Some(slot_idx) = self.graph().selected_node() {
@@ -6742,94 +6913,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                         "=" | "+" => {
                                             self.zoom(1.15, None);
                                             changed = true;
-                                        }
-                                        "f" | "F" => {
-                                            if self.focused_pane == LEFT_MENUBAR_IDX {
-                                                let active_nodes = self.current_dir().children.len();
-                                                if active_nodes == 0 {
-                                                    self.grid_size_x = 80.0;
-                                                    self.grid_size_y = 40.0;
-                                                    self.gap_col_w = 20.0;
-                                                    self.gap_row_h = 20.0;
-                                                    self.pan_x = 20.0;
-                                                    self.pan_y = 20.0;
-                                                } else {
-                                                    let base_gx = 80.0;
-                                                    let base_gy = 40.0;
-                                                    let base_col_w = 20.0;
-                                                    let base_row_h = 20.0;
-
-                                                    let mut b_xmin = f32::MAX;
-                                                    let mut b_xmax = f32::MIN;
-                                                    let mut b_ymin = f32::MAX;
-                                                    let mut b_ymax = f32::MIN;
-
-                                                    for slot_idx in 0..active_nodes {
-                                                        let (col, row) = self.current_dir().children[slot_idx].position;
-                                                        let x_min = col * (base_gx + base_col_w);
-                                                        let x_max = x_min + base_gx;
-                                                        let y_min = row * (base_gy + base_row_h);
-                                                        let y_max = y_min + base_gy;
-
-                                                        if x_min < b_xmin { b_xmin = x_min; }
-                                                        if x_max > b_xmax { b_xmax = x_max; }
-                                                        if y_min < b_ymin { b_ymin = y_min; }
-                                                        if y_max > b_ymax { b_ymax = y_max; }
-                                                    }
-
-                                                    let w_base = b_xmax - b_xmin;
-                                                    let h_base = b_ymax - b_ymin;
-
-                                                     let (_px, _py, pw, ph) = self.positions[CONTENT_IDX];
-                                                     let viewport_w = pw;
-                                                     let viewport_h = ph;
-
-                                                    let padding = 40.0;
-                                                    let padded_w = (viewport_w - 2.0 * padding).max(10.0);
-                                                    let padded_h = (viewport_h - 2.0 * padding).max(10.0);
-
-                                                    let fx = padded_w / w_base;
-                                                    let fy = padded_h / h_base;
-                                                    let mut f = fx.min(fy);
-
-                                                    f = f.min(1.0).max(30.0 / base_gx);
-
-                                                    self.grid_size_x = (base_gx * f).clamp(30.0, 500.0);
-                                                    self.grid_size_y = (base_gy * f).clamp(15.0, 250.0);
-                                                    self.gap_col_w = base_col_w * f;
-                                                    self.gap_row_h = base_row_h * f;
-
-                                                    let mut actual_xmin = f32::MAX;
-                                                    let mut actual_xmax = f32::MIN;
-                                                    let mut actual_ymin = f32::MAX;
-                                                    let mut actual_ymax = f32::MIN;
-
-                                                    for slot_idx in 0..active_nodes {
-                                                        let (col, row) = self.current_dir().children[slot_idx].position;
-                                                        let x_min = col * (self.grid_size_x + self.gap_col_w);
-                                                        let x_max = x_min + self.grid_size_x;
-                                                        let y_min = row * (self.grid_size_y + self.gap_row_h);
-                                                        let y_max = y_min + self.grid_size_y;
-
-                                                        if x_min < actual_xmin { actual_xmin = x_min; }
-                                                        if x_max > actual_xmax { actual_xmax = x_max; }
-                                                        if y_min < actual_ymin { actual_ymin = y_min; }
-                                                        if y_max > actual_ymax { actual_ymax = y_max; }
-                                                    }
-
-                                                    let actual_w = actual_xmax - actual_xmin;
-                                                    let actual_h = actual_ymax - actual_ymin;
-
-                                                    self.pan_x = (viewport_w - actual_w) / 2.0 - actual_xmin;
-                                                    self.pan_y = (viewport_h - actual_h) / 2.0 - actual_ymin;
-                                                }
-
-                                                self.sync_grid_settings();
-                                                self.rebuild_positions();
-                                                self.apply_layout();
-                                                self.update_panel_bounds();
-                                                changed = true;
-                                            }
                                         }
                                         _ => {}
                                     }

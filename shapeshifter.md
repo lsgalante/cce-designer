@@ -387,9 +387,32 @@ Touches: `geometry.rs`, `nodes/*.json`.
 > points. Snapping is a command (`toggle_snap`), which is the previous round's
 > registry paying for itself.
 >
-> Still outstanding for this phase: keyboard graph navigation and auto-layout
-> in the network pane. The keycam navigator the proposal names as a viewer
-> state is not written yet, but the framework it would sit on is.
+> **Keyboard graph navigation landed**, as the plugin's own scheme rather than
+> an invention: hjkl bare to move the grid cursor (the arrows are the playbar
+> transport in every pane), alt to move the node under it, ctrl to pan the view,
+> `f` to frame the cursor and `shift+f` to frame everything. Fourteen registry
+> commands in the network context, so all of it is rebindable through
+> `input.kdl` and listed in the palette.
+>
+> Half of it already existed, hardcoded inline and unrebindable — and the bare
+> family was the one that was never gated on the network pane, so plain hjkl
+> drifted the cursor invisibly while you looked at the viewport. The ctrl pan
+> family did not exist at all. Frame Cursor did not either: `f` framed
+> everything, and the first version of the new command only scrolled the cursor
+> into view, which does nothing in the case you actually press it in — it
+> centres now.
+>
+> `shift+hjkl` is deliberately absent. The Graph widget carries a single
+> `selected_node`, and four rows that quietly did what bare hjkl already does
+> would be worse than the gap. It wants multi-selection first.
+>
+> The conflict check earned its place: `ctrl+h` was taken by `edit_handles` from
+> the previous round, and the test named the winner and the shadowed command
+> rather than leaving a key that silently stopped working.
+>
+> Still outstanding for this phase: auto-layout in the network pane. The keycam
+> navigator the proposal names as a viewer state is not written yet, but the
+> framework it would sit on is.
 
 Independent of all the geometry work, and the place where the app gets to be
 better rather than equal. A **command palette** on the HC Panel's model — fuzzy
