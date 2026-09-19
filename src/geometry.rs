@@ -740,6 +740,10 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("time") {
         resolve_time_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("detangle") {
+        resolve_detangle_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("suture") {
+        resolve_suture_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("remesh") {
         resolve_remesh_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("develop") {
@@ -1292,6 +1296,254 @@ pub fn resolve_relax_geometry_with_errors(
     Some(geom)
 }
 
+/// The Detangle node: push a surface off itself.
+///
+/// Growth folds a surface into its own neighbourhood long before it looks
+/// wrong from outside, and a diffusion across a self-intersecting mesh reads
+/// neighbours that are topologically far away. This resolves it the way the
+/// plugin's Detangle does: a point repulsion over Iterations passes, with
+/// Thickness measured in edge lengths and points within Rings of each other
+/// excluded.
+///
+/// The ring exclusion is the whole trick. Every point is within a thickness of
+/// its own neighbours by construction — that is what an edge is — so a naive
+/// repulsion would blow the mesh apart from the inside. Excluding the
+/// topological neighbourhood leaves exactly the pairs that are near in SPACE
+/// but far across the SURFACE, which is what a self-intersection is.
+pub fn resolve_detangle_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_detangle(&mut geom, target);
+    Some(geom)
+}
+
+pub(crate) fn apply_detangle(geom: &mut Detail, target: &FsNode) {
+    let n = geom.num_points();
+    if n == 0 || geom.num_prims() == 0 {
+        return;
+    }
+    // Thickness in EDGE LENGTHS, so the setting means the same thing before
+    // and after a remesh — an absolute distance would stop separating the
+    // moment the mesh got finer.
+    let edges = geom.edges().to_vec();
+    if edges.is_empty() {
+        return;
+    }
+    let mean_edge = edges
+        .iter()
+        .map(|e| (geom.pos(e[1] as usize) - geom.pos(e[0] as usize)).length())
+        .sum::<f32>()
+        / edges.len() as f32;
+    let thickness = node_param_f32(target, "Thickness", 1.0).max(0.0) * mean_edge;
+    if thickness <= 0.0 {
+        return;
+    }
+    let rings = node_param_f32(target, "Rings", 2.0).clamp(0.0, 6.0) as usize;
+    let iterations = node_param_f32(target, "Iterations", 4.0).clamp(1.0, 32.0) as usize;
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let movable: Vec<bool> = (0..n)
+        .map(|p| group.is_empty() || geom.points().in_group(&group, p))
+        .collect();
+
+    // The excluded neighbourhood, once: it is topology, and the pass does not
+    // change topology.
+    let excluded: Vec<Vec<u32>> = (0..n)
+        .map(|p| {
+            let mut seen = vec![p as u32];
+            let mut frontier = vec![p as u32];
+            for _ in 0..rings {
+                let mut next = Vec::new();
+                for &q in &frontier {
+                    for &r in geom.point_neighbours(q as usize) {
+                        if !seen.contains(&r) {
+                            seen.push(r);
+                            next.push(r);
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    break;
+                }
+                frontier = next;
+            }
+            seen.sort_unstable();
+            seen
+        })
+        .collect();
+
+    let mut pos: Vec<Vec3> = (0..n).map(|p| geom.pos(p)).collect();
+    let mut near = Vec::new();
+    for _ in 0..iterations {
+        let grid = crate::spatial::PointGrid::build(&pos, thickness);
+        // Gathered against the positions at the START of the pass and applied
+        // at the end, so the result does not depend on the order points are
+        // visited in — a Gauss-Seidel sweep here would make the same mesh
+        // untangle differently depending on how its points were numbered.
+        let mut push = vec![Vec3::ZERO; n];
+        for p in 0..n {
+            grid.within(pos[p], thickness, &mut near);
+            for &q in &near {
+                let q = q as usize;
+                if q == p || excluded[p].binary_search(&(q as u32)).is_ok() {
+                    continue;
+                }
+                let d = pos[p] - pos[q];
+                let len = d.length();
+                if len >= thickness {
+                    continue;
+                }
+                // Two coincident points have no direction to separate along;
+                // nudging along an arbitrary axis at least breaks the tie.
+                let dir = if len < 1e-9 {
+                    Vec3::new((p % 7) as f32 - 3.0, (p % 5) as f32 - 2.0, 1.0).normalize_or_zero()
+                } else {
+                    d / len
+                };
+                push[p] += dir * ((thickness - len) * 0.5);
+            }
+        }
+        for p in 0..n {
+            if movable[p] {
+                pos[p] += push[p];
+            }
+        }
+    }
+    for (p, v) in pos.iter().enumerate() {
+        geom.set_pos(p, *v);
+    }
+}
+
+/// The Suture node: resolve a surface against another, and fuse what keeps
+/// touching.
+///
+/// Two thresholds, as the plugin has them. A point closer to the `Against`
+/// geometry than Distance Threshold is in contact: it is pushed back out to
+/// that distance, and its contact counter goes up. A point that is NOT in
+/// contact has its counter reset to zero — contact has to be sustained to
+/// count, which is the difference between two surfaces brushing past each
+/// other and two surfaces growing into each other.
+///
+/// Once a point's counter passes Fusion Threshold, it fuses with any other
+/// such point within Distance Threshold: they become one point, keeping the
+/// lower index's identity and values. That is the operation the name is
+/// about — a surface that has been pressed against itself for long enough
+/// stops being two surfaces.
+pub fn resolve_suture_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let against_name = node_param_str(target, "Against", "");
+    let against_name = against_name.trim().to_string();
+    let against = if against_name.is_empty() {
+        None
+    } else {
+        find_node_by_name(root, &against_name)
+            .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+    };
+    apply_suture(&mut geom, against.as_ref(), target);
+    Some(geom)
+}
+
+pub(crate) fn apply_suture(geom: &mut Detail, against: Option<&Detail>, target: &FsNode) {
+    let n = geom.num_points();
+    if n == 0 {
+        return;
+    }
+    let distance = node_param_f32(target, "Distance Threshold", 0.05).max(0.0);
+    let fusion = node_param_f32(target, "Fusion Threshold", 3.0).max(1.0) as i32;
+    let counter = node_param_str(target, "Counter", "contact");
+    let counter = counter.trim().to_string();
+    if counter.is_empty() || distance <= 0.0 {
+        return;
+    }
+
+    // The counter is LIVE: it is the memory that makes sustained contact
+    // different from a brush, and a derivative one would reset every step and
+    // never reach the threshold.
+    geom.points_mut()
+        .get_or_create(&counter, AttribValue::Int(0));
+
+    let mut counts: Vec<i32> = (0..n)
+        .map(|p| geom.points().value(&counter, p).map(|v| v.as_f32() as i32).unwrap_or(0))
+        .collect();
+
+    if let Some(other) = against.filter(|o| o.num_prims() > 0) {
+        let grid = crate::spatial::TriGrid::build(other);
+        for p in 0..n {
+            let here = geom.pos(p);
+            let Some((closest, dist)) = grid.closest(here) else { continue };
+            // Inclusive, with room for the float error: a point resolved to
+            // exactly the threshold last step is STILL in contact this step.
+            // Comparing strictly would have every resolved contact read as
+            // released on the next pass, and no counter could ever reach the
+            // fusion threshold — contact would be unsustainable by
+            // construction.
+            if dist > distance * (1.0 + 1e-3) {
+                counts[p] = 0;
+                continue;
+            }
+            counts[p] += 1;
+            // Pushed back out along the line to the surface. A point sitting
+            // exactly on it has no such line, and is left where it is rather
+            // than shoved in an invented direction.
+            let away = here - closest;
+            if away.length_squared() > 1e-12 {
+                geom.set_pos(p, closest + away.normalize() * distance);
+            }
+        }
+    }
+
+    for p in 0..n {
+        let _ = geom
+            .points_mut()
+            .set_value(&counter, p, AttribValue::Int(counts[p]));
+    }
+
+    // Fuse the sustained contacts that are near each other. Lowest index wins,
+    // so the result does not depend on visit order.
+    let welded: Vec<usize> = (0..n).filter(|&p| counts[p] >= fusion).collect();
+    if welded.len() < 2 {
+        return;
+    }
+    let pos: Vec<Vec3> = welded.iter().map(|&p| geom.pos(p)).collect();
+    let grid = crate::spatial::PointGrid::build(&pos, distance);
+    let mut rep: Vec<u32> = (0..n as u32).collect();
+    let mut near = Vec::new();
+    for (i, &p) in welded.iter().enumerate() {
+        grid.within(pos[i], distance, &mut near);
+        for &j in &near {
+            let q = welded[j as usize];
+            if q > p {
+                // Only ever point a higher index at a lower one, so the map
+                // cannot contain a cycle.
+                rep[q] = rep[q].min(p as u32);
+            }
+        }
+    }
+    geom.fuse_points(&rep);
+}
+
 /// The Remesh node: keep the triangulation proportional to the surface.
 ///
 /// The counterweight to Develop. Growth pushes points apart and the triangles
@@ -1327,6 +1579,7 @@ pub(crate) fn remesh_settings(target: &FsNode) -> crate::remesh::Settings {
         split: node_param_str(target, "Split", "true") == "true",
         collapse: node_param_str(target, "Collapse", "true") == "true",
         flip: node_param_str(target, "Flip", "true") == "true",
+        project: node_param_str(target, "Project", "true") == "true",
     }
 }
 
@@ -3684,6 +3937,8 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "visualize"
         || nt == "develop"
         || nt == "remesh"
+        || nt == "suture"
+        || nt == "detangle"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -3828,6 +4083,24 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_time_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("detangle") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_detangle_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("suture") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_suture_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }

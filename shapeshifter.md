@@ -231,9 +231,21 @@ Touches: `geometry.rs`, `app.rs`, `render.rs`, `playbar.rs`.
 > sides, so nothing looked wrong. Develop is the first operator whose answer
 > depends on it, and it grew the surface inward.
 >
-> Outstanding: `adapt`, `open`, and collision (`detangle`, `suture`) — which
-> want the spatial index the remesher's missing surface-projection pass also
-> needs.
+> Collision is in. `detangle` is a point repulsion over Iterations passes with
+> Thickness in edge lengths and a Rings exclusion — the audit's own
+> description of the Shapeshifter algorithm. `suture` resolves against a second
+> input, counts SUSTAINED contact, and fuses points past Fusion Threshold
+> within Distance Threshold. Both, and the remesher's projection pass, run on
+> `src/spatial.rs` — a uniform grid built once for all three.
+>
+> **`adapt` and `open` are not ported and should not be guessed at.**
+> `developer_surface_adapt` has eight read parameters and no description
+> anywhere; `developer_surface_open` has none at all. Unlike Charge, whose
+> parameter names carried a reading, these carry nothing. Say what they do and
+> they are a short job each.
+>
+> Remaining: `subdivide`, which is the one documented Surface operator still
+> missing and is the easy one.
 
 `Develop` is easy — displace along the normal by a development attribute.
 **Remesh is the hard one**, and it is load-bearing: without topology that keeps

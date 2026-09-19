@@ -1334,6 +1334,69 @@ impl Detail {
         self.invalidate();
     }
 
+    /// Merge points onto representatives: point `p` becomes `rep[p]`.
+    ///
+    /// A representative keeps its identity and its values — the same choice
+    /// the remesher's collapse makes, and for the same reason: one of the two
+    /// is a point the solver has been writing to, and the merge should cost
+    /// the simulation as little memory as it can. Primitives are rewired, and
+    /// one left with a repeated corner is dropped, because a triangle with two
+    /// corners in the same place is not a triangle.
+    ///
+    /// Chains are followed, so `rep` need not already be flat: a fuse that
+    /// pointed a at b and b at c leaves everything at c.
+    pub fn fuse_points(&mut self, rep: &[u32]) {
+        let n = self.num_points();
+        let root = |mut p: u32| {
+            // Bounded rather than trusting the map to be acyclic: a cycle in a
+            // caller's representative map would otherwise hang the app.
+            for _ in 0..n {
+                let next = rep.get(p as usize).copied().unwrap_or(p);
+                if next == p {
+                    break;
+                }
+                p = next;
+            }
+            p
+        };
+        for v in self.vert_point.iter_mut() {
+            *v = root(*v);
+        }
+
+        // A primitive whose corners collapsed onto each other is not a
+        // primitive any more. Dropped here rather than left for the point
+        // compaction, which only knows about points that went away — these
+        // ones all still exist, they have just stopped being distinct.
+        let mut vert_point = Vec::with_capacity(self.vert_point.len());
+        let mut prim_start = vec![0u32];
+        let mut kept_prims: Vec<u32> = Vec::new();
+        let mut kept_verts: Vec<u32> = Vec::new();
+        for prim in 0..self.num_prims() {
+            let range = self.prim_verts(prim);
+            let pts = &self.vert_point[range.clone()];
+            let mut uniq = pts.to_vec();
+            uniq.sort_unstable();
+            uniq.dedup();
+            if uniq.len() < pts.len() || uniq.len() < 3 {
+                continue;
+            }
+            for v in range {
+                kept_verts.push(v as u32);
+                vert_point.push(self.vert_point[v]);
+            }
+            prim_start.push(vert_point.len() as u32);
+            kept_prims.push(prim as u32);
+        }
+        self.verts = self.verts.gather(&kept_verts);
+        self.prims = self.prims.gather(&kept_prims);
+        self.vert_point = vert_point;
+        self.prim_start = prim_start;
+
+        let keep: Vec<bool> = (0..n).map(|p| root(p as u32) as usize == p).collect();
+        self.invalidate();
+        self.keep_points(&keep);
+    }
+
     /// Keep the points `keep` marks true, dropping the rest.
     pub fn keep_points(&mut self, keep: &[bool]) {
         let idx: Vec<u32> = (0..self.num_points() as u32)

@@ -4,6 +4,7 @@ pub mod application;
 pub mod curve_tool;
 pub mod detail;
 pub mod remesh;
+pub mod spatial;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
@@ -3594,6 +3595,267 @@ mod tests {
         // Topology is remesh's business: Develop moves points and nothing else.
         assert_eq!(out.num_prims(), sphere.num_prims());
         assert_eq!(out.ids(), sphere.ids());
+    }
+
+    fn phase3_node(ty: &str, params: &[(&str, &str)]) -> FsNode {
+        FsNode {
+            id: format!("id-{ty}"),
+            name: format!("{ty} 1"),
+            node_type: ty.into(),
+            children: vec![],
+            params: params
+                .iter()
+                .map(|(name, default)| crate::app::ParamDef {
+                    name: (*name).into(),
+                    label: String::new(),
+                    param_type: "text".into(),
+                    default: (*default).into(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                })
+                .collect(),
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        }
+    }
+
+    #[test]
+    fn test_the_projection_pass_stops_a_remeshed_surface_creeping() {
+        use crate::spatial::TriGrid;
+        // Tangential relaxation slides points within the surface, but "within"
+        // is only true to first order: on anything curved the slide leaves the
+        // surface a little, and the error compounds.
+        //
+        // Measured as distance from the INPUT SURFACE, not as radius. The
+        // projection holds points on the mesh it was given — which is a
+        // faceted sphere, whose edge midpoints are legitimately inside the
+        // ideal one. Radius would be measuring the discretization, not the
+        // drift.
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 10, 14);
+        let rest = TriGrid::build(&sphere);
+        let drift = |d: &Detail| {
+            (0..d.num_points())
+                .filter_map(|p| rest.closest(d.pos(p)).map(|(_, dist)| dist))
+                .sum::<f32>()
+                / d.num_points() as f32
+        };
+
+        let cfg = |project| Settings {
+            target: 0.25,
+            iterations: 16,
+            relax: 1.0,
+            project,
+            ..Default::default()
+        };
+        let drifted = remesh(&sphere, cfg(false));
+        let held = remesh(&sphere, cfg(true));
+
+        assert!(drift(&drifted) > 1e-3, "relaxation did not drift at all: {}", drift(&drifted));
+        assert!(
+            drift(&held) < drift(&drifted) / 4.0,
+            "projection barely helped: {} vs {}",
+            drift(&held),
+            drift(&drifted)
+        );
+        assert!(drift(&held) < 1e-4, "projected points are off the surface: {}", drift(&held));
+    }
+
+    #[test]
+    fn test_the_tri_grid_finds_the_nearest_surface_point() {
+        use crate::spatial::TriGrid;
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+        let grid = TriGrid::build(&sphere);
+
+        // A point well outside: the closest surface point is along the ray to
+        // the centre, at about the radius.
+        let (q, d) = grid.closest(Vec3::new(3.0, 0.0, 0.0)).unwrap();
+        assert!((d - 2.0).abs() < 0.05, "distance {d}");
+        assert!(q.x > 0.9 && q.y.abs() < 0.2 && q.z.abs() < 0.2, "{q:?}");
+
+        // A point ON the surface finds itself.
+        let on = sphere.pos(20);
+        let (_, d) = grid.closest(on).unwrap();
+        assert!(d < 1e-3, "a point on the surface is {d} from it");
+
+        // The centre is a radius from everywhere, and the search still
+        // terminates — the expanding box has to grow several times to find
+        // anything at all.
+        let (_, d) = grid.closest(Vec3::ZERO).unwrap();
+        assert!((d - 1.0).abs() < 0.05, "from the centre: {d}");
+
+        assert!(TriGrid::build(&Detail::new()).closest(Vec3::ZERO).is_none());
+    }
+
+    #[test]
+    fn test_detangle_separates_what_is_near_in_space_but_far_across_the_surface() {
+        // Two sheets pressed closer together than the thickness. They share no
+        // topology, so every pair between them is a self-intersection in
+        // waiting; within each sheet, neighbours are closer than the thickness
+        // by construction and must NOT be pushed apart.
+        let mut d = Detail::new();
+        let step = 0.25;
+        let gap = 0.05;
+        let mut rows = Vec::new();
+        for sheet in 0..2 {
+            let mut row = Vec::new();
+            for i in 0..4 {
+                for j in 0..4 {
+                    row.push(d.add_point(Vec3::new(
+                        i as f32 * step,
+                        sheet as f32 * gap,
+                        j as f32 * step,
+                    )));
+                }
+            }
+            rows.push(row);
+        }
+        for sheet in 0..2 {
+            for i in 0..3 {
+                for j in 0..3 {
+                    let at = |a: usize, b: usize| rows[sheet][a * 4 + b];
+                    d.add_prim(&[at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+                    d.add_prim(&[at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+                }
+            }
+        }
+        let before_gap = d.pos(16).y - d.pos(0).y;
+        assert!((before_gap - gap).abs() < 1e-6);
+        let before_edge = (d.pos(1) - d.pos(0)).length();
+
+        let node = phase3_node(
+            "detangle",
+            &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "6")],
+        );
+        crate::geometry::apply_detangle(&mut d, &node);
+
+        // The sheets moved apart.
+        let after_gap = d.pos(16).y - d.pos(0).y;
+        assert!(after_gap > before_gap * 2.0, "sheets did not separate: {after_gap}");
+        // But the mesh did not explode: points that are neighbours ACROSS the
+        // surface are within a thickness of each other by construction, and a
+        // repulsion that did not exclude them would blow every sheet apart
+        // from the inside.
+        let after_edge = (d.pos(1) - d.pos(0)).length();
+        assert!(
+            (after_edge / before_edge - 1.0).abs() < 0.35,
+            "the sheet stretched from {before_edge} to {after_edge}"
+        );
+    }
+
+    #[test]
+    fn test_detangle_is_independent_of_point_order() {
+        // Gathered against the start-of-pass positions and applied at the end,
+        // so the same tangle untangles the same way however its points are
+        // numbered. A Gauss-Seidel sweep would not.
+        let mut a = sphere_detail(Vec3::ZERO, 0.5, 6, 8);
+        let node = phase3_node("detangle", &[("Thickness", "2.00"), ("Rings", "1"), ("Iterations", "3")]);
+        let mut b = a.clone();
+        crate::geometry::apply_detangle(&mut a, &node);
+        crate::geometry::apply_detangle(&mut b, &node);
+        assert_eq!(a.positions(), b.positions());
+    }
+
+    #[test]
+    fn test_suture_counts_sustained_contact_before_it_fuses() {
+        // A grid sitting just above a collider it is in contact with.
+        let collider = {
+            let mut c = Detail::new();
+            let pts: Vec<u32> = [
+                Vec3::new(-1.0, 0.0, -1.0),
+                Vec3::new(1.0, 0.0, -1.0),
+                Vec3::new(1.0, 0.0, 1.0),
+                Vec3::new(-1.0, 0.0, 1.0),
+            ]
+            .iter()
+            .map(|&p| c.add_point(p))
+            .collect();
+            c.add_prim(&[pts[0], pts[1], pts[2]]);
+            c.add_prim(&[pts[0], pts[2], pts[3]]);
+            c
+        };
+        let mut sheet = Detail::new();
+        for i in 0..3 {
+            sheet.add_point(Vec3::new(i as f32 * 0.02, 0.01, 0.0));
+        }
+        sheet.add_point(Vec3::new(0.0, 5.0, 0.0)); // far away, never in contact
+
+        let node = phase3_node(
+            "suture",
+            &[("Distance Threshold", "0.10"), ("Fusion Threshold", "3"), ("Counter", "contact")],
+        );
+        let count = |d: &Detail, p: usize| d.points().value("contact", p).unwrap().as_f32() as i32;
+
+        // Contact accrues, and the contacting points are pushed out to the
+        // threshold.
+        crate::geometry::apply_suture(&mut sheet, Some(&collider), &node);
+        assert_eq!(count(&sheet, 0), 1);
+        assert!((sheet.pos(0).y - 0.10).abs() < 1e-3, "not pushed out: {}", sheet.pos(0).y);
+        // A point out of contact stays at zero — contact has to be SUSTAINED
+        // to count, which is the difference between brushing past and growing
+        // together.
+        assert_eq!(count(&sheet, 3), 0);
+
+        crate::geometry::apply_suture(&mut sheet, Some(&collider), &node);
+        assert_eq!(count(&sheet, 0), 2);
+        assert_eq!(sheet.num_points(), 4, "nothing fuses below the threshold");
+
+        // The third crossing takes them past Fusion Threshold, and the three
+        // contacting points — all within Distance Threshold of each other —
+        // become one. The far point is untouched.
+        crate::geometry::apply_suture(&mut sheet, Some(&collider), &node);
+        assert_eq!(sheet.num_points(), 2, "sustained contact did not fuse");
+    }
+
+    #[test]
+    fn test_suture_without_a_collider_changes_nothing_but_the_counter() {
+        let mut sheet = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        let before = sheet.positions().to_vec();
+        let node = phase3_node("suture", &[("Distance Threshold", "0.10"), ("Counter", "contact")]);
+        crate::geometry::apply_suture(&mut sheet, None, &node);
+        assert_eq!(sheet.positions(), &before[..]);
+        // The counter exists so the chain downstream can read it either way.
+        assert!(sheet.points().has("contact"));
+        assert_eq!(sheet.points().kind("contact"), AttribKind::Live);
+    }
+
+    #[test]
+    fn test_fusing_points_keeps_the_representative_and_drops_folded_faces() {
+        let mut d = quad_grid();
+        let keep_id = d.id(0).unwrap();
+        d.points_mut().create("mass", AttribValue::Float(0.0));
+        d.points_mut().set_value("mass", 0, AttribValue::Float(7.0)).unwrap();
+        d.points_mut().set_value("mass", 1, AttribValue::Float(9.0)).unwrap();
+
+        // Point 1 merges onto point 0.
+        let mut rep: Vec<u32> = (0..9).collect();
+        rep[1] = 0;
+        d.fuse_points(&rep);
+
+        assert_eq!(d.num_points(), 8);
+        // The representative keeps its identity AND its values — the same
+        // choice the remesher's collapse makes, and for the same reason.
+        assert_eq!(d.id(0), Some(keep_id));
+        assert_eq!(d.points().value("mass", 0), Some(AttribValue::Float(7.0)));
+        // Every surviving primitive is still a real triangle or quad; the ones
+        // that ended up with a repeated corner are gone.
+        for prim in 0..d.num_prims() {
+            let pts = d.prim_points(prim);
+            let mut uniq = pts.to_vec();
+            uniq.sort_unstable();
+            uniq.dedup();
+            assert_eq!(uniq.len(), pts.len(), "prim {prim} folded onto itself");
+        }
+        // A chain resolves: a→b→c leaves everything at c.
+        let mut e = quad_grid();
+        let mut chain: Vec<u32> = (0..9).collect();
+        chain[2] = 1;
+        chain[1] = 0;
+        e.fuse_points(&chain);
+        assert_eq!(e.num_points(), 7);
     }
 
     // ---- Phase 2: the solver contract ----

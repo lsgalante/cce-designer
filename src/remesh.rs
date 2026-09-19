@@ -34,11 +34,11 @@
 //!   memory as it can.
 //! - A **flip** and a **relax** change no attributes at all.
 //!
-//! What it does NOT do is project back onto the input surface, which the
-//! paper's fifth pass does. Tangential relaxation alone lets a surface creep
-//! slightly over many iterations; the projection needs a spatial index over the
-//! original triangles, which is the same index Detangle and Suture will want,
-//! and is better built once for all three.
+//! The paper's fifth pass is here too: after relaxing, every point is pulled
+//! back onto the surface the remesh started from. Tangential relaxation alone
+//! lets a surface creep — each point slides a little, and over a few dozen
+//! iterations a sphere quietly shrinks — so the projection is what makes it
+//! safe to run a remesh every frame of a solve, which is the whole point.
 
 use crate::detail::{AttribData, AttribValue, Detail, PointId};
 use glam::Vec3;
@@ -56,11 +56,21 @@ pub struct Settings {
     pub split: bool,
     pub collapse: bool,
     pub flip: bool,
+    /// Pull relaxed points back onto the input surface.
+    pub project: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { target: 0.1, iterations: 3, relax: 0.5, split: true, collapse: true, flip: true }
+        Self {
+            target: 0.1,
+            iterations: 3,
+            relax: 0.5,
+            split: true,
+            collapse: true,
+            flip: true,
+            project: true,
+        }
     }
 }
 
@@ -559,11 +569,36 @@ fn relax_pass(m: &mut Mesh, amount: f32) {
     }
 }
 
+/// Pull every point back onto the surface the remesh started from.
+///
+/// Relaxation slides points within the surface, but "within" is only true to
+/// first order: on anything curved the slide leaves the surface slightly, and
+/// the error compounds. Without this a sphere remeshed for fifty iterations is
+/// visibly smaller than the one it started as.
+fn project_pass(m: &mut Mesh, rest: &crate::spatial::TriGrid) {
+    if rest.is_empty() {
+        return;
+    }
+    for p in 0..m.pos.len() {
+        if m.dead_point[p] {
+            continue;
+        }
+        if let Some((q, _)) = rest.closest(m.pos[p]) {
+            m.pos[p] = q;
+        }
+    }
+}
+
 /// Remesh toward `settings.target` edge length.
 pub fn remesh(input: &Detail, settings: Settings) -> Detail {
     if input.num_prims() == 0 || settings.target <= 0.0 {
         return input.clone();
     }
+    // Built once from the INPUT and reused by every iteration: projecting onto
+    // the previous iteration's surface would chase the creep rather than
+    // correct it, since each iteration's drift would become the next one's
+    // idea of where the surface is.
+    let rest = settings.project.then(|| crate::spatial::TriGrid::build(input));
     let mut m = Mesh::from_detail(input);
     for _ in 0..settings.iterations.min(20) {
         if settings.split {
@@ -576,6 +611,9 @@ pub fn remesh(input: &Detail, settings: Settings) -> Detail {
             flip_pass(&mut m);
         }
         relax_pass(&mut m, settings.relax.clamp(0.0, 1.0));
+        if let Some(rest) = &rest {
+            project_pass(&mut m, rest);
+        }
     }
     m.into_detail()
 }
