@@ -189,7 +189,12 @@ Touches: `geometry.rs`, `kernel_cpu.rs`, `nodes/*.json`.
 > Composite — covers the same ground however finely the frame is cut, which is
 > what makes substeps a stability control rather than a speed control.
 >
-> Outstanding: an explicit seed frame, and a disk cache.
+> A simnet can declare its own Start Frame (empty follows the timeline), and
+> opt into a disk cache — the solved state parked under `$XDG_CACHE_HOME`, in a
+> compact binary form `Detail` reads and writes itself, keyed by the same hash
+> that invalidates the in-memory cache.
+>
+> Phase 2 is done.
 
 `simnet` is already the Developer Solver — feedback stack, per-node cache keyed
 on the subtree, restart on edit, one step per played frame. What it lacks is a

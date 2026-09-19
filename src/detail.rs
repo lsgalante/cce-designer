@@ -665,6 +665,157 @@ impl AttribStore {
     }
 }
 
+const DETAIL_MAGIC: &[u8; 8] = b"CCEDTL01";
+
+fn put_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+fn put_u64(out: &mut Vec<u8>, v: u64) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+fn put_str(out: &mut Vec<u8>, s: &str) {
+    put_u32(out, s.len() as u32);
+    out.extend_from_slice(s.as_bytes());
+}
+
+/// A bounds-checked cursor over a blob. Every read either yields the bytes it
+/// promised or fails; nothing here can index past the buffer.
+struct Reader<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+        let end = self.at.checked_add(n).ok_or("length overflow")?;
+        let slice = self.b.get(self.at..end).ok_or("unexpected end of blob")?;
+        self.at = end;
+        Ok(slice)
+    }
+    fn u32(&mut self) -> Result<u32, String> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn u64(&mut self) -> Result<u64, String> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+    fn f32(&mut self) -> Result<f32, String> {
+        Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn i32(&mut self) -> Result<i32, String> {
+        Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn str(&mut self) -> Result<String, String> {
+        let n = self.u32()? as usize;
+        let bytes = self.take(n)?;
+        String::from_utf8(bytes.to_vec()).map_err(|_| "attribute name is not UTF-8".to_string())
+    }
+}
+
+impl AttribStore {
+    fn write_into(&self, out: &mut Vec<u8>) {
+        put_u32(out, self.len as u32);
+        let names = self.names();
+        put_u32(out, names.len() as u32);
+        for name in names {
+            let data = &self.attribs[name];
+            put_str(out, name);
+            out.push(match data.ty() {
+                AttribType::Float => 0,
+                AttribType::Float2 => 1,
+                AttribType::Float3 => 2,
+                AttribType::Float4 => 3,
+                AttribType::Int => 4,
+            });
+            out.push(match self.kind(name) {
+                AttribKind::Live => 0,
+                AttribKind::Derivative => 1,
+            });
+            match data {
+                AttribData::Float(v) => out.extend(v.iter().flat_map(|x| x.to_le_bytes())),
+                AttribData::Float2(v) => {
+                    out.extend(v.iter().flatten().flat_map(|x| x.to_le_bytes()))
+                }
+                AttribData::Float3(v) => {
+                    out.extend(v.iter().flatten().flat_map(|x| x.to_le_bytes()))
+                }
+                AttribData::Float4(v) => {
+                    out.extend(v.iter().flatten().flat_map(|x| x.to_le_bytes()))
+                }
+                AttribData::Int(v) => out.extend(v.iter().flat_map(|x| x.to_le_bytes())),
+            }
+        }
+        let groups = self.group_names();
+        put_u32(out, groups.len() as u32);
+        for name in groups {
+            put_str(out, name);
+            out.extend(self.groups[name].iter().map(|&m| m as u8));
+        }
+    }
+
+    fn read_from(r: &mut Reader) -> Result<AttribStore, String> {
+        let len = r.u32()? as usize;
+        let mut store = AttribStore::with_len(len);
+        let n_attrs = r.u32()? as usize;
+        for _ in 0..n_attrs {
+            let name = r.str()?;
+            let ty = match r.take(1)?[0] {
+                0 => AttribType::Float,
+                1 => AttribType::Float2,
+                2 => AttribType::Float3,
+                3 => AttribType::Float4,
+                4 => AttribType::Int,
+                other => return Err(format!("unknown attribute type {other}")),
+            };
+            let kind = match r.take(1)?[0] {
+                0 => AttribKind::Live,
+                1 => AttribKind::Derivative,
+                other => return Err(format!("unknown attribute kind {other}")),
+            };
+            let data = match ty {
+                AttribType::Int => {
+                    let mut v = Vec::with_capacity(len.min(1 << 20));
+                    for _ in 0..len {
+                        v.push(r.i32()?);
+                    }
+                    AttribData::Int(v)
+                }
+                _ => {
+                    let k = ty.components();
+                    let mut flat = Vec::with_capacity((len * k).min(1 << 22));
+                    for _ in 0..len * k {
+                        flat.push(r.f32()?);
+                    }
+                    match ty {
+                        AttribType::Float => AttribData::Float(flat),
+                        AttribType::Float2 => {
+                            AttribData::Float2(flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect())
+                        }
+                        AttribType::Float3 => AttribData::Float3(
+                            flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+                        ),
+                        _ => AttribData::Float4(
+                            flat.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
+                        ),
+                    }
+                }
+            };
+            store.attribs.insert(name.clone(), data);
+            if kind != AttribKind::Live {
+                store.kinds.insert(name, kind);
+            }
+        }
+        let n_groups = r.u32()? as usize;
+        for _ in 0..n_groups {
+            let name = r.str()?;
+            let bits = r.take(len)?;
+            store.groups.insert(name, bits.iter().map(|&b| b != 0).collect());
+        }
+        Ok(store)
+    }
+}
+
 fn append_data(lhs: &mut AttribData, rhs: &AttribData) {
     match (lhs, rhs) {
         (AttribData::Float(a), AttribData::Float(b)) => a.extend_from_slice(b),
@@ -1284,6 +1435,103 @@ impl Detail {
             let _ = self.points.insert(name, data);
             self.points.set_kind(name, AttribKind::Live);
         }
+    }
+
+    /// Serialize to a compact binary blob.
+    ///
+    /// Hand-rolled rather than derived, because the one thing a cache is for is
+    /// being cheaper than recomputing: a hundred thousand points of JSON text
+    /// is not. Positions and attribute arrays go out as raw little-endian
+    /// floats, which is also how they sit in memory.
+    ///
+    /// The derived topology is NOT written — it is rebuilt from the primitives
+    /// on read, and storing it would mean a file that can disagree with itself.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(DETAIL_MAGIC);
+        put_u32(&mut out, self.pos.len() as u32);
+        put_u64(&mut out, self.next_id);
+        for p in &self.pos {
+            for c in p {
+                out.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        for id in &self.ids {
+            put_u64(&mut out, *id);
+        }
+        put_u32(&mut out, self.vert_point.len() as u32);
+        for v in &self.vert_point {
+            put_u32(&mut out, *v);
+        }
+        put_u32(&mut out, self.prim_start.len() as u32);
+        for v in &self.prim_start {
+            put_u32(&mut out, *v);
+        }
+        for store in [&self.points, &self.verts, &self.prims, &self.detail] {
+            store.write_into(&mut out);
+        }
+        out
+    }
+
+    /// Read back a blob written by [`Detail::to_bytes`].
+    ///
+    /// Every length is checked against what is actually left in the buffer, so
+    /// a truncated or corrupt cache file is an error rather than a huge
+    /// allocation or a panic. A cache lives in a directory anything can write
+    /// to, and must never be trusted the way a value from memory is.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Detail, String> {
+        let mut r = Reader { b: bytes, at: 0 };
+        if r.take(DETAIL_MAGIC.len())? != DETAIL_MAGIC {
+            return Err("not a Detail blob".into());
+        }
+        let num_points = r.u32()? as usize;
+        let next_id = r.u64()?;
+        let mut pos = Vec::with_capacity(num_points.min(1 << 20));
+        for _ in 0..num_points {
+            pos.push([r.f32()?, r.f32()?, r.f32()?]);
+        }
+        let mut ids = Vec::with_capacity(pos.len());
+        for _ in 0..num_points {
+            ids.push(r.u64()?);
+        }
+        let nv = r.u32()? as usize;
+        let mut vert_point = Vec::with_capacity(nv.min(1 << 20));
+        for _ in 0..nv {
+            vert_point.push(r.u32()?);
+        }
+        let ns = r.u32()? as usize;
+        let mut prim_start = Vec::with_capacity(ns.min(1 << 20));
+        for _ in 0..ns {
+            prim_start.push(r.u32()?);
+        }
+        if prim_start.is_empty() {
+            return Err("primitive offsets are missing their terminator".into());
+        }
+        let points = AttribStore::read_from(&mut r)?;
+        let verts = AttribStore::read_from(&mut r)?;
+        let prims = AttribStore::read_from(&mut r)?;
+        let detail = AttribStore::read_from(&mut r)?;
+
+        // Cross-checks, because every reader below indexes on these being
+        // consistent and a corrupt file must not reach that code.
+        if points.len() != num_points || verts.len() != nv || prims.len() != ns - 1 {
+            return Err("element counts disagree with their attribute stores".into());
+        }
+        if vert_point.iter().any(|&p| p as usize >= num_points.max(1)) && num_points > 0 {
+            return Err("a vertex references a point that is not there".into());
+        }
+        Ok(Detail {
+            pos,
+            ids,
+            next_id,
+            points,
+            vert_point,
+            verts,
+            prim_start,
+            prims,
+            detail,
+            topo: OnceLock::new(),
+        })
     }
 
     /// Weld a triangle soup into points and triangles: coincident positions

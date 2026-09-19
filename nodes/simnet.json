@@ -16,6 +16,16 @@
       "min": 1.0,
       "max": 64.0,
       "step": 1.0
+    },
+    {
+      "name": "Start Frame",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "name": "Cache",
+      "type": "choice:false,true",
+      "default": "false"
     }
   ],
   "children": [

@@ -640,12 +640,6 @@ impl<'a> EvalSim<'a> {
         Self { frame, start_frame, cache, feedback: Vec::new() }
     }
 
-    /// Steps the sim owes at the frame being evaluated. Scrubbing before the
-    /// start frame is not negative time — it is simply the seed.
-    fn steps_due(&self) -> i32 {
-        (self.frame - self.start_frame).max(0)
-    }
-
     /// The state an `input` node should yield, if its parent simnet is mid-solve.
     fn feedback_for(&self, simnet_id: &str) -> Option<&Detail> {
         self.feedback
@@ -3403,7 +3397,7 @@ fn run_deformer_flat(
         param_data.push(0.0);
     }
 
-    let mut make = |data: &[cl_float]| -> Result<ClBuffer<cl_float>, String> {
+    let make = |data: &[cl_float]| -> Result<ClBuffer<cl_float>, String> {
         let mut buf = unsafe {
             ClBuffer::<cl_float>::create(context, CL_MEM_READ_WRITE, data.len().max(1), std::ptr::null_mut())
                 .map_err(|e| format!("Failed to create buffer: {:?}", e))?
@@ -3418,7 +3412,7 @@ fn run_deformer_flat(
 
     let mut pos_buf = make(pos)?;
     let mut col_buf = make(col)?;
-    let mut param_buf = make(&param_data)?;
+    let param_buf = make(&param_data)?;
     let mut attr_bufs: Vec<ClBuffer<cl_float>> = Vec::with_capacity(attrs.len());
     for (_, data) in attrs.iter() {
         attr_bufs.push(make(data)?);
@@ -4983,14 +4977,27 @@ pub fn resolve_simnet_geometry_with_errors(
     };
 
     let key = sim_solve_key(target, &seed);
-    let due = sim.steps_due();
+    // The frame this sim shows its seed at. Empty means "follow the timeline",
+    // which is what every sim did before this parameter existed; a number
+    // decouples when a simulation starts from when the shot does, so two sims
+    // in one scene can begin at different times.
+    let start_frame = node_param_f32(target, "Start Frame", sim.start_frame as f32).round() as i32;
+    let due = (sim.frame - start_frame).max(0);
 
     // Resume from the cached solve when it is still valid and has not run PAST
     // the frame asked for; scrubbing backwards has to restart from the seed,
-    // because a step is not invertible.
-    let (mut state, mut done) = match sim.cache.entries.get(&target.id) {
-        Some(prev) if prev.key == key && prev.frame <= due => (prev.state.clone(), prev.frame),
-        _ => (seed, 0),
+    // because a step is not invertible. Memory first, then disk.
+    let cached = sim.cache.entries.get(&target.id).and_then(|prev| {
+        (prev.key == key && prev.frame <= due).then(|| (prev.state.clone(), prev.frame))
+    });
+    let caching = node_param_str(target, "Cache", "false") == "true";
+    let (mut state, mut done) = match cached {
+        Some(hit) => hit,
+        None if caching => match read_sim_cache(&target.id, key, due) {
+            Some(hit) => hit,
+            None => (seed, 0),
+        },
+        None => (seed, 0),
     };
 
     // Substeps run the chain more than once per frame. A step's size is what
@@ -5048,7 +5055,75 @@ pub fn resolve_simnet_geometry_with_errors(
         target.id.clone(),
         SimSolve { key, frame: due, state: state.clone() },
     );
+    if caching && due > 0 {
+        write_sim_cache(&target.id, key, due, &state);
+    }
     Some(state)
+}
+
+/// Where a simnet's solved state is parked between runs.
+///
+/// Under the cache directory, not the project: it is derived data that can be
+/// recomputed, and a project directory that silently grew hundreds of
+/// megabytes of solver state would be a nasty surprise to copy or back up.
+fn sim_cache_path(node_id: &str) -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))?;
+    // The id is a node id, not a filename, so anything that could climb out of
+    // the directory is replaced rather than trusted.
+    let safe: String = node_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    Some(base.join("cce/cce-designer/sim").join(format!("{safe}.simcache")))
+}
+
+/// The header in front of a cached state: which solve it belongs to and which
+/// frame it stopped at. Both are checked before the geometry is trusted — a
+/// cache from a different chain is worse than no cache, because it looks like
+/// an answer.
+fn write_sim_cache(node_id: &str, key: u64, frame: i32, state: &Detail) {
+    let Some(path) = sim_cache_path(node_id) else { return };
+    write_sim_cache_at(&path, key, frame, state);
+}
+
+/// [`write_sim_cache`] against a given path, so the format can be exercised
+/// without a process-wide environment variable.
+fn write_sim_cache_at(path: &std::path::Path, key: u64, frame: i32, state: &Detail) {
+    let Some(dir) = path.parent() else { return };
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&key.to_le_bytes());
+    blob.extend_from_slice(&frame.to_le_bytes());
+    blob.extend_from_slice(&state.to_bytes());
+    // Written beside the target and renamed, so a cache half-written when the
+    // app dies is never read as a whole one.
+    let tmp = path.with_extension("simcache.tmp");
+    if std::fs::write(&tmp, &blob).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// A cached state for this solve, if one is on disk and has not run past the
+/// frame being asked for. Any failure — missing, truncated, stale, corrupt —
+/// reads as "no cache" and the sim solves from its seed.
+fn read_sim_cache(node_id: &str, key: u64, due: i32) -> Option<(Detail, i32)> {
+    read_sim_cache_at(&sim_cache_path(node_id)?, key, due)
+}
+
+fn read_sim_cache_at(path: &std::path::Path, key: u64, due: i32) -> Option<(Detail, i32)> {
+    let blob = std::fs::read(path).ok()?;
+    if blob.len() < 12 || u64::from_le_bytes(blob[0..8].try_into().ok()?) != key {
+        return None;
+    }
+    let frame = i32::from_le_bytes(blob[8..12].try_into().ok()?);
+    if frame < 0 || frame > due {
+        return None;
+    }
+    Detail::from_bytes(&blob[12..]).ok().map(|d| (d, frame))
 }
 
 /// Does this graph contain a simnet anywhere? The frame-change invalidation asks
@@ -6245,6 +6320,138 @@ mod simnet_tests {
             node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]),
         ];
         root
+    }
+
+    #[test]
+    fn test_a_simnet_can_start_later_than_the_timeline() {
+        let with_start = |start: &str| {
+            let mut root = substep_graph("1");
+            let sim = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
+            sim.params.push(param("Start Frame", start));
+            root
+        };
+        let acc = |root: &FsNode, frame: i32| -> f32 {
+            solve_at(root, frame).points().value("acc", 0).unwrap().as_f32()
+        };
+
+        // Empty follows the timeline, which is what every sim did before this
+        // parameter existed.
+        assert_eq!(acc(&with_start(""), 4), 3.0);
+
+        // A number decouples when the simulation starts from when the shot
+        // does, so two sims in one scene can begin at different times.
+        let late = with_start("5");
+        assert_eq!(acc(&late, 5), 0.0, "its own start frame is its seed");
+        assert_eq!(acc(&late, 8), 3.0);
+        // Before it starts is not negative time, exactly as before the
+        // timeline's start was not.
+        assert_eq!(acc(&late, 2), 0.0);
+    }
+
+    #[test]
+    fn test_a_detail_round_trips_through_its_binary_form() {
+        let mut d = sphere_detail(Vec3::new(0.1, 0.2, 0.3), 0.7, 4, 6);
+        d.points_mut().create("mass", AttribValue::Float(0.0));
+        for p in 0..d.num_points() {
+            d.points_mut().set_value("mass", p, AttribValue::Float(p as f32 * 0.25)).unwrap();
+        }
+        d.points_mut().create_kind("scratch", AttribValue::Int(3), crate::detail::AttribKind::Derivative);
+        d.points_mut().create_group("pinned");
+        d.points_mut().add_to_group("pinned", 2);
+        d.prims_mut().create("area", AttribValue::Float(1.5));
+        d.detail_mut().create("dt", AttribValue::Float(0.25));
+        d.verts_mut().create("uv", AttribValue::Float2([0.5, 0.25]));
+
+        let blob = d.to_bytes();
+        let back = Detail::from_bytes(&blob).expect("round trip");
+
+        assert_eq!(back.num_points(), d.num_points());
+        assert_eq!(back.num_prims(), d.num_prims());
+        assert_eq!(back.num_verts(), d.num_verts());
+        assert_eq!(back.positions(), d.positions());
+        // Identity is the whole reason a solver state is worth storing: a
+        // resumed sim that renumbered its points would be a different sim.
+        assert_eq!(back.ids(), d.ids());
+        assert_eq!(back.points().value("mass", 5), d.points().value("mass", 5));
+        assert_eq!(back.points().value("scratch", 0), Some(AttribValue::Int(3)));
+        assert_eq!(back.points().kind("scratch"), crate::detail::AttribKind::Derivative);
+        assert_eq!(back.points().kind("mass"), crate::detail::AttribKind::Live);
+        assert_eq!(back.points().group_members("pinned"), vec![2]);
+        assert_eq!(back.prims().value("area", 0), Some(AttribValue::Float(1.5)));
+        assert_eq!(back.detail().value("dt", 0), Some(AttribValue::Float(0.25)));
+        assert_eq!(back.verts().value("uv", 0), Some(AttribValue::Float2([0.5, 0.25])));
+        // Topology is rebuilt rather than stored, so it cannot disagree with
+        // the primitives it came from.
+        assert_eq!(back.edges(), d.edges());
+
+        // A point added after a resume must not reuse an identity.
+        let mut back = back;
+        let fresh = back.add_point(Vec3::ZERO);
+        assert!(!d.ids().contains(&back.id(fresh as usize).unwrap()));
+    }
+
+    #[test]
+    fn test_a_corrupt_cache_blob_is_an_error_not_a_panic() {
+        let good = sphere_detail(Vec3::ZERO, 0.5, 4, 6).to_bytes();
+        assert!(Detail::from_bytes(b"").is_err(), "empty");
+        assert!(Detail::from_bytes(b"not a detail at all").is_err(), "wrong magic");
+        // Truncated at every length: a cache lives in a directory anything can
+        // write to, and half a file must never reach the code that indexes on
+        // its counts.
+        for cut in (0..good.len()).step_by(7) {
+            let _ = Detail::from_bytes(&good[..cut]);
+        }
+        let mut wrong_type = good.clone();
+        // Corrupt a byte in the middle and it either errors or reads as
+        // something harmless; what it must not do is panic.
+        for i in (8..good.len()).step_by(101) {
+            wrong_type[i] = 0xff;
+            let _ = Detail::from_bytes(&wrong_type);
+            wrong_type[i] = good[i];
+        }
+    }
+
+    #[test]
+    fn test_the_disk_cache_resumes_only_the_solve_it_belongs_to() {
+        let dir = std::env::temp_dir().join(format!("cce-simcache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("sim.simcache");
+        let mut state = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        state.points_mut().create("acc", AttribValue::Float(9.0));
+
+        write_sim_cache_at(&path, 0xABCD, 12, &state);
+        assert!(path.exists(), "the cache was written");
+
+        // The right solve, at or before the frame being asked for.
+        let (got, frame) = read_sim_cache_at(&path, 0xABCD, 20).expect("a matching cache resumes");
+        assert_eq!(frame, 12);
+        assert_eq!(got.points().value("acc", 0), Some(AttribValue::Float(9.0)));
+        assert_eq!(got.ids(), state.ids());
+
+        // A cache from a DIFFERENT chain is worse than no cache, because it
+        // looks like an answer.
+        assert!(read_sim_cache_at(&path, 0x1234, 20).is_none(), "a stale key must not resume");
+        // Having run past the frame asked for, it cannot help: a step is not
+        // invertible, so scrubbing back restarts from the seed.
+        assert!(read_sim_cache_at(&path, 0xABCD, 5).is_none(), "a future state must not resume");
+        // A file that is not there, or is rubbish, reads as "no cache".
+        assert!(read_sim_cache_at(&dir.join("absent"), 0xABCD, 20).is_none());
+        std::fs::write(&path, b"rubbish").unwrap();
+        assert!(read_sim_cache_at(&path, 0xABCD, 20).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_cache_filename_cannot_climb_out_of_its_directory() {
+        // The id is a node id, not a filename, and a project file is data.
+        let path = sim_cache_path("../../../etc/passwd").expect("a cache path");
+        assert!(!path.to_string_lossy().contains(".."), "{path:?}");
+        assert!(path.to_string_lossy().ends_with("_________etc_passwd.simcache"), "{path:?}");
+        assert!(
+            path.to_string_lossy().contains("cce/cce-designer/sim"),
+            "derived state belongs under the cache directory: {path:?}"
+        );
     }
 
     #[test]
