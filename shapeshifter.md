@@ -244,8 +244,11 @@ Touches: `geometry.rs`, `app.rs`, `render.rs`, `playbar.rs`.
 > parameter names carried a reading, these carry nothing. Say what they do and
 > they are a short job each.
 >
-> Remaining: `subdivide`, which is the one documented Surface operator still
-> missing and is the easy one.
+> `subdivide` is in: four triangles where there was one, attributes
+> interpolated onto the midpoints, and the shape left exactly where it was —
+> it refines, it does not smooth, which is what separates it from Remesh.
+>
+> Phase 3 is done but for the two operators nobody can describe.
 
 `Develop` is easy — displace along the normal by a development attribute.
 **Remesh is the hard one**, and it is load-bearing: without topology that keeps

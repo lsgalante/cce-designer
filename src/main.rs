@@ -3624,6 +3624,54 @@ mod tests {
     }
 
     #[test]
+    fn test_subdivide_multiplies_triangles_without_moving_the_shape() {
+        use crate::remesh::subdivide;
+        let mut sphere = sphere_detail(Vec3::ZERO, 1.0, 6, 8);
+        sphere.points_mut().create("mass", AttribValue::Float(0.0));
+        for p in 0..sphere.num_points() {
+            let y = sphere.pos(p).y;
+            sphere.points_mut().set_value("mass", p, AttribValue::Float(y)).unwrap();
+        }
+        let (before_prims, before_bounds) = (sphere.num_prims(), sphere.bounds().unwrap());
+
+        let once = subdivide(&sphere, 1);
+        // Every triangle becomes four. The sphere's quad bands fan to two
+        // triangles each on the way in, so the count is against THAT.
+        let tri_count = |d: &Detail| d.triangulate(|_, _| ()).len() / 3;
+        assert_eq!(tri_count(&once), tri_count(&sphere) * 4);
+
+        // The shape does not move: this refines, it does not smooth. A
+        // subdivision that also moved points would be two operations wearing
+        // one name.
+        let after_bounds = once.bounds().unwrap();
+        assert!((after_bounds.0 - before_bounds.0).length() < 1e-5, "{:?}", after_bounds.0);
+        assert!((after_bounds.1 - before_bounds.1).length() < 1e-5, "{:?}", after_bounds.1);
+        // Original points keep their exact positions AND identities.
+        for p in 0..sphere.num_points() {
+            assert!(once.ids().contains(&sphere.id(p).unwrap()), "point {p} lost its identity");
+        }
+
+        // Attributes interpolate onto the midpoints, so a field defined on a
+        // coarse mesh survives being refined.
+        for p in 0..once.num_points() {
+            let v = once.points().value("mass", p).unwrap().as_f32();
+            assert!((v - once.pos(p).y).abs() < 0.12, "point {p}: {v} vs y {}", once.pos(p).y);
+        }
+
+        // Depth compounds, and zero is a pass-through.
+        assert_eq!(tri_count(&subdivide(&sphere, 2)), tri_count(&sphere) * 16);
+        assert_eq!(subdivide(&sphere, 0).num_prims(), before_prims);
+
+        // The result is still a closed, usable mesh.
+        for prim in 0..once.num_prims() {
+            assert_eq!(once.prim_points(prim).len(), 3);
+        }
+        for p in 0..once.num_points() {
+            assert!(!once.point_prims(p).is_empty(), "point {p} belongs to nothing");
+        }
+    }
+
+    #[test]
     fn test_the_projection_pass_stops_a_remeshed_surface_creeping() {
         use crate::spatial::TriGrid;
         // Tangential relaxation slides points within the surface, but "within"

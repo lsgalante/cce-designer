@@ -740,6 +740,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("time") {
         resolve_time_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("subdivide") {
+        resolve_subdivide_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("detangle") {
         resolve_detangle_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("suture") {
@@ -1294,6 +1296,24 @@ pub fn resolve_relax_geometry_with_errors(
         geom.set_pos(p, *v);
     }
     Some(geom)
+}
+
+/// The Subdivide node: four triangles where there was one.
+pub fn resolve_subdivide_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    let depth = node_param_f32(target, "Depth", 1.0).clamp(0.0, 6.0) as usize;
+    Some(crate::remesh::subdivide(&geom, depth))
 }
 
 /// The Detangle node: push a surface off itself.
@@ -3939,6 +3959,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "remesh"
         || nt == "suture"
         || nt == "detangle"
+        || nt == "subdivide"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -4083,6 +4104,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_time_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("subdivide") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_subdivide_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }

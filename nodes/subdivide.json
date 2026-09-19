@@ -1,0 +1,10 @@
+{
+ "name": "Subdivide",
+ "type": "subdivide",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Depth", "type": "spinbox", "default": "1", "min": 0.0, "max": 6.0, "step": 1.0 }
+ ]
+}

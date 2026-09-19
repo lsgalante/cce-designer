@@ -589,6 +589,62 @@ fn project_pass(m: &mut Mesh, rest: &crate::spatial::TriGrid) {
     }
 }
 
+/// Subdivide every triangle into four, `depth` times.
+///
+/// Distinct from remeshing, and deliberately so: this makes a predictable,
+/// uniform refinement of the mesh it is given — every edge gets a midpoint,
+/// every triangle becomes four, and the shape does not move. Remesh steers
+/// toward a length and rearranges topology to get there; Subdivide multiplies
+/// what is already there.
+///
+/// It does NOT smooth, which the Houdini SOP of this name does. A subdivision
+/// that also moved points would be two operations wearing one name, and the
+/// smoothing one is already available as Remesh's relaxation.
+///
+/// Attributes interpolate onto the midpoints, the same way a remesh split
+/// does, so a field defined on a coarse mesh survives being refined.
+pub fn subdivide(input: &Detail, depth: usize) -> Detail {
+    if input.num_prims() == 0 || depth == 0 {
+        return input.clone();
+    }
+    let mut m = Mesh::from_detail(input);
+    // Capped because this is exponential: each level is four times the
+    // triangles, so six levels is four thousand times the input and anything
+    // past that is a hang rather than a render.
+    for _ in 0..depth.min(6) {
+        let mut mids: HashMap<[u32; 2], u32> = HashMap::new();
+        for (e, _) in m.edges() {
+            let mid = m.split_point(e[0], e[1]);
+            mids.insert(e, mid);
+        }
+        let key = |a: u32, b: u32| [a.min(b), a.max(b)];
+        // Snapshotted, because the loop adds triangles as it goes and the new
+        // ones are already subdivided.
+        let count = m.tris.len();
+        for t in 0..count {
+            if m.dead_tri[t] {
+                continue;
+            }
+            let tri = m.tris[t];
+            let (Some(&ab), Some(&bc), Some(&ca)) = (
+                mids.get(&key(tri[0], tri[1])),
+                mids.get(&key(tri[1], tri[2])),
+                mids.get(&key(tri[2], tri[0])),
+            ) else {
+                continue;
+            };
+            m.dead_tri[t] = true;
+            // Three corner triangles and the middle one, each keeping the
+            // original winding.
+            m.add_tri([tri[0], ab, ca]);
+            m.add_tri([ab, tri[1], bc]);
+            m.add_tri([ca, bc, tri[2]]);
+            m.add_tri([ab, bc, ca]);
+        }
+    }
+    m.into_detail()
+}
+
 /// Remesh toward `settings.target` edge length.
 pub fn remesh(input: &Detail, settings: Settings) -> Detail {
     if input.num_prims() == 0 || settings.target <= 0.0 {
