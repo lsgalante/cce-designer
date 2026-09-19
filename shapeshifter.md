@@ -183,7 +183,13 @@ Touches: `geometry.rs`, `kernel_cpu.rs`, `nodes/*.json`.
 > Range Auto re-measures every run, because a simulation's interesting range
 > moves every frame.
 >
-> Outstanding: substeps, an explicit seed frame, and a disk cache.
+> Substeps run the chain N times per frame, so step size stops being tied to
+> the frame rate. The solver writes `dt` (= 1/substeps) as a derivative detail
+> attribute; a chain that scales its rate by it — Promote onto points, then
+> Composite — covers the same ground however finely the frame is cut, which is
+> what makes substeps a stability control rather than a speed control.
+>
+> Outstanding: an explicit seed frame, and a disk cache.
 
 `simnet` is already the Developer Solver — feedback stack, per-node cache keyed
 on the subtree, restart on edit, one step per played frame. What it lacks is a

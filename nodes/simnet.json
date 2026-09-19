@@ -4,22 +4,43 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "text" }
+    {
+      "name": "Input",
+      "default": "",
+      "type": "text"
+    },
+    {
+      "name": "Substeps",
+      "type": "spinbox",
+      "default": "1",
+      "min": 1.0,
+      "max": 64.0,
+      "step": 1.0
+    }
   ],
   "children": [
     {
       "name": "input1",
       "type": "input",
       "params": [],
-      "position": [4.0, 1.0]
+      "position": [
+        4.0,
+        1.0
+      ]
     },
     {
       "name": "output1",
       "type": "output",
       "params": [
-        { "name": "Input", "default": "input1" }
+        {
+          "name": "Input",
+          "default": "input1"
+        }
       ],
-      "position": [4.0, 3.0]
+      "position": [
+        4.0,
+        3.0
+      ]
     }
   ]
 }

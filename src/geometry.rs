@@ -4993,29 +4993,54 @@ pub fn resolve_simnet_geometry_with_errors(
         _ => (seed, 0),
     };
 
+    // Substeps run the chain more than once per frame. A step's size is what
+    // decides whether an iterative solve converges or oscillates, and one step
+    // per frame ties that to the frame rate, which is the wrong coupling for
+    // anything meant to model a physical process.
+    //
+    // Clamped, and deliberately not by trusting the parameter's declared
+    // range: a hand-edited project file reaches here too, and a solve of a
+    // hundred thousand substeps is indistinguishable from a hang.
+    let substeps = (node_param_f32(target, "Substeps", 1.0).round() as i64).clamp(1, 64);
+    // What one substep is worth, as a fraction of a frame. The chain reads it
+    // by promoting it onto points and compositing it into a rate — halve the
+    // step and a rate scaled by `dt` covers the same ground in twice as many
+    // steps, which is what makes substeps a stability control rather than a
+    // speed control.
+    let dt = 1.0 / substeps as f32;
+
     while done < due {
-        // The step boundary, and the contract that makes a chain composable:
-        //
-        // Going in, every Derivative attribute is zeroed. The chain is
-        // expected to rebuild them from live data this step, and one it
-        // forgets reads zero rather than quietly carrying last step's value
-        // forward — which is the failure that looks like a physics bug and
-        // is not one.
-        state.clear_derivatives();
-        let prev = state.clone();
+        for _ in 0..substeps {
+            // The step boundary, and the contract that makes a chain
+            // composable:
+            //
+            // Going in, every Derivative attribute is zeroed. The chain is
+            // expected to rebuild them from live data this step, and one it
+            // forgets reads zero rather than quietly carrying last step's
+            // value forward — which is the failure that looks like a physics
+            // bug and is not one. Per SUBSTEP, not per frame: each run of the
+            // chain is a step, and derivative data describes the state it was
+            // computed from.
+            state.clear_derivatives();
+            state
+                .detail_mut()
+                .create_kind("dt", AttribValue::Float(dt), crate::detail::AttribKind::Derivative);
+            let prev = state.clone();
 
-        sim.feedback.push((target.id.clone(), state));
-        let stepped = generate_single_node_geometry_with_errors(root, &output_node, visited, ocl_error, sim);
-        let fed_back = sim.feedback.pop().map(|(_, g)| g);
-        // A step that yields nothing (an unwired chain, a failed kernel) holds
-        // the previous state rather than collapsing the sim to empty geometry.
-        state = stepped.or(fed_back).unwrap_or_default();
+            sim.feedback.push((target.id.clone(), state));
+            let stepped = generate_single_node_geometry_with_errors(root, &output_node, visited, ocl_error, sim);
+            let fed_back = sim.feedback.pop().map(|(_, g)| g);
+            // A step that yields nothing (an unwired chain, a failed kernel)
+            // holds the previous state rather than collapsing the sim to empty
+            // geometry.
+            state = stepped.or(fed_back).unwrap_or_default();
 
-        // Coming out, any Live attribute the chain DROPPED is restored from
-        // the previous state by point identity. A node that rebuilds geometry
-        // mid-chain — a kernel generator today, a remesh in Phase 3 — no
-        // longer silently takes the simulation's memory with it.
-        state.restore_live_from(&prev);
+            // Coming out, any Live attribute the chain DROPPED is restored
+            // from the previous state by point identity. A node that rebuilds
+            // geometry mid-chain — a kernel generator today, a remesh in Phase
+            // 3 — no longer silently takes the simulation's memory with it.
+            state.restore_live_from(&prev);
+        }
         done += 1;
     }
 
@@ -6139,6 +6164,156 @@ mod simnet_tests {
             vec![inner_input, step, inner_output],
         );
         node("id-root", "root", "node", vec![], vec![sphere, seed, sim])
+    }
+
+    /// A sim that adds a fixed 1.0 to `acc` every time the chain runs.
+    fn substep_graph(substeps: &str) -> FsNode {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let seed = node(
+            "id-seed",
+            "Seed 1",
+            "attribute",
+            vec![
+                param("Input", "Sphere 1"),
+                param("Operation", "Create"),
+                param("Attribute Name", "acc"),
+                param("Type", "Float"),
+                param("Value", "0.00"),
+            ],
+            vec![],
+        );
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let step = node(
+            "id-step",
+            "step1",
+            "attribute",
+            vec![
+                param("Input", "input1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "acc"),
+                param("Combine", "Add"),
+                param("Value", "1.00"),
+            ],
+            vec![],
+        );
+        let inner_output = node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]);
+        let sim = node(
+            "id-sim",
+            "Simnet 1",
+            "simnet",
+            vec![param("Input", "Seed 1"), param("Substeps", substeps)],
+            vec![inner_input, step, inner_output],
+        );
+        node("id-root", "root", "node", vec![], vec![sphere, seed, sim])
+    }
+
+    /// The same sim, but the step adds `dt` instead of a fixed amount — the
+    /// chain assembled out of the vocabulary: Promote lifts the solver's `dt`
+    /// detail attribute onto points, Composite adds it into `acc`.
+    fn substep_dt_graph(substeps: &str) -> FsNode {
+        let mut root = substep_graph(substeps);
+        let sim = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
+        let promote = node(
+            "id-prom",
+            "promote1",
+            "attribute",
+            vec![
+                param("Input", "input1"),
+                param("Operation", "Promote"),
+                param("Attribute Name", "dt"),
+                param("To Class", "Point"),
+            ],
+            vec![],
+        );
+        let step = node(
+            "id-step",
+            "step1",
+            "attribute",
+            vec![
+                param("Input", "promote1"),
+                param("Operation", "Composite"),
+                param("Attribute Name", "acc"),
+                param("Source B", "dt"),
+                param("Combine Op", "Add"),
+            ],
+            vec![],
+        );
+        sim.children = vec![
+            node("id-in", "input1", "input", vec![], vec![]),
+            promote,
+            step,
+            node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]),
+        ];
+        root
+    }
+
+    #[test]
+    fn test_substeps_run_the_chain_more_than_once_per_frame() {
+        let acc = |root: &FsNode, frame: i32| -> f32 {
+            solve_at(root, frame).points().value("acc", 0).unwrap().as_f32()
+        };
+
+        // Three frames elapsed, a fixed +1 per run of the chain.
+        assert_eq!(acc(&substep_graph("1"), 4), 3.0);
+        assert_eq!(acc(&substep_graph("4"), 4), 12.0);
+        // The start frame has taken no steps whatever the substep count.
+        assert_eq!(acc(&substep_graph("8"), 1), 0.0);
+
+        // Substeps is part of the simnet's subtree, so changing it changes the
+        // cache key and the sim restarts rather than resuming someone else's
+        // arithmetic.
+        let one = sim_solve_key(
+            substep_graph("1").children.iter().find(|c| c.node_type == "simnet").unwrap(),
+            &Detail::new(),
+        );
+        let four = sim_solve_key(
+            substep_graph("4").children.iter().find(|c| c.node_type == "simnet").unwrap(),
+            &Detail::new(),
+        );
+        assert_ne!(one, four);
+    }
+
+    #[test]
+    fn test_dt_makes_substeps_a_stability_control_not_a_speed_control() {
+        let acc = |root: &FsNode, frame: i32| -> f32 {
+            solve_at(root, frame).points().value("acc", 0).unwrap().as_f32()
+        };
+
+        // A chain that scales its rate by the solver's `dt` covers the SAME
+        // ground however finely the frame is cut: four substeps of a quarter
+        // each is one frame's worth, exactly as one substep of a whole is.
+        // That is the difference between subdividing a step and running the
+        // simulation faster — and it is assembled from Promote and Composite
+        // rather than built into the solver.
+        let coarse = acc(&substep_dt_graph("1"), 5);
+        for substeps in ["2", "4", "16"] {
+            let fine = acc(&substep_dt_graph(substeps), 5);
+            assert!(
+                (fine - coarse).abs() < 1e-3,
+                "{substeps} substeps drifted: {fine} vs {coarse}"
+            );
+        }
+        assert!((coarse - 4.0).abs() < 1e-4, "four frames of one unit each: {coarse}");
+    }
+
+    #[test]
+    fn test_dt_is_derivative_and_reads_one_over_the_substep_count() {
+        let dt = |root: &FsNode| -> f32 {
+            solve_at(root, 3).detail().value("dt", 0).unwrap().as_f32()
+        };
+        assert_eq!(dt(&substep_graph("1")), 1.0);
+        assert_eq!(dt(&substep_graph("4")), 0.25);
+        assert_eq!(
+            solve_at(&substep_graph("4"), 3).detail().kind("dt"),
+            crate::detail::AttribKind::Derivative
+        );
+
+        // A hand-edited project reaches the solver too, and a hundred thousand
+        // substeps is indistinguishable from a hang. The declared range is a
+        // UI affordance; this is the guard.
+        let wild = substep_graph("100000");
+        let acc = solve_at(&wild, 2).points().value("acc", 0).unwrap().as_f32();
+        assert_eq!(acc, 64.0, "substeps are clamped to the documented ceiling");
     }
 
     #[test]
