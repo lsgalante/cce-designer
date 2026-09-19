@@ -458,6 +458,36 @@ leaves a surface, so both are gated on the same flag. Node bodies keep their
 blur-behind fill, which is what makes the result legible: they frost the scene
 behind each node while the gaps stay clear.
 
+**With the plate off the pane spans the whole window.** The dock rect is
+overridden at its source in `rebuild_positions` — one `let (px, py, pw, ph)`,
+so content, panel and breadcrumb all follow — because there is no surface left
+to bound the graph, and one confined to a rectangle you cannot see is worse
+than one that spans what it is drawn over.
+
+That makes the pane's RECT useless as a hit test, and three things route off it:
+
+- **Clicks** ask `in_network_pane`, which in overlay mode narrows to "a node is
+  under the cursor, and no floating pane covers it" (`overlay_claims`). The
+  same refinement goes into the press cascade's `hits_widget` closure, where
+  the circular pane already refines its own hit test. Without it the graph
+  claims every press in the window, including ones landing on a node drawn
+  UNDER the params pane.
+- **Pan gestures** ask `in_network_area` instead — the plain rect. Middle-drag
+  and space+left mean nothing to the scene, so the network keeps them across
+  its whole span; a graph you could not pan by dragging because its own surface
+  stopped being drawn would be a strange thing to ship.
+- **`cursor_in_viewport`** becomes the complement: the body, minus what the
+  network holds, minus the floating panes.
+
+What changes for the user, and it is worth knowing: a plain click on empty
+space is no longer the network's. In the default docked layout nothing else
+claims it either (the scene is drawn full-bleed but the Viewport3D WIDGET's
+rect is only the centre column, which those layouts leave at zero width), so
+such a click does nothing. Deselecting by clicking empty space is the
+behaviour that costs. Giving the viewport that space was tried and reverted: it
+claimed the press and still did not orbit, and a half-working claim is worse
+than none.
+
 `ViewportSettings::network_plate` persists it, beside the viewport toggles
 rather than in the project's pane-state list: a pane's VISIBILITY belongs to
 the project, but whether its surface is drawn is how you like to work, and it

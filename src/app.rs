@@ -1647,9 +1647,71 @@ impl State {
 
     pub fn param_w(&self) -> f32 { self.get_col_geometries().5 }
     
+    /// Whether the network is drawn as an OVERLAY on the scene rather than on
+    /// its own plate: the plate switched off, in the ordinary docked layout.
+    ///
+    /// The circular pane and a detached network window have their own
+    /// geometry and their own hit tests, and neither is a thing to overlay.
+    pub fn network_overlay(&self) -> bool {
+        !self.network_plate
+            && self.show_network
+            && !self.circular_network_pane
+            && !self.is_detached_network
+    }
+
+    /// Whether the cursor is over a pane that FLOATS above the network —
+    /// which, when the network spans the whole window, is the only thing
+    /// keeping a node drawn under the params pane from stealing its clicks.
+    pub fn over_floating_pane_at(&self, px: f32, py: f32) -> bool {
+        [PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX].iter().any(|&idx| {
+            let (x, y, w, h) = self.positions[idx];
+            w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h
+        })
+    }
+
+    fn over_floating_pane(&self) -> bool {
+        self.over_floating_pane_at(self.cursor_x, self.cursor_y)
+    }
+
+    /// Whether the network claims the pointer at (px, py) while it is an
+    /// overlay: only where it has actually drawn a node, and only where no
+    /// floating pane covers it.
+    pub fn overlay_claims(&self, px: f32, py: f32) -> bool {
+        !self.over_floating_pane_at(px, py) && self.graph().node_at(px, py).is_some()
+    }
+
+    /// Whether (px, py) is inside the network's AREA — the region it is laid
+    /// out over, whatever it has drawn there.
+    ///
+    /// Distinct from [`in_network_pane`](Self::in_network_pane), which in
+    /// overlay mode narrows to the nodes so a click can reach the scene. The
+    /// two differ only when the plate is off, and the difference is the point:
+    /// a CLICK on empty space is not the network's, but a PAN gesture over
+    /// that same space is — middle-drag and space+left mean nothing to the
+    /// scene, and a graph you cannot pan by dragging because its own surface
+    /// stopped being drawn would be a strange thing to ship.
+    pub fn in_network_area(&self, px: f32, py: f32) -> bool {
+        if self.circular_network_pane {
+            return self.circular_network_layout.hit_test_content(px, py, 0.0, BREADCRUMB_H);
+        }
+        let (cx, cy, cw, ch) = self.positions[CONTENT_IDX];
+        px >= cx
+            && px < cx + cw
+            && py >= cy
+            && py < cy + ch
+            && !(self.network_overlay() && self.over_floating_pane_at(px, py))
+    }
+
     pub fn in_network_pane(&self) -> bool {
         if self.circular_network_pane {
             self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, BREADCRUMB_H)
+        } else if self.network_overlay() {
+            // An overlay claims only what it DRAWS. The pane spans the window,
+            // so a rect test would swallow every click meant for the scene
+            // behind it — there would be no way left to orbit the camera. A
+            // node under the cursor is the network's; empty space is the
+            // scene's. The circular pane already routes this way.
+            self.overlay_claims(self.cursor_x, self.cursor_y)
         } else {
             let (cx, cy, cw, ch) = self.positions[CONTENT_IDX];
             self.cursor_x >= cx
@@ -1662,6 +1724,15 @@ impl State {
     /// Whether the cursor sits over the 3D viewport pane — the wheel arm's
     /// routing test, shared with `handle_pinch`.
     pub fn cursor_in_viewport(&self) -> bool {
+        if self.network_overlay() {
+            // The complement of the overlay: everything in the body the
+            // network is not holding and no floating pane covers.
+            return !self.in_network_pane()
+                && !self.over_floating_pane()
+                && self.cursor_x < self.splitter_layout.splitter2_x
+                && self.cursor_y >= HEADER_H
+                && self.cursor_y < self.height - STATUS_H;
+        }
         let node_area_y = self.positions[CONTENT_IDX].1;
         self.cursor_x >= self.content_right_x()
             && self.cursor_x < self.splitter_layout.splitter2_x
@@ -4833,6 +4904,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 };
 
                 let (px, py, pw, ph) = rect_for(NETWORK_PANEL_IDX, self);
+                // With the plate off the network is an overlay on the scene,
+                // so it takes the whole body instead of its dock: there is no
+                // surface left to bound it, and a graph confined to a
+                // rectangle you cannot see is worse than one that spans what
+                // it is drawn over. Everything below derives from these four
+                // numbers — content, panel, breadcrumb — so overriding them
+                // here keeps the pane's parts agreeing with each other.
+                let (px, py, pw, ph) = if self.network_overlay() {
+                    (0.0, HEADER_H, self.width, self.body_h())
+                } else {
+                    (px, py, pw, ph)
+                };
 
                 if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
@@ -6102,7 +6185,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let node_area_x = self.positions[CONTENT_IDX].0;
                 let node_area_y = self.positions[CONTENT_IDX].1;
 
-                let is_pan_trigger = in_network_pane
+                // Panning asks the AREA, not the nodes: with the plate off a
+                // middle-drag over empty space still pans the graph, because
+                // nothing else wants that gesture.
+                let is_pan_trigger = self.in_network_area(self.cursor_x, self.cursor_y)
                     && (*button == MouseButton::Middle
                         || (*button == MouseButton::Left && self.space_pressed));
 
@@ -6153,6 +6239,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         } else {
                             false
                         }
+                    } else if state.network_overlay() && i == CONTENT_IDX {
+                        // The graph's RECT spans the window in overlay mode,
+                        // so the widget's own hit test would claim every press
+                        // and there would be no way left to orbit the camera.
+                        // It claims where it has drawn a node; the rest of the
+                        // window is the scene. Same rule as `in_network_pane`,
+                        // and the circular pane above refines its hit test the
+                        // same way.
+                        state.overlay_claims(x, y)
                     } else {
                         state.slots.get_dyn(i).hit_test(x, y, &state.ui_context)
                     }
