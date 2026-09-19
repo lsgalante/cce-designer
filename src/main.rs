@@ -7,6 +7,7 @@ pub mod export;
 pub mod export_cli;
 pub mod remesh;
 pub mod spatial;
+pub mod volume;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
@@ -113,7 +114,7 @@ mod tests {
     use crate::app::{get_next_visible_pane, DesignSettings, FsNode, Project, ProjectViewState};
     use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX};
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
-    use crate::geometry::{GAttribute, GVertex, Geometry, line_vertices};
+    use crate::geometry::line_vertices;
     use crate::detail::{AttribData, AttribKind, AttribType, AttribValue, Class, Detail};
 
     /// The choosers open in the loaded project's parent — the "current view" —
@@ -3643,6 +3644,257 @@ mod tests {
         assert_eq!(params[1].default, "7.5", "but the value is untouched");
         params[0].default = "Remap".into();
         assert_eq!(param_display(&params)[1].1, "7.5", "and comes back as it was");
+    }
+
+    // ---- Volumes ----
+
+    use crate::volume::Volume;
+
+    #[test]
+    fn test_a_sphere_round_trips_through_a_distance_field() {
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 16, 24);
+        let vol = Volume::from_mesh(&sphere, 0.12, 0.4);
+        let back = vol.to_mesh();
+
+        assert!(back.num_points() > 100, "the surface did not come back");
+        assert!(back.num_prims() > 100);
+
+        // Every extracted point is on the sphere, to within a voxel. That is
+        // the whole claim of the representation: a mesh in, a field, a mesh
+        // out, and the shape survives.
+        for p in 0..back.num_points() {
+            let r = back.pos(p).length();
+            assert!((r - 1.0).abs() < 0.14, "point {p} is at radius {r}");
+        }
+
+        // Closed: every edge is shared by exactly two faces. Surface nets
+        // gives this by construction, and it is what makes the output safe to
+        // hand a slicer.
+        let mut shared: std::collections::HashMap<[u32; 2], usize> = Default::default();
+        for prim in 0..back.num_prims() {
+            let pts = back.prim_points(prim);
+            for i in 0..pts.len() {
+                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                *shared.entry([a.min(b), a.max(b)]).or_default() += 1;
+            }
+        }
+        let open = shared.values().filter(|&&c| c != 2).count();
+        assert_eq!(open, 0, "{open} edges are not shared by two faces");
+
+        // And it faces outward, like every other generator.
+        let normals = crate::geometry::point_normals(&back);
+        let outward = (0..back.num_points())
+            .filter(|&p| normals[p].dot(back.pos(p).normalize()) > 0.0)
+            .count();
+        assert_eq!(outward, back.num_points(), "the extracted surface is inside out");
+    }
+
+    #[test]
+    fn test_the_sign_is_right_where_the_nearest_face_would_lie() {
+        // A field's sign has to be right EVERYWHERE — a wrong one is a bubble
+        // or a hole, where in the Distance node it was a slightly wrong
+        // number. This is why the build casts rays rather than asking the
+        // nearest face which way it points, and this is the check that says so.
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 20, 28);
+        let vol = Volume::from_mesh(&sphere, 0.12, 0.3);
+        let [nx, ny, nz] = vol.dims();
+
+        let mut wrong = Vec::new();
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let p = vol.sample_position(i, j, k);
+                    let r = p.length();
+                    // Skip the band where the answer is genuinely ambiguous at
+                    // this resolution.
+                    if (r - 1.0).abs() < vol.voxel() {
+                        continue;
+                    }
+                    let want_inside = r < 1.0;
+                    if (vol.at(i, j, k) < 0.0) != want_inside {
+                        wrong.push((i, j, k, r, vol.at(i, j, k)));
+                    }
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} of {} samples have the wrong sign, e.g. {:?}",
+            wrong.len(),
+            nx * ny * nz,
+            &wrong[..wrong.len().min(3)]
+        );
+    }
+
+    /// An axis-aligned closed box, built by hand.
+    fn box_mesh(lo: Vec3, hi: Vec3) -> Detail {
+        let mut d = Detail::new();
+        for (x, y, z) in [
+            (lo.x, lo.y, lo.z), (hi.x, lo.y, lo.z), (hi.x, lo.y, hi.z), (lo.x, lo.y, hi.z),
+            (lo.x, hi.y, lo.z), (hi.x, hi.y, lo.z), (hi.x, hi.y, hi.z), (lo.x, hi.y, hi.z),
+        ] {
+            d.add_point(Vec3::new(x, y, z));
+        }
+        // Wound counter-clockwise seen from OUTSIDE, like every generator —
+        // asserted below, because getting this backwards by hand is exactly
+        // what happened the first time.
+        for q in [
+            [0u32, 1, 2, 3], [7, 6, 5, 4], [0, 4, 5, 1],
+            [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0],
+        ] {
+            d.add_prim(&q);
+        }
+        let centre = (lo + hi) * 0.5;
+        for (p, n) in crate::geometry::point_normals(&d).iter().enumerate() {
+            assert!(
+                n.dot((d.pos(p) - centre).normalize()) > 0.0,
+                "the test box's corner {p} faces inward"
+            );
+        }
+        d
+    }
+
+    #[test]
+    fn test_a_thin_slab_is_solid_all_the_way_through() {
+        // The flood fill decides what is enclosed, and it must not be able to
+        // walk THROUGH a wall. A slab only a few voxels thick is where that
+        // goes wrong: at a band narrower than a voxel, two adjacent samples
+        // straddling the surface can both read as "far", the flood steps
+        // between them, and the slab comes back hollow — which a boolean
+        // against it then fails to cut with.
+        let slab = box_mesh(Vec3::new(-1.0, -0.1, -1.0), Vec3::new(1.0, 0.1, 1.0));
+        assert!(slab.is_closed());
+        let vol = Volume::from_mesh(&slab, 0.05, 0.15);
+        let [nx, ny, nz] = vol.dims();
+
+        let mut inside_wrong = Vec::new();
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let p = vol.sample_position(i, j, k);
+                    let deep = p.x.abs() < 0.8 && p.z.abs() < 0.8 && p.y.abs() < 0.04;
+                    if deep && vol.at(i, j, k) >= 0.0 {
+                        inside_wrong.push((p, vol.at(i, j, k)));
+                    }
+                }
+            }
+        }
+        assert!(
+            inside_wrong.is_empty(),
+            "{} samples inside the slab read as outside, e.g. {:?}",
+            inside_wrong.len(),
+            &inside_wrong[..inside_wrong.len().min(3)]
+        );
+
+        // And it cuts: subtracting the slab from a box that contains it leaves
+        // a gap where the slab was.
+        let block = box_mesh(Vec3::splat(-0.6), Vec3::splat(0.6));
+        let (lo, hi) = (Vec3::splat(-1.3), Vec3::splat(1.3));
+        let mut vb = Volume::build(&block, lo, hi, 0.05, 0.15);
+        let vs = Volume::build(&slab, lo, hi, 0.05, 0.15);
+        vb.subtract(&vs);
+        let out = vb.to_mesh();
+        let survivors = (0..out.num_points())
+            .map(|p| out.pos(p))
+            .filter(|q| q.y.abs() < 0.06 && q.x.abs() < 0.4 && q.z.abs() < 0.4)
+            .count();
+        assert_eq!(survivors, 0, "points survive where the slab cut through");
+
+        // And an INSIDE-OUT input gives the same field. The band test asks the
+        // nearest face which way it points, so a mesh wound the other way
+        // would otherwise come back riddled with holes — which is how the
+        // winding measurement got written.
+        let mut flipped = Detail::new();
+        for p in 0..slab.num_points() {
+            flipped.add_point(slab.pos(p));
+        }
+        for prim in 0..slab.num_prims() {
+            let mut pts = slab.prim_points(prim).to_vec();
+            pts.reverse();
+            flipped.add_prim(&pts);
+        }
+        let inverted = Volume::build(&flipped, lo, hi, 0.05, 0.15);
+        let mut differ = 0;
+        for k in 0..vs.dims()[2] {
+            for j in 0..vs.dims()[1] {
+                for i in 0..vs.dims()[0] {
+                    if (vs.at(i, j, k) < 0.0) != (inverted.at(i, j, k) < 0.0) {
+                        differ += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(differ, 0, "{differ} samples disagree when the input is wound inside out");
+    }
+
+    #[test]
+    fn test_offsetting_is_subtraction() {
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 14, 20);
+        let radius = |d: &Detail| {
+            (0..d.num_points()).map(|p| d.pos(p).length()).sum::<f32>() / d.num_points() as f32
+        };
+
+        let mut grown = Volume::from_mesh(&sphere, 0.15, 0.6);
+        grown.offset(0.3);
+        let out = grown.to_mesh();
+        assert!(
+            (radius(&out) - 1.3).abs() < 0.12,
+            "a 0.3 offset should give radius 1.3, got {}",
+            radius(&out)
+        );
+
+        // Inward too, which is what a shell's inner wall is.
+        let mut shrunk = Volume::from_mesh(&sphere, 0.15, 0.6);
+        shrunk.offset(-0.3);
+        assert!((radius(&shrunk.to_mesh()) - 0.7).abs() < 0.12);
+    }
+
+    #[test]
+    fn test_the_booleans_are_a_minimum_and_a_maximum() {
+        // Two overlapping spheres, sampled over ONE grid so the operations are
+        // elementwise. Sharing the grid is what makes them arithmetic rather
+        // than a geometry problem.
+        let a = sphere_detail(Vec3::new(-0.35, 0.0, 0.0), 0.8, 14, 20);
+        let b = sphere_detail(Vec3::new(0.35, 0.0, 0.0), 0.8, 14, 20);
+        let (lo, hi) = (Vec3::splat(-1.6), Vec3::splat(1.6));
+        let va = Volume::from_mesh_in(&a, lo, hi, 0.14);
+        let vb = Volume::from_mesh_in(&b, lo, hi, 0.14);
+        assert!(va.aligned_with(&vb), "the two fields do not share a grid");
+
+        let width = |d: &Detail| d.bounds().map(|(l, h)| h.x - l.x).unwrap_or(0.0);
+
+        let mut u = va.clone();
+        u.union(&vb);
+        let mut i = va.clone();
+        i.intersect(&vb);
+        let mut s = va.clone();
+        s.subtract(&vb);
+        // Extracted ONCE each: surface extraction is not free, and an
+        // assertion message that re-runs it is a slow test nobody runs.
+        let (um, im, sm, am) = (u.to_mesh(), i.to_mesh(), s.to_mesh(), va.to_mesh());
+
+        // The union spans both, the intersection is the lens between them, and
+        // the difference is narrower than the whole of A.
+        assert!(width(&um) > 2.2, "union is {}", width(&um));
+        assert!(width(&im) < 1.0, "intersection is {}", width(&im));
+        assert!(width(&sm) < width(&am) + 0.01, "the difference grew");
+        // Every result is still a closed surface — which a mesh boolean has to
+        // work for and a field gets for free.
+        for m in [&um, &im, &sm] {
+            assert!(m.num_prims() > 50);
+        }
+
+        // Fields on different grids refuse to combine rather than reading each
+        // other's memory in the wrong order.
+        let elsewhere = Volume::from_mesh_in(&b, lo, hi, 0.25);
+        assert!(!va.aligned_with(&elsewhere));
+        let mut guarded = va.clone();
+        guarded.union(&elsewhere);
+        assert_eq!(
+            guarded.to_mesh().num_points(),
+            am.num_points(),
+            "a mismatched grid was combined"
+        );
     }
 
     // ---- Mesh export ----

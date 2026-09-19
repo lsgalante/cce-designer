@@ -308,6 +308,58 @@ Buttons dispatch through `execute_menu_action` by LABEL, which carries no node
 — `run_export` resolves the node from the current selection, which is sound
 because the pressed button can only be on the node the pane is showing.
 
+### The volume representation
+
+`src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,
+dims, data }` — with two nodes on it: `volume` (offset and shell) and
+`boolean` (union, intersect, subtract). It exists because shelling, offsetting
+and booleans are not mesh operations. Doing them on triangles means answering
+"which side of this whole surface is that point on" per triangle pair; doing
+them on a field means `min`, `max` and a sign flip, and the mesh comes back out
+by extraction.
+
+**Signing the field is the whole difficulty**, and it is done in two parts
+because neither part is right everywhere:
+
+- **Far from the surface**, a flood fill from the grid boundary — which is
+  outside by construction — marks everything it can reach. Whatever it cannot
+  reach without crossing the surface is enclosed, however convoluted the
+  cavity. The flood may only step between samples that are *both* further than
+  `voxel * 1.01` from any surface, because two samples one voxel apart cannot
+  both be more than a voxel from a surface lying between them. A looser band
+  (0.75 voxel was the first try) lets the flood walk straight through a thin
+  wall and the solid comes back hollow.
+- **Inside that band**, the flood has nothing to say, so the nearest face's
+  normal decides. That test trusts the winding, so the winding is *measured*
+  first — the signed volume by the divergence theorem, positive when faces look
+  outward — and the test flips if the mesh is inside out. An imported mesh is
+  not obliged to agree with this app's convention, and one that disagrees used
+  to come back with its band signs alternating against the flood's.
+
+Ray parity was the first approach and is wrong: a ray through a shared edge
+crosses two triangles at one point and counts two, so the parity inverts for
+every sample behind it. It failed on 79 of 15625 samples in contiguous runs,
+which is what a parity bug looks like.
+
+Extraction is naive **surface nets** (`to_mesh`): one vertex per cell that has
+a sign change, placed at the average of its edge crossings, and one quad per
+crossed grid edge joining the four cells around it. Chosen over marching cubes
+because it produces quads on a quad grid and far fewer degenerate slivers.
+
+One vertex per cell is also its limit. Where a feature is thinner than a voxel
+— the knife-edge rim of a subtraction — two sheets of surface share one cell's
+vertex and pinch, leaving edges with four faces. The result is still
+watertight; it is not manifold. Hence two predicates on `Detail`, and the
+difference matters: [`is_closed`](src/detail.rs) asks that every directed edge
+have exactly one opposite (no boundary, consistently wound — what having an
+inside requires, and what `Volume::build` guards its input with), while
+`is_manifold` asks for exactly two faces per edge (what remeshing requires,
+since an edge with four faces has no single pair to flip between).
+
+`Volume::build` takes an explicit `reach`: distances are clamped there, so the
+field is exact near the surface and flat far from it. A boolean builds both
+operands on ONE grid so the two fields line up sample for sample.
+
 ### Runtime paths point into the source tree
 
 Node templates (`nodes/*.json`) and `default_project.json` are located via

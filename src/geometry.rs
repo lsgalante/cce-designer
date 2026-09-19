@@ -34,39 +34,6 @@ impl SimpleRng {
     }
 }
 
-fn ray_triangle_intersect(
-    origin: Vec3,
-    dir: Vec3,
-    v0: Vec3,
-    v1: Vec3,
-    v2: Vec3,
-) -> Option<f32> {
-    let edge1 = v1 - v0;
-    let edge2 = v2 - v0;
-    let h = dir.cross(edge2);
-    let a = edge1.dot(h);
-    if a.abs() < 1e-6 {
-        return None;
-    }
-    let f = 1.0 / a;
-    let s = origin - v0;
-    let u = f * s.dot(h);
-    if u < 0.0 || u > 1.0 {
-        return None;
-    }
-    let q = s.cross(edge1);
-    let v = f * dir.dot(q);
-    if v < 0.0 || u + v > 1.0 {
-        return None;
-    }
-    let t = f * edge2.dot(q);
-    if t > 1e-5 {
-        Some(t)
-    } else {
-        None
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum GAttribute {
     Float(f32),
@@ -764,6 +731,10 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_valence_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("deform") {
         resolve_deform_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("volume") {
+        resolve_volume_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("boolean") {
+        resolve_boolean_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("export") {
         resolve_export_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("subdivide") {
@@ -1249,7 +1220,7 @@ pub fn resolve_collision_geometry_with_errors(
         } else {
             let crossings = tris
                 .iter()
-                .filter(|t| ray_triangle_intersect(pt, ray_dir, t[0], t[1], t[2]).is_some())
+                .filter(|t| crate::spatial::ray_triangle(pt, ray_dir, t[0], t[1], t[2]).is_some())
                 .count();
             crossings % 2 == 1
         }
@@ -1668,6 +1639,116 @@ pub fn resolve_cull_geometry_with_errors(
     let keep: Vec<bool> = selected.iter().map(|&s| !s).collect();
     geom.keep_points(&keep);
     Some(geom)
+}
+
+/// The Volume node: offset or shell a surface through a distance field.
+///
+/// Offsetting a mesh directly means resolving every self-intersection the move
+/// creates; through a field it is a subtraction and the result is closed by
+/// construction. Shell is the same trick twice — the shape minus the shape
+/// moved inward — which is what a mold wall is.
+///
+/// The cost is resolution: the result is a surface extracted from a grid, so
+/// detail finer than the Voxel Size is gone. That is the trade the
+/// representation makes, and it is why this is a node rather than something
+/// applied silently.
+pub fn resolve_volume_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    if geom.num_prims() == 0 {
+        return Some(geom);
+    }
+
+    let voxel = node_param_f32(target, "Voxel Size", 0.05).max(1e-3);
+    let offset = node_param_f32(target, "Offset", 0.0);
+    let shell = node_param_str(target, "Mode", "Offset").eq_ignore_ascii_case("shell");
+    let thickness = node_param_f32(target, "Thickness", 0.05).max(1e-4);
+
+    // Room for everything the operation will ask the field to reach: the
+    // offset itself, and for a shell the wall's thickness beyond it.
+    let want = offset.abs() + if shell { thickness } else { 0.0 } + voxel * 2.0;
+    let Some((lo, hi)) = crate::volume::Volume::bounds_for(&geom, want) else {
+        return Some(geom);
+    };
+    // A grid is capped at 256 samples an axis, so a voxel size far too small
+    // for the model silently gives a coarse answer. Saying so beats a result
+    // that looks like the node is broken.
+    let cells = ((hi - lo).max_element() / voxel).ceil();
+    if cells > 256.0 && ocl_error.is_none() {
+        *ocl_error = Some(format!(
+            "Volume '{}': voxel {:.3} needs {} samples across, over the 256 cap — the result is coarser than asked",
+            target.name, voxel, cells as i64
+        ));
+    }
+
+    let mut vol = crate::volume::Volume::build(&geom, lo, hi, voxel, want);
+    if shell {
+        // The wall between the offset surface and the same surface moved in by
+        // Thickness: intersect what is inside the outer with what is outside
+        // the inner.
+        let mut inner = vol.clone();
+        inner.offset(offset - thickness);
+        vol.offset(offset);
+        vol.subtract(&inner);
+    } else {
+        vol.offset(offset);
+    }
+    Some(vol.to_mesh())
+}
+
+/// The Boolean node: union, intersection and difference through a field.
+///
+/// Both inputs are sampled over ONE grid covering both, which is what makes
+/// the operation elementwise — a minimum, a maximum, a maximum against a
+/// negation. A mesh boolean spends its whole length finding intersection
+/// curves and stitching; this cannot produce an open surface because there is
+/// no stitching to get wrong.
+pub fn resolve_boolean_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let a = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let with_name = node_param_str(target, "With", "");
+    let with_name = with_name.trim().to_string();
+    let Some(b) = find_node_by_name(root, &with_name)
+        .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+    else {
+        if ocl_error.is_none() && !with_name.is_empty() {
+            *ocl_error = Some(format!("Boolean '{}': cannot resolve '{}'", target.name, with_name));
+        }
+        return Some(a);
+    };
+    if a.num_prims() == 0 || b.num_prims() == 0 {
+        return Some(a);
+    }
+
+    let voxel = node_param_f32(target, "Voxel Size", 0.05).max(1e-3);
+    let op = node_param_str(target, "Operation", "Union").to_lowercase();
+    // One grid over BOTH, so the two fields line up sample for sample.
+    let (alo, ahi) = a.bounds()?;
+    let (blo, bhi) = b.bounds()?;
+    let pad = Vec3::splat(voxel * 3.0);
+    let (lo, hi) = (alo.min(blo) - pad, ahi.max(bhi) + pad);
+
+    let mut va = crate::volume::Volume::build(&a, lo, hi, voxel, voxel * 3.0);
+    let vb = crate::volume::Volume::build(&b, lo, hi, voxel, voxel * 3.0);
+    match op.as_str() {
+        "intersect" => va.intersect(&vb),
+        "subtract" => va.subtract(&vb),
+        _ => va.union(&vb),
+    }
+    Some(va.to_mesh())
 }
 
 /// The Export node: geometry out of the app.
@@ -4837,6 +4918,8 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "detangle"
         || nt == "subdivide"
         || nt == "export"
+        || nt == "boolean"
+        || nt == "volume"
         || nt == "deform"
         || nt == "valence"
         || nt == "transfer"
@@ -5093,6 +5176,24 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_deform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("volume") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_volume_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("boolean") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_boolean_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
@@ -7122,6 +7223,151 @@ mod simnet_tests {
 
         // Geometry nobody asked to visualize draws nothing at all.
         assert!(vis_marker_vertices(&d, |c| c).is_empty());
+    }
+
+    /// The Boolean node end to end, through the resolver the viewport calls —
+    /// not just Volume's arithmetic.
+    ///
+    /// Written because a hand-built project of two spheres and a Boolean
+    /// rendered an EMPTY scene while every volume unit test passed: the
+    /// arithmetic was right and the wiring was never exercised. A node nobody
+    /// can reach from the network is not a feature.
+    #[test]
+    fn test_the_boolean_node_resolves_two_spheres_into_one_solid() {
+        // Spheres sit on the resolver's own 1.25-spaced layout, so a radius of
+        // 0.8 makes them overlap by 0.35 — a lens neither operation can
+        // mistake for the other.
+        let a = node("id-a", "sphere1", "sphere", vec![param("Radius", "0.8")], vec![]);
+        let b = node("id-b", "sphere2", "sphere", vec![param("Radius", "0.8")], vec![]);
+
+        for (op, expect) in [("Union", "wider"), ("Intersect", "narrower"), ("Subtract", "narrower")] {
+            let bool_node = node(
+                "id-bool",
+                "bool1",
+                "boolean",
+                vec![
+                    param("Input", "sphere1"),
+                    param("With", "sphere2"),
+                    param("Operation", op),
+                    param("Voxel Size", "0.08"),
+                ],
+                vec![],
+            );
+            let root = node("id-root", "root", "node", vec![], vec![a.clone(), b.clone(), bool_node]);
+            let target = &root.children[2];
+
+            let mut err = None;
+            let mut cache = SimCache::default();
+            let mut sim = EvalSim::new(0, 0, &mut cache);
+            let out = resolve_boolean_geometry_with_errors(&root, target, &mut Vec::new(), &mut err, &mut sim)
+                .unwrap_or_else(|| panic!("{op}: the Boolean resolved to nothing"));
+            assert!(err.is_none(), "{op}: {err:?}");
+            assert!(out.num_prims() > 0, "{op}: the Boolean produced no primitives");
+            assert!(out.is_closed(), "{op}: the result is not a closed surface");
+            // Union and Intersect come out fully manifold. Subtract does not:
+            // the bite leaves a rim thinner than a voxel, and surface nets has
+            // one vertex per cell to give it, so the two sheets pinch and a
+            // handful of edges carry four faces. Watertight, still solid, but
+            // recorded here rather than discovered downstream.
+            if op != "Subtract" {
+                assert!(out.is_manifold(), "{op}: the result is not manifold");
+            }
+
+            // The single sphere it started from, for a size to compare against.
+            let (slo, shi) = generate_single_node_geometry_with_errors(
+                &root, &root.children[0], &mut Vec::new(), &mut None, &mut sim,
+            )
+            .unwrap()
+            .bounds()
+            .unwrap();
+            let (olo, ohi) = out.bounds().unwrap();
+            let (one, both) = (shi.x - slo.x, ohi.x - olo.x);
+            if expect == "wider" {
+                assert!(both > one * 1.3, "{op}: {both} is not wider than one sphere's {one}");
+            } else {
+                assert!(both < one * 0.9, "{op}: {both} is not narrower than one sphere's {one}");
+            }
+        }
+    }
+
+    /// The Volume node's two modes, likewise through the resolver.
+    #[test]
+    fn test_the_volume_node_offsets_and_shells() {
+        let sphere = node("id-s", "sphere1", "sphere", vec![param("Radius", "0.8")], vec![]);
+
+        let grown = node(
+            "id-v",
+            "vol1",
+            "volume",
+            vec![
+                param("Input", "sphere1"),
+                param("Mode", "Offset"),
+                param("Voxel Size", "0.08"),
+                param("Offset", "0.2"),
+            ],
+            vec![],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere.clone(), grown]);
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        let out = resolve_volume_geometry_with_errors(&root, &root.children[1], &mut Vec::new(), &mut err, &mut sim)
+            .expect("the Volume node resolved to nothing");
+        assert!(err.is_none(), "{err:?}");
+        assert!(out.is_closed(), "an offset sphere is not a closed surface");
+        let (slo, shi) = generate_single_node_geometry_with_errors(
+            &root, &root.children[0], &mut Vec::new(), &mut None, &mut sim,
+        )
+        .unwrap()
+        .bounds()
+        .unwrap();
+        let (olo, ohi) = out.bounds().unwrap();
+        assert!(
+            (ohi.x - olo.x) > (shi.x - slo.x) + 0.25,
+            "a +0.2 offset did not grow the sphere: {} vs {}",
+            ohi.x - olo.x,
+            shi.x - slo.x
+        );
+
+        // A shell is hollow: closed, and with twice the surface of the solid.
+        let shell = node(
+            "id-v2",
+            "vol2",
+            "volume",
+            vec![
+                param("Input", "sphere1"),
+                param("Mode", "Shell"),
+                param("Voxel Size", "0.08"),
+                param("Offset", "0.0"),
+                param("Thickness", "0.15"),
+            ],
+            vec![],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere, shell]);
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        let out = resolve_volume_geometry_with_errors(&root, &root.children[1], &mut Vec::new(), &mut err, &mut sim)
+            .expect("the Volume node resolved to nothing");
+        assert!(err.is_none(), "{err:?}");
+        assert!(out.is_closed(), "a shell is not a closed surface");
+        assert!(out.num_prims() > 0, "the shell is empty");
+
+        // Hollow, and provably so: a shell has an INNER surface, so its points
+        // sit at two radii, not one. Rendered from outside it is
+        // indistinguishable from the solid sphere, which is exactly why this
+        // is asserted rather than looked at.
+        let centre = (slo + shi) * 0.5;
+        let radii: Vec<f32> = (0..out.num_points()).map(|p| (out.pos(p) - centre).length()).collect();
+        let (near, far) = radii.iter().fold((f32::MAX, 0.0f32), |(n, f), &r| (n.min(r), f.max(r)));
+        assert!(
+            (far - 0.8).abs() < 0.1,
+            "the shell's outer surface is at {far}, not the sphere's 0.8"
+        );
+        assert!(
+            (near - 0.65).abs() < 0.1,
+            "the shell has no cavity: its innermost point is at {near}, expected 0.8 - 0.15"
+        );
     }
 
     #[test]

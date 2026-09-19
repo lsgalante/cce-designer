@@ -1449,6 +1449,69 @@ impl Detail {
         let _ = self.points.set_value(CD, p, AttribValue::Float3(c));
     }
 
+    /// Whether the surface is closed: every directed edge has exactly one
+    /// opposite.
+    ///
+    /// The question "what is inside this?" only has an answer for a closed
+    /// surface. A flat disc, a torn mesh or a single polygon has no inside, and
+    /// anything that signs a distance field has to know the difference — sign
+    /// an open surface and you get whichever side its normals happen to face,
+    /// which is not a solid, just a preference.
+    ///
+    /// Directed, not undirected, because the property that matters is "no
+    /// boundary, consistently wound", and those are the same test: every edge
+    /// walked one way by one face and the other way by its neighbour. Counting
+    /// undirected edges instead would ask for exactly two faces per edge, which
+    /// is [`is_manifold`](Self::is_manifold) — a stricter thing that a boolean
+    /// legitimately fails where two sheets pinch together along a knife edge
+    /// thinner than a voxel. Such a surface is still watertight, still has an
+    /// inside, and still voxelizes correctly.
+    pub fn is_closed(&self) -> bool {
+        if self.num_prims() == 0 {
+            return false;
+        }
+        let mut counts: HashMap<[u32; 2], i32> = HashMap::new();
+        for prim in 0..self.num_prims() {
+            let pts = self.prim_points(prim);
+            if pts.len() < 3 {
+                return false;
+            }
+            for i in 0..pts.len() {
+                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                // One counter per undirected edge, incremented one way and
+                // decremented the other: it lands on zero exactly when every
+                // traversal is matched by an opposite one.
+                let (key, step) = if a < b { ([a, b], 1) } else { ([b, a], -1) };
+                *counts.entry(key).or_default() += step;
+            }
+        }
+        counts.values().all(|&c| c == 0)
+    }
+
+    /// Whether every edge is shared by exactly two primitives.
+    ///
+    /// Stricter than [`is_closed`](Self::is_closed): it also rules out the
+    /// place where more than two faces meet along one edge. Remeshing wants
+    /// this — an edge with four faces has no single pair to flip or collapse
+    /// between — while voxelizing does not.
+    pub fn is_manifold(&self) -> bool {
+        if self.num_prims() == 0 {
+            return false;
+        }
+        let mut counts: HashMap<[u32; 2], usize> = HashMap::new();
+        for prim in 0..self.num_prims() {
+            let pts = self.prim_points(prim);
+            if pts.len() < 3 {
+                return false;
+            }
+            for i in 0..pts.len() {
+                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                *counts.entry([a.min(b), a.max(b)]).or_default() += 1;
+            }
+        }
+        counts.values().all(|&c| c == 2)
+    }
+
     /// The axis-aligned bounds, or `None` when there are no points.
     pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
         let first = *self.pos.first()?;

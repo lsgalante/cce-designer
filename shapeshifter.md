@@ -359,9 +359,33 @@ Touches: `shortcut.rs`, `app.rs`, `slots.rs`, `cce-ui`.
 > writes STL and OBJ, there is an `export` node and a `--export` CLI mode, and
 > a solved growth simulation can be written to a printable file.
 >
-> Still outstanding for this phase: the volume representation (SDF or sparse
-> grid) that shelling, offsetting and boolean work need, and the 2D page
-> context for the COP family.
+> **The volume representation landed.** `src/volume.rs` is a dense signed
+> distance field; the `volume` node offsets and shells, the `boolean` node
+> unions, intersects and subtracts. Extraction is surface nets.
+>
+> Signing the field cost three wrong answers before a right one. Ray parity
+> double-counts at shared edges and inverted 79 of 15625 samples. A flood fill
+> from the grid boundary fixes that, but a 0.75-voxel band let it walk through
+> a thin wall and a slab came back hollow — the band has to be a full voxel,
+> because two samples one voxel apart cannot both be further than a voxel from
+> a surface between them. And the band's own test, which asks the nearest face
+> which side a sample is on, trusts the winding; a mesh wound inside out came
+> back with its band signs alternating against the flood's, so the winding is
+> now measured by the divergence theorem and the test flips to match.
+>
+> The limit worth knowing: one vertex per cell means a feature thinner than a
+> voxel pinches. A subtraction's knife-edge rim leaves a handful of edges
+> carrying four faces — watertight, but not manifold. `Detail` now distinguishes
+> the two (`is_closed` / `is_manifold`), because voxelizing needs only the
+> first and remeshing needs the second.
+>
+> Two of these were found by RENDERING rather than testing, which is now the
+> third time this phase: a node whose arithmetic is right and whose wiring is
+> never exercised looks exactly like a working node until you ask the viewport
+> to draw it. Both new nodes now have resolver-level tests, not just unit tests
+> on the field.
+>
+> Still outstanding for this phase: the 2D page context for the COP family.
 
 Furthest out because it needs infrastructure nothing else does: a **volume
 representation** (SDF or sparse grid) for shelling, offsetting and boolean work,

@@ -1,0 +1,13 @@
+{
+ "name": "Volume",
+ "type": "volume",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Mode", "type": "choice:Offset,Shell", "default": "Offset" },
+  { "name": "Voxel Size", "type": "slider", "default": "0.05", "min": 0.005, "max": 1.0, "step": 0.005 },
+  { "name": "Offset", "type": "slider", "default": "0.00", "min": -1.0, "max": 1.0, "step": 0.005 },
+  { "name": "Thickness", "type": "slider", "default": "0.05", "min": 0.001, "max": 1.0, "step": 0.005, "show_when": "Mode == Shell" }
+ ]
+}

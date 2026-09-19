@@ -59,6 +59,34 @@ pub fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     a + ab * (vb / denom) + ac * (vc / denom)
 }
 
+/// Where a ray meets a triangle, as a distance along the ray.
+///
+/// Möller–Trumbore. Lives here beside the other spatial queries because three
+/// callers want it now: Collision's inside test, and the volume builder's sign
+/// pass, which casts one ray per grid row.
+pub fn ray_triangle(origin: Vec3, dir: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<f32> {
+    let edge1 = v1 - v0;
+    let edge2 = v2 - v0;
+    let h = dir.cross(edge2);
+    let a = edge1.dot(h);
+    if a.abs() < 1e-6 {
+        return None;
+    }
+    let f = 1.0 / a;
+    let s = origin - v0;
+    let u = f * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(edge1);
+    let v = f * dir.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = f * edge2.dot(q);
+    (t > 1e-5).then_some(t)
+}
+
 /// Where things are, bucketed by cell.
 ///
 /// Shared by both grids: they differ only in what they store and how they
@@ -181,14 +209,57 @@ impl TriGrid {
         self.tris.is_empty()
     }
 
+    /// The triangles behind this grid, for a caller that needs them directly —
+    /// the volume builder's scanline sign pass casts rays at all of them.
+    pub fn triangles(&self) -> &[[Vec3; 3]] {
+        &self.tris
+    }
+
     /// The closest point on the surface, and its distance.
     ///
     /// Searches an expanding box until the best hit is closer than the box is
     /// wide — at which point nothing outside can beat it, because anything out
     /// there is at least that far away.
     pub fn closest(&self, p: Vec3) -> Option<Hit> {
+        self.closest_within(p, f32::INFINITY)
+    }
+
+    /// [`TriGrid::closest`], giving up once the search passes `limit`.
+    ///
+    /// The unbounded form doubles its reach until it finds something, so a
+    /// query far from the surface ends up gathering every triangle in the mesh
+    /// and sorting them — which is fine for the handful of queries an operator
+    /// makes and ruinous for the hundred thousand a volume build makes, where
+    /// most samples are nowhere near the surface. A caller that only needs to
+    /// know "further than this" says so and pays for a few cells.
+    pub fn closest_within(&self, p: Vec3, limit: f32) -> Option<Hit> {
         if self.tris.is_empty() {
             return None;
+        }
+        if limit.is_finite() {
+            // ONE gather of exactly the box asked for, rather than doubling up
+            // to it: a bounded query knows how far it cares about, and growing
+            // into that size in stages means gathering and sorting the same
+            // cells over and over. This is the difference between a volume
+            // build taking thirty seconds and taking two.
+            let mut scratch = Vec::new();
+            self.grid
+                .gather(p - Vec3::splat(limit), p + Vec3::splat(limit), &mut scratch);
+            return scratch
+                .iter()
+                .map(|&i| {
+                    let t = self.tris[i as usize];
+                    let q = closest_point_on_triangle(p, t[0], t[1], t[2]);
+                    Hit {
+                        point: q,
+                        distance: (q - p).length(),
+                        normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero(),
+                    }
+                })
+                .min_by(|a, b| {
+                    a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .filter(|h| h.distance <= limit);
         }
         let hit = |i: usize| {
             let t = self.tris[i];
