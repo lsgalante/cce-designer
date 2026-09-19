@@ -3646,6 +3646,290 @@ mod tests {
         assert_eq!(g.num_points(), sphere_detail(Vec3::ZERO, 1.0, 16, 24).num_points());
     }
 
+    #[test]
+    fn test_points_and_scatter_can_emit_bare_points() {
+        // Everything that generates locations drew marker spheres at them,
+        // which is right for looking at and wrong for working with: Copy
+        // placed one instance per marker VERTEX rather than one per location,
+        // because the markers were the only points there were.
+        let markers = modelling_root(
+            "1.0",
+            vec![phase3_node("points", &[("Shape", "Line"), ("Points", "5")])],
+        );
+        let (with, _) = eval_node(&markers, "points 1");
+        assert!(with.num_prims() > 0, "markers are geometry");
+        assert!(with.num_points() > 5);
+
+        let bare = modelling_root(
+            "1.0",
+            vec![phase3_node(
+                "points",
+                &[("Shape", "Line"), ("Points", "5"), ("Markers", "false")],
+            )],
+        );
+        let (without, _) = eval_node(&bare, "points 1");
+        assert_eq!(without.num_points(), 5, "one point per location");
+        assert_eq!(without.num_prims(), 0, "bare points are not geometry");
+
+        // Default is unchanged, so no existing project looks different.
+        let defaulted = modelling_root(
+            "1.0",
+            vec![phase3_node("points", &[("Shape", "Line"), ("Points", "5")])],
+        );
+        assert_eq!(eval_node(&defaulted, "points 1").0.num_points(), with.num_points());
+    }
+
+    #[test]
+    fn test_copy_puts_geometry_at_every_target_point() {
+        let root = modelling_root(
+            "0.2",
+            vec![
+                phase3_node("points", &[("Shape", "Line"), ("Points", "5")]),
+                phase3_node("copy", &[("Input", "sphere 1"), ("To", "points 1")]),
+            ],
+        );
+        let (src, _) = eval_node(&root, "sphere 1");
+        let (onto, _) = eval_node(&root, "points 1");
+        let (g, err) = eval_node(&root, "copy 1");
+        assert!(err.is_none(), "{err:?}");
+
+        assert_eq!(g.num_points(), src.num_points() * onto.num_points());
+        assert_eq!(g.num_prims(), src.num_prims() * onto.num_points());
+        // Every copy is its own set of points: merge reallocates identities, so
+        // a solver can treat them separately rather than seeing one set
+        // repeated.
+        let mut ids = g.ids().to_vec();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "identities were repeated across copies");
+
+        // Each copy lands ON its target. Merge appends them in order, so copy
+        // i is the i-th block of points — and its centroid should be the
+        // target's position plus the source's own centroid, since the `sphere`
+        // node places itself by graph index rather than at the origin.
+        let m = src.num_points();
+        let centroid = |d: &Detail, range: std::ops::Range<usize>| {
+            let n = range.len() as f32;
+            range.map(|p| d.pos(p)).sum::<Vec3>() / n
+        };
+        let src_centre = centroid(&src, 0..m);
+        for i in 0..onto.num_points() {
+            let want = onto.pos(i) + src_centre;
+            let got = centroid(&g, i * m..(i + 1) * m);
+            assert!((got - want).length() < 1e-3, "copy {i} at {got:?}, wanted {want:?}");
+        }
+    }
+
+    #[test]
+    fn test_copy_scales_by_an_attribute_and_refuses_an_explosion() {
+        let mut root = modelling_root(
+            "0.2",
+            vec![
+                phase3_node("points", &[("Shape", "Line"), ("Points", "4")]),
+                phase3_node(
+                    "normal",
+                    &[("Input", "points 1"), ("Attribute", "N")],
+                ),
+                phase3_node(
+                    "copy",
+                    &[
+                        ("Input", "sphere 1"),
+                        ("To", "points 1"),
+                        ("Scale", "2.00"),
+                    ],
+                ),
+            ],
+        );
+        let (plain, _) = eval_node(&root, "copy 1");
+        let plain_size = plain.bounds().map(|(a, b)| (b - a).length()).unwrap();
+
+        // Scale shrinks the copies without moving the targets they sit on.
+        root.children
+            .iter_mut()
+            .find(|c| c.name == "copy 1")
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|p| p.name == "Scale")
+            .unwrap()
+            .default = "0.50".into();
+        let (small, _) = eval_node(&root, "copy 1");
+        let small_size = small.bounds().map(|(a, b)| (b - a).length()).unwrap();
+        assert!(small_size < plain_size, "{small_size} should be under {plain_size}");
+        assert_eq!(small.num_points(), plain.num_points());
+
+        // A copy big enough to hang the app is refused with a number rather
+        // than attempted.
+        let huge = modelling_root(
+            "1.0",
+            vec![
+                phase3_node("points", &[("Shape", "Grid"), ("Points", "9000")]),
+                phase3_node("copy", &[("Input", "sphere 1"), ("To", "points 1")]),
+            ],
+        );
+        let (g, err) = eval_node(&huge, "copy 1");
+        assert!(err.as_deref().unwrap_or("").contains("ceiling"), "{err:?}");
+        assert_eq!(g.num_points(), 0, "nothing is built when the copy is refused");
+    }
+
+    #[test]
+    fn test_soft_transform_falls_off_instead_of_leaving_a_step() {
+        let mut sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+        let before: Vec<Vec3> = (0..sphere.num_points()).map(|p| sphere.pos(p)).collect();
+        // Everything above the equator is selected; the falloff should still
+        // reach below it.
+        sphere.points_mut().create_group("top");
+        for p in 0..sphere.num_points() {
+            if sphere.pos(p).y > 0.7 {
+                sphere.points_mut().add_to_group("top", p);
+            }
+        }
+
+        let node = phase3_node(
+            "soft_transform",
+            &[
+                ("Translation", "0.00:1.00:0.00"),
+                ("Group", "top"),
+                ("Radius", "0.80"),
+                ("Falloff", "Smooth"),
+                ("Attribute", "falloff"),
+            ],
+        );
+        crate::geometry::apply_soft_transform(&mut sphere, &node);
+
+        let moved = |p: usize| (sphere.pos(p) - before[p]).length();
+        // Group members move the full amount.
+        let members = sphere.points().group_members("top");
+        assert!(!members.is_empty());
+        for &p in &members {
+            assert!((moved(p as usize) - 1.0).abs() < 1e-4, "member {p} moved {}", moved(p as usize));
+        }
+        // Points beyond the radius do not move at all, and points between do —
+        // which is the difference from a hard translate on the group.
+        let far = (0..before.len()).find(|&p| before[p].y < -0.9).unwrap();
+        assert!(moved(far) < 1e-5, "a point across the sphere moved {}", moved(far));
+        let between = (0..before.len())
+            .filter(|&p| !members.contains(&(p as u32)) && moved(p) > 1e-4)
+            .count();
+        assert!(between > 0, "nothing followed the selection");
+
+        // The falloff is written out as the mask that drove the move.
+        assert!(sphere.points().has("falloff"));
+        for &p in &members {
+            let w = sphere.points().value("falloff", p as usize).unwrap().as_f32();
+            assert!((w - 1.0).abs() < 1e-4);
+        }
+        assert!((sphere.points().value("falloff", far).unwrap().as_f32()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_soft_transform_measures_from_the_nearest_member_not_the_centroid() {
+        // A selection shaped like a ring: its centroid is the middle, where no
+        // member is. Measuring from the centroid would drag hardest at a place
+        // the selection is nowhere near.
+        let mut sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+        sphere.points_mut().create_group("ring");
+        for p in 0..sphere.num_points() {
+            if sphere.pos(p).y.abs() < 0.15 {
+                sphere.points_mut().add_to_group("ring", p);
+            }
+        }
+        let before: Vec<Vec3> = (0..sphere.num_points()).map(|p| sphere.pos(p)).collect();
+        let node = phase3_node(
+            "soft_transform",
+            &[("Translation", "0.00:0.50:0.00"), ("Group", "ring"), ("Radius", "0.30")],
+        );
+        crate::geometry::apply_soft_transform(&mut sphere, &node);
+
+        let moved = |p: usize| (sphere.pos(p) - before[p]).length();
+        // The ring itself moves fully; the poles, far from every member, do
+        // not — even though they are no further from the ring's CENTROID than
+        // the ring is.
+        for &p in &sphere.points().group_members("ring") {
+            assert!((moved(p as usize) - 0.5).abs() < 1e-4);
+        }
+        let pole = (0..before.len())
+            .max_by(|&a, &b| before[a].y.partial_cmp(&before[b].y).unwrap())
+            .unwrap();
+        assert!(moved(pole) < 1e-5, "the pole moved {}", moved(pole));
+    }
+
+    #[test]
+    fn test_group_selects_by_attribute_and_expands_across_the_surface() {
+        let root = modelling_root(
+            "1.0",
+            vec![
+                phase3_node("connectivity", &[("Input", "sphere 1"), ("Attribute", "piece")]),
+                phase3_node(
+                    "normal",
+                    &[("Input", "connectivity 1"), ("Attribute", "N")],
+                ),
+                phase3_node(
+                    "group",
+                    &[
+                        ("Input", "normal 1"),
+                        ("Group Name", "up"),
+                        ("Mode", "Attribute"),
+                        ("Attribute", "N"),
+                        ("Comparison", "Above"),
+                        ("Threshold", "0.50"),
+                        ("Highlight", "false"),
+                    ],
+                ),
+            ],
+        );
+        let (g, err) = eval_node(&root, "group 1");
+        assert!(err.is_none(), "{err:?}");
+
+        // Selecting by what a point IS, not where it is: this is what makes
+        // the measuring nodes composable. `N` reads as its first component, so
+        // the selection is "normal points along +X".
+        let members = g.points().group_members("up");
+        assert!(!members.is_empty() && members.len() < g.num_points());
+        for &p in &members {
+            assert!(g.points().value("N", p as usize).unwrap().as_f32() > 0.5);
+        }
+
+        // Expand grows that selection across the surface.
+        let mut grown_root = root.clone();
+        grown_root.children.push(phase3_node(
+            "group",
+            &[
+                ("Input", "group 1"),
+                ("Group Name", "wider"),
+                ("Mode", "Expand"),
+                ("Source Group", "up"),
+                ("Rings", "2"),
+                ("Highlight", "false"),
+            ],
+        ));
+        grown_root.children.last_mut().unwrap().name = "group 2".into();
+        grown_root.children.last_mut().unwrap().id = "id-group2".into();
+        let (grown, err) = eval_node(&grown_root, "group 2");
+        assert!(err.is_none(), "{err:?}");
+        let wider = grown.points().group_members("wider");
+        assert!(wider.len() > members.len(), "{} did not grow past {}", wider.len(), members.len());
+        for &p in &members {
+            assert!(wider.contains(&p), "expanding dropped an original member");
+        }
+
+        // And shrinks it: negative rings peel the boundary off, so an
+        // erode/dilate pair is one node twice rather than two nodes.
+        let mut shrunk_root = grown_root.clone();
+        shrunk_root
+            .children
+            .last_mut()
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|p| p.name == "Rings")
+            .unwrap()
+            .default = "-1".into();
+        let (shrunk, _) = eval_node(&shrunk_root, "group 2");
+        assert!(shrunk.points().group_members("wider").len() < members.len());
+    }
+
     // ---- Phase 3: surface development ----
 
     use crate::geometry::sphere_detail;

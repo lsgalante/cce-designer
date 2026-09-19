@@ -16,6 +16,11 @@
       "name": "Shape",
       "type": "choice:None,Spiral,Line,Circle,Grid",
       "default": "None"
+    },
+    {
+      "name": "Markers",
+      "type": "choice:true,false",
+      "default": "true"
     }
   ]
 }

@@ -280,7 +280,17 @@ Touches: a new `remesh.rs`, `geometry.rs`, `nodes/*.json`.
 > recovered parameter names from the HDAs they are honoured (`piece_attr`,
 > `dir_attr`).
 >
-> Remaining: Copy, Soft Transform, Select, and the Create primitives.
+> Copy and Soft Transform are in too, and `group` grew Attribute and Expand —
+> selection by what a point IS rather than where it is, which is what makes
+> the measuring nodes composable, plus grow/shrink across the surface.
+>
+> `points` and `scatter` can now emit BARE POINTS. Both drew marker spheres at
+> every location, which is right for looking at and wrong for working with:
+> Copy placed one instance per marker vertex rather than one per location,
+> because the markers were the only points there were.
+>
+> Remaining: Select (which is `group` with more criteria, not a new node), and
+> the Create primitives.
 
 The `im_*` family, which is the part that looks biggest and is actually the
 easiest — ninety nodes, most of them a screenful once points and prims exist.

@@ -1,0 +1,14 @@
+{
+ "name": "Copy",
+ "type": "copy",
+ "inputs": 2,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "To", "type": "text", "default": "" },
+  { "name": "Orient", "type": "choice:None,Normal", "default": "None" },
+  { "name": "Scale", "type": "text", "default": "1.00" },
+  { "name": "Scale Attribute", "type": "text", "default": "" },
+  { "name": "Group", "type": "text", "default": "" }
+ ]
+}

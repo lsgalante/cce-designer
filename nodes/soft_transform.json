@@ -1,0 +1,15 @@
+{
+ "name": "Soft Transform",
+ "type": "soft_transform",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Translation", "type": "text", "default": "0.00:0.20:0.00" },
+  { "name": "Center", "type": "text", "default": "0.00:0.00:0.00" },
+  { "name": "Group", "type": "text", "default": "" },
+  { "name": "Radius", "type": "slider", "default": "0.50", "min": 0.0, "max": 10.0, "step": 0.01 },
+  { "name": "Falloff", "type": "choice:Smooth,Linear,Constant", "default": "Smooth" },
+  { "name": "Attribute", "type": "text", "default": "" }
+ ]
+}

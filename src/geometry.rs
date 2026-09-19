@@ -750,6 +750,10 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_connectivity_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("cull") {
         resolve_cull_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("copy") {
+        resolve_copy_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("soft_transform") {
+        resolve_soft_transform_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("subdivide") {
         resolve_subdivide_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("detangle") {
@@ -960,7 +964,57 @@ fn select_elements(
     };
 
     let mode = node_param_str(target, "Mode", "Box").to_lowercase();
-    if mode == "random" {
+    if mode == "attribute" {
+        // Select by what a point IS rather than where it is. This is what
+        // makes the measuring nodes composable: Distance, Connectivity or a
+        // solver's own attribute becomes a named selection that Cull, Relax's
+        // pin, Attribute's group and Soft Transform all already read.
+        let attr = node_param_str(target, "Attribute", "");
+        let attr = attr.trim().to_string();
+        let below = node_param_str(target, "Comparison", "Above").eq_ignore_ascii_case("below");
+        let threshold = node_param_f32(target, "Threshold", 0.5);
+        if geom.points().has(&attr) {
+            for p in 0..geom.num_points() {
+                let v = geom.points().value(&attr, p).map(|v| v.as_f32()).unwrap_or(0.0);
+                if if below { v < threshold } else { v > threshold } {
+                    member[p] = true;
+                }
+            }
+        }
+    } else if mode == "expand" {
+        // Grow or shrink an existing selection across the surface. Rings is
+        // signed: positive walks outward from the members, negative peels the
+        // boundary off, which is how an erode/dilate pair reads without two
+        // nodes.
+        let src = node_param_str(target, "Source Group", "");
+        let src = src.trim().to_string();
+        let rings = node_param_f32(target, "Rings", 1.0).clamp(-8.0, 8.0) as i32;
+        let mut inside: Vec<bool> = (0..geom.num_points())
+            .map(|p| !src.is_empty() && geom.points().in_group(&src, p))
+            .collect();
+        for _ in 0..rings.unsigned_abs() {
+            let before = inside.clone();
+            for p in 0..geom.num_points() {
+                let touches_other = geom
+                    .point_neighbours(p)
+                    .iter()
+                    .any(|&q| before[q as usize] != before[p]);
+                if !touches_other {
+                    continue;
+                }
+                // Growing takes the boundary's outside; shrinking gives up the
+                // boundary's inside.
+                if rings > 0 && !before[p] {
+                    inside[p] = true;
+                } else if rings < 0 && before[p] {
+                    inside[p] = false;
+                }
+            }
+        }
+        for (p, &m) in inside.iter().enumerate() {
+            member[p] = m;
+        }
+    } else if mode == "random" {
         let count = node_param_f32(target, "Count", 1.0).max(0.0) as usize;
         // Seed offsets the stream, and the element type joins it so switching
         // type reshuffles instead of replaying the same index sequence.
@@ -1604,7 +1658,180 @@ pub fn resolve_cull_geometry_with_errors(
     Some(geom)
 }
 
-/// The Subdivide node: four triangles where there was one.
+/// The Copy node: one piece of geometry at every point of another.
+///
+/// The layout operator — scatter real geometry rather than the marker spheres
+/// the Points and Scatter nodes draw. Orient reads the target's `N`, so a
+/// Normal node upstream is what makes copies stand on a surface rather than
+/// all facing the same way, and Scale Attribute lets a field drive their size.
+///
+/// Identities are reallocated per copy by `merge`, so a thousand copies are a
+/// thousand distinct sets of points rather than one set repeated — which is
+/// what lets a solver treat them separately.
+pub fn resolve_copy_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let source_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let source = generate_single_node_geometry_with_errors(root, source_node, visited, ocl_error, sim)?;
+
+    let to_name = node_param_str(target, "To", "");
+    let to_name = to_name.trim().to_string();
+    let Some(onto) = find_node_by_name(root, &to_name)
+        .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+    else {
+        if ocl_error.is_none() && !to_name.is_empty() {
+            *ocl_error = Some(format!("Copy '{}': cannot resolve '{}'", target.name, to_name));
+        }
+        return Some(source);
+    };
+
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let targets: Vec<usize> = (0..onto.num_points())
+        .filter(|&p| group.is_empty() || onto.points().in_group(&group, p))
+        .collect();
+
+    // A copy of a 400-point sphere onto a 10,000-point surface is four million
+    // points, which is not a render — it is a hang. Refused with a number
+    // rather than attempted.
+    const CEILING: usize = 2_000_000;
+    let total = source.num_points().saturating_mul(targets.len());
+    if total > CEILING {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!(
+                "Copy '{}': {} copies of {} points is {} — over the {} ceiling",
+                target.name,
+                targets.len(),
+                source.num_points(),
+                total,
+                CEILING
+            ));
+        }
+        return Some(Detail::new());
+    }
+
+    let orient = node_param_str(target, "Orient", "None").eq_ignore_ascii_case("normal");
+    let scale = node_param_f32(target, "Scale", 1.0);
+    let scale_attr = node_param_str(target, "Scale Attribute", "");
+    let scale_attr = scale_attr.trim().to_string();
+    let normals = orient.then(|| point_normals(&onto));
+
+    let mut out = Detail::new();
+    for &t in &targets {
+        let mut inst = source.clone();
+        let mut s = scale;
+        if !scale_attr.is_empty() {
+            if let Some(v) = onto.points().value(&scale_attr, t) {
+                s *= v.as_f32();
+            }
+        }
+        let rot = match &normals {
+            // Whatever rotation takes +Y onto the point's normal. Copies
+            // modelled standing up therefore stand up on the surface.
+            Some(n) if n[t] != Vec3::ZERO => {
+                glam::Quat::from_rotation_arc(Vec3::Y, n[t])
+            }
+            _ => glam::Quat::IDENTITY,
+        };
+        let at = onto.pos(t);
+        for p in 0..inst.num_points() {
+            inst.set_pos(p, at + rot * (inst.pos(p) * s));
+        }
+        out.merge(&inst);
+    }
+    Some(out)
+}
+
+/// The Soft Transform node: move a region and let the surface follow.
+///
+/// A hard translation on a group leaves a step at the group's edge. This falls
+/// off with distance, so the neighbourhood comes along and the surface stays
+/// continuous — the modelling counterpart of what Relax does after a pull.
+///
+/// Distance is measured from the nearest member of Group where one is given,
+/// not from the group's centre: a selection shaped like a ridge should drag
+/// its whole length, and a centroid would make it drag hardest in the middle
+/// of a line it is nowhere near.
+pub fn resolve_soft_transform_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_soft_transform(&mut geom, target);
+    Some(geom)
+}
+
+pub(crate) fn apply_soft_transform(geom: &mut Detail, target: &FsNode) {
+    let n = geom.num_points();
+    if n == 0 {
+        return;
+    }
+    let translation = node_param_vec3(target, "Translation", Vec3::ZERO);
+    let radius = node_param_f32(target, "Radius", 0.5).max(0.0);
+    let falloff = node_param_str(target, "Falloff", "Smooth").to_lowercase();
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let write_attr = node_param_str(target, "Attribute", "");
+    let write_attr = write_attr.trim().to_string();
+
+    let members: Vec<Vec3> = (0..n)
+        .filter(|&p| !group.is_empty() && geom.points().in_group(&group, p))
+        .map(|p| geom.pos(p))
+        .collect();
+    let centre = node_param_vec3(target, "Center", Vec3::ZERO);
+    let grid = (!members.is_empty()).then(|| crate::spatial::PointGrid::build(&members, radius.max(1e-4)));
+
+    let mut weights = vec![0.0f32; n];
+    let mut near = Vec::new();
+    for p in 0..n {
+        let here = geom.pos(p);
+        let d = match &grid {
+            Some(g) => {
+                g.within(here, radius, &mut near);
+                near.iter()
+                    .map(|&i| (members[i as usize] - here).length())
+                    .fold(f32::INFINITY, f32::min)
+            }
+            None => (here - centre).length(),
+        };
+        // Outside the radius nothing moves, and a zero radius moves only what
+        // is exactly at the centre — a falloff with no width.
+        let t = if radius <= 0.0 {
+            if d <= 0.0 { 0.0 } else { 1.0 }
+        } else {
+            (d / radius).clamp(0.0, 1.0)
+        };
+        weights[p] = match falloff.as_str() {
+            "constant" => if t < 1.0 { 1.0 } else { 0.0 },
+            "linear" => 1.0 - t,
+            // Smoothstep, so the moved region meets the still one with no
+            // crease — which is the entire reason to prefer this to a hard
+            // translate on a group.
+            _ => 1.0 - (3.0 * t * t - 2.0 * t * t * t),
+        };
+    }
+
+    for p in 0..n {
+        let moved = geom.pos(p) + translation * weights[p];
+        geom.set_pos(p, moved);
+    }
+    // The falloff is useful as data too: written out, it is the mask that
+    // drove the move, ready for Visualize or for a second operator to reuse.
+    if !write_attr.is_empty() {
+        geom.points_mut().create(&write_attr, AttribValue::Float(0.0));
+        let _ = geom.points_mut().insert(&write_attr, AttribData::Float(weights));
+    }
+}
+
+/// The Subdivide node: four triangles where there was one./// The Subdivide node: four triangles where there was one.
 pub fn resolve_subdivide_geometry_with_errors(
     root: &FsNode,
     target: &FsNode,
@@ -3292,6 +3519,9 @@ pub fn resolve_scatter_geometry_with_errors(
 
     let num_points = node_param_f32(target, "Points", 100.0) as usize;
     let radius = node_param_f32(target, "Radius", 0.02);
+    // See points_detail: markers are for looking at, bare points are for
+    // working with.
+    let markers = node_param_str(target, "Markers", "true") != "false";
 
     let ray_dir = Vec3::new(0.19, 0.98, 0.05).normalize();
     let mut triangles = Vec::new();
@@ -3356,7 +3586,11 @@ pub fn resolve_scatter_geometry_with_errors(
             }
 
             if intersection_count % 2 == 1 {
-                scattered_geom.merge(&sphere_detail(candidate, radius, 6, 8));
+                if markers {
+                    scattered_geom.merge(&sphere_detail(candidate, radius, 6, 8));
+                } else {
+                    scattered_geom.add_point(candidate);
+                }
                 found_count += 1;
             }
         }
@@ -4267,6 +4501,8 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "suture"
         || nt == "detangle"
         || nt == "subdivide"
+        || nt == "soft_transform"
+        || nt == "copy"
         || nt == "cull"
         || nt == "connectivity"
         || nt == "distance"
@@ -4464,6 +4700,24 @@ pub fn network_sphere_vertices_with_errors(
                     out.merge(&geom);
                 }
             }
+        } else if node.node_type.eq_ignore_ascii_case("copy") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_copy_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("soft_transform") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_soft_transform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
         } else if node.node_type.eq_ignore_ascii_case("subdivide") {
             let _idx = *count;
             *count += 1;
@@ -4607,6 +4861,12 @@ pub fn points_node_geometry(node: &FsNode, center: Vec3) -> Geometry {
 pub fn points_detail(node: &FsNode, center: Vec3) -> Detail {
     let num_points = node_param_f32(node, "Points", 100.0) as i32;
     let shape = node_param_str(node, "Shape", "None");
+    // Markers off emits BARE POINTS — no marker geometry at all. Everything
+    // that generates locations drew little spheres at them, which is right for
+    // looking at and wrong for working with: Copy placed one instance per
+    // marker vertex rather than one per location, because the markers were the
+    // only points there were.
+    let markers = node_param_str(node, "Markers", "true") != "false";
     let mut d = Detail::new();
     for i in 0..num_points {
         let t = i as f32 / num_points.max(1) as f32;
@@ -4629,7 +4889,11 @@ pub fn points_detail(node: &FsNode, center: Vec3) -> Detail {
             // "None" and anything unrecognized: every point at the same spot.
             _ => Vec3::ZERO,
         };
-        d.merge(&sphere_detail(center + offset, 0.02, 6, 8));
+        if markers {
+            d.merge(&sphere_detail(center + offset, 0.02, 6, 8));
+        } else {
+            d.add_point(center + offset);
+        }
     }
     d
 }

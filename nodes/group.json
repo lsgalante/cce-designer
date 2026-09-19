@@ -21,7 +21,7 @@
     },
     {
       "name": "Mode",
-      "type": "choice:Box,Random",
+      "type": "choice:Box,Random,Attribute,Expand",
       "default": "Box"
     },
     {
@@ -63,6 +63,34 @@
       "name": "Highlight",
       "type": "toggle",
       "default": "true"
+    },
+    {
+      "name": "Attribute",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "name": "Comparison",
+      "type": "choice:Below,Above",
+      "default": "Above"
+    },
+    {
+      "name": "Threshold",
+      "type": "text",
+      "default": "0.50"
+    },
+    {
+      "name": "Source Group",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "name": "Rings",
+      "type": "spinbox",
+      "default": "1",
+      "min": -8.0,
+      "max": 8.0,
+      "step": 1.0
     }
   ]
 }
