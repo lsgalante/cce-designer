@@ -111,6 +111,18 @@ pub struct ParamDef {
 
 fn default_param_type() -> String { "string".to_string() }
 
+/// Expand a leading `~` to the home directory. A path typed into a text field
+/// is typed by a person, and `~/models/thing.stl` is what a person writes.
+pub fn shellexpand_home(path: &str) -> String {
+    match path.strip_prefix("~/") {
+        Some(rest) => match std::env::var_os("HOME") {
+            Some(home) => format!("{}/{}", home.to_string_lossy(), rest),
+            None => path.to_string(),
+        },
+        None => path.to_string(),
+    }
+}
+
 /// Whether a parameter's `show_when` condition holds, given its siblings.
 ///
 /// Values are compared case-insensitively against the sibling's CURRENT value
@@ -2210,8 +2222,75 @@ impl State {
     /// per triggered button by `sync_parameters_to_project`, and reachable directly
     /// through the `menu_action` tool (the index-matched `menu_click` cannot
     /// reach these). Returns false for an unrecognized label.
+    /// Write the selected Export node's input to its File.
+    ///
+    /// Evaluated fresh at the playbar's current frame rather than reusing the
+    /// scene: the scene is what is VISIBLE, and an Export node whose geometry
+    /// flag is off — which is the normal way to use one, since its input is
+    /// already drawn — contributes nothing to it.
+    pub fn run_export(&mut self) {
+        let Some(slot_idx) = self.param_editor_selected() else { return };
+        let dir = self.param_editor_dir();
+        let Some(node) = dir.children.get(slot_idx).filter(|c| c.node_type == "export") else {
+            return;
+        };
+        let node = node.clone();
+        let file = crate::geometry::node_param_str(&node, "File", "");
+        let file = file.trim().to_string();
+        if file.is_empty() {
+            self.update_status_text("Export: set a File first.");
+            return;
+        }
+        let (format, scale) = crate::geometry::export_settings(&node);
+
+        let (frame, start) = (self.sim_frame(), self.sim_start_frame());
+        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let geom = {
+            let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
+            let mut visited = Vec::new();
+            let mut err = None;
+            crate::geometry::generate_single_node_geometry_with_errors(
+                &self.fs_root,
+                &node,
+                &mut visited,
+                &mut err,
+                &mut sim,
+            )
+        };
+        self.sim_cache = sim_cache;
+        let Some(geom) = geom else {
+            self.update_status_text("Export: the node has no input geometry.");
+            return;
+        };
+        if geom.num_prims() == 0 {
+            // Writing an empty file is a worse answer than saying so: a
+            // zero-triangle STL is valid, and a slicer opening one reports
+            // nothing wrong.
+            self.update_status_text("Export: the geometry has no primitives.");
+            return;
+        }
+
+        let path = std::path::PathBuf::from(shellexpand_home(&file));
+        match crate::export::write(&geom, &path, format, scale) {
+            Ok(bytes) => self.update_status_text(&format!(
+                "Exported {} as {} ({} bytes) to {}",
+                node.name,
+                format.label(),
+                bytes,
+                path.display()
+            )),
+            Err(e) => self.update_status_text(&format!("Export failed: {e}")),
+        }
+    }
+
     pub fn execute_menu_action(&mut self, label: &str) -> bool {
         match label {
+            // An Export node's button. Buttons dispatch by LABEL, which has no
+            // node attached to it — but the pressed button can only be on the
+            // node the pane is showing, so the selection is the node.
+            "Export" => {
+                self.run_export();
+            }
             "Update Parameters" => {
                 if let Some(slot_idx) = self.graph().selected_node() {
                     let dir = self.current_dir_mut();

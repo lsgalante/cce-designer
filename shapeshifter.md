@@ -354,6 +354,15 @@ Touches: `shortcut.rs`, `app.rs`, `slots.rs`, `cce-ui`.
 
 *Largest. Needs Phases 0 and 3.*
 
+> **Mesh export landed early**, out of order, because everything Phases 0 to 4
+> build could until now only be looked at inside the app. `src/export.rs`
+> writes STL and OBJ, there is an `export` node and a `--export` CLI mode, and
+> a solved growth simulation can be written to a printable file.
+>
+> Still outstanding for this phase: the volume representation (SDF or sparse
+> grid) that shelling, offsetting and boolean work need, and the 2D page
+> context for the COP family.
+
 Furthest out because it needs infrastructure nothing else does: a **volume
 representation** (SDF or sparse grid) for shelling, offsetting and boolean work,
 without which mold, sprue and support tooling has nothing to stand on. Then

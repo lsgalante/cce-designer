@@ -41,6 +41,13 @@ cross-validation test compares backends and skips silently with no platform.
   is no timeline and simnets render at their seed; with it the solve runs to
   that frame (start frame 1, the playbar's default), which is the only way to
   look at a simulation without a Wayland session.
+- `cce-designer --export <project> <out.stl|out.obj> [--frame N] [--node NAME] [--scale S]`
+  — headless mesh export (`src/export_cli.rs`, formats in `src/export.rs`).
+  The format comes from the extension, defaulting to binary STL. Without
+  `--node` the whole visible scene is written; with it, that one node's output
+  is written whether or not it is visible, which is normal for an Export node
+  whose input something else already draws. Same frame contract as
+  `--thumbnail`.
 - `cce-designer --detached-network` — a separate network-pane-only window. It syncs
   with the main window by autosaving/polling `default_project.json` mtime (see the
   main loop in `src/main.rs`) — there is no socket between the two.
@@ -278,6 +285,28 @@ hidden parameter is simply not reported and comes back as it was.
 `merge_template_defs` carries `show_when` from the template like the rest of
 the UI metadata — the template owns when a control applies, the instance owns
 its value.
+
+### Mesh export
+
+`src/export.rs` writes STL (binary and ASCII) and OBJ; `src/export_cli.rs` is
+the `--export` mode; the `export` NODE is a pass-through that writes when its
+Export button is pressed — never on evaluation, which happens on every redraw
+and every frame of a solve.
+
+The formats are not the same picture of a mesh. **OBJ keeps the topology**:
+points are written once, faces reference them, a quad stays a quad. **STL keeps
+only triangles** — it has no shared points, so everything fans and comes back
+welded-by-position at best. Neither carries attributes; the project file and
+the sim cache are what preserve a simulation's state.
+
+Coordinates are written as they are, scaled only by the node's Scale.
+The World Unit is a DECLARATION, not a conversion (see the Guides node), and
+export keeps that promise: geometry modelled at 20 units across writes as 20,
+and the slicer is told those are millimetres.
+
+Buttons dispatch through `execute_menu_action` by LABEL, which carries no node
+— `run_export` resolves the node from the current selection, which is sound
+because the pressed button can only be on the node the pane is showing.
 
 ### Runtime paths point into the source tree
 

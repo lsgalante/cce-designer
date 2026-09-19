@@ -764,6 +764,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_valence_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("deform") {
         resolve_deform_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("export") {
+        resolve_export_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("subdivide") {
         resolve_subdivide_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("detangle") {
@@ -1666,6 +1668,34 @@ pub fn resolve_cull_geometry_with_errors(
     let keep: Vec<bool> = selected.iter().map(|&s| !s).collect();
     geom.keep_points(&keep);
     Some(geom)
+}
+
+/// The Export node: geometry out of the app.
+///
+/// A pass-through in the chain — it hands its input straight on, so it can sit
+/// anywhere rather than only at the end — that writes a file when its Export
+/// button is pressed. NOT when it evaluates: evaluation happens on every
+/// redraw and every frame of a solve, and a node that wrote a file each time
+/// would fill a disk while you scrubbed the timeline.
+pub fn resolve_export_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
+}
+
+/// The format and scale an Export node is configured for.
+pub fn export_settings(target: &FsNode) -> (crate::export::Format, f32) {
+    let format = match node_param_str(target, "Format", "STL").as_str() {
+        "OBJ" => crate::export::Format::Obj,
+        "STL (ASCII)" => crate::export::Format::StlAscii,
+        _ => crate::export::Format::StlBinary,
+    };
+    (format, node_param_f32(target, "Scale", 1.0).max(1e-6))
 }
 
 /// The Grid node: a flat sheet of quads in the XZ plane.
@@ -4806,6 +4836,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "suture"
         || nt == "detangle"
         || nt == "subdivide"
+        || nt == "export"
         || nt == "deform"
         || nt == "valence"
         || nt == "transfer"
@@ -5062,6 +5093,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_deform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("export") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_export_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
