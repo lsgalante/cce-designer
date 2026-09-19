@@ -1,0 +1,14 @@
+{
+ "name": "Page",
+ "type": "page",
+ "inputs": 0,
+ "outputs": 1,
+ "params": [
+  { "name": "Preset", "type": "choice:Letter,A4,Legal,Tabloid,Custom", "default": "Letter" },
+  { "name": "Width", "type": "slider", "default": "8.5", "min": 0.5, "max": 48.0, "step": 0.25, "show_when": "Preset == Custom" },
+  { "name": "Height", "type": "slider", "default": "11.0", "min": 0.5, "max": 48.0, "step": 0.25, "show_when": "Preset == Custom" },
+  { "name": "Orientation", "type": "choice:Portrait,Landscape", "default": "Portrait" },
+  { "name": "Resolution", "type": "spinbox", "default": "300", "min": 18, "max": 1200, "step": 6 },
+  { "name": "Color", "type": "float3", "default": "1.00:1.00:1.00", "min": 0.0, "max": 1.0 }
+ ]
+}

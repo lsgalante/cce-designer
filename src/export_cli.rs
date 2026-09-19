@@ -39,6 +39,27 @@ pub fn run(
     // it means in the window — the same contract --thumbnail makes.
     let mut sim = crate::geometry::EvalSim::new(frame.unwrap_or(0), 1, &mut sim_cache);
 
+    // A named node in the PAGE context writes a PNG instead — the same rule
+    // the Export node follows: what is being exported decides the format, not
+    // the file name. Without a node name there is no page to mean, since a
+    // level can hold several.
+    if let Some(name) = &node {
+        let target = crate::geometry::find_node_by_name(&proj.root, name)
+            .ok_or_else(|| format!("no node named '{name}'"))?;
+        if let Some(page) = crate::page::resolve_page(&proj.root, target, &mut Vec::new()) {
+            page.write_png(out)?;
+            return Ok(format!(
+                "page {}x{} at {} DPI ({:.2} x {:.2} in) -> {}",
+                page.width,
+                page.height,
+                page.dpi,
+                page.size[0],
+                page.size[1],
+                out.display()
+            ));
+        }
+    }
+
     let geom = match &node {
         Some(name) => {
             // Borrowed, NOT cloned. Several generators find their place in the

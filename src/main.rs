@@ -23,6 +23,7 @@ pub mod project;
 pub mod render;
 pub mod shortcut;
 pub mod slots;
+pub mod page;
 pub mod thumbnail;
 
 #[cfg(test)]
@@ -634,7 +635,7 @@ mod tests {
             SPLITTER2_IDX, PARAM_IDX, CANVAS_IDX, LEFT_MENUBAR_IDX,
             RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, STATUS_IDX, BREADCRUMB_IDX,
             SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
-            NETWORK_PANEL2_IDX, CONTENT2_IDX, BREADCRUMB2_IDX,
+            NETWORK_PANEL2_IDX, CONTENT2_IDX, BREADCRUMB2_IDX, PAGE_IDX,
         ];
         assert_eq!(roster.len(), WIDGET_COUNT, "roster length vs WIDGET_COUNT");
         for (i, idx) in roster.iter().enumerate() {
@@ -3752,6 +3753,289 @@ mod tests {
             );
         }
         d
+    }
+
+    /// The page nodes end to end, through the resolver — not just the raster.
+    ///
+    /// Written before the UI was wired, because the Boolean node taught this
+    /// exact lesson one commit ago: arithmetic that passes every unit test and
+    /// wiring nobody has exercised look identical until something asks for the
+    /// result.
+    #[test]
+    fn test_the_page_nodes_compose_a_sheet_through_the_resolver() {
+        use crate::page::{displayed_page, is_page_node, resolve_page};
+
+        fn pnode(id: &str, name: &str, ty: &str, params: &[(&str, &str)]) -> FsNode {
+            FsNode {
+                id: id.to_string(),
+                name: name.to_string(),
+                node_type: ty.to_string(),
+                children: vec![],
+                params: params
+                    .iter()
+                    .map(|(n, v)| crate::app::ParamDef {
+                        name: n.to_string(),
+                        label: String::new(),
+                        param_type: "text".to_string(),
+                        default: v.to_string(),
+                        options: vec![],
+                        min: None,
+                        max: None,
+                        step: None,
+                        show_when: String::new(),
+                    })
+                    .collect(),
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 1,
+                outputs: 1,
+            }
+        }
+
+        let root = pnode("r", "root", "node", &[]);
+        let mut root = root;
+        root.children = vec![
+            pnode(
+                "p",
+                "page1",
+                "page",
+                &[
+                    ("Preset", "Letter"),
+                    ("Orientation", "Portrait"),
+                    ("Resolution", "72"),
+                    ("Color", "1.00:1.00:1.00"),
+                ],
+            ),
+            pnode(
+                "g",
+                "grid1",
+                "page_grid",
+                &[
+                    ("Input", "page1"),
+                    ("Cell Size", "0.5"),
+                    ("Line Width", "0.02"),
+                    ("Line Color", "0.00:0.00:0.00"),
+                    ("Fill Cells", "false"),
+                ],
+            ),
+            pnode(
+                "b",
+                "border1",
+                "page_border",
+                &[("Input", "grid1"), ("Width", "0.1"), ("Inset", "0.25"), ("Color", "1.00:0.00:0.00")],
+            ),
+        ];
+
+        assert!(is_page_node("page_grid") && !is_page_node("sphere"));
+
+        let page = resolve_page(&root, &root.children[2], &mut Vec::new())
+            .expect("the page chain resolved to nothing");
+        assert_eq!((page.width, page.height), (612, 792), "Letter at 72 DPI");
+
+        let at = |x: u32, y: u32| page.pixels[(y * page.width + x) as usize];
+        // The border is red where it was asked for, and nowhere else.
+        let b = at(20, 400);
+        assert!(b[0] > 0.9 && b[1] < 0.1, "no border ink at the left edge: {b:?}");
+        assert!(at(300, 400)[1] > 0.5, "the border filled the sheet");
+        // The grid ruled the interior: 0.5 inches at 72 DPI is every 36 px.
+        assert!(at(36 * 4, 400)[0] < 0.4, "no rule at 2.0 inches");
+        assert!(at(36 * 4 + 18, 400)[0] > 0.9, "the cell between rules is not clear");
+
+        // An orphan composite is not a page: a border with nothing under it
+        // resolves to nothing rather than inventing a sheet.
+        let orphan = pnode("o", "border2", "page_border", &[("Input", "nothing")]);
+        let mut lone = root.clone();
+        lone.children.push(orphan);
+        assert!(
+            resolve_page(&lone, lone.children.last().unwrap(), &mut Vec::new()).is_none(),
+            "a border with no page under it invented one"
+        );
+
+        // A cycle terminates rather than recursing forever.
+        let mut looped = root.clone();
+        looped.children[0] = pnode("p", "page1", "page_border", &[("Input", "border1")]);
+        assert!(resolve_page(&looped, &looped.children[2], &mut Vec::new()).is_none());
+
+        // The level's LAST visible page node is what gets displayed.
+        // Green, not red: the red border and the white sheet both read 1.0 in
+        // the red channel, so testing that one proves nothing either way.
+        let border_ink = |p: &crate::page::Page| p.pixels[(400 * p.width + 20) as usize][1];
+        let shown = displayed_page(&root, &root).expect("nothing displayed");
+        assert!(border_ink(&shown) < 0.1, "the border chain is not what showed");
+        let mut hidden = root.clone();
+        hidden.children[2].geometry_visible = false;
+        let shown = displayed_page(&hidden, &hidden).expect("nothing displayed");
+        assert!(border_ink(&shown) > 0.9, "a hidden node still displayed");
+    }
+
+    /// Text lands on the sheet, and alignment moves it.
+    #[test]
+    fn test_page_text_puts_ink_where_it_is_aligned() {
+        use crate::page::{HAlign, Page, TextSpec, VAlign};
+        let ink = |halign, valign| {
+            let mut p = Page::new([4.0, 2.0], 72, [1.0, 1.0, 1.0, 1.0]);
+            crate::page::with_fonts_for_test(|fonts, cache| {
+                p.text(
+                    fonts,
+                    cache,
+                    &TextSpec {
+                        text: "Hg",
+                        size: 0.5,
+                        at: [2.0, 1.0],
+                        halign,
+                        valign,
+                        ..Default::default()
+                    },
+                );
+            });
+            // The centroid of the ink, in pixels.
+            let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
+            for y in 0..p.height {
+                for x in 0..p.width {
+                    let v = 1.0 - p.pixels[(y * p.width + x) as usize][0] as f64;
+                    if v > 0.5 {
+                        sx += x as f64;
+                        sy += y as f64;
+                        n += 1.0;
+                    }
+                }
+            }
+            assert!(n > 0.0, "no ink at all");
+            (sx / n, sy / n)
+        };
+
+        let (cx, cy) = ink(HAlign::Center, VAlign::Middle);
+        assert!((cx - 144.0).abs() < 25.0, "centred text sits at x={cx}, not the middle");
+        assert!((cy - 72.0).abs() < 25.0, "middled text sits at y={cy}, not the middle");
+
+        let (lx, _) = ink(HAlign::Left, VAlign::Middle);
+        let (rx, _) = ink(HAlign::Right, VAlign::Middle);
+        assert!(lx > cx && cx > rx, "alignment did not move the ink: {lx} {cx} {rx}");
+    }
+
+    /// A page's raster is its physical size times its resolution — the
+    /// property that makes DPI a page parameter rather than an export one.
+    #[test]
+    fn test_a_page_is_its_physical_size_times_its_resolution() {
+        use crate::page::Page;
+        let p = Page::new([8.5, 11.0], 300, [1.0; 4]);
+        assert_eq!((p.width, p.height), (2550, 3300));
+        assert!((p.scale() - 300.0).abs() < 0.01);
+
+        // The same sheet at a different resolution is the same sheet.
+        let q = Page::new([8.5, 11.0], 72, [1.0; 4]);
+        assert_eq!((q.width, q.height), (612, 792));
+        assert!(
+            ((p.width as f32 / p.height as f32) - (q.width as f32 / q.height as f32)).abs() < 1e-3
+        );
+
+        // A sheet nobody could print clamps rather than allocating: aspect
+        // survives, resolution does not.
+        let huge = Page::new([100.0, 50.0], 1200, [1.0; 4]);
+        assert!(
+            (huge.width as u64) * (huge.height as u64) <= 356_000_000,
+            "{}x{} is not clamped",
+            huge.width,
+            huge.height
+        );
+        assert!(
+            ((huge.width as f32 / huge.height as f32) - 2.0).abs() < 0.01,
+            "the clamp changed the aspect: {}x{}",
+            huge.width,
+            huge.height
+        );
+    }
+
+    /// Rect coverage is exact area, not a test of the pixel centre.
+    ///
+    /// This is what keeps a ruled sheet's lines from alternating between one
+    /// and two pixels wide down its length — which prints as a wobble in the
+    /// paper rather than as aliasing.
+    #[test]
+    fn test_rect_coverage_is_exact_area() {
+        use crate::page::Page;
+        // Ten pixels per inch, so one pixel is a tenth of an inch and the
+        // arithmetic is readable.
+        let mut p = Page::new([1.0, 1.0], 10, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!((p.width, p.height), (10, 10));
+
+        // A rect covering exactly the left half of pixel (0,0).
+        p.rect(0.0, 0.0, 0.05, 0.1, [1.0, 1.0, 1.0, 1.0]);
+        let v = p.pixels[0][0];
+        assert!((v - 0.5).abs() < 1e-4, "half a pixel of white over black read {v}, not 0.5");
+
+        // A whole-pixel rect is fully opaque, and its neighbour is untouched.
+        let mut p = Page::new([1.0, 1.0], 10, [0.0, 0.0, 0.0, 1.0]);
+        p.rect(0.2, 0.0, 0.3, 0.1, [1.0, 1.0, 1.0, 1.0]);
+        assert!((p.pixels[2][0] - 1.0).abs() < 1e-4, "a whole pixel is not solid");
+        assert!(p.pixels[1][0] < 1e-4, "the rect bled into its neighbour");
+        assert!(p.pixels[3][0] < 1e-4, "the rect bled into its neighbour");
+
+        // Off the sheet entirely is a no-op, not a panic or a wrap.
+        p.rect(-5.0, -5.0, -4.0, -4.0, [1.0, 0.0, 0.0, 1.0]);
+        p.rect(50.0, 50.0, 60.0, 60.0, [1.0, 0.0, 0.0, 1.0]);
+        assert!(p.pixels.iter().all(|px| px[0] == px[1] && px[1] == px[2]), "red leaked in");
+    }
+
+    /// Two grids at cell and 2x cell share their rules exactly, which is the
+    /// whole reason for drawing a second one.
+    #[test]
+    fn test_a_second_grid_lands_on_the_first_ones_rules() {
+        use crate::page::Page;
+        let mut p = Page::new([2.0, 2.0], 100, [1.0, 1.0, 1.0, 1.0]);
+        p.grid(0.25, 0.02, [0.0; 4], [0.0, 0.0, 0.0, 1.0]);
+        // Column of the rule at x = 0.5 inches: 50 px in.
+        let row = 37; // anywhere between two horizontal rules
+        assert!(p.pixels[(row * p.width + 50) as usize][0] < 0.1, "no rule at 0.50 inches");
+        assert!(p.pixels[(row * p.width + 37) as usize][0] > 0.9, "the cell is not clear");
+
+        let mut q = Page::new([2.0, 2.0], 100, [1.0, 1.0, 1.0, 1.0]);
+        q.grid(0.5, 0.02, [0.0; 4], [0.0, 0.0, 0.0, 1.0]);
+        assert!(q.pixels[(row * q.width + 50) as usize][0] < 0.1, "the 2x grid missed the rule");
+
+        // And both rule the sheet's own edge, so neither looks like it stopped
+        // a line short.
+        assert!(p.pixels[(row * p.width) as usize][0] < 0.6, "the left edge is not ruled");
+    }
+
+    /// A border puts its ink INSIDE the sheet: half a border off the paper is
+    /// half a border.
+    #[test]
+    fn test_a_border_stays_on_the_paper() {
+        use crate::page::Page;
+        let mut p = Page::new([2.0, 2.0], 100, [1.0, 1.0, 1.0, 1.0]);
+        p.border(0.25, 0.0, [0.0, 0.0, 0.0, 1.0]);
+        let at = |x: u32, y: u32| p.pixels[(y * p.width + x) as usize][0];
+        assert!(at(0, 100) < 0.1, "the outermost pixel is not inked");
+        assert!(at(24, 100) < 0.1, "the border is thinner than asked");
+        assert!(at(30, 100) > 0.9, "the border is thicker than asked");
+        assert!(at(100, 100) > 0.9, "the border filled the page");
+        // All four sides, not just the two that a copy-paste would reach.
+        assert!(at(199, 100) < 0.1 && at(100, 0) < 0.1 && at(100, 199) < 0.1, "a side is missing");
+    }
+
+    /// The PNG carries the physical size, so a printer lays the sheet out at
+    /// the size it was composed at instead of guessing 96 DPI.
+    #[test]
+    fn test_the_png_knows_its_own_physical_size() {
+        use crate::page::Page;
+        let dir = std::env::temp_dir().join("cce-designer-page-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sheet.png");
+        let p = Page::new([8.5, 11.0], 300, [1.0, 1.0, 1.0, 1.0]);
+        p.write_png(&path).expect("write");
+
+        let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!((info.width, info.height), (2550, 3300));
+        let dims = info.pixel_dims.expect("no pHYs chunk: the printer would guess");
+        assert!(matches!(dims.unit, png::Unit::Meter));
+        // pHYs is pixels per METRE, the only unit PNG offers, so the DPI
+        // round-trips through a conversion and comes back a hair off.
+        let dpi = dims.xppu as f32 / 39.370_08;
+        assert!((dpi - 300.0).abs() < 0.01, "the PNG says {dpi} DPI, not 300");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

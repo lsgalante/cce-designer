@@ -9,8 +9,8 @@
 //! that assert each slot's concrete type are hand-written, below the macro.
 
 use cce_ui::widget::{
-    Adapted, Breadcrumb, Graph, MenuBar, ParametersBg, Splitter, Spreadsheet, StatusBar,
-    WidgetHost,
+    Adapted, Breadcrumb, Graph, ImageView, MenuBar, ParametersBg, Splitter, Spreadsheet,
+    StatusBar, WidgetHost,
 };
 
 use crate::playbar::Playbar;
@@ -113,6 +113,10 @@ widget_roster! {
     NETWORK_PANEL2_IDX:      network_panel2:      PassivePlate,
     CONTENT2_IDX:            content2:            Graph,
     BREADCRUMB2_IDX:         breadcrumb2:         Breadcrumb,
+    // The 2D page context's surface, sharing the viewport's rect and shown in
+    // its place when the displayed level holds a page. Appended, like the
+    // second network editor, so established slot indexes stay stable.
+    PAGE_IDX:                page_view:           ImageView,
 }
 
 impl WidgetSlots {

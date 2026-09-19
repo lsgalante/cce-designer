@@ -34,7 +34,7 @@ use wayland_client::{
     Connection, QueueHandle, Proxy,
 };
 
-use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Label, Dropdown};
+use cce_ui::widget::{Adapted, Breadcrumb, ImageView, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Label, Dropdown};
 use cce_ui::widget::UiContext;
 use crate::playbar::Playbar;
 use crate::viewport_3d::Viewport3D;
@@ -1097,6 +1097,9 @@ pub struct State {
     /// Solved simulation states, kept across frames so playing forward costs one
     /// step per frame instead of re-solving from the start frame every redraw.
     pub sim_cache: crate::geometry::SimCache,
+    /// The GPU image behind the page pane. Owned here — `ImageView` only
+    /// borrows an id — so replacing a page frees the one it replaces.
+    pub page_image: Option<u32>,
     /// Frame the scene was last built at, so the timeline moving can invalidate it.
     pub last_sim_frame: i32,
     pub plate_menu_slot: Option<usize>,
@@ -2242,6 +2245,27 @@ impl State {
             return;
         }
         let (format, scale) = crate::geometry::export_settings(&node);
+        let path = std::path::PathBuf::from(shellexpand_home(&file));
+
+        // A page is a different thing to get out of the computer, and the node
+        // does not need to be told which it is holding: what reaches its input
+        // decides. A page writes a PNG that carries its own physical size; the
+        // Format parameter names a MESH format and has nothing to say here.
+        if let Some(page) = crate::page::resolve_page(&self.fs_root, &node, &mut Vec::new()) {
+            let (w, h) = (page.width, page.height);
+            match page.write_png(&path) {
+                Ok(()) => self.update_status_text(&format!(
+                    "Exported {} as PNG ({}x{} at {} DPI) to {}",
+                    node.name,
+                    w,
+                    h,
+                    page.dpi,
+                    path.display()
+                )),
+                Err(e) => self.update_status_text(&format!("Export failed: {e}")),
+            }
+            return;
+        }
 
         let (frame, start) = (self.sim_frame(), self.sim_start_frame());
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
@@ -2270,7 +2294,6 @@ impl State {
             return;
         }
 
-        let path = std::path::PathBuf::from(shellexpand_home(&file));
         match crate::export::write(&geom, &path, format, scale) {
             Ok(bytes) => self.update_status_text(&format!(
                 "Exported {} as {} ({} bytes) to {}",
@@ -3889,6 +3912,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 bc.set_raised(true);
                 bc
             },
+            page_view: {
+                // Contain, never crop: a page is a document, and a document
+                // shown with its margins cut off is a different document. No
+                // upscale past 1:1 either — a 72 DPI sheet blown up to fill
+                // the pane would look like the composition is soft when it is
+                // the preview that is.
+                let mut v = ImageView::new()
+                    .with_fit(cce_ui::scene::layout::FitMode::Contain { max_upscale: 1.0 })
+                    .with_bg([0.12, 0.12, 0.13, 1.0]);
+                v.set_visible(false);
+                v
+            },
         });
 
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
@@ -3975,6 +4010,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             viewport_menu_active: false,
             viewport_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
+            page_image: None,
             last_sim_frame: i32::MIN,
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
@@ -4890,6 +4926,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
 
         self.apply_detached_panes();
+        // The 2D page context takes the viewport's rect whenever the displayed
+        // level holds a page, and the viewport stands down: one pane, one
+        // thing in it. Placed here, after every layout branch has run, rather
+        // than inside each of them — the rect it wants is always exactly the
+        // viewport's, so there is nothing per-branch to decide.
+        //
+        // The ImageView's own image is the flag. Composing a page is
+        // expensive and happens in rebuild_scene_geometry; layout runs on
+        // every resize, and a second copy of "is a page showing" would be a
+        // second thing to keep true.
+        let showing_page = self.slots.page_view.image.is_some();
+        self.positions[PAGE_IDX] = if showing_page {
+            self.positions[VIEWPORT_IDX]
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+        self.slots.page_view.set_visible(showing_page && self.slots.viewport.visible());
+        if showing_page {
+            self.slots.viewport.set_visible(false);
+        }
+
         self.apply_collapsed_panes();
     }
 

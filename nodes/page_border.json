@@ -1,0 +1,12 @@
+{
+ "name": "Page Border",
+ "type": "page_border",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Width", "type": "slider", "default": "0.06", "min": 0.001, "max": 2.0, "step": 0.005 },
+  { "name": "Inset", "type": "slider", "default": "0.40", "min": 0.0, "max": 4.0, "step": 0.05 },
+  { "name": "Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0 }
+ ]
+}

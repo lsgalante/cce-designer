@@ -1,0 +1,18 @@
+{
+ "name": "Page Text",
+ "type": "page_text",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Text", "type": "text", "default": "Title" },
+  { "name": "Font", "type": "text", "default": "" },
+  { "name": "Size", "type": "slider", "default": "0.25", "min": 0.02, "max": 4.0, "step": 0.01 },
+  { "name": "Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0 },
+  { "name": "X", "type": "slider", "default": "4.25", "min": 0.0, "max": 48.0, "step": 0.05 },
+  { "name": "Y", "type": "slider", "default": "0.80", "min": 0.0, "max": 48.0, "step": 0.05 },
+  { "name": "Horizontal", "type": "choice:Left,Center,Right", "default": "Center" },
+  { "name": "Vertical", "type": "choice:Top,Middle,Bottom", "default": "Top" },
+  { "name": "Leading", "type": "slider", "default": "1.25", "min": 0.5, "max": 3.0, "step": 0.05 }
+ ]
+}

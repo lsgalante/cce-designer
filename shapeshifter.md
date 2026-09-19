@@ -385,7 +385,29 @@ Touches: `shortcut.rs`, `app.rs`, `slots.rs`, `cce-ui`.
 > to draw it. Both new nodes now have resolver-level tests, not just unit tests
 > on the field.
 >
-> Still outstanding for this phase: the 2D page context for the COP family.
+> **The 2D page context landed, and Phase 4 is done.** `src/page.rs` composes a
+> printed sheet — inches, a DPI, straight-alpha RGBA — and four nodes build one:
+> `page`, `page_grid`, `page_border`, `page_text`. It previews in the viewport's
+> pane and exports a PNG whose pHYs chunk carries its physical size, so a
+> printer lays the sheet out at the size it was composed at.
+>
+> It is a genuinely separate context, as proposed: page chains resolve through
+> `resolve_page` and contribute nothing to the geometry the viewport draws.
+> `export` is the only node in both, and what reaches it decides the format.
+> `gem_graph` — the source family's everything-at-once node, 29 parameters — is
+> deliberately not ported: it is the other four chained, which is the whole
+> premise of the fifty-to-ten collapse.
+>
+> The blank-pane lesson: a new pane needs a `paint_widget` arm (the
+> fall-through serves LEGACY widgets, so a modern-paint one draws nothing), a
+> place in the `draw_order` sort (the viewport is full-bleed and panes float
+> over it), and a line in the hand-listed roster test. Only the third fails
+> loudly. Two shadow runs went into finding the first, and one of those was
+> spent chasing a second designer process my kill had silently failed to stop —
+> both were writing to one log, so I was reading one process's state against
+> another's.
+>
+> Still outstanding: nothing in Phase 4.
 
 Furthest out because it needs infrastructure nothing else does: a **volume
 representation** (SDF or sparse grid) for shelling, offsetting and boolean work,

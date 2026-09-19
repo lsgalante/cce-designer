@@ -122,7 +122,13 @@ impl State {
 
         let mut draw_order: Vec<usize> = (0..WIDGET_COUNT).collect();
         draw_order.sort_by_key(|&i| {
+            // PAGE_IDX shares the viewport's layer, not the roster's tail.
+            // The viewport is full-bleed and the other panes float OVER it, so
+            // a pane that takes the viewport's rect has to take its depth too
+            // — drawn last it covers the collapsed stubs and the corner dots,
+            // which then show through as ghost text from the later label pass.
             let base_key = if i == VIEWPORT_IDX
+                || i == crate::slots::PAGE_IDX
                 || i == NETWORK_PANEL_IDX
                 || i == crate::slots::NETWORK_PANEL2_IDX
             {
@@ -282,6 +288,17 @@ impl State {
             // subtree painter since cce-ui@f1cd939: its text passes through
             // paint_self verbatim, carrying the per-column clamp bounds the
             // own-labels bridge would drop; append_frame_text skips the slot.
+            let (wx, wy, ww2, wh2) = w.rect();
+            append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
+            w.paint_self(&self.ui_context, pc);
+        } else if idx == crate::slots::PAGE_IDX {
+            // Modern-paint pane, like the spreadsheet: the designer authors the
+            // plate (span-widened radii, focus tint) and ImageView::paint fits
+            // the sheet into it. The fall-through branch below serves LEGACY
+            // widgets — it emits a plate and the widget's legacy views — so a
+            // widget whose whole look lives in Paint::paint lands there and
+            // draws nothing at all, which is exactly what this pane did before
+            // the branch existed: visible, correctly placed, and blank.
             let (wx, wy, ww2, wh2) = w.rect();
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
@@ -854,6 +871,12 @@ impl State {
         if !self.show_viewport {
             return;
         }
+        // The readout describes the 3D world's scale on screen. A page is not
+        // in that world — it is a sheet of paper measured in inches — so over
+        // a page the number is not merely irrelevant, it is wrong.
+        if self.slots.page_view.image.is_some() {
+            return;
+        }
         let (vx, vy, vw, vh) = self.last_scene_view_rect;
         if vw <= 0.0 || vh <= 0.0 {
             return;
@@ -914,6 +937,38 @@ impl State {
                 pc.text((i + 1).to_string(), sx + 8.0, sy - 6.0, 10.0, [0xff, 0xe6, 0xa0]);
             }
         });
+    }
+
+    /// Compose the 2D page the displayed level holds, if it holds one, and
+    /// hand it to the page pane.
+    ///
+    /// The page context's counterpart to the geometry rebuild, and it runs on
+    /// the same trigger for the same reason: a parameter changed, so what the
+    /// pane shows is stale. The raster goes to the GPU as an image the widget
+    /// only BORROWS — the id is owned here and freed when it is replaced, so a
+    /// page that is being scrubbed does not leak a texture per frame.
+    pub(crate) fn rebuild_page(&mut self) {
+        let page = crate::page::displayed_page(&self.fs_root, self.viewport_editor_dir());
+        if let Some(old) = self.page_image.take() {
+            cce_ui::vk::free_image(old);
+        }
+        match page {
+            Some(page) => {
+                let (w, h) = (page.width, page.height);
+                let id = cce_ui::vk::upload_rgba(page.to_rgba8(), w, h);
+                self.page_image = Some(id);
+                self.slots.page_view.set_image(Some((id, w, h)));
+                self.update_status_text(&format!(
+                    "Page: {:.2} x {:.2} in at {} DPI ({}x{})",
+                    page.size[0], page.size[1], page.dpi, w, h
+                ));
+            }
+            None => self.slots.page_view.set_image(None),
+        }
+        // Visibility and placement follow the image, and both are decided in
+        // rebuild_positions.
+        self.rebuild_positions();
+        self.apply_layout();
     }
 
     pub(crate) fn rebuild_scene_geometry(&mut self) {
@@ -986,6 +1041,11 @@ impl State {
             cce_ui::colors::to_linear_rgb,
         ));
         self.meta_points_dirty = true;
+
+        // Last, not first: the page's status line would otherwise be
+        // overwritten by the geometry pass's own, and a level showing a page
+        // has nothing to say about geometry.
+        self.rebuild_page();
     }
 
     /// The path tracer's scene: the sphere geometry (and the reference cube if

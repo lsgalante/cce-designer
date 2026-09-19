@@ -72,7 +72,7 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size, size);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_srgb(png::SrgbRenderingIntent::Perceptual);
+    crate::page::mark_srgb(&mut encoder);
     let mut writer = encoder.write_header().map_err(|e| format!("png header: {e}"))?;
     writer.write_image_data(&pixels).map_err(|e| format!("png write: {e}"))?;
     writer.finish().map_err(|e| format!("png finish: {e}"))?;

@@ -360,6 +360,64 @@ since an edge with four faces has no single pair to flip between).
 field is exact near the surface and flat far from it. A boolean builds both
 operands on ONE grid so the two fields line up sample for sample.
 
+### The 2D page context
+
+`src/page.rs` is a second context, not a second kind of geometry node. Its
+currency is a `Page` — a printed sheet: inches, a DPI, and straight-alpha RGBA
+pixels — its origin is the top-left corner with y running DOWN, and nothing in
+it has a point id, an attribute or a normal. Four nodes compose one: `page`
+(the sheet: preset or custom size, orientation, resolution, colour),
+`page_grid`, `page_border` and `page_text`.
+
+The two contexts do not mix, and `is_page_node` is the one place that says so.
+A page node contributes nothing to the viewport's geometry and a geometry node
+cannot feed a page: page chains resolve through `resolve_page`, never through
+`generate_single_node_geometry_with_errors`. `export` is the only node in
+both — it passes either through, and what reaches it decides the format, so a
+page writes a PNG and geometry writes the mesh format its Format parameter
+names. There is no PNG option on that parameter, because offering one for a
+mesh would be a lie.
+
+**Resolution is a property of the page, not of the export.** The raster is
+size × DPI, and `write_png` puts that in the pHYs chunk, so a printer lays the
+file out at the size it was composed at instead of guessing 96. pHYs is pixels
+per metre — the only unit PNG offers — so the DPI round-trips through a
+conversion and comes back a hair off (300 stores as 11811 px/m, reads as
+299.9994). Inches rather than millimetres because paper is specified in inches
+by the family this came from; the geometry graph's World Unit declaration does
+not reach here.
+
+Rect coverage is exact area, not a test of the pixel centre. A printed grid is
+mostly hairlines, and a binary fill snaps every rule to whole pixels, so a
+ruled sheet comes out with lines alternating between one and two pixels wide
+down its length — which reads as a wobble in the paper rather than as
+aliasing. Grid rules are centred ON their coordinate so a second grid at twice
+the cell size lands exactly on the first's, which is the only reason to draw
+two. Text shapes and rasterizes through cosmic-text, the toolkit's own font
+stack, with system fonts loaded because a page names its font by family.
+
+**The preview pane** (`PAGE_IDX`, an `ImageView`) takes the viewport's rect
+when the displayed level holds a page, and the viewport stands down — the same
+rule the viewport already follows about showing its editor's level. Three
+things were needed to make a new pane actually appear, and missing any one of
+them looks identical to the others:
+
+- A `PAGE_IDX` arm in `paint_widget`. The fall-through branch serves LEGACY
+  widgets — it emits a plate and the widget's legacy views — so a modern-paint
+  widget whose whole look lives in `Paint::paint` lands there and draws
+  nothing. The pane was visible, correctly placed and blank.
+- The viewport's key in the `draw_order` sort. The viewport is full-bleed and
+  the other panes float OVER it, so a pane taking its rect must take its depth;
+  drawn last, it covered the collapsed stubs and their labels ghosted through
+  from the later text pass.
+- An entry in `test_widget_roster_indices_are_dense`, which is hand-listed and
+  fails loudly — the one of the three that tells you itself.
+
+The GPU image is owned by `State::page_image` and freed when replaced;
+`ImageView` only borrows the id. `gem_graph`, the source family's
+everything-at-once node, is deliberately not ported: it is these four chained,
+and that collapse is the whole premise of "fifty operators, ten nodes".
+
 ### Runtime paths point into the source tree
 
 Node templates (`nodes/*.json`) and `default_project.json` are located via
