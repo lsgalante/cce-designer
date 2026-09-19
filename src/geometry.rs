@@ -732,6 +732,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("time") {
         resolve_time_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("visualize") {
+        resolve_visualize_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("analysis") {
         resolve_analysis_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("attribute") {
@@ -1276,6 +1278,212 @@ pub fn resolve_relax_geometry_with_errors(
         geom.set_pos(p, *v);
     }
     Some(geom)
+}
+
+/// Sample one of the built-in ramps at `t`, clamped to 0..1.
+///
+/// Named ramps rather than an editable curve because there is no ramp widget
+/// yet; these four cover the readings that actually come up — a neutral one, a
+/// hot/cold one, a full spectrum, and one that stays legible in greyscale and
+/// to colour-blind readers, which matters when the picture IS the result.
+pub fn ramp_color(name: &str, t: f32) -> [f32; 3] {
+    let stops: &[[f32; 3]] = match name {
+        "heat" => &[
+            [0.0, 0.0, 0.0],
+            [0.6, 0.0, 0.0],
+            [1.0, 0.4, 0.0],
+            [1.0, 0.9, 0.2],
+            [1.0, 1.0, 1.0],
+        ],
+        "spectrum" => &[
+            [0.0, 0.0, 0.8],
+            [0.0, 0.8, 0.8],
+            [0.0, 0.8, 0.0],
+            [0.9, 0.9, 0.0],
+            [0.9, 0.0, 0.0],
+        ],
+        "grayscale" => &[[0.0; 3], [1.0; 3]],
+        // Viridis, sampled at five stops.
+        _ => &[
+            [0.267, 0.005, 0.329],
+            [0.229, 0.322, 0.545],
+            [0.128, 0.567, 0.551],
+            [0.369, 0.789, 0.383],
+            [0.993, 0.906, 0.144],
+        ],
+    };
+    let t = t.clamp(0.0, 1.0);
+    let last = stops.len() - 1;
+    let scaled = t * last as f32;
+    let i = (scaled.floor() as usize).min(last.saturating_sub(1));
+    let f = scaled - i as f32;
+    let (a, b) = (stops[i], stops[(i + 1).min(last)]);
+    [
+        a[0] + (b[0] - a[0]) * f,
+        a[1] + (b[1] - a[1]) * f,
+        a[2] + (b[2] - a[2]) * f,
+    ]
+}
+
+/// The vector markers a [`Detail`] is asking to have drawn, as LINE_LIST
+/// pairs: one segment per point, from the point along the staged vector, in
+/// the point's own colour.
+///
+/// Reading them off the assembled scene rather than out of the per-node
+/// overlay walk keeps a marker a property of the geometry that reached the
+/// viewport rather than of a node's display prefs, and costs one pass over
+/// geometry already in hand.
+pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<Vertex3D> {
+    let mut out = Vec::new();
+    for name in geom.points().names() {
+        if !name.starts_with(crate::detail::VIS_PREFIX) {
+            continue;
+        }
+        let Some(data) = geom.points().get(name) else { continue };
+        for p in 0..geom.num_points() {
+            let Some(v) = data.get(p) else { continue };
+            let dir = v.as_vec3();
+            if dir.length_squared() < 1e-12 {
+                continue;
+            }
+            // Drawn in the point's own colour, so a Ramp Visualize upstream
+            // colours the markers too and one chain says two things at once.
+            let color = linearize(geom.color(p));
+            out.push(Vertex3D { position: geom.positions()[p], color });
+            out.push(Vertex3D { position: (geom.pos(p) + dir).to_array(), color });
+        }
+    }
+    out
+}
+
+/// The Visualize node: make a simulation's state visible.
+///
+/// Two readings, chosen by Mode. **Ramp** maps a scalar attribute through a
+/// colour ramp into `Cd`. **Vector** stages a vector attribute as markers the
+/// viewport draws from each point (see [`crate::detail::VIS_PREFIX`]).
+///
+/// Compositing is what makes several attributes legible at once, and it is
+/// done by CHAINING rather than by one node growing a list of layers: each
+/// Visualize blends its ramp into whatever `Cd` it was handed, so a stack of
+/// them reads top to bottom like a stack of layers, and any one of them can be
+/// bypassed to see what it was contributing. That is how the plugin's Solver
+/// Vis tabs work too — the tabs describe, the Visualize nodes in the chain
+/// draw — and it means a Visualize can sit anywhere, not only before the
+/// output.
+///
+/// Range Auto measures the attribute every time it runs, which is the setting
+/// a simulation wants: the interesting range moves every frame, and a manual
+/// range picked at frame 1 goes flat by frame 50.
+pub fn resolve_visualize_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_visualize(&mut geom, target, ocl_error);
+    Some(geom)
+}
+
+pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
+    let name = node_param_str(target, "Attribute", "").trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    if !geom.points().has(&name) {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!(
+                "Visualize '{}': no point attribute named '{}'",
+                target.name, name
+            ));
+        }
+        return;
+    }
+
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let affected: Vec<usize> = (0..geom.num_points())
+        .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
+        .collect();
+
+    if node_param_str(target, "Mode", "Ramp").eq_ignore_ascii_case("vector") {
+        let scale = node_param_f32(target, "Scale", 0.2);
+        let staged: Vec<[f32; 3]> = (0..geom.num_points())
+            .map(|p| {
+                if !affected.contains(&p) {
+                    return [0.0; 3];
+                }
+                (geom
+                    .points()
+                    .value(&name, p)
+                    .map(|v| v.as_vec3())
+                    .unwrap_or(Vec3::ZERO)
+                    * scale)
+                    .to_array()
+            })
+            .collect();
+        // Derivative: a marker describes the state it was made from, and one
+        // left over from the previous step would draw a lie.
+        let vis = format!("{}{}", crate::detail::VIS_PREFIX, name);
+        let _ = geom
+            .points_mut()
+            .create_kind(&vis, AttribValue::Float3([0.0; 3]), crate::detail::AttribKind::Derivative);
+        let _ = geom.points_mut().insert(&vis, AttribData::Float3(staged));
+        return;
+    }
+
+    // Ramp. Auto measures across EVERY point, not just the group: a group's
+    // colours should sit where they belong on the whole picture's scale, or
+    // two Visualize nodes over two groups would each claim the full ramp.
+    let (from, to) = if node_param_str(target, "Range", "Auto").eq_ignore_ascii_case("manual") {
+        (
+            node_param_f32(target, "From", 0.0),
+            node_param_f32(target, "To", 1.0),
+        )
+    } else {
+        let vals: Vec<f32> = (0..geom.num_points())
+            .filter_map(|p| geom.points().value(&name, p))
+            .map(|v| v.as_f32())
+            .collect();
+        (
+            vals.iter().copied().fold(f32::INFINITY, f32::min),
+            vals.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        )
+    };
+    let span = to - from;
+
+    let ramp = node_param_str(target, "Ramp", "Viridis").to_lowercase();
+    let blend = node_param_str(target, "Blend", "Set").to_lowercase();
+    let opacity = node_param_f32(target, "Opacity", 1.0).clamp(0.0, 1.0);
+
+    for p in affected {
+        let v = geom.points().value(&name, p).map(|v| v.as_f32()).unwrap_or(0.0);
+        // A flat attribute has no range to spread across the ramp; showing it
+        // all at the bottom is the honest picture of "nothing varies here".
+        let t = if span.abs() < 1e-9 { 0.0 } else { (v - from) / span };
+        let c = ramp_color(&ramp, t);
+        let old = geom.color(p);
+        let mixed = match blend.as_str() {
+            "multiply" => [old[0] * c[0], old[1] * c[1], old[2] * c[2]],
+            "add" => [old[0] + c[0], old[1] + c[1], old[2] + c[2]],
+            _ => c,
+        };
+        // Opacity is applied the same way for every blend, so a stack of
+        // Visualize nodes fades uniformly and Mix is just Set at less than
+        // full strength.
+        let out = [
+            old[0] + (mixed[0] - old[0]) * opacity,
+            old[1] + (mixed[1] - old[1]) * opacity,
+            old[2] + (mixed[2] - old[2]) * opacity,
+        ];
+        geom.set_color(p, out);
+    }
 }
 
 /// The Analysis node: measure an attribute (or the mesh's edge lengths) and
@@ -2861,6 +3069,7 @@ pub fn resolve_opencl_geometry_with_errors(
         }
 
         let processed_code = preprocess_opencl_code(&code);
+        let attr_names = parse_attr_refs(&code);
         let is_generator = code.contains("out_count");
 
         // A DEFORMER runs over POINTS. It never sees a triangle, so topology,
@@ -2869,7 +3078,7 @@ pub fn resolve_opencl_geometry_with_errors(
         // all gone. Inside a simnet that is the difference between a solver
         // that can follow a point across frames and one that cannot.
         if !is_generator {
-            let result = run_kernel_on_detail(&processed_code, &mut input, &flat_values);
+            let result = run_kernel_on_detail(&processed_code, &attr_names, &mut input, &flat_values);
             if let Err(e) = result {
                 if ocl_error.is_none() {
                     *ocl_error = Some(e);
@@ -3263,7 +3472,12 @@ fn run_deformer_flat(
 ///
 /// An attribute the kernel names but the geometry lacks is created and zeroed:
 /// naming it is the declaration.
-pub fn run_kernel_on_detail(code: &str, geom: &mut Detail, params: &[f32]) -> Result<(), String> {
+pub fn run_kernel_on_detail(
+    code: &str,
+    names: &[String],
+    geom: &mut Detail,
+    params: &[f32],
+) -> Result<(), String> {
     let count = geom.num_points();
     if count == 0 {
         return Ok(());
@@ -3274,9 +3488,14 @@ pub fn run_kernel_on_detail(code: &str, geom: &mut Detail, params: &[f32]) -> Re
         col.extend_from_slice(&geom.color(p));
     }
 
-    let names = parse_attr_refs(code);
+    // The names come from the caller, NOT from `code`: by the time a kernel
+    // reaches here the preprocessor has rewritten every `attrf("mass", i)`
+    // into `attr_0[i]`, so there is nothing left to parse. Reading them off
+    // the processed source bound zero buffers and the attribute silently never
+    // appeared — which is the gap between a test that parses raw source and a
+    // test that runs a kernel with its buffers handed to it.
     let mut attrs: Vec<(String, Vec<cl_float>)> = Vec::with_capacity(names.len());
-    for name in &names {
+    for name in names {
         let data = match geom.points().get(name) {
             Some(AttribData::Float(v)) => v.clone(),
             Some(other) => (0..count)
@@ -3330,6 +3549,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "neighbour"
         || nt == "time"
         || nt == "analysis"
+        || nt == "visualize"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -3474,6 +3694,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_time_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("visualize") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_visualize_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
@@ -5117,6 +5346,221 @@ mod simnet_tests {
         assert_eq!(g.detail().value("t", 0).unwrap().as_f32(), 1.0);
         apply_time(&mut g, &degenerate, 4);
         assert_eq!(g.detail().value("t", 0).unwrap().as_f32(), 0.0);
+    }
+
+    fn run_vis(before: &Detail, params: &[(&str, &str)]) -> (Detail, Option<String>) {
+        let mut geom = before.clone();
+        let mut ps = vec![param("Input", "In"), param("Attribute", "mass")];
+        for (k, v) in params {
+            match ps.iter_mut().find(|p| p.name == *k) {
+                Some(p) => p.default = v.to_string(),
+                None => ps.push(param(k, v)),
+            }
+        }
+        let vn = node("id-v", "V", "visualize", ps, vec![]);
+        let mut err = None;
+        apply_visualize(&mut geom, &vn, &mut err);
+        (geom, err)
+    }
+
+    #[test]
+    fn test_ramps_run_end_to_end_and_clamp_outside_it() {
+        for name in ["grayscale", "heat", "spectrum", "viridis"] {
+            let (lo, hi) = (ramp_color(name, 0.0), ramp_color(name, 1.0));
+            assert_ne!(lo, hi, "{name} goes nowhere");
+            assert_eq!(ramp_color(name, -5.0), lo, "{name} clamps below");
+            assert_eq!(ramp_color(name, 5.0), hi, "{name} clamps above");
+            // Continuous: a small step in t is a small step in colour, or the
+            // picture would show banding that is not in the data.
+            let a = ramp_color(name, 0.5);
+            let b = ramp_color(name, 0.51);
+            let d: f32 = (0..3).map(|i| (a[i] - b[i]).abs()).sum();
+            assert!(d < 0.1, "{name} jumps at the midpoint: {a:?} -> {b:?}");
+        }
+        assert_eq!(ramp_color("grayscale", 0.0), [0.0; 3]);
+        assert_eq!(ramp_color("grayscale", 1.0), [1.0; 3]);
+        assert_eq!(ramp_color("grayscale", 0.5), [0.5; 3]);
+    }
+
+    #[test]
+    fn test_visualize_auto_range_tracks_the_attribute_every_time_it_runs() {
+        let mut before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        let n = before.num_points();
+        before.points_mut().create("mass", AttribValue::Float(0.0));
+        for p in 0..n {
+            before.points_mut().set_value("mass", p, AttribValue::Float(p as f32)).unwrap();
+        }
+
+        let (g, err) = run_vis(&before, &[("Ramp", "Grayscale"), ("Range", "Auto")]);
+        assert!(err.is_none(), "{err:?}");
+        // The measured range spreads across the whole ramp regardless of what
+        // the numbers happen to be — which is the setting a simulation wants,
+        // because the interesting range moves every frame.
+        assert_eq!(g.color(0), [0.0; 3]);
+        assert_eq!(g.color(n - 1), [1.0; 3]);
+
+        // Scale every value by ten and the picture is identical: Auto is about
+        // the shape of the data, not its units.
+        let mut scaled = before.clone();
+        for p in 0..n {
+            scaled.points_mut().set_value("mass", p, AttribValue::Float(p as f32 * 10.0)).unwrap();
+        }
+        let (h, _) = run_vis(&scaled, &[("Ramp", "Grayscale"), ("Range", "Auto")]);
+        for p in 0..n {
+            assert_eq!(g.color(p), h.color(p), "point {p}");
+        }
+
+        // A flat attribute has no range to spread; everything at the bottom is
+        // the honest picture of "nothing varies here", not a division by zero.
+        let mut flat = before.clone();
+        flat.points_mut().create("mass", AttribValue::Float(3.0));
+        let (f, err) = run_vis(&flat, &[("Ramp", "Grayscale"), ("Range", "Auto")]);
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(f.color(0), [0.0; 3]);
+    }
+
+    #[test]
+    fn test_visualize_nodes_composite_by_chaining() {
+        let mut before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        let n = before.num_points();
+        before.points_mut().create("mass", AttribValue::Float(1.0));
+        before.points_mut().create("heat", AttribValue::Float(0.0));
+        for p in 0..n {
+            before.points_mut().set_value("heat", p, AttribValue::Float(p as f32)).unwrap();
+        }
+
+        // Set lays down a base; a second node blends over it. Several
+        // attributes read at once come from STACKING nodes, not from one node
+        // growing a list of layers — so any one of them can be bypassed to see
+        // what it was contributing.
+        let (base, _) = run_vis(&before, &[("Ramp", "Grayscale"), ("Blend", "Set")]);
+        assert_eq!(base.color(0), [0.0; 3], "a flat attribute floors the ramp");
+
+        let (over, _) = run_vis(&base, &[("Attribute", "heat"), ("Ramp", "Grayscale"), ("Blend", "Set"), ("Opacity", "0.50")]);
+        // Half-strength Set is a half-way mix with what was already there.
+        assert!((over.color(n - 1)[0] - 0.5).abs() < 1e-5, "{:?}", over.color(n - 1));
+
+        // Opacity 0 changes nothing at all, whatever the blend.
+        for blend in ["Set", "Multiply", "Add"] {
+            let (none, _) = run_vis(&base, &[("Attribute", "heat"), ("Blend", blend), ("Opacity", "0.00")]);
+            for p in 0..n {
+                assert_eq!(none.color(p), base.color(p), "{blend} at zero opacity, point {p}");
+            }
+        }
+
+        // Multiply darkens toward the ramp, Add brightens away from it.
+        let mid = run_vis(&before, &[("Ramp", "Grayscale"), ("Range", "Manual"), ("From", "0.00"), ("To", "2.00")]).0;
+        let (mul, _) = run_vis(&mid, &[("Attribute", "heat"), ("Ramp", "Grayscale"), ("Blend", "Multiply")]);
+        let (add, _) = run_vis(&mid, &[("Attribute", "heat"), ("Ramp", "Grayscale"), ("Blend", "Add")]);
+        assert!(mul.color(0)[0] <= mid.color(0)[0] + 1e-6);
+        assert!(add.color(n - 1)[0] >= mid.color(n - 1)[0] - 1e-6);
+    }
+
+    #[test]
+    fn test_visualize_vector_mode_stages_markers_the_viewport_can_draw() {
+        let mut before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        before.points_mut().create("vel", AttribValue::Float3([0.0, 4.0, 0.0]));
+
+        let (g, err) = run_vis(&before, &[("Attribute", "vel"), ("Mode", "Vector"), ("Scale", "0.25")]);
+        assert!(err.is_none(), "{err:?}");
+        let vis = format!("{}vel", crate::detail::VIS_PREFIX);
+        assert!(g.points().has(&vis), "the marker request rides the geometry");
+        assert_eq!(g.points().value(&vis, 0), Some(AttribValue::Float3([0.0, 1.0, 0.0])));
+
+        // A marker describes the state it was made from, so it must not
+        // survive into a step that has not remade it.
+        assert_eq!(g.points().kind(&vis), crate::detail::AttribKind::Derivative);
+
+        // Outside a group, no marker — so a Visualize can annotate part of a
+        // surface without drawing over the rest.
+        let mut grouped = before.clone();
+        grouped.points_mut().create_group("some");
+        grouped.points_mut().add_to_group("some", 2);
+        let (h, _) = run_vis(&grouped, &[("Attribute", "vel"), ("Mode", "Vector"), ("Group", "some")]);
+        assert_ne!(h.points().value(&vis, 2), Some(AttribValue::Float3([0.0; 3])));
+        assert_eq!(h.points().value(&vis, 0), Some(AttribValue::Float3([0.0; 3])));
+    }
+
+    #[test]
+    fn test_vis_markers_become_line_pairs_in_the_points_own_colour() {
+        let mut d = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        d.points_mut().create("vel", AttribValue::Float3([0.0, 1.0, 0.0]));
+        // Only two points get a marker; the rest stage a zero vector.
+        let (mut g, _) = run_vis(&d, &[("Attribute", "vel"), ("Mode", "Vector"), ("Scale", "0.50")]);
+        let vis = format!("{}vel", crate::detail::VIS_PREFIX);
+        for p in 2..g.num_points() {
+            g.points_mut().set_value(&vis, p, AttribValue::Float3([0.0; 3])).unwrap();
+        }
+        g.set_color(0, [1.0, 0.0, 0.0]);
+
+        let verts = vis_marker_vertices(&g, |c| c);
+        // One PAIR per marker — a zero vector draws nothing rather than a
+        // degenerate segment at the point.
+        assert_eq!(verts.len(), 4);
+        assert_eq!(verts[0].position, g.positions()[0]);
+        assert_eq!(verts[1].position, (g.pos(0) + Vec3::new(0.0, 0.5, 0.0)).to_array());
+        assert_eq!(verts[0].color, [1.0, 0.0, 0.0], "markers take the point's colour");
+        assert_eq!(verts[1].color, verts[0].color);
+
+        // Geometry nobody asked to visualize draws nothing at all.
+        assert!(vis_marker_vertices(&d, |c| c).is_empty());
+    }
+
+    #[test]
+    fn test_an_opencl_deformer_lands_its_named_attribute_on_the_geometry() {
+        // The gap between "parse_attr_refs reads raw source" and "run the
+        // kernel with buffers handed to it": run_kernel_on_detail was reading
+        // the names off the PROCESSED source, where every attrf() call has
+        // already become attr_0[], so it bound no buffers and the attribute
+        // silently never appeared. Only an end-to-end evaluation catches that.
+        let kernel = r#"
+            __kernel void process(__global float* pos, __global float* col, int count) {
+                int id = get_global_id(0);
+                if (id < count) {
+                    setattrf("mass", id, pos[id * 3 + 1] * 2.0f);
+                }
+            }
+        "#;
+        let sphere = node("id-s", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let dfm = node(
+            "id-k",
+            "Height 1",
+            "opencl",
+            vec![param("Input", "Sphere 1"), param("Code", kernel)],
+            vec![],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere, dfm]);
+
+        let mut visited = Vec::new();
+        let mut err = None;
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(0, 0, &mut cache);
+        let g = generate_single_node_geometry_with_errors(
+            &root,
+            &root.children[1],
+            &mut visited,
+            &mut err,
+            &mut sim,
+        )
+        .expect("the deformer evaluates");
+        assert!(err.is_none(), "{err:?}");
+
+        assert!(g.points().has("mass"), "the kernel's named attribute must reach the geometry");
+        for p in 0..g.num_points() {
+            let want = g.positions()[p][1] * 2.0;
+            let got = g.points().value("mass", p).unwrap().as_f32();
+            assert!((got - want).abs() < 1e-4, "point {p}: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn test_visualize_reports_a_missing_attribute_and_leaves_colour_alone() {
+        let before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        let (g, err) = run_vis(&before, &[("Attribute", "nope")]);
+        assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+        for p in 0..before.num_points() {
+            assert_eq!(g.color(p), before.color(p), "point {p}");
+        }
     }
 
     /// A sphere, one point given a spike of `mass`, then a Neighbour node.

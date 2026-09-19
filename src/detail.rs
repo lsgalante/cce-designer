@@ -52,6 +52,16 @@ pub type PointId = u64;
 /// present; geometry without it renders at [`DEFAULT_COLOR`].
 pub const CD: &str = "Cd";
 
+/// Point attributes under this prefix are MARKER REQUESTS, not data: the
+/// Visualize node copies a vector attribute into `vis_<name>`, already scaled,
+/// and the viewport draws a segment from each point along it.
+///
+/// A naming convention rather than a side-channel on the container, so the
+/// request travels with the geometry through every operator that already knows
+/// how to carry an attribute, and shows up in the spreadsheet where you can
+/// see what is being drawn and why.
+pub const VIS_PREFIX: &str = "vis_";
+
 /// What a point renders as when it carries no `Cd`.
 pub const DEFAULT_COLOR: [f32; 3] = [0.8, 0.8, 0.8];
 

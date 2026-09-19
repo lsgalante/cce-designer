@@ -1,0 +1,19 @@
+{
+ "name": "Visualize",
+ "type": "visualize",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Attribute", "type": "text", "default": "mass" },
+  { "name": "Mode", "type": "choice:Ramp,Vector", "default": "Ramp" },
+  { "name": "Ramp", "type": "choice:Grayscale,Heat,Spectrum,Viridis", "default": "Viridis" },
+  { "name": "Range", "type": "choice:Auto,Manual", "default": "Auto" },
+  { "name": "From", "type": "text", "default": "0.00" },
+  { "name": "To", "type": "text", "default": "1.00" },
+  { "name": "Blend", "type": "choice:Set,Mix,Multiply,Add", "default": "Set" },
+  { "name": "Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01 },
+  { "name": "Scale", "type": "slider", "default": "0.20", "min": 0.0, "max": 2.0, "step": 0.01 },
+  { "name": "Group", "type": "text", "default": "" }
+ ]
+}

@@ -176,7 +176,14 @@ Touches: `geometry.rs`, `kernel_cpu.rs`, `nodes/*.json`.
 > unchanged point set means a missing attribute was removed on purpose.
 > Analysis and Time write derivative; the spreadsheet marks them with `~`.
 >
-> Outstanding: substeps, an explicit seed frame, a disk cache, and Visualize.
+> `visualize` is in: Ramp maps a scalar through one of four built-in ramps
+> into `Cd`, Vector stages a vector attribute as viewport markers. Several
+> attributes at once come from CHAINING Visualize nodes, each blending into
+> the `Cd` it was handed, which is how the plugin's Solver Vis tabs work.
+> Range Auto re-measures every run, because a simulation's interesting range
+> moves every frame.
+>
+> Outstanding: substeps, an explicit seed frame, and a disk cache.
 
 `simnet` is already the Developer Solver — feedback stack, per-node cache keyed
 on the subtree, restart on edit, one step per played frame. What it lacks is a

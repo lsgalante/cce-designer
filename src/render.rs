@@ -978,6 +978,13 @@ impl State {
         self.meta_number_labels = labels;
         self.meta_wire_verts = wires;
         self.meta_normal_verts = normals;
+
+        // Visualize's vector markers ride the same LINE_LIST channel as the
+        // normal whiskers.
+        self.meta_normal_verts.extend(crate::geometry::vis_marker_vertices(
+            &geom,
+            cce_ui::colors::to_linear_rgb,
+        ));
         self.meta_points_dirty = true;
     }
 
