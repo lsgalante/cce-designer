@@ -122,6 +122,10 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "toggle_circular_pane", label: "Circular Pane", context: Context::Network, run: Run::Key(Action::ToggleCircularPane), default_chord: Some("Ctrl+d") },
     Command { id: "detach_circular_window", label: "Detach Circular Window", context: Context::Network, run: Run::Key(Action::DetachCircularWindow), default_chord: None },
 
+    // --- Viewer states ---
+    Command { id: "edit_handles", label: "Edit Handles", context: Context::Viewport, run: Run::Key(Action::ToggleViewerState), default_chord: Some("Ctrl+h") },
+    Command { id: "toggle_snap", label: "Toggle Snapping", context: Context::Viewport, run: Run::Key(Action::ToggleSnap), default_chord: Some("Ctrl+b") },
+
     // --- Viewport ---
     Command { id: "toggle_grid", label: "Show Grid", context: Context::Viewport, run: Run::Key(Action::ToggleGrid), default_chord: Some("Ctrl+g") },
     Command { id: "toggle_cube", label: "Show Cube", context: Context::Viewport, run: Run::Key(Action::ToggleCube), default_chord: Some("Ctrl+e") },

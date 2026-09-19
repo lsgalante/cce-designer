@@ -359,9 +359,37 @@ Touches: `geometry.rs`, `nodes/*.json`.
 > missing was not a file but a set of NAMES to put in it, and conflict
 > reporting; both are in.
 >
+> **The viewer-state framework landed.** `src/viewer_state.rs` owns everything
+> the curve tool had that was not about curves: projection, hit-testing, the
+> drag model, per-gesture undo, binding by node id, write-back — plus the two
+> things this phase asked for that it did not have, snapping and a HUD.
+>
+> What differs per tool is the `HandleSource` trait, and two implementations
+> ship because an abstraction with one implementation has not been shown to be
+> one. The curve is an open-ended list of world positions stored as world
+> positions. The soft transform is a FIXED pair whose second handle is
+> `Centre + Translation` — a derived position, converted both ways by the
+> source, so the framework's drag maths never learns that one of its two world
+> points is not a place. That conversion is the whole reason the trait exists.
+>
+> The one design question it forced: `write` is handed a full set of handles
+> with no word about which moved, because it has to mean the same thing when
+> the set came from an undo snapshot as when it came from a drag. So the soft
+> transform's handles read as a vector with a base and a tip, and dragging
+> either end changes the offset between them. The alternative — keep the
+> translation fixed when the centre moves — would be right for the drag and
+> would quietly discard half of every restored snapshot.
+>
+> `source_for` is the one map from node type to tool, so the context menu entry,
+> the `edit_handles` command and anything later cannot disagree about what is
+> editable: a new source appears in the menu without the menu being touched.
+> The entry is now "Edit Handles", not "Edit Points" — only a curve's are
+> points. Snapping is a command (`toggle_snap`), which is the previous round's
+> registry paying for itself.
+>
 > Still outstanding for this phase: keyboard graph navigation and auto-layout
-> in the network pane, and the viewer-state framework generalized out of
-> `curve_tool.rs`.
+> in the network pane. The keycam navigator the proposal names as a viewer
+> state is not written yet, but the framework it would sit on is.
 
 Independent of all the geometry work, and the place where the app gets to be
 better rather than equal. A **command palette** on the HC Panel's model — fuzzy

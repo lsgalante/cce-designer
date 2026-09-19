@@ -178,7 +178,7 @@ impl State {
         self.append_frame_text(&mut pc);
         self.append_meta_point_numbers(&mut pc);
         self.append_scale_readout(&mut pc);
-        self.append_curve_tool_overlay(&mut pc);
+        self.append_viewer_state_overlay(&mut pc);
         self.append_popovers(&mut pc);
         self.append_dock_drag_overlay(&mut pc);
         self.append_plate_corners(&mut pc);
@@ -907,12 +907,12 @@ impl State {
     /// through the cached scene mvp (like the point numbers above), drawn as
     /// a ringed dot with its index, the control cage as faint segments
     /// between them. Selected point draws larger and brighter.
-    fn append_curve_tool_overlay(&self, pc: &mut PaintCtx) {
-        let Some(tool) = &self.curve_tool else { return };
+    fn append_viewer_state_overlay(&self, pc: &mut PaintCtx) {
+        let Some(tool) = &self.viewer_tool else { return };
         if !self.show_viewport {
             return;
         }
-        let handles = self.curve_tool_handles();
+        let handles = self.viewer_tool_handles();
         let (vx, vy, vw, vh) = self.last_scene_view_rect;
         if vw <= 0.0 || vh <= 0.0 {
             return;
@@ -934,8 +934,29 @@ impl State {
                     [1.0, 0.78, 0.20, 1.0]
                 };
                 pc.circle(*sx, *sy, r, col);
-                pc.text((i + 1).to_string(), sx + 8.0, sy - 6.0, 10.0, [0xff, 0xe6, 0xa0]);
+                pc.text(tool.source.handle_label(*i), sx + 8.0, sy - 6.0, 10.0, [0xff, 0xe6, 0xa0]);
             }
+        });
+
+        // The HUD sits one line ABOVE the scale readout, sharing its left
+        // margin. Not at the top: the viewport is full-bleed and the pane
+        // plates float over its top edge, so a mode line there lands under the
+        // collapsed stubs and their titles read through it. Not at the very
+        // bottom either — that row belongs to the scale readout, and two
+        // sentences on one line read as one garbled sentence.
+        //
+        // It exists because a viewer state changes what every click does and
+        // snapping silently changes what a drag does. A mode you cannot see is
+        // a mode you forget you are in, and the first symptom is a click that
+        // does something surprising.
+        let hud = tool.hud();
+        let size = 11.0;
+        let pad = 5.0;
+        let y = vy + vh - 16.0 - (size + pad * 2.0) - 4.0;
+        let width = (hud.chars().count() as f32 * size * 0.52 + pad * 2.0).min(vw - 16.0);
+        pc.clip(rect(vx, vy, vw, vh), |pc| {
+            pc.quad(rect(vx + 8.0 - pad, y, width, size + pad * 2.0), [0.0, 0.0, 0.0, 0.55]);
+            pc.text(hud, vx + 8.0, y + pad, size, [0xff, 0xe6, 0xa0]);
         });
     }
 

@@ -25,6 +25,10 @@ pub enum Action {
     /// Open the command palette — a command like any other, so it is
     /// rebindable and lists itself.
     CommandPalette,
+    /// Snap dragged handles in the active viewer state to a world increment.
+    ToggleSnap,
+    /// Enter or leave the selected node's viewer state.
+    ToggleViewerState,
 }
 
 #[derive(Debug, Clone)]

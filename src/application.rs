@@ -326,7 +326,7 @@ impl Application for State {
     /// The toolkit's undo/redo routing lands here once no focused text box
     /// wanted the chord. Only the curve viewer state has a history today.
     fn undo(&mut self, needs_rebuild: &mut bool) -> bool {
-        let taken = self.curve_tool_undo();
+        let taken = self.viewer_tool_undo();
         if taken {
             *needs_rebuild = true;
         }
@@ -334,7 +334,7 @@ impl Application for State {
     }
 
     fn redo(&mut self, needs_rebuild: &mut bool) -> bool {
-        let taken = self.curve_tool_redo();
+        let taken = self.viewer_tool_redo();
         if taken {
             *needs_rebuild = true;
         }

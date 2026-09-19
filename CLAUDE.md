@@ -169,32 +169,57 @@ gone from cce-ui with the wgpu path).
   from output nodes; OpenCL failures are collected, not fatal.
 - `src/viewport_3d.rs` — app-owned `Viewport3D` widget (camera orbit/zoom, inertial
   scroll, `rt_mode` flag switching the pane to the `cce_ui::vk` compute path tracer).
-- `src/curve_tool.rs` — the curve viewer state (Houdini-style viewport point
-  editing for the native `curve` node; "Edit Points" in the node context menu).
-  The pattern for any future viewer state: project world positions to handles
+- `src/viewer_state.rs` — the **viewer-state framework**: interactive viewport
+  tools, generalized out of the curve tool. A viewer state is a mode the
+  viewport is in, bound to one node, in which the pointer edits that node
+  instead of orbiting the camera. The framework owns everything that turned out
+  to be the same for any such tool: projection of world positions to handles
   through `State::last_scene_mvp` + `last_scene_view_rect` (both LOGICAL px,
-  the rect is divided by scale where it is cached — same path as the meta
-  Point Numbers overlay), hit-test against `cursor_x/y`, drag by unprojecting
-  the cursor at the grabbed point's captured NDC depth, and write edits back
-  through the SetParam resync sequence (`sync_nodes` + `rebuild_scene_geometry`
-  + `sync_parameters_pane`). Input hooks live in `handle_event`: presses
-  intercept in the MouseInput arm ahead of the viewport context menu (gated on
-  `cursor_in_viewport() && !in_network_pane`, so the network plate keeps its
-  clicks where they overlap), motion at the top of CursorMoved, Escape ahead of
-  connection-cancel. The tool binds the node by ID and deactivates lazily when
-  the id no longer resolves to a curve. Undo/redo is a
-  `cce_ui::history::History` of point-list snapshots on the tool, one per
-  gesture (a drag opens a gesture its first motion commits, so a no-move
-  click leaves nothing). The chords are the toolkit's (`undo`/`redo` in
-  input.kdl, routed by the runner to `Application::undo`/`redo` in
-  `application.rs` after the focused text box declines); Edit ▸ Undo/Redo
-  reach the same code through `Action::Undo`/`Redo`. There is no
-  project-wide history yet; `execute_action` is where one would be consulted
-  after the tool declines.
+  the rect divided by scale where it is cached — the same path as the meta
+  Point Numbers overlay), hit-testing against `cursor_x/y`, dragging by
+  unprojecting the cursor at the grabbed handle's captured NDC depth, snapping,
+  the HUD, per-gesture undo (`cce_ui::history::History` of handle snapshots on
+  the tool, so it lives exactly as long as the state does), binding by node ID
+  rather than slot so renames don't detach it and a vanished node drops the
+  state lazily, and write-back through the SetParam resync sequence
+  (`sync_nodes` + `rebuild_scene_geometry` + `sync_parameters_pane`).
+  Input hooks live in `handle_event`: presses intercept in the MouseInput arm
+  ahead of the viewport context menu (gated on `cursor_in_viewport() &&
+  !in_network_pane`, so the network plate keeps its clicks where they overlap),
+  motion at the top of CursorMoved, Escape ahead of connection-cancel.
+
+  What differs per tool is the `HandleSource` trait: which node types it
+  accepts, where the handles are, how to write them back, whether the pointer
+  may add and remove them, and what to label them. `source_for` is the one map
+  from node type to tool, so the node context menu's Edit Handles entry, the
+  `edit_handles` command and any future entry point cannot disagree about what
+  is editable — adding a source makes it appear in the menu without touching
+  the menu.
+
+  Two implementations ship, deliberately different in shape, because an
+  abstraction with a single implementation has not been shown to be one:
+  `src/curve_tool.rs` (an open-ended list of world positions in the `curve`
+  node's Points parameter, extensible) and `src/soft_transform_tool.rs` (a
+  FIXED pair where the second handle is `Centre + Translation` — a derived
+  position that has to be converted both ways, which is exactly what the trait
+  exists to contain). The soft transform's two handles read as a vector with a
+  base and a tip, and dragging either end changes the offset between them; a
+  rule like "keep the translation when the centre moves" would be right for the
+  drag and would quietly discard half of every restored undo snapshot, since
+  `write` is handed a full set of handles with no word about which moved.
+
+  The HUD draws one line ABOVE the scale readout, sharing its left margin — not
+  at the top, because the viewport is full-bleed and the pane plates float over
+  its top edge, so a mode line there lands under the collapsed stubs. It exists
+  because a viewer state changes what every click does and snapping silently
+  changes what a drag does.
 - `src/project.rs` — save/load. A project is a **directory containing `state.json`**
   (`Project { name, root: FsNode, view_state }`); `default_project.json` in the crate
   root is special-cased as a single file and doubles as the detached-window sync channel.
-- `src/shortcut.rs` — `Shortcut::parse("Ctrl+Shift+g")` → `Action` mapping.
+- `src/shortcut.rs` — `Shortcut::parse("Ctrl+Shift+g")` and chord → COMMAND ID
+  matching (see the command registry above; a chord names a row in
+  `src/command.rs`, not an `Action`). `Shortcut`'s equality is hand-written
+  rather than derived, so it agrees with `matches` about case.
 
 The `zcce_inspector_v1` integration (window-position tracking + widget-state
 streaming to cce-test-interface) was dropped in the engine migration; the HTTP API

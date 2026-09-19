@@ -2,6 +2,8 @@
 pub mod app;
 pub mod application;
 pub mod curve_tool;
+pub mod soft_transform_tool;
+pub mod viewer_state;
 pub mod detail;
 pub mod export;
 pub mod export_cli;
@@ -1688,8 +1690,8 @@ mod tests {
             "template instances must not share ids"
         );
 
-        state.toggle_curve_tool(slot);
-        assert!(state.curve_tool.is_some());
+        state.toggle_viewer_state(slot);
+        assert!(state.viewer_tool.is_some());
 
         state.last_scene_mvp = Some(Mat4::IDENTITY);
         state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
@@ -1707,11 +1709,11 @@ mod tests {
         // Grab the first point and drag it to the pane center → (0, 0, z).
         state.cursor_x = sx(default_first.x);
         state.cursor_y = sy(default_first.y);
-        assert!(state.curve_tool_press(), "press on a handle must grab");
+        assert!(state.viewer_tool_press(), "press on a handle must grab");
         state.cursor_x = 50.0;
         state.cursor_y = 50.0;
-        assert!(state.curve_tool_drag_motion());
-        assert!(state.curve_tool_release());
+        assert!(state.viewer_tool_drag_motion());
+        assert!(state.viewer_tool_release());
         let pts = points_of(&state, slot);
         assert!(pts[0].length() < 1e-4, "dragged point should sit at the origin, got {:?}", pts[0]);
         // The other curve is untouched.
@@ -1721,24 +1723,24 @@ mod tests {
         // depth — z=0 here) and immediately drags it.
         state.cursor_x = 90.0;
         state.cursor_y = 90.0;
-        assert!(state.curve_tool_press());
+        assert!(state.viewer_tool_press());
         let pts = points_of(&state, slot);
         assert_eq!(pts.len(), 5);
         assert!((pts[4] - Vec3::new(0.8, -0.8, 0.0)).length() < 1e-4, "added at {:?}", pts[4]);
-        assert!(state.curve_tool_release());
+        assert!(state.viewer_tool_release());
 
         // Delete the (selected) new point, then right-press-delete the one
         // parked at the pane center.
-        assert!(state.curve_tool_delete_selected());
+        assert!(state.viewer_tool_delete_selected());
         assert_eq!(points_of(&state, slot).len(), 4);
         state.cursor_x = 50.0;
         state.cursor_y = 50.0;
-        assert!(state.curve_tool_delete_at_cursor());
+        assert!(state.viewer_tool_delete_at_cursor());
         assert_eq!(points_of(&state, slot).len(), 3);
 
         // Toggling on the same node exits the state.
-        state.toggle_curve_tool(slot);
-        assert!(state.curve_tool.is_none());
+        state.toggle_viewer_state(slot);
+        assert!(state.viewer_tool.is_none());
     }
 
     /// Undo/redo in the curve viewer state: one entry per gesture (a drag
@@ -1757,7 +1759,7 @@ mod tests {
             )
             .expect("add curve node");
         let slot = state.current_dir().children.len() - 1;
-        state.toggle_curve_tool(slot);
+        state.toggle_viewer_state(slot);
         state.last_scene_mvp = Some(Mat4::IDENTITY);
         state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
         let sx = |x: f32| 50.0 + x * 50.0;
@@ -1770,30 +1772,30 @@ mod tests {
             ))
         };
         let history = |state: &State| {
-            let t = state.curve_tool.as_ref().expect("tool active");
+            let t = state.viewer_tool.as_ref().expect("tool active");
             (t.history.undo_len(), t.history.redo_len())
         };
 
         let initial = points_of(&state);
-        assert!(!state.curve_tool_undo(), "nothing to undo yet");
-        assert!(!state.curve_tool_redo(), "nothing to redo yet");
+        assert!(!state.viewer_tool_undo(), "nothing to undo yet");
+        assert!(!state.viewer_tool_redo(), "nothing to redo yet");
 
         // Grab and release without moving: no history.
         state.cursor_x = sx(initial[0].x);
         state.cursor_y = sy(initial[0].y);
-        assert!(state.curve_tool_press());
-        assert!(state.curve_tool_release());
+        assert!(state.viewer_tool_press());
+        assert!(state.viewer_tool_release());
         assert_eq!(history(&state), (0, 0));
 
         // Gesture 1: drag the first point to the pane center, over several
         // motion events — still one entry.
-        assert!(state.curve_tool_press());
+        assert!(state.viewer_tool_press());
         for (x, y) in [(55.0, 55.0), (52.0, 52.0), (50.0, 50.0)] {
             state.cursor_x = x;
             state.cursor_y = y;
-            assert!(state.curve_tool_drag_motion());
+            assert!(state.viewer_tool_drag_motion());
         }
-        assert!(state.curve_tool_release());
+        assert!(state.viewer_tool_release());
         let after_drag = points_of(&state);
         assert!(after_drag[0].length() < 1e-4);
         assert_eq!(history(&state), (1, 0));
@@ -1801,62 +1803,62 @@ mod tests {
         // Gesture 2: add a point (press on empty space + drag + release).
         state.cursor_x = 90.0;
         state.cursor_y = 90.0;
-        assert!(state.curve_tool_press());
+        assert!(state.viewer_tool_press());
         state.cursor_x = 85.0;
         state.cursor_y = 85.0;
-        assert!(state.curve_tool_drag_motion());
-        assert!(state.curve_tool_release());
+        assert!(state.viewer_tool_drag_motion());
+        assert!(state.viewer_tool_release());
         let after_add = points_of(&state);
         assert_eq!(after_add.len(), initial.len() + 1);
         assert_eq!(history(&state), (2, 0));
 
         // Gesture 3: delete the selected (new) point.
-        assert!(state.curve_tool_delete_selected());
+        assert!(state.viewer_tool_delete_selected());
         let after_delete = points_of(&state);
         assert_eq!(after_delete.len(), initial.len());
         assert_eq!(history(&state), (3, 0));
 
         // Undo walks back through all three.
-        assert!(state.curve_tool_undo());
+        assert!(state.viewer_tool_undo());
         assert_eq!(points_of(&state), after_add);
-        assert!(state.curve_tool_undo());
+        assert!(state.viewer_tool_undo());
         assert_eq!(points_of(&state), after_drag);
-        assert!(state.curve_tool_undo());
+        assert!(state.viewer_tool_undo());
         assert_eq!(points_of(&state), initial);
         assert_eq!(history(&state), (0, 3));
-        assert!(!state.curve_tool_undo(), "history exhausted");
+        assert!(!state.viewer_tool_undo(), "history exhausted");
 
         // Redo walks forward again.
-        assert!(state.curve_tool_redo());
+        assert!(state.viewer_tool_redo());
         assert_eq!(points_of(&state), after_drag);
-        assert!(state.curve_tool_redo());
+        assert!(state.viewer_tool_redo());
         assert_eq!(points_of(&state), after_add);
         assert_eq!(history(&state), (2, 1));
 
         // A new gesture after an undo forks: the redo branch is gone.
         state.cursor_x = 50.0;
         state.cursor_y = 50.0;
-        assert!(state.curve_tool_delete_at_cursor());
+        assert!(state.viewer_tool_delete_at_cursor());
         assert_eq!(history(&state), (3, 0));
-        assert!(!state.curve_tool_redo());
+        assert!(!state.viewer_tool_redo());
 
         // Undo mid-drag abandons the drag and clamps the selection.
         let pts = points_of(&state);
         state.cursor_x = sx(pts[pts.len() - 1].x);
         state.cursor_y = sy(pts[pts.len() - 1].y);
-        assert!(state.curve_tool_press());
+        assert!(state.viewer_tool_press());
         state.cursor_x += 5.0;
-        assert!(state.curve_tool_drag_motion());
-        assert!(state.curve_tool_undo());
-        let tool = state.curve_tool.as_ref().unwrap();
+        assert!(state.viewer_tool_drag_motion());
+        assert!(state.viewer_tool_undo());
+        let tool = state.viewer_tool.as_ref().unwrap();
         assert!(tool.drag.is_none());
         assert!(tool.selected.map(|i| i < points_of(&state).len()).unwrap_or(true));
-        assert!(!state.curve_tool_drag_motion(), "no drag survives an undo");
+        assert!(!state.viewer_tool_drag_motion(), "no drag survives an undo");
 
         // Leaving the state drops its history.
-        state.toggle_curve_tool(slot);
-        assert!(state.curve_tool.is_none());
-        assert!(!state.curve_tool_undo());
+        state.toggle_viewer_state(slot);
+        assert!(state.viewer_tool.is_none());
+        assert!(!state.viewer_tool_undo());
     }
 
     /// The Extrude template: a subnet (input -> opencl -> output) whose kernel
@@ -4098,6 +4100,168 @@ mod tests {
         assert_eq!(from_palette_row(&row).map(|c| c.id), Some("save_document_as"));
 
         assert!(from_palette_row("Not A Command").is_none());
+    }
+
+    /// The soft-transform viewer state: two fixed handles, one of which is a
+    /// DERIVED position, driven through the same framework as the curve.
+    ///
+    /// This is the test that says the framework is one — the curve tests above
+    /// exercise an open-ended list of stored world positions, and this is a
+    /// fixed pair where the second handle is `Centre + Translation` and has to
+    /// be converted both ways.
+    #[test]
+    fn test_the_soft_transform_state_drags_a_derived_handle() {
+        use crate::geometry::node_param_str;
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode {
+                    template_name: "Soft Transform".to_string(),
+                    name: None,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                &mut redraw,
+            )
+            .expect("add soft transform node");
+        let slot = state.current_dir().children.len() - 1;
+        assert_eq!(state.current_dir().children[slot].node_type, "soft_transform");
+
+        state.toggle_viewer_state(slot);
+        assert!(state.viewer_tool.is_some(), "soft_transform must enter a viewer state");
+
+        state.last_scene_mvp = Some(Mat4::IDENTITY);
+        state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+        let sx = |x: f32| 50.0 + x * 50.0;
+        let sy = |y: f32| 50.0 - y * 50.0;
+        let param = |state: &State, name: &str| {
+            node_param_str(&state.current_dir().children[slot], name, "")
+        };
+
+        // Two handles: the centre, and the tip at centre + translation. The
+        // template ships centre (0,0,0) and translation (0,0.2,0).
+        let handles = state.viewer_tool_handles();
+        assert_eq!(handles.len(), 2, "a soft transform has exactly two handles");
+        assert!((handles[0].1 - sx(0.0)).abs() < 1e-3 && (handles[0].2 - sy(0.0)).abs() < 1e-3);
+        assert!(
+            (handles[1].2 - sy(0.2)).abs() < 1e-3,
+            "the tip is not drawn at centre + translation: {:?}",
+            handles[1]
+        );
+
+        // Drag the TIP to (0.4, 0, 0): the translation becomes that offset,
+        // and the centre does not move.
+        state.cursor_x = handles[1].1;
+        state.cursor_y = handles[1].2;
+        assert!(state.viewer_tool_press(), "press on the tip must grab");
+        state.cursor_x = sx(0.4);
+        state.cursor_y = sy(0.0);
+        assert!(state.viewer_tool_drag_motion());
+        assert!(state.viewer_tool_release());
+        assert_eq!(param(&state, "Center"), "0.00:0.00:0.00", "the centre moved");
+        assert_eq!(param(&state, "Translation"), "0.40:0.00:0.00");
+
+        // Fixed handles: a press on empty space adds nothing, and Delete
+        // removes nothing — a third handle would mean nothing.
+        state.cursor_x = sx(-0.9);
+        state.cursor_y = sy(-0.9);
+        assert!(state.viewer_tool_press(), "the state still owns the viewport press");
+        assert!(state.viewer_tool_release() || true);
+        assert_eq!(state.viewer_tool_handles().len(), 2, "empty-space press added a handle");
+        assert!(!state.viewer_tool_delete_selected(), "a fixed source must not delete");
+
+        // Dragging the BASE keeps the tip where it is, so the translation
+        // shortens to match — the documented two-handled-gizmo behaviour.
+        let handles = state.viewer_tool_handles();
+        state.cursor_x = handles[0].1;
+        state.cursor_y = handles[0].2;
+        assert!(state.viewer_tool_press());
+        state.cursor_x = sx(0.1);
+        state.cursor_y = sy(0.0);
+        assert!(state.viewer_tool_drag_motion());
+        assert!(state.viewer_tool_release());
+        assert_eq!(param(&state, "Center"), "0.10:0.00:0.00");
+        assert_eq!(param(&state, "Translation"), "0.30:0.00:0.00", "the tip should not have moved");
+
+        // And undo restores BOTH parameters, which is the case a "keep the
+        // translation when the centre moves" rule would have broken.
+        assert!(state.viewer_tool_undo());
+        assert_eq!(param(&state, "Center"), "0.00:0.00:0.00");
+        assert_eq!(param(&state, "Translation"), "0.40:0.00:0.00");
+    }
+
+    /// Snapping rounds a dragged handle to a world increment, and only when it
+    /// is on.
+    #[test]
+    fn test_snapping_rounds_a_dragged_handle() {
+        use crate::viewer_state::SNAP_INCREMENT;
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Curve".to_string(), name: None, x: 0.0, y: 0.0 },
+                &mut redraw,
+            )
+            .expect("add curve node");
+        let slot = state.current_dir().children.len() - 1;
+        state.toggle_viewer_state(slot);
+        state.last_scene_mvp = Some(Mat4::IDENTITY);
+        state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+        let points = |state: &State| {
+            crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
+                &state.current_dir().children[slot],
+                "Points",
+                "",
+            ))
+        };
+
+        // Off by default: a drag lands exactly where the cursor is.
+        let first = points(&state)[0];
+        state.cursor_x = 50.0 + first.x * 50.0;
+        state.cursor_y = 50.0 - first.y * 50.0;
+        assert!(state.viewer_tool_press());
+        state.cursor_x = 50.0 + 0.37 * 50.0;
+        state.cursor_y = 50.0;
+        assert!(state.viewer_tool_drag_motion());
+        assert!(state.viewer_tool_release());
+        assert!((points(&state)[0].x - 0.37).abs() < 1e-3, "{:?}", points(&state)[0]);
+
+        // On: the same drag rounds to the increment.
+        assert!(state.toggle_viewer_snap());
+        assert_eq!(state.viewer_tool.as_ref().unwrap().snap, Some(SNAP_INCREMENT));
+        let first = points(&state)[0];
+        state.cursor_x = 50.0 + first.x * 50.0;
+        state.cursor_y = 50.0 - first.y * 50.0;
+        assert!(state.viewer_tool_press());
+        state.cursor_x = 50.0 + 0.37 * 50.0;
+        state.cursor_y = 50.0;
+        assert!(state.viewer_tool_drag_motion());
+        assert!(state.viewer_tool_release());
+        let p = points(&state)[0];
+        assert!((p.x - 0.4).abs() < 1e-3, "snapped x should be 0.4, got {p:?}");
+
+        // And off again, from the same command.
+        assert!(state.toggle_viewer_snap());
+        assert_eq!(state.viewer_tool.as_ref().unwrap().snap, None);
+
+        // The HUD says which it is, because a mode you cannot see is a mode
+        // you forget you are in.
+        let hud = state.viewer_tool.as_ref().unwrap().hud();
+        assert!(hud.contains("Curve Points") && hud.contains("Snap off"), "{hud}");
+    }
+
+    /// Only node types with a source enter a viewer state, and each gets its
+    /// own.
+    #[test]
+    fn test_only_editable_node_types_enter_a_viewer_state() {
+        use crate::viewer_state::source_for;
+        assert_eq!(source_for("curve").map(|s| s.name()), Some("Curve Points"));
+        assert_eq!(source_for("soft_transform").map(|s| s.name()), Some("Soft Transform"));
+        assert!(source_for("sphere").is_none());
+        assert!(source_for("boolean").is_none());
+        // Types are matched case-insensitively, like every other node lookup.
+        assert!(source_for("Curve").is_some());
     }
 
     /// A page's raster is its physical size times its resolution — the

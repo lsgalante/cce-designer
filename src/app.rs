@@ -1355,7 +1355,7 @@ pub struct State {
     pub last_scene_mvp: Option<Mat4>,
     pub last_scene_view_rect: (f32, f32, f32, f32),
     /// The active curve viewer state (viewport point editing), if any.
-    pub curve_tool: Option<crate::curve_tool::CurveTool>,
+    pub viewer_tool: Option<crate::viewer_state::ViewerTool>,
     pub last_viewport_rt_mode: bool,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
@@ -2985,16 +2985,13 @@ impl State {
             let dir = self.current_dir();
             let Some(node) = dir.children.get(slot) else { return };
             let enterable = node.is_enterable();
-            // None: not a curve; Some(bool): a curve, editing or not.
-            let curve_editing = node
-                .node_type
-                .eq_ignore_ascii_case("curve")
-                .then(|| {
-                    self.curve_tool
-                        .as_ref()
-                        .map(|t| t.node_id == node.id)
-                        .unwrap_or(false)
-                });
+            // None: no viewer state for this node type; Some(bool): editable,
+            // and whether it is being edited right now. The types that have a
+            // state are whatever `source_for` accepts, so a new HandleSource
+            // appears in this menu without touching it.
+            let curve_editing = crate::viewer_state::source_for(&node.node_type).map(|_| {
+                self.viewer_tool.as_ref().map(|t| t.node_id == node.id).unwrap_or(false)
+            });
             (
                 matches!(node.node_type.as_str(), "utility" | "session" | "meta"),
                 node.geometry_visible,
@@ -3020,7 +3017,9 @@ impl State {
             actions.push(NodeMenuAction::ToggleGeometry);
         }
         if let Some(editing) = curve_editing {
-            options.push(if editing { "Stop Editing Points" } else { "Edit Points" }.to_string());
+            // "Handles", not "Points": a soft transform's are a centre and a
+            // tip, and only a curve's are points.
+            options.push(if editing { "Stop Editing Handles" } else { "Edit Handles" }.to_string());
             actions.push(NodeMenuAction::EditCurve);
         }
         if deletable {
@@ -3317,7 +3316,7 @@ impl State {
                 let _ = self.apply_action(McpAction::ToggleGeometry { slot }, &mut redraw);
             }
             NodeMenuAction::EditCurve => {
-                self.toggle_curve_tool(slot);
+                self.toggle_viewer_state(slot);
             }
             NodeMenuAction::Delete => {
                 self.delete_node(slot);
@@ -4203,7 +4202,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             pick_cache: None,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
-            curve_tool: None,
+            viewer_tool: None,
             last_viewport_rt_mode: false,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
@@ -5121,6 +5120,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let mut settings_changed = false;
         match action {
             Action::CommandPalette => self.open_command_palette(),
+            Action::ToggleViewerState => {
+                // The selected node, the same one the context menu's entry
+                // would act on — so the command and the menu cannot disagree
+                // about what "this node" means.
+                match self.graph().selected_node() {
+                    Some(slot) => {
+                        self.toggle_viewer_state(slot);
+                        if self.viewer_tool.is_none() {
+                            self.update_status_text("Left the viewer state.");
+                        }
+                    }
+                    None => self.update_status_text("Select a node to edit its handles."),
+                }
+            }
+            Action::ToggleSnap => {
+                if !self.toggle_viewer_snap() {
+                    self.update_status_text("Snapping applies inside a viewer state.");
+                }
+            }
             // Undo/Redo reach whichever editing state owns a history. The
             // chords arrive through `Application::undo` / `redo` (the
             // toolkit routes them, after the focused text box's turn); the
@@ -5128,10 +5146,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // the only history so far; a project-wide one would be consulted
             // here after the tool declines.
             Action::Undo => {
-                self.curve_tool_undo();
+                self.viewer_tool_undo();
             }
             Action::Redo => {
-                self.curve_tool_redo();
+                self.viewer_tool_redo();
             }
             Action::ToggleGrid => {
                 let val = !self.viewport().show_grid;
@@ -5579,7 +5597,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 // An in-flight curve-tool grab eats motion ahead of every
                 // other drag: the grabbed control point tracks the cursor.
-                if self.curve_tool_drag_motion() {
+                if self.viewer_tool_drag_motion() {
                     return true;
                 }
 
@@ -6011,16 +6029,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         // left grabs or adds a control point, right on a
                         // handle deletes it (right elsewhere still opens the
                         // viewport menu below).
-                        if self.curve_tool.is_some()
+                        if self.viewer_tool.is_some()
                             && self.cursor_in_viewport()
                             && !in_circle_network_pane
                         {
                             if *button == MouseButton::Left {
-                                if self.curve_tool_press() {
+                                if self.viewer_tool_press() {
                                     return true;
                                 }
                             } else if *button == MouseButton::Right
-                                && self.curve_tool_delete_at_cursor()
+                                && self.viewer_tool_delete_at_cursor()
                             {
                                 return true;
                             }
@@ -6250,7 +6268,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
-                        if self.curve_tool_release() {
+                        if self.viewer_tool_release() {
                             changed = true;
                         }
                         if let Some(drag) = self.app_drag.take() {
@@ -6588,8 +6606,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     // The curve viewer state exits on Escape, ahead of
                     // connection-cancel — leaving point-edit mode is the
                     // more immediate "get me out" while it is active.
-                    if self.curve_tool.is_some() {
-                        self.curve_tool = None;
+                    if self.viewer_tool.is_some() {
+                        self.viewer_tool = None;
                         return true;
                     }
                     self.graph_mut().cancel_connecting();
@@ -6603,7 +6621,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if event.state == ElementState::Pressed
                     && (event.logical_key == Key::Named(NamedKey::Delete)
                         || event.logical_key == Key::Named(NamedKey::Backspace))
-                    && self.curve_tool_delete_selected()
+                    && self.viewer_tool_delete_selected()
                 {
                     return true;
                 }
