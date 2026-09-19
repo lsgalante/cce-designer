@@ -754,6 +754,12 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_copy_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("soft_transform") {
         resolve_soft_transform_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("transfer") {
+        resolve_transfer_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("valence") {
+        resolve_valence_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("deform") {
+        resolve_deform_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("subdivide") {
         resolve_subdivide_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("detangle") {
@@ -1658,7 +1664,215 @@ pub fn resolve_cull_geometry_with_errors(
     Some(geom)
 }
 
-/// The Copy node: one piece of geometry at every point of another.
+/// The Transfer node: carry attributes from one geometry onto another.
+///
+/// How a field outlives the geometry it was defined on. A remesh keeps values
+/// for the points that survived, but a chain that REBUILDS — a kernel
+/// generator, a Copy, a fresh Scatter — starts from nothing, and this is what
+/// samples the old state onto the new one.
+///
+/// Matching is by nearest POINT, not nearest surface position. A surface match
+/// would interpolate across the triangle a point lands in and read a little
+/// better on a coarse source; nearest-point is predictable, which matters more
+/// when the thing being transferred is a simulation's state and a wrong value
+/// is a wrong simulation rather than a slightly wrong colour.
+///
+/// Attributes names a comma-separated list, or takes every point attribute on
+/// the source when left empty. Maximum Distance of zero means no limit; above
+/// zero, a target with nothing near enough keeps whatever it had.
+pub fn resolve_transfer_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let from_name = node_param_str(target, "From", "");
+    let from_name = from_name.trim().to_string();
+    let Some(source) = find_node_by_name(root, &from_name)
+        .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+    else {
+        if ocl_error.is_none() && !from_name.is_empty() {
+            *ocl_error = Some(format!("Transfer '{}': cannot resolve '{}'", target.name, from_name));
+        }
+        return Some(geom);
+    };
+    if source.num_points() == 0 {
+        return Some(geom);
+    }
+
+    let wanted = node_param_str(target, "Attributes", "");
+    let wanted: Vec<String> = wanted
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let names: Vec<String> = if wanted.is_empty() {
+        source.points().names().iter().map(|s| s.to_string()).collect()
+    } else {
+        wanted
+            .into_iter()
+            .filter(|n| source.points().has(n))
+            .collect()
+    };
+    if names.is_empty() {
+        return Some(geom);
+    }
+
+    let limit = node_param_f32(target, "Maximum Distance", 0.0).max(0.0);
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+
+    let src_pos: Vec<Vec3> = (0..source.num_points()).map(|p| source.pos(p)).collect();
+    let grid = crate::spatial::PointGrid::build(&src_pos, limit.max(1e-3));
+
+    for name in &names {
+        let Some(ty) = source.points().get(name).map(|a| a.ty()) else { continue };
+        // Created with the source's type so the column exists everywhere even
+        // where nothing was near enough to fill it — a reader downstream finds
+        // the attribute present and zero rather than missing.
+        geom.points_mut()
+            .get_or_create(name, components_attrib(ty, &vec![0.0; ty.components()]));
+        geom.points_mut().set_kind(name, source.points().kind(name));
+
+        for p in 0..geom.num_points() {
+            if !group.is_empty() && !geom.points().in_group(&group, p) {
+                continue;
+            }
+            let Some((q, dist)) = grid.nearest(geom.pos(p)) else { continue };
+            if limit > 0.0 && dist > limit {
+                continue;
+            }
+            if let Some(v) = source.points().value(name, q as usize) {
+                let _ = geom.points_mut().set_value(name, p, v);
+            }
+        }
+    }
+    Some(geom)
+}
+
+/// The Valence node: how connected each point is, as data.
+///
+/// Valence is what the remesher steers toward — six is a regular
+/// triangulation — so being able to see it is how you tell a mesh that has
+/// settled from one that has not. Ramp it through Visualize and the irregular
+/// vertices light up.
+pub fn resolve_valence_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    let name = node_param_str(target, "Attribute", "valence").trim().to_string();
+    if name.is_empty() {
+        return Some(geom);
+    }
+    let by_prims = node_param_str(target, "Measure", "Neighbours").eq_ignore_ascii_case("primitives");
+    let data: Vec<i32> = (0..geom.num_points())
+        .map(|p| {
+            if by_prims {
+                geom.point_prims(p).len() as i32
+            } else {
+                geom.point_neighbours(p).len() as i32
+            }
+        })
+        .collect();
+    geom.points_mut().create(&name, AttribValue::Int(0));
+    let _ = geom.points_mut().insert(&name, AttribData::Int(data));
+    Some(geom)
+}
+
+/// The Deform node: twist, bend and taper about an axis.
+///
+/// Three operators in hou-control — `im_twist`, `im_bend`, `im_curl` — and one
+/// here, because they are the same shape: a transform whose strength varies
+/// with how far along an axis a point sits. Only what varies differs.
+///
+/// The position along the axis is NORMALIZED against the geometry's own extent,
+/// so Amount means the same thing on a model of any size and a deform set up on
+/// a rough shape survives that shape growing.
+pub fn resolve_deform_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_deform(&mut geom, target);
+    Some(geom)
+}
+
+pub(crate) fn apply_deform(geom: &mut Detail, target: &FsNode) {
+    let Some((lo, hi)) = geom.bounds() else { return };
+    let axis = match node_param_str(target, "Axis", "Y").to_uppercase().as_str() {
+        "X" => 0,
+        "Z" => 2,
+        _ => 1,
+    };
+    let (u, v) = match axis {
+        0 => (1, 2),
+        2 => (0, 1),
+        _ => (0, 2),
+    };
+    let span = (hi - lo)[axis];
+    if span.abs() < 1e-9 {
+        return;
+    }
+    let amount = node_param_f32(target, "Amount", 1.0);
+    let mode = node_param_str(target, "Mode", "Twist").to_lowercase();
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let centre = (lo + hi) * 0.5;
+
+    for p in 0..geom.num_points() {
+        if !group.is_empty() && !geom.points().in_group(&group, p) {
+            continue;
+        }
+        let here = geom.pos(p);
+        // Minus a half so the middle of the geometry is the still point and
+        // the two ends deform in opposite directions, which is what makes a
+        // twist read as a twist rather than a rotation.
+        let t = (here[axis] - lo[axis]) / span - 0.5;
+        let (du, dv) = (here[u] - centre[u], here[v] - centre[v]);
+        let mut out = here;
+        match mode.as_str() {
+            "bend" => {
+                // Rotate in the plane of the axis and one perpendicular, by an
+                // angle that grows along the axis.
+                let a = amount * t;
+                let (s, c) = a.sin_cos();
+                let along = here[axis] - centre[axis];
+                out[axis] = centre[axis] + along * c - du * s;
+                out[u] = centre[u] + along * s + du * c;
+            }
+            "taper" => {
+                // Scale the perpendicular components. Clamped at zero so a
+                // large Amount pinches to a point instead of turning the
+                // geometry inside out.
+                let k = (1.0 + amount * t).max(0.0);
+                out[u] = centre[u] + du * k;
+                out[v] = centre[v] + dv * k;
+            }
+            _ => {
+                let a = amount * t;
+                let (s, c) = a.sin_cos();
+                out[u] = centre[u] + du * c - dv * s;
+                out[v] = centre[v] + du * s + dv * c;
+            }
+        }
+        geom.set_pos(p, out);
+    }
+}
+
+/// The Copy node: one piece of geometry at every point of another./// The Copy node: one piece of geometry at every point of another.
 ///
 /// The layout operator — scatter real geometry rather than the marker spheres
 /// the Points and Scatter nodes draw. Orient reads the target's `N`, so a
@@ -4501,6 +4715,9 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "suture"
         || nt == "detangle"
         || nt == "subdivide"
+        || nt == "deform"
+        || nt == "valence"
+        || nt == "transfer"
         || nt == "soft_transform"
         || nt == "copy"
         || nt == "cull"
@@ -4715,6 +4932,33 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_soft_transform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("transfer") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_transfer_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("valence") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_valence_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("deform") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_deform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }

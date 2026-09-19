@@ -1,0 +1,11 @@
+{
+ "name": "Valence",
+ "type": "valence",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Attribute", "type": "text", "default": "valence" },
+  { "name": "Measure", "type": "choice:Neighbours,Primitives", "default": "Neighbours" }
+ ]
+}

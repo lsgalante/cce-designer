@@ -1,0 +1,13 @@
+{
+ "name": "Deform",
+ "type": "deform",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Mode", "type": "choice:Twist,Bend,Taper", "default": "Twist" },
+  { "name": "Axis", "type": "choice:X,Y,Z", "default": "Y" },
+  { "name": "Amount", "type": "slider", "default": "1.00", "min": -4.0, "max": 4.0, "step": 0.05 },
+  { "name": "Group", "type": "text", "default": "" }
+ ]
+}

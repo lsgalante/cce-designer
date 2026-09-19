@@ -289,8 +289,16 @@ Touches: a new `remesh.rs`, `geometry.rs`, `nodes/*.json`.
 > Copy placed one instance per marker vertex rather than one per location,
 > because the markers were the only points there were.
 >
-> Remaining: Select (which is `group` with more criteria, not a new node), and
-> the Create primitives.
+> `transfer` carries attributes from one geometry onto another by nearest
+> point — how a field outlives the geometry it was defined on, which a chain
+> that REBUILDS needs and a remesh cannot provide. `valence` publishes the
+> number the remesher steers toward. `deform` collapses `im_twist`, `im_bend`
+> and `im_curl` into one node: they are the same shape, a transform whose
+> strength varies along an axis.
+>
+> Remaining: Select (which is `group` with more criteria, not a new node), the
+> Create primitives, and the long tail — which the audit prunes hard (version
+> forks, the dead-on-arrival nodes, the Houdini-SOP wrappers).
 
 The `im_*` family, which is the part that looks biggest and is actually the
 easiest — ninety nodes, most of them a screenful once points and prims exist.

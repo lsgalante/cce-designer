@@ -240,6 +240,41 @@ impl PointGrid {
         PointGrid { points: points.to_vec(), grid }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    /// The nearest point, and its distance.
+    ///
+    /// Expands the search box until the best hit is closer than the box is
+    /// wide, the same argument [`TriGrid::closest`] makes: anything outside a
+    /// box that wide is at least that far away, so nothing out there can beat
+    /// what is already in hand.
+    pub fn nearest(&self, p: Vec3) -> Option<(u32, f32)> {
+        if self.points.is_empty() {
+            return None;
+        }
+        let mut reach = self.grid.cell;
+        let mut scratch = Vec::new();
+        for _ in 0..12 {
+            self.grid
+                .gather(p - Vec3::splat(reach), p + Vec3::splat(reach), &mut scratch);
+            let best = scratch
+                .iter()
+                .map(|&i| (i, (self.points[i as usize] - p).length()))
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            match best {
+                Some(hit) if hit.1 <= reach => return Some(hit),
+                _ => reach *= 2.0,
+            }
+        }
+        self.points
+            .iter()
+            .enumerate()
+            .map(|(i, q)| (i as u32, (*q - p).length()))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
     /// Indices of points within `radius` of `p`, excluding nothing — the
     /// caller decides what does not count as a neighbour, because "not
     /// itself" and "not topologically adjacent" are different questions.

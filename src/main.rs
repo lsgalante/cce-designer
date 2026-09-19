@@ -3647,6 +3647,188 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_samples_a_field_onto_new_geometry() {
+        // A field defined on one sphere, read onto a second one that shares
+        // none of its points — which is what happens whenever a chain rebuilds
+        // rather than deforms.
+        let mut source = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+        source.points_mut().create("mass", AttribValue::Float(0.0));
+        for p in 0..source.num_points() {
+            let y = source.pos(p).y;
+            source.points_mut().set_value("mass", p, AttribValue::Float(y)).unwrap();
+        }
+        source
+            .points_mut()
+            .create_kind("scratch", AttribValue::Float(1.0), AttribKind::Derivative);
+
+        let mut dest = sphere_detail(Vec3::ZERO, 1.0, 7, 9);
+        assert!(dest.num_points() != source.num_points());
+
+        // Exercised through the same nearest-point walk the node does.
+        let src_pos: Vec<Vec3> = (0..source.num_points()).map(|p| source.pos(p)).collect();
+        let grid = crate::spatial::PointGrid::build(&src_pos, 0.1);
+        dest.points_mut().create("mass", AttribValue::Float(0.0));
+        for p in 0..dest.num_points() {
+            let (q, _) = grid.nearest(dest.pos(p)).unwrap();
+            let v = source.points().value("mass", q as usize).unwrap();
+            dest.points_mut().set_value("mass", p, v).unwrap();
+        }
+
+        // The field came across: a point's value matches where it sits, to
+        // within the source's resolution.
+        for p in 0..dest.num_points() {
+            let v = dest.points().value("mass", p).unwrap().as_f32();
+            assert!((v - dest.pos(p).y).abs() < 0.25, "point {p}: {v} vs y {}", dest.pos(p).y);
+        }
+    }
+
+    #[test]
+    fn test_transfer_respects_its_maximum_distance_and_carries_the_kind() {
+        let root = modelling_root(
+            "1.0",
+            vec![
+                phase3_node("points", &[("Shape", "Line"), ("Points", "6"), ("Markers", "false")]),
+                phase3_node(
+                    "transfer",
+                    &[
+                        ("Input", "points 1"),
+                        ("From", "sphere 1"),
+                        ("Attributes", "Norm"),
+                        ("Maximum Distance", "0.00"),
+                    ],
+                ),
+            ],
+        );
+        let (g, err) = eval_node(&root, "transfer 1");
+        assert!(err.is_none(), "{err:?}");
+        // No limit: everything finds a nearest source point however far.
+        assert!(g.points().has("Norm"));
+        assert!(
+            (0..g.num_points()).any(|p| g.points().value("Norm", p).unwrap().as_vec3() != Vec3::ZERO),
+            "nothing was transferred"
+        );
+
+        // With a tight limit the sphere is out of reach, so the column exists
+        // and stays at the type's zero — present and empty, not missing.
+        let mut limited = root.clone();
+        limited
+            .children
+            .iter_mut()
+            .find(|c| c.name == "transfer 1")
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|p| p.name == "Maximum Distance")
+            .unwrap()
+            .default = "0.01".into();
+        let (g, _) = eval_node(&limited, "transfer 1");
+        assert!(g.points().has("Norm"), "the column exists even where nothing was near");
+        assert!(
+            (0..g.num_points()).all(|p| g.points().value("Norm", p).unwrap().as_vec3() == Vec3::ZERO),
+            "something transferred from out of range"
+        );
+
+        // A source it cannot resolve is reported rather than silently doing
+        // nothing.
+        let broken = modelling_root(
+            "1.0",
+            vec![phase3_node("transfer", &[("Input", "sphere 1"), ("From", "nope")])],
+        );
+        let (_, err) = eval_node(&broken, "transfer 1");
+        assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+    }
+
+    #[test]
+    fn test_valence_counts_what_the_remesher_steers_toward() {
+        use crate::remesh::{remesh, Settings};
+        let root = modelling_root(
+            "1.0",
+            vec![phase3_node("valence", &[("Input", "sphere 1"), ("Attribute", "valence")])],
+        );
+        let (g, err) = eval_node(&root, "valence 1");
+        assert!(err.is_none(), "{err:?}");
+
+        for p in 0..g.num_points() {
+            let v = g.points().value("valence", p).unwrap().as_f32() as usize;
+            assert_eq!(v, g.point_neighbours(p).len(), "point {p}");
+        }
+        // A UV sphere's poles are the irregular vertices: everything else on a
+        // quad sphere has four neighbours.
+        let counts: Vec<usize> = (0..g.num_points()).map(|p| g.point_neighbours(p).len()).collect();
+        assert!(counts.iter().any(|&c| c > 4), "the poles should be irregular");
+
+        // After remeshing to triangles, six is the regular valence — which is
+        // the number the flip pass steers toward, and being able to see it is
+        // how a settled mesh is told from an unsettled one.
+        let settled = remesh(&g, Settings { target: 0.25, iterations: 6, ..Default::default() });
+        let sixes = (0..settled.num_points())
+            .filter(|&p| settled.point_neighbours(p).len() == 6)
+            .count();
+        assert!(
+            sixes * 2 > settled.num_points(),
+            "only {sixes} of {} points reached valence 6",
+            settled.num_points()
+        );
+    }
+
+    #[test]
+    fn test_deform_twists_bends_and_tapers_about_an_axis() {
+        let base = sphere_detail(Vec3::ZERO, 1.0, 10, 14);
+        let run = |mode: &str, amount: &str| {
+            let mut g = base.clone();
+            let node = phase3_node("deform", &[("Mode", mode), ("Axis", "Y"), ("Amount", amount)]);
+            crate::geometry::apply_deform(&mut g, &node);
+            g
+        };
+
+        // The middle of the geometry is the still point, and the two ends go
+        // opposite ways — which is what makes a twist read as a twist rather
+        // than a rotation of the whole thing.
+        let twisted = run("Twist", "2.00");
+        let top = (0..base.num_points())
+            .max_by(|&a, &b| base.pos(a).y.partial_cmp(&base.pos(b).y).unwrap())
+            .unwrap();
+        let equator = (0..base.num_points())
+            .min_by(|&a, &b| base.pos(a).y.abs().partial_cmp(&base.pos(b).y.abs()).unwrap())
+            .unwrap();
+        assert!((twisted.pos(equator) - base.pos(equator)).length() < 0.15, "the middle moved");
+        // A twist keeps every point's distance from the axis.
+        for p in 0..base.num_points() {
+            let r0 = Vec3::new(base.pos(p).x, 0.0, base.pos(p).z).length();
+            let r1 = Vec3::new(twisted.pos(p).x, 0.0, twisted.pos(p).z).length();
+            assert!((r0 - r1).abs() < 1e-4, "point {p} changed radius");
+            assert!((twisted.pos(p).y - base.pos(p).y).abs() < 1e-4, "point {p} moved along the axis");
+        }
+        let _ = top;
+
+        // A taper pinches one end and swells the other, and clamps at zero
+        // rather than turning the geometry inside out.
+        let tapered = run("Taper", "3.90");
+        let radius = |d: &Detail, p: usize| Vec3::new(d.pos(p).x, 0.0, d.pos(p).z).length();
+        let lower = (0..base.num_points())
+            .filter(|&p| base.pos(p).y < -0.8)
+            .collect::<Vec<_>>();
+        for &p in &lower {
+            assert!(radius(&tapered, p) <= radius(&base, p) + 1e-4, "point {p} swelled at the pinched end");
+        }
+
+        // A bend moves points along the axis, which neither of the others do.
+        let bent = run("Bend", "1.50");
+        assert!(
+            (0..base.num_points()).any(|p| (bent.pos(p).y - base.pos(p).y).abs() > 0.05),
+            "bend did not move anything along the axis"
+        );
+
+        // Zero amount is the identity, whatever the mode.
+        for mode in ["Twist", "Bend", "Taper"] {
+            let still = run(mode, "0.00");
+            for p in 0..base.num_points() {
+                assert!((still.pos(p) - base.pos(p)).length() < 1e-5, "{mode} moved at zero");
+            }
+        }
+    }
+
+    #[test]
     fn test_points_and_scatter_can_emit_bare_points() {
         // Everything that generates locations drew marker spheres at them,
         // which is right for looking at and wrong for working with: Copy

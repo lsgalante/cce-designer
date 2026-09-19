@@ -1,0 +1,13 @@
+{
+ "name": "Transfer",
+ "type": "transfer",
+ "inputs": 2,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "From", "type": "text", "default": "" },
+  { "name": "Attributes", "type": "text", "default": "" },
+  { "name": "Maximum Distance", "type": "slider", "default": "0.00", "min": 0.0, "max": 10.0, "step": 0.01 },
+  { "name": "Group", "type": "text", "default": "" }
+ ]
+}
