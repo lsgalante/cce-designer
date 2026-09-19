@@ -3362,6 +3362,290 @@ mod tests {
         }
     }
 
+    // ---- Phase 4: the modelling set ----
+
+    /// Two spheres far apart: two connected pieces, the first much larger.
+    fn two_pieces() -> Detail {
+        let mut d = sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        d.merge(&sphere_detail(Vec3::new(10.0, 0.0, 0.0), 0.3, 4, 6));
+        d
+    }
+
+    fn eval_node(root: &FsNode, name: &str) -> (Detail, Option<String>) {
+        let target = root.children.iter().find(|c| c.name == name).unwrap();
+        let mut visited = Vec::new();
+        let mut err = None;
+        let mut cache = crate::geometry::SimCache::default();
+        let mut sim = crate::geometry::EvalSim::new(0, 0, &mut cache);
+        let g = crate::geometry::generate_single_node_geometry_with_errors(
+            root, target, &mut visited, &mut err, &mut sim,
+        )
+        .unwrap_or_else(|| panic!("{name} evaluates"));
+        (g, err)
+    }
+
+    /// A root holding a native sphere plus the nodes described, each already
+    /// named "<type> 1" by `phase3_node`.
+    fn modelling_root(radius: &str, nodes: Vec<FsNode>) -> FsNode {
+        let mut children = vec![phase3_node("sphere", &[("Radius", radius)])];
+        children.extend(nodes);
+        FsNode {
+            id: "root".into(),
+            name: "root".into(),
+            node_type: "node".into(),
+            children,
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        }
+    }
+
+    #[test]
+    fn test_normal_publishes_the_surface_normal_as_data() {
+        let root = modelling_root(
+            "1.0",
+            vec![phase3_node("normal", &[("Input", "sphere 1"), ("Attribute", "N")])],
+        );
+        let (g, err) = eval_node(&root, "normal 1");
+        assert!(err.is_none(), "{err:?}");
+
+        // The normal has been computed inside the app all along; as an
+        // attribute it becomes ordinary data that anything can read.
+        assert!(g.points().has("N"));
+        // The `sphere` node places itself by its index in the graph, so the
+        // centre comes off the bounds rather than being assumed to be zero.
+        let (lo, hi) = g.bounds().unwrap();
+        let centre = (lo + hi) * 0.5;
+        for p in 0..g.num_points() {
+            let n = g.points().value("N", p).unwrap().as_vec3();
+            assert!((n.length() - 1.0).abs() < 1e-4, "point {p} normal is not unit: {n:?}");
+            assert!(
+                n.dot((g.pos(p) - centre).normalize()) > 0.99,
+                "point {p} does not face outward"
+            );
+        }
+
+        let flipped = modelling_root(
+            "1.0",
+            vec![phase3_node("normal", &[("Input", "sphere 1"), ("Flip", "true")])],
+        );
+        let (f, _) = eval_node(&flipped, "normal 1");
+        let (lo, hi) = f.bounds().unwrap();
+        let radial = f.pos(0) - (lo + hi) * 0.5;
+        assert!(f.points().value("N", 0).unwrap().as_vec3().dot(radial) < 0.0);
+    }
+
+    #[test]
+    fn test_bounds_measures_into_detail_attributes() {
+        let root = modelling_root(
+            "2.0",
+            vec![phase3_node("bounds", &[("Input", "sphere 1"), ("Prefix", "bb")])],
+        );
+        let (g, err) = eval_node(&root, "bounds 1");
+        assert!(err.is_none(), "{err:?}");
+
+        let v = |n: &str| g.detail().value(n, 0).unwrap().as_vec3();
+        // A radius-2 sphere is 4 across wherever the node happens to place it,
+        // and min/max/center have to agree with each other and with the points.
+        assert!((v("bb_size") - Vec3::splat(4.0)).length() < 0.02, "{:?}", v("bb_size"));
+        assert!((v("bb_max") - v("bb_min") - v("bb_size")).length() < 1e-4);
+        assert!(((v("bb_min") + v("bb_max")) * 0.5 - v("bb_center")).length() < 1e-4);
+        let (lo, hi) = g.bounds().unwrap();
+        assert!((v("bb_min") - lo).length() < 1e-5 && (v("bb_max") - hi).length() < 1e-5);
+        // A measurement describes the state it was taken from.
+        assert_eq!(g.detail().kind("bb_min"), AttribKind::Derivative);
+    }
+
+    #[test]
+    fn test_distance_measures_to_another_geometry_and_points_at_it() {
+        let mut root = modelling_root(
+            "1.0",
+            vec![
+                phase3_node("points", &[]),
+                phase3_node(
+                    "distance",
+                    &[
+                        ("Input", "points 1"),
+                        ("To", "sphere 1"),
+                        ("Attribute", "dist"),
+                        ("Direction", "toward"),
+                    ],
+                ),
+            ],
+        );
+        // Put the sample points somewhere known: a Points node in "Line" mode
+        // lays them along X.
+        root.children[1]
+            .params
+            .push(crate::app::ParamDef {
+                name: "Shape".into(),
+                label: String::new(),
+                param_type: "text".into(),
+                default: "Line".into(),
+                options: vec![],
+                min: None,
+                max: None,
+                step: None,
+            });
+
+        let (g, err) = eval_node(&root, "distance 1");
+        assert!(err.is_none(), "{err:?}");
+        assert!(g.points().has("dist") && g.points().has("toward"));
+
+        // Every distance is non-negative unsigned, and the direction is a unit
+        // vector pointing at the surface — which is exactly what Migrate wants
+        // to flow along and Align wants to steer by, out of one lookup.
+        for p in 0..g.num_points() {
+            let d = g.points().value("dist", p).unwrap().as_f32();
+            assert!(d >= 0.0, "point {p} unsigned distance is negative: {d}");
+            // Unit, except where there is nothing to point at: a point
+            // sitting ON the surface has no direction to it, and inventing one
+            // would be worse than leaving it zero.
+            let dir = g.points().value("toward", p).unwrap().as_vec3();
+            if d > 1e-5 {
+                assert!((dir.length() - 1.0).abs() < 1e-3, "point {p} direction is not unit");
+            } else {
+                assert_eq!(dir, Vec3::ZERO, "point {p} on the surface invented a direction");
+            }
+        }
+
+        // A missing target is reported rather than silently writing zeros.
+        let broken = modelling_root(
+            "1.0",
+            vec![phase3_node("distance", &[("Input", "sphere 1"), ("To", "nope")])],
+        );
+        let (_, err) = eval_node(&broken, "distance 1");
+        assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+    }
+
+    #[test]
+    fn test_distance_signed_tells_inside_from_outside() {
+        // A point cloud straddling a sphere's surface.
+        let mut cloud = Detail::new();
+        cloud.add_point(Vec3::new(0.0, 0.0, 0.0)); // inside
+        cloud.add_point(Vec3::new(3.0, 0.0, 0.0)); // outside
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+
+        let grid = crate::spatial::TriGrid::build(&sphere);
+        let signed = |p: Vec3| {
+            let h = grid.closest(p).unwrap();
+            if (p - h.point).dot(h.normal) < 0.0 { -h.distance } else { h.distance }
+        };
+        assert!(signed(cloud.pos(0)) < 0.0, "the centre should read as inside");
+        assert!(signed(cloud.pos(1)) > 0.0, "a point outside should read as outside");
+    }
+
+    #[test]
+    fn test_connectivity_numbers_pieces_largest_first() {
+        let mut geom = two_pieces();
+        let big = sphere_detail(Vec3::ZERO, 1.0, 8, 12).num_points();
+
+        let node = phase3_node("connectivity", &[("Attribute", "piece")]);
+        // Exercised through the resolver's own labelling by hand, since the
+        // input is built here rather than by a graph.
+        let root = modelling_root("1.0", vec![node]);
+        let _ = &root;
+        let labels = {
+            // Same walk the node does.
+            let n = geom.num_points();
+            let mut label = vec![u32::MAX; n];
+            let mut sizes: Vec<(u32, usize)> = Vec::new();
+            for seed in 0..n {
+                if label[seed] != u32::MAX {
+                    continue;
+                }
+                let id = sizes.len() as u32;
+                let mut count = 0;
+                let mut stack = vec![seed];
+                label[seed] = id;
+                while let Some(p) = stack.pop() {
+                    count += 1;
+                    for &q in geom.point_neighbours(p) {
+                        if label[q as usize] == u32::MAX {
+                            label[q as usize] = id;
+                            stack.push(q as usize);
+                        }
+                    }
+                }
+                sizes.push((id, count));
+            }
+            (label, sizes)
+        };
+        assert_eq!(labels.1.len(), 2, "two spheres are two pieces");
+        assert_eq!(labels.1.iter().map(|(_, c)| c).sum::<usize>(), geom.num_points());
+
+        // Through the node: piece 0 is the BIGGEST however the points are
+        // ordered, which is what makes "keep the largest" an ordinary Cull.
+        let mut err = None;
+        let g = {
+            let n = phase3_node("connectivity", &[("Attribute", "piece")]);
+            crate::geometry::apply_connectivity_for_test(&mut geom, &n, &mut err);
+            geom
+        };
+        let zeros = (0..g.num_points())
+            .filter(|&p| g.points().value("piece", p).unwrap().as_f32() as i32 == 0)
+            .count();
+        assert_eq!(zeros, big, "piece 0 should be the large sphere");
+    }
+
+    #[test]
+    fn test_cull_removes_what_it_selects_and_invert_keeps_it() {
+        let root = modelling_root(
+            "1.0",
+            vec![
+                phase3_node("connectivity", &[("Input", "sphere 1"), ("Attribute", "piece")]),
+                phase3_node(
+                    "cull",
+                    &[
+                        ("Input", "connectivity 1"),
+                        ("Attribute", "piece"),
+                        ("Comparison", "Below"),
+                        ("Threshold", "1.00"),
+                        ("Invert", "false"),
+                    ],
+                ),
+            ],
+        );
+        // One sphere is one piece, so culling piece < 1 removes everything.
+        let (all_gone, err) = eval_node(&root, "cull 1");
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(all_gone.num_points(), 0);
+
+        // Inverted, the same selection is what SURVIVES — which is how
+        // "isolate the largest piece" reads, and what the GEM mold chain used
+        // im_cull for.
+        let mut kept_root = root.clone();
+        kept_root
+            .children
+            .iter_mut()
+            .find(|c| c.name == "cull 1")
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|p| p.name == "Invert")
+            .unwrap()
+            .default = "true".into();
+        let (kept, _) = eval_node(&kept_root, "cull 1");
+        assert_eq!(kept.num_points(), sphere_detail(Vec3::ZERO, 1.0, 16, 24).num_points());
+        assert!(kept.num_prims() > 0, "the surface survived with its primitives");
+
+        // A missing attribute is reported, and nothing is deleted on a guess.
+        let broken = modelling_root(
+            "1.0",
+            vec![phase3_node("cull", &[("Input", "sphere 1"), ("Attribute", "nope")])],
+        );
+        let (g, err) = eval_node(&broken, "cull 1");
+        assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+        assert!(g.num_points() > 0, "nothing should be culled on an error");
+
+        // With neither a group nor an attribute there is no selection at all.
+        let idle = modelling_root("1.0", vec![phase3_node("cull", &[("Input", "sphere 1")])]);
+        let (g, _) = eval_node(&idle, "cull 1");
+        assert_eq!(g.num_points(), sphere_detail(Vec3::ZERO, 1.0, 16, 24).num_points());
+    }
+
     // ---- Phase 3: surface development ----
 
     use crate::geometry::sphere_detail;
@@ -3687,7 +3971,7 @@ mod tests {
         let rest = TriGrid::build(&sphere);
         let drift = |d: &Detail| {
             (0..d.num_points())
-                .filter_map(|p| rest.closest(d.pos(p)).map(|(_, dist)| dist))
+                .filter_map(|p| rest.closest(d.pos(p)).map(|h| h.distance))
                 .sum::<f32>()
                 / d.num_points() as f32
         };
@@ -3720,19 +4004,22 @@ mod tests {
 
         // A point well outside: the closest surface point is along the ray to
         // the centre, at about the radius.
-        let (q, d) = grid.closest(Vec3::new(3.0, 0.0, 0.0)).unwrap();
-        assert!((d - 2.0).abs() < 0.05, "distance {d}");
-        assert!(q.x > 0.9 && q.y.abs() < 0.2 && q.z.abs() < 0.2, "{q:?}");
+        let h = grid.closest(Vec3::new(3.0, 0.0, 0.0)).unwrap();
+        assert!((h.distance - 2.0).abs() < 0.05, "distance {}", h.distance);
+        assert!(h.point.x > 0.9 && h.point.y.abs() < 0.2 && h.point.z.abs() < 0.2, "{:?}", h.point);
+        // The hit carries the face's normal, which is what lets a caller tell
+        // inside from outside without casting a ray.
+        assert!(h.normal.dot(Vec3::X) > 0.5, "the nearest face should look outward: {:?}", h.normal);
 
         // A point ON the surface finds itself.
         let on = sphere.pos(20);
-        let (_, d) = grid.closest(on).unwrap();
+        let d = grid.closest(on).unwrap().distance;
         assert!(d < 1e-3, "a point on the surface is {d} from it");
 
         // The centre is a radius from everywhere, and the search still
         // terminates — the expanding box has to grow several times to find
         // anything at all.
-        let (_, d) = grid.closest(Vec3::ZERO).unwrap();
+        let d = grid.closest(Vec3::ZERO).unwrap().distance;
         assert!((d - 1.0).abs() < 0.05, "from the centre: {d}");
 
         assert!(TriGrid::build(&Detail::new()).closest(Vec3::ZERO).is_none());

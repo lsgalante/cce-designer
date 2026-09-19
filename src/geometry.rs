@@ -740,6 +740,16 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("time") {
         resolve_time_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("normal") {
+        resolve_normal_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("bounds") {
+        resolve_bounds_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("distance") {
+        resolve_distance_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("connectivity") {
+        resolve_connectivity_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("cull") {
+        resolve_cull_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("subdivide") {
         resolve_subdivide_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("detangle") {
@@ -1298,6 +1308,302 @@ pub fn resolve_relax_geometry_with_errors(
     Some(geom)
 }
 
+// ---------------------------------------------------------------------------
+// The Immutable Methods set: measure and filter.
+//
+// None of these carry a description in hou-control — the IM family has no
+// prose anywhere — but unlike `developer_surface_adapt`, their names say
+// exactly what they are. A node called Normal computes normals. What is
+// implemented here is the plain reading of each name, with the parameter
+// names the audit recovered from the HDAs where it had them (`piece_attr` on
+// Connectivity, `dir_attr` on Distance).
+// ---------------------------------------------------------------------------
+
+/// The Normal node: the surface normal as an attribute you can read.
+///
+/// The normal has been computed inside the app for a while — the viewport
+/// whiskers draw it, Develop displaces along it, Align's Surface Tangent
+/// projects onto it — but nothing could get at it. As an attribute it becomes
+/// ordinary data: a kernel can read it through the Phase 1 ABI, Align can
+/// steer toward it, Visualize can colour by it, Migrate can flow along it.
+pub fn resolve_normal_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    let name = node_param_str(target, "Attribute", "N").trim().to_string();
+    if name.is_empty() {
+        return Some(geom);
+    }
+    let flip = node_param_str(target, "Flip", "false") == "true";
+    let sign = if flip { -1.0 } else { 1.0 };
+    let normals: Vec<[f32; 3]> = point_normals(&geom).iter().map(|n| (*n * sign).to_array()).collect();
+    geom.points_mut().create(&name, AttribValue::Float3([0.0; 3]));
+    let _ = geom.points_mut().insert(&name, AttribData::Float3(normals));
+    Some(geom)
+}
+
+/// The Bounds node: the geometry's extent, as detail attributes.
+///
+/// Four of them — `_min`, `_max`, `_size`, `_center` — rather than one box
+/// type, for the reason Analysis writes six numbers instead of a dictionary:
+/// everything downstream can already read a detail attribute, and nothing has
+/// to learn a new shape.
+pub fn resolve_bounds_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let prefix = node_param_str(target, "Prefix", "bounds").trim().to_string();
+    if prefix.is_empty() {
+        return Some(geom);
+    }
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let pts: Vec<Vec3> = (0..geom.num_points())
+        .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
+        .map(|p| geom.pos(p))
+        .collect();
+    let (lo, hi) = if pts.is_empty() {
+        (Vec3::ZERO, Vec3::ZERO)
+    } else {
+        pts.iter().fold((pts[0], pts[0]), |(a, b), &p| (a.min(p), b.max(p)))
+    };
+    // Derivative: a measurement describes the state it was taken from.
+    for (suffix, v) in [
+        ("min", lo),
+        ("max", hi),
+        ("size", hi - lo),
+        ("center", (lo + hi) * 0.5),
+    ] {
+        geom.detail_mut().create_kind(
+            &format!("{}_{}", prefix, suffix),
+            AttribValue::Float3(v.to_array()),
+            crate::detail::AttribKind::Derivative,
+        );
+    }
+    Some(geom)
+}
+
+/// The Distance node: how far each point is from another piece of geometry.
+///
+/// The measurement a chain drives proximity growth from — and, with Direction
+/// written too, the vector Migrate flows along and Align steers by. Both come
+/// out of one surface lookup, which is why they are one node.
+///
+/// Signed uses the nearest face's normal rather than casting a ray: constant
+/// time instead of a pass over every triangle. It reads the wrong way inside a
+/// concave crease, where the nearest face is not the one you are behind, and
+/// that is the trade — a ray cast is exact and turns this node from a lookup
+/// into a full intersection test per point.
+pub fn resolve_distance_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let to_name = node_param_str(target, "To", "");
+    let to_name = to_name.trim().to_string();
+    let Some(other) = find_node_by_name(root, &to_name)
+        .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+    else {
+        if ocl_error.is_none() && !to_name.is_empty() {
+            *ocl_error = Some(format!("Distance '{}': cannot resolve '{}'", target.name, to_name));
+        }
+        return Some(geom);
+    };
+
+    let name = node_param_str(target, "Attribute", "dist").trim().to_string();
+    let dir_name = node_param_str(target, "Direction", "");
+    let dir_name = dir_name.trim().to_string();
+    let signed = node_param_str(target, "Signed", "false") == "true";
+    // Zero means no clamp: a maximum is for keeping a falloff bounded, and a
+    // node whose default quietly flattened every measurement to zero would be
+    // a trap.
+    let maximum = node_param_f32(target, "Maximum", 0.0).max(0.0);
+
+    let grid = crate::spatial::TriGrid::build(&other);
+    // A point ON the surface has no direction to it, and the vector between
+    // them is pure float error. Normalizing that would hand the chain a
+    // heading made of nothing — the same mistake Align's Surface Tangent made
+    // before it was caught, so the guard is scaled to the geometry rather than
+    // being an exact-zero test.
+    let scale = other
+        .bounds()
+        .map(|(lo, hi)| (hi - lo).length())
+        .unwrap_or(1.0)
+        .max(1.0);
+    let eps = scale * 1e-6;
+
+    let n = geom.num_points();
+    let mut dists = vec![0.0f32; n];
+    let mut dirs = vec![[0.0f32; 3]; n];
+    for p in 0..n {
+        let here = geom.pos(p);
+        let Some(hit) = grid.closest(here) else { continue };
+        let away = here - hit.point;
+        let mut d = hit.distance;
+        if signed && away.dot(hit.normal) < 0.0 {
+            d = -d;
+        }
+        if maximum > 0.0 {
+            d = d.clamp(-maximum, maximum);
+        }
+        dists[p] = d;
+        if hit.distance > eps {
+            dirs[p] = (-away).normalize().to_array();
+        }
+    }
+
+    if !name.is_empty() {
+        geom.points_mut().create(&name, AttribValue::Float(0.0));
+        let _ = geom.points_mut().insert(&name, AttribData::Float(dists));
+    }
+    if !dir_name.is_empty() {
+        geom.points_mut().create(&dir_name, AttribValue::Float3([0.0; 3]));
+        let _ = geom.points_mut().insert(&dir_name, AttribData::Float3(dirs));
+    }
+    Some(geom)
+}
+
+/// The Connectivity node: which connected piece each point belongs to.
+///
+/// Pieces are numbered by SIZE, largest first, so piece 0 is the main body
+/// however the points happen to be ordered. That is what makes "keep the
+/// largest piece" a Cull with a threshold rather than a special operator —
+/// and the audit shows `isolate_largest` and `extract_longest` were exactly
+/// what the GEM mold chain used `im_cull` for.
+pub fn resolve_connectivity_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_connectivity(&mut geom, target);
+    Some(geom)
+}
+
+/// Exposed for tests that build their geometry by hand rather than by graph.
+pub fn apply_connectivity_for_test(geom: &mut Detail, target: &FsNode, _err: &mut Option<String>) {
+    apply_connectivity(geom, target);
+}
+
+pub(crate) fn apply_connectivity(geom: &mut Detail, target: &FsNode) {
+    let name = node_param_str(target, "Attribute", "piece").trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+
+    let n = geom.num_points();
+    let mut label = vec![u32::MAX; n];
+    let mut sizes: Vec<(u32, usize)> = Vec::new();
+    for seed in 0..n {
+        if label[seed] != u32::MAX {
+            continue;
+        }
+        let id = sizes.len() as u32;
+        let mut count = 0usize;
+        let mut stack = vec![seed];
+        label[seed] = id;
+        while let Some(p) = stack.pop() {
+            count += 1;
+            for &q in geom.point_neighbours(p) {
+                if label[q as usize] == u32::MAX {
+                    label[q as usize] = id;
+                    stack.push(q as usize);
+                }
+            }
+        }
+        sizes.push((id, count));
+    }
+
+    // Renumber by size, descending. Ties break on the original label so the
+    // answer does not depend on sort stability.
+    sizes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut rank = vec![0i32; sizes.len()];
+    for (r, (id, _)) in sizes.iter().enumerate() {
+        rank[*id as usize] = r as i32;
+    }
+
+    let data: Vec<i32> = label.iter().map(|&l| rank[l as usize]).collect();
+    geom.points_mut().create(&name, AttribValue::Int(0));
+    let _ = geom.points_mut().insert(&name, AttribData::Int(data));
+}
+
+/// The Cull node: remove points, and the primitives that needed them.
+///
+/// Selection is the intersection of a Group and an attribute comparison, and
+/// what is selected is DELETED — the name says remove. Invert keeps the
+/// selection instead, which is how "isolate the largest piece" reads: a
+/// Connectivity, then a Cull inverted on `piece` below 1.
+///
+/// Nothing else in the app deletes geometry, which is why this one is in the
+/// first five.
+pub fn resolve_cull_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let attr = node_param_str(target, "Attribute", "");
+    let attr = attr.trim().to_string();
+    if group.is_empty() && attr.is_empty() {
+        return Some(geom);
+    }
+    if !attr.is_empty() && !geom.points().has(&attr) {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!(
+                "Cull '{}': no point attribute named '{}'",
+                target.name, attr
+            ));
+        }
+        return Some(geom);
+    }
+
+    let below = node_param_str(target, "Comparison", "Below").eq_ignore_ascii_case("below");
+    let threshold = node_param_f32(target, "Threshold", 0.5);
+    let invert = node_param_str(target, "Invert", "false") == "true";
+
+    let selected: Vec<bool> = (0..geom.num_points())
+        .map(|p| {
+            let in_group = group.is_empty() || geom.points().in_group(&group, p);
+            let passes = attr.is_empty()
+                || geom
+                    .points()
+                    .value(&attr, p)
+                    .map(|v| if below { v.as_f32() < threshold } else { v.as_f32() > threshold })
+                    .unwrap_or(false);
+            (in_group && passes) != invert
+        })
+        .collect();
+
+    let keep: Vec<bool> = selected.iter().map(|&s| !s).collect();
+    geom.keep_points(&keep);
+    Some(geom)
+}
+
 /// The Subdivide node: four triangles where there was one.
 pub fn resolve_subdivide_geometry_with_errors(
     root: &FsNode,
@@ -1512,7 +1818,8 @@ pub(crate) fn apply_suture(geom: &mut Detail, against: Option<&Detail>, target: 
         let grid = crate::spatial::TriGrid::build(other);
         for p in 0..n {
             let here = geom.pos(p);
-            let Some((closest, dist)) = grid.closest(here) else { continue };
+            let Some(hit) = grid.closest(here) else { continue };
+            let (closest, dist) = (hit.point, hit.distance);
             // Inclusive, with room for the float error: a point resolved to
             // exactly the threshold last step is STILL in contact this step.
             // Comparing strictly would have every resolved contact read as
@@ -3960,6 +4267,11 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "suture"
         || nt == "detangle"
         || nt == "subdivide"
+        || nt == "cull"
+        || nt == "connectivity"
+        || nt == "distance"
+        || nt == "bounds"
+        || nt == "normal"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -4104,6 +4416,51 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_time_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("normal") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_normal_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("bounds") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_bounds_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("distance") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_distance_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("connectivity") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_connectivity_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("cull") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_cull_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
@@ -6905,8 +7262,12 @@ mod simnet_tests {
 
     #[test]
     fn test_the_disk_cache_resumes_only_the_solve_it_belongs_to() {
+        // A directory of its own, and files removed one by one at the end
+        // rather than with remove_dir_all: this process has been seen to fail
+        // a closedir with EBADF while other threads are running, and a test
+        // should not be the thing that trips it.
         let dir = std::env::temp_dir().join(format!("cce-simcache-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("sim.simcache");
         let mut state = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
         state.points_mut().create("acc", AttribValue::Float(9.0));
@@ -6931,7 +7292,9 @@ mod simnet_tests {
         std::fs::write(&path, b"rubbish").unwrap();
         assert!(read_sim_cache_at(&path, 0xABCD, 20).is_none());
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("simcache.tmp"));
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

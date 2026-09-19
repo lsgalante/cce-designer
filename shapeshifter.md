@@ -269,6 +269,19 @@ Touches: a new `remesh.rs`, `geometry.rs`, `nodes/*.json`.
 
 *Wide, shallow. Needs Phase 0. Runs parallel with Phases 2 and 3.*
 
+> **Started.** The measure-and-filter five: `normal` publishes the surface
+> normal as an attribute anything can read, `bounds` and `distance` measure
+> (the latter writing a direction too, out of the same lookup, which is what
+> Migrate flows along), `connectivity` numbers pieces largest-first, and `cull`
+> deletes — the first node in the app that removes geometry.
+>
+> The IM family carries no prose anywhere, but unlike `adapt` and `open` these
+> names are unambiguous: a node called Normal computes normals. Where the audit
+> recovered parameter names from the HDAs they are honoured (`piece_attr`,
+> `dir_attr`).
+>
+> Remaining: Copy, Soft Transform, Select, and the Create primitives.
+
 The `im_*` family, which is the part that looks biggest and is actually the
 easiest — ninety nodes, most of them a screenful once points and prims exist.
 Sequence it by what the Developer chain consumes rather than by category:

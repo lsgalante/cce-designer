@@ -1,0 +1,11 @@
+{
+ "name": "Bounds",
+ "type": "bounds",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Prefix", "type": "text", "default": "bounds" },
+  { "name": "Group", "type": "text", "default": "" }
+ ]
+}

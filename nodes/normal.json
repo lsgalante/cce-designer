@@ -1,0 +1,11 @@
+{
+ "name": "Normal",
+ "type": "normal",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Attribute", "type": "text", "default": "N" },
+  { "name": "Flip", "type": "choice:false,true", "default": "false" }
+ ]
+}

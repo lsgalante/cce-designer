@@ -583,8 +583,8 @@ fn project_pass(m: &mut Mesh, rest: &crate::spatial::TriGrid) {
         if m.dead_point[p] {
             continue;
         }
-        if let Some((q, _)) = rest.closest(m.pos[p]) {
-            m.pos[p] = q;
+        if let Some(hit) = rest.closest(m.pos[p]) {
+            m.pos[p] = hit.point;
         }
     }
 }

@@ -119,6 +119,20 @@ impl Grid {
     }
 }
 
+/// What a surface lookup found.
+#[derive(Clone, Copy, Debug)]
+pub struct Hit {
+    pub point: Vec3,
+    pub distance: f32,
+    /// The face normal of the triangle the hit is on, normalized. Lets a
+    /// caller tell inside from outside in constant time — the sign of
+    /// `(p - point) . normal` — instead of casting a ray through the whole
+    /// mesh. It reads the wrong way in a concave crease, where the nearest
+    /// face is not the one facing you, which is why the node that uses it
+    /// says so.
+    pub normal: Vec3,
+}
+
 /// A grid over a surface's triangles, for asking what the nearest surface
 /// point is.
 pub struct TriGrid {
@@ -172,39 +186,37 @@ impl TriGrid {
     /// Searches an expanding box until the best hit is closer than the box is
     /// wide — at which point nothing outside can beat it, because anything out
     /// there is at least that far away.
-    pub fn closest(&self, p: Vec3) -> Option<(Vec3, f32)> {
+    pub fn closest(&self, p: Vec3) -> Option<Hit> {
         if self.tris.is_empty() {
             return None;
         }
+        let hit = |i: usize| {
+            let t = self.tris[i];
+            let q = closest_point_on_triangle(p, t[0], t[1], t[2]);
+            Hit {
+                point: q,
+                distance: (q - p).length(),
+                normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero(),
+            }
+        };
+        let nearer = |a: &Hit, b: &Hit| {
+            a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal)
+        };
+
         let mut reach = self.grid.cell;
         let mut scratch = Vec::new();
         for _ in 0..12 {
             self.grid
                 .gather(p - Vec3::splat(reach), p + Vec3::splat(reach), &mut scratch);
-            let best = scratch
-                .iter()
-                .map(|&i| {
-                    let t = self.tris[i as usize];
-                    let q = closest_point_on_triangle(p, t[0], t[1], t[2]);
-                    (q, (q - p).length())
-                })
-                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            let best = scratch.iter().map(|&i| hit(i as usize)).min_by(nearer);
             match best {
-                Some(hit) if hit.1 <= reach => return Some(hit),
+                Some(h) if h.distance <= reach => return Some(h),
                 _ => reach *= 2.0,
             }
         }
         // The grid is clamped to the geometry's bounds, so twelve doublings
         // have gathered everything; whatever it found is the answer.
-        let best = self
-            .tris
-            .iter()
-            .map(|t| {
-                let q = closest_point_on_triangle(p, t[0], t[1], t[2]);
-                (q, (q - p).length())
-            })
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        best
+        (0..self.tris.len()).map(hit).min_by(nearer)
     }
 }
 
