@@ -218,6 +218,23 @@ Touches: `geometry.rs`, `app.rs`, `render.rs`, `playbar.rs`.
 
 *Large. Needs Phases 0, 1 and 2.*
 
+> **Started.** `develop` displaces along the point normal by an attribute, and
+> `remesh` is in as its own module (`src/remesh.rs`): split, collapse, flip and
+> tangential relax, the Botsch–Kobbelt passes. It carries the simulation's data
+> across — a split interpolates, a collapse keeps the survivor's identity and
+> values, and a group only grows where both parents were members.
+>
+> Fixed on the way: the native generators wound BACKWARDS. Every normal on a
+> native sphere pointed into it, and every face of a native box wound against
+> the `Norm` it shipped. The template meshes were always right, which is why
+> the winding test and the overlay test both passed; a path tracer shades both
+> sides, so nothing looked wrong. Develop is the first operator whose answer
+> depends on it, and it grew the surface inward.
+>
+> Outstanding: `adapt`, `open`, and collision (`detangle`, `suture`) — which
+> want the spatial index the remesher's missing surface-projection pass also
+> needs.
+
 `Develop` is easy — displace along the normal by a development attribute.
 **Remesh is the hard one**, and it is load-bearing: without topology that keeps
 primitives proportional to surface area, every growth sim degenerates within a

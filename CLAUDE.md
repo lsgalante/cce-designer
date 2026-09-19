@@ -35,9 +35,12 @@ cross-validation test compares backends and skips silently with no platform.
 
 ### CLI modes
 
-- `cce-designer --thumbnail <project-dir-or-state.json> <out.png> [--size N] [--samples N]`
+- `cce-designer --thumbnail <project-dir-or-state.json> <out.png> [--size N] [--samples N] [--frame N]`
   — headless path-traced thumbnail (no Wayland, no window; `src/thumbnail.rs`).
-  `cce-files` shells out to this for its preview cache.
+  `cce-files` shells out to this for its preview cache. Without `--frame` there
+  is no timeline and simnets render at their seed; with it the solve runs to
+  that frame (start frame 1, the playbar's default), which is the only way to
+  look at a simulation without a Wayland session.
 - `cce-designer --detached-network` — a separate network-pane-only window. It syncs
   with the main window by autosaving/polling `default_project.json` mtime (see the
   main loop in `src/main.rs`) — there is no socket between the two.

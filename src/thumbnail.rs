@@ -19,7 +19,7 @@ const SAMPLES: u32 = 96;
 
 /// Render `project` (a project directory or a `state.json` path) to a square
 /// `size`×`size` PNG at `out`, with `samples` paths per pixel (None = 96).
-pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>) -> Result<(), String> {
+pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: Option<i32>) -> Result<(), String> {
     let state_file = if project.is_dir() { project.join("state.json") } else { project.to_path_buf() };
     let content = std::fs::read_to_string(&state_file)
         .map_err(|e| format!("read {}: {e}", state_file.display()))?;
@@ -31,9 +31,16 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>) -> Resul
     crate::app::merge_template_defs(&mut proj.root, &templates);
 
     let mut ocl_error = None;
-    // A headless thumbnail has no timeline: simnets render at their seed.
+    // Without `--frame`, a headless thumbnail has no timeline and simnets
+    // render at their seed. WITH it, the solve runs to that frame — which is
+    // the only way to look at a simulation without a Wayland session, and so
+    // the only way to check that a growth chain does what it claims.
+    //
+    // The start frame is the playbar's default of 1, the same number the app
+    // uses, so a frame number here means what it means in the window. A simnet
+    // with its own Start Frame answers for itself either way.
     let mut sim_cache = crate::geometry::SimCache::default();
-    let mut sim = crate::geometry::EvalSim::new(0, 0, &mut sim_cache);
+    let mut sim = crate::geometry::EvalSim::new(frame.unwrap_or(0), 1, &mut sim_cache);
     // Thumbnails always show the whole scene from the top, regardless of the
     // network level the project was saved at: root as both eval and walk root.
     let geom = network_sphere_vertices_with_errors(&proj.root, &proj.root, &mut ocl_error, &mut sim);

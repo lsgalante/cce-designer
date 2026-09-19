@@ -3,6 +3,7 @@ pub mod app;
 pub mod application;
 pub mod curve_tool;
 pub mod detail;
+pub mod remesh;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
@@ -37,7 +38,7 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--thumbnail") {
         let _ = env_logger::try_init();
         let (Some(project), Some(out)) = (args.get(i + 1), args.get(i + 2)) else {
-            eprintln!("usage: cce-designer --thumbnail <project> <out.png> [--size N]");
+            eprintln!("usage: cce-designer --thumbnail <project> <out.png> [--size N] [--samples N] [--frame N]");
             std::process::exit(2);
         };
         let size = args
@@ -50,7 +51,11 @@ fn main() {
             .windows(2)
             .find(|w| w[0] == "--samples")
             .and_then(|w| w[1].parse::<u32>().ok());
-        match thumbnail::run(std::path::Path::new(project), std::path::Path::new(out), size, samples) {
+        let frame = args
+            .windows(2)
+            .find(|w| w[0] == "--frame")
+            .and_then(|w| w[1].parse::<i32>().ok());
+        match thumbnail::run(std::path::Path::new(project), std::path::Path::new(out), size, samples, frame) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 eprintln!("cce-designer --thumbnail: {e}");
@@ -3354,6 +3359,241 @@ mod tests {
             serde_json::from_value::<McpAction>(serde_json::Value::Object(args))
                 .unwrap_or_else(|e| panic!("tool '{}' does not map to an McpAction: {e}", tool.name));
         }
+    }
+
+    // ---- Phase 3: surface development ----
+
+    use crate::geometry::sphere_detail;
+    use crate::remesh::{remesh, Settings};
+
+    /// Mean edge length, the number remeshing steers.
+    fn mean_edge(d: &Detail) -> f32 {
+        let edges = d.edges();
+        if edges.is_empty() {
+            return 0.0;
+        }
+        edges
+            .iter()
+            .map(|e| (d.pos(e[1] as usize) - d.pos(e[0] as usize)).length())
+            .sum::<f32>()
+            / edges.len() as f32
+    }
+
+    #[test]
+    fn test_remesh_pulls_edge_lengths_toward_the_target_from_both_sides() {
+        let coarse = sphere_detail(Vec3::ZERO, 1.0, 6, 8);
+        let before = mean_edge(&coarse);
+        assert!(before > 0.4, "the test sphere starts coarse: {before}");
+
+        // Too coarse: splitting dominates and the mesh gets denser.
+        let finer = remesh(&coarse, Settings { target: 0.2, iterations: 4, ..Default::default() });
+        let after = mean_edge(&finer);
+        assert!(after < before, "{after} is not shorter than {before}");
+        assert!(finer.num_points() > coarse.num_points(), "a finer mesh needs more points");
+        assert!((after - 0.2).abs() < 0.12, "landed at {after}, wanted about 0.2");
+
+        // Too fine: collapsing dominates and the mesh gets coarser. The same
+        // node, the same passes, steered from the other side.
+        let dense = sphere_detail(Vec3::ZERO, 1.0, 24, 32);
+        let dense_before = mean_edge(&dense);
+        let coarsened = remesh(&dense, Settings { target: 0.5, iterations: 4, ..Default::default() });
+        assert!(mean_edge(&coarsened) > dense_before, "collapse did not coarsen");
+        assert!(coarsened.num_points() < dense.num_points());
+    }
+
+    #[test]
+    fn test_remesh_converges_rather_than_oscillating() {
+        // The 4/3 and 4/5 thresholds exist so a split cannot produce edges the
+        // next collapse undoes. If they were wrong, running longer would keep
+        // changing the answer instead of settling.
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        let a = remesh(&sphere, Settings { target: 0.3, iterations: 6, ..Default::default() });
+        let b = remesh(&sphere, Settings { target: 0.3, iterations: 12, ..Default::default() });
+        let (ea, eb) = (mean_edge(&a), mean_edge(&b));
+        assert!((ea - eb).abs() < 0.06, "still moving at 12 iterations: {ea} -> {eb}");
+
+        // And it is deterministic: the same input twice is the same mesh, or a
+        // simulation could not be reproduced frame to frame.
+        let again = remesh(&sphere, Settings { target: 0.3, iterations: 6, ..Default::default() });
+        assert_eq!(a.num_points(), again.num_points());
+        assert_eq!(a.positions(), again.positions());
+    }
+
+    #[test]
+    fn test_remesh_keeps_the_surface_it_was_given() {
+        // Relaxation is TANGENTIAL: points slide within the surface to even out
+        // the triangles, and the shape they describe stays where it was. A
+        // sphere of radius 1 must still be a sphere of radius 1.
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 10, 14);
+        let out = remesh(&sphere, Settings { target: 0.25, iterations: 5, ..Default::default() });
+        for p in 0..out.num_points() {
+            let r = out.pos(p).length();
+            assert!((r - 1.0).abs() < 0.08, "point {p} left the sphere at radius {r}");
+        }
+        let (lo, hi) = out.bounds().unwrap();
+        assert!(lo.x > -1.1 && hi.x < 1.1, "bounds grew: {lo:?} {hi:?}");
+    }
+
+    #[test]
+    fn test_remesh_carries_the_simulations_data_across() {
+        let mut sphere = sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        // A field that varies smoothly, so interpolation is checkable.
+        sphere.points_mut().create("mass", AttribValue::Float(0.0));
+        for p in 0..sphere.num_points() {
+            let y = sphere.pos(p).y;
+            sphere.points_mut().set_value("mass", p, AttribValue::Float(y)).unwrap();
+        }
+        sphere.points_mut().create_group("top");
+        for p in 0..sphere.num_points() {
+            if sphere.pos(p).y > 0.5 {
+                sphere.points_mut().add_to_group("top", p);
+            }
+        }
+        let before_ids: std::collections::HashSet<u64> = sphere.ids().iter().copied().collect();
+
+        let out = remesh(&sphere, Settings { target: 0.25, iterations: 4, ..Default::default() });
+
+        // A split interpolates, so a new point's value is consistent with
+        // where it sits rather than zero — which is what the attribute means.
+        assert!(out.points().has("mass"));
+        for p in 0..out.num_points() {
+            let v = out.points().value("mass", p).unwrap().as_f32();
+            assert!((v - out.pos(p).y).abs() < 0.2, "point {p}: {v} vs y {}", out.pos(p).y);
+        }
+
+        // Points that survived kept their identity: a remesh should cost the
+        // simulation as little memory as it can, and the solver has been
+        // writing to these.
+        let kept = out.ids().iter().filter(|id| before_ids.contains(id)).count();
+        assert!(kept > 0, "every identity was thrown away");
+        // And no identity is used twice, however many were minted on the way.
+        let mut all = out.ids().to_vec();
+        all.sort_unstable();
+        let unique = all.len();
+        all.dedup();
+        assert_eq!(all.len(), unique, "an identity was reused");
+
+        // Groups come across, and a new point joins only where BOTH parents
+        // were members — otherwise every group grows along its own boundary
+        // each time the mesh is remeshed.
+        let members = out.points().group_members("top");
+        assert!(!members.is_empty() && members.len() < out.num_points());
+        for &p in &members {
+            assert!(out.pos(p as usize).y > 0.3, "the group leaked downward");
+        }
+    }
+
+    #[test]
+    fn test_remesh_leaves_a_mesh_it_cannot_help_alone() {
+        // A mesh that has already been remeshed to a target is settled at it,
+        // and running again changes little. Note what is NOT settled: a UV
+        // sphere at its own MEAN edge length, because a UV sphere is
+        // anisotropic — its rings are short at the poles and long at the
+        // equator — and making it isotropic has to move points. That is the
+        // job, not churn.
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+        let settled = remesh(&sphere, Settings { target: 0.3, iterations: 5, ..Default::default() });
+        let again = remesh(&settled, Settings { target: 0.3, iterations: 5, ..Default::default() });
+        let ratio = again.num_points() as f32 / settled.num_points() as f32;
+        assert!((0.85..1.18).contains(&ratio), "a settled mesh was churned: {ratio}");
+
+        // Degenerate settings pass the geometry through rather than producing
+        // nothing: a zero target has no length to steer toward.
+        let zero = remesh(&sphere, Settings { target: 0.0, ..Default::default() });
+        assert_eq!(zero.num_points(), sphere.num_points());
+        // Geometry with no primitives has no edges to split or collapse.
+        let mut cloud = Detail::new();
+        cloud.add_point(Vec3::ZERO);
+        cloud.add_point(Vec3::X);
+        assert_eq!(remesh(&cloud, Settings::default()).num_points(), 2);
+    }
+
+    #[test]
+    fn test_remesh_output_is_a_usable_mesh() {
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        let out = remesh(&sphere, Settings { target: 0.3, iterations: 4, ..Default::default() });
+
+        // Every primitive is a real triangle over live points — a stale index
+        // or a degenerate face here would crash or smear the renderer.
+        assert!(out.num_prims() > 0);
+        for prim in 0..out.num_prims() {
+            let pts = out.prim_points(prim);
+            assert_eq!(pts.len(), 3, "prim {prim} is not a triangle");
+            assert!(pts.iter().all(|&p| (p as usize) < out.num_points()), "prim {prim} dangles");
+            assert!(pts[0] != pts[1] && pts[1] != pts[2] && pts[0] != pts[2], "prim {prim} is degenerate");
+        }
+        // No orphans: every point is used by something.
+        for p in 0..out.num_points() {
+            assert!(!out.point_prims(p).is_empty(), "point {p} belongs to nothing");
+        }
+        // Still closed — every edge shared by exactly two faces. A remesh that
+        // tore a hole would be invisible until something tried to fill it.
+        for e in out.edges() {
+            let shared = (0..out.num_prims())
+                .filter(|&t| {
+                    let pts = out.prim_points(t);
+                    pts.contains(&e[0]) && pts.contains(&e[1])
+                })
+                .count();
+            assert_eq!(shared, 2, "edge {e:?} is on {shared} faces, so the surface is torn");
+        }
+    }
+
+    #[test]
+    fn test_develop_moves_the_surface_along_its_normals() {
+        let mut sphere = sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        sphere.points_mut().create("growth", AttribValue::Float(1.0));
+        // Only the top half grows.
+        sphere.points_mut().create_group("top");
+        for p in 0..sphere.num_points() {
+            if sphere.pos(p).y <= 0.0 {
+                sphere.points_mut().set_value("growth", p, AttribValue::Float(0.0)).unwrap();
+            } else {
+                sphere.points_mut().add_to_group("top", p);
+            }
+        }
+
+        let mut out = sphere.clone();
+        let node = crate::app::FsNode {
+            id: "d".into(),
+            name: "Develop 1".into(),
+            node_type: "develop".into(),
+            children: vec![],
+            params: [("Attribute", "growth"), ("Scale", "0.50"), ("Direction", "Normal")]
+                .into_iter()
+                .map(|(name, default)| crate::app::ParamDef {
+                    name: name.into(),
+                    label: String::new(),
+                    param_type: "text".into(),
+                    default: default.into(),
+                    options: vec![],
+                    min: None,
+                    max: None,
+                    step: None,
+                })
+                .collect(),
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        let mut err = None;
+        crate::geometry::apply_develop(&mut out, &node, &mut err);
+        assert!(err.is_none(), "{err:?}");
+
+        for p in 0..out.num_points() {
+            let grew = sphere.points().value("growth", p).unwrap().as_f32() > 0.0;
+            let r = out.pos(p).length();
+            if grew {
+                // Outward along the normal, which on a sphere is radial.
+                assert!((r - 1.5).abs() < 0.05, "point {p} grew to {r}, wanted 1.5");
+            } else {
+                assert!((r - 1.0).abs() < 1e-4, "point {p} moved without growth: {r}");
+            }
+        }
+        // Topology is remesh's business: Develop moves points and nothing else.
+        assert_eq!(out.num_prims(), sphere.num_prims());
+        assert_eq!(out.ids(), sphere.ids());
     }
 
     // ---- Phase 2: the solver contract ----

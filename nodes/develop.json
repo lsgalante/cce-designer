@@ -1,0 +1,14 @@
+{
+ "name": "Develop",
+ "type": "develop",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Attribute", "type": "text", "default": "growth" },
+  { "name": "Scale", "type": "slider", "default": "0.10", "min": -2.0, "max": 2.0, "step": 0.01 },
+  { "name": "Direction", "type": "choice:Normal,Attribute", "default": "Normal" },
+  { "name": "Source", "type": "text", "default": "" },
+  { "name": "Group", "type": "text", "default": "" }
+ ]
+}

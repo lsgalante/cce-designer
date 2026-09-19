@@ -1162,6 +1162,28 @@ impl Detail {
             .collect()
     }
 
+    /// Replace every point's identity, and the counter new points draw from.
+    ///
+    /// For a rebuild that KNOWS which points it preserved — the remesher,
+    /// which tears a mesh apart and puts it back, and needs the survivors to
+    /// come out as themselves. Everything else must let [`Detail::add_point`]
+    /// allocate, or two points end up answering to one identity.
+    ///
+    /// A mismatched length is refused rather than padded: a partial identity
+    /// map is worse than none, because the points it does map look right.
+    pub fn set_ids(&mut self, ids: Vec<PointId>, next_id: PointId) -> Result<(), String> {
+        if ids.len() != self.pos.len() {
+            return Err(format!(
+                "{} identities for {} points",
+                ids.len(),
+                self.pos.len()
+            ));
+        }
+        self.next_id = next_id.max(ids.iter().copied().max().map(|m| m + 1).unwrap_or(0));
+        self.ids = ids;
+        Ok(())
+    }
+
     /// Add a point at `pos`, assigning it a fresh identity. Returns its index.
     pub fn add_point(&mut self, pos: Vec3) -> u32 {
         let idx = self.pos.len() as u32;

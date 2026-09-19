@@ -309,22 +309,34 @@ pub fn sphere_detail(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usi
     }
     let south = d.add_point(sphere_point(center, radius, std::f32::consts::PI, 0.0));
 
-    // Winding follows the soup's exactly, so the fan in `Detail::triangulate`
-    // reproduces the old triangles corner for corner — minus the degenerate
-    // pole pair, which is why a sphere is now 2*lon_steps triangles lighter.
+    // Wound counter-clockwise seen from OUTSIDE, so the plain
+    // cross(B-A, C-A) points away from the surface. That is the raster
+    // culling convention, what the template meshes do, and what
+    // `point_normals` — and therefore Develop, the normal overlay and
+    // Align's surface tangent — all assume.
+    //
+    // The soup this replaced wound the other way, and had done since it was
+    // written: every normal on a native sphere pointed INTO it. Nothing
+    // caught it because the winding test covers the template meshes, the
+    // overlay test uses a template sphere, and a path tracer shades both
+    // sides of a triangle. Develop is the first operator whose answer depends
+    // on it, and it grew the surface inward.
     let wrap = |lon: usize| (lon + 1) % lon_steps;
     for lon in 0..lon_steps {
-        d.add_prim(&[north, rings[0][lon], rings[0][wrap(lon)]]);
+        d.add_prim(&[north, rings[0][wrap(lon)], rings[0][lon]]);
     }
+    // Each quad is the soup's quad reversed but ANCHORED on the same corner,
+    // so it fans into the same two triangles rather than across the other
+    // diagonal. The surface is identical; only the facing changed.
     for lat in 1..lat_steps - 1 {
         let (a, b) = (&rings[lat - 1], &rings[lat]);
         for lon in 0..lon_steps {
-            d.add_prim(&[a[lon], b[lon], b[wrap(lon)], a[wrap(lon)]]);
+            d.add_prim(&[a[lon], a[wrap(lon)], b[wrap(lon)], b[lon]]);
         }
     }
     let last = &rings[lat_steps - 2];
     for lon in 0..lon_steps {
-        d.add_prim(&[last[lon], south, last[wrap(lon)]]);
+        d.add_prim(&[last[lon], last[wrap(lon)], south]);
     }
 
     let n: Vec<Vec3> = (0..d.num_points())
@@ -404,15 +416,17 @@ pub fn box_detail(start: Vec3, end: Vec3, thickness: f32) -> Detail {
         d.add_point(c);
     }
 
-    // Face winding is the soup's: each `add_quad(p0, p1, p2, p3)` emitted
-    // (p0, p1, p2) then (p0, p2, p3), which is exactly a fan over the quad.
+    // Wound counter-clockwise seen from outside, like the sphere and the
+    // template meshes. The soup's order was the reverse, which meant every
+    // face of a native box wound against the `Norm` attribute the same
+    // function attached to it — the geometry and its own normal disagreed.
     let faces: [([u32; 4], Vec3); 6] = [
-        ([0, 1, 2, 3], -dir), // start cap
-        ([5, 4, 7, 6], dir),  // end cap
-        ([4, 0, 3, 7], -u),   // left
-        ([1, 5, 6, 2], u),    // right
-        ([3, 2, 6, 7], v),    // top
-        ([0, 4, 5, 1], -v),   // bottom
+        ([3, 2, 1, 0], -dir), // start cap
+        ([6, 7, 4, 5], dir),  // end cap
+        ([7, 3, 0, 4], -u),   // left
+        ([2, 6, 5, 1], u),    // right
+        ([7, 6, 2, 3], v),    // top
+        ([1, 5, 4, 0], -v),   // bottom
     ];
     for (quad, _) in &faces {
         d.add_prim(quad);
@@ -726,6 +740,10 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("time") {
         resolve_time_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("remesh") {
+        resolve_remesh_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("develop") {
+        resolve_develop_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("visualize") {
         resolve_visualize_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("analysis") {
@@ -1272,6 +1290,126 @@ pub fn resolve_relax_geometry_with_errors(
         geom.set_pos(p, *v);
     }
     Some(geom)
+}
+
+/// The Remesh node: keep the triangulation proportional to the surface.
+///
+/// The counterweight to Develop. Growth pushes points apart and the triangles
+/// between them stretch; an attribute diffused across a stretched mesh is
+/// being averaged over distances that no longer mean what they meant, so a
+/// growth sim without remeshing degenerates within a few dozen frames however
+/// good its attribute maths is.
+///
+/// The passes live in [`crate::remesh`], with their own tests, because the
+/// algorithm is worth reading on its own and a node body is not where it
+/// belongs.
+pub fn resolve_remesh_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    Some(crate::remesh::remesh(&geom, remesh_settings(target)))
+}
+
+pub(crate) fn remesh_settings(target: &FsNode) -> crate::remesh::Settings {
+    crate::remesh::Settings {
+        target: node_param_f32(target, "Target Length", 0.1).max(1e-4),
+        iterations: node_param_f32(target, "Iterations", 3.0).clamp(1.0, 20.0) as usize,
+        relax: node_param_f32(target, "Relax", 0.5),
+        split: node_param_str(target, "Split", "true") == "true",
+        collapse: node_param_str(target, "Collapse", "true") == "true",
+        flip: node_param_str(target, "Flip", "true") == "true",
+    }
+}
+
+/// The Develop node: move the surface along its normals by an attribute.
+///
+/// The whole of surface development in one operator — everything else in the
+/// Developer set exists to decide WHAT this should read. A growth attribute
+/// built by diffusion, migration and decay is a scalar field; Develop is the
+/// step that turns a field into a shape.
+///
+/// Direction Normal displaces along the smooth point normal, which is what
+/// growth means on a surface. Direction Attribute takes a vector attribute
+/// instead, for the cases where the surface is not what decides — a
+/// gravity-fed sag, a flow along a field.
+///
+/// Note what this deliberately does NOT do: it moves points and touches
+/// nothing else. Topology is `remesh`'s business, and a node that quietly
+/// retriangulated while it displaced would make it impossible to tell which of
+/// the two turned a simulation to mush.
+pub fn resolve_develop_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.is_empty() {
+        return None;
+    }
+    let input_node = find_node_by_name(root, &input_name)?;
+    let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    apply_develop(&mut geom, target, ocl_error);
+    Some(geom)
+}
+
+pub(crate) fn apply_develop(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
+    let name = node_param_str(target, "Attribute", "").trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    if !geom.points().has(&name) {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!(
+                "Develop '{}': no point attribute named '{}'",
+                target.name, name
+            ));
+        }
+        return;
+    }
+
+    let scale = node_param_f32(target, "Scale", 0.1);
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let by_attr = node_param_str(target, "Direction", "Normal").eq_ignore_ascii_case("attribute");
+    let src = node_param_str(target, "Source", "");
+    let src = src.trim().to_string();
+
+    // Normals come off the geometry as it arrives, so every point is displaced
+    // along the surface it had BEFORE the displacement — otherwise the points
+    // computed late would be following a surface the earlier ones had already
+    // moved, and the result would depend on point order.
+    let dirs: Vec<Vec3> = if by_attr {
+        (0..geom.num_points())
+            .map(|p| {
+                geom.points()
+                    .value(&src, p)
+                    .map(|v| v.as_vec3())
+                    .unwrap_or(Vec3::ZERO)
+            })
+            .collect()
+    } else {
+        point_normals(geom)
+    };
+
+    for p in 0..geom.num_points() {
+        if !group.is_empty() && !geom.points().in_group(&group, p) {
+            continue;
+        }
+        let amount = geom.points().value(&name, p).map(|v| v.as_f32()).unwrap_or(0.0);
+        let moved = geom.pos(p) + dirs[p] * (amount * scale);
+        geom.set_pos(p, moved);
+    }
 }
 
 /// Sample one of the built-in ramps at `t`, clamped to 0..1.
@@ -3544,6 +3682,8 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "time"
         || nt == "analysis"
         || nt == "visualize"
+        || nt == "develop"
+        || nt == "remesh"
         || nt == "attribute"
         || nt == "simnet"
 }
@@ -3688,6 +3828,24 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_time_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("remesh") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_remesh_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("develop") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_develop_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
@@ -4281,12 +4439,43 @@ mod tests {
         assert_eq!(before.len(), lat * lon * 6);
         assert_eq!(kept.len(), sphere_soup_len(lat, lon), "only the pole bands go");
         assert_eq!(after.len(), kept.len());
-        for (i, (a, b)) in after.iter().zip(kept.iter()).enumerate() {
-            // Not bit-identical, and the difference is the point: the soup
-            // computed its seam corner at phi = TAU and its south pole once per
-            // longitude, so the surface had a ~1e-7 crack down it. The welded
-            // sphere computes each of those places once.
-            assert!(d(*a, *b) < 1e-5, "corner {i}: {a:?} vs {b:?}");
+
+        // The same triangles, wound the other way round. The soup wound
+        // clockwise seen from outside, so every normal on a native sphere
+        // pointed INTO it; the welded generator wound with it until Develop
+        // made the bug visible.
+        //
+        // Compared as an unordered collection of triangles, each keyed by its
+        // corners rounded and sorted. Not bit-identical, and the difference is
+        // the point: the soup computed its seam corner at phi = TAU and its
+        // south pole once per longitude, so the surface had a ~1e-7 crack down
+        // it, which is also why the key rounds before it sorts.
+        let key = |t: &[[f32; 3]]| {
+            let mut c: Vec<[i64; 3]> = t
+                .iter()
+                .map(|p| {
+                    [
+                        (p[0] as f64 * 1e4).round() as i64,
+                        (p[1] as f64 * 1e4).round() as i64,
+                        (p[2] as f64 * 1e4).round() as i64,
+                    ]
+                })
+                .collect();
+            c.sort_unstable();
+            c
+        };
+        let mut want: Vec<Vec<[i64; 3]>> = kept.chunks_exact(3).map(key).collect();
+        let mut got: Vec<Vec<[i64; 3]>> = after.chunks_exact(3).map(key).collect();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want, "the welded sphere is not the same set of triangles");
+
+        // And they face outward now, which is the whole reason for the change.
+        let welded = sphere_detail(center, radius, lat, lon);
+        let normals = point_normals(&welded);
+        for p in 0..welded.num_points() {
+            let radial = (welded.pos(p) - center).normalize();
+            assert!(normals[p].dot(radial) > 0.0, "point {p} still faces inward");
         }
     }
 
