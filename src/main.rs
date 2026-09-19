@@ -26,6 +26,7 @@ pub mod render;
 pub mod shortcut;
 pub mod slots;
 pub mod command;
+pub mod dialog;
 pub mod layout;
 pub mod mold;
 pub mod page;
@@ -641,6 +642,7 @@ mod tests {
             RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, STATUS_IDX, BREADCRUMB_IDX,
             SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
             NETWORK_PANEL2_IDX, CONTENT2_IDX, BREADCRUMB2_IDX, PAGE_IDX,
+            DIALOG_IDX, DIALOG_PARAMS_IDX,
         ];
         assert_eq!(roster.len(), WIDGET_COUNT, "roster length vs WIDGET_COUNT");
         for (i, idx) in roster.iter().enumerate() {
@@ -7122,5 +7124,232 @@ mod tests {
         copy.keep_points(&vec![true; 9]);
         assert_eq!(copy.num_prims(), 4);
         assert_eq!(d.num_prims(), 4, "the original is untouched");
+    }
+
+    // ----- The Alt+D dialog (src/dialog.rs) -----
+
+    /// A key, as the dialog's handler expects one.
+    fn key_press(key: Key) -> cce_ui::widget::KeyEvent {
+        cce_ui::widget::KeyEvent {
+            state: cce_ui::widget::ElementState::Pressed,
+            logical_key: key,
+            text: None,
+            repeat: false,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        }
+    }
+
+    fn typed(c: &str) -> cce_ui::widget::KeyEvent {
+        key_press(Key::Character(c.to_string()))
+    }
+
+    /// Every Settings row still names something that exists.
+    ///
+    /// The failure this catches is silent and the reason the table is a table:
+    /// `dialog_settings_params` SKIPS a row whose owning param it cannot find,
+    /// so renaming a subnet param quietly shortens the Settings half and
+    /// nothing says why. Same argument as
+    /// `test_every_menu_command_names_a_label_that_is_dispatched`.
+    #[test]
+    fn dialog_settings_rows_name_owners_that_exist() {
+        use crate::dialog::Owner;
+        let state = State::new(false);
+        let session = state.session_node().expect("the root meta node");
+        for s in crate::dialog::SETTINGS {
+            match s.owner {
+                None => {}
+                Some(Owner::Subnet(subnet, name)) => {
+                    let node = session
+                        .children
+                        .iter()
+                        .find(|c| c.name == subnet)
+                        .unwrap_or_else(|| panic!("no '{subnet}' subnet for row '{}'", s.label));
+                    assert!(
+                        node.params.iter().any(|p| p.name == name),
+                        "'{subnet}' has no param '{name}' — row '{}' would vanish",
+                        s.label
+                    );
+                }
+                Some(Owner::Command(id)) => assert!(
+                    crate::command::by_id(id).is_some(),
+                    "row '{}' names no command '{id}'",
+                    s.label
+                ),
+                // The active camera's params exist only once a camera node
+                // does; the Default Camera branch is exercised below.
+                Some(Owner::ActiveCamera(_)) => {}
+            }
+        }
+    }
+
+    /// Row labels are the writeback's identity — `param_display` keys a row by
+    /// its label and `sync_dialog_settings_to_project` resolves it back the
+    /// same way — so two rows sharing one would write each other's values.
+    #[test]
+    fn dialog_settings_labels_are_unique() {
+        let mut seen: Vec<&str> = Vec::new();
+        for s in crate::dialog::SETTINGS {
+            assert!(!seen.contains(&s.label), "two Settings rows are called '{}'", s.label);
+            seen.push(s.label);
+        }
+    }
+
+    /// The dialog opens on its registry command, lists every command, and
+    /// closes on Escape.
+    #[test]
+    fn dialog_opens_on_its_command_and_escape_closes_it() {
+        let mut state = State::new(false);
+        assert!(!state.dialog_visible(), "closed until asked for");
+
+        assert!(state.run_command("toggle_dialog"));
+        assert!(state.dialog_visible());
+        assert_eq!(
+            state.slots.dialog.rows.len(),
+            crate::command::COMMANDS.len(),
+            "an empty query lists everything"
+        );
+
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
+        assert!(!state.dialog_visible());
+    }
+
+    /// Typing filters, and Enter runs the row it landed on — then closes,
+    /// because a modal that stays up after acting hides what it just did.
+    #[test]
+    fn dialog_filters_as_you_type_and_enter_runs_the_selection() {
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+
+        for c in ["s", "q", "u", "a"] {
+            state.dialog_key_input(&typed(c));
+        }
+        assert_eq!(state.slots.dialog.query, "squa");
+        assert_eq!(
+            state.slots.dialog.selected_id(),
+            Some("toggle_square_viewport"),
+            "rows: {:?}",
+            state.slots.dialog.rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
+        );
+
+        let before = state.square_viewport;
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert_eq!(state.square_viewport, !before, "Enter ran the command");
+        assert!(!state.dialog_visible(), "and closed behind it");
+    }
+
+    /// Backspace walks the query back, and the ranking follows it.
+    #[test]
+    fn dialog_backspace_widens_the_filter() {
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+        for c in ["z", "z", "z"] {
+            state.dialog_key_input(&typed(c));
+        }
+        assert!(state.slots.dialog.rows.is_empty(), "nothing matches 'zzz'");
+        for _ in 0..3 {
+            state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
+        }
+        assert_eq!(state.slots.dialog.query, "");
+        assert_eq!(state.slots.dialog.rows.len(), crate::command::COMMANDS.len());
+    }
+
+    /// The dialog owns the keyboard outright while it is open.
+    ///
+    /// The network pane's bare-letter family is ungated by design, so typing
+    /// "e" into an unguarded filter would flip the selected node's geometry
+    /// toggle on the way past. The guard is the whole reason
+    /// `dialog_key_input` is total rather than a layer.
+    #[test]
+    fn dialog_keys_never_reach_the_pane_underneath() {
+        use crate::window::WindowEvent;
+        let mut state = State::new(false);
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        let col = state.grid_cursor_col;
+        state.run_command("toggle_dialog");
+
+        // "l" is Cursor Right in the network pane and a plain letter here.
+        state.handle_event(&WindowEvent::KeyboardInput { event: typed("l") });
+        assert_eq!(state.grid_cursor_col, col, "the grid cursor must not move");
+        assert_eq!(state.slots.dialog.query, "l");
+    }
+
+    /// Tab moves between the halves, and entering Settings lays its body out
+    /// and fills it.
+    #[test]
+    fn dialog_tab_switches_halves_and_settings_has_rows() {
+        use cce_ui::widget::WidgetHost as _;
+        use crate::dialog::Tab;
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+        assert_eq!(state.dialog_tab(), Tab::Commands);
+
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Tab)));
+        assert_eq!(state.dialog_tab(), Tab::Settings);
+        assert!(state.slots.dialog_params.visible(), "the settings body shows");
+        assert!(
+            state.positions[crate::slots::DIALOG_PARAMS_IDX].2 > 0.0,
+            "and is laid out inside the dialog"
+        );
+        // Every non-section row of the table, minus the ones whose owner is
+        // missing in a fresh project — there are none, per the test above.
+        let rows = state.dialog_settings_shown.clone();
+        assert_eq!(rows.len(), crate::dialog::SETTINGS.len());
+        assert!(rows.iter().any(|(k, _, t)| k == "Show Grid" && t == "toggle"));
+        assert!(rows.iter().any(|(k, _, t)| k == "Grid Color" && t == "color"));
+        assert!(rows.iter().any(|(k, _, t)| k == "Grid Thickness" && t.starts_with("spinbox")));
+
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Tab)));
+        assert_eq!(state.dialog_tab(), Tab::Commands);
+        assert!(!state.slots.dialog_params.visible());
+    }
+
+    /// A Settings row writes to whatever OWNS its value, not to the live field
+    /// — which is the only write that survives, since
+    /// `apply_settings_from_menubar_subnets` copies the subnets over the live
+    /// state on every param change.
+    #[test]
+    fn dialog_settings_write_reaches_the_owning_subnet() {
+        use crate::dialog::Tab;
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+        state.set_dialog_tab(Tab::Settings);
+
+        let was = state.viewport().show_grid;
+        // What a click on the toggle leaves behind: the control reports the
+        // flipped value, and the poll picks it up.
+        let mut rows = state.dialog_settings_shown.clone();
+        let row = rows.iter_mut().find(|(k, _, _)| k == "Show Grid").expect("the Show Grid row");
+        row.1 = if was { "false" } else { "true" }.to_string();
+        state.slots.dialog_params_mut().set_display_params(&rows);
+        state.sync_dialog_settings_to_project();
+
+        assert_eq!(state.viewport().show_grid, !was, "the live state followed");
+        let guides = state
+            .session_node()
+            .expect("meta")
+            .children
+            .iter()
+            .find(|c| c.name == "Guides")
+            .expect("Guides");
+        let p = guides.params.iter().find(|p| p.name == "Show Grid Guide").expect("the param");
+        assert_eq!(p.default == "true", !was, "and so did its owner");
+    }
+
+    /// Reopening starts clean: on Commands, with an empty query.
+    #[test]
+    fn dialog_reopens_without_the_last_search() {
+        use crate::dialog::Tab;
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+        state.dialog_key_input(&typed("g"));
+        state.set_dialog_tab(Tab::Settings);
+        state.run_command("toggle_dialog");
+        assert!(!state.dialog_visible());
+
+        state.run_command("toggle_dialog");
+        assert_eq!(state.slots.dialog.query, "");
+        assert_eq!(state.dialog_tab(), Tab::Commands);
     }
 }

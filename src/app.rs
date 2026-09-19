@@ -1095,6 +1095,12 @@ pub struct State {
 
     pub slots: Box<WidgetSlots>,
     pub positions: Vec<(f32, f32, f32, f32)>,
+    /// The Alt+D dialog's Settings rows as last handed to its `ParametersBg` —
+    /// the baseline `sync_dialog_settings_to_project` diffs the controls
+    /// against. The params pane gets away without one because it can compare a
+    /// reported value to the `ParamDef` it came from; the dialog's rows are
+    /// assembled from several owners, so what was shown is its own fact.
+    pub dialog_settings_shown: Vec<(String, String, String)>,
     pub splitter_layout: cce_ui::layout::SplitterLayout,
     /// The add-node palette's cce-cloud popup (single active popup, toggle
     /// semantics — the status bar's tracker pattern).
@@ -1171,7 +1177,7 @@ pub struct State {
     /// slide the graph under the armed node drag, or the commit re-derives the
     /// node's cell against the panned origin and it teleports. Cleared (latch
     /// open) once the pointer strays a real-drag distance from the press.
-    drag_press_cursor: Option<(f32, f32)>,
+    pub(crate) drag_press_cursor: Option<(f32, f32)>,
     pub focused_widget: Option<usize>,
 
     pub cursor_x: f32,
@@ -4082,6 +4088,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 v.set_visible(false);
                 v
             },
+            dialog: crate::dialog::Dialog::new(),
+            dialog_params: {
+                // Shown only while the dialog's Settings tab is up; laid out
+                // inside the dialog's plate, so it draws no plate of its own.
+                let mut p = ParametersBg::new();
+                p.set_visible(false);
+                p
+            },
         });
 
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
@@ -4172,6 +4186,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             event_sender: None,
             slots,
             positions,
+            dialog_settings_shown: Vec::new(),
             splitter_layout,
             cloud_popups: cce_ui::process::CloudPopupTracker::new(),
             node_menu_slot: None,
@@ -5134,6 +5149,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
 
         self.apply_collapsed_panes();
+        // Last of all: the dialog floats over whatever the branches above
+        // produced, so its rect depends on the window and nothing else.
+        self.layout_dialog();
     }
 
 
@@ -5559,6 +5577,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let mut settings_changed = false;
         match action {
             Action::CommandPalette => self.open_command_palette(),
+            Action::ToggleDialog => self.toggle_dialog(),
             // The network navigation families. Each returns false when the
             // network pane does not have focus, which is how one gate covers
             // all fourteen of them.
@@ -5911,6 +5930,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::MouseWheel { delta } => {
+                // The dialog is modal: a wheel over it scrolls it, and a wheel
+                // anywhere else does nothing rather than scrolling — and
+                // focusing — the pane it is covering.
+                if self.dialog_visible() {
+                    return self.dialog_mouse_wheel(*delta);
+                }
                 let in_network_pane = self.in_network_pane();
                 // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
@@ -6235,6 +6260,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             changed = true;
                             if idx == PARAM_IDX {
                                 self.sync_parameters_to_project();
+                            } else if idx == crate::slots::DIALOG_PARAMS_IDX {
+                                self.sync_dialog_settings_to_project();
                             }
                         }
                     }
@@ -6285,6 +6312,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     self.pan_velocity_y = 0.0;
 
                     self.viewport_mut().reset_velocity();
+                }
+                // The dialog is modal over what it covers, so it takes the
+                // press before the pan trigger and before the whole
+                // hit-target cascade. A press OUTSIDE it dismisses — the
+                // convention every other floating surface in this app follows
+                // (the node menu, the plate corner menu) — and is swallowed
+                // rather than also acting on the pane it landed on.
+                if self.dialog_visible() {
+                    if let Some(handled) = self.dialog_mouse_input(*button, *btn_state) {
+                        return handled;
+                    }
                 }
                 let in_network_pane = self.in_network_pane();
                 let node_area_x = self.positions[CONTENT_IDX].0;
@@ -7090,6 +7128,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.logical_key == Key::Named(NamedKey::Space) {
                     self.space_pressed = event.state == ElementState::Pressed;
+                }
+
+                // The dialog owns the keyboard outright while it is open —
+                // ahead of the context chords, ahead of the params pane, ahead
+                // of everything. It has a text field in it, and a modal whose
+                // typing leaks into the pane behind it is worse than no modal:
+                // typing "frame" into the filter would step the grid cursor
+                // four times and toggle a node's geometry on the way past.
+                if self.dialog_visible() {
+                    return self.dialog_key_input(event);
                 }
 
                 // Context switching dispatches ahead of the widget key paths

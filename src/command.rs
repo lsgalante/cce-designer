@@ -113,6 +113,12 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "next_context", label: "Focus Next Pane", context: Context::Always, run: Run::Key(Action::NextContext), default_chord: Some("Ctrl+Tab") },
     Command { id: "previous_context", label: "Focus Previous Pane", context: Context::Always, run: Run::Key(Action::PrevContext), default_chord: Some("Ctrl+Shift+Tab") },
     Command { id: "command_palette", label: "Command Palette", context: Context::Always, run: Run::Key(Action::CommandPalette), default_chord: Some("Ctrl+p") },
+    // Alt+D, not Super+D: the compositor claims every Super chord before any
+    // client sees one (`input.kdl`'s `cce-window-manager` domain binds
+    // super+d to the app launcher), and Super held is also the DE's
+    // window-adjust modifier. Alt is the app's own — the network move family
+    // already lives there.
+    Command { id: "toggle_dialog", label: "Dialog", context: Context::Always, run: Run::Key(Action::ToggleDialog), default_chord: Some("Alt+d") },
     Command { id: "toggle_configure", label: "Configure", context: Context::Always, run: Run::Key(Action::ToggleConfigure), default_chord: Some("Ctrl+,") },
 
     // Escape already does this, handled inline with the rest of Escape's

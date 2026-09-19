@@ -117,6 +117,12 @@ widget_roster! {
     // its place when the displayed level holds a page. Appended, like the
     // second network editor, so established slot indexes stay stable.
     PAGE_IDX:                page_view:           ImageView,
+    // The Alt+D dialog: the frame (plate, tabs, query line, command list) and
+    // its settings body, a second ParametersBg so a control in the dialog is
+    // the same control as one in the params pane. Appended, like every slot
+    // since the second network editor, so established indexes stay stable.
+    DIALOG_IDX:              dialog:              crate::dialog::Dialog,
+    DIALOG_PARAMS_IDX:       dialog_params:       ParametersBg,
 }
 
 impl WidgetSlots {
@@ -181,6 +187,24 @@ impl WidgetSlots {
 
     pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController {
         self.spreadsheet.as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
+    }
+
+    /// The dialog's settings body. A `ParametersBg` like `PARAM_IDX`, reached
+    /// through the same controller trait — the writeback in
+    /// `sync_dialog_settings_to_project` is the params pane's, pointed at the
+    /// dialog's row table instead of the selected node's params.
+    pub fn dialog_params(&self) -> &dyn cce_ui::widget::ParamController {
+        self.dialog_params
+            .as_any()
+            .downcast_ref::<ParametersBg>()
+            .expect("DIALOG_PARAMS_IDX must be a ParametersBg")
+    }
+
+    pub fn dialog_params_mut(&mut self) -> &mut dyn cce_ui::widget::ParamController {
+        self.dialog_params
+            .as_any_mut()
+            .downcast_mut::<ParametersBg>()
+            .expect("DIALOG_PARAMS_IDX must be a ParametersBg")
     }
 
     pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController {

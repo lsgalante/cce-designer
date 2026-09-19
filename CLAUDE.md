@@ -114,6 +114,11 @@ gone from cce-ui with the wgpu path).
   slot's concrete type (`viewport()`, `graph_mut()`, `menu(idx)`, …) live here too, and
   `State` keeps one-line forwarders. `PassivePlate` and `Canvas`, the two app-owned
   slot-only widgets, are also here.
+- `src/dialog.rs` — the Alt+D dialog: the `Dialog` widget (a third app-owned
+  slot-only widget) plus the `State` half that fills it, routes its input and
+  writes its settings back. See "The dialog (Alt+D)" below — three of its four
+  hard parts are about paint order and occlusion, none of which is guessable
+  from the widget.
 - `src/plate_corner.rs` — the plate corner control: a circular menu trigger on the
   top-right of each pane that draws its own plate (`PLATE_SLOTS` — network, params,
   spreadsheet, playbar; NOT the viewport, whose plate is the window-spanning lip).
@@ -741,6 +746,73 @@ the alternative is calling every command to see whether it is handled, and
 "Exit" would end the test run. It is the check the plugin's `hccommands.py` doc
 argues for: a label kept in two places drifts, and a renamed one fails silently
 — the dispatch falls through its match and the command does nothing.
+
+### The dialog (Alt+D)
+
+`src/dialog.rs` is a modal overlay with two halves: **Commands**, the registry
+fuzzy-filtered in place, and **Settings**, the viewport/graph display state
+`DesignSettings` persists. It is two roster slots — `DIALOG_IDX`, an app-owned
+`Dialog` that paints the plate, the tab strip, the query line and the command
+list, and `DIALOG_PARAMS_IDX`, a **second `ParametersBg`** laid out inside it.
+The settings controls are that second params pane rather than new widgets,
+because a slider in the dialog should be the same slider as a slider in the
+params pane; what the dialog adds is the row TABLE, not the rows.
+
+**Alt+D, not Super+D.** Every Super chord is the compositor's before any client
+sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
+launcher), and Super held is the DE's window-adjust modifier besides. Alt is the
+app's own — the `move_*` family already lives there.
+
+**A Settings row edits the meta node, never the live field.** The values behind
+those rows have exactly one owner, and it is not `State` and not
+`DesignSettings`: `apply_settings_from_menubar_subnets` copies the utility
+subnets (`Main`, `View`, `Guides`) onto the live state on EVERY param change, so
+a write straight to `State::grid_thickness` survives until the next one and no
+longer. `SETTINGS` is the table of which row belongs to which owner, and `Owner`
+has three arms for the three kinds there turn out to be: a subnet param, a
+registry command (Square Aspect and Show Camera Pivot are per-CAMERA, with no
+node at all behind the Default Camera — their commands are the only code that
+gets both cases right), and an active-camera param with the live field as its
+fallback. Writeback is `sync_parameters_to_project`'s shape, polled rather than
+pushed for the same reason: a `ParametersBg` reports its values, it does not
+emit events. `dialog_settings_rows_name_owners_that_exist` is the backstop,
+because the failure is silent — `dialog_settings_params` SKIPS a row whose param
+it cannot find, so a rename quietly shortens the Settings half.
+
+**The dialog is painted after the overlay passes, not in the widget walk.** A
+high `z_order` is not enough: `append_frame_text`, `append_scale_readout` and the
+meta-point overlays all run AFTER the whole walk, so the graph's node labels drew
+straight over a dialog that had already covered them. `append_dialog` runs
+between the plate corners and the context menu instead.
+
+**And even that is not enough, because text is not painted in display-list
+order.** The engine collects every `Prim::Text` and lays them all out at the end,
+so a plate over a label does not hide it at any depth. What hides it is the
+engine's popover-occlusion clamp, which reads `UiContext::active_popovers` — so
+`Dialog::popover` claims the dialog's whole rect, and the designer's
+registration loop picks it up. The clamp exempts text whose own bounds COINCIDE
+with the occluder, so every label inside the dialog carries the dialog's rect and
+truncates itself; the settings body is painted twice for this (once for its
+controls, once to re-emit its text retagged), since a `PaintCtx` can be handed
+text back but not geometry.
+
+**`Dialog::occluding` exists because that one claim serves two mechanisms that
+want opposite answers.** `UiContext::is_coordinate_covered` reads the same
+`popover_rect` — off every REGISTERED widget, not just the ones in
+`active_popovers` — to decide a press landed under something else. With the claim
+standing, every control in the Settings half is covered by the plate it is drawn
+on and nothing can be clicked; the toggles looked laid out, painted, and
+completely inert. `State::dispatch_uncovered` lowers the flag for the length of a
+dispatch into the dialog and puts it back, invalidating the coverage memo on both
+edges (the engine queries it on every left press, so lowering the flag alone
+leaves a stale cached answer).
+
+Input is intercepted whole, at the top of `handle_event`'s keyboard and mouse
+branches: `dialog_key_input` is TOTAL rather than a layer, because the network
+pane's bare-letter family is ungated and typing "frame" into the filter would
+otherwise step the grid cursor four times and flip a node's geometry toggle on
+the way past. A press outside the plate dismisses and is swallowed, the way the
+node and plate-corner menus behave.
 
 ### Runtime paths point into the source tree
 

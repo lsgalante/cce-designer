@@ -9,6 +9,7 @@ use crate::slots::{
     BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
     SPREADSHEET_MENUBAR_IDX, SPREADSHEET_IDX,
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
+    DIALOG_IDX, DIALOG_PARAMS_IDX,
 };
 use crate::geometry::network_sphere_vertices_with_errors;
 use cce_ui::scene::layout::Rect;
@@ -169,6 +170,14 @@ impl State {
             if !self.slots.get_dyn(i).visible() {
                 continue;
             }
+            // The dialog is painted after the overlay passes below, not in the
+            // walk. A high z_index is not enough: `append_frame_text` and the
+            // viewport overlays run AFTER the whole walk, so the graph's node
+            // labels and the scale readout drew straight over a dialog that
+            // had already covered them.
+            if i == DIALOG_IDX || i == DIALOG_PARAMS_IDX {
+                continue;
+            }
             unsafe {
                 self.paint_element(&*widget_ptrs[i], &mut pc, show_cursor, &mut visited, clip, clip_circle);
             }
@@ -182,6 +191,9 @@ impl State {
         self.append_popovers(&mut pc);
         self.append_dock_drag_overlay(&mut pc);
         self.append_plate_corners(&mut pc);
+        // Above every pane AND every overlay text pass, below only the context
+        // menu — which can be opened from inside it.
+        self.append_dialog(&mut pc, show_cursor, &mut visited, clip);
 
         // The context menu (node/viewport right-click AND the plate corner
         // menus — one shared state) floats above everything, drawn last as
@@ -264,6 +276,45 @@ impl State {
             fill[3] = fill[3].abs();
             pc.circle(cx, cy, r, fill);
             pc.arc(cx, cy, r, 3.0, 0.0, TAU, [0.35, 0.65, 0.95, 0.80 * self.network_opacity]);
+        } else if idx == DIALOG_IDX {
+            // Modern-paint surface, the playbar's contract: the designer
+            // authors the plate (the dialog floats, so the pane radii and the
+            // focus tint do not apply — it is never a pane and never the
+            // focused one), then Dialog::paint emits the tab strip, the query
+            // line and the rows. A subtree painter, so append_frame_text skips
+            // the slot and the chord column keeps its own font and bounds.
+            append_widget_plate(w, pc);
+            w.paint_self(&self.ui_context, pc);
+        } else if idx == DIALOG_PARAMS_IDX {
+            // The dialog's settings body: PARAM_IDX's arm without the plate,
+            // because it is laid out INSIDE the dialog's plate and a second
+            // one would draw a panel on a panel. The scrollbar straddle goes
+            // with it — over a plate it is not straddling, it is just on top.
+            let (px, py, pw, ph) = self.positions[DIALOG_PARAMS_IDX];
+            let view = rect(px, py, pw, ph);
+            pc.clip(view, |pc| {
+                w.paint_self(&self.ui_context, pc);
+            });
+            let scrollbar = self
+                .slots
+                .dialog_params
+                .as_any()
+                .downcast_ref::<cce_ui::widget::ParametersBg>()
+                .expect("DIALOG_PARAMS_IDX must be a ParametersBg")
+                .scrollbar_visible()
+                .then(|| {
+                    self.slots
+                        .dialog_params
+                        .as_any()
+                        .downcast_ref::<cce_ui::widget::ParametersBg>()
+                        .expect("DIALOG_PARAMS_IDX must be a ParametersBg")
+                        .scrollbar_quads()
+                });
+            if let Some(quads) = scrollbar {
+                for &(qx, qy, qw, qh, qc) in &quads {
+                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+                }
+            }
         } else if idx == PLAYBAR_IDX {
             // Modern-paint pane: the plate from the legacy views like the other
             // panes, then paint_self emits the transport controls — geometry AND
@@ -720,7 +771,13 @@ impl State {
             // pass already (see paint_widget: subtree text for the playbar
             // and spreadsheet, the own-labels bridge for the params pane) —
             // drawing them here again would double it.
-            if is_menubar || i == PLAYBAR_IDX || i == PARAM_IDX || i == SPREADSHEET_IDX {
+            if is_menubar
+                || i == PLAYBAR_IDX
+                || i == PARAM_IDX
+                || i == SPREADSHEET_IDX
+                || i == DIALOG_IDX
+                || i == DIALOG_PARAMS_IDX
+            {
                 continue;
             }
             let is_node = i == CONTENT_IDX;
@@ -810,6 +867,72 @@ impl State {
         }
     }
 
+    /// The Alt+D dialog, last of the pane content: its plate and command list,
+    /// its settings body, and that body's popovers.
+    ///
+    /// Out of the widget walk entirely, because the walk is not the end of the
+    /// frame — `append_frame_text` and the viewport overlays follow it, and
+    /// they drew the graph's node labels and the scale readout straight over
+    /// a dialog whose z_index had already put it on top of the same panes.
+    /// Only the context menu goes above this, and it can be opened from inside
+    /// the dialog.
+    fn append_dialog(
+        &self,
+        pc: &mut PaintCtx,
+        show_cursor: bool,
+        visited: &mut [bool],
+        clip: Rect,
+    ) {
+        if !self.slots.dialog.visible() {
+            return;
+        }
+        self.paint_widget(DIALOG_IDX, pc, show_cursor, visited, clip, None);
+        if !self.slots.dialog_params.visible() {
+            return;
+        }
+        // The settings body is painted twice, on purpose.
+        //
+        // Its labels have to carry the DIALOG's bounds or the occluder the
+        // dialog registers (see `Dialog::popover`) clamps them away: the
+        // clamp's exemption is bounds that COINCIDE with the occluder, and a
+        // params row's bounds are its row's. The first pass lays down the
+        // controls — its labels land inside the occluder and are clamped to
+        // nothing, which is exactly what should happen to a row-bounded label
+        // under this plate. The second pass re-emits only the text, retagged
+        // with the dialog's bounds, which is what is actually read.
+        //
+        // Two passes rather than one because a `PaintCtx` cannot be handed a
+        // prim back: text can be re-emitted through `text_with`, geometry
+        // cannot, so the geometry has to come from a pass that writes
+        // straight into `pc`. It costs a dozen labels' shaping while the
+        // Settings half is open.
+        let (dx, dy, dw, dh) = self.positions[DIALOG_IDX];
+        let own = Some([dx, dy, dx + dw, dy + dh]);
+        self.paint_widget(DIALOG_PARAMS_IDX, pc, show_cursor, visited, clip, None);
+        let mut scratch = PaintCtx::new();
+        visited[DIALOG_PARAMS_IDX] = false;
+        self.paint_widget(DIALOG_PARAMS_IDX, &mut scratch, show_cursor, visited, clip, None);
+        for item in scratch.finish().items {
+            if let Prim::Text { text, x, y, font_size, color, font, .. } = item.prim {
+                pc.text_with(text, x, y, font_size, color, font, own);
+            }
+        }
+
+        let mut popover_pc = cce_ui::layout::PopoverCollector::new();
+        self.slots.dialog_params.render_popover(&mut popover_pc);
+        for (color, px, py, pw, ph) in popover_pc.rects {
+            pc.quad(rect(px, py, pw, ph), color);
+        }
+        for (t, size, x, y, tc, font_opt, _) in popover_pc.texts {
+            let color = [
+                (tc[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+                (tc[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+                (tc[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+            ];
+            pc.text_with(t, x, y, size, color, font_opt, own);
+        }
+    }
+
     fn append_popovers(&self, pc: &mut PaintCtx) {
         for i in 0..WIDGET_COUNT {
             let w = self.slots.get_dyn(i);
@@ -818,6 +941,11 @@ impl State {
             }
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
             if is_menubar {
+                continue;
+            }
+            if i == DIALOG_PARAMS_IDX {
+                // Drawn by `append_dialog`, after this pass: a popover of the
+                // dialog's belongs above the dialog, not under it.
                 continue;
             }
             if self.focused_widget == Some(i) || i == PARAM_IDX {

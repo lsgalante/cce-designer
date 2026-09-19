@@ -25,6 +25,9 @@ pub enum Action {
     /// Open the command palette — a command like any other, so it is
     /// rebindable and lists itself.
     CommandPalette,
+    /// Open or close the in-app dialog (`src/dialog.rs`): the same commands,
+    /// plus the viewport/graph settings, without leaving the window.
+    ToggleDialog,
     /// Snap dragged handles in the active viewer state to a world increment.
     ToggleSnap,
     /// Enter or leave the selected node's viewer state.
