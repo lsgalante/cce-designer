@@ -733,6 +733,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_deform_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("volume") {
         resolve_volume_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("mold_shell") {
+        resolve_mold_shell_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("boolean") {
         resolve_boolean_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("export") {
@@ -1749,6 +1751,29 @@ pub fn resolve_boolean_geometry_with_errors(
         _ => va.union(&vb),
     }
     Some(va.to_mesh())
+}
+
+/// The Mold Shell node: a cast's shell, thickened by curvature.
+pub fn resolve_mold_shell_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    let shell = crate::mold::mold_shell(
+        &input,
+        node_param_f32(target, "Minimum Thickness", 0.6),
+        node_param_f32(target, "Maximum Thickness", 0.75),
+        node_param_f32(target, "Remesh Division Size", 0.9),
+        crate::mold::Ramp::parse(&node_param_str(target, "Ramp", "Linear")),
+    );
+    // A node with nothing to thicken passes its input through rather than
+    // vanishing: an empty result in the middle of a chain reads as a broken
+    // node, and the thing that is actually wrong is upstream.
+    Some(shell.unwrap_or(input))
 }
 
 /// The Export node: geometry out of the app.
@@ -4919,6 +4944,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "subdivide"
         || nt == "export"
         || nt == "boolean"
+        || nt == "mold_shell"
         || nt == "volume"
         || nt == "deform"
         || nt == "valence"
@@ -5194,6 +5220,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_boolean_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("mold_shell") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_mold_shell_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }

@@ -513,6 +513,29 @@ Touches: `shortcut.rs`, `app.rs`, `slots.rs`, `cce-ui`.
 > another's.
 >
 > Still outstanding: nothing in Phase 4.
+>
+> **Phase 6's first GEM operator landed.** `src/mold.rs` ports
+> `gem_mold_shell`: remesh to a division size, measure curvature per point, map
+> it through a ramp into a thickness range, and displace a copy of the surface
+> inward by that much. Its four parameters are the plugin's, and the template's
+> defaults are the numbers from the production notes for the cast that worked.
+>
+> The measure is deliberately dimensionless — the mean of
+> `dot(normalize(neighbour - p), n)` — so it does not move when the model is
+> scaled or re-tessellated. Thickness is chosen from it, and a measure that
+> shifted with the remesh division size would give a shell whose thickness
+> changed every time you re-tessellated. The map into the range is affine over
+> a fixed -1..1 rather than normalized over the model, so adding a sharp corner
+> somewhere cannot thin the whole shell.
+>
+> A rendering check turned up an unrelated hole: the `box` node has a template
+> and is listed as a geometry node type, but no resolver was ever written for
+> it, so it silently produces nothing and any chain reading from it resolves to
+> nothing. Raised separately rather than fixed here.
+>
+> The volume representation, mesh export and the 2D page context — the three
+> things this phase named as prerequisites — all landed earlier. What remains
+> is the rest of the GEM set: sprue, supports, build area, partition, orient.
 
 Furthest out because it needs infrastructure nothing else does: a **volume
 representation** (SDF or sparse grid) for shelling, offsetting and boolean work,

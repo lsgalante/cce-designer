@@ -333,6 +333,47 @@ Buttons dispatch through `execute_menu_action` by LABEL, which carries no node
 — `run_export` resolves the node from the current selection, which is sound
 because the pressed button can only be on the node the pane is showing.
 
+### Mold tooling
+
+`src/mold.rs` is the first GEM operator, ported from the plugin's
+`gem_mold_shell`. Its four parameters are that node's — Maximum Thickness,
+Minimum Thickness, Remesh Division Size, Thickness Ramp — and the production
+notes from the original cast give the numbers that worked (0.75 / 0.6 / 0.9,
+linear), which are the template's defaults.
+
+**Thickness varies with curvature**, which is the whole point and the reason
+the `volume` node's uniform shell will not do. The plugin does it with an
+`im_ramp_scalar` named `curvature_to_thickness`; this does the same three
+steps — remesh to the division size, measure curvature per point, map it
+through a ramp into the thickness range.
+
+`curvature` is a signed DIMENSIONLESS measure in roughly -1..1: the mean of
+`dot(normalize(neighbour - p), n)`. Negative is convex, positive concave. Every
+term is a dot product of two unit vectors, so it does not move when the model
+is scaled or re-tessellated — which matters because thickness is chosen from
+it, and a measure that shifted with the remesh division size would give a shell
+whose thickness changed every time you re-tessellated. A true mean curvature in
+1/length would do exactly that.
+
+The curvature-to-thickness map is affine over a FIXED -1..1, not normalized
+over the range present in the model. Normalizing would make one part's
+thickness depend on how curved the rest of it is, so adding a sharp corner
+somewhere would thin the whole shell. Concave regions get the maximum: a mould
+is weakest where it cups inward, with least material behind it and the most
+leverage on it when the cast is pulled.
+
+The inner surface is a DISPLACEMENT along each point's normal, not a field
+offset — a signed distance field offsets by a constant and cannot vary per
+point. The cost is the usual one: where thickness exceeds the local radius of
+curvature the inner surface folds through itself. That is what the
+minimum/maximum range is for; it is a range because the geometry constrains it,
+not because one number was hard to pick.
+
+There is no ramp PARAMETER type in this app (cce-ui has the widget, nothing
+wires it as a node parameter), so the free-form float ramp is ported as the
+three-way choice the falloff parameters already use. Linear is the default
+because linear is what the cast that worked used.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,

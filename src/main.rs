@@ -27,6 +27,7 @@ pub mod shortcut;
 pub mod slots;
 pub mod command;
 pub mod layout;
+pub mod mold;
 pub mod page;
 pub mod thumbnail;
 
@@ -4765,6 +4766,154 @@ mod tests {
             Some(slot),
             "re-selecting the deselected node did not stick"
         );
+    }
+
+    /// Curvature is signed, dimensionless, and does not move when the model
+    /// is scaled or re-tessellated.
+    ///
+    /// That last property is the one that matters: thickness is chosen from
+    /// this measure, so a measure that changed with the remesh division size
+    /// would give a shell whose thickness moved every time you re-tessellated.
+    #[test]
+    fn test_curvature_is_signed_and_scale_free() {
+        use crate::mold::curvature;
+
+        // A sphere is convex everywhere, so every point reads negative, and
+        // every point reads the SAME — it has one curvature.
+        let sphere = crate::geometry::sphere_detail(glam::Vec3::ZERO, 1.0, 24, 32);
+        let c = curvature(&sphere);
+        assert!(c.iter().all(|v| *v < 0.0), "a sphere should read convex everywhere");
+        let (lo, hi) = c.iter().fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+        assert!(hi - lo < 0.08, "a sphere's curvature is not uniform: {lo}..{hi}");
+
+        // Ten times the size, same measure — this is what "dimensionless"
+        // buys, and it is why the thickness range means the same thing on a
+        // model of any size.
+        let big = crate::geometry::sphere_detail(glam::Vec3::ZERO, 10.0, 24, 32);
+        let cb = curvature(&big);
+        let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
+        assert!(
+            (mean(&c) - mean(&cb)).abs() < 1e-3,
+            "curvature changed with scale: {} vs {}",
+            mean(&c),
+            mean(&cb)
+        );
+
+        // And it is finite on a mesh with isolated points — those read flat
+        // rather than NaN, which would poison the whole thickness range.
+        let mut stray = sphere.clone();
+        stray.add_point(glam::Vec3::new(50.0, 0.0, 0.0));
+        let cs = curvature(&stray);
+        assert!(cs.iter().all(|v| v.is_finite()), "curvature went non-finite");
+        assert_eq!(cs[cs.len() - 1], 0.0, "an isolated point should read flat");
+    }
+
+    /// The ramp maps curvature into the thickness range, and the range is
+    /// honoured whichever way round its ends are given.
+    #[test]
+    fn test_thickness_stays_inside_the_range() {
+        use crate::mold::{thickness_from_curvature, Ramp};
+        let curv = [-1.0, -0.5, 0.0, 0.5, 1.0];
+
+        let t = thickness_from_curvature(&curv, 0.6, 0.75, Ramp::Linear);
+        assert!(t.iter().all(|v| (0.6..=0.75).contains(v)), "{t:?} left the range");
+        assert!(t[0] < t[4], "concave should be thicker than convex");
+        assert!((t[0] - 0.6).abs() < 1e-6 && (t[4] - 0.75).abs() < 1e-6, "{t:?}");
+
+        // Constant is the uniform shell, reachable without leaving the node.
+        let t = thickness_from_curvature(&curv, 0.6, 0.75, Ramp::Constant);
+        assert!(t.iter().all(|v| (*v - 0.75).abs() < 1e-6), "{t:?}");
+
+        // Smooth flattens both ends rather than changing where they land.
+        let t = thickness_from_curvature(&curv, 0.0, 1.0, Ramp::Smooth);
+        assert!((t[0] - 0.0).abs() < 1e-6 && (t[4] - 1.0).abs() < 1e-6);
+        assert!(t[1] < 0.25 && t[3] > 0.75, "smooth did not flatten the ends: {t:?}");
+
+        // A range given backwards is still a range — min and max are the two
+        // ends, not an ordering the caller has to get right.
+        let a = thickness_from_curvature(&curv, 0.75, 0.6, Ramp::Linear);
+        let b = thickness_from_curvature(&curv, 0.6, 0.75, Ramp::Linear);
+        assert_eq!(a, b);
+    }
+
+    /// The shell end to end, through the resolver the viewport calls.
+    #[test]
+    fn test_the_mold_shell_node_builds_a_two_sided_shell() {
+        use crate::geometry::resolve_mold_shell_geometry_with_errors;
+        fn mnode(id: &str, name: &str, ty: &str, params: &[(&str, &str)]) -> FsNode {
+            FsNode {
+                id: id.to_string(),
+                name: name.to_string(),
+                node_type: ty.to_string(),
+                children: vec![],
+                params: params
+                    .iter()
+                    .map(|(n, v)| crate::app::ParamDef {
+                        name: n.to_string(),
+                        label: String::new(),
+                        param_type: "text".to_string(),
+                        default: v.to_string(),
+                        options: vec![],
+                        min: None,
+                        max: None,
+                        step: None,
+                        show_when: String::new(),
+                    })
+                    .collect(),
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 1,
+                outputs: 1,
+            }
+        }
+        let sphere = mnode("id-s", "sphere1", "sphere", &[("Radius", "0.8")]);
+        let shell = mnode(
+            "id-m",
+            "mold1",
+            "mold_shell",
+            &[
+                ("Input", "sphere1"),
+                ("Maximum Thickness", "0.20"),
+                ("Minimum Thickness", "0.10"),
+                ("Remesh Division Size", "0.30"),
+                ("Ramp", "Linear"),
+            ],
+        );
+        let mut root = mnode("id-root", "root", "node", &[]);
+        root.children = vec![sphere, shell];
+
+        let mut err = None;
+        let mut cache = crate::geometry::SimCache::default();
+        let mut sim = crate::geometry::EvalSim::new(0, 0, &mut cache);
+        let out = resolve_mold_shell_geometry_with_errors(
+            &root,
+            &root.children[1],
+            &mut Vec::new(),
+            &mut err,
+            &mut sim,
+        )
+        .expect("the mold shell resolved to nothing");
+        assert!(err.is_none(), "{err:?}");
+        assert!(out.num_prims() > 0);
+
+        // Two surfaces: the outer one at the sphere's radius, the inner one
+        // pulled in by between the minimum and the maximum thickness.
+        let centre = {
+            let (lo, hi) = out.bounds().unwrap();
+            (lo + hi) * 0.5
+        };
+        let radii: Vec<f32> = (0..out.num_points()).map(|p| (out.pos(p) - centre).length()).collect();
+        let far = radii.iter().cloned().fold(0.0f32, f32::max);
+        let near = radii.iter().cloned().fold(f32::MAX, f32::min);
+        assert!((far - 0.8).abs() < 0.12, "the outer surface is at {far}, not the sphere's 0.8");
+        assert!(
+            near < far - 0.08 && near > far - 0.30,
+            "the inner surface is {near} against an outer {far}; the gap should be the thickness range"
+        );
+
+        // Closed: the pair is a solid, not two loose surfaces. A sphere has no
+        // rim, so the two shells close each other.
+        assert!(out.is_closed(), "the shell is not a closed surface");
     }
 
     /// A page's raster is its physical size times its resolution — the
