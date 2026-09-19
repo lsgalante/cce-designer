@@ -20,7 +20,7 @@ cargo build -p cce-designer            # from the workspace root
 cargo run  -p cce-designer             # needs a Wayland session (cce or any compositor)
 cargo test -p cce-designer             # all tests live in src/main.rs's tests module
 cargo test -p cce-designer test_keyboard_shortcut_system   # one test
-make install                           # release build → ~/.local/bin/cce-designer
+make install                           # release build, then `ccebuild install --no-build cce-designer`
 ```
 
 Two binaries: `cce-designer` (the app) and `vk-smoke` (`src/vk_smoke.rs`) — a
@@ -97,7 +97,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~5.4k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~8k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
