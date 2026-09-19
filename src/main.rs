@@ -4701,6 +4701,72 @@ mod tests {
 
     }
 
+    /// Deselecting has to STICK, which is the whole difficulty.
+    ///
+    /// The selection is whatever sits in the cursor's cell — that is what
+    /// `sync_cursor_and_selection` means — and the sync runs on nearly every
+    /// frame that changes anything. A bare `set_selected_node(None)` is put
+    /// straight back, so the deselected cell is remembered and the sync leaves
+    /// that one cell alone.
+    #[test]
+    fn test_deselect_sticks_until_the_cursor_moves() {
+        use crate::slots::{CONTENT_IDX, LEFT_MENUBAR_IDX};
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(
+                McpAction::AddNode { template_name: "Sphere".to_string(), name: None, x: 6.0, y: 6.0 },
+                &mut redraw,
+            )
+            .expect("add node");
+        let slot = state.current_dir().children.len() - 1;
+
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = CONTENT_IDX;
+        state.grid_cursor_col = 6;
+        state.grid_cursor_row = 6;
+        state.sync_cursor_and_selection();
+        assert_eq!(state.graph().selected_node(), Some(slot));
+
+        // Nothing selected, nothing to do — so Escape can fall through to
+        // meaning nothing rather than claiming it acted.
+        assert!(state.deselect_node());
+        assert_eq!(state.graph().selected_node(), None);
+        assert!(!state.deselect_node(), "a second deselect has nothing to clear");
+
+        // THE point: the sync that runs on the next changed frame must not put
+        // it back, even though the cursor still sits on the node.
+        state.sync_cursor_and_selection();
+        assert_eq!(
+            state.graph().selected_node(),
+            None,
+            "the sync re-selected the node the user just deselected"
+        );
+
+        // Stepping away and back selects again — the deselect held for that
+        // one cell, not for the node.
+        assert!(state.run_command("nav_right"));
+        assert_eq!(state.graph().selected_node(), None, "nothing is at the new cell");
+        assert!(state.run_command("nav_left"));
+        assert_eq!(
+            state.graph().selected_node(),
+            Some(slot),
+            "coming back to the node should select it again"
+        );
+
+        // And selecting explicitly spends the memory: deselect, then select
+        // the same node, and the next sync must leave it selected.
+        assert!(state.deselect_node());
+        state.graph_mut().set_selected_node(Some(slot));
+        state.sync_layout();
+        state.sync_cursor_and_selection();
+        assert_eq!(
+            state.graph().selected_node(),
+            Some(slot),
+            "re-selecting the deselected node did not stick"
+        );
+    }
+
     /// A page's raster is its physical size times its resolution — the
     /// property that makes DPI a page parameter rather than an export one.
     #[test]

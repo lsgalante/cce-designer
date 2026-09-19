@@ -1125,6 +1125,15 @@ pub struct State {
     /// first call is this process's own and every later one is a REPLACEMENT
     /// after a reconnect. Remembering is the only way to tell them apart.
     pub seen_renderer: bool,
+    /// The grid cell an explicit deselect happened in.
+    ///
+    /// The selection IS whatever sits in the cursor's cell — that is what
+    /// `sync_cursor_and_selection` means — so simply clearing it does not
+    /// stick: the sync runs on nearly every frame that changes anything and
+    /// puts it straight back. Remembering the cell lets the sync leave that one
+    /// alone, and only that one: navigate anywhere else and selection resumes,
+    /// which is why this is a cell rather than a flag.
+    pub deselected_cell: Option<(i32, i32)>,
     /// An in-flight camera orbit drag: the cursor position the last motion was
     /// measured from. `None` when no orbit drag is running.
     pub orbit_drag: Option<(f32, f32)>,
@@ -4172,6 +4181,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             sim_cache: crate::geometry::SimCache::default(),
             page_image: None,
             seen_renderer: false,
+            deselected_cell: None,
             orbit_drag: None,
             page_dirty: false,
             last_sim_frame: i32::MIN,
@@ -5335,6 +5345,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         true
     }
 
+    /// Clear the node selection, and make it stick.
+    ///
+    /// Returns false when nothing was selected, so Escape can fall through to
+    /// meaning nothing rather than reporting that it did something.
+    pub(crate) fn deselect_node(&mut self) -> bool {
+        if self.graph().selected_node().is_none() {
+            return false;
+        }
+        self.graph_mut().set_selected_node(None);
+        self.deselected_cell = Some((self.grid_cursor_col, self.grid_cursor_row));
+        if self.focused_widget == Some(CONTENT_IDX) {
+            self.focused_widget = None;
+        }
+        self.sync_parameters_pane();
+        true
+    }
+
     /// Move the grid cursor one cell, taking the selection with it.
     ///
     /// The cursor is the network pane's keyboard position: `sync_cursor_and_
@@ -5352,6 +5379,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.pan_velocity_y = 0.0;
         self.grid_cursor_col += dc;
         self.grid_cursor_row += dr;
+        self.deselected_cell = None;
         self.sync_cursor_and_selection();
         self.keep_cursor_in_view();
         true
@@ -5555,6 +5583,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // Saved through the same `settings_changed` path every other
                 // viewport toggle uses, rather than a save call of its own.
                 settings_changed = true;
+            }
+            Action::Deselect => {
+                self.deselect_node();
             }
             Action::LayoutNodes => {
                 self.layout_current_level();
@@ -5790,6 +5821,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 break;
             }
         }
+
+        // A selection that arrived from anywhere else — a click, a load, the
+        // params pane — spends the remembered deselect. Otherwise clicking the
+        // very node you deselected would clear itself again on this sync.
+        if self.graph().selected_node().is_some() {
+            self.deselected_cell = None;
+        }
+
+        // An explicit deselect holds for the cell it happened in, and for no
+        // other: step away and selection resumes by itself.
+        let node_at_cursor_idx = match self.deselected_cell {
+            Some(cell) if cell == (self.grid_cursor_col, self.grid_cursor_row) => None,
+            _ => node_at_cursor_idx,
+        };
 
         if let Some(idx) = node_at_cursor_idx {
             self.graph_mut().set_selected_node(Some(idx));
@@ -7106,6 +7151,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         return true;
                     }
                     self.graph_mut().cancel_connecting();
+                    // Last: clearing the selection. Escape is this app's one
+                    // "get me out" key, and the things above are all more
+                    // immediate than a selection — a menu you can see, a mode
+                    // you are in, a wire you are dragging.
+                    self.deselect_node();
                     return true;
                 }
                 // Delete/Backspace removes the curve tool's selected control

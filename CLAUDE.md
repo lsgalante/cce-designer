@@ -492,10 +492,30 @@ That makes the pane's RECT useless as a hit test, and three things route off it:
   network holds, minus the floating panes.
 
 What changes for the user: a plain click on empty space is no longer the
-network's — so deselecting by clicking empty space is gone while the plate is
-off. It now ORBITS THE CAMERA instead (see below), which is what makes the
+network's — it ORBITS THE CAMERA instead (see below), which is what makes the
 overlay feel like a scene with a graph on it rather than a graph with a
-picture behind it.
+picture behind it. Deselecting is on Escape.
+
+### Deselecting has to stick
+
+The selection IS whatever sits in the grid cursor's cell — that is what
+`sync_cursor_and_selection` means — and that sync runs on nearly every frame
+where anything changed. So `set_selected_node(None)` alone does not deselect:
+it is put straight back on the next frame, and the pane never clears.
+
+`State::deselect_node` therefore remembers the CELL it happened in
+(`deselected_cell`), and the sync leaves that one cell alone. A cell rather
+than a flag, so the suppression is exactly as narrow as it should be: step the
+cursor anywhere else and selection resumes by itself, and stepping back onto
+the node selects it again. A selection arriving from anywhere else — a click, a
+load, the params pane — spends the memory at the top of the same sync, or
+clicking the very node you just deselected would clear itself again.
+
+Escape runs it LAST, after the context menus, the viewer state and
+connection-cancel: Escape is this app's one "get me out" key, and all of those
+are more immediate than a selection. There is also a `deselect` command, shipped
+UNBOUND so it is findable in the palette — deliberately not Ctrl+D, which the
+plugin uses for deselect-all but which this app already gives to Circular Pane.
 
 `ViewportSettings::network_plate` persists it, beside the viewport toggles
 rather than in the project's pane-state list: a pane's VISIBILITY belongs to

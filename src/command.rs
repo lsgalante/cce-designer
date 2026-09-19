@@ -115,6 +115,13 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "command_palette", label: "Command Palette", context: Context::Always, run: Run::Key(Action::CommandPalette), default_chord: Some("Ctrl+p") },
     Command { id: "toggle_configure", label: "Configure", context: Context::Always, run: Run::Key(Action::ToggleConfigure), default_chord: Some("Ctrl+,") },
 
+    // Escape already does this, handled inline with the rest of Escape's
+    // cascade, so the row ships unbound — it is here to be findable in the
+    // palette and bindable by anyone who wants a chord. NOT Ctrl+D, which the
+    // plugin uses for deselect-all but which this app already gives to
+    // Circular Pane.
+    Command { id: "deselect", label: "Deselect", context: Context::Network, run: Run::Key(Action::Deselect), default_chord: None },
+
     // --- Network navigation ---
     //
     // The plugin's scheme, ported: hjkl rather than arrows (the arrows are the

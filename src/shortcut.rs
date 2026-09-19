@@ -42,6 +42,8 @@ pub enum Action {
     LayoutNodes,
     /// Draw the network pane's plate, or let the graph overlay the scene.
     ToggleNetworkPlate,
+    /// Clear the node selection.
+    Deselect,
 }
 
 #[derive(Debug, Clone)]
