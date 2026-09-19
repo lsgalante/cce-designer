@@ -408,7 +408,6 @@ dependencies = [
  "cce-ui",
  "env_logger",
  "glam",
- "libc",
  "log",
  "opencl3",
  "png",

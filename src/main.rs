@@ -7352,4 +7352,134 @@ mod tests {
         assert_eq!(state.slots.dialog.query, "");
         assert_eq!(state.dialog_tab(), Tab::Commands);
     }
+
+    /// Tab opens the same plate in its AddNode mode: one list of node
+    /// templates, no tab strip, no chord column.
+    #[test]
+    fn dialog_add_node_mode_lists_the_templates() {
+        use cce_ui::widget::WidgetHost as _;
+        use crate::dialog::Mode;
+        let mut state = State::new(false);
+        state.open_node_palette();
+
+        assert!(state.dialog_visible());
+        assert_eq!(state.slots.dialog.mode, Mode::AddNode);
+        assert!(!state.slots.dialog_params.visible(), "no settings body in this mode");
+        assert_eq!(state.slots.dialog.rows.len(), state.node_templates.len());
+        assert!(
+            state.slots.dialog.rows.iter().all(|r| r.chord.is_empty()),
+            "a template has no chord to teach"
+        );
+
+        // Tab is what opened it, so Tab closes it again rather than looking
+        // for a second half that is not there.
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Tab)));
+        assert!(!state.dialog_visible());
+    }
+
+    /// Typing filters the templates through the SAME `fuzzy_rank` the command
+    /// half uses, and Enter instantiates at the grid cursor.
+    #[test]
+    fn dialog_add_node_filters_and_adds_at_the_cursor() {
+        let mut state = State::new(false);
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        state.grid_cursor_col = 3;
+        state.grid_cursor_row = 2;
+        let before = state.current_dir().children.len();
+
+        state.open_node_palette();
+        for c in ["b", "o", "x"] {
+            state.dialog_key_input(&typed(c));
+        }
+        assert_eq!(
+            state.slots.dialog.selected_id(),
+            Some("Box"),
+            "rows: {:?}",
+            state.slots.dialog.rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
+        );
+
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(!state.dialog_visible(), "the pick closes the dialog");
+        assert_eq!(state.current_dir().children.len(), before + 1);
+        let added = state.current_dir().children.last().expect("the new node");
+        assert!(added.name.starts_with("Box"), "added {}", added.name);
+        assert_eq!(added.position, (3.0, 2.0), "placed at the grid cursor");
+    }
+
+    /// Geometry templates are refused inside a utility dir, so the list does
+    /// not offer them there — the same filter the popup was fed.
+    #[test]
+    fn dialog_add_node_hides_geometry_templates_in_a_utility_dir() {
+        let mut state = State::new(false);
+        let offered_at_root = {
+            state.open_node_palette();
+            let n = state.slots.dialog.rows.len();
+            state.close_dialog();
+            n
+        };
+
+        // Into the root meta node, which `in_settings_dir` reports as utility.
+        let meta = state
+            .fs_root
+            .children
+            .iter()
+            .position(|c| c.node_type == "meta")
+            .expect("the root meta node");
+        state.current_path.push(meta);
+        assert!(state.in_settings_dir());
+
+        state.open_node_palette();
+        let offered_in_utility = state.slots.dialog.rows.len();
+        assert!(
+            offered_in_utility < offered_at_root,
+            "{offered_in_utility} offered in a utility dir vs {offered_at_root} at the root"
+        );
+        assert!(
+            !state.slots.dialog.rows.iter().any(|r| r.label == "Grid"),
+            "a geometry template would be refused at placement"
+        );
+        // Box/Sphere/Plane/Extrude are `"type": "node"` SUBNET templates, not
+        // native geometry types, so `is_geometry_node_type` does not claim
+        // them and the filter leaves them offered. Pre-existing, and exactly
+        // what the popup was fed — asserted so the next reader does not take
+        // it for a hole in this filter.
+        assert!(state.slots.dialog.rows.iter().any(|r| r.label == "Box"));
+    }
+
+    /// Ctrl+P lands on Commands rather than toggling, which is the one thing
+    /// that distinguishes it from Alt+D now that both open the same dialog.
+    #[test]
+    fn command_palette_opens_the_dialog_on_commands() {
+        use crate::dialog::{Mode, Tab};
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+        state.set_dialog_tab(Tab::Settings);
+        assert_eq!(state.dialog_tab(), Tab::Settings);
+
+        state.run_command("command_palette");
+        assert!(state.dialog_visible(), "it lands, it does not toggle");
+        assert_eq!(state.dialog_tab(), Tab::Commands);
+        assert_eq!(state.slots.dialog.mode, Mode::Tabbed);
+    }
+
+    /// No designer code path spawns a cce-cloud popup any more.
+    ///
+    /// A source scan, like `test_every_menu_command_names_a_label_that_is_
+    /// dispatched`: the alternative is asserting on a process that does not
+    /// start, which is indistinguishable from one that failed to.
+    #[test]
+    fn nothing_shells_out_to_cce_cloud_any_more() {
+        for name in ["app.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
+            let src = std::fs::read_to_string(&path).expect("read source");
+            for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {
+                // The doc comments say what the dialog REPLACED, so only code
+                // counts: skip comment lines.
+                let hit = src
+                    .lines()
+                    .find(|l| l.contains(needle) && !l.trim_start().starts_with("//"));
+                assert!(hit.is_none(), "{name} still uses {needle}: {}", hit.unwrap().trim());
+            }
+        }
+    }
 }

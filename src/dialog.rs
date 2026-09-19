@@ -45,15 +45,35 @@ impl Tab {
     }
 }
 
-/// One command row, resolved: the registry id to run, plus what to draw.
+/// What the dialog was opened to do.
+///
+/// One widget, two entry points, because a picker and a settings page are the
+/// same plate with the same keys — what differs is the strip at the top and
+/// what a row MEANS. Splitting them into two widgets is how an app ends up
+/// with two filterable lists that behave differently, which is the thing this
+/// dialog replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// `Alt+D`: the tab strip, Commands and Settings.
+    Tabbed,
+    /// `Tab` in the network pane: one list, a title where the strip goes, and
+    /// a pick that instantiates a node template at the grid cursor. No tabs —
+    /// adding a node is a contextual act, not a peer of the app's settings.
+    AddNode,
+}
+
+/// One row: what picking it means, plus what to draw.
 #[derive(Debug, Clone)]
 pub struct Row {
-    pub id: &'static str,
+    /// What the app does with this row: a command id in [`Mode::Tabbed`], a
+    /// node template's name in [`Mode::AddNode`]. Owned rather than
+    /// `&'static str` because a template name is read off disk.
+    pub id: String,
     pub label: String,
-    /// The chord as a human reads it, or empty for an unbound command. Drawn
-    /// in its own right-hand column so the dialog teaches the keyboard rather
-    /// than replacing it — the same argument the `cce-cloud` palette's padded
-    /// rows make, except that here the column can be a real column.
+    /// The chord as a human reads it, empty when there is none. Drawn in its
+    /// own right-hand column so the dialog teaches the keyboard rather than
+    /// replacing it — which the `cce-cloud` palette could only approximate by
+    /// padding the label out, since all it could send was one line of text.
     pub chord: String,
 }
 
@@ -125,6 +145,7 @@ pub fn visible_rows(x: f32, y: f32, w: f32, h: f32) -> usize {
 }
 
 pub struct Dialog {
+    pub mode: Mode,
     pub tab: Tab,
     /// What has been typed into the Commands half's filter.
     pub query: String,
@@ -142,7 +163,7 @@ pub struct Dialog {
     hover_row: Option<usize>,
     hover_tab: Option<Tab>,
     /// A row the pointer activated, drained by the app.
-    activated: Option<&'static str>,
+    activated: Option<String>,
     /// A tab the pointer chose, drained by the app.
     tab_click: Option<Tab>,
     /// Whether the dialog is currently claiming its rect as an occluder — see
@@ -155,6 +176,7 @@ pub struct Dialog {
 impl Dialog {
     pub fn new() -> Adapted<Dialog> {
         let mut d = Adapted::new(Dialog {
+            mode: Mode::Tabbed,
             tab: Tab::Commands,
             query: String::new(),
             rows: Vec::new(),
@@ -185,6 +207,12 @@ impl Dialog {
     /// Claim, or stop claiming, the dialog's rect as an occluder.
     pub fn set_occluding(&mut self, on: bool) {
         self.occluding = on;
+    }
+
+    /// Whether the body is the filterable row list — everything but the
+    /// Settings half, which hands its body to `DIALOG_PARAMS_IDX`.
+    pub fn shows_list(&self) -> bool {
+        self.mode == Mode::AddNode || self.tab == Tab::Commands
     }
 
     fn row_rect(&self, rect: Rect, i: usize) -> Option<Rect> {
@@ -238,12 +266,12 @@ impl Dialog {
         self.scroll_to_selected();
     }
 
-    /// The command Enter would run.
-    pub fn selected_id(&self) -> Option<&'static str> {
-        self.rows.get(self.selected).map(|r| r.id)
+    /// What Enter would pick.
+    pub fn selected_id(&self) -> Option<&str> {
+        self.rows.get(self.selected).map(|r| r.id.as_str())
     }
 
-    pub fn take_activated(&mut self) -> Option<&'static str> {
+    pub fn take_activated(&mut self) -> Option<String> {
         self.activated.take()
     }
 
@@ -348,9 +376,23 @@ impl Paint for Dialog {
             display::truncate_tail(text, cols)
         };
 
+        // --- The header. In AddNode there are no halves to move between, so
+        // the strip's band carries a title instead: the same plate, saying
+        // what this opening of it is for.
+        if self.mode == Mode::AddNode {
+            let strip = tab_strip(rect);
+            let title = "Add Node";
+            let tw = display::measure_text_width(title, &family, font_size);
+            let tx = strip.x + (strip.width - tw) * 0.5;
+            let ty = cce_ui::layout::align_text_y(strip.y, strip.height, font_size, 0.0);
+            ctx.text_with(title, tx, ty, font_size, [0xf0, 0xf0, 0xf6], Some(family.clone()), own);
+        }
         // --- The tab strip: one segmented control, so the seam between the
         // two halves reads as a seam and not as a gap.
         for tab in Tab::ALL {
+            if self.mode != Mode::Tabbed {
+                break;
+            }
             let r = tab_rect(rect, tab);
             let active = tab == self.tab;
             // Active wears the focus language the rest of the app uses for
@@ -379,7 +421,7 @@ impl Paint for Dialog {
 
         // The Settings half's body is a separate roster slot, painted by the
         // designer's own walk — nothing more to draw here.
-        if self.tab == Tab::Settings {
+        if self.mode == Mode::Tabbed && self.tab == Tab::Settings {
             return;
         }
 
@@ -392,7 +434,13 @@ impl Paint for Dialog {
         let qtx = q.x + 8.0;
         let q_w = q.width - 16.0;
         if self.query.is_empty() {
-            let hint = fit("Type to filter commands", q_w);
+            let hint = fit(
+                match self.mode {
+                    Mode::Tabbed => "Type to filter commands",
+                    Mode::AddNode => "Type to filter nodes",
+                },
+                q_w,
+            );
             ctx.text_with(hint, qtx, qty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
         } else {
             // Head-truncated: what matters while typing is the end of the
@@ -414,7 +462,11 @@ impl Paint for Dialog {
         let list = list_rect(rect);
         if self.rows.is_empty() {
             let ty = cce_ui::layout::align_text_y(list.y, ROW_H, font_size, 0.0);
-            ctx.text_with("No matching command", list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
+            let empty = match self.mode {
+                Mode::Tabbed => "No matching command",
+                Mode::AddNode => "No matching node",
+            };
+            ctx.text_with(empty, list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
             return;
         }
         for i in self.scroll..self.rows.len() {
@@ -472,14 +524,16 @@ impl Input for Dialog {
         let rect = ectx.rect;
         match event {
             Event::MouseButton { button: MouseButton::Left, state: ElementState::Pressed, x, y, .. } => {
-                if let Some(tab) = self.tab_at(rect, *x, *y) {
-                    self.tab_click = Some(tab);
-                    return true;
+                if self.mode == Mode::Tabbed {
+                    if let Some(tab) = self.tab_at(rect, *x, *y) {
+                        self.tab_click = Some(tab);
+                        return true;
+                    }
                 }
-                if self.tab == Tab::Commands {
+                if self.shows_list() {
                     if let Some(i) = self.row_at(rect, *x, *y) {
                         self.selected = i;
-                        self.activated = self.rows.get(i).map(|r| r.id);
+                        self.activated = self.rows.get(i).map(|r| r.id.clone());
                         return true;
                     }
                 }
@@ -488,15 +542,15 @@ impl Input for Dialog {
                 true
             }
             Event::PointerMove { x, y, .. } => {
-                let row = self.row_at(rect, *x, *y);
-                let tab = self.tab_at(rect, *x, *y);
+                let row = self.shows_list().then(|| self.row_at(rect, *x, *y)).flatten();
+                let tab = (self.mode == Mode::Tabbed).then(|| self.tab_at(rect, *x, *y)).flatten();
                 let changed = row != self.hover_row || tab != self.hover_tab;
                 self.hover_row = row;
                 self.hover_tab = tab;
                 changed
             }
             Event::MouseWheel { delta, .. } => {
-                if self.tab != Tab::Commands || self.rows.is_empty() {
+                if !self.shows_list() || self.rows.is_empty() {
                     return false;
                 }
                 let lines = match delta {
@@ -633,25 +687,54 @@ impl State {
     }
 
     pub fn toggle_dialog(&mut self) {
-        if self.dialog_visible() {
+        if self.dialog_visible() && self.slots.dialog.mode == Mode::Tabbed {
             self.close_dialog();
         } else {
             self.open_dialog();
         }
     }
 
+    /// Open the tabbed dialog on Commands — `Alt+D`, and what `Ctrl+P` now
+    /// reaches instead of spawning a popup process.
     pub fn open_dialog(&mut self) {
-        // Always on Commands, and always with an empty query: a dialog that
-        // reopens holding the last search has to be cleared before it can be
-        // used, which is a step every single time to save one occasionally.
+        self.open_dialog_in(Mode::Tabbed);
+    }
+
+    /// The add-node palette: the same plate, one list, and a pick that
+    /// instantiates a template at the grid cursor.
+    ///
+    /// Was a `cce-cloud --dmenu` popup — a second process with its own
+    /// window, fed one line of text per row and answering with one line back.
+    /// It could not show a chord in a column of its own, could not be styled
+    /// with the app, and put a second filterable list in front of the user
+    /// that looked nothing like the first.
+    pub fn open_node_palette(&mut self) {
+        if self.dialog_visible() && self.slots.dialog.mode == Mode::AddNode {
+            self.close_dialog();
+            return;
+        }
+        self.open_dialog_in(Mode::AddNode);
+    }
+
+    fn open_dialog_in(&mut self, mode: Mode) {
+        // Always with an empty query, and the tabbed mode always on Commands:
+        // a dialog that reopens holding the last search has to be cleared
+        // before it can be used, which is a step every single time to save
+        // one occasionally.
+        self.slots.dialog.mode = mode;
         self.slots.dialog.tab = Tab::Commands;
         self.slots.dialog.query.clear();
         self.slots.dialog.set_visible(true);
         self.refresh_dialog_rows();
-        self.refresh_dialog_settings();
+        if mode == Mode::Tabbed {
+            self.refresh_dialog_settings();
+        }
         self.rebuild_positions();
         self.apply_layout();
-        self.update_status_text("Dialog: type to filter, Tab switches halves, Escape closes.");
+        self.update_status_text(match mode {
+            Mode::Tabbed => "Dialog: type to filter, Tab switches halves, Escape closes.",
+            Mode::AddNode => "Add Node: type to filter, Enter adds at the cursor, Escape closes.",
+        });
     }
 
     pub fn close_dialog(&mut self) {
@@ -671,7 +754,7 @@ impl State {
     }
 
     pub fn set_dialog_tab(&mut self, tab: Tab) {
-        if self.slots.dialog.tab == tab {
+        if self.slots.dialog.mode != Mode::Tabbed || self.slots.dialog.tab == tab {
             return;
         }
         self.slots.dialog.tab = tab;
@@ -686,24 +769,52 @@ impl State {
         self.apply_layout();
     }
 
-    /// Re-rank the Commands half against the current query.
+    /// Re-rank the row list against the current query, for whichever mode is
+    /// up.
     ///
-    /// Ranking is [`crate::command::palette_entries`] — the same fuzzy rank
-    /// and the same focused-pane-first partition as the `cce-cloud` palette,
-    /// so the two agree on what typing "sg" means.
+    /// Commands rank through [`crate::command::palette_entries`] — the fuzzy
+    /// rank plus the focused-pane-first partition. Node templates rank
+    /// through the same [`crate::command::fuzzy_rank`], so typing means the
+    /// same thing in both lists; they carry no chord, so the column is simply
+    /// empty for them.
     pub fn refresh_dialog_rows(&mut self) {
-        let entries = {
-            let query = self.slots.dialog.query.clone();
-            crate::command::palette_entries(&query, self.focused_context())
+        let query = self.slots.dialog.query.clone();
+        let rows: Vec<Row> = match self.slots.dialog.mode {
+            Mode::Tabbed => crate::command::palette_entries(&query, self.focused_context())
+                .iter()
+                .map(|c| Row {
+                    id: c.id.to_string(),
+                    label: c.label.to_string(),
+                    chord: self
+                        .shortcut_manager
+                        .chord_for(c.id)
+                        .map(|s| s.describe())
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            Mode::AddNode => {
+                // In a utility dir geometry templates are rejected at
+                // placement — don't offer them.
+                let in_utility = self.in_settings_dir();
+                let offered: Vec<&str> = self
+                    .node_templates
+                    .iter()
+                    .filter(|t| {
+                        !in_utility
+                            || !crate::geometry::is_geometry_node_type(&t.node.node_type)
+                    })
+                    .map(|t| t.label.as_str())
+                    .collect();
+                crate::command::fuzzy_rank(&query, &offered)
+                    .into_iter()
+                    .map(|i| Row {
+                        id: offered[i].to_string(),
+                        label: offered[i].to_string(),
+                        chord: String::new(),
+                    })
+                    .collect()
+            }
         };
-        let rows: Vec<Row> = entries
-            .iter()
-            .map(|c| Row {
-                id: c.id,
-                label: c.label.to_string(),
-                chord: self.shortcut_manager.chord_for(c.id).map(|s| s.describe()).unwrap_or_default(),
-            })
-            .collect();
         self.slots.dialog.set_rows(rows);
     }
 
@@ -814,7 +925,7 @@ impl State {
     /// for the same reason the params pane is — a `ParametersBg` reports its
     /// values, it does not emit events.
     pub fn sync_dialog_settings_to_project(&mut self) {
-        if !self.dialog_visible() || self.slots.dialog.tab != Tab::Settings {
+        if !self.dialog_visible() || self.slots.dialog.shows_list() {
             return;
         }
         let updated = self.slots.dialog_params().node_params();
@@ -946,15 +1057,25 @@ impl State {
             }
             Key::Named(NamedKey::Tab) => {
                 // One key for two halves, in both directions: there are only
-                // two, so Tab and Shift+Tab are the same move.
-                let next = if self.slots.dialog.tab == Tab::Commands { Tab::Settings } else { Tab::Commands };
-                self.set_dialog_tab(next);
+                // two, so Tab and Shift+Tab are the same move. In AddNode
+                // there are no halves — and Tab is what OPENED it, so the
+                // same key closes it again.
+                if self.slots.dialog.mode == Mode::AddNode {
+                    self.close_dialog();
+                } else {
+                    let next = if self.slots.dialog.tab == Tab::Commands {
+                        Tab::Settings
+                    } else {
+                        Tab::Commands
+                    };
+                    self.set_dialog_tab(next);
+                }
                 return true;
             }
             _ => {}
         }
 
-        if self.slots.dialog.tab == Tab::Settings {
+        if !self.slots.dialog.shows_list() {
             // The settings body is a real `ParametersBg` with real text
             // fields; hand it the key and poll what it did, exactly as the
             // params pane's own key path does.
@@ -991,8 +1112,8 @@ impl State {
                 self.slots.dialog.scroll_to_selected();
             }
             Key::Named(NamedKey::Enter) => {
-                if let Some(id) = self.slots.dialog.selected_id() {
-                    self.run_dialog_command(id);
+                if let Some(id) = self.slots.dialog.selected_id().map(str::to_string) {
+                    self.take_dialog_pick(id);
                 }
             }
             Key::Named(NamedKey::Backspace) => {
@@ -1026,10 +1147,38 @@ impl State {
     /// `cce-cloud` palette, a file chooser) does not come up behind the
     /// dialog. The dialog's own row is the exception: toggling it here would
     /// reopen what was just closed.
-    pub(crate) fn run_dialog_command(&mut self, id: &'static str) {
+    pub(crate) fn take_dialog_pick(&mut self, id: String) {
+        let mode = self.slots.dialog.mode;
+        let (gx, gy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
         self.close_dialog();
-        if id != "toggle_dialog" {
-            self.run_command(id);
+        match mode {
+            // Not `toggle_dialog`: toggling here would reopen what was just
+            // closed. Picking the dialog's own row is a no-op, which is the
+            // least surprising thing it could be.
+            Mode::Tabbed => {
+                if id != "toggle_dialog" {
+                    self.run_command(&id);
+                }
+            }
+            // Fire-and-forget at the grid cursor, exactly as the popup's
+            // answer used to arrive — read BEFORE the close, since closing
+            // relays the panes.
+            Mode::AddNode => {
+                let mut redraw = false;
+                let action = crate::app::McpAction::AddNode {
+                    template_name: id,
+                    name: None,
+                    x: gx,
+                    y: gy,
+                };
+                if let Err(e) = self.apply_action(action, &mut redraw) {
+                    // The one refusal this can hit is a geometry template in
+                    // a utility dir, which `refresh_dialog_rows` already
+                    // filters out — but the rule lives in `apply_action`, so
+                    // say what it said rather than assume it cannot fire.
+                    self.update_status_text(&e);
+                }
+            }
         }
     }
 
@@ -1042,7 +1191,7 @@ impl State {
             changed = true;
         }
         if let Some(id) = self.slots.dialog.take_activated() {
-            self.run_dialog_command(id);
+            self.take_dialog_pick(id);
             changed = true;
         }
         changed

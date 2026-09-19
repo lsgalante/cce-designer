@@ -239,20 +239,8 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
             }),
         ),
         tool(
-            "menu_closed",
-            "Notify that a menu cloud was closed (clears the active menu-cloud state).",
-            json!({
-                "type": "object",
-                "properties": {
-                    "widget_idx": { "type": "integer" },
-                    "menu_idx": { "type": "integer" },
-                },
-                "required": ["widget_idx", "menu_idx"],
-            }),
-        ),
-        tool(
             "run_command",
-            "Run a command by its registry id (e.g. \"command_palette\", \"toggle_grid\", \"save_document\") — every command the palette lists, including the ones no menu label reaches.",
+            "Run a command by its registry id (e.g. \"toggle_dialog\", \"toggle_grid\", \"save_document\") — every command the dialog lists, including the ones no menu label reaches.",
             json!({
                 "type": "object",
                 "properties": { "id": { "type": "string", "description": "Command id, snake_case, as input.kdl binds it" } },

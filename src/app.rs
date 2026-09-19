@@ -364,7 +364,6 @@ pub enum McpAction {
     DeleteParam { slot: usize, name: String },
     ToggleCircularPane,
     MenuClick { widget_idx: usize, menu_idx: usize, item_idx: usize },
-    MenuClosed { widget_idx: usize, menu_idx: usize },
     /// Execute a label-matched menu-pane action ("Show Spreadsheet Pane", "Save", ...)
     /// — the items `menu_click`'s index-matched menubar dispatch cannot reach.
     MenuAction { label: String },
@@ -393,17 +392,9 @@ pub enum CustomEvent {
     /// An MCP `tools/call` from the embedded MCP server (carries its own
     /// reply channel) — the tool name is an `McpAction` tag, or `get_state`.
     McpCall(cce_ui::mcp::McpToolCall),
-    /// A command chosen in the palette, which runs on its own thread and so
-    /// cannot touch `State` — it sends the id back to the event loop instead.
-    RunCommand(&'static str),
     /// A fire-and-forget action from an app-internal thread (the cce-files
     /// choosers deliver their picked path this way).
     RunAction(McpAction),
-    /// A cce-cloud popup thread announced its process (CloudPopupTracker
-    /// adoption — the add-node palette).
-    CloudSpawned { pid: u32, source: String },
-    /// A cce-cloud popup thread reported its popup closed.
-    CloudClosed { pid: u32, source: String },
     /// App-requested exit (menu File > Exit, MCP menu_action): the engine's
     /// update hook is the only place with exit access, so input handlers that
     /// see `exit_requested` route it here.
@@ -1102,10 +1093,6 @@ pub struct State {
     /// assembled from several owners, so what was shown is its own fact.
     pub dialog_settings_shown: Vec<(String, String, String)>,
     pub splitter_layout: cce_ui::layout::SplitterLayout,
-    /// The add-node palette's cce-cloud popup (single active popup, toggle
-    /// semantics — the status bar's tracker pattern).
-    pub cloud_popups: cce_ui::process::CloudPopupTracker,
-
     /// The node right-click context menu: the targeted node slot and the
     /// actions parallel to the visible items pushed into `context_menu::show`.
     /// `None` when no menu is open. The menu's geometry/paint lives in the
@@ -1261,8 +1248,6 @@ pub struct State {
     pub last_project_check: std::time::Instant,
     pub needs_autosave: bool,
     pub last_autosave_time: std::time::Instant,
-    pub active_menu_cloud_pid: Option<u32>,
-    pub active_menu_cloud_idx: Option<(usize, usize)>,
     /// The drop-target glow's animation state: position glides toward the
     /// cell an in-flight node drag will land on, alpha fades in on drag
     /// start and out after release (the glow lingers at its last cell while
@@ -3090,49 +3075,6 @@ impl State {
         });
     }
 
-    /// The add-node palette, as a `cce-cloud --dmenu` popup: toggle-tracked like the
-    /// status bar's popups, positioned at the pointer and parented to the
-    /// designer surface. The picked template comes back through the event
-    /// loop as a fire-and-forget `AddNode` at the grid cursor.
-    pub fn open_node_palette(&mut self) {
-        const SOURCE: &str = "node-palette";
-        if self.cloud_popups.click(SOURCE) == cce_ui::process::CloudPopupClick::ToggledOff {
-            return;
-        }
-        let Some(sender) = self.event_sender.clone() else { return };
-        // In a utility dir geometry templates are rejected at placement —
-        // don't offer them.
-        let in_utility = self.in_settings_dir();
-        let items: String = self
-            .node_templates
-            .iter()
-            .filter(|t| !in_utility || !crate::geometry::is_geometry_node_type(&t.node.node_type))
-            .map(|t| t.label.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let (px, py) = (self.cursor_x as i32, self.cursor_y as i32);
-        let (gx, gy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
-        std::thread::spawn(move || {
-            let popup = cce_ui::process::CloudPopup::at(px, py).parent_app_id("cce-designer");
-            let mut spawned_pid = 0;
-            let result = popup.run_dmenu("Add Node:", &items, |pid| {
-                spawned_pid = pid;
-                let _ = sender.send(CustomEvent::CloudSpawned { pid, source: SOURCE.to_string() });
-            });
-            if let Ok(Some(selected)) = &result {
-                if !selected.is_empty() {
-                    let _ = sender.send(CustomEvent::RunAction(McpAction::AddNode {
-                        template_name: selected.clone(),
-                        name: None,
-                        x: gx,
-                        y: gy,
-                    }));
-                }
-            }
-            let _ = sender.send(CustomEvent::CloudClosed { pid: spawned_pid, source: SOURCE.to_string() });
-        });
-    }
-
     /// Open the node right-click context menu at the cursor for `slot`. The
     /// items are contextual: Enter (dive into the subnet) for enterable nodes,
     /// Show/Hide Geometry for non-utility nodes, and Delete always.
@@ -4188,7 +4130,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             positions,
             dialog_settings_shown: Vec::new(),
             splitter_layout,
-            cloud_popups: cce_ui::process::CloudPopupTracker::new(),
             node_menu_slot: None,
             node_menu_actions: Vec::new(),
             viewport_menu_active: false,
@@ -4277,8 +4218,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             last_project_check: std::time::Instant::now(),
             needs_autosave: false,
             last_autosave_time: std::time::Instant::now(),
-            active_menu_cloud_pid: None,
-            active_menu_cloud_idx: None,
             // Cells and gaps render as ONE surface (the graph's bg_color is
             // the cell tint): the checkerboard grout is off by design; the
             // drop-target glow (render.rs) carries the only cell highlight.
@@ -5239,56 +5178,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
     }
 
-    /// The command palette: every command, fuzzy-searched, focused pane first.
-    ///
-    /// It is the node palette's mechanism rather than a new widget — the same
-    /// `cce-cloud --dmenu` popup, at the cursor, with the same keys — because
-    /// two pickers in one app that look and behave differently is worse than
-    /// either. The proposal's point about Houdini was that a palette should not
-    /// exist to work around a missing API; it does not, here.
-    pub fn open_command_palette(&mut self) {
-        const SOURCE: &str = "command-palette";
-        if self.cloud_popups.click(SOURCE) == cce_ui::process::CloudPopupClick::ToggledOff {
-            return;
-        }
-        let Some(sender) = self.event_sender.clone() else { return };
-        // Ranked here, not in the popup: the popup filters as you type, but the
-        // ORDER it starts from is ours, and that is where the focused pane's
-        // commands come first.
-        let entries = crate::command::palette_entries("", self.focused_context());
-        // The chord goes on the row so the palette teaches the keyboard rather
-        // than replacing it. Padded to a column rather than separated by a tab:
-        // the popup renders a tab as one literal tab stop, so the chords came
-        // out ragged and stopped reading as a column at all.
-        let width = entries.iter().map(|c| c.label.len()).max().unwrap_or(0) + 2;
-        let items: String = entries
-            .iter()
-            .map(|c| {
-                let chord = self.shortcut_manager.chord_for(c.id).map(|s| s.describe());
-                crate::command::palette_row(c.label, chord, width)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let (px, py) = (self.cursor_x as i32, self.cursor_y as i32);
-        std::thread::spawn(move || {
-            let popup = cce_ui::process::CloudPopup::at(px, py).parent_app_id("cce-designer");
-            let mut spawned_pid = 0;
-            let result = popup.run_dmenu("Command:", &items, |pid| {
-                spawned_pid = pid;
-                let _ = sender.send(CustomEvent::CloudSpawned { pid, source: SOURCE.to_string() });
-            });
-            if let Ok(Some(selected)) = &result {
-                // The row is the label padded out, then its chord. Match the
-                // LONGEST label the row starts with, so "Save" cannot claim a
-                // row that belongs to "Save As".
-                if let Some(cmd) = crate::command::from_palette_row(selected) {
-                    let _ = sender.send(CustomEvent::RunCommand(cmd.id));
-                }
-            }
-            let _ = sender.send(CustomEvent::CloudClosed { pid: spawned_pid, source: SOURCE.to_string() });
-        });
-    }
-
     /// The command context of the focused pane, for palette ranking.
     pub fn focused_context(&self) -> crate::command::Context {
         use crate::command::Context;
@@ -5576,7 +5465,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     pub fn execute_action(&mut self, action: Action) {
         let mut settings_changed = false;
         match action {
-            Action::CommandPalette => self.open_command_palette(),
+            // Ctrl+P lands on Commands specifically, where Alt+D toggles the
+            // dialog as a whole — the one difference between the two rows.
+            Action::CommandPalette => {
+                self.open_dialog();
+                self.set_dialog_tab(crate::dialog::Tab::Commands);
+            }
             Action::ToggleDialog => self.toggle_dialog(),
             // The network navigation families. Each returns false when the
             // network pane does not have focus, which is how one gate covers
@@ -6450,26 +6344,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             // menu painted until the next incidental redraw.
                             if *button == MouseButton::Left {
                                 return true;
-                            }
-                        }
-
-                        let hits_any_menu = (0..WIDGET_COUNT).any(|i| {
-                            hits_widget(self, i, self.cursor_x, self.cursor_y)
-                                && self.menubar_at(i).and_then(|m| m.get_menu_items_at(self.cursor_x, self.cursor_y)).is_some()
-                        });
-
-                        if !hits_any_menu {
-                            if let Some(pid) = self.active_menu_cloud_pid {
-                                let is_running = unsafe {
-                                    libc::kill(pid as libc::pid_t, 0) == 0
-                                };
-                                if is_running {
-                                    unsafe {
-                                        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-                                    }
-                                }
-                                self.active_menu_cloud_pid = None;
-                                self.active_menu_cloud_idx = None;
                             }
                         }
 

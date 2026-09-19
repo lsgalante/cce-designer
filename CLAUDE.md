@@ -726,19 +726,28 @@ keypress at the keyboard and two distinct values in memory — and the collision
 detector quietly failed to report exactly the collision it exists to catch. Both
 now go through one `same_key`.
 
-**The palette** is the node palette's mechanism, not a new widget: the same
-`cce-cloud --dmenu` popup at the cursor, with the same keys. Two pickers in one
-app that look and behave differently is worse than either. Ranking is
-`fuzzy_rank`, which reproduces the plugin's fuzzyfinder exactly — shortest
-contiguous span, then earliest start, then alphabetical — so muscle memory
-survives the move; the focused pane's commands are then partitioned to the
-front, stably, without dropping anything (a palette that hides what you are
-looking for is worse than one that lists it second). Rows are the label padded
-to a column and then its chord, so the palette teaches the keyboard rather than
-replacing it; padded rather than tab-separated because the popup renders a tab
-as one literal stop and the chords came out ragged. A row is matched back to its
-command by the LONGEST label it starts with, since "Save" starts "Save As"'s
-row.
+**The palette** is the dialog's Commands half (`src/dialog.rs`, below), not a
+widget of its own. Ranking is `fuzzy_rank`, which reproduces the plugin's
+fuzzyfinder exactly — shortest contiguous span, then earliest start, then
+alphabetical — so muscle memory survives; the focused pane's commands are then
+partitioned to the front, stably, without dropping anything (a palette that
+hides what you are looking for is worse than one that lists it second). Each row
+carries its chord in a column of its own, so the palette teaches the keyboard
+rather than replacing it.
+
+It was a `cce-cloud --dmenu` popup until 2026-09-19: a second PROCESS with its
+own window, handed one line of text per row on stdin and answering with one line
+on stdout. Everything awkward about it followed from that pipe — the chord had
+to be padded into the label to fake a column (a tab rendered as one literal
+stop, so they came out ragged), and the answer had to be matched back to a
+command by the LONGEST label the row starts with, since "Save" is a prefix of
+"Save As"'s row. `palette_row` / `from_palette_row` were that encode/decode pair
+and are gone with it; `fuzzy_rank` and `palette_entries` survive, because the
+ranking was never the problem.
+
+`command_palette` (Ctrl+P) and `toggle_dialog` (Alt+D) both reach the same
+dialog and differ in exactly one way, which is the reason both rows exist:
+Ctrl+P LANDS on Commands, Alt+D toggles the dialog as a whole.
 
 `test_every_menu_command_names_a_label_that_is_dispatched` scans `app.rs` for
 `execute_menu_action`'s arms. Scanning source is an odd way to assert it, but
@@ -747,16 +756,30 @@ the alternative is calling every command to see whether it is handled, and
 argues for: a label kept in two places drifts, and a renamed one fails silently
 — the dispatch falls through its match and the command does nothing.
 
-### The dialog (Alt+D)
+### The dialog (Alt+D, Ctrl+P, Tab)
 
-`src/dialog.rs` is a modal overlay with two halves: **Commands**, the registry
-fuzzy-filtered in place, and **Settings**, the viewport/graph display state
-`DesignSettings` persists. It is two roster slots — `DIALOG_IDX`, an app-owned
-`Dialog` that paints the plate, the tab strip, the query line and the command
-list, and `DIALOG_PARAMS_IDX`, a **second `ParametersBg`** laid out inside it.
-The settings controls are that second params pane rather than new widgets,
+`src/dialog.rs` is the app's one modal overlay, and **every filterable list in
+the designer is now an opening of it**. It is two roster slots — `DIALOG_IDX`,
+an app-owned `Dialog` that paints the plate, the header, the query line and the
+row list, and `DIALOG_PARAMS_IDX`, a **second `ParametersBg`** laid out inside
+it. The settings controls are that second params pane rather than new widgets,
 because a slider in the dialog should be the same slider as a slider in the
 params pane; what the dialog adds is the row TABLE, not the rows.
+
+`Mode` says what an opening is for, and it is the reason there is one widget
+rather than two:
+
+- `Mode::Tabbed` (**Alt+D**, and **Ctrl+P** onto Commands) — a tab strip over
+  two halves. **Commands** is the registry fuzzy-filtered in place;
+  **Settings** is the viewport/graph display state `DesignSettings` persists.
+- `Mode::AddNode` (**Tab**, in the network pane) — one list of node templates,
+  a title where the strip goes, and a pick that instantiates at the grid
+  cursor. No tabs: adding a node is a contextual act, not a peer of the app's
+  settings. Tab is what opened it, so Tab closes it again.
+
+Both modes share the plate, the keys and `fuzzy_rank`, which is the whole
+point — the app used to put two filterable lists in front of the user that
+looked and behaved nothing alike.
 
 **Alt+D, not Super+D.** Every Super chord is the compositor's before any client
 sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
@@ -813,6 +836,20 @@ pane's bare-letter family is ungated and typing "frame" into the filter would
 otherwise step the grid cursor four times and flip a node's geometry toggle on
 the way past. A press outside the plate dismisses and is swallowed, the way the
 node and plate-corner menus behave.
+
+**Nothing in this crate shells out to `cce-cloud` any more**, and
+`nothing_shells_out_to_cce_cloud_any_more` scans the source to keep it that
+way. Retiring the two popups took a surprising amount of scaffolding with
+them: `CloudPopupTracker` (the single-active-popup toggle bookkeeping), the
+`CloudSpawned` / `CloudClosed` events that adopted a popup's pid, the
+`RunCommand(&'static str)` event that existed because the popup ran on its own
+thread and could not touch `State`, and the `libc` dependency, whose only use
+was `kill`ing a stray popup. `active_menu_cloud_pid` / `_idx` and the
+`menu_closed` MCP tool went too — they were already dead, left from a retired
+attempt at menubar dropdowns over `cce-cloud`, and nothing had set them to
+`Some` in a long time. `cce_ui::process::CloudPopup` itself still exists; the
+designer was its only consumer, so it is now unused public API in a shared
+crate, which is a coordination job of its own.
 
 ### Runtime paths point into the source tree
 

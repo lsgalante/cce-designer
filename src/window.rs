@@ -593,21 +593,11 @@ impl State {
                     let res = state.apply_mcp_call(&call, &mut needs_redraw);
                     let _ = call.reply.send(res);
                 }
-                CustomEvent::RunCommand(id) => {
-                    state.run_command(id);
-                    needs_redraw = true;
-                }
                 CustomEvent::RunAction(action) => {
                     if let Err(e) = state.apply_action(action, &mut needs_redraw) {
                         state.update_status_text(&e);
                         needs_redraw = true;
                     }
-                }
-                CustomEvent::CloudSpawned { pid, source } => {
-                    state.cloud_popups.on_spawned(pid, &source);
-                }
-                CustomEvent::CloudClosed { pid, source } => {
-                    let _ = state.cloud_popups.on_closed(pid, &source);
                 }
                 // Exit is handled by the Application::update wrapper
                 // (autosave + engine exit) before this is reached.
@@ -1049,14 +1039,6 @@ impl State {
                     Err(format!("unknown command: {}", id.replace(['"', '\\'], "'")))
                 }
             }
-            McpAction::MenuClosed { widget_idx, menu_idx } => {
-                if state.active_menu_cloud_idx == Some((widget_idx, menu_idx)) {
-                    state.active_menu_cloud_pid = None;
-                    state.active_menu_cloud_idx = None;
-                }
-                Ok("Menu closed".to_string())
-            }
-
         };
         if needs_redraw {
             *redraw = true;
