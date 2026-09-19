@@ -4916,6 +4916,17 @@ pub fn run_kernel_on_detail(
     Ok(())
 }
 
+/// The NATIVE geometry types — the ones
+/// [`generate_single_node_geometry_with_errors`] dispatches on directly.
+///
+/// Subnet templates (Box, Sphere, Plane, Extrude) are NOT here: they
+/// instantiate as type `node` and resolve through their `output` child, so
+/// their type never reaches this list. `"box"` sat here from 2026-06-13 to
+/// 2026-09-19 for that reason — `nodes/box.json` has always been a subnet,
+/// no node ever carried the type, and no resolver ever matched it.
+/// `test_every_listed_geometry_type_has_a_resolver` now keeps that from
+/// recurring: an entry here with no dispatch arm is a node type that would
+/// resolve to nothing, silently.
 pub fn is_geometry_node_type(node_type: &str) -> bool {
     let nt = node_type.to_lowercase();
     nt == "sphere"
@@ -4926,7 +4937,6 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "points"
         || nt == "transform"
         || nt == "opencl"
-        || nt == "box"
         || nt == "input"
         || nt == "output"
         || nt == "scatter"
@@ -5730,6 +5740,147 @@ pub(crate) const fn sphere_soup_len(lat_steps: usize, lon_steps: usize) -> usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every type [`is_geometry_node_type`] lists must have a resolver arm in
+    /// [`generate_single_node_geometry_with_errors`].
+    ///
+    /// A type listed here with no dispatch arm is the worst kind of dead
+    /// node: it passes every "is this geometry?" check the app makes — it
+    /// gets a `meta` child, it shows in the palette's geometry filter, the
+    /// network editor treats it as a producer — and then resolves to `None`.
+    /// Nothing reports it. The node draws nothing, exports as "produced no
+    /// geometry", and anything downstream of it silently resolves to nothing
+    /// too. `"box"` sat in the list that way from the day it was written
+    /// (2026-06-13) until 2026-09-19, harmless only because `nodes/box.json`
+    /// is a subnet and no node ever actually carried the type.
+    ///
+    /// Scanning the source is an odd way to assert it, but the alternative —
+    /// building a node of each type and resolving it — needs a plausible
+    /// parameter set per type, which is exactly the per-type knowledge that
+    /// goes stale.
+    #[test]
+    fn test_every_listed_geometry_type_has_a_resolver() {
+        let src = include_str!("geometry.rs");
+
+        // The listed types, read off `nt == "..."` in is_geometry_node_type.
+        let list_start = src
+            .find("pub fn is_geometry_node_type")
+            .expect("is_geometry_node_type moved; this test scans for it");
+        let list_end = list_start
+            + src[list_start..].find("\n}").expect("unterminated is_geometry_node_type");
+        let listed: Vec<&str> = src[list_start..list_end]
+            .match_indices("nt == \"")
+            .map(|(i, m)| {
+                let rest = &src[list_start + i + m.len()..];
+                &rest[..rest.find('"').expect("unterminated type literal")]
+            })
+            .collect();
+        assert!(
+            listed.len() > 20,
+            "only {} types parsed out of is_geometry_node_type — the scan broke, not the list",
+            listed.len()
+        );
+
+        // The dispatch, bounded to the resolver itself: `visit` further down
+        // carries its own arms, and scanning the whole file would let a type
+        // that only the display walk knows about pass as resolvable.
+        let disp_start = src
+            .find("pub fn generate_single_node_geometry_with_errors")
+            .expect("generate_single_node_geometry_with_errors moved; this test scans for it");
+        let after_sig = disp_start + "pub fn ".len();
+        let disp_end = src[after_sig..]
+            .find("\npub fn ")
+            .map(|i| after_sig + i)
+            .expect("resolver is the last fn in the file?");
+        let dispatch = &src[disp_start..disp_end];
+
+        let mut missing: Vec<&str> = Vec::new();
+        for ty in &listed {
+            if !dispatch.contains(&format!("eq_ignore_ascii_case(\"{ty}\")")) {
+                missing.push(ty);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "is_geometry_node_type lists {missing:?}, which generate_single_node_geometry_with_errors \
+             does not dispatch — such a node resolves to nothing, silently. Either give it a \
+             resolver arm or drop it from the list (a subnet template like Box instantiates as \
+             type `node` and belongs in neither)."
+        );
+    }
+
+    /// The inverse of the test above: every template in `nodes/` must name a
+    /// type that something actually resolves.
+    ///
+    /// The pair closes the loop. That test catches a type LISTED as geometry
+    /// with no resolver; this one catches a template whose type is in no
+    /// list at all — a palette entry that places a node the resolver walks
+    /// straight past. Both fail the same silent way: the node draws nothing,
+    /// exports as "produced no geometry", and anything reading from it
+    /// resolves to nothing with no error anywhere.
+    ///
+    /// The four things a template's type may legitimately be:
+    /// a native geometry type; `node`, the subnet form (Box, Sphere, Plane,
+    /// Extrude), which resolves through its `output` child; a page node,
+    /// which belongs to the raster context and has no geometry by design;
+    /// or `camera`, which the project reads directly. A new type outside
+    /// those is a decision to make, not a default to fall into.
+    #[test]
+    fn test_every_template_names_a_type_something_resolves() {
+        let templates = crate::app::load_fs_tree();
+
+        // load_fs_tree drops a template whose JSON does not parse — silently,
+        // in an `if let Ok`. A typo'd brace would otherwise just remove the
+        // node from the palette, which looks nothing like a parse error.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nodes");
+        let on_disk = std::fs::read_dir(&dir)
+            .expect("nodes/ is missing")
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count();
+        assert_eq!(
+            templates.children.len(),
+            on_disk,
+            "load_fs_tree returned {} of {on_disk} templates in {} — the missing one(s) failed to \
+             parse and were dropped without a word",
+            templates.children.len(),
+            dir.display()
+        );
+
+        let mut orphans: Vec<String> = Vec::new();
+        let mut headless: Vec<String> = Vec::new();
+        for t in &templates.children {
+            let ty = t.node_type.as_str();
+            let resolvable = is_geometry_node_type(ty)
+                || ty.eq_ignore_ascii_case("node")
+                || crate::page::is_page_node(ty)
+                || ty.eq_ignore_ascii_case("camera");
+            if !resolvable {
+                orphans.push(format!("{} (type {ty:?})", t.name));
+            }
+            // A subnet resolves through its `output` child and returns None
+            // without one, so a template that ships children must ship that.
+            // An EMPTY subnet (Subnet itself) is fine: it is a container the
+            // user fills, not a node that promises geometry.
+            if ty.eq_ignore_ascii_case("node")
+                && !t.children.is_empty()
+                && !t.children.iter().any(|c| c.node_type.eq_ignore_ascii_case("output"))
+            {
+                headless.push(t.name.clone());
+            }
+        }
+        assert!(
+            orphans.is_empty(),
+            "these templates name a type nothing resolves: {orphans:?} — a node placed from the \
+             palette that the resolver walks straight past. Give the type a resolver arm (and a \
+             line in is_geometry_node_type), or make the template a `node` subnet."
+        );
+        assert!(
+            headless.is_empty(),
+            "these subnet templates ship children but no `output` child: {headless:?} — the `node` \
+             resolver arm reads the output child, so they resolve to nothing."
+        );
+    }
 
     /// The soup generator the welded sphere replaced, kept verbatim so the
     /// migration can be checked against it rather than against a remembered
