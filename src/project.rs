@@ -529,6 +529,7 @@ impl State {
         let show_parameters = self.show_parameters;
         let show_spreadsheet = self.show_spreadsheet;
         let show_playbar = self.show_playbar;
+        let network_plate = self.network_plate;
         let wireframe = self.wireframe;
         let wire_single_color = self.wire_single_color;
         let wire_color = self.wire_color;
@@ -855,6 +856,20 @@ impl State {
         ensure_param(view_node, "Show Parameters Pane", "toggle", bool_str(show_parameters), &[], None, None, None);
         ensure_param(view_node, "Show Spreadsheet Pane", "toggle", bool_str(show_spreadsheet), &[], None, None, None);
         ensure_param(view_node, "Show Playbar Pane", "toggle", bool_str(show_playbar), &[], None, None, None);
+        // Appearance, not visibility — hence its own section. The pane
+        // toggles above say which panes EXIST; this one says whether the
+        // network draws a surface under its graph or lets the scene through.
+        ensure_param(view_node, "Network", "section", "", &[], None, None, None);
+        ensure_param(
+            view_node,
+            "Show Network Plate",
+            "toggle",
+            bool_str(network_plate),
+            &[],
+            None,
+            None,
+            None,
+        );
         for p in view_node.params.iter_mut() {
             match p.name.as_str() {
                 "Show Network Pane" => set_toggle(p, show_network),
@@ -862,6 +877,7 @@ impl State {
                 "Show Parameters Pane" => set_toggle(p, show_parameters),
                 "Show Spreadsheet Pane" => set_toggle(p, show_spreadsheet),
                 "Show Playbar Pane" => set_toggle(p, show_playbar),
+                "Show Network Plate" => set_toggle(p, network_plate),
                 _ => {}
             }
             // "Show Network Pane" -> "Network": inside the Panes section the
@@ -870,6 +886,10 @@ impl State {
             if p.param_type == "toggle" {
                 if let Some(rest) = p.name.strip_prefix("Show ").and_then(|r| r.strip_suffix(" Pane")) {
                     p.label = rest.to_string();
+                } else if p.name == "Show Network Plate" {
+                    // Under its own "Network" section the row reads as
+                    // "Plate", the same way the pane rows read as their pane.
+                    p.label = "Plate".to_string();
                 }
             }
         }

@@ -146,6 +146,7 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "zoom_in", label: "Zoom In", context: Context::Network, run: Run::Menu("Zoom In"), default_chord: None },
     Command { id: "zoom_out", label: "Zoom Out", context: Context::Network, run: Run::Menu("Zoom Out"), default_chord: None },
     Command { id: "reset_zoom", label: "Reset Zoom", context: Context::Network, run: Run::Menu("Reset Zoom"), default_chord: None },
+    Command { id: "toggle_network_plate", label: "Network Plate", context: Context::Network, run: Run::Key(Action::ToggleNetworkPlate), default_chord: Some("Shift+p") },
     Command { id: "toggle_circular_pane", label: "Circular Pane", context: Context::Network, run: Run::Key(Action::ToggleCircularPane), default_chord: Some("Ctrl+d") },
     Command { id: "detach_circular_window", label: "Detach Circular Window", context: Context::Network, run: Run::Key(Action::DetachCircularWindow), default_chord: None },
 

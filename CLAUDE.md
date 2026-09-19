@@ -443,6 +443,31 @@ The GPU image is owned by `State::page_image` and freed when replaced;
 everything-at-once node, is deliberately not ported: it is these four chained,
 and that collapse is the whole premise of "fifty operators, ten nodes".
 
+### The network plate is optional
+
+The network pane can drop its PLATE — the filled, frosted surface its graph
+sits on — so the nodes and wires overlay the 3D scene directly. The viewport is
+full-bleed (`CANVAS_IDX` covers the window and the other panes float over it),
+so removing the plate is all it takes: what is behind the pane is the scene.
+
+The pane itself is untouched. It keeps its rect, its focus domain, its corner
+menus, its clip and its keyboard navigation; only two `append_widget_plate_radii`
+calls are skipped — `CONTENT_IDX`'s (the graph's own plate) and
+`NETWORK_PANEL_IDX`'s (the panel behind it). Skipping one and not the other
+leaves a surface, so both are gated on the same flag. Node bodies keep their
+blur-behind fill, which is what makes the result legible: they frost the scene
+behind each node while the gaps stay clear.
+
+`ViewportSettings::network_plate` persists it, beside the viewport toggles
+rather than in the project's pane-state list: a pane's VISIBILITY belongs to
+the project, but whether its surface is drawn is how you like to work, and it
+should outlive any one file. It is reachable three ways that cannot disagree,
+because all three run one `Action::ToggleNetworkPlate` — the View settings
+node's Network > Plate row, the network pane's View menu ("Network Plate"), and
+the `toggle_network_plate` command. The action marks `settings_changed` and
+lets `execute_action` save once at its end, like every other viewport toggle,
+rather than writing the file itself.
+
 ### Keyboard graph navigation
 
 The network pane's keyboard scheme is the plugin's, ported: **hjkl rather than

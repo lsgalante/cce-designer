@@ -40,6 +40,8 @@ pub enum Action {
     FrameAll,
     /// Arrange the current level's nodes from their wiring.
     LayoutNodes,
+    /// Draw the network pane's plate, or let the graph overlay the scene.
+    ToggleNetworkPlate,
 }
 
 #[derive(Debug, Clone)]

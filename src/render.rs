@@ -365,7 +365,10 @@ impl State {
             } else {
                 clip
             };
-            if second || !self.circular_network_pane {
+            // The plate is skipped entirely when it is switched off, so the
+            // graph draws straight onto whatever is behind the pane — which,
+            // the viewport being full-bleed, is the 3D scene.
+            if (second || !self.circular_network_pane) && self.network_plate {
                 let (wx, wy, ww2, wh2) = w.rect();
                 append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             }
@@ -523,7 +526,11 @@ impl State {
             }
         } else {
             let (wx, wy, ww2, wh2) = w.rect();
-            append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
+            let network_panel =
+                idx == NETWORK_PANEL_IDX || idx == crate::slots::NETWORK_PANEL2_IDX;
+            if !(network_panel && !self.network_plate) {
+                append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
+            }
 
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
                 pc.quad(rect(qx, qy, qw, qh), qc);

@@ -4551,6 +4551,67 @@ mod tests {
         assert!(!state.layout_current_level());
     }
 
+    /// The network plate is optional, and the option is reachable three ways
+    /// that cannot disagree: the View settings node's toggle, the network
+    /// pane's View menu, and the command palette.
+    ///
+    /// The toggle is NOT exercised here. Flipping it marks settings dirty and
+    /// `execute_action` then writes `~/.config/cce/cce-designer/state.kdl` —
+    /// the real one, since tests run with the real HOME — so a test that
+    /// toggled it would rewrite the user's own settings as a side effect. What
+    /// is asserted instead is everything around the flip: the default, the
+    /// wiring, and the mirror.
+    #[test]
+    fn test_the_network_plate_is_an_option() {
+        use crate::command::{by_id, Run};
+
+        let state = State::new(false);
+        assert!(state.network_plate, "the plate is on unless the user turned it off");
+
+        // The command exists, is rebindable, and runs the same action the menu
+        // row does — one implementation behind both.
+        let cmd = by_id("toggle_network_plate").expect("no toggle_network_plate command");
+        assert_eq!(cmd.label, "Network Plate");
+        assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::ToggleNetworkPlate));
+        assert!(cmd.default_chord.is_some(), "the plate toggle has no chord");
+
+        // The View settings node mirrors the live flag, so the row in the
+        // params pane shows what is actually on screen.
+        let mut state = State::new(false);
+        let session = state
+            .fs_root
+            .children
+            .iter()
+            .position(|c| c.node_type == "meta")
+            .expect("root meta node");
+        let view = state.fs_root.children[session]
+            .children
+            .iter()
+            .position(|c| c.name == "View")
+            .expect("View node");
+        let plate_row = |state: &State| {
+            state.fs_root.children[session].children[view]
+                .params
+                .iter()
+                .find(|p| p.name == "Show Network Plate")
+                .map(|p| (p.default.clone(), p.label.clone()))
+        };
+        assert_eq!(
+            plate_row(&state),
+            Some(("true".to_string(), "Plate".to_string())),
+            "the View node has no Plate row, or it does not read as on"
+        );
+
+        state.network_plate = false;
+        state.current_path = vec![session];
+        state.refresh_main_node_live_toggles(view);
+        assert_eq!(
+            plate_row(&state).map(|(v, _)| v),
+            Some("false".to_string()),
+            "the View node's row did not follow the live flag"
+        );
+    }
+
     /// A page's raster is its physical size times its resolution — the
     /// property that makes DPI a page parameter rather than an export one.
     #[test]

@@ -724,6 +724,16 @@ pub struct ViewportSettings {
     pub grid_thickness: f32,
     #[serde(default = "default_grid_color")]
     pub grid_color: [f32; 3],
+    /// Whether the network pane draws its plate. Lives beside the viewport
+    /// settings rather than in a pane-state list because it is an appearance
+    /// choice that outlives any one project — a pane's VISIBILITY belongs to
+    /// the project, but whether its surface is drawn is how you like to work.
+    #[serde(default = "default_network_plate")]
+    pub network_plate: bool,
+}
+
+fn default_network_plate() -> bool {
+    true
 }
 
 impl Default for ViewportSettings {
@@ -736,6 +746,7 @@ impl Default for ViewportSettings {
             show_grid_enabled: true,
             show_cube_enabled: false,
             show_origin_enabled: true,
+            network_plate: true,
             origin_size: 1.0,
             grid_thickness: default_grid_thickness(),
             grid_color: default_grid_color(),
@@ -1178,6 +1189,12 @@ pub struct State {
     pub space_pressed: bool,
     pub active_camera: String,
     pub show_network: bool,
+    /// Whether the network pane draws its PLATE — the filled, frosted surface
+    /// the graph sits on. With it off the nodes and wires overlay the 3D scene
+    /// directly, since the viewport is full-bleed and the network floats over
+    /// it. The pane is still there: it keeps its rect, its focus, its corner
+    /// menus and its clip; only the surface under it stops being drawn.
+    pub network_plate: bool,
     pub show_viewport: bool,
     pub show_parameters: bool,
     pub show_spreadsheet: bool,
@@ -1509,6 +1526,7 @@ impl State {
                 origin_size: self.origin_size,
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
+                network_plate: self.network_plate,
             },
             default_project: self.default_project_setting.clone(),
         };
@@ -2406,6 +2424,11 @@ impl State {
             "Detach Circular Window" | "Detach Pane" => {
                 self.execute_action(Action::DetachCircularWindow);
             }
+            // Both spellings reach the one action: "Show Network Plate" is
+            // the View node's parameter name, "Network Plate" the menu row.
+            "Show Network Plate" | "Network Plate" => {
+                self.execute_action(Action::ToggleNetworkPlate);
+            }
             "Show Network Pane" => {
                 self.show_network = !self.show_network;
                 self.slots.content.set_visible(self.show_network);
@@ -2616,12 +2639,13 @@ impl State {
         }
     }
 
-    fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
+    pub(crate) fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
         let live_main: [(&str, bool); 2] = [
             ("Circular Pane", self.circular_network_pane),
             ("Ray Traced Preview", self.viewport().rt_mode),
         ];
-        let live_view: [(&str, bool); 5] = [
+        let live_view: [(&str, bool); 6] = [
+            ("Show Network Plate", self.network_plate),
             ("Show Network Pane", self.show_network),
             ("Show Viewport Pane", self.show_viewport),
             ("Show Parameters Pane", self.show_parameters),
@@ -3890,7 +3914,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             splitter2: Splitter::new(SPLITTER_W),
             param: ParametersBg::new(),
             canvas: Canvas::new(),
-            left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
+            left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Network Plate", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
             right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
             param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
             status: StatusBar::new().with_text("Ready"),
@@ -4076,6 +4100,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             space_pressed: false,
             active_camera,
             show_network: true,
+            network_plate: settings.viewport.network_plate,
             show_viewport: true,
             show_parameters: true,
             show_spreadsheet: false,
@@ -5385,6 +5410,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::NetworkPan(dc, dr) => {
                 self.network_pan_view(dc, dr);
+            }
+            Action::ToggleNetworkPlate => {
+                self.network_plate = !self.network_plate;
+                self.rebuild_positions();
+                self.apply_layout();
+                self.update_status_text(if self.network_plate {
+                    "Network plate on."
+                } else {
+                    "Network plate off — the graph overlays the scene."
+                });
+                // Saved through the same `settings_changed` path every other
+                // viewport toggle uses, rather than a save call of its own.
+                settings_changed = true;
             }
             Action::LayoutNodes => {
                 self.layout_current_level();
