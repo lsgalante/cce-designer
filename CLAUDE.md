@@ -439,7 +439,19 @@ them looks identical to the others:
   fails loudly — the one of the three that tells you itself.
 
 The GPU image is owned by `State::page_image` and freed when replaced;
-`ImageView` only borrows the id. `gem_graph`, the source family's
+`ImageView` only borrows the id. **A replacement renderer invalidates that id.** There is no reconnect
+callback: the runner calls `renderer_init` once per renderer, so the first call
+is this process's own and every later one is a replacement — remembering is the
+only way to tell them apart (`State::seen_renderer`, via
+`renderer_handed_over`, which is split out of the callback so it can be tested
+without a live `VkRenderer`). Images uploaded outside that callback are not
+replayed, so a cached id names nothing and its draws are skipped in SILENCE:
+the page pane just goes blank. The id is dropped and `page_dirty` asks the next
+tick to recompose and re-upload — the raster is cheap to rebuild from the node
+graph, and no id can be carried across renderers. Found by cce-1f's audit of
+clients caching vk image ids.
+
+`gem_graph`, the source family's
 everything-at-once node, is deliberately not ported: it is these four chained,
 and that collapse is the whole premise of "fifty operators, ten nodes".
 

@@ -366,6 +366,9 @@ impl Application for State {
 
     fn renderer_init(&mut self, renderer: &mut VkRenderer) {
         self.init_renderer(renderer);
+        // Everything that cannot survive a REPLACEMENT renderer, which this
+        // may be — see `renderer_handed_over`.
+        self.renderer_handed_over();
     }
 
     fn stage_renderer(&mut self, renderer: &mut VkRenderer, _size: LogicalSize, _scale: f64) -> bool {

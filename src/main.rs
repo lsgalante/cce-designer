@@ -4612,6 +4612,40 @@ mod tests {
         );
     }
 
+    /// A replacement renderer invalidates the page pane's image id, and the
+    /// state has to notice.
+    ///
+    /// There is no reconnect callback: the runner calls `renderer_init` once
+    /// per renderer, so the FIRST call is this process's own and every later
+    /// one is a replacement. Remembering that it has been called is the only
+    /// way to tell them apart — and getting it wrong is silent, because a
+    /// stale id names nothing and its draws are skipped rather than failing.
+    #[test]
+    fn test_a_replacement_renderer_drops_the_page_image() {
+        let mut state = State::new(false);
+        assert!(!state.seen_renderer, "a fresh State has not been given a renderer");
+        assert!(!state.page_dirty);
+
+        // Stand in for a composed page: an id owned by State and borrowed by
+        // the view.
+        state.page_image = Some(7);
+        state.slots.page_view.set_image(Some((7, 100, 100)));
+
+        // The FIRST renderer is this process's own — nothing to invalidate,
+        // and dropping the image here would throw away a page that is fine.
+        assert!(!state.renderer_handed_over(), "the first renderer is not a replacement");
+        assert_eq!(state.page_image, Some(7), "the first renderer must not drop the image");
+        assert!(!state.page_dirty);
+
+        // A LATER one is a replacement: the id names nothing in it, so it is
+        // dropped and the next tick re-uploads rather than leaving the pane
+        // blank forever.
+        assert!(state.renderer_handed_over(), "the second renderer must read as a replacement");
+        assert_eq!(state.page_image, None, "the dead id was kept");
+        assert!(state.slots.page_view.image.is_none(), "the view still borrows a dead id");
+        assert!(state.page_dirty, "nothing would re-upload the page");
+    }
+
     /// A page's raster is its physical size times its resolution — the
     /// property that makes DPI a page parameter rather than an export one.
     #[test]

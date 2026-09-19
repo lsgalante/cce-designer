@@ -1120,6 +1120,16 @@ pub struct State {
     /// The GPU image behind the page pane. Owned here — `ImageView` only
     /// borrows an id — so replacing a page frees the one it replaces.
     pub page_image: Option<u32>,
+    /// Whether `renderer_init` has run before. There is no separate reconnect
+    /// callback: the runner calls `renderer_init` once per renderer, so the
+    /// first call is this process's own and every later one is a REPLACEMENT
+    /// after a reconnect. Remembering is the only way to tell them apart.
+    pub seen_renderer: bool,
+    /// Set when the page raster must be re-uploaded — after a replacement
+    /// renderer drops the old id. Consumed on the next tick rather than acted
+    /// on in `renderer_init`, which runs before the frame has settled and
+    /// where relaying the panes would be premature.
+    pub page_dirty: bool,
     /// Frame the scene was last built at, so the timeline moving can invalidate it.
     pub last_sim_frame: i32,
     pub plate_menu_slot: Option<usize>,
@@ -4125,6 +4135,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             viewport_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
             page_image: None,
+            seen_renderer: false,
+            page_dirty: false,
             last_sim_frame: i32::MIN,
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
@@ -7199,6 +7211,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     pub fn tick_frame(&mut self, dt: f32) -> bool {
         let now = Instant::now();
 
+        // A replacement renderer left the page pane with no image; recompose
+        // and re-upload it now that the frame has settled.
+        if std::mem::take(&mut self.page_dirty) {
+            self.rebuild_page();
+        }
+
         // Drop-target glow animation: exponential smoothing toward the live
         // target — the position GLIDES between cells, alpha fades in while a
         // drag is in flight and out after it ends (lingering at the last
@@ -7562,6 +7580,37 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// One-time renderer setup (engine `renderer_init` hook): the persistent
     /// 3D meshes. The spheres mesh starts empty and fills from the node graph
     /// via the pending-mesh flush.
+    /// Note that a renderer has been handed over, and invalidate anything
+    /// that cannot survive a REPLACEMENT one. Returns whether this was a
+    /// replacement.
+    ///
+    /// Split out of `renderer_init` so it can be tested: the callback needs a
+    /// live `VkRenderer`, this needs nothing. There is no separate reconnect
+    /// callback — the runner calls `renderer_init` once per renderer, so the
+    /// first call is this process's own and every later one is a replacement,
+    /// and remembering is the only way to tell them apart.
+    ///
+    /// Images uploaded outside that callback are not replayed into the new
+    /// renderer, so a cached id names nothing and its draws are skipped in
+    /// SILENCE — the page pane simply went blank. Freeing the stale id is
+    /// safe (destroy_image returns early on an id the new table lacks, ids
+    /// come from a counter that never resets, and free_image only queues), and
+    /// the raster recomposes from the node graph cheaply, so dropping and
+    /// re-uploading beats trying to preserve anything.
+    pub fn renderer_handed_over(&mut self) -> bool {
+        if !std::mem::replace(&mut self.seen_renderer, true) {
+            return false;
+        }
+        if let Some(old) = self.page_image.take() {
+            cce_ui::vk::free_image(old);
+        }
+        self.slots.page_view.set_image(None);
+        // Re-uploaded on the next tick, not here: this runs before the frame
+        // has settled, and rebuild_page relays the panes.
+        self.page_dirty = true;
+        true
+    }
+
     pub fn init_renderer(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
         let cube_verts = cube_vertices();
         let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
