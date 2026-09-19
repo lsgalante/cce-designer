@@ -41,13 +41,16 @@ pub fn run(
 
     let geom = match &node {
         Some(name) => {
+            // Borrowed, NOT cloned. Several generators find their place in the
+            // scene with `find_sphere_index`, which identifies the target by
+            // POINTER — so a clone is a node the walk never recognizes, and a
+            // sphere exported this way silently produced nothing.
             let target = crate::geometry::find_node_by_name(&proj.root, name)
-                .ok_or_else(|| format!("no node named '{name}'"))?
-                .clone();
+                .ok_or_else(|| format!("no node named '{name}'"))?;
             let mut visited = Vec::new();
             crate::geometry::generate_single_node_geometry_with_errors(
                 &proj.root,
-                &target,
+                target,
                 &mut visited,
                 &mut ocl_error,
                 &mut sim,
