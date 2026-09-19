@@ -38,6 +38,8 @@ pub enum Action {
     NetworkPan(i32, i32),
     FrameCursor,
     FrameAll,
+    /// Arrange the current level's nodes from their wiring.
+    LayoutNodes,
 }
 
 #[derive(Debug, Clone)]

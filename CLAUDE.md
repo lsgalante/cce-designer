@@ -478,6 +478,49 @@ by hand: `edit_handles` from `Ctrl+H` to `Ctrl+Shift+H` (the ctrl+hjkl family
 owns those now), and `f` now frames the CURSOR where it used to frame
 everything, with framing everything on `shift+f` — the plugin's split.
 
+### Auto-layout
+
+`src/layout.rs` arranges a level's nodes from their wiring. The network is
+already a GRID — positions are integer cells and the keyboard cursor steps cell
+by cell — so this is a layered assignment on cells, not a force-directed
+sprawl: a node's ROW is how far downstream it is, its COLUMN is chosen to sit
+under what it reads from.
+
+**Edges come from the same rule the wires do** — a node's `Input` parameter
+naming another node, which is the widget's `wire_pairs` derivation. Matching it
+is the point: a layout computed from relationships you cannot see would move
+nodes for reasons that are not on screen. It also means a second operand (a
+Boolean's `With`, a Copy's target) does not pull on the layout, because it does
+not draw a wire either. When those become wires they should become edges here
+in the same change.
+
+Flow is downward, matching every project in the repo (a Sphere at (4, 2)
+feeding an output at (4, 3)). Row is the LONGEST path from a root, not the
+shortest, so a node always sits below every one of its inputs rather than
+beside one of them. Depth is computed by iterating to a fixed point rather than
+by recursion, because a name-wired graph can be cyclic — A reads B reads A is
+something a user can type — and the loop stops improving instead of
+overflowing the stack.
+
+Utility trees are pinned: the settings node lives where the user put it, and an
+"arrange everything" that relocated it would be a surprise every time. Their
+cells count as occupied so nothing lands on top of them. Within a row, a node
+wants its parent's column (a root wants the column it already has, which
+preserves the left-to-right order among independent chains) and takes the
+nearest free column to that, searching outward — so a chain stays perfectly
+vertical and a collision nudges one node aside instead of shifting the whole
+row.
+
+`arrange` returns only the nodes that MOVED, so `layout_current_level` can say
+"moved 3 nodes" or "every node was already in place" — an arrange that did
+nothing because the layout was already right looks identical to a broken one,
+and the status line is the only thing that separates them.
+
+The command is `layout_nodes` on `Ctrl+Shift+L` rather than the bare `L`
+Houdini uses: bare hjkl is the cursor, and shift+hjkl is reserved for the
+select family this app cannot implement until the Graph widget has
+multi-selection, so taking `Shift+L` now would have to be given back later.
+
 ### Commands, chords and the palette
 
 `src/command.rs` is one list of everything the app can be asked to do. Each row

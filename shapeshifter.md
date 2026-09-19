@@ -410,9 +410,30 @@ Touches: `geometry.rs`, `nodes/*.json`.
 > the previous round, and the test named the winner and the shadowed command
 > rather than leaving a key that silently stopped working.
 >
-> Still outstanding for this phase: auto-layout in the network pane. The keycam
-> navigator the proposal names as a viewer state is not written yet, but the
-> framework it would sit on is.
+> **Auto-layout landed, and Phase 5's list is done.** `src/layout.rs` arranges a
+> level from its wiring: row is how far downstream a node is, column is chosen
+> to sit under what it reads from. Because the network is already a grid of
+> integer cells, this is a layered assignment rather than the usual
+> force-directed sprawl — and a chain comes out as one vertical line, which is
+> what a chain already looks like in every project in the repo.
+>
+> Edges come from the same rule the WIRES do: a node's `Input` naming another.
+> A layout computed from relationships you cannot see would move nodes for
+> reasons that are not on screen. The cost is that a second operand — a
+> Boolean's `With` — does not pull on the layout, because it does not draw a
+> wire either; those should become edges here in the same change that makes
+> them wires.
+>
+> Depth iterates to a fixed point rather than recursing, because a name-wired
+> graph can be cyclic: `A` reads `B` reads `A` is something a user can type, and
+> it must terminate rather than overflow. Utility trees are pinned, and their
+> cells count as occupied.
+>
+> The proposal's Phase 5 list is now complete: conditional parameter rows, the
+> command registry and palette, the hotkey file (which turned out to already
+> exist, better than proposed), the viewer-state framework, keyboard graph
+> navigation, and auto-layout. The keycam navigator is named there as a viewer
+> state ON that framework rather than as a list item, and is not written.
 
 Independent of all the geometry work, and the place where the app gets to be
 better rather than equal. A **command palette** on the HC Panel's model — fuzzy

@@ -26,6 +26,7 @@ pub mod render;
 pub mod shortcut;
 pub mod slots;
 pub mod command;
+pub mod layout;
 pub mod page;
 pub mod thumbnail;
 
@@ -4385,6 +4386,169 @@ mod tests {
             let parsed = crate::shortcut::Shortcut::parse(cmd.default_chord.expect(id)).unwrap();
             assert_eq!(parsed.describe(), chord, "{id} is not bound where the plugin binds it");
         }
+    }
+
+    /// Auto-layout: rows are how far downstream a node is, columns keep it
+    /// under what it reads from.
+    #[test]
+    fn test_auto_layout_lays_a_chain_out_vertically() {
+        use crate::layout::{arrange, LayoutNode};
+        let node = |name: &str, input: Option<&str>, pos: (f32, f32)| LayoutNode {
+            name: name.to_string(),
+            input: input.map(|s| s.to_string()),
+            position: pos,
+            pinned: false,
+        };
+
+        // A chain, scattered. It should come back as one vertical line,
+        // because a chain IS a vertical line in this grid — a sphere at
+        // (4, 2) feeding an output at (4, 3) is the convention every project
+        // in the repo already uses.
+        let nodes = vec![
+            node("c", Some("b"), (7.0, 0.0)),
+            node("a", None, (2.0, 5.0)),
+            node("b", Some("a"), (0.0, 9.0)),
+        ];
+        let moved: std::collections::HashMap<usize, (f32, f32)> =
+            arrange(&nodes).into_iter().collect();
+        let at = |i: usize| moved.get(&i).copied().unwrap_or(nodes[i].position);
+        assert_eq!(at(1).1, 0.0, "the root is not on the top row");
+        assert_eq!(at(2).1, 1.0, "its child is not one row below it");
+        assert_eq!(at(0).1, 2.0, "the grandchild is not two rows below");
+        assert_eq!(at(1).0, at(2).0, "a chain should be one column");
+        assert_eq!(at(2).0, at(0).0, "a chain should be one column");
+
+        // A root's existing column is its wish, so two independent chains keep
+        // the left-to-right order the user gave them.
+        let nodes = vec![
+            node("right", None, (5.0, 0.0)),
+            node("left", None, (1.0, 0.0)),
+            node("right_child", Some("right"), (0.0, 0.0)),
+            node("left_child", Some("left"), (0.0, 0.0)),
+        ];
+        let moved: std::collections::HashMap<usize, (f32, f32)> =
+            arrange(&nodes).into_iter().collect();
+        let at = |i: usize| moved.get(&i).copied().unwrap_or(nodes[i].position);
+        assert!(at(1).0 < at(0).0, "left should stay left of right");
+        assert_eq!(at(1).0, at(3).0, "left's child should sit under it");
+        assert_eq!(at(0).0, at(2).0, "right's child should sit under it");
+        assert_eq!(at(2).1, 1.0);
+        assert_eq!(at(3).1, 1.0);
+    }
+
+    /// The cases that would otherwise hang or overwrite: cycles, self
+    /// reference, dangling names, and pinned cells.
+    #[test]
+    fn test_auto_layout_survives_cycles_and_pinned_nodes() {
+        use crate::layout::{arrange, LayoutNode};
+        let node = |name: &str, input: Option<&str>, pos: (f32, f32), pinned: bool| LayoutNode {
+            name: name.to_string(),
+            input: input.map(|s| s.to_string()),
+            position: pos,
+            pinned,
+        };
+
+        // A name-wired graph can be cyclic; it must terminate rather than
+        // recurse, and the answer only has to be finite and sane.
+        let cyclic = vec![
+            node("a", Some("b"), (0.0, 0.0), false),
+            node("b", Some("a"), (1.0, 0.0), false),
+            node("self", Some("self"), (2.0, 0.0), false),
+        ];
+        let moved = arrange(&cyclic);
+        assert!(moved.len() <= 3);
+        for (_, (c, r)) in &moved {
+            assert!(c.is_finite() && r.is_finite() && *r >= 0.0);
+        }
+
+        // A dangling input name is simply no edge — the node is a root, not an
+        // error and not a crash.
+        let dangling = vec![node("a", Some("nothing_called_this"), (3.0, 4.0), false)];
+        let moved: Vec<_> = arrange(&dangling);
+        assert_eq!(moved, vec![(0, (3.0, 0.0))], "a dangling input should make a root");
+
+        // Pinned nodes never move, and nothing is placed on top of them.
+        let pinned = vec![
+            node("meta", None, (0.0, 0.0), true),
+            node("a", None, (0.0, 5.0), false),
+            node("b", Some("a"), (0.0, 6.0), false),
+        ];
+        let moved: std::collections::HashMap<usize, (f32, f32)> =
+            arrange(&pinned).into_iter().collect();
+        assert!(!moved.contains_key(&0), "a pinned node moved");
+        let a = moved.get(&1).copied().unwrap_or(pinned[1].position);
+        assert_ne!(a, (0.0, 0.0), "a node was placed on top of the pinned one");
+        assert_eq!(a.1, 0.0, "the root still belongs on the top row");
+        let b = moved.get(&2).copied().unwrap_or(pinned[2].position);
+        assert_eq!(b.0, a.0, "the child should follow its parent's column");
+        assert_eq!(b.1, 1.0);
+    }
+
+    /// The command end to end, on a real project.
+    #[test]
+    fn test_the_layout_command_arranges_the_current_level() {
+        use crate::slots::{CONTENT_IDX, LEFT_MENUBAR_IDX};
+        let mut state = State::new(false);
+        let mut redraw = false;
+        for (template, x, y) in
+            [("Curve", 6.0, 7.0), ("Remesh", 2.0, 1.0), ("Subdivide", 9.0, 3.0)]
+        {
+            state
+                .apply_action(
+                    McpAction::AddNode {
+                        template_name: template.to_string(),
+                        name: None,
+                        x,
+                        y,
+                    },
+                    &mut redraw,
+                )
+                .unwrap_or_else(|e| panic!("add {template}: {e}"));
+        }
+        let n = state.current_dir().children.len();
+        let (curve, remesh, subdiv) = (n - 3, n - 2, n - 1);
+        let names: Vec<String> =
+            state.current_dir().children.iter().map(|c| c.name.clone()).collect();
+
+        // Wire them into a chain: curve -> remesh -> subdivide.
+        let set_input = |state: &mut State, slot: usize, value: &str| {
+            let dir = state.current_dir_mut();
+            if let Some(p) =
+                dir.children[slot].params.iter_mut().find(|p| p.name.eq_ignore_ascii_case("input"))
+            {
+                p.default = value.to_string();
+            }
+        };
+        set_input(&mut state, remesh, &names[curve]);
+        set_input(&mut state, subdiv, &names[remesh]);
+
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = CONTENT_IDX;
+        assert!(state.layout_current_level());
+
+        let pos = |state: &State, slot: usize| state.current_dir().children[slot].position;
+        assert_eq!(pos(&state, curve).1 + 1.0, pos(&state, remesh).1, "remesh should sit below curve");
+        assert_eq!(pos(&state, remesh).1 + 1.0, pos(&state, subdiv).1, "subdivide should sit below remesh");
+        assert_eq!(pos(&state, curve).0, pos(&state, remesh).0, "the chain should be one column");
+        assert_eq!(pos(&state, remesh).0, pos(&state, subdiv).0, "the chain should be one column");
+
+        // The meta node is a utility tree and stays where it was.
+        let meta = state.current_dir().children.iter().position(|c| c.node_type == "meta");
+        if let Some(m) = meta {
+            assert_eq!(pos(&state, m), (0.0, 0.0), "the meta node moved");
+        }
+
+        // Running it again changes nothing, and says so rather than looking
+        // broken.
+        let before: Vec<_> =
+            state.current_dir().children.iter().map(|c| c.position).collect();
+        assert!(state.layout_current_level());
+        let after: Vec<_> = state.current_dir().children.iter().map(|c| c.position).collect();
+        assert_eq!(before, after, "a second layout should be a no-op");
+
+        // And it is gated on the network pane like every other network command.
+        state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
+        assert!(!state.layout_current_level());
     }
 
     /// A page's raster is its physical size times its resolution — the

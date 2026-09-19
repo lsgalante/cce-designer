@@ -5116,6 +5116,68 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
     }
 
+    /// Arrange the current level's nodes from their wiring.
+    ///
+    /// Reports how many moved: an arrange that did nothing — because the
+    /// layout was already right — looks identical to one that is broken, and
+    /// the status line is the only thing that can tell them apart.
+    pub(crate) fn layout_current_level(&mut self) -> bool {
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            return false;
+        }
+        let nodes: Vec<crate::layout::LayoutNode> = self
+            .current_dir()
+            .children
+            .iter()
+            .map(|c| crate::layout::LayoutNode {
+                name: c.name.clone(),
+                input: c
+                    .params
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case("input"))
+                    .map(|p| p.default.clone()),
+                position: c.position,
+                // Utility trees stay where they were put; see the module doc.
+                pinned: matches!(c.node_type.as_str(), "utility" | "session" | "meta"),
+            })
+            .collect();
+        let moved = crate::layout::arrange(&nodes);
+        let count = moved.len();
+        {
+            let dir = self.current_dir_mut();
+            for (idx, pos) in moved {
+                if let Some(child) = dir.children.get_mut(idx) {
+                    child.position = pos;
+                }
+            }
+        }
+        if count > 0 {
+            self.sync_nodes();
+            self.sync_layout();
+            // The cursor tracks the selection, which has just moved with its
+            // node — otherwise the next keypress navigates from a cell the
+            // selected node no longer occupies.
+            let sel_pos = self
+                .graph()
+                .selected_node()
+                .and_then(|sel| self.current_dir().children.get(sel).map(|c| c.position));
+            if let Some((cx, cy)) = sel_pos {
+                self.grid_cursor_col = cx as i32;
+                self.grid_cursor_row = cy as i32;
+            }
+            self.keep_cursor_in_view();
+            self.rebuild_positions();
+            self.apply_layout();
+            self.update_panel_bounds();
+        }
+        self.update_status_text(&match count {
+            0 => "Layout: every node was already in place.".to_string(),
+            1 => "Layout: moved 1 node.".to_string(),
+            n => format!("Layout: moved {n} nodes."),
+        });
+        true
+    }
+
     /// Move the grid cursor one cell, taking the selection with it.
     ///
     /// The cursor is the network pane's keyboard position: `sync_cursor_and_
@@ -5323,6 +5385,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::NetworkPan(dc, dr) => {
                 self.network_pan_view(dc, dr);
+            }
+            Action::LayoutNodes => {
+                self.layout_current_level();
             }
             Action::FrameCursor => {
                 self.frame_cursor();

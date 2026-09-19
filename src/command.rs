@@ -136,6 +136,10 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "view_up", label: "Pan View Up", context: Context::Network, run: Run::Key(Action::NetworkPan(0, -1)), default_chord: Some("Ctrl+k") },
     Command { id: "view_right", label: "Pan View Right", context: Context::Network, run: Run::Key(Action::NetworkPan(1, 0)), default_chord: Some("Ctrl+l") },
     Command { id: "frame_cursor", label: "Frame Cursor", context: Context::Network, run: Run::Key(Action::FrameCursor), default_chord: Some("f") },
+    // Ctrl+Shift+L rather than the L that Houdini uses: bare hjkl is the
+    // cursor, and shift+hjkl is reserved for the select family this app cannot
+    // implement yet — taking Shift+L now would have to be given back later.
+    Command { id: "layout_nodes", label: "Layout Nodes", context: Context::Network, run: Run::Key(Action::LayoutNodes), default_chord: Some("Ctrl+Shift+l") },
     Command { id: "frame_all", label: "Frame All", context: Context::Network, run: Run::Key(Action::FrameAll), default_chord: Some("Shift+f") },
 
     // --- Network ---
