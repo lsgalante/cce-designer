@@ -451,6 +451,15 @@ tick to recompose and re-upload — the raster is cheap to rebuild from the node
 graph, and no id can be carried across renderers. Found by cce-1f's audit of
 clients caching vk image ids.
 
+**To test it**, put `CCE_UI_FAULT_RECONNECT=<seconds>` on the binary's
+environment: the runner drops the session that many seconds in, exactly as a
+transport error would, and the app reconnects with a new renderer. Run the OLD
+binary through the same fault first — a fix that passes a test which never
+reproduced the bug is worth nothing. Judge by the picture: the designer inits no
+logger, so the runner's WARN never appears even when it fired. Verified this way
+on 2026-09-19 — with the fix disabled the sheet vanishes at the fault, with it
+the sheet survives.
+
 `gem_graph`, the source family's
 everything-at-once node, is deliberately not ported: it is these four chained,
 and that collapse is the whole premise of "fifty operators, ten nodes".
