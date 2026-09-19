@@ -329,6 +329,39 @@ Touches: `geometry.rs`, `nodes/*.json`.
 > collapse coming due — a pane of twelve irrelevant rows is worse than the
 > twelve nodes it replaced — and it is the first Phase 5 item because it was
 > the binding constraint on using what Phases 1 to 4 built.
+>
+> **The command registry and the palette landed.** `src/command.rs` is one list
+> of everything the app can do — id, label, context, how to run it, default
+> chord — and `ShortcutManager` now binds command IDS rather than `Action`s,
+> which is what lets a chord reach a menu-dispatched command like Open at all.
+> `State::run_command(id)` is the single entry point and is exposed over MCP,
+> so every command is scriptable.
+>
+> The palette is the node palette's `cce-cloud --dmenu` popup rather than a new
+> widget: two pickers in one app that behave differently is worse than either.
+> Ranking reproduces the plugin's fuzzyfinder exactly — shortest span, earliest
+> start, alphabetical — so muscle memory survives; the focused pane's commands
+> partition to the front without anything being hidden. Rows carry their chord
+> in a column, so the palette teaches the keyboard instead of replacing it.
+>
+> Two findings the registry paid for immediately. The toolkit's runner already
+> claims ctrl+z, ctrl+shift+z, ctrl+tab and ctrl+shift+tab before the app sees
+> them, so undo and redo ship with no chord HERE on purpose — binding ctrl+z
+> would have taken undo away from focused text boxes while looking like a fix.
+> And `Shortcut`'s derived `PartialEq` compared character keys case-sensitively
+> while `matches()` compared them case-insensitively: `Ctrl+S` and `Ctrl+s` were
+> one keypress at the keyboard and two values in memory, so the new conflict
+> detector silently failed to report the very collision it exists to catch.
+>
+> The hotkey file this phase asked for turns out to be already built and better
+> than proposed: `input.kdl` is workspace-wide with per-app domains, so a chord
+> is `cce-designer.<id>` there and the registry supplies the default. What was
+> missing was not a file but a set of NAMES to put in it, and conflict
+> reporting; both are in.
+>
+> Still outstanding for this phase: keyboard graph navigation and auto-layout
+> in the network pane, and the viewer-state framework generalized out of
+> `curve_tool.rs`.
 
 Independent of all the geometry work, and the place where the app gets to be
 better rather than equal. A **command palette** on the HC Panel's model — fuzzy

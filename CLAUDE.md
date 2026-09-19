@@ -418,6 +418,70 @@ The GPU image is owned by `State::page_image` and freed when replaced;
 everything-at-once node, is deliberately not ported: it is these four chained,
 and that collapse is the whole premise of "fifty operators, ten nodes".
 
+### Commands, chords and the palette
+
+`src/command.rs` is one list of everything the app can be asked to do. Each row
+carries its `id` (snake_case — this is what `input.kdl` binds, so it follows
+that file's existing convention and must not change when the label does), its
+`label` (what the palette and menus show), a `Context` (which pane it belongs
+to), a `Run` (how it reaches the work), and a `default_chord`.
+
+Before it there were three vocabularies with nothing holding them together: the
+`Action` enum matched against chords, the menu-item LABELS `execute_menu_action`
+dispatches on, and a hand-written registration block listing which `Action` got
+which chord. A command lived in whichever of them someone had needed, and
+nothing could tell you which ones had no binding at all. `ShortcutManager` now
+binds **command ids**, not `Action`s — which is also what lets a chord reach a
+menu-dispatched command like Open, something no binding could do before.
+
+`Run` has two variants because the app genuinely has two dispatch paths; a
+command names exactly one, so the palette, the chord and the menu all end up in
+the same code. `State::run_command(id)` is the single entry point, and it is
+exposed over MCP as `run_command` — every command is scriptable, including the
+ones no menu label reaches.
+
+**The toolkit's runner claims four chords before the app sees them**, from
+`input.kdl`'s `cce-ui` domain: `undo` (ctrl+z), `redo` (ctrl+shift+z),
+`focus_next_group` (ctrl+tab) and `focus_prev_group` (ctrl+shift+tab). Undo and
+Redo are therefore registry rows with NO default chord — not an oversight: the
+runner routes them to the focused widget first, so a text box undoes its own
+typing before the app is asked, and registering ctrl+z here would quietly take
+that away. Focus Next/Previous Pane do override the runner's group chords, which
+is deliberate and predates the registry. `command::conflicts` cannot see any of
+this — it compares this app's bindings with each other — so it is written down
+here instead.
+
+`conflicts()` reports two commands resolving to one chord at startup, because
+the failure is otherwise silent and looks like a broken command rather than a
+broken binding: `match_command` returns the first match and the second simply
+never runs. It compares chords as PARSED, not as text. That exposed a real bug:
+`Shortcut`'s derived `PartialEq` compared character keys byte for byte while
+`matches()` compared them case-insensitively, so `Ctrl+S` and `Ctrl+s` were one
+keypress at the keyboard and two distinct values in memory — and the collision
+detector quietly failed to report exactly the collision it exists to catch. Both
+now go through one `same_key`.
+
+**The palette** is the node palette's mechanism, not a new widget: the same
+`cce-cloud --dmenu` popup at the cursor, with the same keys. Two pickers in one
+app that look and behave differently is worse than either. Ranking is
+`fuzzy_rank`, which reproduces the plugin's fuzzyfinder exactly — shortest
+contiguous span, then earliest start, then alphabetical — so muscle memory
+survives the move; the focused pane's commands are then partitioned to the
+front, stably, without dropping anything (a palette that hides what you are
+looking for is worse than one that lists it second). Rows are the label padded
+to a column and then its chord, so the palette teaches the keyboard rather than
+replacing it; padded rather than tab-separated because the popup renders a tab
+as one literal stop and the chords came out ragged. A row is matched back to its
+command by the LONGEST label it starts with, since "Save" starts "Save As"'s
+row.
+
+`test_every_menu_command_names_a_label_that_is_dispatched` scans `app.rs` for
+`execute_menu_action`'s arms. Scanning source is an odd way to assert it, but
+the alternative is calling every command to see whether it is handled, and
+"Exit" would end the test run. It is the check the plugin's `hccommands.py` doc
+argues for: a label kept in two places drifts, and a renamed one fails silently
+— the dispatch falls through its match and the command does nothing.
+
 ### Runtime paths point into the source tree
 
 Node templates (`nodes/*.json`) and `default_project.json` are located via

@@ -76,8 +76,8 @@ impl State {
                 }
             }
 
-            if let Some(action) = state.pending_action.take() {
-                state.execute_action(action);
+            if let Some(id) = state.pending_command.take() {
+                state.run_command(id);
                 changed = true;
             }
 
@@ -593,6 +593,10 @@ impl State {
                     let res = state.apply_mcp_call(&call, &mut needs_redraw);
                     let _ = call.reply.send(res);
                 }
+                CustomEvent::RunCommand(id) => {
+                    state.run_command(id);
+                    needs_redraw = true;
+                }
                 CustomEvent::RunAction(action) => {
                     if let Err(e) = state.apply_action(action, &mut needs_redraw) {
                         state.update_status_text(&e);
@@ -1034,6 +1038,15 @@ impl State {
                     Ok(format!("Menu action executed: {}", label.replace(['"', '\\'], "'")))
                 } else {
                     Err(format!("unknown menu action label: {}", label.replace(['"', '\\'], "'")))
+                }
+            }
+            McpAction::RunCommand { id } => {
+                if state.run_command(&id) {
+                    state.sync_nodes();
+                    needs_redraw = true;
+                    Ok(format!("Command run: {}", id.replace(['"', '\\'], "'")))
+                } else {
+                    Err(format!("unknown command: {}", id.replace(['"', '\\'], "'")))
                 }
             }
             McpAction::MenuClosed { widget_idx, menu_idx } => {

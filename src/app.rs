@@ -368,6 +368,10 @@ pub enum McpAction {
     /// Execute a label-matched menu-pane action ("Show Spreadsheet Pane", "Save", ...)
     /// — the items `menu_click`'s index-matched menubar dispatch cannot reach.
     MenuAction { label: String },
+    /// Run a registry command by id — every command the palette lists and
+    /// every chord the keyboard can send, under one name. `menu_action`
+    /// reaches only the label-dispatched half.
+    RunCommand { id: String },
     /// Collapse a pane to its title stub, or restore it — the plate corner
     /// menu's Collapse/Expand, reachable without driving the pointer.
     SetPaneCollapsed { pane: String, collapsed: bool },
@@ -389,6 +393,9 @@ pub enum CustomEvent {
     /// An MCP `tools/call` from the embedded MCP server (carries its own
     /// reply channel) — the tool name is an `McpAction` tag, or `get_state`.
     McpCall(cce_ui::mcp::McpToolCall),
+    /// A command chosen in the palette, which runs on its own thread and so
+    /// cannot touch `State` — it sends the id back to the event loop instead.
+    RunCommand(&'static str),
     /// A fire-and-forget action from an app-internal thread (the cce-files
     /// choosers deliver their picked path this way).
     RunAction(McpAction),
@@ -1066,7 +1073,9 @@ pub struct State {
     pub last_click: Option<(Instant, usize)>,
 
     pub shortcut_manager: ShortcutManager,
-    pub pending_action: Option<Action>,
+    /// A chord matched this frame, run on the next tick — the command's
+    /// ID, since a chord binds a registry row rather than an `Action`.
+    pub pending_command: Option<&'static str>,
     pub exit_requested: bool,
     /// Engine event-loop sender so app-spawned threads (the cce-files
     /// choosers) can deliver results back as `CustomEvent`s; set once by
@@ -3943,31 +3952,42 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
 
         // Chords from input.kdl (`cce-designer` domain → `cce-ui` domain),
-        // defaulting to the historical bindings; an invalid user chord logs
-        // and falls back to the default instead of panicking.
+        // defaulting to what the command registry declares; an invalid user
+        // chord logs and falls back to the default instead of panicking.
+        //
+        // One loop over the registry, not a list kept beside it. The old hand-
+        // written block was where a command went to be forgotten: undo was an
+        // Action and an Edit-menu item and appeared here in neither, so the app
+        // shipped with no Ctrl+Z and nothing that could have told you.
         let mut shortcut_manager = ShortcutManager::new();
         {
-            let mut register = |name: &str, default: &str, action: Action| {
-                let chord = cce_ui::input::app_chord(name, default);
-                if shortcut_manager.register(&chord, action).is_err() {
-                    eprintln!("[cce-designer] invalid chord {:?} for {}; using {:?}", chord, name, default);
-                    let _ = shortcut_manager.register(default, action);
+            let mut resolved: Vec<(&'static str, String)> = Vec::new();
+            for cmd in crate::command::COMMANDS {
+                let Some(default) = cmd.default_chord else { continue };
+                let chord = cce_ui::input::app_chord(cmd.id, default);
+                if shortcut_manager.register(&chord, cmd.id).is_err() {
+                    eprintln!(
+                        "[cce-designer] invalid chord {:?} for {}; using {:?}",
+                        chord, cmd.id, default
+                    );
+                    let _ = shortcut_manager.register(default, cmd.id);
+                    resolved.push((cmd.id, default.to_string()));
+                } else {
+                    resolved.push((cmd.id, chord));
                 }
-            };
-            register("toggle_grid", "Ctrl+g", Action::ToggleGrid);
-            register("toggle_cube", "Ctrl+e", Action::ToggleCube);
-            register("toggle_square_viewport", "Ctrl+a", Action::ToggleSquareViewport);
-            register("toggle_configure", "Ctrl+,", Action::ToggleConfigure);
-            register("toggle_spreadsheet", "`", Action::ToggleSpreadsheet);
-            register("toggle_circular_pane", "Ctrl+d", Action::ToggleCircularPane);
-            register("save_document", "Ctrl+s", Action::Save);
-            register("save_document_as", "Ctrl+Shift+s", Action::SaveAs);
-            register("next_context", "Ctrl+Tab", Action::NextContext);
-            register("previous_context", "Ctrl+Shift+Tab", Action::PrevContext);
-            register("play_pause", "Up", Action::PlayPause);
-            register("play_pause_reverse", "Down", Action::PlayPauseReverse);
-            register("frame_next", "Right", Action::FrameNext);
-            register("frame_prev", "Left", Action::FramePrev);
+            }
+            // Two commands on one chord make the second unreachable in silence
+            // — it looks like a broken command rather than a broken binding —
+            // so say which lost and to whom.
+            for c in crate::command::conflicts(&resolved) {
+                eprintln!(
+                    "[cce-designer] chord {:?} is bound to {} and to {}; {} wins",
+                    c.chord,
+                    c.winner,
+                    c.shadowed.join(", "),
+                    c.winner
+                );
+            }
         }
 
         let mut state = Self {
@@ -3998,7 +4018,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             node_clipboard: None,
             last_click: None,
             shortcut_manager,
-            pending_action: None,
+            pending_command: None,
             exit_requested: false,
             event_sender: None,
             slots,
@@ -5016,9 +5036,91 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.sync_pane_focus();
     }
 
+    /// Run a command by its registry id — the one entry point the chord, the
+    /// palette and (soon) the menus all go through.
+    ///
+    /// Returns false for an id that names no command, which is what a stale
+    /// `input.kdl` binding looks like.
+    pub fn run_command(&mut self, id: &str) -> bool {
+        let Some(cmd) = crate::command::by_id(id) else {
+            self.update_status_text(&format!("No command named '{id}'"));
+            return false;
+        };
+        match cmd.run {
+            crate::command::Run::Key(action) => {
+                self.execute_action(action);
+                true
+            }
+            crate::command::Run::Menu(label) => self.execute_menu_action(label),
+        }
+    }
+
+    /// The command palette: every command, fuzzy-searched, focused pane first.
+    ///
+    /// It is the node palette's mechanism rather than a new widget — the same
+    /// `cce-cloud --dmenu` popup, at the cursor, with the same keys — because
+    /// two pickers in one app that look and behave differently is worse than
+    /// either. The proposal's point about Houdini was that a palette should not
+    /// exist to work around a missing API; it does not, here.
+    pub fn open_command_palette(&mut self) {
+        const SOURCE: &str = "command-palette";
+        if self.cloud_popups.click(SOURCE) == cce_ui::process::CloudPopupClick::ToggledOff {
+            return;
+        }
+        let Some(sender) = self.event_sender.clone() else { return };
+        // Ranked here, not in the popup: the popup filters as you type, but the
+        // ORDER it starts from is ours, and that is where the focused pane's
+        // commands come first.
+        let entries = crate::command::palette_entries("", self.focused_context());
+        // The chord goes on the row so the palette teaches the keyboard rather
+        // than replacing it. Padded to a column rather than separated by a tab:
+        // the popup renders a tab as one literal tab stop, so the chords came
+        // out ragged and stopped reading as a column at all.
+        let width = entries.iter().map(|c| c.label.len()).max().unwrap_or(0) + 2;
+        let items: String = entries
+            .iter()
+            .map(|c| {
+                let chord = self.shortcut_manager.chord_for(c.id).map(|s| s.describe());
+                crate::command::palette_row(c.label, chord, width)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (px, py) = (self.cursor_x as i32, self.cursor_y as i32);
+        std::thread::spawn(move || {
+            let popup = cce_ui::process::CloudPopup::at(px, py).parent_app_id("cce-designer");
+            let mut spawned_pid = 0;
+            let result = popup.run_dmenu("Command:", &items, |pid| {
+                spawned_pid = pid;
+                let _ = sender.send(CustomEvent::CloudSpawned { pid, source: SOURCE.to_string() });
+            });
+            if let Ok(Some(selected)) = &result {
+                // The row is the label padded out, then its chord. Match the
+                // LONGEST label the row starts with, so "Save" cannot claim a
+                // row that belongs to "Save As".
+                if let Some(cmd) = crate::command::from_palette_row(selected) {
+                    let _ = sender.send(CustomEvent::RunCommand(cmd.id));
+                }
+            }
+            let _ = sender.send(CustomEvent::CloudClosed { pid: spawned_pid, source: SOURCE.to_string() });
+        });
+    }
+
+    /// The command context of the focused pane, for palette ranking.
+    pub fn focused_context(&self) -> crate::command::Context {
+        use crate::command::Context;
+        match self.focused_pane {
+            LEFT_MENUBAR_IDX => Context::Network,
+            RIGHT_MENUBAR_IDX => Context::Viewport,
+            PARAM_MENUBAR_IDX => Context::Parameters,
+            SPREADSHEET_MENUBAR_IDX => Context::Spreadsheet,
+            _ => Context::Always,
+        }
+    }
+
     pub fn execute_action(&mut self, action: Action) {
         let mut settings_changed = false;
         match action {
+            Action::CommandPalette => self.open_command_palette(),
             // Undo/Redo reach whichever editing state owns a history. The
             // chords arrive through `Application::undo` / `redo` (the
             // toolkit routes them, after the focused text box's turn); the
@@ -6435,10 +6537,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // Context switching dispatches ahead of the widget key paths
                 // (param pane, node palette) so the chord works from any pane.
                 if event.state == ElementState::Pressed {
-                    if let Some(action @ (Action::NextContext | Action::PrevContext)) =
-                        self.shortcut_manager.match_action(&self.modifiers, &event.logical_key)
+                    if let Some(id @ ("next_context" | "previous_context")) =
+                        self.shortcut_manager.match_command(&self.modifiers, &event.logical_key)
                     {
-                        self.execute_action(action);
+                        self.run_command(id);
                         return true;
                     }
                 }
@@ -6456,12 +6558,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // fire once per physical press, or a held key would flicker
                 // play/pause at the repeat rate.
                 if event.state == ElementState::Pressed {
-                    if let Some(action @ (Action::PlayPause | Action::PlayPauseReverse | Action::FrameNext | Action::FramePrev)) =
-                        self.shortcut_manager.match_action(&self.modifiers, &event.logical_key)
+                    if let Some(id @ ("play_pause" | "play_pause_reverse" | "frame_next" | "frame_prev")) =
+                        self.shortcut_manager.match_command(&self.modifiers, &event.logical_key)
                     {
-                        let is_toggle = matches!(action, Action::PlayPause | Action::PlayPauseReverse);
+                        let is_toggle = matches!(id, "play_pause" | "play_pause_reverse");
                         if !(is_toggle && event.repeat) {
-                            self.execute_action(action);
+                            self.run_command(id);
                         }
                         return true;
                     }
@@ -6773,8 +6875,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             self.open_node_palette();
                             return true;
                         }
-                        if let Some(action) = self.shortcut_manager.match_action(&self.modifiers, &event.logical_key) {
-                            self.pending_action = Some(action);
+                        if let Some(id) = self.shortcut_manager.match_command(&self.modifiers, &event.logical_key) {
+                            self.pending_command = Some(id);
                             return true;
                         }
                     }

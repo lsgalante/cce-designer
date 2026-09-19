@@ -22,9 +22,12 @@ pub enum Action {
     FramePrev,
     Undo,
     Redo,
+    /// Open the command palette — a command like any other, so it is
+    /// rebindable and lists itself.
+    CommandPalette,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Shortcut {
     pub ctrl: bool,
     pub shift: bool,
@@ -82,6 +85,37 @@ impl Shortcut {
         Ok(Shortcut { ctrl, shift, alt, logo, key })
     }
 
+    /// The chord as a human reads it — the inverse of [`parse`](Self::parse),
+    /// for showing beside a command's label.
+    ///
+    /// Modifier order is fixed (Ctrl, Shift, Alt, Super) rather than however
+    /// the user happened to write it, so two spellings of one chord print the
+    /// same and a palette column stays scannable.
+    pub fn describe(&self) -> String {
+        let mut out = String::new();
+        for (on, name) in
+            [(self.ctrl, "Ctrl"), (self.shift, "Shift"), (self.alt, "Alt"), (self.logo, "Super")]
+        {
+            if on {
+                out.push_str(name);
+                out.push('+');
+            }
+        }
+        match &self.key {
+            Key::Character(c) => {
+                // Single letters read as capitals — "Ctrl+S", not "Ctrl+s" —
+                // which is how every menu in the app already writes them.
+                if c.chars().count() == 1 {
+                    out.extend(c.chars().flat_map(|ch| ch.to_uppercase()));
+                } else {
+                    out.push_str(c);
+                }
+            }
+            Key::Named(n) => out.push_str(&format!("{n:?}")),
+        }
+        out
+    }
+
     pub fn matches(&self, mods: &ModifiersState, key: &Key) -> bool {
         if mods.control_key() != self.ctrl
             || mods.shift_key() != self.shift
@@ -90,19 +124,54 @@ impl Shortcut {
         {
             return false;
         }
-        // Character keys compare case-insensitively: with Shift held, xkb
-        // delivers the SHIFTED character ("S"), so an exact match against the
-        // chord's stored "s" made every Shift+letter chord unmatchable —
-        // Ctrl+Shift+Tab never noticed because Named keys aren't shifted.
-        match (key, &self.key) {
-            (Key::Character(a), Key::Character(b)) => a.eq_ignore_ascii_case(b),
-            (a, b) => a == b,
-        }
+        same_key(key, &self.key)
     }
 }
 
+/// Whether two keys are the same key.
+///
+/// Character keys compare case-insensitively: with Shift held, xkb delivers
+/// the SHIFTED character ("S"), so an exact match against the chord's stored
+/// "s" made every Shift+letter chord unmatchable — Ctrl+Shift+Tab never
+/// noticed because Named keys aren't shifted.
+fn same_key(a: &Key, b: &Key) -> bool {
+    match (a, b) {
+        (Key::Character(x), Key::Character(y)) => x.eq_ignore_ascii_case(y),
+        (x, y) => x == y,
+    }
+}
+
+/// Equality is what the KEYBOARD would call the same chord, which is why it is
+/// written rather than derived.
+///
+/// The derived version compared character keys byte for byte while `matches`
+/// compared them case-insensitively, so the two disagreed: `Ctrl+S` and
+/// `Ctrl+s` are one keypress at the keyboard and were two distinct `Shortcut`s
+/// in memory. Nothing noticed until `command::conflicts` started comparing
+/// chords to each other and quietly failed to report a collision between two
+/// spellings of the same binding — the exact failure it exists to catch. Both
+/// go through `same_key` now, so they cannot drift again.
+impl PartialEq for Shortcut {
+    fn eq(&self, other: &Self) -> bool {
+        self.ctrl == other.ctrl
+            && self.shift == other.shift
+            && self.alt == other.alt
+            && self.logo == other.logo
+            && same_key(&self.key, &other.key)
+    }
+}
+
+impl Eq for Shortcut {}
+
+/// Chord -> command id.
+///
+/// Ids rather than [`Action`]s because a chord has to be able to reach a
+/// command the `Action` enum does not cover — New Project and Open are menu
+/// labels, and there was no way to bind them at all while this held `Action`.
+/// What a binding names is a row in [`crate::command::COMMANDS`], and that row
+/// says how to run it.
 pub struct ShortcutManager {
-    bindings: Vec<(Shortcut, Action)>,
+    bindings: Vec<(Shortcut, &'static str)>,
 }
 
 impl ShortcutManager {
@@ -110,18 +179,26 @@ impl ShortcutManager {
         ShortcutManager { bindings: Vec::new() }
     }
 
-    pub fn register(&mut self, shortcut_str: &str, action: Action) -> Result<(), String> {
+    pub fn register(&mut self, shortcut_str: &str, command: &'static str) -> Result<(), String> {
         let shortcut = Shortcut::parse(shortcut_str)?;
-        self.bindings.push((shortcut, action));
+        self.bindings.push((shortcut, command));
         Ok(())
     }
 
-    pub fn match_action(&self, mods: &ModifiersState, key: &Key) -> Option<Action> {
-        for (shortcut, action) in &self.bindings {
+    /// First match wins, in registration order — which is registry order. Two
+    /// commands on one chord therefore make the second unreachable in silence,
+    /// which is why `command::conflicts` exists to say so at startup.
+    pub fn match_command(&self, mods: &ModifiersState, key: &Key) -> Option<&'static str> {
+        for (shortcut, command) in &self.bindings {
             if shortcut.matches(mods, key) {
-                return Some(*action);
+                return Some(command);
             }
         }
         None
+    }
+
+    /// The chord bound to `command`, for showing beside its label.
+    pub fn chord_for(&self, command: &str) -> Option<&Shortcut> {
+        self.bindings.iter().find(|(_, c)| *c == command).map(|(s, _)| s)
     }
 }

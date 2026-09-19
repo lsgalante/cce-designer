@@ -251,6 +251,15 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
             }),
         ),
         tool(
+            "run_command",
+            "Run a command by its registry id (e.g. \"command_palette\", \"toggle_grid\", \"save_document\") — every command the palette lists, including the ones no menu label reaches.",
+            json!({
+                "type": "object",
+                "properties": { "id": { "type": "string", "description": "Command id, snake_case, as input.kdl binds it" } },
+                "required": ["id"],
+            }),
+        ),
+        tool(
             "menu_action",
             "Execute a menu action by its label (e.g. \"Show Spreadsheet Pane\", \"Save\") — reaches label-matched menu-pane items that menu_click's index dispatch cannot.",
             json!({

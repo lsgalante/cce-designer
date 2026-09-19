@@ -23,6 +23,7 @@ pub mod project;
 pub mod render;
 pub mod shortcut;
 pub mod slots;
+pub mod command;
 pub mod page;
 pub mod thumbnail;
 
@@ -801,8 +802,8 @@ mod tests {
     #[test]
     fn test_save_as_chord() {
         let mut m = ShortcutManager::new();
-        m.register("Ctrl+s", Action::Save).unwrap();
-        m.register("Ctrl+Shift+s", Action::SaveAs).unwrap();
+        m.register("Ctrl+s", "save_document").unwrap();
+        m.register("Ctrl+Shift+s", "save_document_as").unwrap();
         let ctrl = crate::app::ModifiersState { ctrl: true, ..Default::default() };
         let ctrl_shift = crate::app::ModifiersState { ctrl: true, shift: true, ..Default::default() };
         // The REAL event shapes: xkb delivers the shifted character when
@@ -811,9 +812,9 @@ mod tests {
         // fire in practice.
         let lower = cce_ui::widget::Key::Character("s".into());
         let upper = cce_ui::widget::Key::Character("S".into());
-        assert_eq!(m.match_action(&ctrl, &lower), Some(Action::Save));
-        assert_eq!(m.match_action(&ctrl_shift, &upper), Some(Action::SaveAs));
-        assert_eq!(m.match_action(&ctrl_shift, &lower), Some(Action::SaveAs));
+        assert_eq!(m.match_command(&ctrl, &lower), Some("save_document"));
+        assert_eq!(m.match_command(&ctrl_shift, &upper), Some("save_document_as"));
+        assert_eq!(m.match_command(&ctrl_shift, &lower), Some("save_document_as"));
     }
 
     /// Plates support tabs: a pane pulled into another dock rides it as a
@@ -1109,17 +1110,17 @@ mod tests {
     fn test_playbar_transport_keys() {
         use cce_ui::widget::{Key, NamedKey};
         let mut m = ShortcutManager::new();
-        m.register("Up", Action::PlayPause).unwrap();
-        m.register("Right", Action::FrameNext).unwrap();
-        m.register("Left", Action::FramePrev).unwrap();
+        m.register("Up", "play_pause").unwrap();
+        m.register("Right", "frame_next").unwrap();
+        m.register("Left", "frame_prev").unwrap();
         let plain = crate::app::ModifiersState::default();
         let ctrl = crate::app::ModifiersState { ctrl: true, ..Default::default() };
-        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowUp)), Some(Action::PlayPause));
-        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowRight)), Some(Action::FrameNext));
-        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowLeft)), Some(Action::FramePrev));
-        assert_eq!(m.match_action(&ctrl, &Key::Named(NamedKey::ArrowUp)), None);
-        m.register("Down", Action::PlayPauseReverse).unwrap();
-        assert_eq!(m.match_action(&plain, &Key::Named(NamedKey::ArrowDown)), Some(Action::PlayPauseReverse));
+        assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowUp)), Some("play_pause"));
+        assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowRight)), Some("frame_next"));
+        assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowLeft)), Some("frame_prev"));
+        assert_eq!(m.match_command(&ctrl, &Key::Named(NamedKey::ArrowUp)), None);
+        m.register("Down", "play_pause_reverse").unwrap();
+        assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowDown)), Some("play_pause_reverse"));
     }
 
     /// Either play toggle pauses a moving timeline; direction only chooses
@@ -3288,31 +3289,31 @@ mod tests {
 
         // Test register and match
         let mut mgr = ShortcutManager::new();
-        mgr.register("Ctrl+g", Action::ToggleGrid).unwrap();
-        mgr.register("`", Action::ToggleSpreadsheet).unwrap();
+        mgr.register("Ctrl+g", "toggle_grid").unwrap();
+        mgr.register("`", "toggle_spreadsheet").unwrap();
 
         // Matches with ctrl and g
         let mods_ctrl = ModifiersState { ctrl: true, alt: false, shift: false, logo: false };
         let key_g = Key::Character("g".to_string());
-        assert_eq!(mgr.match_action(&mods_ctrl, &key_g), Some(Action::ToggleGrid));
+        assert_eq!(mgr.match_command(&mods_ctrl, &key_g), Some("toggle_grid"));
 
         // No match with ctrl and a
         let key_a = Key::Character("a".to_string());
-        assert_eq!(mgr.match_action(&mods_ctrl, &key_a), None);
+        assert_eq!(mgr.match_command(&mods_ctrl, &key_a), None);
 
         // Matches backtick with no modifiers
         let mods_none = ModifiersState::default();
         let key_tick = Key::Character("`".to_string());
-        assert_eq!(mgr.match_action(&mods_none, &key_tick), Some(Action::ToggleSpreadsheet));
+        assert_eq!(mgr.match_command(&mods_none, &key_tick), Some("toggle_spreadsheet"));
 
         // Context cycling chords: exact modifier match separates next from previous
-        mgr.register("Ctrl+Tab", Action::NextContext).unwrap();
-        mgr.register("Ctrl+Shift+Tab", Action::PrevContext).unwrap();
+        mgr.register("Ctrl+Tab", "next_context").unwrap();
+        mgr.register("Ctrl+Shift+Tab", "previous_context").unwrap();
         let key_tab = Key::Named(NamedKey::Tab);
         let mods_ctrl_shift = ModifiersState { ctrl: true, alt: false, shift: true, logo: false };
-        assert_eq!(mgr.match_action(&mods_ctrl, &key_tab), Some(Action::NextContext));
-        assert_eq!(mgr.match_action(&mods_ctrl_shift, &key_tab), Some(Action::PrevContext));
-        assert_eq!(mgr.match_action(&mods_none, &key_tab), None);
+        assert_eq!(mgr.match_command(&mods_ctrl, &key_tab), Some("next_context"));
+        assert_eq!(mgr.match_command(&mods_ctrl_shift, &key_tab), Some("previous_context"));
+        assert_eq!(mgr.match_command(&mods_none, &key_tab), None);
     }
 
     #[test]
@@ -3911,6 +3912,192 @@ mod tests {
         let (lx, _) = ink(HAlign::Left, VAlign::Middle);
         let (rx, _) = ink(HAlign::Right, VAlign::Middle);
         assert!(lx > cx && cx > rx, "alignment did not move the ink: {lx} {cx} {rx}");
+    }
+
+    /// Fuzzy ranking is the plugin's fuzzyfinder, deliberately: shortest
+    /// contiguous span, then earliest start, then alphabetical. Muscle memory
+    /// is the whole point of keeping it — "sg" has to keep landing on Show
+    /// Grid.
+    #[test]
+    fn test_fuzzy_ranking_matches_the_plugins_order() {
+        use crate::command::fuzzy_rank;
+        let items = ["Show Grid", "Show Spreadsheet Pane", "Save As", "Set As Default"];
+
+        // Subsequence, not substring.
+        let r = fuzzy_rank("sg", &items);
+        assert_eq!(items[r[0]], "Show Grid", "sg did not rank Show Grid first: {r:?}");
+
+        // The tightest span wins over the earliest start: "sa" spans 2 in
+        // "Save As" (Sa) and more in the others.
+        let r = fuzzy_rank("sa", &items);
+        assert_eq!(items[r[0]], "Save As");
+
+        // No match at all drops out rather than ranking last.
+        assert!(fuzzy_rank("zzz", &items).is_empty());
+
+        // An empty query is every item in registry order, which is what makes
+        // the palette usable as a plain list.
+        assert_eq!(fuzzy_rank("", &items), vec![0, 1, 2, 3]);
+
+        // Case and spaces in the query are ignored.
+        assert_eq!(fuzzy_rank("S G", &items), fuzzy_rank("sg", &items));
+    }
+
+    /// The registry's own invariants. Ids are what `input.kdl` binds and
+    /// labels are what the palette maps a chosen row back to, so a duplicate
+    /// of either silently runs the wrong command.
+    #[test]
+    fn test_the_command_registry_is_consistent() {
+        use crate::command::COMMANDS;
+        let mut ids: Vec<&str> = COMMANDS.iter().map(|c| c.id).collect();
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "duplicate command id");
+
+        let mut labels: Vec<&str> = COMMANDS.iter().map(|c| c.label).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), n, "duplicate command label: the palette picks by label");
+
+        for c in COMMANDS {
+            assert!(
+                c.id.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'),
+                "{} is not snake_case, which is what input.kdl writes",
+                c.id
+            );
+            if let Some(chord) = c.default_chord {
+                crate::shortcut::Shortcut::parse(chord)
+                    .unwrap_or_else(|e| panic!("{}: unparseable default chord {chord:?}: {e}", c.id));
+            }
+        }
+    }
+
+    /// Every menu-dispatched command names a label `execute_menu_action`
+    /// actually handles.
+    ///
+    /// This is the check the plugin's hccommands.py doc argues for: a label
+    /// kept in two places drifts, and a renamed one fails SILENTLY — the
+    /// dispatch falls through its match and the command simply does nothing.
+    /// Scanning the source is an odd way to assert it, but the alternative is
+    /// calling every command to see if it is handled, and "Exit" would end the
+    /// test run.
+    #[test]
+    fn test_every_menu_command_names_a_label_that_is_dispatched() {
+        use crate::command::{Run, COMMANDS};
+        let src = include_str!("app.rs");
+        let start = src
+            .find("pub fn execute_menu_action")
+            .expect("execute_menu_action moved; this test scans for it");
+        let body = &src[start..];
+        for c in COMMANDS {
+            let Run::Menu(label) = c.run else { continue };
+            let arm = format!("\"{label}\"");
+            assert!(
+                body.contains(&arm),
+                "command {} dispatches {label:?}, which execute_menu_action does not handle",
+                c.id
+            );
+        }
+    }
+
+    /// Two commands on one chord is silent at the keyboard — the second never
+    /// runs and nothing says why — so it is reported at startup.
+    #[test]
+    fn test_chord_conflicts_are_detected_across_spellings() {
+        use crate::command::conflicts;
+        let none = conflicts(&[("save_document", "Ctrl+s".into()), ("undo", "Ctrl+z".into())]);
+        assert!(none.is_empty(), "{none:?}");
+
+        // Compared as PARSED chords, not as text: these are the same keypress.
+        let clash = conflicts(&[
+            ("save_document", "Ctrl+s".into()),
+            ("toggle_grid", "ctrl+S".into()),
+            ("undo", "CTRL+s".into()),
+        ]);
+        assert_eq!(clash.len(), 1, "{clash:?}");
+        assert_eq!(clash[0].winner, "save_document", "the first registered must win");
+        assert_eq!(clash[0].shadowed, vec!["toggle_grid", "undo"]);
+
+        // The shipped defaults must not collide with each other.
+        let shipped: Vec<(&'static str, String)> = crate::command::COMMANDS
+            .iter()
+            .filter_map(|c| c.default_chord.map(|d| (c.id, d.to_string())))
+            .collect();
+        let shipped_conflicts = conflicts(&shipped);
+        assert!(shipped_conflicts.is_empty(), "the defaults collide: {shipped_conflicts:?}");
+    }
+
+    /// The palette ranks the focused pane's commands first without hiding the
+    /// rest — a palette that omits what you are looking for is worse than one
+    /// that lists it second.
+    #[test]
+    fn test_the_palette_puts_the_focused_panes_commands_first() {
+        use crate::command::{palette_entries, Context, COMMANDS};
+        let all = palette_entries("", Context::Viewport);
+        assert_eq!(all.len(), COMMANDS.len(), "ranking dropped commands");
+        assert_eq!(
+            all[0].context,
+            Context::Viewport,
+            "a viewport command does not lead: {}",
+            all[0].id
+        );
+        assert!(
+            all.iter().any(|c| c.id == "save_document"),
+            "a global command vanished when a pane was focused"
+        );
+
+        // With nothing pane-specific focused the order is the fuzzy one alone.
+        let plain = palette_entries("", Context::Always);
+        assert_eq!(plain[0].id, COMMANDS[0].id);
+    }
+
+    /// A chord prints back the way it parsed, in a fixed modifier order, so
+    /// two spellings of one chord read the same beside their labels.
+    #[test]
+    fn test_a_chord_describes_itself_back() {
+        use crate::shortcut::Shortcut;
+        for (written, shown) in [
+            ("Ctrl+s", "Ctrl+S"),
+            ("ctrl+shift+S", "Ctrl+Shift+S"),
+            ("shift+ctrl+s", "Ctrl+Shift+S"),
+            ("`", "`"),
+        ] {
+            assert_eq!(Shortcut::parse(written).unwrap().describe(), shown);
+        }
+        // And what it prints parses back to the same chord.
+        for c in crate::command::COMMANDS.iter().filter_map(|c| c.default_chord) {
+            let parsed = Shortcut::parse(c).unwrap();
+            assert_eq!(Shortcut::parse(&parsed.describe()).unwrap(), parsed, "{c} did not round trip");
+        }
+    }
+
+    /// A palette row round-trips back to the command it names — including
+    /// when one label is a prefix of another.
+    #[test]
+    fn test_a_palette_row_names_its_command_back() {
+        use crate::command::{from_palette_row, palette_row, COMMANDS};
+        let width = COMMANDS.iter().map(|c| c.label.len()).max().unwrap() + 2;
+
+        for c in COMMANDS {
+            let row = palette_row(c.label, Some("Ctrl+X".into()), width);
+            assert_eq!(
+                from_palette_row(&row).map(|f| f.id),
+                Some(c.id),
+                "row {row:?} did not name {} back",
+                c.id
+            );
+            // And a row with no chord at all.
+            let bare = palette_row(c.label, None, width);
+            assert_eq!(from_palette_row(&bare).map(|f| f.id), Some(c.id));
+        }
+
+        // The prefix case, spelled out: "Save" starts "Save As"'s row, and
+        // taking the first match rather than the longest runs the wrong one.
+        let row = palette_row("Save As", Some("Ctrl+Shift+S".into()), width);
+        assert_eq!(from_palette_row(&row).map(|c| c.id), Some("save_document_as"));
+
+        assert!(from_palette_row("Not A Command").is_none());
     }
 
     /// A page's raster is its physical size times its resolution — the
