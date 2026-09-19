@@ -722,6 +722,10 @@ pub fn generate_single_node_geometry_with_errors(
         Some(box_detail(start, end, thickness))
     } else if target.node_type.eq_ignore_ascii_case("curve") {
         Some(curve_detail(target))
+    } else if target.node_type.eq_ignore_ascii_case("grid") {
+        Some(grid_detail(target))
+    } else if target.node_type.eq_ignore_ascii_case("polygon") {
+        Some(polygon_detail(target))
     } else if target.node_type.eq_ignore_ascii_case("points") {
         let idx = find_sphere_index(root, target)?;
         let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
@@ -1664,7 +1668,91 @@ pub fn resolve_cull_geometry_with_errors(
     Some(geom)
 }
 
-/// The Transfer node: carry attributes from one geometry onto another.
+/// The Grid node: a flat sheet of quads in the XZ plane.
+///
+/// Native, where Plane is an OpenCL subnet. Both make a grid; this one costs
+/// no kernel compile, produces welded points rather than a corner list that
+/// has to be welded on the way back, and can therefore be the input to a
+/// remesh or a diffusion without a round trip. Plane stays because a kernel
+/// generator is a useful thing to have an example of.
+///
+/// Placed at Center rather than by its position in the graph. The older
+/// generators offset themselves by an index so several of them do not stack,
+/// which is surprising the first time and unadjustable after; a parameter says
+/// what it is.
+pub fn grid_detail(target: &FsNode) -> Detail {
+    let rows = node_param_f32(target, "Rows", 10.0).clamp(1.0, 500.0) as usize;
+    let cols = node_param_f32(target, "Columns", 10.0).clamp(1.0, 500.0) as usize;
+    let width = node_param_f32(target, "Width", 1.0).max(1e-4);
+    let length = node_param_f32(target, "Length", 1.0).max(1e-4);
+    let centre = node_param_vec3(target, "Center", Vec3::ZERO);
+
+    let mut d = Detail::new();
+    for r in 0..=rows {
+        for c in 0..=cols {
+            let u = c as f32 / cols as f32 - 0.5;
+            let v = r as f32 / rows as f32 - 0.5;
+            d.add_point(centre + Vec3::new(u * width, 0.0, v * length));
+        }
+    }
+    let at = |r: usize, c: usize| (r * (cols + 1) + c) as u32;
+    // Wound counter-clockwise seen from +Y, so the plain cross points up —
+    // the same convention the sphere and the template meshes follow.
+    for r in 0..rows {
+        for c in 0..cols {
+            d.add_prim(&[at(r, c), at(r + 1, c), at(r + 1, c + 1), at(r, c + 1)]);
+        }
+    }
+    d
+}
+
+/// The Polygon node: a regular n-gon, a star, or a disc.
+///
+/// One node for four of the plugin's Create operators — `im_square`,
+/// `im_triangle`, `im_star` and the circle nobody got round to — because they
+/// are one shape with one parameter varying. Three sides is a triangle, four
+/// is a square, thirty-two is a circle, and a non-zero Inner Radius makes any
+/// of them a star by pulling every other point inward.
+///
+/// Filled fans from a CENTRE POINT rather than from the first corner. A fan
+/// from a corner is fine on a convex polygon and wrong on a star: the
+/// triangles cross the concave notches and the shape renders as its own convex
+/// hull.
+pub fn polygon_detail(target: &FsNode) -> Detail {
+    let sides = node_param_f32(target, "Sides", 4.0).clamp(3.0, 256.0) as usize;
+    let radius = node_param_f32(target, "Radius", 0.5).max(1e-4);
+    let inner = node_param_f32(target, "Inner Radius", 0.0).max(0.0);
+    let fill = node_param_str(target, "Fill", "true") != "false";
+    let centre = node_param_vec3(target, "Center", Vec3::ZERO);
+
+    let mut d = Detail::new();
+    // A star alternates between the two radii, so it has twice the corners.
+    let star = inner > 0.0;
+    let corners = if star { sides * 2 } else { sides };
+    let ring: Vec<u32> = (0..corners)
+        .map(|i| {
+            let a = std::f32::consts::TAU * i as f32 / corners as f32;
+            let r = if star && i % 2 == 1 { inner } else { radius };
+            d.add_point(centre + Vec3::new(r * a.cos(), 0.0, -r * a.sin()))
+        })
+        .collect();
+
+    if fill {
+        let hub = d.add_point(centre);
+        for i in 0..corners {
+            d.add_prim(&[hub, ring[i], ring[(i + 1) % corners]]);
+        }
+    } else {
+        // Two-point primitives: the outline as edges, which Detail's topology
+        // reads as a closed loop and nothing tries to shade.
+        for i in 0..corners {
+            d.add_prim(&[ring[i], ring[(i + 1) % corners]]);
+        }
+    }
+    d
+}
+
+/// The Transfer node: carry attributes from one geometry onto another./// The Transfer node: carry attributes from one geometry onto another.
 ///
 /// How a field outlives the geometry it was defined on. A remesh keeps values
 /// for the points that survived, but a chain that REBUILDS — a kernel
@@ -4697,6 +4785,8 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
     nt == "sphere"
         || nt == "line"
         || nt == "curve"
+        || nt == "grid"
+        || nt == "polygon"
         || nt == "points"
         || nt == "transform"
         || nt == "opencl"
@@ -4796,6 +4886,18 @@ pub fn network_sphere_vertices_with_errors(
                 let thickness = node_param_f32(node, "Thickness", 0.02);
                 let end = start + Vec3::new(0.0, length, 0.0);
                 out.merge(&box_detail(start, end, thickness));
+            }
+        } else if node.node_type.eq_ignore_ascii_case("grid") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                out.merge(&grid_detail(node));
+            }
+        } else if node.node_type.eq_ignore_ascii_case("polygon") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                out.merge(&polygon_detail(node));
             }
         } else if node.node_type.eq_ignore_ascii_case("curve") {
             // Absolute world coordinates: no grid-index placement, and

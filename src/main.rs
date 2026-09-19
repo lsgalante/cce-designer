@@ -3364,6 +3364,109 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_grid_is_a_welded_sheet_wound_upward() {
+        let root = modelling_root(
+            "1.0",
+            vec![phase3_node(
+                "grid",
+                &[("Rows", "4"), ("Columns", "6"), ("Width", "2.00"), ("Length", "3.00")],
+            )],
+        );
+        let (g, err) = eval_node(&root, "grid 1");
+        assert!(err.is_none(), "{err:?}");
+
+        // Welded, not a corner list: 5 x 7 points for 4 x 6 quads. That is the
+        // difference from the Plane subnet, whose kernel emits corners that
+        // have to be welded on the way back.
+        assert_eq!(g.num_points(), 5 * 7);
+        assert_eq!(g.num_prims(), 4 * 6);
+        for prim in 0..g.num_prims() {
+            assert_eq!(g.prim_points(prim).len(), 4, "prim {prim} is not a quad");
+        }
+
+        // Sized by its parameters, centred where it was told.
+        let (lo, hi) = g.bounds().unwrap();
+        assert!(((hi - lo) - Vec3::new(2.0, 0.0, 3.0)).length() < 1e-5, "{:?}", hi - lo);
+        assert!(((lo + hi) * 0.5).length() < 1e-5, "not centred: {:?}", (lo + hi) * 0.5);
+
+        // Wound so the plain cross points up, like every other generator.
+        for n in crate::geometry::point_normals(&g) {
+            assert!(n.y > 0.99, "a face points {n:?} rather than up");
+        }
+
+        // An interior point has four neighbours, which is what says the sheet
+        // is one surface rather than loose quads.
+        let interior = (0..g.num_points())
+            .find(|&p| g.point_neighbours(p).len() == 4)
+            .expect("no interior point");
+        assert_eq!(g.point_prims(interior).len(), 4);
+    }
+
+    #[test]
+    fn test_polygon_is_four_create_operators_with_one_parameter_varying() {
+        let build = |params: &[(&str, &str)]| {
+            let mut ps = vec![("Radius", "1.00")];
+            ps.extend_from_slice(params);
+            let root = modelling_root("1.0", vec![phase3_node("polygon", &ps)]);
+            eval_node(&root, "polygon 1").0
+        };
+
+        // Three sides is a triangle, four a square, thirty-two a circle: the
+        // same shape with one number changed.
+        let tri = build(&[("Sides", "3")]);
+        assert_eq!(tri.num_prims(), 3, "a filled triangle is three fan triangles");
+        assert_eq!(tri.num_points(), 4, "three corners and a hub");
+        let circle = build(&[("Sides", "32")]);
+        assert_eq!(circle.num_points(), 33);
+
+        // A circle's corners all sit at the radius; a square's do too.
+        for d in [&circle, &build(&[("Sides", "4")])] {
+            for p in 0..d.num_points() {
+                let r = d.pos(p).length();
+                assert!(r < 1.0 + 1e-4, "point {p} is outside the radius at {r}");
+            }
+            assert!((d.bounds().unwrap().1.y).abs() < 1e-6, "the polygon is not flat");
+            // Wound so the plain cross points up, like the grid and the
+            // sphere. The grid got this backwards on the first try, so it is
+            // worth asserting wherever a generator lays out a face by hand.
+            for n in crate::geometry::point_normals(d) {
+                assert!(n.y > 0.99, "a face points {n:?} rather than up");
+            }
+        }
+
+        // A star alternates the two radii, so it has twice the corners and
+        // half of them sit on the inner circle.
+        let star = build(&[("Sides", "5"), ("Inner Radius", "0.40")]);
+        assert_eq!(star.num_prims(), 10);
+        let inner = (0..star.num_points())
+            .filter(|&p| (star.pos(p).length() - 0.4).abs() < 1e-4)
+            .count();
+        assert_eq!(inner, 5, "the notches are not on the inner radius");
+
+        // Filled from a CENTRE point, not fanned from a corner: on a star a
+        // corner fan crosses the notches and the shape renders as its convex
+        // hull. Every triangle here touches the hub.
+        let hub = star.num_points() - 1;
+        assert!(star.pos(hub).length() < 1e-6, "the hub is not at the centre");
+        for prim in 0..star.num_prims() {
+            assert!(
+                star.prim_points(prim).contains(&(hub as u32)),
+                "prim {prim} does not touch the hub, so the fill fans from a corner"
+            );
+        }
+
+        // Unfilled is the outline: one two-point primitive per edge, a closed
+        // loop, and nothing to shade.
+        let ring = build(&[("Sides", "6"), ("Fill", "false")]);
+        assert_eq!(ring.num_points(), 6, "no hub when there is no fill");
+        assert_eq!(ring.num_prims(), 6);
+        assert_eq!(ring.edges().len(), 6, "the outline closes");
+        for p in 0..ring.num_points() {
+            assert_eq!(ring.point_neighbours(p).len(), 2, "point {p} is not on a loop");
+        }
+    }
+
     // ---- The parameter pane's conditional rows ----
 
     fn pd(name: &str, value: &str, show_when: &str) -> crate::app::ParamDef {

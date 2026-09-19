@@ -296,9 +296,14 @@ Touches: a new `remesh.rs`, `geometry.rs`, `nodes/*.json`.
 > and `im_curl` into one node: they are the same shape, a transform whose
 > strength varies along an axis.
 >
-> Remaining: Select (which is `group` with more criteria, not a new node), the
-> Create primitives, and the long tail — which the audit prunes hard (version
-> forks, the dead-on-arrival nodes, the Houdini-SOP wrappers).
+> The Create set grew a native `grid` (welded points, no kernel, so it can
+> feed a remesh or a diffusion directly) and a `polygon` covering `im_square`,
+> `im_triangle`, `im_star` and the circle nobody got round to — one shape with
+> one parameter varying.
+>
+> Remaining: Select (which is `group` with more criteria, not a new node), and
+> the long tail — which the audit prunes hard (version forks, the
+> dead-on-arrival nodes, the Houdini-SOP wrappers).
 
 The `im_*` family, which is the part that looks biggest and is actually the
 easiest — ninety nodes, most of them a screenful once points and prims exist.
