@@ -894,6 +894,7 @@ impl State {
                         min: None,
                         max: None,
                         step: None,
+                        show_when: String::new(),
                     };
                     state.current_dir_mut().children[slot].params.push(param);
                     state.sync_nodes();

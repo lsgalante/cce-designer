@@ -4159,6 +4159,7 @@ pub fn parse_dynamic_params(code: &str) -> Vec<ParamDef> {
                                     min,
                                     max,
                                     step,
+                                    show_when: String::new(),
                                 });
                             }
                         }
@@ -5738,6 +5739,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 })
                 .collect(),
             geometry_visible: true,
@@ -5868,6 +5870,7 @@ mod tests {
                     min: Some(1.0),
                     max: Some(10.0),
                     step: Some(1.0),
+                    show_when: String::new(),
                 },
                 ParamDef {
                     name: "Shape".to_string(),
@@ -5878,6 +5881,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 },
             ],
             geometry_visible: true,
@@ -5941,6 +5945,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -5963,6 +5968,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 },
                 ParamDef {
                     name: "Translation".to_string(),
@@ -5973,6 +5979,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -6019,6 +6026,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 },
                 ParamDef {
                     name: "Translation".to_string(),
@@ -6029,6 +6037,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -6072,6 +6081,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 },
                 ParamDef {
                     name: "Translation".to_string(),
@@ -6082,6 +6092,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -6127,6 +6138,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -6150,6 +6162,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 },
                 ParamDef {
                     name: "Code".to_string(),
@@ -6167,6 +6180,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -6215,6 +6229,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -6238,6 +6253,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 },
                 ParamDef {
                     name: "Points".to_string(),
@@ -6248,6 +6264,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 },
                 ParamDef {
                     name: "Radius".to_string(),
@@ -6258,6 +6275,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 }
             ],
             geometry_visible: true,
@@ -6508,6 +6526,7 @@ mod simnet_tests {
             min: None,
             max: None,
             step: None,
+            show_when: String::new(),
         }
     }
 

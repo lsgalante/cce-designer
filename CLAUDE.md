@@ -254,6 +254,31 @@ files migrate on load. Scroll behavior (`scroll_speed`, `inertial_scroll`,
 `scroll_friction`) is intentionally absent: it is config-owned
 (`input.inertial` in config.kdl) and must not be shadowed by app state.
 
+### Conditional parameter rows
+
+A `ParamDef` may carry `show_when`, a condition over its SIBLINGS' current
+values deciding whether the params pane shows it: `Mode == Twist`,
+`Mode == Twist|Bend` for any-of, `Mode != Bleed` for unless, ` && ` between
+clauses, compared case-insensitively. Empty means always, which is what most
+parameters have. `param_visible` evaluates it and `param_display` filters on
+it.
+
+It exists because collapsing the Houdini operator set into fewer nodes traded
+node count for parameter count — `attribute` reached seventeen parameters, of
+which seven apply at once. Phrased the positive way round (unlike Houdini's
+`hideWhen`) because a template author is describing when a control APPLIES.
+
+Two rules worth knowing. A condition that does not parse, or names a parameter
+the node does not have, HIDES its row: a template bug should be visible, not
+silent — and `test_the_shipped_templates_only_name_parameters_they_have` walks
+every shipped template to catch exactly that. And hiding a row never touches
+its value: write-back resolves rows by display key rather than position, so a
+hidden parameter is simply not reported and comes back as it was.
+
+`merge_template_defs` carries `show_when` from the template like the rest of
+the UI metadata — the template owns when a control applies, the instance owns
+its value.
+
 ### Runtime paths point into the source tree
 
 Node templates (`nodes/*.json`) and `default_project.json` are located via

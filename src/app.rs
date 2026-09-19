@@ -92,9 +92,57 @@ pub struct ParamDef {
     pub max: Option<f32>,
     #[serde(default)]
     pub step: Option<f32>,
+    /// When this parameter should be SHOWN, as a condition over its siblings'
+    /// current values. Empty means always.
+    ///
+    /// Grammar, deliberately tiny: `Mode == Twist`, `Mode == Twist|Bend` for
+    /// any-of, `Mode != Bleed` for unless, and ` && ` between clauses. It
+    /// exists because collapsing fifty operators into ten traded node count
+    /// for parameter count — Attribute reached sixteen parameters, of which
+    /// four matter at any moment — and a pane showing twelve irrelevant rows
+    /// is worse than the twelve nodes it replaced.
+    ///
+    /// Houdini calls this `hideWhen`. Phrased the positive way round here
+    /// because a template author is describing when a control APPLIES, and
+    /// stating that directly is easier to get right than stating its negation.
+    #[serde(default)]
+    pub show_when: String,
 }
 
 fn default_param_type() -> String { "string".to_string() }
+
+/// Whether a parameter's `show_when` condition holds, given its siblings.
+///
+/// Values are compared case-insensitively against the sibling's CURRENT value
+/// (`default` is where this app keeps live values). A condition naming a
+/// parameter that does not exist is treated as unmet: a template that
+/// misspells a name hides the row rather than showing it unconditionally, so
+/// the mistake is visible instead of silent.
+pub fn param_visible(params: &[ParamDef], cond: &str) -> bool {
+    let cond = cond.trim();
+    if cond.is_empty() {
+        return true;
+    }
+    cond.split("&&").all(|clause| {
+        let clause = clause.trim();
+        let (name, wanted, negated) = match clause.split_once("!=") {
+            Some((n, v)) => (n.trim(), v.trim(), true),
+            None => match clause.split_once("==") {
+                Some((n, v)) => (n.trim(), v.trim(), false),
+                // Not a comparison at all: an unparseable condition is a
+                // template bug, and hiding the row makes it noticeable.
+                None => return false,
+            },
+        };
+        let Some(sibling) = params.iter().find(|p| p.name.eq_ignore_ascii_case(name)) else {
+            return false;
+        };
+        let matches = wanted
+            .split('|')
+            .any(|w| w.trim().eq_ignore_ascii_case(sibling.default.trim()));
+        matches != negated
+    })
+}
 
 static NODE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -350,7 +398,10 @@ pub struct NodeTemplate {
 }
 
 pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
-    params.iter().map(|p| {
+    // Rows whose condition does not hold are not shown. Write-back resolves a
+    // row by its display key rather than by position, so a hidden parameter
+    // simply is not reported and keeps whatever value it had.
+    params.iter().filter(|p| param_visible(params, &p.show_when)).map(|p| {
         let key = if p.label.is_empty() { &p.name } else { &p.label };
         let value = if p.param_type == "choice" && !p.options.is_empty() && p.default.is_empty() {
             p.options[0].clone()
@@ -435,6 +486,7 @@ pub fn ensure_meta_on(node: &mut FsNode) {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 });
             }
         }
@@ -524,6 +576,12 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                 ip.min = tp.min;
                 ip.max = tp.max;
                 ip.step = tp.step;
+                // The condition is UI metadata like the rest: the template
+                // owns when a control applies, the instance owns its value.
+                // Without this a saved project keeps the pane it had on the
+                // day it was made, and a node that later learned to hide its
+                // irrelevant rows would not hide them there.
+                ip.show_when = tp.show_when.clone();
             } else {
                 node.params.push(tp.clone());
             }

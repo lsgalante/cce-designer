@@ -592,6 +592,7 @@ impl State {
                     min,
                     max,
                     step,
+                    show_when: String::new(),
                 });
             }
         }
@@ -990,6 +991,7 @@ impl State {
                         min: None,
                         max: None,
                         step: None,
+                        show_when: String::new(),
                     });
                 }
                 if !node.params.iter().any(|p| p.name == "Show Camera Pivot") {
@@ -1002,6 +1004,7 @@ impl State {
                         min: None,
                         max: None,
                         step: None,
+                        show_when: String::new(),
                     });
                 }
                 if !node.params.iter().any(|p| p.name == "Camera Pivot Size") {
@@ -1014,6 +1017,7 @@ impl State {
                         min: Some(1.0),
                         max: Some(50.0),
                         step: Some(1.0),
+                        show_when: String::new(),
                     });
                 }
             }

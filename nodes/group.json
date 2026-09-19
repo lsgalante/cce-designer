@@ -17,7 +17,8 @@
     {
       "name": "Element Type",
       "type": "choice:Points,Primitives,Edges",
-      "default": "Points"
+      "default": "Points",
+      "show_when": "Mode != Expand|Attribute"
     },
     {
       "name": "Mode",
@@ -30,7 +31,8 @@
       "default": "1",
       "min": 1.0,
       "max": 500.0,
-      "step": 1.0
+      "step": 1.0,
+      "show_when": "Mode == Random"
     },
     {
       "name": "Seed",
@@ -38,21 +40,24 @@
       "default": "0",
       "min": 0.0,
       "max": 999.0,
-      "step": 1.0
+      "step": 1.0,
+      "show_when": "Mode == Random"
     },
     {
       "name": "Center",
       "type": "float3",
       "default": "0.00:0.00:0.00",
       "min": -10.0,
-      "max": 10.0
+      "max": 10.0,
+      "show_when": "Mode == Box"
     },
     {
       "name": "Size",
       "type": "float3",
       "default": "1.00:1.00:1.00",
       "min": 0.0,
-      "max": 20.0
+      "max": 20.0,
+      "show_when": "Mode == Box"
     },
     {
       "name": "Invert",
@@ -67,22 +72,26 @@
     {
       "name": "Attribute",
       "type": "text",
-      "default": ""
+      "default": "",
+      "show_when": "Mode == Attribute"
     },
     {
       "name": "Comparison",
       "type": "choice:Below,Above",
-      "default": "Above"
+      "default": "Above",
+      "show_when": "Mode == Attribute"
     },
     {
       "name": "Threshold",
       "type": "text",
-      "default": "0.50"
+      "default": "0.50",
+      "show_when": "Mode == Attribute"
     },
     {
       "name": "Source Group",
       "type": "text",
-      "default": ""
+      "default": "",
+      "show_when": "Mode == Expand"
     },
     {
       "name": "Rings",
@@ -90,7 +99,8 @@
       "default": "1",
       "min": -8.0,
       "max": 8.0,
-      "step": 1.0
+      "step": 1.0,
+      "show_when": "Mode == Expand"
     }
   ]
 }

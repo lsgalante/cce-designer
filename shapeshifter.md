@@ -317,6 +317,14 @@ Touches: `geometry.rs`, `nodes/*.json`.
 
 *Medium. Needs nothing — start any time.*
 
+> **Started.** Parameters can declare `show_when`, a condition over their
+> siblings' values, and the pane shows only the rows that apply: `attribute`
+> drops from seventeen rows to seven, `group` from fifteen to eight,
+> `neighbour` from thirteen to seven. This was the cost of the 50 → 10
+> collapse coming due — a pane of twelve irrelevant rows is worse than the
+> twelve nodes it replaced — and it is the first Phase 5 item because it was
+> the binding constraint on using what Phases 1 to 4 built.
+
 Independent of all the geometry work, and the place where the app gets to be
 better rather than equal. A **command palette** on the HC Panel's model — fuzzy
 search over every action, contextual to the focused pane — which in Houdini

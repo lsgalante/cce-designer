@@ -1,93 +1,107 @@
 {
- "name": "Attribute",
- "type": "attribute",
- "inputs": 1,
- "outputs": 1,
- "params": [
-  {
-   "name": "Input",
-   "type": "text",
-   "default": ""
-  },
-  {
-   "name": "Operation",
-   "type": "choice:Create,Modify,Delete,Remap,Clip,Normalize,Composite,Promote",
-   "default": "Create"
-  },
-  {
-   "name": "Attribute Name",
-   "type": "text",
-   "default": "attr1"
-  },
-  {
-   "name": "Type",
-   "type": "choice:Float,Float2,Float3,Float4",
-   "default": "Float"
-  },
-  {
-   "name": "Value",
-   "type": "text",
-   "default": "1.00"
-  },
-  {
-   "name": "Combine",
-   "type": "choice:Set,Add,Multiply",
-   "default": "Set"
-  },
-  {
-   "name": "Group",
-   "type": "text",
-   "default": ""
-  },
-  {
-   "name": "From Min",
-   "type": "text",
-   "default": "0.00"
-  },
-  {
-   "name": "From Max",
-   "type": "text",
-   "default": "1.00"
-  },
-  {
-   "name": "To Min",
-   "type": "text",
-   "default": "0.00"
-  },
-  {
-   "name": "To Max",
-   "type": "text",
-   "default": "1.00"
-  },
-  {
-   "name": "Source B",
-   "type": "text",
-   "default": ""
-  },
-  {
-   "name": "Combine Op",
-   "type": "choice:Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
-   "default": "Add"
-  },
-  {
-   "name": "To Class",
-   "type": "choice:Detail,Point",
-   "default": "Detail"
-  },
-  {
-   "name": "Method",
-   "type": "choice:Average,Sum,Minimum,Maximum,First",
-   "default": "Average"
-  },
-  {
-   "name": "Target",
-   "type": "choice:Sum,Maximum,Range",
-   "default": "Maximum"
-  },
-  {
-   "name": "Kind",
-   "type": "choice:Live,Derivative",
-   "default": "Live"
-  }
- ]
+  "name": "Attribute",
+  "type": "attribute",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    {
+      "name": "Input",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "name": "Operation",
+      "type": "choice:Create,Modify,Delete,Remap,Clip,Normalize,Composite,Promote",
+      "default": "Create"
+    },
+    {
+      "name": "Attribute Name",
+      "type": "text",
+      "default": "attr1"
+    },
+    {
+      "name": "Type",
+      "type": "choice:Float,Float2,Float3,Float4",
+      "default": "Float",
+      "show_when": "Operation == Create"
+    },
+    {
+      "name": "Value",
+      "type": "text",
+      "default": "1.00",
+      "show_when": "Operation == Create|Modify"
+    },
+    {
+      "name": "Combine",
+      "type": "choice:Set,Add,Multiply",
+      "default": "Set",
+      "show_when": "Operation == Modify"
+    },
+    {
+      "name": "Group",
+      "type": "text",
+      "default": "",
+      "show_when": "Operation != Promote"
+    },
+    {
+      "name": "From Min",
+      "type": "text",
+      "default": "0.00",
+      "show_when": "Operation == Remap|Clip"
+    },
+    {
+      "name": "From Max",
+      "type": "text",
+      "default": "1.00",
+      "show_when": "Operation == Remap|Clip"
+    },
+    {
+      "name": "To Min",
+      "type": "text",
+      "default": "0.00",
+      "show_when": "Operation == Remap"
+    },
+    {
+      "name": "To Max",
+      "type": "text",
+      "default": "1.00",
+      "show_when": "Operation == Remap|Normalize"
+    },
+    {
+      "name": "Source B",
+      "type": "text",
+      "default": "",
+      "show_when": "Operation == Composite"
+    },
+    {
+      "name": "Combine Op",
+      "type": "choice:Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
+      "default": "Add",
+      "show_when": "Operation == Composite"
+    },
+    {
+      "name": "To Class",
+      "type": "choice:Detail,Point",
+      "default": "Detail",
+      "show_when": "Operation == Promote"
+    },
+    {
+      "name": "Method",
+      "type": "choice:Average,Sum,Minimum,Maximum,First",
+      "default": "Average",
+      "show_when": "Operation == Promote"
+    },
+    {
+      "name": "Target",
+      "type": "choice:Sum,Maximum,Range",
+      "default": "Maximum",
+      "show_when": "Operation == Normalize"
+    },
+    {
+      "name": "Kind",
+      "type": "choice:Live,Derivative",
+      "default": "Live",
+      "show_when": "Operation == Create"
+    }
+  ]
 }

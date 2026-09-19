@@ -571,6 +571,7 @@ mod tests {
                 min: None,
                 max: None,
                 step: None,
+                show_when: String::new(),
             });
         }
 
@@ -742,6 +743,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 });
             }
             state.fs_root.children.push(child);
@@ -3362,6 +3364,147 @@ mod tests {
         }
     }
 
+    // ---- The parameter pane's conditional rows ----
+
+    fn pd(name: &str, value: &str, show_when: &str) -> crate::app::ParamDef {
+        crate::app::ParamDef {
+            name: name.into(),
+            label: String::new(),
+            param_type: "text".into(),
+            default: value.into(),
+            options: vec![],
+            min: None,
+            max: None,
+            step: None,
+            show_when: show_when.into(),
+        }
+    }
+
+    #[test]
+    fn test_a_row_shows_only_when_its_condition_holds() {
+        use crate::app::{param_display, param_visible};
+        let params = vec![
+            pd("Mode", "Twist", ""),
+            pd("Angle", "1.0", "Mode == Twist"),
+            pd("Bend Axis", "Y", "Mode == Bend"),
+            pd("Shared", "x", "Mode == Twist|Bend"),
+            pd("Not Bleed", "x", "Mode != Bleed"),
+        ];
+        let shown: Vec<String> = param_display(&params).into_iter().map(|r| r.0).collect();
+        assert_eq!(shown, vec!["Mode", "Angle", "Shared", "Not Bleed"]);
+
+        // Flip the driving parameter and a different set applies. This is the
+        // whole point: collapsing fifty operators into ten traded node count
+        // for parameter count, and a pane showing twelve irrelevant rows is
+        // worse than the twelve nodes it replaced.
+        let mut bent = params.clone();
+        bent[0].default = "Bend".into();
+        let shown: Vec<String> = param_display(&bent).into_iter().map(|r| r.0).collect();
+        assert_eq!(shown, vec!["Mode", "Bend Axis", "Shared", "Not Bleed"]);
+
+        // Bleed matches none of the conditions, so only the driving row is
+        // left — which is a node with one relevant control showing one.
+        let mut bleeding = params.clone();
+        bleeding[0].default = "Bleed".into();
+        let shown: Vec<String> = param_display(&bleeding).into_iter().map(|r| r.0).collect();
+        assert_eq!(shown, vec!["Mode"]);
+
+        // The condition is evaluated against siblings' CURRENT values, which
+        // is where this app keeps them.
+        assert!(param_visible(&params, "Mode == Twist"));
+        assert!(!param_visible(&bleeding, "Mode == Twist"));
+    }
+
+    #[test]
+    fn test_conditions_and_together_and_compare_without_case() {
+        use crate::app::param_visible;
+        let params = vec![
+            pd("Mode", "Align", ""),
+            pd("Target", "Constant", ""),
+        ];
+        assert!(param_visible(&params, "Mode == Align && Target == Constant"));
+        assert!(!param_visible(&params, "Mode == Align && Target == Attribute"));
+        // Case does not matter: a template author writing `twist` and a choice
+        // reading `Twist` is not a bug worth having.
+        assert!(param_visible(&params, "mode == ALIGN"));
+        // An empty condition always holds — that is what most parameters have.
+        assert!(param_visible(&params, ""));
+        assert!(param_visible(&params, "   "));
+    }
+
+    #[test]
+    fn test_a_broken_condition_hides_its_row_rather_than_hiding_the_mistake() {
+        use crate::app::param_visible;
+        let params = vec![pd("Mode", "Twist", "")];
+        // A misspelled sibling, and a clause that is not a comparison at all.
+        // Both are template bugs; showing the row unconditionally would let
+        // them pass unnoticed, and the row going missing is a complaint you
+        // can act on.
+        assert!(!param_visible(&params, "Moed == Twist"));
+        assert!(!param_visible(&params, "Mode"));
+        assert!(!param_visible(&params, "Mode ~ Twist"));
+    }
+
+    #[test]
+    fn test_the_shipped_templates_only_name_parameters_they_have() {
+        // Every condition in every template has to resolve, or the row it
+        // guards silently never appears. Checking the shipped set here is
+        // cheaper than finding one missing in the pane a month from now.
+        let templates = crate::app::load_fs_tree();
+        let mut checked = 0;
+        fn walk(node: &FsNode, checked: &mut usize) {
+            let names: Vec<&str> = node.params.iter().map(|p| p.name.as_str()).collect();
+            for p in &node.params {
+                for clause in p.show_when.split("&&") {
+                    let clause = clause.trim();
+                    if clause.is_empty() {
+                        continue;
+                    }
+                    let sep = if clause.contains("!=") { "!=" } else { "==" };
+                    let (lhs, rhs) = clause.split_once(sep).unwrap_or_else(|| {
+                        panic!("{}: '{}' is not a comparison", node.name, clause)
+                    });
+                    let lhs = lhs.trim();
+                    assert!(
+                        names.iter().any(|n| n.eq_ignore_ascii_case(lhs)),
+                        "{} guards '{}' on '{}', which it does not have",
+                        node.name,
+                        p.name,
+                        lhs
+                    );
+                    assert!(!rhs.trim().is_empty(), "{}: '{}' compares to nothing", node.name, clause);
+                    *checked += 1;
+                }
+            }
+            for c in &node.children {
+                walk(c, checked);
+            }
+        }
+        for t in &templates.children {
+            walk(t, &mut checked);
+        }
+        assert!(checked > 20, "only {checked} conditions checked — did the templates lose them?");
+    }
+
+    #[test]
+    fn test_hiding_a_row_does_not_lose_its_value() {
+        use crate::app::param_display;
+        // Write-back resolves a row by its display key, not by position, so a
+        // hidden parameter is simply not reported and keeps what it had. A
+        // user who sets a Remap range, switches to Clip and switches back must
+        // find their numbers still there.
+        let mut params = vec![
+            pd("Operation", "Remap", ""),
+            pd("To Max", "7.5", "Operation == Remap"),
+        ];
+        assert_eq!(param_display(&params).len(), 2);
+        params[0].default = "Clip".into();
+        assert_eq!(param_display(&params).len(), 1, "the row hid");
+        assert_eq!(params[1].default, "7.5", "but the value is untouched");
+        params[0].default = "Remap".into();
+        assert_eq!(param_display(&params)[1].1, "7.5", "and comes back as it was");
+    }
+
     // ---- Phase 4: the modelling set ----
 
     /// Two spheres far apart: two connected pieces, the first much larger.
@@ -3488,6 +3631,7 @@ mod tests {
                 min: None,
                 max: None,
                 step: None,
+                show_when: String::new(),
             });
 
         let (g, err) = eval_node(&root, "distance 1");
@@ -4321,6 +4465,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 })
                 .collect(),
             geometry_visible: true,
@@ -4364,6 +4509,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
+                    show_when: String::new(),
                 })
                 .collect(),
             geometry_visible: true,
