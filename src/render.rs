@@ -385,8 +385,7 @@ impl State {
                         let depth = cce_ui::layout::bevel_width();
                         pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
                             rect: vp_rect,
-                            color: [0.0; 4],
-                            blur: false,
+                            material: cce_ui::scene::Material::opaque([0.0; 4]),
                             window_corners: (true, true, true, true),
                             depth: -depth,
                         });
