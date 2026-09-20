@@ -390,7 +390,7 @@ impl State {
                             depth: -depth,
                         });
                         if let Some(tint) = self.plate_focus_tint(idx) {
-                            pc.bevel_tinted(vp_rect, radii, [0.0; 4], depth, tint);
+                            pc.bevel_tinted(vp_rect, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
                         }
                     } else {
                         pc.border(vp_rect, radii, [0.0; 4], bc, cce_ui::colors::plate_border_thickness());
@@ -487,9 +487,9 @@ impl State {
                 }
                 for (qx, qy, qw, qh, highlighted) in bodies {
                     if highlighted {
-                        pc.bevel_tinted(rect(qx, qy, qw, qh), radii, node_fill, node_bevel, hl_tint);
+                        pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &cce_ui::scene::Material::from_fill(node_fill), node_bevel, hl_tint);
                     } else {
-                        pc.bevel(rect(qx, qy, qw, qh), radii, node_fill, node_bevel);
+                        pc.bevel(rect(qx, qy, qw, qh), radii, &cce_ui::scene::Material::from_fill(node_fill), node_bevel);
                     }
                 }
                 for (qx, qy, qw, qh, qc) in overlays {
@@ -521,11 +521,11 @@ impl State {
                 let depth = cce_ui::colors::plate_bevel_width();
                 if self.graph().is_node_rect(cx, cy, cw, ch) {
                     let r = cce_ui::layout::graph_node_corner_radius();
-                    pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], depth, tint);
+                    pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
                 } else {
                     let r = self.graph().cell_corner_radius();
                     pc.clip(clip, |pc| {
-                        pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), [0.0; 4], depth, tint);
+                        pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
                     });
                 }
             }

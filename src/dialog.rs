@@ -399,7 +399,7 @@ impl Paint for Dialog {
             // "this is the live one": the tinted bevel, a glint on the
             // control's own silhouette.
             if active {
-                ctx.bevel_tinted(r, radii, colors::param_plate_fill(), depth, tint);
+                ctx.bevel_tinted(r, radii, &cce_ui::scene::Material::from_fill(colors::param_plate_fill()), depth, tint);
             } else if self.hover_tab == Some(tab) {
                 ctx.rounded_rect(r, ctrl_r, (true, true, true, true), [1.0, 1.0, 1.0, 0.05]);
             }
@@ -474,7 +474,7 @@ impl Paint for Dialog {
             let row = &self.rows[i];
             if i == self.selected {
                 ctx.rounded_rect(r, ctrl_r, (true, true, true, true), [accent[0], accent[1], accent[2], 0.16]);
-                ctx.bevel_tinted(r, radii, [0.0; 4], depth, tint);
+                ctx.bevel_tinted(r, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
             } else if self.hover_row == Some(i) {
                 ctx.rounded_rect(r, ctrl_r, (true, true, true, true), [1.0, 1.0, 1.0, 0.05]);
             }
