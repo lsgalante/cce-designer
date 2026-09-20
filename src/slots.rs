@@ -216,10 +216,12 @@ impl WidgetSlots {
 /// Dissolved cce-ui `Plate` (Phase 6as): a passive panel wearing the parameter
 /// plate's fill — same tint, opacity, and blur-behind marker (`param_plate_fill`),
 /// so the network plate's bevel rolls exactly like the params plate's and tracks a
-/// live retint/opacity/blur toggle — scaled by the network fade. No children, no
-/// events.
+/// live retint/opacity/blur toggle. NOT scaled by the network fade (it was until
+/// 2026-09-20): the graph's grid cells are this plate showing through, so the
+/// plate has to be the pane material verbatim or the network pane reads as a
+/// different colour from every other pane. The fade applies to what is drawn
+/// over it — grid lines, wires, text. No children, no events.
 pub struct PassivePlate {
-    pub network_opacity: f32,
     /// Circular hit shape while the network pane is round (the legacy Plate marker).
     curved_circle: Option<(f32, f32, f32)>,
 }
@@ -227,13 +229,8 @@ pub struct PassivePlate {
 impl PassivePlate {
     pub fn new() -> cce_ui::widget::Adapted<PassivePlate> {
         cce_ui::widget::Adapted::new(Self {
-            network_opacity: 1.0,
             curved_circle: None,
         })
-    }
-
-    pub fn set_network_opacity(&mut self, opacity: f32) {
-        self.network_opacity = opacity;
     }
 
     pub fn set_curved_circle(&mut self, circle: Option<(f32, f32, f32)>) {
@@ -252,11 +249,8 @@ impl cce_ui::widget::Paint for PassivePlate {
     fn paint(&self, _rect: cce_ui::scene::layout::Rect, _ctx: &mut cce_ui::scene::paint::PaintCtx) {}
 
     fn color(&self) -> [f32; 4] {
-        // `param_plate_fill` folds in the plate opacity and the blur marker; the
-        // network fade scales the (possibly negative) alpha without flipping its sign.
-        let mut c = cce_ui::colors::param_plate_fill();
-        c[3] *= self.network_opacity;
-        c
+        // `param_plate_fill` folds in the plate opacity and the blur marker.
+        cce_ui::colors::param_plate_fill()
     }
 
     fn corner_style(&self, _rect: cce_ui::scene::layout::Rect) -> Option<(f32, (bool, bool, bool, bool))> {

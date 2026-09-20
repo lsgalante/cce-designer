@@ -4402,9 +4402,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if let Some(breadcrumb) = self.slots.breadcrumb.as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
             breadcrumb.set_network_opacity(self.network_opacity);
         }
-        if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
-            plate.set_network_opacity(self.network_opacity);
-        }
 
         // The second editor's graph reads the SAME display settings but its
         // OWN rect as origin (no pan of its own yet — the rect is the view).
@@ -4427,9 +4424,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
         if let Some(bc2) = self.slots.breadcrumb2.as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
             bc2.set_network_opacity(self.network_opacity);
-        }
-        if let Some(plate) = self.slots.network_panel2.as_any_mut().downcast_mut::<PassivePlate>() {
-            plate.set_network_opacity(self.network_opacity);
         }
     }
 
