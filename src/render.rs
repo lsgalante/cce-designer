@@ -456,6 +456,10 @@ impl State {
                 let mut bodies: Vec<(f32, f32, f32, f32, bool)> = Vec::new();
                 let mut overlays: Vec<(f32, f32, f32, f32, [f32; 4])> = Vec::new();
                 let mut seen_node = false;
+                // The grid: relief carved into the pane plate (one lattice +
+                // the two axis grooves), under the wires and nodes. Shading
+                // only, so the pane stays the params plate's material.
+                g.paint_grid_relief(clip, pc);
                 for (qx, qy, qw, qh, qc, cell) in g.geometry_quads_tagged(clip) {
                     if g.is_node_rect(qx, qy, qw, qh) {
                         seen_node = true;
