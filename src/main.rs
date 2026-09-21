@@ -4071,8 +4071,21 @@ mod tests {
         assert_eq!(state.dialog_tab(), Tab::Settings);
         let shown = state.dialog_settings_shown.clone();
         assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Color" && t == "rgba"), "{shown:?}");
+        assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Single Color" && t == "toggle"), "{shown:?}");
         let s = crate::dialog::SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
         assert_eq!(s.owner, Some(crate::dialog::Owner::Subnet("Render", "Wire Color")));
+
+        // Editing both rows reaches the live state: the colour AND the switch
+        // that makes the wire pass use it (off, the wires carry the
+        // geometry's colours and the colour row is their alpha alone).
+        assert!(!state.wire_single_color, "single-colour mode is off by default");
+        let mut rows = state.dialog_settings_shown.clone();
+        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Color").unwrap().1 = "#000000ff".to_string();
+        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Single Color").unwrap().1 = "true".to_string();
+        state.slots.dialog_params_mut().set_display_params(&rows);
+        state.sync_dialog_settings_to_project();
+        assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0], "the colour row writes the live wire colour");
+        assert!(state.wire_single_color, "the switch row turns single-colour mode on");
     }
 
     /// The wireframe toggle is a palette row that flips the live flag AND

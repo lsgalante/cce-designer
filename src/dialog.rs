@@ -849,9 +849,10 @@ impl Setting {
 /// the render subnet (per-project look), the pane-visibility toggles (the
 /// View menu and the plate corners already own those, and a settings dialog
 /// is a strange place to hide a pane from), and keybindings, which this DE
-/// edits as `input.kdl` on purpose. The one exception is the wire colour:
-/// the palette's Wireframe Color command lands on it, so it is a row here,
-/// its owner still the Render node — per-project, unlike the rest of this
+/// edits as `input.kdl` on purpose. The one exception is the wireframe
+/// pair: the palette's Wireframe Color command lands on the colour, so it
+/// is a row here with the single-colour switch that makes it apply, their
+/// owner still the Render node — per-project, unlike the rest of this
 /// table.
 pub const SETTINGS: &[Setting] = &[
     Setting::section("Viewport"),
@@ -859,6 +860,11 @@ pub const SETTINGS: &[Setting] = &[
     Setting::row("Square Aspect", Owner::Command("toggle_square_viewport")),
     Setting::section("Wireframe"),
     Setting::row("Wireframe Color", Owner::Subnet("Render", "Wire Color")),
+    // The colour applies only in single-colour mode (off, the wires carry
+    // the geometry's vertex colours and the colour row sets their alpha
+    // alone) — so the switch sits beside the colour, or a colour set here
+    // looks ignored.
+    Setting::row("Wireframe Single Color", Owner::Subnet("Render", "Wire Single Color")),
     Setting::section("Grid"),
     Setting::row("Show Grid", Owner::Subnet("Guides", "Show Grid Guide")),
     Setting::row("Grid Color", Owner::Subnet("Guides", "Grid Color")),
