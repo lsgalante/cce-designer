@@ -343,6 +343,7 @@ impl State {
                         2 => {
                             state.circular_network_pane = !state.circular_network_pane;
                             let val = state.circular_network_pane;
+                            state.write_meta_toggle("Main", "Circular Pane", val);
                             state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
                             state.rebuild_positions();
                             state.apply_layout();
@@ -973,6 +974,7 @@ impl State {
             McpAction::ToggleCircularPane => {
                 state.circular_network_pane = !state.circular_network_pane;
                 let val = state.circular_network_pane;
+                state.write_meta_toggle("Main", "Circular Pane", val);
                 state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 state.rebuild_positions();
                 state.apply_layout();

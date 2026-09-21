@@ -2797,12 +2797,33 @@ impl State {
     /// so a command that changed the live state leaves the node agreeing
     /// with it. Nothing when the project has no Render node yet.
     pub(crate) fn write_render_toggle(&mut self, name: &str, val: bool) {
+        self.write_meta_toggle("Render", name, val);
+    }
+
+    /// The Guides node's counterpart: what Show Grid, Show Cube and Show
+    /// Origin write, for the same reason Show Wireframe writes the Render
+    /// node — see [`State::write_meta_toggle`].
+    pub(crate) fn write_guides_toggle(&mut self, name: &str, val: bool) {
+        self.write_meta_toggle("Guides", name, val);
+    }
+
+    /// Write a toggle's value onto the utility subnet that OWNS it.
+    ///
+    /// A command that flips only the live flag has flipped it until the next
+    /// parameter edit anywhere: `apply_settings_from_menubar_subnets` copies
+    /// the meta node's subnets onto the live state on every change, so the
+    /// stored value wins and the toggle silently reverts. Show Cube did
+    /// exactly that on 2026-09-21 — hidden by its command, back the moment a
+    /// node's parameter was edited. The subnet param is the value's one
+    /// owner (the dialog's Settings half writes there too), so a command
+    /// that changes the value writes it there.
+    pub(crate) fn write_meta_toggle(&mut self, subnet: &str, name: &str, val: bool) {
         if let Some(p) = self
             .fs_root
             .children
             .iter_mut()
             .find(|c| c.node_type == "meta")
-            .and_then(|s| s.children.iter_mut().find(|c| c.name == "Render"))
+            .and_then(|s| s.children.iter_mut().find(|c| c.name == subnet))
             .and_then(|n| n.params.iter_mut().find(|p| p.name == name))
         {
             p.default = if val { "true" } else { "false" }.to_string();
@@ -5625,18 +5646,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleGrid => {
                 let val = !self.viewport().show_grid;
                 self.viewport_mut().show_grid = val;
+                self.write_guides_toggle("Show Grid Guide", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, val);
                 settings_changed = true;
             }
             Action::ToggleCube => {
                 let val = !self.viewport().show_cube;
                 self.viewport_mut().show_cube = val;
+                self.write_guides_toggle("Show Reference Cube", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 1, val);
                 settings_changed = true;
             }
             Action::ToggleOrigin => {
                 let val = !self.viewport().show_origin;
                 self.viewport_mut().show_origin = val;
+                self.write_guides_toggle("Show Origin Axes", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 settings_changed = true;
             }
@@ -5702,6 +5726,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleCircularPane => {
                 self.circular_network_pane = !self.circular_network_pane;
                 let val = self.circular_network_pane;
+                // The Main node owns this one, as Guides owns the guide
+                // toggles above: without the write, the next parameter edit
+                // put the pane back the way the node said.
+                self.write_meta_toggle("Main", "Circular Pane", val);
                 self.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 self.rebuild_positions();
                 self.apply_layout();

@@ -5046,6 +5046,63 @@ mod tests {
         );
     }
 
+    /// The viewport guide toggles survive the next parameter edit.
+    ///
+    /// `apply_settings_from_menubar_subnets` copies the Guides node onto the
+    /// live flags on EVERY parameter change, so a command that flipped only
+    /// the flag was undone by the next edit anywhere — Show Cube hid the
+    /// cube, and editing any node's parameter brought it back. The command
+    /// has to write the Guides node, the value's owner, as Show Wireframe
+    /// writes the Render node.
+    #[test]
+    fn guide_toggles_survive_the_settings_apply_pass() {
+        let mut state = State::new(false);
+        let guides_value = |state: &State, name: &str| -> String {
+            state
+                .session_node()
+                .and_then(|s| s.children.iter().find(|c| c.name == "Guides"))
+                .and_then(|g| g.params.iter().find(|p| p.name == name))
+                .map(|p| p.default.clone())
+                .expect("the Guides param")
+        };
+        for (command, param) in [
+            ("toggle_cube", "Show Reference Cube"),
+            ("toggle_grid", "Show Grid Guide"),
+            ("toggle_origin", "Show Origin Axes"),
+        ] {
+            let flag = |state: &State| match command {
+                "toggle_cube" => state.viewport().show_cube,
+                "toggle_grid" => state.viewport().show_grid,
+                _ => state.viewport().show_origin,
+            };
+            let before = flag(&state);
+            assert_eq!(guides_value(&state, param), before.to_string(), "{param} starts in step with the flag");
+
+            assert!(state.run_command(command));
+            assert_eq!(flag(&state), !before, "{command} flipped the flag");
+            assert_eq!(guides_value(&state, param), (!before).to_string(), "{command} wrote the Guides node");
+
+            // What every parameter edit runs.
+            state.apply_settings_from_menubar_subnets();
+            assert_eq!(flag(&state), !before, "{command} was undone by the apply pass");
+
+            // And a real edit through the action path, on an unrelated node.
+            let mut redraw = false;
+            let sphere = state.current_dir().children.iter().position(|c| c.name.starts_with("Sphere")).expect("a sphere");
+            state
+                .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.7".into() }, &mut redraw)
+                .expect("set a sphere param");
+            assert_eq!(flag(&state), !before, "{command} was undone by a parameter edit");
+        }
+
+        // Circular Pane lives on the Main node and had the same hole.
+        let before = state.circular_network_pane;
+        assert!(state.run_command("toggle_circular_pane"));
+        assert_eq!(state.circular_network_pane, !before);
+        state.apply_settings_from_menubar_subnets();
+        assert_eq!(state.circular_network_pane, !before, "Circular Pane was undone by the apply pass");
+    }
+
     /// A replacement renderer invalidates the page pane's image id, and the
     /// state has to notice.
     ///
