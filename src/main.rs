@@ -3277,7 +3277,7 @@ mod tests {
         d.set_visible(true);
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new() })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -3983,6 +3983,48 @@ mod tests {
 
         // Case and spaces in the query are ignored.
         assert_eq!(fuzzy_rank("S G", &items), fuzzy_rank("sg", &items));
+    }
+
+    /// The Wireframe Color command is a palette row that PREVIEWS the colour
+    /// — the row carries the live wire colour as its swatch — and, picked,
+    /// lands on the Settings half's Wireframe Color row, whose owner is the
+    /// Render node's "Wire Color" (the value's one home). The palette row
+    /// shows the value; the settings row edits it.
+    #[test]
+    fn test_wireframe_color_row_previews_and_lands_on_settings() {
+        use crate::command::{by_id, Run};
+        use crate::dialog::Tab;
+        let cmd = by_id("wireframe_color").expect("no wireframe_color command");
+        assert_eq!(cmd.label, "Wireframe Color");
+        assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::WireframeColor));
+
+        let mut state = State::new(false);
+        state.wire_color = [0.2, 0.6, 0.9, 0.5];
+        state.run_command("command_palette");
+        let row = state
+            .slots
+            .dialog
+            .rows
+            .iter()
+            .find(|r| r.id == "wireframe_color")
+            .expect("the palette lists Wireframe Color");
+        let sw = row.swatch.expect("the row carries a swatch");
+        let want = cce_ui::color::to_linear([0.2, 0.6, 0.9, 1.0]);
+        for k in 0..4 {
+            assert!((sw[k] - want[k]).abs() < 1e-6, "swatch channel {k}: {} vs {}", sw[k], want[k]);
+        }
+        assert!(state.slots.dialog.rows.iter().filter(|r| r.id != "wireframe_color").all(|r| r.swatch.is_none()));
+
+        // Picked from the list: the dialog closes, the command reopens it on
+        // Settings, and the Wireframe Color row is there as a colour control
+        // owned by the Render node.
+        state.take_dialog_pick("wireframe_color".to_string());
+        assert!(state.dialog_visible());
+        assert_eq!(state.dialog_tab(), Tab::Settings);
+        let shown = state.dialog_settings_shown.clone();
+        assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Color" && t == "rgba"), "{shown:?}");
+        let s = crate::dialog::SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
+        assert_eq!(s.owner, Some(crate::dialog::Owner::Subnet("Render", "Wire Color")));
     }
 
     /// The wireframe toggle is a palette row that flips the live flag AND

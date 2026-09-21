@@ -75,6 +75,11 @@ pub struct Row {
     /// replacing it — which the `cce-cloud` palette could only approximate by
     /// padding the label out, since all it could send was one line of text.
     pub chord: String,
+    /// A colour the row previews, drawn as a swatch ahead of the label —
+    /// linear RGBA, as the paint path takes it. `None` for the ordinary row.
+    /// The Wireframe Color command carries the live wire colour here, so
+    /// the palette shows what the setting currently is before it is opened.
+    pub swatch: Option<[f32; 4]>,
 }
 
 /// The dialog's outer size. Fixed rather than proportional: it is a focused
@@ -88,6 +93,8 @@ const PAD: f32 = 12.0;
 const TAB_H: f32 = 30.0;
 const QUERY_H: f32 = 30.0;
 pub const ROW_H: f32 = 24.0;
+/// Side of a row's colour swatch, logical px.
+pub const SWATCH_SIDE: f32 = 14.0;
 /// Gap between the tab strip, the query line and the list.
 const GAP: f32 = 8.0;
 
@@ -522,9 +529,21 @@ impl Paint for Dialog {
             // label is cut by it rather than running under it.
             let label_right = r.x + r.width - 8.0 - if chord_w > 0.0 { chord_w + 12.0 } else { 0.0 };
             let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
+            // The swatch: a small rounded tile ahead of the label, ringed
+            // faintly so a colour near the plate's own does not vanish into
+            // it. The label steps right by the tile.
+            let mut label_x = r.x + 8.0;
+            if let Some(sw) = row.swatch {
+                let side = SWATCH_SIDE;
+                let tile = Rect { x: label_x, y: r.y + (r.height - side) * 0.5, width: side, height: side };
+                let ring = Rect { x: tile.x - 1.0, y: tile.y - 1.0, width: side + 2.0, height: side + 2.0 };
+                ctx.rounded_rect(ring, 4.0, (true, true, true, true), [1.0, 1.0, 1.0, 0.22]);
+                ctx.rounded_rect(tile, 3.0, (true, true, true, true), sw);
+                label_x += side + 8.0;
+            }
             ctx.text_with(
-                fit(&row.label, label_right - (r.x + 8.0)),
-                r.x + 8.0,
+                fit(&row.label, label_right - label_x),
+                label_x,
                 ty,
                 font_size,
                 label_color,
@@ -684,11 +703,16 @@ impl Setting {
 /// the render subnet (per-project look), the pane-visibility toggles (the
 /// View menu and the plate corners already own those, and a settings dialog
 /// is a strange place to hide a pane from), and keybindings, which this DE
-/// edits as `input.kdl` on purpose.
+/// edits as `input.kdl` on purpose. The one exception is the wire colour:
+/// the palette's Wireframe Color command lands on it, so it is a row here,
+/// its owner still the Render node — per-project, unlike the rest of this
+/// table.
 pub const SETTINGS: &[Setting] = &[
     Setting::section("Viewport"),
     Setting::row("Background Color", Owner::Subnet("Main", "Background Color")),
     Setting::row("Square Aspect", Owner::Command("toggle_square_viewport")),
+    Setting::section("Wireframe"),
+    Setting::row("Wireframe Color", Owner::Subnet("Render", "Wire Color")),
     Setting::section("Grid"),
     Setting::row("Show Grid", Owner::Subnet("Guides", "Show Grid Guide")),
     Setting::row("Grid Color", Owner::Subnet("Guides", "Grid Color")),
@@ -789,6 +813,16 @@ impl State {
         });
     }
 
+    /// Open the tabbed dialog on its Settings half — what the Wireframe
+    /// Color command does, so a palette pick lands on the row that edits
+    /// the value rather than on the list it was picked from.
+    pub fn open_dialog_on_settings(&mut self) {
+        if !self.dialog_visible() || self.slots.dialog.mode != Mode::Tabbed {
+            self.open_dialog_in(Mode::Tabbed);
+        }
+        self.set_dialog_tab(Tab::Settings);
+    }
+
     pub fn close_dialog(&mut self) {
         if !self.dialog_visible() {
             return;
@@ -842,6 +876,11 @@ impl State {
                         .chord_for(c.id)
                         .map(|s| s.describe())
                         .unwrap_or_default(),
+                    // The wire colour is kept sRGB-encoded (it round-trips
+                    // through the Render node's hex); the swatch is a fill.
+                    swatch: (c.id == "wireframe_color").then(|| {
+                        cce_ui::color::to_linear([self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0])
+                    }),
                 })
                 .collect(),
             Mode::AddNode => {
@@ -863,6 +902,7 @@ impl State {
                         id: offered[i].to_string(),
                         label: offered[i].to_string(),
                         chord: String::new(),
+                        swatch: None,
                     })
                     .collect()
             }

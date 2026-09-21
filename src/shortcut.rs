@@ -11,6 +11,7 @@ pub enum Action {
     ToggleOrigin,
     ToggleCameraPivot,
     ToggleWireframe,
+    WireframeColor,
     ToggleCircularPane,
     DetachCircularWindow,
     Save,

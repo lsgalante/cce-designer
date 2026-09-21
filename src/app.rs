@@ -5609,6 +5609,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.wireframe = val;
                 self.write_render_toggle("Show Wireframe", val);
             }
+            Action::WireframeColor => self.open_dialog_on_settings(),
             Action::ToggleSquareViewport => {
                 self.square_viewport = !self.square_viewport;
                 let val = self.square_viewport;
