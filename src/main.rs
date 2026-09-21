@@ -5602,6 +5602,30 @@ mod tests {
         }
     }
 
+    /// A Sphere TEMPLATE instance reads its kernel's chf("Radius") through
+    /// its parent's parameter — and that parameter may be a reference to the
+    /// subnet above, which has to be resolved before the kernel sees it.
+    #[test]
+    fn a_kernel_reads_a_reference_through_its_parent() {
+        let templates_root = crate::app::load_fs_tree();
+        let mut sphere = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap().clone();
+        sphere.id = "sph".into();
+        sphere.name = "sphere1".into();
+        for c in &mut sphere.children {
+            c.id = format!("sph_{}", c.name);
+        }
+        sphere.params.iter_mut().find(|p| p.name == "Radius").unwrap().default = "ch(\"Radius\")".into();
+        let out = ref_node("o", "output1", "output", vec![("Input", "text", "sphere1")], vec![]);
+        let sub = ref_node("sub", "subnet1", "node", vec![("Input", "text", ""), ("Radius", "slider", "0.9")], vec![sphere, out]);
+        let root = ref_node("root", "root", "node", vec![], vec![sub]);
+        let (g, err) = eval(&root, &root.children[0]);
+        assert!(err.is_none(), "{err:?}");
+        let g = g.expect("the subnet evaluates");
+        let center = Vec3::new(0.0, 0.55, 0.0);
+        let r = g.positions().iter().map(|p| (Vec3::from(*p) - center).length()).fold(0.0, f32::max);
+        assert!((r - 0.9).abs() < 0.02, "the kernel got the subnet's radius, not the reference string: {r}");
+    }
+
     /// The params pane shows a referencing value as the text it is.
     #[test]
     fn param_display_shows_references_as_text() {

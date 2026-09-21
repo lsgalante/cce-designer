@@ -980,6 +980,10 @@ pub fn generate_single_node_geometry_with_errors(
                 visited.pop();
                 return Some(fed);
             }
+            // Resolved, like the kernel's parent read above: a subnet's
+            // Input may itself be a reference.
+            let resolved_parent = resolve_param_refs(root, parent, ocl_error);
+            let parent = resolved_parent.as_ref().unwrap_or(parent);
             let input_name = node_param_str(parent, "Input", "");
             if !input_name.is_empty() {
                 if let Some(input_node) = find_input_node(root, target, &input_name) {
@@ -4689,6 +4693,12 @@ pub fn resolve_opencl_geometry_with_errors(
             let mut val_str = node_param_str(target, &p.name, &p.default);
             if !target.params.iter().any(|p_def| p_def.name.eq_ignore_ascii_case(&p.name)) {
                 if let Some(parent) = find_parent_node(root, &target.id) {
+                    // The parent's value RESOLVED: a Sphere instance whose
+                    // Radius is ch("Radius") hands its kernel the subnet's
+                    // number, not the reference string (which parses as
+                    // nothing and left the kernel at its default).
+                    let resolved_parent = resolve_param_refs(root, parent, ocl_error);
+                    let parent = resolved_parent.as_ref().unwrap_or(parent);
                     val_str = node_param_str(parent, &p.name, &val_str);
                 }
             }
