@@ -155,8 +155,16 @@ pub struct Dialog {
     pub rows: Vec<Row>,
     /// Which row Enter would run. Kept in range by [`Dialog::set_rows`].
     pub selected: usize,
-    /// First visible row, scrolled to keep `selected` in view.
-    pub scroll: usize,
+    /// The list's scroll offset in px (0 = row 0 flush with the list top),
+    /// the drawn value: rows paint at `i * ROW_H - scroll_px`, clipped to the
+    /// list. Driven by `scroll_motion` — the DE's one wheel→offset model, so
+    /// a notch glides and a trackpad tracks and coasts — and jumped by the
+    /// keyboard (`scroll_to_selected`). Until 2026-09-20 this was a ROW
+    /// index: every wheel event rounded to whole rows, so a trackpad's small
+    /// deltas did nothing until one crossed half a row and then jumped it —
+    /// the choppy commands list.
+    pub scroll_px: f32,
+    scroll_motion: cce_ui::widget::scroll_motion::ScrollMotion,
     /// How many rows fit — pushed in from the layout, since `on_event` and the
     /// app's key handling both need it and neither has the rect to hand.
     page: usize,
@@ -181,7 +189,8 @@ impl Dialog {
             query: String::new(),
             rows: Vec::new(),
             selected: 0,
-            scroll: 0,
+            scroll_px: 0.0,
+            scroll_motion: cce_ui::widget::scroll_motion::ScrollMotion::new(),
             page: 1,
             hover_row: None,
             hover_tab: None,
@@ -215,13 +224,28 @@ impl Dialog {
         self.mode == Mode::AddNode || self.tab == Tab::Commands
     }
 
+    /// The furthest the list scrolls: the last page flush with the bottom.
+    fn max_scroll_px(&self) -> f32 {
+        ((self.rows.len() as f32 - self.page.max(1) as f32) * ROW_H).max(0.0)
+    }
+
+    /// The first row with any part in view.
+    fn first_row(&self) -> usize {
+        (self.scroll_px / ROW_H).floor().max(0.0) as usize
+    }
+
+    /// Jump the list to `px` (clamped) — the keyboard's move, not a glide.
+    fn set_scroll_px(&mut self, px: f32) {
+        self.scroll_px = px.clamp(0.0, self.max_scroll_px());
+        self.scroll_motion.y.jump_to(self.scroll_px);
+    }
+
+    /// A row's rect in the list, `Some` while any part of it is in view
+    /// (the paint clips to the list, so a partly scrolled row draws cut).
     fn row_rect(&self, rect: Rect, i: usize) -> Option<Rect> {
         let list = list_rect(rect);
-        if i < self.scroll {
-            return None;
-        }
-        let offset = (i - self.scroll) as f32 * ROW_H;
-        if offset + ROW_H > list.height {
+        let offset = i as f32 * ROW_H - self.scroll_px;
+        if offset + ROW_H <= 0.0 || offset >= list.height {
             return None;
         }
         Some(Rect { x: list.x, y: list.y + offset, width: list.width, height: ROW_H })
@@ -232,8 +256,8 @@ impl Dialog {
         if x < list.x || x >= list.x + list.width || y < list.y || y >= list.y + list.height {
             return None;
         }
-        let i = self.scroll + ((y - list.y) / ROW_H).floor() as usize;
-        (i < self.rows.len()).then_some(i)
+        let i = ((y - list.y + self.scroll_px) / ROW_H).floor();
+        (i >= 0.0 && (i as usize) < self.rows.len()).then_some(i as usize)
     }
 
     fn tab_at(&self, rect: Rect, x: f32, y: f32) -> Option<Tab> {
@@ -245,18 +269,20 @@ impl Dialog {
 
     /// Keep `selected` inside the scrolled window.
     pub fn scroll_to_selected(&mut self) {
-        let per_page = self.page.max(1);
-        if self.selected < self.scroll {
-            self.scroll = self.selected;
-        } else if self.selected >= self.scroll + per_page {
-            self.scroll = self.selected + 1 - per_page;
+        let view = self.page.max(1) as f32 * ROW_H;
+        let top = self.selected as f32 * ROW_H;
+        let bottom = top + ROW_H;
+        if top < self.scroll_px {
+            self.set_scroll_px(top);
+        } else if bottom > self.scroll_px + view {
+            self.set_scroll_px(bottom - view);
         }
     }
 
     pub fn move_selection(&mut self, delta: i32) {
         if self.rows.is_empty() {
             self.selected = 0;
-            self.scroll = 0;
+            self.set_scroll_px(0.0);
             return;
         }
         let n = self.rows.len() as i32;
@@ -288,7 +314,7 @@ impl Dialog {
     pub fn set_rows(&mut self, rows: Vec<Row>) {
         self.rows = rows;
         self.selected = 0;
-        self.scroll = 0;
+        self.set_scroll_px(0.0);
     }
 }
 
@@ -469,7 +495,8 @@ impl Paint for Dialog {
             ctx.text_with(empty, list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
             return;
         }
-        for i in self.scroll..self.rows.len() {
+        ctx.clip(list, |ctx| {
+        for i in self.first_row()..self.rows.len() {
             let Some(r) = self.row_rect(rect, i) else { break };
             let row = &self.rows[i];
             if i == self.selected {
@@ -509,10 +536,25 @@ impl Paint for Dialog {
                 );
             }
         }
+        });
     }
 }
 
 impl Input for Dialog {
+    /// Advance the list's glide / coast (see `scroll_px`).
+    fn tick(&mut self, dt: f32, _rect: Rect) -> bool {
+        if !self.shows_list() {
+            return false;
+        }
+        let max = self.max_scroll_px();
+        self.scroll_motion.reconcile(0.0, self.scroll_px);
+        let moved = self.scroll_motion.tick(dt, cce_ui::widget::Bounds::max(0.0), cce_ui::widget::Bounds::max(max));
+        if moved {
+            self.scroll_px = self.scroll_motion.y.pos();
+        }
+        moved || self.scroll_motion.is_animating()
+    }
+
     /// The whole rect, always — this is what makes the dialog modal over what
     /// it covers: the designer's press cascade asks the dialog first and a hit
     /// never falls through to the pane underneath.
@@ -553,15 +595,18 @@ impl Input for Dialog {
                 if !self.shows_list() || self.rows.is_empty() {
                     return false;
                 }
-                let lines = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => -*y,
-                    MouseScrollDelta::PixelDelta(p) => -(p.y as f32) / ROW_H,
-                };
-                let max_scroll = self.rows.len().saturating_sub(self.page.max(1));
-                let next = (self.scroll as f32 + lines).round().clamp(0.0, max_scroll as f32) as usize;
-                let changed = next != self.scroll;
-                self.scroll = next;
-                changed
+                // The DE scroll model: a notch is one row and glides there, a
+                // trackpad tracks 1:1 and coasts on the lift (`tick` advances).
+                let max = self.max_scroll_px();
+                self.scroll_motion.reconcile(0.0, self.scroll_px);
+                let moved = self.scroll_motion.apply(
+                    delta,
+                    (ROW_H, ROW_H),
+                    cce_ui::widget::Bounds::max(0.0),
+                    cce_ui::widget::Bounds::max(max),
+                );
+                self.scroll_px = self.scroll_motion.y.pos();
+                moved || self.scroll_motion.is_animating()
             }
             _ => false,
         }
