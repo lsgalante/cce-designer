@@ -1372,6 +1372,12 @@ impl State {
         // cache, and the engine makes one on every left press
         // (`close_popovers_missed_by_press`).
         self.ui_context.invalidate_coverage_cache();
+        // Straight to handle_event, not propagate_event: so the gesture
+        // bookkeeping the router would have done is done here, or the
+        // dialog's panes inherit the main pane's gesture state.
+        if matches!(ev, cce_ui::widget::Event::MouseWheel { .. }) {
+            self.ui_context.note_scroll_event();
+        }
         let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn cce_ui::widget::WidgetHost + 'static);
         let taken = unsafe { (*ptr).handle_event(ev, &mut self.ui_context) };
         self.slots.dialog.set_occluding(true);
