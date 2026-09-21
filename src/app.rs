@@ -1344,6 +1344,9 @@ pub struct State {
     pub wire_width: f32,
     pub last_viewport_wire_single_color: bool,
     pub last_viewport_wire_color: [f32; 4],
+    /// The wire colour as last read off the Render node — so a CHANGE to
+    /// it can be told from a load. `None` until the first read.
+    pub last_applied_wire_color: Option<[f32; 4]>,
     pub last_viewport_wire_width: f32,
     /// Opacity of the rendered node geometry (the Render node's "Opacity"
     /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
@@ -2785,7 +2788,7 @@ impl State {
     /// `apply_settings_from_menubar_subnets` reads render settings from —
     /// so a command that changed the live state leaves the node agreeing
     /// with it. Nothing when the project has no Render node yet.
-    fn write_render_toggle(&mut self, name: &str, val: bool) {
+    pub(crate) fn write_render_toggle(&mut self, name: &str, val: bool) {
         if let Some(p) = self
             .fs_root
             .children
@@ -4347,6 +4350,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             wire_width: 1.0,
             last_viewport_wire_single_color: false,
             last_viewport_wire_color: [1.0, 1.0, 1.0, 1.0],
+            last_applied_wire_color: None,
             last_viewport_wire_width: 1.0,
             geo_opacity: 1.0,
             last_viewport_geo_opacity: 1.0,

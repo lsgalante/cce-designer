@@ -379,6 +379,9 @@ impl State {
             // (so a chord-flipped toggle shows on the node), which on a load
             // stamped the preferences file's values over the file's and lost
             // them before the apply below could read them (2026-09-21).
+            // A load is not a colour change: the loaded tree's value is the
+            // baseline, so the auto-enable of single-colour mode stays quiet.
+            self.last_applied_wire_color = None;
             self.apply_settings_from_menubar_subnets();
             self.ensure_menubar_subnets();
             self.apply_settings_from_menubar_subnets();
@@ -438,6 +441,9 @@ impl State {
         self.fs_root = proj.root;
         // As in the default-project branch: the file's viewport settings
         // land on the live state before ensure re-seeds the nodes from it.
+        // A load is not a colour change: the loaded tree's value is the
+        // baseline, so the auto-enable of single-colour mode stays quiet.
+        self.last_applied_wire_color = None;
         self.apply_settings_from_menubar_subnets();
         self.ensure_menubar_subnets();
         self.apply_settings_from_menubar_subnets();
@@ -1194,6 +1200,7 @@ impl State {
         }
 
         if let Some(params) = session_params(&self.fs_root, "Render") {
+            let before = self.wire_color;
             for p in &params {
                 match p.name.as_str() {
                     "Show Wireframe" => if let Ok(val) = p.default.parse::<bool>() { self.wireframe = val; }
@@ -1206,6 +1213,20 @@ impl State {
                     "Point Color" => if let Some(col) = hex_to_color(&p.default) { self.point_color = col; }
                     _ => {}
                 }
+            }
+            // Setting a wire colour means wanting to see it: a CHANGE to the
+            // colour (not a load — the first read of a tree sets the
+            // baseline, and a load's value is what it is) turns single-colour
+            // mode on if it was off, on the node as well as live, so the
+            // switch shows moved. Off, the wires carry the geometry's own
+            // colours and the colour row is their alpha alone — which twice
+            // read as "the colour did not take" (2026-09-21).
+            let changed = self.last_applied_wire_color.is_some_and(|last| last != self.wire_color)
+                && before != self.wire_color;
+            self.last_applied_wire_color = Some(self.wire_color);
+            if changed && !self.wire_single_color {
+                self.wire_single_color = true;
+                self.write_render_toggle("Wire Single Color", true);
             }
         }
     }

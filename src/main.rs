@@ -4181,6 +4181,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Changing the wire colour turns single-colour mode on — on the node
+    /// and live — so the colour shows; a load does not (a file that says
+    /// off stays off, whatever colour it carries), and turning the switch
+    /// off afterwards sticks until the colour changes again.
+    #[test]
+    fn changing_the_wire_colour_turns_single_colour_mode_on() {
+        let mut state = State::new(false);
+        state.ensure_menubar_subnets();
+        state.apply_settings_from_menubar_subnets();
+        assert!(!state.wire_single_color);
+        let render_param = |state: &State, name: &str| -> String {
+            state.fs_root.children.iter().find(|c| c.node_type == "meta").unwrap()
+                .children.iter().find(|c| c.name == "Render").unwrap()
+                .params.iter().find(|p| p.name == name).unwrap().default.clone()
+        };
+        // An edit through the node, as the params pane and the dialog make it.
+        {
+            let meta = state.fs_root.children.iter_mut().find(|c| c.node_type == "meta").unwrap();
+            let render = meta.children.iter_mut().find(|c| c.name == "Render").unwrap();
+            render.params.iter_mut().find(|p| p.name == "Wire Color").unwrap().default = "#000000ff".to_string();
+        }
+        state.apply_settings_from_menubar_subnets();
+        assert!(state.wire_single_color, "a colour change switches single-colour mode on");
+        assert_eq!(render_param(&state, "Wire Single Color"), "true", "and the node's switch shows it");
+        // Off again by hand stays off while the colour is unchanged.
+        state.write_render_toggle("Wire Single Color", false);
+        state.apply_settings_from_menubar_subnets();
+        assert!(!state.wire_single_color);
+
+        // A load: the file's colour differs from the fresh state's, its
+        // switch is off, and it stays off.
+        let dir = std::env::temp_dir().join(format!("cce-designer-wire-colour-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        state.save_to_file(&dir).expect("save");
+        let mut fresh = State::new(false);
+        fresh.ensure_menubar_subnets();
+        fresh.load_from_file(&dir).expect("load");
+        assert_eq!(fresh.wire_color, [0.0, 0.0, 0.0, 1.0]);
+        assert!(!fresh.wire_single_color, "a load never flips the switch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The wireframe toggle is a palette row that flips the live flag AND
     /// the Render node's "Show Wireframe" switch. The node matters: it is
     /// what `apply_settings_from_menubar_subnets` reads back on every
