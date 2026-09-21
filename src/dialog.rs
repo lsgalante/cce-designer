@@ -172,6 +172,16 @@ pub struct Dialog {
     /// the choppy commands list.
     pub scroll_px: f32,
     scroll_motion: cce_ui::widget::scroll_motion::ScrollMotion,
+    /// The list's scrollbar, in the DE's sink-behind idiom (cce-mail's
+    /// body bar, `ScrollRegion` with `sink_behind`): pills at the list's
+    /// right edge that fade in on a scroll, stay while hovered or dragged,
+    /// and fade out after the hold. Sunk, it is not drawn and takes no
+    /// input — a press on its lane reaches the row beneath.
+    sb_activity: cce_ui::widget::ScrollbarActivity,
+    sb_dragging: bool,
+    /// Where in the thumb the drag grabbed it, so the thumb does not jump
+    /// to centre itself under the pointer.
+    sb_drag_offset: f32,
     /// How many rows fit — pushed in from the layout, since `on_event` and the
     /// app's key handling both need it and neither has the rect to hand.
     page: usize,
@@ -198,6 +208,9 @@ impl Dialog {
             selected: 0,
             scroll_px: 0.0,
             scroll_motion: cce_ui::widget::scroll_motion::ScrollMotion::new(),
+            sb_activity: cce_ui::widget::ScrollbarActivity::new(),
+            sb_dragging: false,
+            sb_drag_offset: 0.0,
             page: 1,
             hover_row: None,
             hover_tab: None,
@@ -254,6 +267,82 @@ impl Dialog {
         self.scroll_motion.y.jump_to(self.scroll_px);
     }
 
+    /// The scrollbar's geometry — `(sb_x, track_y, sb_w, track_h, thumb_y,
+    /// thumb_h)`, mirroring `ScrollRegion::scrollbar_geom` as cce-mail's
+    /// body bar does — or `None` when the rows fit and there is no bar. The
+    /// one source for paint, the press and the drag. The bar rides the
+    /// plate's CENTRE line, as both of cce-mail's bars ride theirs — over
+    /// the rows, reserving no lane, in front only while raised — at the
+    /// page-level width the Settings half's pane uses, so the two halves'
+    /// bars match; the track stops 4px short at each end like every toolkit
+    /// bar.
+    pub fn scrollbar_geom(&self, rect: Rect) -> Option<(f32, f32, f32, f32, f32, f32)> {
+        if !self.shows_list() {
+            return None;
+        }
+        let max_scroll = self.max_scroll_px();
+        if max_scroll <= 0.0 {
+            return None;
+        }
+        let list = list_rect(rect);
+        let sb_w = cce_ui::layout::scrollbar_width() * 1.6;
+        let sb_x = rect.x + (rect.width - sb_w) * 0.5;
+        let track_y = list.y + 4.0;
+        let track_h = (list.height - 8.0).max(0.0);
+        let content_h = self.rows.len() as f32 * ROW_H;
+        let visible_ratio = list.height / content_h.max(1.0);
+        let thumb_h = if track_h <= 20.0 { track_h } else { (track_h * visible_ratio).clamp(20.0, track_h) };
+        let thumb_y = track_y + (self.scroll_px / max_scroll) * (track_h - thumb_h);
+        Some((sb_x, track_y, sb_w, track_h, thumb_y, thumb_h))
+    }
+
+    fn over_scrollbar(&self, rect: Rect, px: f32, py: f32) -> bool {
+        self.scrollbar_geom(rect).is_some_and(|(sb_x, track_y, sb_w, track_h, _, _)| {
+            px >= sb_x - 4.0 && px <= sb_x + sb_w + 4.0 && py >= track_y && py <= track_y + track_h
+        })
+    }
+
+    /// A left press on the bar's strip (±4px slop, like `ScrollRegion`):
+    /// grab the thumb where it was clicked, or jump the track there and
+    /// drag from the thumb's centre. A sunk bar is not drawn and takes no
+    /// input — the press falls through to the row beneath.
+    fn sb_press(&mut self, rect: Rect, px: f32, py: f32) -> bool {
+        if !self.sb_activity.raised() {
+            return false;
+        }
+        let Some((sb_x, track_y, sb_w, track_h, thumb_y, thumb_h)) = self.scrollbar_geom(rect) else {
+            return false;
+        };
+        if px < sb_x - 4.0 || px > sb_x + sb_w + 4.0 || py < track_y || py > track_y + track_h {
+            return false;
+        }
+        self.sb_dragging = true;
+        let click_offset = py - thumb_y;
+        if (0.0..=thumb_h).contains(&click_offset) {
+            self.sb_drag_offset = click_offset;
+        } else {
+            self.sb_drag_offset = thumb_h / 2.0;
+            self.sb_drag_to(rect, py);
+        }
+        true
+    }
+
+    fn sb_drag_to(&mut self, rect: Rect, py: f32) -> bool {
+        let Some((_, track_y, _, track_h, _, thumb_h)) = self.scrollbar_geom(rect) else {
+            return false;
+        };
+        let target = py - self.sb_drag_offset;
+        let ratio = if track_h - thumb_h > 0.0 { ((target - track_y) / (track_h - thumb_h)).clamp(0.0, 1.0) } else { 0.0 };
+        let old = self.scroll_px;
+        self.set_scroll_px(ratio * self.max_scroll_px());
+        (self.scroll_px - old).abs() > 0.01
+    }
+
+    /// Whether the bar is raised — for the app's press cascade and tests.
+    pub fn scrollbar_raised(&self) -> bool {
+        self.sb_activity.raised()
+    }
+
     /// A row's rect in the list, `Some` while any part of it is in view
     /// (the paint clips to the list, so a partly scrolled row draws cut).
     fn row_rect(&self, rect: Rect, i: usize) -> Option<Rect> {
@@ -288,8 +377,10 @@ impl Dialog {
         let bottom = top + ROW_H;
         if top < self.scroll_px {
             self.set_scroll_px(top);
+            self.sb_activity.bump();
         } else if bottom > self.scroll_px + view {
             self.set_scroll_px(bottom - view);
+            self.sb_activity.bump();
         }
     }
 
@@ -563,12 +654,41 @@ impl Paint for Dialog {
             }
         }
         });
+
+        // The scrollbar's fore copy, over the rows, at the activity's fade:
+        // pills, as `ScrollRegion::push_scrollbar_prims` and cce-mail's body
+        // bar draw them. Driven by the fade rather than the latch so it
+        // draws all the way out. The dialog's plate is the host's, so there
+        // is no under-plate copy to show through while sunk — sunk is
+        // simply not drawn, as cce-mail's body bar over its opaque window.
+        let a = self.sb_activity.fade().clamp(0.0, 1.0);
+        if a > 0.001 {
+            if let Some((sb_x, track_y, sb_w, track_h, thumb_y, thumb_h)) = self.scrollbar_geom(rect) {
+                let dim = |mut c: [f32; 4]| {
+                    c[3] *= a;
+                    c
+                };
+                let all = (true, true, true, true);
+                ctx.rounded_rect(
+                    Rect { x: sb_x, y: track_y, width: sb_w, height: track_h },
+                    sb_w.min(track_h) * 0.5,
+                    all,
+                    dim(cce_ui::color::scrollbar_track_color()),
+                );
+                ctx.rounded_rect(
+                    Rect { x: sb_x, y: thumb_y, width: sb_w, height: thumb_h },
+                    sb_w.min(thumb_h) * 0.5,
+                    all,
+                    dim(cce_ui::color::scrollbar_thumb_color()),
+                );
+            }
+        }
     }
 }
 
 impl Input for Dialog {
     /// Advance the list's glide / coast (see `scroll_px`).
-    fn tick(&mut self, dt: f32, _rect: Rect) -> bool {
+    fn tick(&mut self, dt: f32, rect: Rect) -> bool {
         if !self.shows_list() {
             return false;
         }
@@ -578,7 +698,14 @@ impl Input for Dialog {
         if moved {
             self.scroll_px = self.scroll_motion.y.pos();
         }
-        moved || self.scroll_motion.is_animating()
+        // The bar's raise/sink latch and its fade: frames keep coming while
+        // the hold runs and while the fore copy is still chasing the latch,
+        // so the sink actually renders instead of freezing mid-fade.
+        let visible = self.scrollbar_geom(rect).is_some();
+        let flipped = self.sb_activity.tick(dt, visible, self.sb_dragging);
+        let fade = self.sb_activity.fade();
+        let fading = if self.sb_activity.raised() { fade < 1.0 } else { fade > 0.0 };
+        moved || self.scroll_motion.is_animating() || flipped || self.sb_activity.holding() || fading
     }
 
     /// The whole rect, always — this is what makes the dialog modal over what
@@ -599,6 +726,11 @@ impl Input for Dialog {
                     }
                 }
                 if self.shows_list() {
+                    // The raised bar is in front of the rows; sunk, it is
+                    // not there and the press reaches the row.
+                    if self.sb_press(rect, *x, *y) {
+                        return true;
+                    }
                     if let Some(i) = self.row_at(rect, *x, *y) {
                         self.selected = i;
                         self.activated = self.rows.get(i).map(|r| r.id.clone());
@@ -609,7 +741,19 @@ impl Input for Dialog {
                 // press cannot reach the pane the dialog is covering.
                 true
             }
+            Event::MouseButton { button: MouseButton::Left, state: ElementState::Released, .. } => {
+                if std::mem::take(&mut self.sb_dragging) {
+                    // The release starts the hold before the bar sinks.
+                    self.sb_activity.bump();
+                    return true;
+                }
+                false
+            }
             Event::PointerMove { x, y, .. } => {
+                if self.sb_dragging {
+                    return self.sb_drag_to(rect, *y);
+                }
+                self.sb_activity.set_hover(self.over_scrollbar(rect, *x, *y));
                 let row = self.shows_list().then(|| self.row_at(rect, *x, *y)).flatten();
                 let tab = (self.mode == Mode::Tabbed).then(|| self.tab_at(rect, *x, *y)).flatten();
                 let changed = row != self.hover_row || tab != self.hover_tab;
@@ -632,6 +776,8 @@ impl Input for Dialog {
                     cce_ui::widget::Bounds::max(max),
                 );
                 self.scroll_px = self.scroll_motion.y.pos();
+                // A scroll raises the bar and starts its hold.
+                self.sb_activity.bump();
                 moved || self.scroll_motion.is_animating()
             }
             _ => false,

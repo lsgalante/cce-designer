@@ -3266,6 +3266,54 @@ mod tests {
     }
 
     #[test]
+    /// The list's scrollbar is cce-mail's: sunk until a scroll raises it,
+    /// draggable while raised, sunk again after the hold — and while sunk it
+    /// takes no input, so a press on its lane reaches the row beneath.
+    #[test]
+    fn dialog_scrollbar_raises_on_scroll_drags_and_sinks() {
+        use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, Position, ScrollPhase, WidgetHost};
+        use crate::dialog::{Dialog, Row};
+        let mut ctx = cce_ui::context::UiContext::new();
+        let mut d = Dialog::new();
+        d.set_visible(true);
+        WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
+        let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 520.0, height: 420.0 };
+        let rows: Vec<Row> = (0..60)
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None })
+            .collect();
+        d.set_rows(rows);
+        d.set_page(10);
+        assert!(d.scrollbar_geom(rect).is_some(), "sixty rows overflow: there is a bar");
+        assert!(!d.scrollbar_raised(), "sunk until something scrolls");
+
+        cce_ui::widget::scroll_motion::set_scroll_phase(ScrollPhase::Finger);
+        d.mouse_wheel_ungated(&MouseScrollDelta::PixelDelta(Position { x: 0.0, y: -30.0 }), 100.0, 200.0, &mut ctx);
+        WidgetHost::tick(&mut d, 1.0 / 60.0, &mut ctx);
+        assert!(d.scrollbar_raised(), "a scroll raises the bar");
+
+        // Grab the thumb and drag it down: the list follows.
+        let (sb_x, _, sb_w, _, thumb_y, thumb_h) = d.scrollbar_geom(rect).unwrap();
+        let before = d.scroll_px;
+        let gx = sb_x + sb_w * 0.5;
+        let gy = thumb_y + thumb_h * 0.5;
+        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, gx, gy, &mut ctx));
+        d.cursor_moved(gx, gy + 80.0, &mut ctx);
+        assert!(d.scroll_px > before + 10.0, "dragging the thumb scrolls: {} -> {}", before, d.scroll_px);
+        d.mouse_input(MouseButton::Left, ElementState::Released, gx, gy + 80.0, &mut ctx);
+        assert!(d.scrollbar_raised(), "the release starts the hold");
+
+        // Quiet for longer than the hold and the fade: the bar sinks, and a
+        // press on its lane is a row press again.
+        for _ in 0..90 {
+            WidgetHost::tick(&mut d, 1.0 / 60.0, &mut ctx);
+        }
+        assert!(!d.scrollbar_raised(), "the bar sinks after the hold");
+        let was = d.scroll_px;
+        d.mouse_input(MouseButton::Left, ElementState::Pressed, gx, gy, &mut ctx);
+        assert!((d.scroll_px - was).abs() < 0.01, "a sunk bar takes no input");
+        assert!(d.take_activated().is_some(), "the press reached the row beneath");
+    }
+
     /// The dialog's commands list takes a trackpad (finger-phase pixel
     /// delta) as well as a wheel notch (2026-09-20: a finger did nothing).
     #[test]
