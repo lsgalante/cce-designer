@@ -3279,7 +3279,7 @@ mod tests {
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 520.0, height: 420.0 };
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -3325,7 +3325,7 @@ mod tests {
         d.set_visible(true);
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -7533,21 +7533,88 @@ mod tests {
         let mut state = State::new(false);
         state.run_command("toggle_dialog");
 
-        for c in ["s", "q", "u", "a"] {
+        for c in ["d", "e", "s", "e", "l"] {
             state.dialog_key_input(&typed(c));
         }
-        assert_eq!(state.slots.dialog.query, "squa");
+        assert_eq!(state.slots.dialog.query, "desel");
         assert_eq!(
             state.slots.dialog.selected_id(),
-            Some("toggle_square_viewport"),
+            Some("deselect"),
             "rows: {:?}",
             state.slots.dialog.rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
         );
+        let row = &state.slots.dialog.rows[state.slots.dialog.selected];
+        assert_eq!(row.toggle, None, "Deselect runs and is done; it draws no switch");
 
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(!state.dialog_visible(), "a plain command closes the dialog behind it");
+    }
+
+    /// A toggle row is a switch: Enter flips it, the switch on the row moves,
+    /// and the dialog stays up with the selection where it was — so Show
+    /// Grid, Show Cube and Square Aspect can be set together, looking at the
+    /// viewport, instead of reopening the dialog for each.
+    #[test]
+    fn dialog_enter_on_a_toggle_row_flips_it_and_keeps_the_dialog_open() {
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+
+        for c in ["s", "q", "u", "a"] {
+            state.dialog_key_input(&typed(c));
+        }
+        assert_eq!(state.slots.dialog.selected_id(), Some("toggle_square_viewport"));
         let before = state.square_viewport;
+        let row = state.slots.dialog.rows[state.slots.dialog.selected].clone();
+        assert_eq!(row.toggle, Some(before), "the switch shows the live value");
+
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert_eq!(state.square_viewport, !before, "Enter ran the command");
-        assert!(!state.dialog_visible(), "and closed behind it");
+        assert!(state.dialog_visible(), "and the dialog stayed up");
+        assert_eq!(state.slots.dialog.query, "squa", "with its query intact");
+        assert_eq!(state.slots.dialog.selected_id(), Some("toggle_square_viewport"), "and its selection");
+        let row = &state.slots.dialog.rows[state.slots.dialog.selected];
+        assert_eq!(row.toggle, Some(!before), "the switch moved with the value");
+
+        // And back again, without leaving.
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert_eq!(state.square_viewport, before);
+        assert!(state.dialog_visible());
+        assert_eq!(state.slots.dialog.rows[state.slots.dialog.selected].toggle, Some(before));
+
+        // A click on the row is the same pick as Enter.
+        state.take_dialog_pick("toggle_square_viewport".to_string());
+        assert_eq!(state.square_viewport, !before);
+        assert!(state.dialog_visible(), "a clicked switch keeps the dialog up too");
+    }
+
+    /// Every toggle command in the registry draws a switch, and every switch
+    /// names a command the registry has. `command_toggle_state` is a match on
+    /// id strings, so a `toggle_*` row added to the registry without an arm
+    /// there would silently ship as a plain row — this is what says so.
+    #[test]
+    fn dialog_toggle_rows_cover_every_toggle_command() {
+        let state = State::new(false);
+        // Named like toggles, but not switches: Dialog toggles the dialog
+        // itself (picking it is a no-op), Configure focuses a pane, and
+        // Snapping is a switch only inside a viewer state — asserted below.
+        let not_switches = ["toggle_dialog", "toggle_configure", "toggle_snap"];
+        for c in crate::command::COMMANDS {
+            let looks_like_toggle = c.id.starts_with("toggle_")
+                || (c.id.starts_with("show_") && c.id.ends_with("_pane"));
+            let is_switch = state.command_toggle_state(c.id).is_some();
+            if looks_like_toggle && !not_switches.contains(&c.id) {
+                assert!(is_switch, "{} is a toggle command with no switch", c.id);
+            } else if !looks_like_toggle && c.id != "detach_circular_window" {
+                assert!(!is_switch, "{} draws a switch but is not a toggle", c.id);
+            }
+        }
+        assert!(state.command_toggle_state("detach_circular_window").is_some());
+        assert_eq!(state.command_toggle_state("toggle_snap"), None, "no viewer state, no switch");
+        assert_eq!(state.command_toggle_state("no_such_command"), None);
+
+        // The switches agree with the fields the commands flip.
+        assert_eq!(state.command_toggle_state("toggle_grid"), Some(state.viewport().show_grid));
+        assert_eq!(state.command_toggle_state("show_network_pane"), Some(state.show_network));
     }
 
     /// Backspace walks the query back, and the ranking follows it.

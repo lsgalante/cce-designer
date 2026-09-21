@@ -80,6 +80,13 @@ pub struct Row {
     /// The Wireframe Color command carries the live wire colour here, so
     /// the palette shows what the setting currently is before it is opened.
     pub swatch: Option<[f32; 4]>,
+    /// The current state of a TOGGLE command — Show Grid, Square Aspect,
+    /// the pane toggles — drawn as a switch in a column of its own, so the
+    /// list shows what each toggle currently is the way the View menu's
+    /// checkmarks do. `None` for a command that runs and is done. A row
+    /// that carries one is picked in place: the command flips, the switch
+    /// moves, and the dialog stays up — see `State::take_dialog_pick`.
+    pub toggle: Option<bool>,
 }
 
 /// The dialog's outer size. Fixed rather than proportional: it is a focused
@@ -95,6 +102,11 @@ const QUERY_H: f32 = 30.0;
 pub const ROW_H: f32 = 24.0;
 /// Side of a row's colour swatch, logical px.
 pub const SWATCH_SIDE: f32 = 14.0;
+/// A toggle row's switch: the toolkit's `Toggle`, at the row's height less a
+/// hair of air, and about twice as wide as tall — the proportion the params
+/// pane's toggles have.
+pub const TOGGLE_W: f32 = 36.0;
+const TOGGLE_H: f32 = ROW_H - 4.0;
 /// Gap between the tab strip, the query line and the list.
 const GAP: f32 = 8.0;
 
@@ -196,10 +208,20 @@ pub struct Dialog {
     /// the dialog, because the one claim serves two mechanisms that want
     /// opposite answers.
     occluding: bool,
+    /// The switch a toggle row draws, off and on — the toolkit's own
+    /// `Toggle`, painted by hand into the row, so a switch in the dialog IS
+    /// the switch in the params pane. Two stamps rather than one set per row
+    /// because `paint` takes `&self`, and building a widget per row per
+    /// frame would be silly.
+    toggle_stamps: [Adapted<Toggle>; 2],
 }
 
 impl Dialog {
     pub fn new() -> Adapted<Dialog> {
+        let mut off = Toggle::new();
+        off.set_toggled(false);
+        let mut on = Toggle::new();
+        on.set_toggled(true);
         let mut d = Adapted::new(Dialog {
             mode: Mode::Tabbed,
             tab: Tab::Commands,
@@ -217,6 +239,7 @@ impl Dialog {
             activated: None,
             tab_click: None,
             occluding: true,
+            toggle_stamps: [off, on],
         });
         d.set_visible(false);
         d
@@ -590,7 +613,14 @@ impl Paint for Dialog {
         // --- The rows. The chord column is right-aligned against the list's
         // right edge rather than padded out to a fixed width: the label is
         // what gets read, so it is the label that keeps the stable left edge.
+        //
+        // The switches get a column of their own at the far right, reserved
+        // for EVERY row as soon as any row has one, so the chord column keeps
+        // a straight edge whether or not the row beside it toggles. Without
+        // the reservation the chords step left on toggle rows and the column
+        // reads as ragged, which is worse than the strip of air it costs.
         let list = list_rect(rect);
+        let toggle_col = if self.rows.iter().any(|r| r.toggle.is_some()) { TOGGLE_W + 12.0 } else { 0.0 };
         if self.rows.is_empty() {
             let ty = cce_ui::layout::align_text_y(list.y, ROW_H, font_size, 0.0);
             let empty = match self.mode {
@@ -604,11 +634,18 @@ impl Paint for Dialog {
         for i in self.first_row()..self.rows.len() {
             let Some(r) = self.row_rect(rect, i) else { break };
             let row = &self.rows[i];
+            // The highlight stops short of the switch column. A switch has
+            // no face of its own — it is carved out of whatever it stands
+            // on, the DE's convention — and carved out of the selection's
+            // tinted bevel it vanished outright: the selected row, the one
+            // row whose state Enter is about to flip, was the one row whose
+            // state could not be read. On the plate it reads like the rest.
+            let hl = Rect { width: (r.width - toggle_col).max(0.0), ..r };
             if i == self.selected {
-                ctx.rounded_rect(r, ctrl_r, (true, true, true, true), [accent[0], accent[1], accent[2], 0.16]);
-                ctx.bevel_tinted(r, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
+                ctx.rounded_rect(hl, ctrl_r, (true, true, true, true), [accent[0], accent[1], accent[2], 0.16]);
+                ctx.bevel_tinted(hl, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
             } else if self.hover_row == Some(i) {
-                ctx.rounded_rect(r, ctrl_r, (true, true, true, true), [1.0, 1.0, 1.0, 0.05]);
+                ctx.rounded_rect(hl, ctrl_r, (true, true, true, true), [1.0, 1.0, 1.0, 0.05]);
             }
             let ty = cce_ui::layout::align_text_y(r.y, r.height, font_size, 0.0);
             let chord_w = if row.chord.is_empty() {
@@ -618,7 +655,8 @@ impl Paint for Dialog {
             };
             // The label's clip stops short of the chord column so a long
             // label is cut by it rather than running under it.
-            let label_right = r.x + r.width - 8.0 - if chord_w > 0.0 { chord_w + 12.0 } else { 0.0 };
+            let chord_right = r.x + r.width - 8.0 - toggle_col;
+            let label_right = chord_right - if chord_w > 0.0 { chord_w + 12.0 } else { 0.0 };
             let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
             // The swatch: a small rounded tile ahead of the label, ringed
             // faintly so a colour near the plate's own does not vanish into
@@ -644,13 +682,22 @@ impl Paint for Dialog {
             if chord_w > 0.0 {
                 ctx.text_with(
                     row.chord.clone(),
-                    r.x + r.width - 8.0 - chord_w,
+                    chord_right - chord_w,
                     ty,
                     font_size,
                     [0x85, 0x85, 0x92],
                     Some(family.clone()),
                     own,
                 );
+            }
+            if let Some(on) = row.toggle {
+                let tr = Rect {
+                    x: r.x + r.width - 8.0 - TOGGLE_W,
+                    y: r.y + (r.height - TOGGLE_H) * 0.5,
+                    width: TOGGLE_W,
+                    height: TOGGLE_H,
+                };
+                Paint::paint(&*self.toggle_stamps[on as usize], tr, ctx);
             }
         }
         });
@@ -1033,6 +1080,7 @@ impl State {
                     swatch: (c.id == "wireframe_color").then(|| {
                         cce_ui::color::to_linear([self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0])
                     }),
+                    toggle: self.command_toggle_state(c.id),
                 })
                 .collect(),
             Mode::AddNode => {
@@ -1055,11 +1103,60 @@ impl State {
                         label: offered[i].to_string(),
                         chord: String::new(),
                         swatch: None,
+                        toggle: None,
                     })
                     .collect()
             }
         };
         self.slots.dialog.set_rows(rows);
+    }
+
+    /// What a toggle command's switch currently shows, or `None` for a
+    /// command that is not a toggle.
+    ///
+    /// Read off the very field each command flips in `execute_action` /
+    /// `execute_menu_action` — the same read the View menu's checkmarks are
+    /// set from — so the switch cannot disagree with the menu. Snapping is
+    /// a toggle only INSIDE a viewer state; outside one the command does
+    /// nothing but say so, and a switch on a row that cannot flip would be a
+    /// lie, so the row is plain until a state is entered.
+    /// `dialog_toggle_rows_cover_every_toggle_command` keeps this list and
+    /// the registry's `toggle_*` / `show_*_pane` rows in step.
+    pub fn command_toggle_state(&self, id: &str) -> Option<bool> {
+        Some(match id {
+            "toggle_grid" => self.viewport().show_grid,
+            "toggle_cube" => self.viewport().show_cube,
+            "toggle_origin" => self.viewport().show_origin,
+            "toggle_camera_pivot" => self.viewport().show_camera_pivot,
+            "toggle_wireframe" => self.wireframe,
+            "toggle_square_viewport" => self.square_viewport,
+            "toggle_network_plate" => self.network_plate,
+            "toggle_circular_pane" => self.circular_network_pane,
+            "detach_circular_window" => self.detached_circular_network,
+            "toggle_spreadsheet" => self.show_spreadsheet,
+            "show_network_pane" => self.show_network,
+            "show_viewport_pane" => self.show_viewport,
+            "show_parameters_pane" => self.show_parameters,
+            "show_playbar_pane" => self.show_playbar,
+            "toggle_snap" => self.viewer_tool.as_ref()?.snap.is_some(),
+            _ => return None,
+        })
+    }
+
+    /// Re-read every row's switch from the live state, touching nothing
+    /// else — not the ranking, not the selection, not the scroll. This is
+    /// what a toggle pick runs instead of `refresh_dialog_rows`: the rows are
+    /// the same rows, only a switch has moved, and re-ranking would throw the
+    /// selection back to the top of a list the user is still working down.
+    fn refresh_dialog_toggles(&mut self) {
+        if self.slots.dialog.mode != Mode::Tabbed {
+            return;
+        }
+        let states: Vec<Option<bool>> =
+            self.slots.dialog.rows.iter().map(|r| self.command_toggle_state(&r.id)).collect();
+        for (row, state) in self.slots.dialog.rows.iter_mut().zip(states) {
+            row.toggle = state;
+        }
     }
 
     /// The Settings half's rows, each read from whatever owns its value.
@@ -1391,8 +1488,21 @@ impl State {
     /// `cce-cloud` palette, a file chooser) does not come up behind the
     /// dialog. The dialog's own row is the exception: toggling it here would
     /// reopen what was just closed.
+    ///
+    /// A TOGGLE row does not close at all. It is a switch, and a switch you
+    /// can only flip once before the panel it is on vanishes is a button
+    /// with extra steps: Show Grid, Show Cube and Square Aspect are the
+    /// kind of thing you set together, looking at the viewport, and the
+    /// dialog staying up is what lets you. The command runs, the switches
+    /// re-read, and the selection stays where it was — by Enter or by a
+    /// click, since both arrive here.
     pub(crate) fn take_dialog_pick(&mut self, id: String) {
         let mode = self.slots.dialog.mode;
+        if mode == Mode::Tabbed && self.command_toggle_state(&id).is_some() {
+            self.run_command(&id);
+            self.refresh_dialog_toggles();
+            return;
+        }
         let (gx, gy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
         self.close_dialog();
         match mode {

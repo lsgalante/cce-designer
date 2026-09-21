@@ -781,6 +781,20 @@ Both modes share the plate, the keys and `fuzzy_rank`, which is the whole
 point — the app used to put two filterable lists in front of the user that
 looked and behaved nothing alike.
 
+**Toggle commands are switches in the Commands list, and picking one does
+not close it.** `State::command_toggle_state(id)` is the table: it reads the
+same field each toggle command flips (the read the View menu's checkmarks
+are set from), and a row it answers carries a `toggle` that paints as the
+toolkit's own `Toggle` in a right-hand column reserved for every row, so the
+chord column keeps a straight edge. Enter or a click on such a row runs the
+command, re-reads the switches in place (`refresh_dialog_toggles` — not
+`refresh_dialog_rows`, which re-ranks and would throw the selection to the
+top) and leaves the dialog up: Show Grid, Show Cube and Square Aspect are set
+together while looking at the viewport. Snapping is a switch only inside a
+viewer state. `dialog_toggle_rows_cover_every_toggle_command` fails when a
+`toggle_*` / `show_*_pane` command is added without an arm in the table,
+because the miss is silent — the row just ships plain.
+
 **Alt+D, not Super+D.** Every Super chord is the compositor's before any client
 sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
 launcher), and Super held is the DE's window-adjust modifier besides. Alt is the
