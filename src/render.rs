@@ -415,13 +415,12 @@ impl State {
             } else {
                 clip
             };
-            // The plate is skipped entirely when it is switched off, so the
-            // graph draws straight onto whatever is behind the pane — which,
-            // the viewport being full-bleed, is the 3D scene.
-            if (second || !self.circular_network_pane) && self.network_plate {
-                let (wx, wy, ww2, wh2) = w.rect();
-                append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
-            }
+            // No plate here: the pane's plate is NETWORK_PANEL_IDX's
+            // PassivePlate (the params material, gated on `network_plate`
+            // in the generic arm). Until 2026-09-20 this arm ALSO painted
+            // the graph widget's own background over it — the cell colour
+            // at the network opacity, a flat blue-grey wash that predated
+            // the plate and made the network pane the one pane with a hue.
 
             pc.clip(clip, |pc| {
                 // Node bodies wear the parameter plate's fill exactly — same
