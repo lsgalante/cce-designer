@@ -162,8 +162,14 @@ gone from cce-ui with the wgpu path).
   simnet subtree + seed, so edits restart the sim, and backward scrubs restart
   from the seed (steps are not invertible). The scene walk does NOT recurse
   into a simnet's children — that would draw one un-iterated pass of the chain
-  on top of the solved result; dived INTO a simnet, the walk draws the solved
-  state instead (toggled by the output child's geometry flag), and at any
+  on top of the solved result. Dived INTO a simnet, the output child's
+  geometry flag draws the solved state, and every OTHER visible child draws
+  itself as the current frame's step saw it, with the feedback stack holding
+  the state that step consumed (`simnet_step_feedback`, read off the
+  `SimSolve` the solve already keeps): `input` shows what the step reads, a
+  chain node shows this frame's pass, and a node not wired into the chain at
+  all simply draws. Until 2026-09-21 only the output flag drew, and a visible
+  node inside a simnet was a node you could not see. At any
   displayed level `input`/`output` children draw their resolved geometry (top
   level of the walk only, so outer views don't draw subnet chains twice).
   Frame changes invalidate the scene only when the

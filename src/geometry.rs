@@ -585,6 +585,12 @@ struct SimSolve {
     /// The frame `state` is the solution FOR.
     frame: i32,
     state: Detail,
+    /// The state the step that produced `state` consumed — the seed until a
+    /// step has run. What a visible child inside the simnet is evaluated
+    /// against when the interior is displayed (see
+    /// [`network_sphere_vertices_with_errors`]): `input` yields it, the
+    /// chain shows this frame's pass over it.
+    prev: Detail,
 }
 
 /// Per-simnet solved states, keyed by node id. Owned by the caller (the app keeps
@@ -5046,10 +5052,16 @@ pub fn network_sphere_vertices_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Detail {
-    // Inside a simnet the chain is the simulation STEP; drawing its nodes
-    // would show one un-iterated pass of the chain. The interior view is the
-    // solved state at the current frame — the same geometry the parent level
-    // draws for the simnet — toggled by the output child's geometry flag.
+    // Inside a simnet the chain is the simulation STEP, so its nodes are not
+    // walked like a subnet's: the output child's geometry flag shows the
+    // SOLVED state at the current frame — the same geometry the parent level
+    // draws for the simnet — and every other visible child draws itself as
+    // the current frame's step saw it, with the feedback stack holding the
+    // state that step consumed. So `input` shows what the step reads, a
+    // chain node shows this frame's pass over it, and a node that is not
+    // wired into the chain at all (a seed being built beside it) simply
+    // draws. Before 2026-09-21 only the output flag drew anything, and a
+    // visible node inside a simnet was a node you could not see.
     if start.node_type.eq_ignore_ascii_case("simnet") {
         let mut out = Detail::new();
         let display_on = start
@@ -5062,6 +5074,28 @@ pub fn network_sphere_vertices_with_errors(
             let mut visited = Vec::new();
             if let Some(geom) = resolve_simnet_geometry_with_errors(root, start, &mut visited, ocl_error, sim) {
                 out.merge(&geom);
+            }
+        }
+        let shown: Vec<&FsNode> = start
+            .children
+            .iter()
+            .filter(|c| {
+                c.geometry_visible
+                    && !c.node_type.eq_ignore_ascii_case("output")
+                    && is_geometry_node_type(&c.node_type)
+            })
+            .collect();
+        if !shown.is_empty() {
+            let mut visited = Vec::new();
+            if let Some(fed) = simnet_step_feedback(root, start, &mut visited, ocl_error, sim) {
+                sim.feedback.push((start.id.clone(), fed));
+                for child in shown {
+                    let mut visited = Vec::new();
+                    if let Some(geom) = generate_single_node_geometry_with_errors(root, child, &mut visited, ocl_error, sim) {
+                        out.merge(&geom);
+                    }
+                }
+                sim.feedback.pop();
             }
         }
         return out;
@@ -6852,6 +6886,13 @@ pub fn resolve_simnet_geometry_with_errors(
         (prev.key == key && prev.frame <= due).then(|| (prev.state.clone(), prev.frame))
     });
     let caching = node_param_str(target, "Cache", "false") == "true";
+    // What the last step consumed, carried with the solve so the interior
+    // view can be drawn without re-solving: resumed from the cache when the
+    // cache is what we resume from, the seed otherwise.
+    let mut prev_frame = match &cached {
+        Some(_) => sim.cache.entries.get(&target.id).map(|e| e.prev.clone()).unwrap_or_default(),
+        None => seed.clone(),
+    };
     let (mut state, mut done) = match cached {
         Some(hit) => hit,
         None if caching => match read_sim_cache(&target.id, key, due) {
@@ -6878,6 +6919,7 @@ pub fn resolve_simnet_geometry_with_errors(
     let dt = 1.0 / substeps as f32;
 
     while done < due {
+        prev_frame = state.clone();
         for _ in 0..substeps {
             // The step boundary, and the contract that makes a chain
             // composable:
@@ -6914,12 +6956,27 @@ pub fn resolve_simnet_geometry_with_errors(
 
     sim.cache.entries.insert(
         target.id.clone(),
-        SimSolve { key, frame: due, state: state.clone() },
+        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame },
     );
     if caching && due > 0 {
         write_sim_cache(&target.id, key, due, &state);
     }
     Some(state)
+}
+
+/// The state a simnet's current frame was stepped FROM: the seed at the
+/// start frame, the previous frame's solution after that. Solves the simnet
+/// (filling the cache) and reads it back, so it costs nothing beyond the
+/// solve the display needs anyway.
+pub fn simnet_step_feedback(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    resolve_simnet_geometry_with_errors(root, target, visited, ocl_error, sim)?;
+    sim.cache.entries.get(&target.id).map(|e| e.prev.clone())
 }
 
 /// Where a simnet's solved state is parked between runs.
@@ -8664,7 +8721,12 @@ mod simnet_tests {
     /// though the sim resolved fine from the parent level.
     #[test]
     fn test_scene_walk_inside_a_simnet_draws_the_solved_state() {
-        let root = stepping_graph();
+        let mut root = stepping_graph();
+        // Only the output flag on: the other children draw themselves too
+        // now (the test below), and this one is about the solved state.
+        for c in &mut root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap().children {
+            c.geometry_visible = c.node_type == "output";
+        }
         let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap();
         let base = min_x(&solve_at(&root, 1));
 
@@ -8676,17 +8738,66 @@ mod simnet_tests {
         let moved = min_x(&interior) - base;
         assert!((moved - 3.0).abs() < 1e-4, "frame 4 = 3 steps of +1.0, got {moved}");
 
-        // The output child's geometry toggle is the interior display switch.
+        // The output child's geometry toggle is the solved state's switch;
+        // with every child's flag off the interior is empty.
         let mut hidden = root.clone();
-        hidden.children.iter_mut().find(|c| c.node_type == "simnet").unwrap()
-            .children.iter_mut().find(|c| c.node_type == "output").unwrap()
-            .geometry_visible = false;
+        for c in &mut hidden.children.iter_mut().find(|c| c.node_type == "simnet").unwrap().children {
+            c.geometry_visible = false;
+        }
         let sim_node = hidden.children.iter().find(|c| c.node_type == "simnet").unwrap();
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(4, 1, &mut cache);
         let mut err = None;
         let toggled = network_sphere_vertices_with_errors(&hidden, sim_node, &mut err, &mut sim);
         assert!(toggled.is_empty(), "output toggle off should hide the solved state");
+    }
+
+    /// Dived into a simnet, a visible child other than the output draws
+    /// itself as the current frame's step saw it: `input` is the state the
+    /// step consumed, a chain node is this frame's pass over it, and a node
+    /// not wired into the chain at all simply draws. Before this a visible
+    /// node inside a simnet was a node you could not see — the embryo being
+    /// built beside a solver's chain drew nothing.
+    #[test]
+    fn test_scene_walk_inside_a_simnet_draws_visible_children_as_the_step_sees_them() {
+        let base = min_x(&solve_at(&stepping_graph(), 1));
+        // Every child off, then one on at a time.
+        let with_only = |name: &str| {
+            let mut root = stepping_graph();
+            let sim_node = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
+            sim_node.children.push(node("id-seed", "seed1", "sphere", vec![param("Radius", "0.25")], vec![]));
+            for c in &mut sim_node.children {
+                c.geometry_visible = c.name == name;
+            }
+            root
+        };
+        let interior_at = |root: &FsNode, frame: i32| {
+            let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap();
+            let mut cache = SimCache::default();
+            let mut sim = EvalSim::new(frame, 1, &mut cache);
+            let mut err = None;
+            network_sphere_vertices_with_errors(root, sim_node, &mut err, &mut sim)
+        };
+
+        // `input1` at frame 4 is the state at frame 3: two steps of +1.
+        let fed = interior_at(&with_only("input1"), 4);
+        assert!(!fed.is_empty(), "a visible input draws what the step reads");
+        assert!((min_x(&fed) - base - 2.0).abs() < 1e-4, "input1 shows frame 3's state, got +{}", min_x(&fed) - base);
+
+        // `step1` is this frame's pass over that: three steps.
+        let pass = interior_at(&with_only("step1"), 4);
+        assert!((min_x(&pass) - base - 3.0).abs() < 1e-4, "step1 shows frame 4's pass, got +{}", min_x(&pass) - base);
+
+        // At the start frame the step reads the seed itself.
+        let at_start = interior_at(&with_only("input1"), 1);
+        assert!((min_x(&at_start) - base).abs() < 1e-4, "at the start frame input1 is the seed");
+
+        // A node beside the chain draws regardless of the sim.
+        let beside = interior_at(&with_only("seed1"), 4);
+        assert_eq!(beside.num_points(), sphere_detail(Vec3::ZERO, 0.25, 16, 24).num_points(), "the unwired sphere draws");
+
+        // And with nothing on, nothing: the output flag still owns the solved state.
+        assert!(interior_at(&with_only("none"), 4).is_empty());
     }
 
     /// Dived into a pass-through subnet (input → output, no generator) the
