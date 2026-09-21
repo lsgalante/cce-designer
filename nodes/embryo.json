@@ -1,0 +1,24 @@
+{
+ "name": "Embryo",
+ "type": "embryo",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Source", "type": "choice:Internal,Input", "default": "Internal" },
+  { "name": "Method", "type": "choice:Basic,Scatter", "default": "Basic" },
+  { "name": "Base Resolution", "type": "spinbox", "default": "50", "min": 3, "max": 100, "step": 1, "show_when": "Source == Internal" },
+  { "name": "Radius", "type": "slider", "default": "0.5", "min": 0.01, "max": 10.0, "step": 0.01, "show_when": "Source == Internal" },
+  { "name": "Scatter Count", "type": "spinbox", "default": "1000", "min": 10, "max": 10000, "step": 10, "show_when": "Method == Scatter" },
+  { "name": "Scatter Seed", "type": "slider", "default": "1.1", "min": 0.0, "max": 10.0, "step": 0.1, "show_when": "Method == Scatter" },
+  { "name": "Relax Points", "type": "toggle", "default": "true", "show_when": "Method == Scatter" },
+  { "name": "Scatter Relax Iterations", "type": "spinbox", "default": "50", "min": 0, "max": 100, "step": 1, "show_when": "Method == Scatter && Relax Points == true" },
+  { "name": "Scale Radii By", "type": "slider", "default": "1.248", "min": 0.0, "max": 2.0, "step": 0.001, "show_when": "Method == Scatter && Relax Points == true" },
+  { "name": "Use Max Relax Radius", "type": "toggle", "default": "true", "show_when": "Method == Scatter && Relax Points == true" },
+  { "name": "Scatter Relax Radius", "type": "slider", "default": "10", "min": 0.0, "max": 100.0, "step": 0.1, "show_when": "Method == Scatter && Relax Points == true && Use Max Relax Radius == true" },
+  { "name": "Relax Iterations", "type": "spinbox", "default": "0", "min": 0, "max": 50, "step": 1 },
+  { "name": "Relax Radius", "type": "slider", "default": "1", "min": 0.001, "max": 1.0, "step": 0.001 },
+  { "name": "Relax in 3D Space", "type": "toggle", "default": "false" },
+  { "name": "Subdivision Depth", "type": "spinbox", "default": "0", "min": 0, "max": 3, "step": 1 }
+ ]
+}

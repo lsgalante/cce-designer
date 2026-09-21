@@ -29,6 +29,7 @@ pub mod command;
 pub mod dialog;
 pub mod layout;
 pub mod mold;
+pub mod embryo;
 pub mod page;
 pub mod thumbnail;
 
@@ -5269,6 +5270,170 @@ mod tests {
     }
 
     /// The shell end to end, through the resolver the viewport calls.
+    // ----- The Embryo node (src/embryo.rs) -----
+
+    /// The hull of a cube's corners plus points inside it is the cube: eight
+    /// points, twelve triangles, closed, with nothing left outside it.
+    #[test]
+    fn convex_hull_of_a_cube_with_interior_points_is_the_cube() {
+        use crate::embryo::convex_hull;
+        let mut pts = Vec::new();
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    pts.push(Vec3::new(x, y, z));
+                }
+            }
+        }
+        for i in 0..50 {
+            let t = i as f32 / 50.0;
+            pts.push(Vec3::new(t * 0.9 - 0.45, (t * 7.0).sin() * 0.5, (t * 3.0).cos() * 0.5));
+        }
+        let hull = convex_hull(&pts).expect("a cube spans a volume");
+        assert_eq!(hull.num_points(), 8, "only the corners are on the hull");
+        assert_eq!(hull.num_prims(), 12);
+        assert!(hull.is_closed(), "a hull is watertight and consistently wound");
+        // Every face looks away from the centre, and every input point is on
+        // or behind every face.
+        for prim in 0..hull.num_prims() {
+            let ids = hull.prim_points(prim);
+            let (a, b, c) = (hull.pos(ids[0] as usize), hull.pos(ids[1] as usize), hull.pos(ids[2] as usize));
+            let n = (b - a).cross(c - a).normalize();
+            assert!(a.dot(n) > 0.0, "face {prim} winds outward");
+            for q in &pts {
+                assert!((*q - a).dot(n) <= 1e-4, "point {q:?} is outside face {prim}");
+            }
+        }
+        // No volume, no hull.
+        let flat: Vec<Vec3> = (0..20).map(|i| Vec3::new(i as f32, (i * i) as f32 * 0.1, 0.0)).collect();
+        assert!(convex_hull(&flat).is_none(), "coplanar points span no volume");
+        assert!(convex_hull(&pts[..3]).is_none());
+    }
+
+    /// Scattered points lie on the surface, in the number asked for, and a
+    /// seed reproduces its draw.
+    #[test]
+    fn embryo_scatter_lands_on_the_surface_and_is_seeded() {
+        use crate::embryo::scatter_on_surface;
+        let sphere = crate::geometry::sphere_detail(Vec3::ZERO, 0.5, 12, 16);
+        let a = scatter_on_surface(&sphere, 300, 1.1);
+        assert_eq!(a.len(), 300);
+        let grid = crate::spatial::TriGrid::build(&sphere);
+        for p in &a {
+            let hit = grid.closest(*p).unwrap();
+            assert!(hit.distance < 1e-4, "point {p:?} is {} off the surface", hit.distance);
+        }
+        assert_eq!(a, scatter_on_surface(&sphere, 300, 1.1), "same seed, same points");
+        assert_ne!(a, scatter_on_surface(&sphere, 300, 2.0), "another seed, another draw");
+        assert!(scatter_on_surface(&Detail::new(), 10, 1.0).is_empty());
+    }
+
+    /// The pipeline end to end: Basic is the internal sphere; Scatter is a
+    /// closed hull of at most Scatter Count points inside the sphere's
+    /// radius; Input reads what it is given; and every mesh carries N.
+    #[test]
+    fn embryo_builds_a_sphere_a_hull_or_the_input() {
+        use crate::embryo::{embryo, EmbryoParams, Method, Source};
+        let basic = embryo(None, &EmbryoParams::default()).expect("the internal sphere");
+        let sphere = crate::geometry::sphere_detail(Vec3::ZERO, 0.5, 50, 50);
+        assert_eq!(basic.num_points(), sphere.num_points());
+        assert_eq!(basic.num_prims(), sphere.num_prims());
+        assert!(basic.points().value("N", 0).is_some(), "normals are written last");
+
+        let scattered = embryo(None, &EmbryoParams { method: Method::Scatter, scatter_count: 400, ..EmbryoParams::default() })
+            .expect("a hull");
+        assert!(scattered.num_prims() > 0, "the scatter is hulled into a surface");
+        assert!(scattered.is_closed(), "the hull is watertight");
+        assert!(scattered.num_points() <= 400);
+        for p in 0..scattered.num_points() {
+            let r = scattered.pos(p).length();
+            assert!(r <= 0.5 + 1e-3, "hull point {p} at {r} lies inside the seed sphere");
+        }
+        assert!(scattered.points().value("N", 0).is_some());
+
+        // Relaxing spreads the scatter: the hull of relaxed points reaches
+        // further round the sphere than the hull of the raw draw.
+        let raw = embryo(None, &EmbryoParams { method: Method::Scatter, scatter_count: 60, relax_points: false, ..EmbryoParams::default() }).unwrap();
+        let relaxed = embryo(None, &EmbryoParams { method: Method::Scatter, scatter_count: 60, ..EmbryoParams::default() }).unwrap();
+        let area = |d: &Detail| crate::embryo::surface_area(d);
+        assert!(area(&relaxed) > area(&raw) * 0.99, "relaxed hull area {} vs raw {}", area(&relaxed), area(&raw));
+
+        // Source Input: the seed is the input, and nothing without one.
+        let cube = crate::geometry::sphere_detail(Vec3::new(2.0, 0.0, 0.0), 0.25, 6, 8);
+        let from_input = embryo(Some(&cube), &EmbryoParams { source: Source::Input, ..EmbryoParams::default() }).unwrap();
+        assert_eq!(from_input.num_points(), cube.num_points());
+        assert!((from_input.pos(0) - cube.pos(0)).length() < 1e-6);
+        assert!(embryo(None, &EmbryoParams { source: Source::Input, ..EmbryoParams::default() }).is_none());
+
+        // Subdivision Depth multiplies the faces by four per level.
+        let sub = embryo(None, &EmbryoParams { base_resolution: 8, subdivision_depth: 1, ..EmbryoParams::default() }).unwrap();
+        let coarse = embryo(None, &EmbryoParams { base_resolution: 8, ..EmbryoParams::default() }).unwrap();
+        assert_eq!(sub.num_prims(), coarse.triangulate_points().len() / 3 * 4);
+    }
+
+    /// The Relax step slides points apart in their tangent planes: the
+    /// sphere's points end up better spaced but still on the sphere.
+    #[test]
+    fn embryo_relax_keeps_points_in_their_tangent_planes() {
+        use crate::embryo::{embryo, EmbryoParams};
+        let p = EmbryoParams { base_resolution: 10, relax_iterations: 5, relax_radius: 0.08, ..EmbryoParams::default() };
+        let relaxed = embryo(None, &p).unwrap();
+        let plain = embryo(None, &EmbryoParams { base_resolution: 10, ..EmbryoParams::default() }).unwrap();
+        let mut moved = 0;
+        for i in 0..relaxed.num_points() {
+            let (a, b) = (relaxed.pos(i), plain.pos(i));
+            if (a - b).length() > 1e-5 {
+                moved += 1;
+            }
+            // A tangent-plane slide changes the radius only to second order.
+            assert!((a.length() - 0.5).abs() < 0.05, "point {i} left the sphere: r = {}", a.length());
+        }
+        assert!(moved > 0, "some point moved");
+        let free = embryo(None, &EmbryoParams { relax_in_3d: true, ..p.clone() }).unwrap();
+        let mut left = 0;
+        for i in 0..free.num_points() {
+            if (free.pos(i).length() - 0.5).abs() > 0.01 {
+                left += 1;
+            }
+        }
+        assert!(left > 0, "in 3D the points are free to leave the surface");
+    }
+
+    /// The node reads the template's parameters into the pipeline, and the
+    /// template's defaults are the HDA's.
+    #[test]
+    fn embryo_node_reads_its_template() {
+        use crate::embryo::{EmbryoParams, Method, Source};
+        let templates_root = crate::app::load_fs_tree();
+        let t = templates_root.children.iter().find(|t| t.name == "Embryo").expect("the Embryo template");
+        assert_eq!(t.node_type, "embryo");
+        assert_eq!(crate::geometry::embryo_params(t), EmbryoParams::default(), "template defaults are the HDA's");
+
+        let mut inst = t.clone();
+        inst.id = "embryo1".into();
+        inst.name = "Embryo 1".into();
+        for (name, value) in [("Method", "Scatter"), ("Scatter Count", "200"), ("Source", "Internal")] {
+            inst.params.iter_mut().find(|p| p.name == name).unwrap().default = value.to_string();
+        }
+        let read = crate::geometry::embryo_params(&inst);
+        assert_eq!(read.method, Method::Scatter);
+        assert_eq!(read.scatter_count, 200);
+        assert_eq!(read.source, Source::Internal);
+
+        let root = FsNode {
+            id: "root".into(), name: "root".into(), node_type: "node".into(),
+            children: vec![inst], params: vec![], geometry_visible: true, position: (0.0, 0.0), inputs: 0, outputs: 0,
+        };
+        let mut visited = Vec::new();
+        let mut err = None;
+        let geom = crate::geometry::generate_single_node_geometry_with_errors(
+            &root, &root.children[0], &mut visited, &mut err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+        ).expect("the node evaluates");
+        assert!(err.is_none());
+        assert!(geom.is_closed() && geom.num_points() <= 200);
+    }
+
     #[test]
     fn test_the_mold_shell_node_builds_a_two_sided_shell() {
         use crate::geometry::resolve_mold_shell_geometry_with_errors;

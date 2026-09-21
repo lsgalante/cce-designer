@@ -379,6 +379,40 @@ wires it as a node parameter), so the free-form float ramp is ported as the
 three-way choice the falloff parameters already use. Linear is the default
 because linear is what the cast that worked used.
 
+### The Embryo node
+
+`src/embryo.rs` is hou-control's `developer_embryo`, the Developer family's
+first Pre-Simulation operator — "the seed geometry a simulation starts from"
+— ported as a native node (`nodes/embryo.json`, evaluated by
+`resolve_embryo_geometry_with_errors`, the pipeline itself a plain struct so
+tests drive it without a node tree). The HDA is a small network behind two
+switches, and the module is that network in order: **Source** (a polygon
+sphere of Radius with Base Resolution rows and columns, or the Input),
+**Method** (Basic uses it as is; Scatter scatters Scatter Count points over
+it by area, relaxes them apart across the surface, and wraps them in a
+convex hull), then the Relax SOP on the result's points (off by default),
+Subdivision Depth, and normals last as `N`. The defaults are the HDA's, and
+`embryo_node_reads_its_template` pins the template to them.
+
+Two deliberate differences from the HDA. **Subdivide does not smooth**: it
+is this app's `remesh::subdivide` (four triangles per triangle, points
+unmoved), where the HDA runs Catmull-Clark — same parameter, one operation
+rather than two under one name. **The second input is the first**: the HDA
+read its Source from input 2 (its audit notes that input had been wired to
+the first connector), and this app's nodes name one Input.
+
+The convex hull is the one piece nothing here had, and it is the incremental
+algorithm rather than quickhull: a tetrahedron from the extreme points, then
+each point either lies inside or sees some faces, which are replaced by a fan
+from the horizon to the point. Points within a size-relative tolerance of a
+face count as inside — the HDA's Remove Inline Points — or a hull of a
+thousand coplanar slivers comes back. It is O(points × faces), which for a
+thousand scattered points is nothing; a hull of a million would want the
+conflict lists. The scatter's relaxation derives each point's push radius
+from the surface area per point (spheres of that radius roughly tile the
+surface), scaled by Scale Radii By, and puts every point back on the nearest
+surface point after each push.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,

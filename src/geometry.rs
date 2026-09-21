@@ -735,6 +735,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_volume_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("mold_shell") {
         resolve_mold_shell_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("embryo") {
+        resolve_embryo_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("boolean") {
         resolve_boolean_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("export") {
@@ -1774,6 +1776,51 @@ pub fn resolve_mold_shell_geometry_with_errors(
     // vanishing: an empty result in the middle of a chain reads as a broken
     // node, and the thing that is actually wrong is upstream.
     Some(shell.unwrap_or(input))
+}
+
+/// The Embryo node: the seed geometry a simulation starts from — see
+/// `crate::embryo`. The parameters are read here by the template's names;
+/// the pipeline itself takes a plain struct so a test can drive it without
+/// a node tree.
+pub fn resolve_embryo_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let params = embryo_params(target);
+    let input = if params.source == crate::embryo::Source::Input {
+        let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+        Some(generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?)
+    } else {
+        None
+    };
+    crate::embryo::embryo(input.as_ref(), &params)
+}
+
+/// An Embryo node's parameters, as the pipeline takes them.
+pub fn embryo_params(target: &FsNode) -> crate::embryo::EmbryoParams {
+    use crate::embryo::{EmbryoParams, Method, Source};
+    let d = EmbryoParams::default();
+    let flag = |name: &str, default: bool| node_param_str(target, name, if default { "true" } else { "false" }) == "true";
+    EmbryoParams {
+        source: Source::parse(&node_param_str(target, "Source", "Internal")),
+        method: Method::parse(&node_param_str(target, "Method", "Basic")),
+        base_resolution: node_param_f32(target, "Base Resolution", d.base_resolution as f32).max(3.0) as usize,
+        radius: node_param_f32(target, "Radius", d.radius),
+        scatter_count: node_param_f32(target, "Scatter Count", d.scatter_count as f32).max(0.0) as usize,
+        scatter_seed: node_param_f32(target, "Scatter Seed", d.scatter_seed),
+        relax_points: flag("Relax Points", d.relax_points),
+        scatter_relax_iterations: node_param_f32(target, "Scatter Relax Iterations", d.scatter_relax_iterations as f32).max(0.0) as usize,
+        scale_radii_by: node_param_f32(target, "Scale Radii By", d.scale_radii_by),
+        use_max_radius: flag("Use Max Relax Radius", d.use_max_radius),
+        max_radius: node_param_f32(target, "Scatter Relax Radius", d.max_radius),
+        relax_iterations: node_param_f32(target, "Relax Iterations", d.relax_iterations as f32).max(0.0) as usize,
+        relax_radius: node_param_f32(target, "Relax Radius", d.relax_radius),
+        relax_in_3d: flag("Relax in 3D Space", d.relax_in_3d),
+        subdivision_depth: node_param_f32(target, "Subdivision Depth", d.subdivision_depth as f32).clamp(0.0, 6.0) as usize,
+    }
 }
 
 /// The Export node: geometry out of the app.
@@ -4955,6 +5002,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "export"
         || nt == "boolean"
         || nt == "mold_shell"
+        || nt == "embryo"
         || nt == "volume"
         || nt == "deform"
         || nt == "valence"
@@ -5239,6 +5287,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_mold_shell_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("embryo") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_embryo_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
