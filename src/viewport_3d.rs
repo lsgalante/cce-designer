@@ -12,6 +12,12 @@ pub struct Viewport3D {
     pub rotation_x: f32,
     pub rotation_y: f32,
     pub zoom: f32,
+    /// The point the Default Camera view orbits and looks at — the pivot a
+    /// camera NODE carries as its "Pivot" param, for the view that has no
+    /// node. The origin until Frame All moves it to the displayed geometry's
+    /// centre; the fixed eye ray (2.5, 1.8, 2.5) is taken FROM here, so the
+    /// view's direction never changes, only what it is centred on.
+    pub pivot: Vec3,
     pub active_camera: String,
     pub bg_color: [f32; 3],
     pub grid_color: [f32; 3],
@@ -73,6 +79,7 @@ impl Viewport3D {
             rotation_x: 0.0,
             rotation_y: 0.0,
             zoom: 1.0,
+            pivot: Vec3::ZERO,
             active_camera: "Default Camera".to_string(),
             bg_color: [0.10, 0.10, 0.13],
             grid_color: [0.18, 0.18, 0.22],
@@ -148,8 +155,8 @@ impl Viewport3D {
     }
 
     pub fn get_matrices(&self, aspect: f32, custom_camera_pos: Option<Vec3>, custom_camera_rot: Option<Vec3>, custom_pivot: Option<Vec3>) -> (Mat4, Mat4, Mat4) {
-        let camera_pos = custom_camera_pos.unwrap_or(Vec3::new(2.5, 1.8, 2.5));
-        let pivot = custom_pivot.unwrap_or(Vec3::ZERO);
+        let pivot = custom_pivot.unwrap_or(self.pivot);
+        let camera_pos = custom_camera_pos.unwrap_or(pivot + Vec3::new(2.5, 1.8, 2.5));
         let rot = custom_camera_rot.unwrap_or(Vec3::ZERO);
         let rx = rot.x;
         let ry = rot.y;

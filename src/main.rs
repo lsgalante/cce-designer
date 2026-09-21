@@ -4088,6 +4088,45 @@ mod tests {
         assert!(state.wire_single_color, "the switch row turns single-colour mode on");
     }
 
+    /// Frame All frames the displayed geometry from wherever the view is:
+    /// with a named camera that is not in the current directory (a subnet —
+    /// the camera node lives at the root and applies only there) it used to
+    /// do nothing at all; now that view is the Default Camera view and is
+    /// framed as one — its pivot moves to the geometry's centre and the
+    /// fixed eye ray is fitted with zoom.
+    #[test]
+    fn frame_all_frames_off_centre_geometry_without_a_camera_node_in_the_dir() {
+        use crate::geometry::Vertex3D;
+        let mut state = State::new(false);
+        // The root holds Camera 1; a subnet holds no camera at all.
+        state.active_camera = "Camera 1".to_string();
+        let sub = state.current_dir().children.iter().position(|c| c.name == "Sphere 1").expect("Sphere 1 at the root");
+        state.current_path.push(sub);
+        state.on_path_changed();
+        assert!(!state.current_dir().children.iter().any(|c| c.node_type == "camera"), "no camera in the subnet");
+        // Displayed geometry: a small cluster centred well off the origin.
+        let c = [3.0f32, 0.5, -2.0];
+        state.rt_sphere_verts = (0..12)
+            .map(|i| {
+                let a = i as f32 * 0.5236;
+                Vertex3D { position: [c[0] + 0.25 * a.cos(), c[1] + 0.25 * a.sin(), c[2] + 0.1 * (i % 3) as f32], color: [1.0; 3] }
+            })
+            .collect();
+        state.last_viewport_width = 800;
+        state.last_viewport_height = 600;
+        let zoom_before = state.viewport().zoom;
+        assert_eq!(state.viewport().pivot, Vec3::ZERO);
+
+        state.frame_all();
+
+        let piv = state.viewport().pivot;
+        for k in 0..3 {
+            assert!((piv[k] - c[k]).abs() < 0.2, "pivot {piv:?} is not on the geometry's centre {c:?}");
+        }
+        assert!(state.viewport().zoom != zoom_before, "the fixed ray was fitted");
+        assert!(state.viewport().zoom < 1.0, "a 0.25 sphere frames closer than the stock view: zoom {}", state.viewport().zoom);
+    }
+
     /// The wireframe toggle is a palette row that flips the live flag AND
     /// the Render node's "Show Wireframe" switch. The node matters: it is
     /// what `apply_settings_from_menubar_subnets` reads back on every

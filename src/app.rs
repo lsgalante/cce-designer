@@ -3227,15 +3227,16 @@ impl State {
         // touching the pane edges.
         let dist = (radius / half.sin()) * 1.25;
 
-        if self.active_camera == "Default Camera" {
-            // Fixed eye ray through the origin — fit with zoom alone.
-            let base_len = Vec3::new(2.5, 1.8, 2.5).length();
-            self.viewport_mut().zoom = (dist / base_len).clamp(0.05, crate::viewport_3d::Viewport3D::MAX_ZOOM);
-            self.viewport_mut().reset_velocity();
-        } else {
-            let camera_name = self.active_camera.clone();
+        // A camera node applies in the directory it lives in (the render
+        // looks it up there): a named camera that is not in THIS directory
+        // is the Default Camera view, and is framed as one. Before, this
+        // silently did nothing — inside a subnet, Frame All was a no-op.
+        let camera_name = self.active_camera.clone();
+        let mut framed_node = false;
+        if self.active_camera != "Default Camera" {
             let dir = self.current_dir_mut();
             if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
+                framed_node = true;
                 let parse3 = |s: &str| -> Option<Vec3> {
                     let parts: Vec<&str> = s
                         .split(|c| c == ':' || c == ',' || c == ' ')
@@ -3271,6 +3272,17 @@ impl State {
                 self.viewport_mut().zoom = 1.0;
                 self.viewport_mut().reset_velocity();
             }
+        }
+        if !framed_node {
+            // The Default Camera view: its pivot moves to the geometry's
+            // centre and the fixed eye ray is fitted with zoom, so the
+            // geometry is centred AND sized — the pivot used to be pinned to
+            // the origin, which framed off-centre geometry out of the pane.
+            let base_len = Vec3::new(2.5, 1.8, 2.5).length();
+            let vp = self.viewport_mut();
+            vp.pivot = center;
+            vp.zoom = (dist / base_len).clamp(0.05, crate::viewport_3d::Viewport3D::MAX_ZOOM);
+            vp.reset_velocity();
         }
         self.viewport_dirty = true;
         self.sync_parameters_pane();
@@ -3313,14 +3325,14 @@ impl State {
     /// very large or small unit — then the readout shows what was reached.
     pub fn view_one_to_one(&mut self) {
         let dist = self.one_to_one_distance();
-        if self.active_camera == "Default Camera" {
-            let base_len = Vec3::new(2.5, 1.8, 2.5).length();
-            self.viewport_mut().zoom = (dist / base_len).clamp(0.05, crate::viewport_3d::Viewport3D::MAX_ZOOM);
-            self.viewport_mut().reset_velocity();
-        } else {
-            let camera_name = self.active_camera.clone();
+        // As in `frame_all`: a named camera not in this directory is the
+        // Default Camera view, and is fitted as one.
+        let camera_name = self.active_camera.clone();
+        let mut fitted_node = false;
+        if self.active_camera != "Default Camera" {
             let dir = self.current_dir_mut();
             if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
+                fitted_node = true;
                 let parse3 = |s: &str| -> Option<Vec3> {
                     let parts: Vec<&str> = s
                         .split(|c| c == ':' || c == ',' || c == ' ')
@@ -3348,6 +3360,11 @@ impl State {
                 self.viewport_mut().zoom = 1.0;
                 self.viewport_mut().reset_velocity();
             }
+        }
+        if !fitted_node {
+            let base_len = Vec3::new(2.5, 1.8, 2.5).length();
+            self.viewport_mut().zoom = (dist / base_len).clamp(0.05, crate::viewport_3d::Viewport3D::MAX_ZOOM);
+            self.viewport_mut().reset_velocity();
         }
         self.viewport_dirty = true;
         self.sync_parameters_pane();
@@ -7771,11 +7788,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
 
             if cw > 0 && ch > 0 {
-                let mut camera_pos = Vec3::new(2.5, 1.8, 2.5);
+                // The Default Camera: the fixed eye ray from the viewport's own
+                // pivot (`Viewport3D::pivot`, the origin until Frame All moves
+                // it). Also what a NAMED camera that is not in this directory
+                // resolves to — a camera node applies where it lives.
+                let mut pivot = self.viewport().pivot;
+                let mut camera_pos = pivot + Vec3::new(2.5, 1.8, 2.5);
                 let mut rx = 0.0f32;
                 let mut ry = 0.0f32;
                 let mut rz = 0.0f32;
-                let mut pivot = Vec3::ZERO;
                 if self.active_camera != "Default Camera" {
                     if let Some(node) = self.current_dir().children.iter().find(|c| c.node_type == "camera" && c.name == self.active_camera) {
                         let mut cx = 2.5f32;
