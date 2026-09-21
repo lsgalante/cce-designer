@@ -7444,8 +7444,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // Live-streaming param widgets (the color picker's --stream lines)
         // change row values inside tick — push them through the same sync the
         // input path uses so they apply while the picker stays open.
+        // ...but only when a VALUE changed: the pane's tick also reports
+        // change for every frame of a scroll glide / coast and the scrollbar
+        // reveal window, and syncing the whole parameter list on each of
+        // those (clone + compare every param) made the params scroll choppy.
         if param_ticked {
-            self.sync_parameters_to_project();
+            let streamed = self
+                .slots
+                .param
+                .as_any_mut()
+                .downcast_mut::<cce_ui::widget::ParametersBg>()
+                .map_or(false, |p| p.take_tick_value_change());
+            if streamed {
+                self.sync_parameters_to_project();
+            }
         }
         if cce_ui::widget::hover_animation::tick(dt) {
             tick_changed = true;
