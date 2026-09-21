@@ -562,11 +562,112 @@ pub fn meta_pref(node: &FsNode, name: &str) -> bool {
 ///
 /// Matching is conservative: native nodes (group, attribute, scatter, …)
 /// match their template by node type exactly; subnet instances match by name
-/// ("Sphere 3" → "Sphere", so a renamed instance simply keeps its saved
+/// ("Sphere3" → "Sphere" — and "Sphere_3", should someone type one — so a
+/// renamed instance simply keeps its saved
 /// shape), and only merge when EVERY template child is present by name and
 /// type — a hand-built subnet that happens to share the name is left alone,
 /// and nothing is ever injected or deleted. Simnet children (the user's sim
 /// chain) are out of scope by construction: simnet is a native type.
+/// A node name as this app will keep it: no whitespace.
+///
+/// A node's name is a segment of its path — `/Sphere1/opencl1` is how the
+/// breadcrumb, the MCP tools and every `Input` wire name it — and a path
+/// with spaces in it is a path that has to be quoted everywhere it goes.
+/// So names do not carry them. The one space that was CONVENTIONAL, the one
+/// between a template's name and its index ("Sphere 1"), simply goes, so a
+/// migrated save reads like a fresh one; any other whitespace becomes an
+/// underscore, so "My Region" keeps its two words. Empty comes back as
+/// `node`, since a node with no name has no path at all.
+pub fn sanitize_node_name(name: &str) -> String {
+    let trimmed = name.trim();
+    // "Sphere 1" → "Sphere1": drop the whitespace between a base and a
+    // trailing run of digits.
+    let digits = trimmed.trim_end_matches(|c: char| c.is_ascii_digit());
+    let (base, index) = trimmed.split_at(digits.len());
+    let base = if index.is_empty() { base } else { base.trim_end() };
+    let mut out = String::with_capacity(trimmed.len());
+    let mut in_space = false;
+    for c in base.chars() {
+        if c.is_whitespace() {
+            in_space = true;
+        } else {
+            if in_space {
+                out.push('_');
+                in_space = false;
+            }
+            out.push(c);
+        }
+    }
+    out.push_str(index);
+    if out.is_empty() {
+        "node".to_string()
+    } else {
+        out
+    }
+}
+
+impl Project {
+    /// Bring a loaded project's node names under [`sanitize_node_name`],
+    /// and follow every reference to a renamed node.
+    ///
+    /// Saves from before 2026-09-21 carry "Sphere 1" and "Camera 1", and
+    /// wires are BY NAME — a node's `Input` (and `With`, `Rest`, `Target`,
+    /// `Source`, `Collider`) holds the name of the node it reads — so a
+    /// rename that left the references alone would cut every wire in the
+    /// file. Names are unique within a level and references stay within a
+    /// level, so each level is handled on its own: rename its children, then
+    /// rewrite any sibling parameter whose value was one of the old names.
+    /// The view state's active camera is the one reference outside the tree.
+    /// Runs before the template merge on every load path, so what the merge
+    /// matches ("Sphere1" → "Sphere") is already the kept spelling.
+    pub fn sanitize_node_names(&mut self) {
+        fn walk(dir: &mut FsNode, renamed: &mut Vec<(String, String)>) {
+            // The names as loaded: a sanitized name must not land on a
+            // sibling's — "Sphere 1" next to a hand-named "Sphere1" — or two
+            // nodes share one name and every wire to them is ambiguous. A
+            // later sibling still carries its loaded name; an earlier one
+            // carries what this pass gave it.
+            let loaded: Vec<String> = dir.children.iter().map(|c| c.name.clone()).collect();
+            let mut taken: Vec<String> = Vec::new();
+            let mut map: Vec<(String, String)> = Vec::new();
+            for (i, child) in dir.children.iter_mut().enumerate() {
+                let mut name = sanitize_node_name(&child.name);
+                let clashes = |n: &str| taken.iter().any(|t| t == n) || loaded[i + 1..].iter().any(|t| t == n);
+                if name != child.name && clashes(&name) {
+                    let mut n = 2;
+                    while clashes(&format!("{name}_{n}")) {
+                        n += 1;
+                    }
+                    name = format!("{name}_{n}");
+                }
+                if name != child.name {
+                    map.push((child.name.clone(), name.clone()));
+                    child.name = name.clone();
+                }
+                taken.push(name);
+            }
+            if !map.is_empty() {
+                for child in &mut dir.children {
+                    for p in &mut child.params {
+                        if let Some((_, new)) = map.iter().find(|(old, _)| *old == p.default) {
+                            p.default = new.clone();
+                        }
+                    }
+                }
+                renamed.extend(map);
+            }
+            for child in &mut dir.children {
+                walk(child, &mut Vec::new());
+            }
+        }
+        let mut root_renamed = Vec::new();
+        walk(&mut self.root, &mut root_renamed);
+        if let Some((_, new)) = root_renamed.iter().find(|(old, _)| *old == self.view_state.active_camera) {
+            self.view_state.active_camera = new.clone();
+        }
+    }
+}
+
 pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     // Legacy retypes, session->meta style: renamed native types are rewritten
     // in place (params and name intact) BEFORE matching, so old saves find the
@@ -584,7 +685,10 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
 
     fn template_for<'a>(node: &FsNode, templates: &'a [NodeTemplate]) -> Option<&'a FsNode> {
         if node.node_type.eq_ignore_ascii_case("node") {
-            let base = node.name.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+            let base = node
+                .name
+                .trim_end_matches(|c: char| c.is_ascii_digit())
+                .trim_end_matches(|c: char| c == '_' || c.is_whitespace());
             templates.iter().map(|t| &t.node).find(|t| {
                 t.node_type.eq_ignore_ascii_case("node")
                     && (t.name == node.name || (!base.is_empty() && t.name == base))
@@ -2283,11 +2387,16 @@ impl State {
         self.current_path2.truncate(valid);
     }
 
+    /// The name a new node gets: the template's name and the lowest free
+    /// index run together — `Sphere1`, not `Sphere 1`. A node's name is a
+    /// segment of its path, and a path with spaces in it is a path you have
+    /// to quote everywhere it goes (see [`sanitize_node_name`]).
     pub fn get_lowest_unused_name(&self, base_name: &str) -> String {
         let dir = self.current_dir();
+        let base = sanitize_node_name(base_name);
         let mut index = 1;
         loop {
-            let candidate = format!("{} {}", base_name, index);
+            let candidate = format!("{}{}", base, index);
             if !dir.children.iter().any(|c| c.name == candidate) {
                 return candidate;
             }
@@ -4029,6 +4138,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if default_proj_path.exists() {
             if let Ok(content) = fs::read_to_string(&default_proj_path) {
                 if let Ok(mut proj) = serde_json::from_str::<Project>(&content) {
+                    proj.sanitize_node_names();
                     merge_template_defs(&mut proj.root, &node_templates);
                     ensure_meta_children(&mut proj.root);
                     loaded_project = Some(proj);

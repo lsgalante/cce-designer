@@ -916,8 +916,31 @@ templates (Sphere/Plane/Extrude) refresh their children's `Code` outright —
 values.** A kernel hand-edited inside a template instance reverts on load;
 custom kernels belong in bare OpenCL nodes, which the merge never touches.
 Native nodes match their template by type, subnet instances by name
-("Sphere 3" → "Sphere") plus a full child name/type match; the merge never
+("Sphere3" → "Sphere") plus a full child name/type match; the merge never
 injects or deletes children and never rewrites files on disk.
+
+### Node names carry no whitespace
+
+A node's name is a segment of its path — `/Sphere1/opencl1` is how the
+breadcrumb, the MCP tools and every `Input` wire name it — so names do not
+carry spaces (since 2026-09-21). `sanitize_node_name` (src/app.rs) is the
+rule: the conventional space between a template name and its index goes
+("Sphere 1" → "Sphere1", which is also what minting now produces), any
+other whitespace becomes an underscore ("My Region" → "My_Region"), and
+empty comes back as `node`. It runs at every entry point — minting, the
+`add_node` name override, `rename_node` — and as a LOAD-TIME MIGRATION on
+every load path, `Project::sanitize_node_names`, called before the template
+merge in all five places a project is deserialized (the two `load_from_file`
+branches, `State::new`, the thumbnail and the export CLI).
+
+The migration follows references, because wires are by name: within each
+level it renames the children, then rewrites any sibling parameter whose
+value was one of the old names (`Input`, `With`, `Rest`, `Target`, `Source`,
+`Collider` — any of them, since it matches values rather than a list), and
+maps the view state's active camera, the one reference outside the tree. A
+sanitized name that lands on a sibling's ("Sphere 1" beside a hand-named
+"Sphere1") steps aside with a `_2` suffix rather than leaving two nodes one
+name and every wire to them ambiguous.
 
 ## Repo hygiene
 

@@ -369,6 +369,7 @@ impl State {
         if path.file_name().map_or(false, |n| n == "default_project.json") {
             let content = fs::read_to_string(path)?;
             let mut proj: Project = serde_json::from_str(&content)?;
+            proj.sanitize_node_names();
             crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
             crate::app::ensure_meta_children(&mut proj.root);
             let saved_pane_vis = Self::project_pane_visibility(&proj.root);
@@ -435,6 +436,7 @@ impl State {
 
         let content = fs::read_to_string(&state_file_path)?;
         let mut proj: Project = serde_json::from_str(&content)?;
+        proj.sanitize_node_names();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         crate::app::ensure_meta_children(&mut proj.root);
         let saved_pane_vis = Self::project_pane_visibility(&proj.root);

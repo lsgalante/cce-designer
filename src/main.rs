@@ -470,6 +470,81 @@ mod tests {
         assert_eq!(state.orbit_drag, Some((cx, cy)), "a press on the scene still orbits");
     }
 
+    // ----- Node names carry no spaces -----
+
+    /// A node's name is a path segment, so the conventional "Sphere 1"
+    /// becomes "Sphere1" and any other whitespace an underscore.
+    #[test]
+    fn node_names_are_sanitized_of_whitespace() {
+        use crate::app::sanitize_node_name;
+        assert_eq!(sanitize_node_name("Sphere 1"), "Sphere1");
+        assert_eq!(sanitize_node_name("Camera 12"), "Camera12");
+        assert_eq!(sanitize_node_name("Sphere1"), "Sphere1");
+        assert_eq!(sanitize_node_name("My Region"), "My_Region");
+        assert_eq!(sanitize_node_name("  My   Region 2 "), "My_Region2");
+        assert_eq!(sanitize_node_name("mold\tshell"), "mold_shell");
+        assert_eq!(sanitize_node_name(""), "node");
+        assert_eq!(sanitize_node_name("   "), "node");
+
+        // Minting and both MCP entry points go through it.
+        let mut state = State::new(false);
+        assert_eq!(state.get_lowest_unused_name("Sphere"), "Sphere2", "Sphere1 is taken by the default project");
+        let mut redraw = false;
+        state.apply_action(crate::app::McpAction::AddNode { template_name: "Plane".into(), name: Some("my plane".into()), x: 5.0, y: 5.0 }, &mut redraw).unwrap();
+        let slot = state.current_dir().children.iter().position(|c| c.name == "my_plane").expect("the added node, sanitized");
+        state.apply_action(crate::app::McpAction::RenameNode { slot, new_name: "flat one 3".into() }, &mut redraw).unwrap();
+        assert_eq!(state.current_dir().children[slot].name, "flat_one3");
+        state.apply_action(crate::app::McpAction::AddNode { template_name: "Plane".into(), name: None, x: 6.0, y: 6.0 }, &mut redraw).unwrap();
+        assert!(state.current_dir().children.iter().any(|c| c.name == "Plane1"), "a minted name has no space");
+    }
+
+    /// Loading an older save renames its nodes and follows every reference:
+    /// the wires, and the active camera in the view state.
+    #[test]
+    fn loading_a_project_strips_spaces_and_rewires_references() {
+        use crate::app::{ParamDef, Project};
+        let content = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/default_project.json")).unwrap();
+        let mut proj: Project = serde_json::from_str(&content).unwrap();
+        // Age the file: put the spaces back, add a consumer wired to the
+        // sphere by its old name, and a sibling already holding the new one.
+        let sphere = proj.root.children.iter().position(|c| c.name == "Sphere1").unwrap();
+        let camera = proj.root.children.iter().position(|c| c.name == "Camera1").unwrap();
+        proj.root.children[sphere].name = "Sphere 1".into();
+        proj.root.children[camera].name = "Camera 1".into();
+        proj.view_state.active_camera = "Camera 1".into();
+        let mut group = proj.root.children[sphere].clone();
+        group.id = "g".into();
+        group.name = "My Region".into();
+        group.node_type = "group".into();
+        group.children.clear();
+        group.params = vec![ParamDef { name: "Input".into(), label: "Input".into(), param_type: "text".into(), default: "Sphere 1".into(), options: vec![], min: None, max: None, step: None, show_when: String::new() }];
+        let mut clash = group.clone();
+        clash.id = "c".into();
+        clash.name = "Sphere1".into();
+        clash.params[0].default = "Camera 1".into();
+        proj.root.children.push(group);
+        proj.root.children.push(clash);
+
+        proj.sanitize_node_names();
+
+        let names: Vec<&str> = proj.root.children.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"Camera1"));
+        assert!(names.contains(&"My_Region"));
+        assert!(names.contains(&"Sphere1"), "the hand-named sibling keeps its name");
+        assert!(names.contains(&"Sphere1_2"), "the migrated sphere steps aside from it: {names:?}");
+        let by_name = |n: &str| proj.root.children.iter().find(|c| c.name == n).unwrap();
+        assert_eq!(by_name("My_Region").params[0].default, "Sphere1_2", "the wire followed the rename");
+        assert_eq!(by_name("Sphere1").params[0].default, "Camera1");
+        assert_eq!(proj.view_state.active_camera, "Camera1");
+        // The template children inside the sphere were never spaced and are untouched.
+        assert!(by_name("Sphere1_2").children.iter().any(|c| c.name == "opencl1"));
+
+        // A clean file is left exactly alone.
+        let before = serde_json::to_string(&proj).unwrap();
+        proj.sanitize_node_names();
+        assert_eq!(serde_json::to_string(&proj).unwrap(), before);
+    }
+
     #[test]
     fn test_dock_swap_repositions_plates() {
         use crate::app::Dock;
@@ -927,12 +1002,12 @@ mod tests {
             .fs_root
             .children
             .iter()
-            .position(|c| c.name == "Sphere 1")
-            .expect("default project has Sphere 1");
+            .position(|c| c.name == "Sphere1")
+            .expect("default project has Sphere1");
         state.current_path2 = vec![sphere];
         state.sync_nodes();
         assert!(state.current_path.is_empty(), "primary path must not follow");
-        assert_eq!(state.path_names_at(&state.current_path2), vec!["Sphere 1".to_string()]);
+        assert_eq!(state.path_names_at(&state.current_path2), vec!["Sphere1".to_string()]);
 
         state.current_path2 = vec![99];
         state.sync_nodes();
@@ -956,8 +1031,8 @@ mod tests {
         let mut state = State::new(false);
         state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
 
-        let sphere = state.fs_root.children.iter().position(|c| c.name == "Sphere 1").unwrap();
-        let camera = state.fs_root.children.iter().position(|c| c.name == "Camera 1").unwrap();
+        let sphere = state.fs_root.children.iter().position(|c| c.name == "Sphere1").unwrap();
+        let camera = state.fs_root.children.iter().position(|c| c.name == "Camera1").unwrap();
 
         // Pane 1 selects the sphere; the spreadsheet pins to pane 1.
         state.graph_mut().set_selected_node(Some(sphere));
@@ -1027,8 +1102,8 @@ mod tests {
             .fs_root
             .children
             .iter()
-            .position(|c| c.name == "Sphere 1")
-            .expect("default project has Sphere 1");
+            .position(|c| c.name == "Sphere1")
+            .expect("default project has Sphere1");
         a.current_path2 = vec![sphere];
         a.save_to_file(&dir).expect("save");
 
@@ -1224,12 +1299,12 @@ mod tests {
         let content = fs::read_to_string(&path).expect("failed to read default project");
         let proj: Project = serde_json::from_str(&content).expect("failed to deserialize project");
         assert_eq!(proj.name, "Default Project");
-        assert_eq!(proj.view_state.active_camera, "Camera 1");
+        assert_eq!(proj.view_state.active_camera, "Camera1");
         assert_eq!(proj.root.name, "root");
         assert_eq!(proj.root.children.len(), 2);
-        assert_eq!(proj.root.children[0].name, "Camera 1");
+        assert_eq!(proj.root.children[0].name, "Camera1");
         assert_eq!(proj.root.children[0].position, (1.0, 1.0));
-        assert_eq!(proj.root.children[1].name, "Sphere 1");
+        assert_eq!(proj.root.children[1].name, "Sphere1");
         assert_eq!(proj.root.children[1].position, (4.0, 2.0));
     }
 
@@ -1280,7 +1355,7 @@ mod tests {
         use glam::Vec3;
         let mut vp = crate::viewport_3d::Viewport3D::new();
         let inner = vp.as_any_mut().downcast_mut::<crate::viewport_3d::Viewport3D>().unwrap();
-        inner.active_camera = "Camera 1".to_string();
+        inner.active_camera = "Camera1".to_string();
         let pos = Vec3::new(2.5, 1.8, 2.5);
         let piv = Vec3::ZERO;
         let (_, v1, _) = inner.get_matrices(1.0, Some(pos), Some(Vec3::new(23.62, -58.83, 0.0)), Some(piv));
@@ -4219,8 +4294,8 @@ mod tests {
         use crate::geometry::Vertex3D;
         let mut state = State::new(false);
         // The root holds Camera 1; a subnet holds no camera at all.
-        state.active_camera = "Camera 1".to_string();
-        let sub = state.current_dir().children.iter().position(|c| c.name == "Sphere 1").expect("Sphere 1 at the root");
+        state.active_camera = "Camera1".to_string();
+        let sub = state.current_dir().children.iter().position(|c| c.name == "Sphere1").expect("Sphere1 at the root");
         state.current_path.push(sub);
         state.on_path_changed();
         assert!(!state.current_dir().children.iter().any(|c| c.node_type == "camera"), "no camera in the subnet");

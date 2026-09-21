@@ -805,7 +805,7 @@ impl State {
                         let (nx, ny) = state.find_empty_cell(x, y, None);
                         node.position = (nx, ny);
                         if let Some(n) = name {
-                            node.name = n;
+                            node.name = crate::app::sanitize_node_name(&n);
                         } else {
                             node.name = state.get_lowest_unused_name(&node.name);
                         }
@@ -851,7 +851,7 @@ impl State {
             McpAction::RenameNode { slot, new_name } => {
                 let len = state.current_dir().children.len();
                 if slot < len {
-                    state.current_dir_mut().children[slot].name = new_name;
+                    state.current_dir_mut().children[slot].name = crate::app::sanitize_node_name(&new_name);
                     state.sync_nodes();
                     // Connections reference nodes by name (Input params), so a
                     // rename changes downstream evaluation.

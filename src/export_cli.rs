@@ -31,6 +31,7 @@ pub fn run(
     let mut proj: crate::app::Project = serde_json::from_str(&content)
         .map_err(|e| format!("parse {}: {e}", state_file.display()))?;
     let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
+    proj.sanitize_node_names();
     crate::app::merge_template_defs(&mut proj.root, &templates);
 
     let mut ocl_error = None;
