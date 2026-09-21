@@ -3985,6 +3985,43 @@ mod tests {
         assert_eq!(fuzzy_rank("S G", &items), fuzzy_rank("sg", &items));
     }
 
+    /// The wireframe toggle is a palette row that flips the live flag AND
+    /// the Render node's "Show Wireframe" switch. The node matters: it is
+    /// what `apply_settings_from_menubar_subnets` reads back on every
+    /// parameter edit, so a flag flipped alone would revert on the next
+    /// unrelated edit. No settings write is involved, so running it here
+    /// touches nothing outside the test.
+    #[test]
+    fn test_toggle_wireframe_flips_the_flag_and_the_render_node() {
+        use crate::command::{by_id, Run};
+        let cmd = by_id("toggle_wireframe").expect("no toggle_wireframe command");
+        assert_eq!(cmd.label, "Show Wireframe");
+        assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::ToggleWireframe));
+
+        let render_toggle = |state: &State| -> String {
+            state
+                .fs_root
+                .children
+                .iter()
+                .find(|c| c.node_type == "meta")
+                .and_then(|s| s.children.iter().find(|c| c.name == "Render"))
+                .and_then(|n| n.params.iter().find(|p| p.name == "Show Wireframe"))
+                .map(|p| p.default.clone())
+                .expect("a Render node with a Show Wireframe toggle")
+        };
+        let mut state = State::new(false);
+        assert!(!state.wireframe, "wireframe is off unless the project turned it on");
+        assert!(state.run_command("toggle_wireframe"));
+        assert!(state.wireframe);
+        assert_eq!(render_toggle(&state), "true");
+        // The read-back path agrees with the flag instead of reverting it.
+        state.apply_settings_from_menubar_subnets();
+        assert!(state.wireframe);
+        assert!(state.run_command("toggle_wireframe"));
+        assert!(!state.wireframe);
+        assert_eq!(render_toggle(&state), "false");
+    }
+
     /// The registry's own invariants. Ids are what `input.kdl` binds and
     /// labels are what the palette maps a chosen row back to, so a duplicate
     /// of either silently runs the wrong command.

@@ -10,6 +10,7 @@ pub enum Action {
     ToggleSpreadsheet,
     ToggleOrigin,
     ToggleCameraPivot,
+    ToggleWireframe,
     ToggleCircularPane,
     DetachCircularWindow,
     Save,

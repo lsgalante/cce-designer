@@ -2762,6 +2762,23 @@ impl State {
         }
     }
 
+    /// Write a toggle on the session's Render utility node — the source
+    /// `apply_settings_from_menubar_subnets` reads render settings from —
+    /// so a command that changed the live state leaves the node agreeing
+    /// with it. Nothing when the project has no Render node yet.
+    fn write_render_toggle(&mut self, name: &str, val: bool) {
+        if let Some(p) = self
+            .fs_root
+            .children
+            .iter_mut()
+            .find(|c| c.node_type == "meta")
+            .and_then(|s| s.children.iter_mut().find(|c| c.name == "Render"))
+            .and_then(|n| n.params.iter_mut().find(|p| p.name == name))
+        {
+            p.default = if val { "true" } else { "false" }.to_string();
+        }
+    }
+
     pub(crate) fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
         let live_main: [(&str, bool); 2] = [
             ("Circular Pane", self.circular_network_pane),
@@ -2780,12 +2797,17 @@ impl State {
             ("Show Reference Cube", self.viewport().show_cube),
             ("Show Origin Axes", self.viewport().show_origin),
         ];
+        let live_render: [(&str, bool); 2] = [
+            ("Show Wireframe", self.wireframe),
+            ("Wire Single Color", self.wire_single_color),
+        ];
         let dir = self.param_editor_dir_mut();
         let Some(child) = dir.children.get_mut(slot_idx) else { return };
         let live: &[(&str, bool)] = match child.name.as_str() {
             "Main" => &live_main,
             "View" => &live_view,
             "Guides" => &live_guides,
+            "Render" => &live_render,
             _ => return,
         };
         for &(name, on) in live {
@@ -5576,6 +5598,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.write_active_camera_toggle("Show Camera Pivot", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 3, val);
                 settings_changed = true;
+            }
+            Action::ToggleWireframe => {
+                // The Render utility node's "Show Wireframe" toggle is the
+                // value `apply_settings_from_menubar_subnets` reads back on
+                // EVERY parameter edit, so flipping the flag alone would
+                // revert on the next unrelated edit: the node's toggle is
+                // written too, and the pane shows the switch moved.
+                let val = !self.wireframe;
+                self.wireframe = val;
+                self.write_render_toggle("Show Wireframe", val);
             }
             Action::ToggleSquareViewport => {
                 self.square_viewport = !self.square_viewport;
