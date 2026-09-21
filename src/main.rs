@@ -1445,6 +1445,69 @@ mod tests {
         );
     }
 
+    /// The Sphere's Color toggle: on, the normal-mapped gradient the sphere
+    /// has always had; off, `DEFAULT_COLOR` — the same grey geometry with no
+    /// `Cd` at all renders at, so an uncoloured sphere looks like an
+    /// uncoloured anything else rather than like a second colour scheme.
+    #[test]
+    fn sphere_color_toggle_switches_between_gradient_and_default() {
+        let templates_root = crate::app::load_fs_tree();
+        let sphere_template = templates_root
+            .children
+            .iter()
+            .find(|t| t.name == "Sphere")
+            .expect("Sphere template should be loaded");
+        let color = sphere_template.params.iter().find(|p| p.name == "Color").expect("a Color param");
+        assert_eq!(color.param_type, "toggle");
+        assert_eq!(color.default, "true", "coloured by default, as it always was");
+
+        let generate = |on: &str| {
+            let mut inst = sphere_template.clone();
+            inst.id = format!("sphere_{on}");
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            inst.params.iter_mut().find(|p| p.name == "Color").unwrap().default = on.to_string();
+            let root = FsNode {
+                id: "root".to_string(),
+                name: "root".to_string(),
+                node_type: "node".to_string(),
+                children: vec![inst],
+                params: vec![],
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 0,
+                outputs: 0,
+            };
+            let mut visited = Vec::new();
+            let mut err = None;
+            let geom = crate::geometry::generate_single_node_geometry_with_errors(
+                &root,
+                &root.children[0],
+                &mut visited,
+                &mut err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+            )
+            .expect("geometry");
+            assert!(err.is_none(), "kernel error: {err:?}");
+            geom
+        };
+
+        let off = generate("false");
+        assert!(off.num_points() > 0);
+        for p in 0..off.num_points() {
+            assert_eq!(off.color(p), crate::detail::DEFAULT_COLOR, "point {p} off");
+        }
+
+        let on = generate("true");
+        assert_eq!(on.num_points(), off.num_points(), "the toggle changes colour, not shape");
+        let first = on.color(0);
+        assert!(
+            (0..on.num_points()).any(|p| on.color(p) != first),
+            "on, the sphere carries its gradient"
+        );
+    }
+
     #[test]
     fn test_sphere_subnet_geometry_generation() {
         let templates_root = crate::app::load_fs_tree();
@@ -2599,7 +2662,7 @@ mod tests {
         // kernel refreshed.
         let s = &root.children[0];
         let names: Vec<&str> = s.params.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["Radius", "Rows", "Columns", "Center X", "Center Y", "Center Z"]);
+        assert_eq!(names, ["Radius", "Rows", "Columns", "Center X", "Center Y", "Center Z", "Color"]);
         assert_eq!(s.params[0].default, "0.70", "instance value survives");
         let code = &s.children.iter().find(|c| c.name == "opencl1").unwrap()
             .params.iter().find(|p| p.name == "Code").unwrap().default;
