@@ -422,6 +422,53 @@ mod tests {
     /// Dock swap: dragging a plate's dot to another region swaps occupants,
     /// and the dock-owned dimensions stay put — the network lands in the
     /// bottom strip's rect, the spreadsheet in the left column's.
+    /// A left press on the spreadsheet's column header reaches the widget,
+    /// which sorts the column — it does not orbit the camera.
+    ///
+    /// `cursor_in_viewport` used to be the whole centre column, spreadsheet
+    /// included, and the orbit arm at the top of the left-press path returns
+    /// before any widget is asked. So the toolkit's header-click sort
+    /// (tested in cce-ui) never fired in this app: clicking a header
+    /// hovered it, tinted it, and did nothing.
+    #[test]
+    fn spreadsheet_header_press_reaches_the_widget_not_the_camera() {
+        use crate::slots::{SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, VIEWPORT_IDX};
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.show_spreadsheet = true;
+        state.rebuild_positions();
+        state.apply_layout();
+        state.spreadsheet_mut().set_spreadsheet_data(
+            vec!["Point".into(), "Pos.x".into()],
+            vec![vec!["0".into(), "9".into()], vec!["1".into(), "10".into()]],
+        );
+
+        // The middle of the second column's header cell.
+        let (sx, sy, sw, sh) = state.positions[SPREADSHEET_IDX];
+        assert!(sw > 0.0 && sh > 0.0, "the spreadsheet is laid out");
+        let (hx, hy) = (sx + sw * 0.75, sy + 12.0);
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: hx as f64, y: hy as f64 } });
+        assert!(!state.cursor_in_viewport(), "a floating pane is not the scene");
+
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(state.orbit_drag.is_none(), "the press must not arm the camera orbit");
+        assert_eq!(state.focused_widget, Some(SPREADSHEET_IDX), "the press reached the spreadsheet");
+        assert_eq!(state.focused_pane, SPREADSHEET_MENUBAR_IDX);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+
+        // And the scene beside it is still the scene: a press in the
+        // viewport's own rect, clear of every floating pane, orbits.
+        let (vx, vy, vw, vh) = state.positions[VIEWPORT_IDX];
+        let (cx, cy) = (vx + vw * 0.5, vy + vh * 0.3);
+        assert!(!state.over_floating_pane_at(cx, cy), "pick a point clear of the panes");
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: cx as f64, y: cy as f64 } });
+        assert!(state.cursor_in_viewport());
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert_eq!(state.orbit_drag, Some((cx, cy)), "a press on the scene still orbits");
+    }
+
     #[test]
     fn test_dock_swap_repositions_plates() {
         use crate::app::Dock;

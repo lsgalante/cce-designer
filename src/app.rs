@@ -1807,8 +1807,16 @@ impl State {
                 && self.cursor_y >= HEADER_H
                 && self.cursor_y < self.height - STATUS_H;
         }
+        // Minus the floating panes here too. The spreadsheet and the playbar
+        // sit INSIDE the centre column, over the full-bleed scene, and this
+        // test used to count them as viewport — so a left press on a column
+        // header armed the camera orbit and returned before any widget was
+        // asked, and the spreadsheet's own header-click sort never fired.
+        // Same for the right-click menu and the pinch zoom, which gate on
+        // this test as well.
         let node_area_y = self.positions[CONTENT_IDX].1;
-        self.cursor_x >= self.content_right_x()
+        !self.over_floating_pane()
+            && self.cursor_x >= self.content_right_x()
             && self.cursor_x < self.splitter_layout.splitter2_x
             && self.cursor_y >= node_area_y
             && self.cursor_y < self.height - STATUS_H
@@ -5924,12 +5932,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 {
                     if in_network_pane {
                         new_pane = Some(LEFT_MENUBAR_IDX);
+                    } else if self.show_spreadsheet && {
+                        let (sx, sy, sw, sh) = self.positions[SPREADSHEET_IDX];
+                        sw > 0.0 && sh > 0.0
+                            && self.cursor_x >= sx && self.cursor_x < sx + sw
+                            && self.cursor_y >= sy && self.cursor_y < sy + sh
+                    } {
+                        // Asked before the viewport: `cursor_in_viewport` no
+                        // longer counts the spreadsheet as scene, so this can
+                        // no longer be a refinement of that answer.
+                        new_pane = Some(SPREADSHEET_MENUBAR_IDX);
                     } else if in_viewport {
-                        if self.show_spreadsheet && self.cursor_y >= self.positions[SPREADSHEET_IDX].1 {
-                            new_pane = Some(SPREADSHEET_MENUBAR_IDX);
-                        } else {
-                            new_pane = Some(RIGHT_MENUBAR_IDX);
-                        }
+                        new_pane = Some(RIGHT_MENUBAR_IDX);
                     } else if self.cursor_x > self.splitter_layout.splitter2_x + SPLITTER_W && self.cursor_y >= node_area_y && self.cursor_y < self.height - STATUS_H {
                         new_pane = Some(PARAM_MENUBAR_IDX);
                     }
