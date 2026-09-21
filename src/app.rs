@@ -284,6 +284,25 @@ pub struct ProjectViewState {
     /// older saves keeps the live geometry.
     #[serde(default)]
     pub plates: Option<PlateGeometry>,
+    /// The Default Camera view — the viewport settings that have no node
+    /// to live on when no camera node is active: the square aspect, the
+    /// camera-pivot marker and its size, and the view itself (orbit, zoom,
+    /// pivot). Absent in older saves keeps the live values. A named camera's
+    /// own params still win over these when it is active and in the
+    /// directory (`apply_settings_from_menubar_subnets`).
+    #[serde(default)]
+    pub default_view: Option<DefaultCameraView>,
+}
+
+/// See [`ProjectViewState::default_view`].
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+pub struct DefaultCameraView {
+    pub square: bool,
+    pub show_pivot: bool,
+    pub pivot_size: f32,
+    pub rotation: (f32, f32),
+    pub zoom: f32,
+    pub pivot: [f32; 3],
 }
 
 /// The user-dragged plate edges of the floating layout, each as a fraction

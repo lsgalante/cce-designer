@@ -142,7 +142,39 @@ impl State {
             params_pin: Self::pin_name(self.params_pin),
             spreadsheet_pin: Self::pin_name(self.spreadsheet_pin),
             plates,
+            default_view: Some(crate::app::DefaultCameraView {
+                square: self.square_viewport,
+                show_pivot: self.viewport().show_camera_pivot,
+                pivot_size: self.camera_pivot_size,
+                rotation: (self.viewport().rotation_x, self.viewport().rotation_y),
+                zoom: self.viewport().zoom,
+                pivot: self.viewport().pivot.to_array(),
+            }),
         }
+    }
+
+    /// The saved Default Camera view onto the live state — after the
+    /// active camera and the path are known. The orbit, zoom and pivot are
+    /// the view and always restore; the square aspect, pivot marker and its
+    /// size are a camera NODE's own params when one is active in the
+    /// current directory (`apply_settings_from_menubar_subnets` reads them
+    /// off it), so those restore only for a view with no node.
+    fn apply_default_view_from_project(&mut self, view: Option<crate::app::DefaultCameraView>) {
+        let Some(v) = view else { return };
+        let active = self.active_camera.clone();
+        let has_node = active != "Default Camera"
+            && self.current_dir().children.iter().any(|c| c.node_type == "camera" && c.name == active);
+        if !has_node {
+            self.square_viewport = v.square;
+            self.camera_pivot_size = v.pivot_size;
+            self.viewport_mut().show_camera_pivot = v.show_pivot;
+        }
+        let vp = self.viewport_mut();
+        vp.rotation_x = v.rotation.0;
+        vp.rotation_y = v.rotation.1;
+        vp.zoom = v.zoom.clamp(0.05, crate::viewport_3d::Viewport3D::MAX_ZOOM);
+        vp.pivot = glam::Vec3::from_array(v.pivot);
+        vp.reset_velocity();
     }
 
     /// A pin as its saved pane name.
@@ -341,6 +373,13 @@ impl State {
             crate::app::ensure_meta_children(&mut proj.root);
             let saved_pane_vis = Self::project_pane_visibility(&proj.root);
             self.fs_root = proj.root;
+            // The project's viewport settings — the Guides and Render
+            // nodes' values, Main's background — onto the live state FIRST:
+            // `ensure_menubar_subnets` re-seeds those params from live state
+            // (so a chord-flipped toggle shows on the node), which on a load
+            // stamped the preferences file's values over the file's and lost
+            // them before the apply below could read them (2026-09-21).
+            self.apply_settings_from_menubar_subnets();
             self.ensure_menubar_subnets();
             self.apply_settings_from_menubar_subnets();
             self.apply_pane_state_from_project(&saved_pane_vis, &proj.view_state);
@@ -352,6 +391,7 @@ impl State {
             self.last_frame_pan_x = self.pan_x;
             self.last_frame_pan_y = self.pan_y;
             self.current_path = proj.view_state.current_path;
+            self.apply_default_view_from_project(proj.view_state.default_view);
 
             let sel = proj.view_state.selected_node;
             self.graph_mut().set_selected_node(sel);
@@ -396,6 +436,9 @@ impl State {
         crate::app::ensure_meta_children(&mut proj.root);
         let saved_pane_vis = Self::project_pane_visibility(&proj.root);
         self.fs_root = proj.root;
+        // As in the default-project branch: the file's viewport settings
+        // land on the live state before ensure re-seeds the nodes from it.
+        self.apply_settings_from_menubar_subnets();
         self.ensure_menubar_subnets();
         self.apply_settings_from_menubar_subnets();
         self.apply_pane_state_from_project(&saved_pane_vis, &proj.view_state);
@@ -407,6 +450,7 @@ impl State {
         self.last_frame_pan_x = self.pan_x;
         self.last_frame_pan_y = self.pan_y;
         self.current_path = proj.view_state.current_path;
+        self.apply_default_view_from_project(proj.view_state.default_view);
 
         let sel = proj.view_state.selected_node;
         self.graph_mut().set_selected_node(sel);
@@ -733,6 +777,11 @@ impl State {
 
         ensure_param(main_node, "Ray Traced Preview", "toggle", bool_str(vp_rt_mode), &[], None, None, None);
         ensure_param(main_node, "Background Color", "color", &color_to_hex(vp_bg_color), &[], None, None, None);
+        // Mirrors the live value, as the toggles do: a background set on the
+        // viewport rather than through the node still reaches the saved tree.
+        if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Background Color") {
+            p.default = color_to_hex(vp_bg_color);
+        }
 
         // The Style section is retired — DE chrome is config-owned, not
         // per-project: the wall and edge relief curves are

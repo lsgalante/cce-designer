@@ -4127,6 +4127,60 @@ mod tests {
         assert!(state.viewport().zoom < 1.0, "a 0.25 sphere frames closer than the stock view: zoom {}", state.viewport().zoom);
     }
 
+    /// The viewport settings live in the scene file: the Render node's
+    /// wireframe state and colour, the Guides node's grid and origin, Main's
+    /// background, and the Default Camera view (square aspect, pivot marker,
+    /// orbit/zoom/pivot). A fresh State whose live values differ takes the
+    /// file's on load. Before this, `ensure_menubar_subnets` re-seeded the
+    /// nodes from live state on load and the file's values were lost.
+    #[test]
+    fn viewport_settings_round_trip_through_the_scene_file() {
+        let dir = std::env::temp_dir().join(format!("cce-designer-vp-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut a = State::new(false);
+        a.ensure_menubar_subnets();
+        // The Default Camera is active: a camera NODE's own Square Aspect and
+        // pivot params would override the saved view's, by design.
+        a.active_camera = "Default Camera".to_string();
+        a.wireframe = true;
+        a.wire_single_color = true;
+        a.wire_color = [0.0, 0.0, 0.0, 1.0];
+        a.wire_width = 3.0;
+        a.viewport_mut().show_grid = false;
+        a.viewport_mut().show_origin = true;
+        a.viewport_mut().bg_color = [0.1, 0.2, 0.3];
+        a.square_viewport = true;
+        a.viewport_mut().show_camera_pivot = true;
+        a.viewport_mut().rotation_y = 0.7;
+        a.viewport_mut().zoom = 0.4;
+        a.viewport_mut().pivot = Vec3::new(3.0, 0.5, -2.0);
+        a.save_to_file(&dir).expect("save");
+
+        let mut b = State::new(false);
+        b.ensure_menubar_subnets();
+        assert!(!b.wireframe && !b.wire_single_color, "a fresh state starts without wires");
+        b.load_from_file(&dir).expect("load");
+        assert!(b.wireframe, "Show Wireframe loads from the file");
+        assert!(b.wire_single_color, "Wire Single Color loads from the file");
+        assert_eq!(b.wire_color, [0.0, 0.0, 0.0, 1.0]);
+        assert!((b.wire_width - 3.0).abs() < 1e-4);
+        assert!(!b.viewport().show_grid, "Show Grid loads from the file");
+        assert!(b.viewport().show_origin, "Show Origin loads from the file");
+        let bg = b.viewport().bg_color;
+        assert!((bg[0] - 0.1).abs() < 0.01 && (bg[1] - 0.2).abs() < 0.01 && (bg[2] - 0.3).abs() < 0.01, "background {bg:?}");
+        assert!(b.square_viewport, "Square Aspect loads from the file");
+        assert!(b.viewport().show_camera_pivot, "the pivot marker loads from the file");
+        assert!((b.viewport().rotation_y - 0.7).abs() < 1e-4);
+        assert!((b.viewport().zoom - 0.4).abs() < 1e-4);
+        assert_eq!(b.viewport().pivot, Vec3::new(3.0, 0.5, -2.0));
+        // And the nodes agree with the live state after the load.
+        let render = b.fs_root.children.iter().find(|c| c.node_type == "meta").unwrap()
+            .children.iter().find(|c| c.name == "Render").unwrap();
+        assert_eq!(render.params.iter().find(|p| p.name == "Show Wireframe").unwrap().default, "true");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The wireframe toggle is a palette row that flips the live flag AND
     /// the Render node's "Show Wireframe" switch. The node matters: it is
     /// what `apply_settings_from_menubar_subnets` reads back on every
