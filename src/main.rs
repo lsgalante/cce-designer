@@ -3266,6 +3266,42 @@ mod tests {
     }
 
     #[test]
+    /// The dialog's commands list takes a trackpad (finger-phase pixel
+    /// delta) as well as a wheel notch (2026-09-20: a finger did nothing).
+    #[test]
+    fn dialog_list_scrolls_by_trackpad_and_by_wheel() {
+        use cce_ui::widget::{MouseScrollDelta, Position, ScrollPhase, WidgetHost};
+        use crate::dialog::{Dialog, Row};
+        let mut ctx = cce_ui::context::UiContext::new();
+        let mut d = Dialog::new();
+        d.set_visible(true);
+        WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
+        let rows: Vec<Row> = (0..60)
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new() })
+            .collect();
+        d.set_rows(rows);
+        d.set_page(10);
+        assert_eq!(d.scroll_px, 0.0);
+
+        cce_ui::widget::scroll_motion::set_scroll_phase(ScrollPhase::Finger);
+        let moved = d.mouse_wheel_ungated(&MouseScrollDelta::PixelDelta(Position { x: 0.0, y: -30.0 }), 100.0, 200.0, &mut ctx);
+        assert!(moved, "a finger delta moves the list");
+        assert!(d.scroll_px > 0.0, "trackpad scrolled the list: {}", d.scroll_px);
+        // The layout re-records the page on every relayout; that must not
+        // snap the list back to the (unscrolled) selection.
+        let scrolled = d.scroll_px;
+        d.set_page(10);
+        assert_eq!(d.scroll_px, scrolled, "set_page keeps the scroll");
+
+        let before = d.scroll_px;
+        cce_ui::widget::scroll_motion::set_scroll_phase(ScrollPhase::Wheel);
+        d.mouse_wheel_ungated(&MouseScrollDelta::LineDelta(0.0, -1.0), 100.0, 200.0, &mut ctx);
+        for _ in 0..30 {
+            WidgetHost::tick(&mut d, 1.0 / 60.0, &mut ctx);
+        }
+        assert!(d.scroll_px > before, "a wheel notch glides the list: {} -> {}", before, d.scroll_px);
+    }
+
     fn test_keyboard_shortcut_system() {
         // Test parsing simple shortcut
         let ctrl_g = Shortcut::parse("Ctrl+g").unwrap();

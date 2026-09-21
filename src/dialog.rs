@@ -202,10 +202,17 @@ impl Dialog {
         d
     }
 
-    /// Record how many rows fit, from the laid-out rect.
+    /// Record how many rows fit, from the laid-out rect. Re-clamps the
+    /// offset to the new range and nothing more: this runs on EVERY
+    /// relayout (`layout_dialog`, off `rebuild_positions`, which the frame
+    /// tick reaches whenever anything animates), and snapping to the
+    /// selection here undid every wheel and finger scroll within a frame
+    /// (2026-09-20 — the list "would not scroll at all"). Keeping the
+    /// selection in view is the keyboard's job: `move_selection` and
+    /// `scroll_to_selected` at the call sites that change it.
     pub fn set_page(&mut self, page: usize) {
         self.page = page.max(1);
-        self.scroll_to_selected();
+        self.set_scroll_px(self.scroll_px);
     }
 
     /// How many rows fit — what PageUp/PageDown step by.
