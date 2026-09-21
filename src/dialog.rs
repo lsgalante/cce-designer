@@ -903,28 +903,28 @@ impl Setting {
 /// table.
 pub const SETTINGS: &[Setting] = &[
     Setting::section("Viewport"),
-    Setting::row("Background Color", Owner::Subnet("Main", "Background Color")),
+    Setting::row("Background Color", Owner::Subnet("main", "Background Color")),
     Setting::row("Square Aspect", Owner::Command("toggle_square_viewport")),
     Setting::section("Wireframe"),
-    Setting::row("Wireframe Color", Owner::Subnet("Render", "Wire Color")),
+    Setting::row("Wireframe Color", Owner::Subnet("render", "Wire Color")),
     // The colour applies only in single-colour mode (off, the wires carry
     // the geometry's vertex colours and the colour row sets their alpha
     // alone) — so the switch sits beside the colour, or a colour set here
     // looks ignored.
-    Setting::row("Wireframe Single Color", Owner::Subnet("Render", "Wire Single Color")),
+    Setting::row("Wireframe Single Color", Owner::Subnet("render", "Wire Single Color")),
     Setting::section("Grid"),
-    Setting::row("Show Grid", Owner::Subnet("Guides", "Show Grid Guide")),
-    Setting::row("Grid Color", Owner::Subnet("Guides", "Grid Color")),
-    Setting::row("Grid Thickness", Owner::Subnet("Guides", "Grid Thickness")),
+    Setting::row("Show Grid", Owner::Subnet("guides", "Show Grid Guide")),
+    Setting::row("Grid Color", Owner::Subnet("guides", "Grid Color")),
+    Setting::row("Grid Thickness", Owner::Subnet("guides", "Grid Thickness")),
     Setting::section("Guides"),
-    Setting::row("Show Origin Axes", Owner::Subnet("Guides", "Show Origin Axes")),
-    Setting::row("Origin Size", Owner::Subnet("Guides", "Origin Guide Size")),
-    Setting::row("Show Reference Cube", Owner::Subnet("Guides", "Show Reference Cube")),
+    Setting::row("Show Origin Axes", Owner::Subnet("guides", "Show Origin Axes")),
+    Setting::row("Origin Size", Owner::Subnet("guides", "Origin Guide Size")),
+    Setting::row("Show Reference Cube", Owner::Subnet("guides", "Show Reference Cube")),
     Setting::section("Camera"),
     Setting::row("Show Camera Pivot", Owner::Command("toggle_camera_pivot")),
     Setting::row("Camera Pivot Size", Owner::ActiveCamera("Camera Pivot Size")),
     Setting::section("Network"),
-    Setting::row("Show Network Plate", Owner::Subnet("View", "Show Network Plate")),
+    Setting::row("Show Network Plate", Owner::Subnet("view", "Show Network Plate")),
 ];
 
 fn setting_by_label(label: &str) -> Option<&'static Setting> {

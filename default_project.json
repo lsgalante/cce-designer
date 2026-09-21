@@ -5,7 +5,7 @@
     "type": "node",
     "children": [
       {
-        "name": "Camera1",
+        "name": "camera1",
         "type": "camera",
         "children": [],
         "params": [
@@ -46,7 +46,7 @@
         ]
       },
       {
-        "name": "Sphere1",
+        "name": "sphere1",
         "type": "node",
         "position": [
           4.0,
@@ -137,7 +137,7 @@
     ]
   },
   "view_state": {
-    "active_camera": "Camera1",
+    "active_camera": "camera1",
     "pan": [
       0.0,
       0.0

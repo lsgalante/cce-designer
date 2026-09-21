@@ -473,29 +473,29 @@ mod tests {
     // ----- Node names carry no spaces -----
 
     /// A node's name is a path segment, so the conventional "Sphere 1"
-    /// becomes "Sphere1" and any other whitespace an underscore.
+    /// becomes "sphere1" and any other whitespace an underscore, all lowercase.
     #[test]
     fn node_names_are_sanitized_of_whitespace() {
         use crate::app::sanitize_node_name;
-        assert_eq!(sanitize_node_name("Sphere 1"), "Sphere1");
-        assert_eq!(sanitize_node_name("Camera 12"), "Camera12");
-        assert_eq!(sanitize_node_name("Sphere1"), "Sphere1");
-        assert_eq!(sanitize_node_name("My Region"), "My_Region");
-        assert_eq!(sanitize_node_name("  My   Region 2 "), "My_Region2");
+        assert_eq!(sanitize_node_name("Sphere 1"), "sphere1");
+        assert_eq!(sanitize_node_name("Camera 12"), "camera12");
+        assert_eq!(sanitize_node_name("Sphere1"), "sphere1");
+        assert_eq!(sanitize_node_name("My Region"), "my_region");
+        assert_eq!(sanitize_node_name("  My   Region 2 "), "my_region2");
         assert_eq!(sanitize_node_name("mold\tshell"), "mold_shell");
         assert_eq!(sanitize_node_name(""), "node");
         assert_eq!(sanitize_node_name("   "), "node");
 
         // Minting and both MCP entry points go through it.
         let mut state = State::new(false);
-        assert_eq!(state.get_lowest_unused_name("Sphere"), "Sphere2", "Sphere1 is taken by the default project");
+        assert_eq!(state.get_lowest_unused_name("Sphere"), "sphere2", "sphere1 is taken by the default project");
         let mut redraw = false;
         state.apply_action(crate::app::McpAction::AddNode { template_name: "Plane".into(), name: Some("my plane".into()), x: 5.0, y: 5.0 }, &mut redraw).unwrap();
         let slot = state.current_dir().children.iter().position(|c| c.name == "my_plane").expect("the added node, sanitized");
         state.apply_action(crate::app::McpAction::RenameNode { slot, new_name: "flat one 3".into() }, &mut redraw).unwrap();
         assert_eq!(state.current_dir().children[slot].name, "flat_one3");
         state.apply_action(crate::app::McpAction::AddNode { template_name: "Plane".into(), name: None, x: 6.0, y: 6.0 }, &mut redraw).unwrap();
-        assert!(state.current_dir().children.iter().any(|c| c.name == "Plane1"), "a minted name has no space");
+        assert!(state.current_dir().children.iter().any(|c| c.name == "plane1"), "a minted name is lowercase with no space");
     }
 
     /// Loading an older save renames its nodes and follows every reference:
@@ -507,8 +507,8 @@ mod tests {
         let mut proj: Project = serde_json::from_str(&content).unwrap();
         // Age the file: put the spaces back, add a consumer wired to the
         // sphere by its old name, and a sibling already holding the new one.
-        let sphere = proj.root.children.iter().position(|c| c.name == "Sphere1").unwrap();
-        let camera = proj.root.children.iter().position(|c| c.name == "Camera1").unwrap();
+        let sphere = proj.root.children.iter().position(|c| c.name == "sphere1").unwrap();
+        let camera = proj.root.children.iter().position(|c| c.name == "camera1").unwrap();
         proj.root.children[sphere].name = "Sphere 1".into();
         proj.root.children[camera].name = "Camera 1".into();
         proj.view_state.active_camera = "Camera 1".into();
@@ -520,7 +520,7 @@ mod tests {
         group.params = vec![ParamDef { name: "Input".into(), label: "Input".into(), param_type: "text".into(), default: "Sphere 1".into(), options: vec![], min: None, max: None, step: None, show_when: String::new() }];
         let mut clash = group.clone();
         clash.id = "c".into();
-        clash.name = "Sphere1".into();
+        clash.name = "sphere1".into();
         clash.params[0].default = "Camera 1".into();
         proj.root.children.push(group);
         proj.root.children.push(clash);
@@ -528,16 +528,16 @@ mod tests {
         proj.sanitize_node_names();
 
         let names: Vec<&str> = proj.root.children.iter().map(|c| c.name.as_str()).collect();
-        assert!(names.contains(&"Camera1"));
-        assert!(names.contains(&"My_Region"));
-        assert!(names.contains(&"Sphere1"), "the hand-named sibling keeps its name");
-        assert!(names.contains(&"Sphere1_2"), "the migrated sphere steps aside from it: {names:?}");
+        assert!(names.contains(&"camera1"));
+        assert!(names.contains(&"my_region"));
+        assert!(names.contains(&"sphere1"), "the hand-named sibling keeps its name");
+        assert!(names.contains(&"sphere1_2"), "the migrated sphere steps aside from it: {names:?}");
         let by_name = |n: &str| proj.root.children.iter().find(|c| c.name == n).unwrap();
-        assert_eq!(by_name("My_Region").params[0].default, "Sphere1_2", "the wire followed the rename");
-        assert_eq!(by_name("Sphere1").params[0].default, "Camera1");
-        assert_eq!(proj.view_state.active_camera, "Camera1");
+        assert_eq!(by_name("my_region").params[0].default, "sphere1_2", "the wire followed the rename");
+        assert_eq!(by_name("sphere1").params[0].default, "camera1");
+        assert_eq!(proj.view_state.active_camera, "camera1");
         // The template children inside the sphere were never spaced and are untouched.
-        assert!(by_name("Sphere1_2").children.iter().any(|c| c.name == "opencl1"));
+        assert!(by_name("sphere1_2").children.iter().any(|c| c.name == "opencl1"));
 
         // A clean file is left exactly alone.
         let before = serde_json::to_string(&proj).unwrap();
@@ -777,7 +777,7 @@ mod tests {
     /// Session) now; tests that need Main resolve it through there.
     fn session_and_main(state: &State) -> (usize, usize) {
         let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta node");
-        let m_idx = state.fs_root.children[s_idx].children.iter().position(|c| c.name == "Main").expect("Main inside Session");
+        let m_idx = state.fs_root.children[s_idx].children.iter().position(|c| c.name == "main").expect("main inside Session");
         (s_idx, m_idx)
     }
 
@@ -828,13 +828,13 @@ mod tests {
         assert_eq!(session.name, "meta");
         assert!(session.is_enterable(), "the root meta stays a subnet");
         let names: Vec<&str> = session.children.iter().map(|c| c.name.as_str()).collect();
-        for expected in ["Main", "View", "Guides", "Render"] {
+        for expected in ["main", "view", "guides", "render"] {
             assert!(names.contains(&expected), "Session is missing {expected}: {names:?}");
         }
         // None of the four remain at root.
         for c in &state.fs_root.children {
             assert!(
-                !(c.node_type == "utility" && matches!(c.name.as_str(), "Main" | "View" | "Guides" | "Render")),
+                !(c.node_type == "utility" && matches!(c.name.as_str(), "main" | "view" | "guides" | "render")),
                 "settings node '{}' still at root", c.name
             );
         }
@@ -854,7 +854,7 @@ mod tests {
         assert_eq!(state.fs_root.children[s_idx].name, "meta");
         let names: Vec<&str> =
             state.fs_root.children[s_idx].children.iter().map(|c| c.name.as_str()).collect();
-        for expected in ["Main", "View", "Guides", "Render"] {
+        for expected in ["main", "view", "guides", "render"] {
             assert!(names.contains(&expected), "retype lost {expected}: {names:?}");
         }
 
@@ -862,7 +862,7 @@ mod tests {
         // applying the settings drives the overlay size.
         {
             let guides = state.fs_root.children[s_idx].children.iter_mut()
-                .find(|c| c.name == "Guides").unwrap();
+                .find(|c| c.name == "guides").unwrap();
             let p = guides.params.iter_mut().find(|p| p.name == "Point Marker Size")
                 .expect("Guides has Point Marker Size");
             assert_eq!(p.default, "20", "default = 0.02 world units");
@@ -902,7 +902,7 @@ mod tests {
         let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").unwrap();
         let mut session = state.fs_root.children.remove(s_idx);
         for mut child in session.children.drain(..) {
-            if child.name == "Guides" {
+            if child.name == "guides" {
                 child.params.push(crate::app::ParamDef {
                     name: "migration probe".to_string(),
                     label: String::new(),
@@ -920,7 +920,7 @@ mod tests {
 
         state.ensure_menubar_subnets();
         let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta recreated");
-        let guides = state.fs_root.children[s_idx].children.iter().find(|c| c.name == "Guides").expect("Guides migrated in");
+        let guides = state.fs_root.children[s_idx].children.iter().find(|c| c.name == "guides").expect("Guides migrated in");
         let v = guides.params.iter().find(|p| p.name == "migration probe").map(|p| p.default.as_str());
         assert_eq!(v, Some("survived"), "migration recreated Guides instead of moving it");
     }
@@ -1002,12 +1002,12 @@ mod tests {
             .fs_root
             .children
             .iter()
-            .position(|c| c.name == "Sphere1")
-            .expect("default project has Sphere1");
+            .position(|c| c.name == "sphere1")
+            .expect("default project has sphere1");
         state.current_path2 = vec![sphere];
         state.sync_nodes();
         assert!(state.current_path.is_empty(), "primary path must not follow");
-        assert_eq!(state.path_names_at(&state.current_path2), vec!["Sphere1".to_string()]);
+        assert_eq!(state.path_names_at(&state.current_path2), vec!["sphere1".to_string()]);
 
         state.current_path2 = vec![99];
         state.sync_nodes();
@@ -1031,8 +1031,8 @@ mod tests {
         let mut state = State::new(false);
         state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
 
-        let sphere = state.fs_root.children.iter().position(|c| c.name == "Sphere1").unwrap();
-        let camera = state.fs_root.children.iter().position(|c| c.name == "Camera1").unwrap();
+        let sphere = state.fs_root.children.iter().position(|c| c.name == "sphere1").unwrap();
+        let camera = state.fs_root.children.iter().position(|c| c.name == "camera1").unwrap();
 
         // Pane 1 selects the sphere; the spreadsheet pins to pane 1.
         state.graph_mut().set_selected_node(Some(sphere));
@@ -1102,8 +1102,8 @@ mod tests {
             .fs_root
             .children
             .iter()
-            .position(|c| c.name == "Sphere1")
-            .expect("default project has Sphere1");
+            .position(|c| c.name == "sphere1")
+            .expect("default project has sphere1");
         a.current_path2 = vec![sphere];
         a.save_to_file(&dir).expect("save");
 
@@ -1299,12 +1299,12 @@ mod tests {
         let content = fs::read_to_string(&path).expect("failed to read default project");
         let proj: Project = serde_json::from_str(&content).expect("failed to deserialize project");
         assert_eq!(proj.name, "Default Project");
-        assert_eq!(proj.view_state.active_camera, "Camera1");
+        assert_eq!(proj.view_state.active_camera, "camera1");
         assert_eq!(proj.root.name, "root");
         assert_eq!(proj.root.children.len(), 2);
-        assert_eq!(proj.root.children[0].name, "Camera1");
+        assert_eq!(proj.root.children[0].name, "camera1");
         assert_eq!(proj.root.children[0].position, (1.0, 1.0));
-        assert_eq!(proj.root.children[1].name, "Sphere1");
+        assert_eq!(proj.root.children[1].name, "sphere1");
         assert_eq!(proj.root.children[1].position, (4.0, 2.0));
     }
 
@@ -1355,7 +1355,7 @@ mod tests {
         use glam::Vec3;
         let mut vp = crate::viewport_3d::Viewport3D::new();
         let inner = vp.as_any_mut().downcast_mut::<crate::viewport_3d::Viewport3D>().unwrap();
-        inner.active_camera = "Camera1".to_string();
+        inner.active_camera = "camera1".to_string();
         let pos = Vec3::new(2.5, 1.8, 2.5);
         let piv = Vec3::ZERO;
         let (_, v1, _) = inner.get_matrices(1.0, Some(pos), Some(Vec3::new(23.62, -58.83, 0.0)), Some(piv));
@@ -4268,7 +4268,7 @@ mod tests {
         assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Color" && t == "rgba"), "{shown:?}");
         assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Single Color" && t == "toggle"), "{shown:?}");
         let s = crate::dialog::SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
-        assert_eq!(s.owner, Some(crate::dialog::Owner::Subnet("Render", "Wire Color")));
+        assert_eq!(s.owner, Some(crate::dialog::Owner::Subnet("render", "Wire Color")));
 
         // Editing both rows reaches the live state: the colour AND the switch
         // that makes the wire pass use it (off, the wires carry the
@@ -4294,8 +4294,8 @@ mod tests {
         use crate::geometry::Vertex3D;
         let mut state = State::new(false);
         // The root holds Camera 1; a subnet holds no camera at all.
-        state.active_camera = "Camera1".to_string();
-        let sub = state.current_dir().children.iter().position(|c| c.name == "Sphere1").expect("Sphere1 at the root");
+        state.active_camera = "camera1".to_string();
+        let sub = state.current_dir().children.iter().position(|c| c.name == "sphere1").expect("sphere1 at the root");
         state.current_path.push(sub);
         state.on_path_changed();
         assert!(!state.current_dir().children.iter().any(|c| c.node_type == "camera"), "no camera in the subnet");
@@ -4371,7 +4371,7 @@ mod tests {
         assert_eq!(b.viewport().pivot, Vec3::new(3.0, 0.5, -2.0));
         // And the nodes agree with the live state after the load.
         let render = b.fs_root.children.iter().find(|c| c.node_type == "meta").unwrap()
-            .children.iter().find(|c| c.name == "Render").unwrap();
+            .children.iter().find(|c| c.name == "render").unwrap();
         assert_eq!(render.params.iter().find(|p| p.name == "Show Wireframe").unwrap().default, "true");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -4388,13 +4388,13 @@ mod tests {
         assert!(!state.wire_single_color);
         let render_param = |state: &State, name: &str| -> String {
             state.fs_root.children.iter().find(|c| c.node_type == "meta").unwrap()
-                .children.iter().find(|c| c.name == "Render").unwrap()
+                .children.iter().find(|c| c.name == "render").unwrap()
                 .params.iter().find(|p| p.name == name).unwrap().default.clone()
         };
         // An edit through the node, as the params pane and the dialog make it.
         {
             let meta = state.fs_root.children.iter_mut().find(|c| c.node_type == "meta").unwrap();
-            let render = meta.children.iter_mut().find(|c| c.name == "Render").unwrap();
+            let render = meta.children.iter_mut().find(|c| c.name == "render").unwrap();
             render.params.iter_mut().find(|p| p.name == "Wire Color").unwrap().default = "#000000ff".to_string();
         }
         state.apply_settings_from_menubar_subnets();
@@ -4437,7 +4437,7 @@ mod tests {
                 .children
                 .iter()
                 .find(|c| c.node_type == "meta")
-                .and_then(|s| s.children.iter().find(|c| c.name == "Render"))
+                .and_then(|s| s.children.iter().find(|c| c.name == "render"))
                 .and_then(|n| n.params.iter().find(|p| p.name == "Show Wireframe"))
                 .map(|p| p.default.clone())
                 .expect("a Render node with a Show Wireframe toggle")
@@ -5096,7 +5096,7 @@ mod tests {
         let view = state.fs_root.children[session]
             .children
             .iter()
-            .position(|c| c.name == "View")
+            .position(|c| c.name == "view")
             .expect("View node");
         let plate_row = |state: &State| {
             state.fs_root.children[session].children[view]
@@ -5135,7 +5135,7 @@ mod tests {
         let guides_value = |state: &State, name: &str| -> String {
             state
                 .session_node()
-                .and_then(|s| s.children.iter().find(|c| c.name == "Guides"))
+                .and_then(|s| s.children.iter().find(|c| c.name == "guides"))
                 .and_then(|g| g.params.iter().find(|p| p.name == name))
                 .map(|p| p.default.clone())
                 .expect("the Guides param")
@@ -5163,7 +5163,7 @@ mod tests {
 
             // And a real edit through the action path, on an unrelated node.
             let mut redraw = false;
-            let sphere = state.current_dir().children.iter().position(|c| c.name.starts_with("Sphere")).expect("a sphere");
+            let sphere = state.current_dir().children.iter().position(|c| c.name.starts_with("sphere")).expect("a sphere");
             state
                 .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.7".into() }, &mut redraw)
                 .expect("set a sphere param");
@@ -8125,7 +8125,7 @@ mod tests {
             .expect("meta")
             .children
             .iter()
-            .find(|c| c.name == "Guides")
+            .find(|c| c.name == "guides")
             .expect("Guides");
         let p = guides.params.iter().find(|p| p.name == "Show Grid Guide").expect("the param");
         assert_eq!(p.default == "true", !was, "and so did its owner");
@@ -8196,7 +8196,7 @@ mod tests {
         assert!(!state.dialog_visible(), "the pick closes the dialog");
         assert_eq!(state.current_dir().children.len(), before + 1);
         let added = state.current_dir().children.last().expect("the new node");
-        assert!(added.name.starts_with("Box"), "added {}", added.name);
+        assert!(added.name.starts_with("box"), "added {}", added.name);
         assert_eq!(added.position, (3.0, 2.0), "placed at the grid cursor");
     }
 

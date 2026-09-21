@@ -562,24 +562,28 @@ pub fn meta_pref(node: &FsNode, name: &str) -> bool {
 ///
 /// Matching is conservative: native nodes (group, attribute, scatter, …)
 /// match their template by node type exactly; subnet instances match by name
-/// ("Sphere3" → "Sphere" — and "Sphere_3", should someone type one — so a
+/// ("sphere3" → "Sphere" — and "sphere_3", should someone type one — so a
 /// renamed instance simply keeps its saved
 /// shape), and only merge when EVERY template child is present by name and
 /// type — a hand-built subnet that happens to share the name is left alone,
 /// and nothing is ever injected or deleted. Simnet children (the user's sim
 /// chain) are out of scope by construction: simnet is a native type.
-/// A node name as this app will keep it: no whitespace.
+/// A node name as this app will keep it: lowercase, no whitespace.
 ///
-/// A node's name is a segment of its path — `/Sphere1/opencl1` is how the
+/// A node's name is a segment of its path — `/sphere1/opencl1` is how the
 /// breadcrumb, the MCP tools and every `Input` wire name it — and a path
 /// with spaces in it is a path that has to be quoted everywhere it goes.
 /// So names do not carry them. The one space that was CONVENTIONAL, the one
 /// between a template's name and its index ("Sphere 1"), simply goes, so a
 /// migrated save reads like a fresh one; any other whitespace becomes an
-/// underscore, so "My Region" keeps its two words. Empty comes back as
+/// underscore, so "My Region" keeps its two words. And the whole thing is
+/// lowercased, as Houdini names its nodes (`sphere1`, `camera1`) — the
+/// app's own utility nodes included (`/meta/guides`), since a path
+/// convention with exceptions is two conventions. Empty comes back as
 /// `node`, since a node with no name has no path at all.
 pub fn sanitize_node_name(name: &str) -> String {
-    let trimmed = name.trim();
+    let lowered = name.to_lowercase();
+    let trimmed = lowered.trim();
     // "Sphere 1" → "Sphere1": drop the whitespace between a base and a
     // trailing run of digits.
     let digits = trimmed.trim_end_matches(|c: char| c.is_ascii_digit());
@@ -689,9 +693,12 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                 .name
                 .trim_end_matches(|c: char| c.is_ascii_digit())
                 .trim_end_matches(|c: char| c == '_' || c.is_whitespace());
+            // Case-insensitively: the template is "Sphere", its instances
+            // are "sphere1".
             templates.iter().map(|t| &t.node).find(|t| {
                 t.node_type.eq_ignore_ascii_case("node")
-                    && (t.name == node.name || (!base.is_empty() && t.name == base))
+                    && (t.name.eq_ignore_ascii_case(&node.name)
+                        || (!base.is_empty() && t.name.eq_ignore_ascii_case(base)))
             })
         } else {
             templates.iter().map(|t| &t.node).find(|t| {
@@ -1646,7 +1653,7 @@ impl State {
 
         let main_node = self
             .session_node_mut()
-            .and_then(|s| s.children.iter_mut().find(|c| c.name == "Main"));
+            .and_then(|s| s.children.iter_mut().find(|c| c.name == "main"));
         if let Some(main_node) = main_node {
             if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Open") {
                 p.options = opts;
@@ -2906,14 +2913,14 @@ impl State {
     /// so a command that changed the live state leaves the node agreeing
     /// with it. Nothing when the project has no Render node yet.
     pub(crate) fn write_render_toggle(&mut self, name: &str, val: bool) {
-        self.write_meta_toggle("Render", name, val);
+        self.write_meta_toggle("render", name, val);
     }
 
     /// The Guides node's counterpart: what Show Grid, Show Cube and Show
     /// Origin write, for the same reason Show Wireframe writes the Render
     /// node — see [`State::write_meta_toggle`].
     pub(crate) fn write_guides_toggle(&mut self, name: &str, val: bool) {
-        self.write_meta_toggle("Guides", name, val);
+        self.write_meta_toggle("guides", name, val);
     }
 
     /// Write a toggle's value onto the utility subnet that OWNS it.
@@ -2964,10 +2971,10 @@ impl State {
         let dir = self.param_editor_dir_mut();
         let Some(child) = dir.children.get_mut(slot_idx) else { return };
         let live: &[(&str, bool)] = match child.name.as_str() {
-            "Main" => &live_main,
-            "View" => &live_view,
-            "Guides" => &live_guides,
-            "Render" => &live_render,
+            "main" => &live_main,
+            "view" => &live_view,
+            "guides" => &live_guides,
+            "render" => &live_render,
             _ => return,
         };
         for &(name, on) in live {
@@ -5839,7 +5846,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // The Main node owns this one, as Guides owns the guide
                 // toggles above: without the write, the next parameter edit
                 // put the pane back the way the node said.
-                self.write_meta_toggle("Main", "Circular Pane", val);
+                self.write_meta_toggle("main", "Circular Pane", val);
                 self.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 self.rebuild_positions();
                 self.apply_layout();

@@ -250,7 +250,7 @@ impl State {
         root.children
             .iter()
             .find(|c| c.node_type == "meta")
-            .and_then(|m| m.children.iter().find(|c| c.name == "View"))
+            .and_then(|m| m.children.iter().find(|c| c.name == "view"))
             .map(|v| {
                 v.params
                     .iter()
@@ -672,7 +672,7 @@ impl State {
             while idx < self.fs_root.children.len() {
                 let c = &self.fs_root.children[idx];
                 if c.node_type == "utility"
-                    && matches!(c.name.as_str(), "Main" | "View" | "Guides" | "Render")
+                    && matches!(c.name.as_str(), "main" | "view" | "guides" | "render")
                 {
                     migrated.push(self.fs_root.children.remove(idx));
                 } else {
@@ -715,7 +715,7 @@ impl State {
         let session = &mut self.fs_root.children[session_idx];
 
         // 1. Main subnet
-        let main_node = find_or_create_subnet(session, "Main", "utility", (0.0, 0.0));
+        let main_node = find_or_create_subnet(session, "main", "utility", (0.0, 0.0));
         main_node.children.clear();
 
         ensure_param(main_node, "File", "section", "", &[], None, None, None);
@@ -905,7 +905,7 @@ impl State {
         // syncs this mirror before cloning the tree, and load_from_file reads
         // the loaded values (before this refresh clobbers them) and applies
         // the diffs via apply_pane_state_from_project.
-        let view_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "View", "utility", (0.0, 2.0));
+        let view_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "view", "utility", (0.0, 2.0));
         view_node.children.clear();
         ensure_param(view_node, "Panes", "section", "", &[], None, None, None);
         ensure_param(view_node, "Show Network Pane", "toggle", bool_str(show_network), &[], None, None, None);
@@ -955,7 +955,7 @@ impl State {
         // migrated off Main). The utility column keeps one empty cell between
         // nodes: Main (0,0), View (0,2), Guides (0,4), Render (0,6); older
         // saves parked at prior defaults slide to the spaced slots.
-        let guides_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "Guides", "utility", (0.0, 4.0));
+        let guides_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "guides", "utility", (0.0, 4.0));
         if guides_node.position == (0.0, 1.0) || guides_node.position == (0.0, 2.0) {
             guides_node.position = (0.0, 4.0);
         }
@@ -999,7 +999,7 @@ impl State {
         // Main. Toggles reflect live state so a reopened project shows real
         // switches. Two rows below Guides (the spaced column); older saves
         // parked at the prior defaults slide down.
-        let render_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "Render", "utility", (0.0, 6.0));
+        let render_node = find_or_create_subnet(&mut self.fs_root.children[session_idx], "render", "utility", (0.0, 6.0));
         if render_node.position == (0.0, 1.0) || render_node.position == (0.0, 2.0) || render_node.position == (0.0, 4.0) {
             render_node.position = (0.0, 6.0);
         }
@@ -1117,7 +1117,7 @@ impl State {
                 .and_then(|s| s.children.iter().find(|c| c.name == name))
                 .map(|n| n.params.clone())
         };
-        if let Some(params) = session_params(&self.fs_root, "Guides") {
+        if let Some(params) = session_params(&self.fs_root, "guides") {
             for p in &params {
                 match p.name.as_str() {
                     "Show Grid Guide" => if let Ok(val) = p.default.parse::<bool>() { self.viewport_mut().show_grid = val; }
@@ -1152,7 +1152,7 @@ impl State {
                 }
             }
         }
-        if let Some(params) = session_params(&self.fs_root, "Main") {
+        if let Some(params) = session_params(&self.fs_root, "main") {
             for p in &params {
                 match p.name.as_str() {
                     // Network Settings
@@ -1201,7 +1201,7 @@ impl State {
             }
         }
 
-        if let Some(params) = session_params(&self.fs_root, "Render") {
+        if let Some(params) = session_params(&self.fs_root, "render") {
             let before = self.wire_color;
             for p in &params {
                 match p.name.as_str() {
