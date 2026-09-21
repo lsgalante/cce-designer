@@ -1445,25 +1445,24 @@ mod tests {
         );
     }
 
-    /// The Sphere's Color toggle: on, the normal-mapped gradient the sphere
-    /// has always had; off, `DEFAULT_COLOR` — the same grey geometry with no
-    /// `Cd` at all renders at, so an uncoloured sphere looks like an
+    /// A template's Color toggle: on, the gradient the shape has always
+    /// carried; off, `DEFAULT_COLOR` — the same grey geometry with no `Cd`
+    /// at all renders at, so an uncoloured sphere or plane looks like an
     /// uncoloured anything else rather than like a second colour scheme.
-    #[test]
-    fn sphere_color_toggle_switches_between_gradient_and_default() {
+    fn assert_color_toggle_switches_between_gradient_and_default(template_name: &str) {
         let templates_root = crate::app::load_fs_tree();
-        let sphere_template = templates_root
+        let template = templates_root
             .children
             .iter()
-            .find(|t| t.name == "Sphere")
-            .expect("Sphere template should be loaded");
-        let color = sphere_template.params.iter().find(|p| p.name == "Color").expect("a Color param");
+            .find(|t| t.name == template_name)
+            .unwrap_or_else(|| panic!("{template_name} template should be loaded"));
+        let color = template.params.iter().find(|p| p.name == "Color").expect("a Color param");
         assert_eq!(color.param_type, "toggle");
         assert_eq!(color.default, "true", "coloured by default, as it always was");
 
         let generate = |on: &str| {
-            let mut inst = sphere_template.clone();
-            inst.id = format!("sphere_{on}");
+            let mut inst = template.clone();
+            inst.id = format!("{template_name}_{on}");
             for child in &mut inst.children {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
@@ -1489,14 +1488,14 @@ mod tests {
                 &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
             )
             .expect("geometry");
-            assert!(err.is_none(), "kernel error: {err:?}");
+            assert!(err.is_none(), "{template_name} kernel error: {err:?}");
             geom
         };
 
         let off = generate("false");
         assert!(off.num_points() > 0);
         for p in 0..off.num_points() {
-            assert_eq!(off.color(p), crate::detail::DEFAULT_COLOR, "point {p} off");
+            assert_eq!(off.color(p), crate::detail::DEFAULT_COLOR, "{template_name} point {p} off");
         }
 
         let on = generate("true");
@@ -1504,8 +1503,18 @@ mod tests {
         let first = on.color(0);
         assert!(
             (0..on.num_points()).any(|p| on.color(p) != first),
-            "on, the sphere carries its gradient"
+            "on, the {template_name} carries its gradient"
         );
+    }
+
+    #[test]
+    fn sphere_color_toggle_switches_between_gradient_and_default() {
+        assert_color_toggle_switches_between_gradient_and_default("Sphere");
+    }
+
+    #[test]
+    fn plane_color_toggle_switches_between_gradient_and_default() {
+        assert_color_toggle_switches_between_gradient_and_default("Plane");
     }
 
     #[test]
