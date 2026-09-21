@@ -1259,6 +1259,12 @@ pub struct State {
     /// Node-domain opacity (style.surface.graph.node.opacity) — independent of
     /// the pane's network_opacity; fades node bodies/wires/ports and node text.
     pub node_opacity: f32,
+    /// The node bodies' own backdrop compression (`style.surface.graph.
+    /// node_compression`, 0..1), overriding the pane material's for nodes
+    /// only — the plates can stay clear while the tablets sitting on them
+    /// pull the view toward the tint's key and read as solid. None = the
+    /// pane's.
+    pub node_compression: Option<f32>,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     pub floating_network_layout: (f32, f32, f32, f32),
@@ -4225,6 +4231,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             uniform_background: true,
             network_opacity: 0.95,
             node_opacity: 1.0,
+            node_compression: None,
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -4474,8 +4481,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let gap_color = cce_ui::color::graph_gap_color();
         let snap_enabled = cce_ui::layout::graph_grid_snap();
         let node_color = cce_ui::color::graph_node_color();
+        let node_compression = cce_ui::config::cached_config()
+            .pointer("/style/surface/graph/node_compression")
+            .and_then(|v| v.as_f64())
+            .map(|k| (k as f32).clamp(0.0, 1.0));
 
         let mut changed = false;
+
+        if self.node_compression != node_compression {
+            self.node_compression = node_compression;
+            changed = true;
+        }
         
         if (self.network_opacity - opacity).abs() > 0.001 {
             self.network_opacity = opacity;

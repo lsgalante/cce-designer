@@ -439,6 +439,16 @@ impl State {
                 // a tighter lip keeps the flat face reading.
                 let node_bevel = cce_ui::colors::plate_bevel_width() * 0.5;
                 let node_fill = cce_ui::colors::param_plate_fill();
+                // The pane material, with the nodes' own compression when
+                // configured (State::node_compression): the one knob that
+                // differs between a node body and the plate it sits on.
+                let node_mat = {
+                    let mut m = cce_ui::scene::Material::from_fill(node_fill);
+                    if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.node_compression, &mut m.frost) {
+                        *compression = k;
+                    }
+                    m
+                };
                 let sel = cce_ui::colors::node_selected_color();
                 let drag = cce_ui::colors::node_drag_color();
                 let hl = cce_ui::colors::highlight_primary_color();
@@ -490,9 +500,9 @@ impl State {
                 }
                 for (qx, qy, qw, qh, highlighted) in bodies {
                     if highlighted {
-                        pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &cce_ui::scene::Material::from_fill(node_fill), node_bevel, hl_tint);
+                        pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel, hl_tint);
                     } else {
-                        pc.bevel(rect(qx, qy, qw, qh), radii, &cce_ui::scene::Material::from_fill(node_fill), node_bevel);
+                        pc.bevel(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel);
                     }
                 }
                 for (qx, qy, qw, qh, qc) in overlays {
