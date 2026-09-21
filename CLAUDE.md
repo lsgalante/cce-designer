@@ -385,6 +385,40 @@ wires it as a node parameter), so the free-form float ramp is ported as the
 three-way choice the falloff parameters already use. Linear is the default
 because linear is what the cast that worked used.
 
+### Parameter references, sibling-first inputs, and the Switch node
+
+Three pieces added on 2026-09-21 so a node can be BUILT FROM other nodes
+the way a Houdini HDA is — the Embryo is the first to be recomposed that
+way — all in `src/geometry.rs`:
+
+- **A parameter value that is `ch("Name")` reads the enclosing subnet's
+  parameter `Name`** at evaluation time. `chf` / `chi` / `chb` are the
+  kernel vocabulary applied to references: `chi("Method")` on a choice with
+  options Basic, Scatter is 0 or 1, which is what lets a subnet's choice
+  drive a child switch's Index; `chb` reads a toggle as `true`/`false`. A
+  `../` per level climbs further (`ch("../../X")`); `ch("Name")` and
+  `ch("../Name")` both mean the parent. The whole value is the reference or
+  it is not one — there is no expression language, and a kernel's Code,
+  which merely contains `chf(`, is left alone. `resolve_param_refs` runs at
+  the top of `generate_single_node_geometry_with_errors` AND at the top of
+  the scene walk's `visit` (the walk hands nodes to their resolvers
+  directly), on a clone made only for nodes that actually reference. A
+  reference to nothing is reported through the node-error slot and the
+  value left as written, and a reference to a reference follows the chain
+  (bounded), so a composed node inside a composed node still reaches the
+  outermost control. The params pane shows a referencing value as text
+  (`param_display`), since a slider cannot hold it and a spinbox would write
+  zero back over it.
+- **`find_input_node(root, target, name)` looks for a SIBLING first, then
+  anywhere.** Every resolver used to search the whole tree from the top, so
+  inside the second instance of a subnet a child wired to "input1" found the
+  first instance's; the opencl and output resolvers had each grown a
+  sibling-first lookup of their own to dodge exactly that. All 39 lookups go
+  through it now.
+- **`switch`** passes one of `Input`, `Input 2` … `Input 4` by `Index`,
+  clamped; an empty slot passes nothing. Only `Input` draws a wire, the
+  limit every second operand has (Boolean's With, Copy's target).
+
 ### The Embryo node
 
 `src/embryo.rs` is hou-control's `developer_embryo`, the Developer family's

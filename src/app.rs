@@ -437,7 +437,12 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
         } else {
             p.default.clone()
         };
-        let ptype = if p.param_type == "slider" {
+        // A value that is a reference (`ch("Radius")`) is shown as the text
+        // it is: a slider cannot hold it, and a spinbox would show zero and
+        // then write zero back over it.
+        let ptype = if crate::geometry::parse_param_ref(&value).is_some() {
+            "text".to_string()
+        } else if p.param_type == "slider" {
             let min = p.min.unwrap_or(0.0);
             let max = p.max.unwrap_or(2.0);
             format!("slider:{}:{}", min, max)

@@ -5402,6 +5402,219 @@ mod tests {
     }
 
     /// The shell end to end, through the resolver the viewport calls.
+    // ----- Parameter references and the Switch node (src/geometry.rs) -----
+
+    fn ref_node(id: &str, name: &str, node_type: &str, params: Vec<(&str, &str, &str)>, children: Vec<FsNode>) -> FsNode {
+        use crate::app::ParamDef;
+        FsNode {
+            id: id.into(),
+            name: name.into(),
+            node_type: node_type.into(),
+            children,
+            params: params
+                .into_iter()
+                .map(|(n, t, d)| {
+                    let (ptype, options) = match t.strip_prefix("choice:") {
+                        Some(o) => ("choice".to_string(), o.split(',').map(str::to_string).collect()),
+                        None => (t.to_string(), Vec::new()),
+                    };
+                    ParamDef { name: n.into(), label: String::new(), param_type: ptype, default: d.into(), options, min: None, max: None, step: None, show_when: String::new() }
+                })
+                .collect(),
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        }
+    }
+
+    fn eval(root: &FsNode, target: &FsNode) -> (Option<Detail>, Option<String>) {
+        let mut visited = Vec::new();
+        let mut err = None;
+        let g = crate::geometry::generate_single_node_geometry_with_errors(
+            root, target, &mut visited, &mut err,
+            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+        );
+        (g, err)
+    }
+
+    /// Half the x extent — native spheres are placed at an index-derived
+    /// centre, so a distance from the origin would measure the placement.
+    fn radius_of(g: &Detail) -> f32 {
+        let (lo, hi) = g.positions().iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[0]), hi.max(p[0])));
+        (hi - lo) * 0.5
+    }
+
+    /// The reference syntax: the whole value, one of four kinds, a `../` per
+    /// level, and nothing that merely contains `ch(`.
+    #[test]
+    fn param_references_parse() {
+        use crate::geometry::{parse_param_ref, RefKind};
+        assert_eq!(parse_param_ref("ch(\"Radius\")"), Some((RefKind::Str, 1, "Radius".into())));
+        assert_eq!(parse_param_ref("  chf('Base Resolution')  "), Some((RefKind::Float, 1, "Base Resolution".into())));
+        assert_eq!(parse_param_ref("chi(\"../Source\")"), Some((RefKind::Int, 1, "Source".into())));
+        assert_eq!(parse_param_ref("chb(\"../../Relax Points\")"), Some((RefKind::Bool, 2, "Relax Points".into())));
+        assert_eq!(parse_param_ref("0.5"), None);
+        assert_eq!(parse_param_ref("float r = chf(\"Radius\", 0.5);"), None, "a kernel is not a reference");
+        assert_eq!(parse_param_ref("ch(Radius)"), None, "unquoted is not a reference");
+        assert_eq!(parse_param_ref("ch(\"\")"), None);
+    }
+
+    /// A child reads its subnet's controls: a number straight through, a
+    /// choice as its option index, a toggle as a bool, and a reference that
+    /// points at a reference follows the chain to the outermost control.
+    #[test]
+    fn param_references_resolve_against_the_enclosing_subnet() {
+        use crate::geometry::{resolve_param_refs, RefKind};
+        let sphere = ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "ch(\"Radius\")")], vec![]);
+        let output = ref_node("o", "output1", "output", vec![("Input", "text", "sphere1")], vec![]);
+        let inner = ref_node("sub", "shape1", "node",
+            vec![("Radius", "slider", "chf(\"../Size\")"), ("Mode", "choice:Basic,Scatter", "Scatter"), ("On", "toggle", "true")],
+            vec![sphere, output]);
+        let probe = ref_node("p", "probe", "switch",
+            vec![("Index", "spinbox", "chi(\"Mode\")"), ("Flag", "text", "chb(\"On\")"), ("Name", "text", "ch(\"Mode\")"), ("Plain", "text", "kept")],
+            vec![]);
+        let mut inner = inner;
+        inner.children.push(probe);
+        let outer = ref_node("outer", "outer1", "node", vec![("Size", "slider", "0.8")], vec![inner]);
+        let root = ref_node("root", "root", "node", vec![], vec![outer]);
+
+        // The probe's params, resolved against shape1.
+        let probe = &root.children[0].children[0].children[2];
+        let mut err = None;
+        let resolved = resolve_param_refs(&root, probe, &mut err).expect("it has references");
+        assert!(err.is_none(), "{err:?}");
+        let get = |n: &str| resolved.params.iter().find(|p| p.name == n).unwrap().default.clone();
+        assert_eq!(get("Index"), "1", "chi on a choice is its option index");
+        assert_eq!(get("Flag"), "true");
+        assert_eq!(get("Name"), "Scatter");
+        assert_eq!(get("Plain"), "kept");
+        let _ = RefKind::Str;
+
+        // Evaluated, the sphere's Radius chains: sphere1 → shape1's Radius,
+        // which is itself chf("../Size") → outer1's 0.8.
+        let shape = &root.children[0].children[0];
+        let (g, err) = eval(&root, shape);
+        assert!(err.is_none(), "{err:?}");
+        assert!((radius_of(&g.expect("geometry")) - 0.8).abs() < 0.02, "the radius came from the outermost control");
+
+        // A node with no references is left alone: no clone, no error.
+        let mut none = None;
+        assert!(resolve_param_refs(&root, &root.children[0].children[0].children[1], &mut none).is_none());
+        assert!(none.is_none());
+
+        // A reference to nothing is reported, and the value left as written.
+        let bad = ref_node("b", "bad1", "sphere", vec![("Radius", "slider", "ch(\"Nope\")")], vec![]);
+        let holder = ref_node("h", "holder1", "node", vec![], vec![bad]);
+        let root2 = ref_node("root", "root", "node", vec![], vec![holder]);
+        let mut err = None;
+        let r = resolve_param_refs(&root2, &root2.children[0].children[0], &mut err).unwrap();
+        assert_eq!(r.params[0].default, "ch(\"Nope\")");
+        assert!(err.as_deref().unwrap_or("").contains("names no parameter on holder1"), "{err:?}");
+        // Too many levels up, likewise.
+        let far = ref_node("f", "far1", "sphere", vec![("Radius", "slider", "ch(\"../../../X\")")], vec![]);
+        let root3 = ref_node("root", "root", "node", vec![], vec![far]);
+        let mut err = None;
+        resolve_param_refs(&root3, &root3.children[0], &mut err);
+        assert!(err.is_some());
+    }
+
+    /// Inside the SECOND instance of a subnet, a child wired to a sibling by
+    /// name finds its own sibling, not the first instance's.
+    #[test]
+    fn input_lookups_prefer_siblings() {
+        let make = |id: &str, name: &str, radius: &str| {
+            let src = ref_node(&format!("{id}-src"), "src", "sphere", vec![("Radius", "slider", radius)], vec![]);
+            let out = ref_node(&format!("{id}-out"), "output1", "output", vec![("Input", "text", "src")], vec![]);
+            ref_node(id, name, "node", vec![], vec![src, out])
+        };
+        let root = ref_node("root", "root", "node", vec![], vec![make("a", "shape1", "0.3"), make("b", "shape2", "0.9")]);
+        let (g, _) = eval(&root, &root.children[1]);
+        assert!((radius_of(&g.unwrap()) - 0.9).abs() < 0.02, "shape2's output read shape1's src");
+        // Sibling-first, then anywhere: a name with no sibling still resolves globally.
+        let global = ref_node("g", "global1", "sphere", vec![("Radius", "slider", "0.6")], vec![]);
+        let user = ref_node("u", "user1", "node", vec![], vec![ref_node("u-out", "output1", "output", vec![("Input", "text", "global1")], vec![])]);
+        let root2 = ref_node("root", "root", "node", vec![], vec![global, user]);
+        let (g, _) = eval(&root2, &root2.children[1]);
+        assert!((radius_of(&g.unwrap()) - 0.6).abs() < 0.02);
+        assert_eq!(crate::geometry::find_input_node(&root2, &root2.children[1], "").map(|n| n.name.clone()), None);
+    }
+
+    /// The Switch passes the input its Index names, clamps a wild index, and
+    /// passes nothing for an empty slot.
+    #[test]
+    fn switch_node_selects_one_of_its_inputs() {
+        use crate::geometry::switch_input_param;
+        assert_eq!(switch_input_param(0), "Input");
+        assert_eq!(switch_input_param(1), "Input 2");
+        assert_eq!(switch_input_param(3), "Input 4");
+        let a = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.2")], vec![]);
+        let b = ref_node("b", "b1", "sphere", vec![("Radius", "slider", "0.7")], vec![]);
+        let sw = |index: &str| ref_node("sw", "switch1", "switch",
+            vec![("Input", "text", "a1"), ("Input 2", "text", "b1"), ("Input 3", "text", ""), ("Input 4", "text", ""), ("Index", "spinbox", index)], vec![]);
+        let root = |index: &str| ref_node("root", "root", "node", vec![], vec![a.clone(), b.clone(), sw(index)]);
+        let r = root("0");
+        assert!((radius_of(&eval(&r, &r.children[2]).0.unwrap()) - 0.2).abs() < 0.02);
+        let r = root("1");
+        assert!((radius_of(&eval(&r, &r.children[2]).0.unwrap()) - 0.7).abs() < 0.02);
+        let r = root("2");
+        assert!(eval(&r, &r.children[2]).0.is_none(), "an empty slot passes nothing");
+        let r = root("99");
+        assert!(eval(&r, &r.children[2]).0.is_none(), "clamped to the last slot, which is empty");
+        let r = root("-4");
+        assert!((radius_of(&eval(&r, &r.children[2]).0.unwrap()) - 0.2).abs() < 0.02, "clamped to the first");
+
+        // The template loads and is a geometry type the walk knows.
+        let templates = crate::app::load_fs_tree();
+        let t = templates.children.iter().find(|t| t.name == "Switch").expect("the Switch template");
+        assert_eq!(t.node_type, "switch");
+        assert_eq!(t.inputs, 4);
+        assert!(crate::geometry::is_geometry_node_type("switch"));
+    }
+
+    /// A subnet's choice drives its switch through chi(), and the scene walk
+    /// dived into the subnet draws the switch's pick — references resolve on
+    /// that path too.
+    #[test]
+    fn a_choice_drives_a_switch_and_the_walk_sees_it() {
+        let a = ref_node("a", "small", "sphere", vec![("Radius", "slider", "0.2")], vec![]);
+        let b = ref_node("b", "big", "sphere", vec![("Radius", "slider", "0.7")], vec![]);
+        let sw = ref_node("sw", "switch1", "switch",
+            vec![("Input", "text", "small"), ("Input 2", "text", "big"), ("Index", "spinbox", "chi(\"Size\")")], vec![]);
+        let out = ref_node("o", "output1", "output", vec![("Input", "text", "switch1")], vec![]);
+        let mut a = a; a.geometry_visible = false;
+        let mut b = b; b.geometry_visible = false;
+        let sub = |size: &str| ref_node("sub", "pick1", "node", vec![("Size", "choice:Small,Big", size)], vec![a.clone(), b.clone(), sw.clone(), out.clone()]);
+        for (size, want) in [("Small", 0.2), ("Big", 0.7)] {
+            let root = ref_node("root", "root", "node", vec![], vec![sub(size)]);
+            let (g, err) = eval(&root, &root.children[0]);
+            assert!(err.is_none(), "{err:?}");
+            assert!((radius_of(&g.unwrap()) - want).abs() < 0.02, "Size {size} should pick radius {want}");
+            // Dived in: the walk draws switch1 (visible) and output1, both the pick.
+            let mut err = None;
+            let drawn = crate::geometry::network_sphere_vertices_with_errors(
+                &root, &root.children[0], &mut err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
+            );
+            assert!(err.is_none(), "{err:?}");
+            assert!(!drawn.is_empty());
+            assert!((radius_of(&drawn) - want).abs() < 0.02, "the walk inside pick1 draws the {size} pick");
+        }
+    }
+
+    /// The params pane shows a referencing value as the text it is.
+    #[test]
+    fn param_display_shows_references_as_text() {
+        use crate::app::ParamDef;
+        let params = vec![
+            ParamDef { name: "Radius".into(), label: String::new(), param_type: "slider".into(), default: "ch(\"Radius\")".into(), options: vec![], min: Some(0.0), max: Some(2.0), step: None, show_when: String::new() },
+            ParamDef { name: "Rows".into(), label: String::new(), param_type: "spinbox".into(), default: "16".into(), options: vec![], min: Some(2.0), max: Some(128.0), step: Some(1.0), show_when: String::new() },
+        ];
+        let rows = crate::app::param_display(&params);
+        assert_eq!(rows[0], ("Radius".to_string(), "ch(\"Radius\")".to_string(), "text".to_string()));
+        assert!(rows[1].2.starts_with("spinbox"));
+    }
+
     // ----- The Embryo node (src/embryo.rs) -----
 
     /// The hull of a cube's corners plus points inside it is the cube: eight

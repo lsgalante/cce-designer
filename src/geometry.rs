@@ -575,6 +575,177 @@ pub fn find_parent_node<'a>(root: &'a FsNode, child_id: &str) -> Option<&'a FsNo
     visit(root, child_id)
 }
 
+/// The node `name` refers to from `target`: a SIBLING first, then anywhere
+/// under `root`.
+///
+/// Every resolver used to search the whole tree from the top, so inside the
+/// second instance of a subnet a child wired to "input1" found the FIRST
+/// instance's `input1` — the opencl and output resolvers had each grown a
+/// sibling-first lookup of their own to dodge exactly that. A subnet built
+/// from other nodes (the Embryo, composed) wires its children to each other
+/// by name, and every one of those wires has to land on its own sibling.
+/// The global fallback keeps what worked before: a node inside a subnet may
+/// still name a node outside it.
+pub fn find_input_node<'a>(root: &'a FsNode, target: &FsNode, name: &str) -> Option<&'a FsNode> {
+    if name.is_empty() {
+        return None;
+    }
+    find_parent_node(root, &target.id)
+        .and_then(|p| p.children.iter().find(|c| c.name == name || c.id == name))
+        .or_else(|| find_node_by_name(root, name))
+}
+
+/// How a parameter reference wants the value it points at.
+///
+/// The kernel vocabulary (`chf` / `chi` / `chb`, which kernels already read
+/// their parameters through) plus `ch` for the string as it is. The
+/// conversions are what make a subnet's CHOICE drive a child's INDEX:
+/// `chi("Method")` on a choice with options Basic, Scatter is 0 or 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    Str,
+    Float,
+    Int,
+    Bool,
+}
+
+/// A parameter reference, parsed: `ch("Name")` and its kinds, with a `../`
+/// per level above the enclosing subnet — `ch("Name")` and `ch("../Name")`
+/// both mean the node's parent, `ch("../../Name")` its grandparent, as in
+/// Houdini, where a channel reference is a path.
+///
+/// The WHOLE value is the reference or it is not one: there is no expression
+/// language here, and a value that merely contains `ch(` (a kernel's Code)
+/// is left alone.
+pub fn parse_param_ref(value: &str) -> Option<(RefKind, usize, String)> {
+    let v = value.trim();
+    let (kind, rest) = if let Some(r) = v.strip_prefix("chf(") {
+        (RefKind::Float, r)
+    } else if let Some(r) = v.strip_prefix("chi(") {
+        (RefKind::Int, r)
+    } else if let Some(r) = v.strip_prefix("chb(") {
+        (RefKind::Bool, r)
+    } else if let Some(r) = v.strip_prefix("ch(") {
+        (RefKind::Str, r)
+    } else {
+        return None;
+    };
+    let inner = rest.strip_suffix(')')?.trim();
+    let quote = inner.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let path = inner.strip_prefix(quote)?.strip_suffix(quote)?;
+    let mut levels = 0;
+    let mut name = path;
+    while let Some(r) = name.strip_prefix("../") {
+        levels += 1;
+        name = r;
+    }
+    let name = name.trim();
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    Some((kind, levels.max(1), name.to_string()))
+}
+
+/// Whether any of `node`'s own parameters is a reference — the cheap test
+/// that lets evaluation skip the clone for the common node.
+pub fn has_param_refs(node: &FsNode) -> bool {
+    node.params.iter().any(|p| parse_param_ref(&p.default).is_some())
+}
+
+/// A parameter's value converted for a reference of `kind`.
+fn convert_ref_value(kind: RefKind, p: &ParamDef) -> String {
+    let raw = p.default.trim();
+    let is_choice = p.param_type == "choice" || p.param_type.starts_with("choice:");
+    // The option index is what a choice IS to a number: the position in the
+    // template's list, the way an ordinal menu evaluates in Houdini.
+    let choice_index = || -> Option<usize> {
+        let options: Vec<String> = if !p.options.is_empty() {
+            p.options.clone()
+        } else {
+            p.param_type
+                .strip_prefix("choice:")
+                .map(|o| o.split(',').map(|x| x.trim().to_string()).collect())
+                .unwrap_or_default()
+        };
+        options.iter().position(|o| o.eq_ignore_ascii_case(raw))
+    };
+    let as_number = || -> f32 {
+        if is_choice {
+            choice_index().map_or(0.0, |i| i as f32)
+        } else if raw.eq_ignore_ascii_case("true") {
+            1.0
+        } else if raw.eq_ignore_ascii_case("false") {
+            0.0
+        } else {
+            raw.parse::<f32>().unwrap_or(0.0)
+        }
+    };
+    match kind {
+        RefKind::Str => raw.to_string(),
+        RefKind::Float => {
+            let v = as_number();
+            if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{v}") }
+        }
+        RefKind::Int => format!("{}", as_number().trunc() as i64),
+        RefKind::Bool => (as_number() != 0.0).to_string(),
+    }
+}
+
+/// `target` with every parameter reference replaced by the value it names,
+/// or `None` when it has none — so the common node costs one scan and no
+/// clone. An unresolvable reference (no such ancestor, no such parameter)
+/// is reported through `error` and the value left as written, which is the
+/// difference between a node that silently reads zero and one that says why.
+///
+/// References chain: a subnet parameter that is itself a reference to ITS
+/// parent resolves on through, so a composed node nested in a composed node
+/// still reaches the outermost control. Bounded, because a chain can loop.
+pub fn resolve_param_refs(root: &FsNode, target: &FsNode, error: &mut Option<String>) -> Option<FsNode> {
+    if !has_param_refs(target) {
+        return None;
+    }
+    fn lookup(root: &FsNode, from: &FsNode, kind: RefKind, levels: usize, name: &str, depth: usize) -> Result<String, String> {
+        let mut anc = from;
+        for _ in 0..levels {
+            anc = find_parent_node(root, &anc.id).ok_or_else(|| {
+                format!("{}: {name} is {levels} level(s) up, but {} has no parent that far", from.name, from.name)
+            })?;
+        }
+        let p = anc
+            .params
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| format!("{}: ch(\"{name}\") names no parameter on {}", from.name, anc.name))?;
+        if let Some((k2, l2, n2)) = parse_param_ref(&p.default) {
+            if depth >= 8 {
+                return Err(format!("{}: ch(\"{name}\") chains too deep", from.name));
+            }
+            let through = lookup(root, anc, k2, l2, &n2, depth + 1)?;
+            let mut resolved = p.clone();
+            resolved.default = through;
+            return Ok(convert_ref_value(kind, &resolved));
+        }
+        Ok(convert_ref_value(kind, p))
+    }
+    let mut out = target.clone();
+    for p in &mut out.params {
+        if let Some((kind, levels, name)) = parse_param_ref(&p.default) {
+            match lookup(root, target, kind, levels, &name, 0) {
+                Ok(v) => p.default = v,
+                Err(e) => {
+                    if error.is_none() {
+                        *error = Some(e);
+                    }
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
 /// One simnet's solved state, kept between evaluations so playing forward costs
 /// one iteration per frame instead of re-solving the whole history every redraw.
 struct SimSolve {
@@ -682,6 +853,12 @@ pub fn generate_single_node_geometry_with_errors(
     }
     visited.push(target.id.clone());
 
+    // Parameter references resolve here, once, for every resolver below:
+    // a child of a composed subnet reads its parent's controls through
+    // `ch("Name")` and the resolvers never know.
+    let resolved = resolve_param_refs(root, target, ocl_error);
+    let target = resolved.as_ref().unwrap_or(target);
+
     let res = if target.node_type.eq_ignore_ascii_case("sphere") {
         let idx = find_sphere_index(root, target)?;
         let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
@@ -743,6 +920,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_mold_shell_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("embryo") {
         resolve_embryo_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("switch") {
+        resolve_switch_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("boolean") {
         resolve_boolean_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("export") {
@@ -784,7 +963,7 @@ pub fn generate_single_node_geometry_with_errors(
             } else {
                 None
             };
-            let input_node = input_node.or_else(|| find_node_by_name(root, &input_name));
+            let input_node = input_node.or_else(|| find_input_node(root, target, &input_name));
             if let Some(node) = input_node {
                 generate_single_node_geometry_with_errors(root, node, visited, ocl_error, sim)
             } else {
@@ -803,7 +982,7 @@ pub fn generate_single_node_geometry_with_errors(
             }
             let input_name = node_param_str(parent, "Input", "");
             if !input_name.is_empty() {
-                if let Some(input_node) = find_node_by_name(root, &input_name) {
+                if let Some(input_node) = find_input_node(root, target, &input_name) {
                     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
                 } else {
                     None
@@ -840,7 +1019,7 @@ pub fn resolve_transform_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let translation = node_param_vec3(target, "Translation", Vec3::ZERO).to_array();
     // Moving points changes no topology, so the cache rides along.
@@ -903,7 +1082,7 @@ pub fn resolve_group_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let group_name = node_param_str(target, "Group Name", "group1").trim().to_string();
@@ -1192,7 +1371,7 @@ pub fn resolve_collision_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let collider_name = node_param_str(target, "Collider", "");
@@ -1284,7 +1463,7 @@ pub fn resolve_relax_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let rest_name = node_param_str(target, "Rest", "");
@@ -1380,7 +1559,7 @@ pub fn resolve_normal_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let name = node_param_str(target, "Attribute", "N").trim().to_string();
     if name.is_empty() {
@@ -1407,7 +1586,7 @@ pub fn resolve_bounds_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let prefix = node_param_str(target, "Prefix", "bounds").trim().to_string();
@@ -1459,12 +1638,12 @@ pub fn resolve_distance_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let to_name = node_param_str(target, "To", "");
     let to_name = to_name.trim().to_string();
-    let Some(other) = find_node_by_name(root, &to_name)
+    let Some(other) = find_input_node(root, target, &to_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
         if ocl_error.is_none() && !to_name.is_empty() {
@@ -1540,7 +1719,7 @@ pub fn resolve_connectivity_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_connectivity(&mut geom, target);
     Some(geom)
@@ -1609,7 +1788,7 @@ pub fn resolve_cull_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let group = node_param_str(target, "Group", "");
@@ -1669,7 +1848,7 @@ pub fn resolve_volume_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     if geom.num_prims() == 0 {
         return Some(geom);
@@ -1726,12 +1905,12 @@ pub fn resolve_boolean_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let a = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let with_name = node_param_str(target, "With", "");
     let with_name = with_name.trim().to_string();
-    let Some(b) = find_node_by_name(root, &with_name)
+    let Some(b) = find_input_node(root, target, &with_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
         if ocl_error.is_none() && !with_name.is_empty() {
@@ -1769,7 +1948,7 @@ pub fn resolve_mold_shell_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let shell = crate::mold::mold_shell(
         &input,
@@ -1797,7 +1976,7 @@ pub fn resolve_embryo_geometry_with_errors(
 ) -> Option<Detail> {
     let params = embryo_params(target);
     let input = if params.source == crate::embryo::Source::Input {
-        let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+        let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
         Some(generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?)
     } else {
         None
@@ -1829,6 +2008,35 @@ pub fn embryo_params(target: &FsNode) -> crate::embryo::EmbryoParams {
     }
 }
 
+/// The Switch node: one of up to four inputs, chosen by Index.
+///
+/// What a composed subnet puts behind a choice: the Embryo's Source is a
+/// switch whose Index reads `chi("Source")`, so Internal is input 0 and
+/// Input is input 1. Nothing else about it — it passes the chosen geometry
+/// through untouched, and an empty slot passes nothing.
+///
+/// The inputs are `Input` and `Input 2` … `Input 4`. Only `Input` draws a
+/// wire, the same limit every second operand has (Boolean's With, Copy's
+/// target); when those become wires these should too.
+pub const SWITCH_INPUTS: usize = 4;
+
+pub fn switch_input_param(index: usize) -> String {
+    if index == 0 { "Input".to_string() } else { format!("Input {}", index + 1) }
+}
+
+pub fn resolve_switch_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let index = (node_param_f32(target, "Index", 0.0).round().max(0.0) as usize).min(SWITCH_INPUTS - 1);
+    let name = node_param_str(target, &switch_input_param(index), "");
+    let input_node = find_input_node(root, target, &name)?;
+    generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
+}
+
 /// The Export node: geometry out of the app.
 ///
 /// A pass-through in the chain — it hands its input straight on, so it can sit
@@ -1843,7 +2051,7 @@ pub fn resolve_export_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
 }
 
@@ -1964,12 +2172,12 @@ pub fn resolve_transfer_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let from_name = node_param_str(target, "From", "");
     let from_name = from_name.trim().to_string();
-    let Some(source) = find_node_by_name(root, &from_name)
+    let Some(source) = find_input_node(root, target, &from_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
         if ocl_error.is_none() && !from_name.is_empty() {
@@ -2044,7 +2252,7 @@ pub fn resolve_valence_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let name = node_param_str(target, "Attribute", "valence").trim().to_string();
     if name.is_empty() {
@@ -2081,7 +2289,7 @@ pub fn resolve_deform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_deform(&mut geom, target);
     Some(geom)
@@ -2166,12 +2374,12 @@ pub fn resolve_copy_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let source_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let source_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let source = generate_single_node_geometry_with_errors(root, source_node, visited, ocl_error, sim)?;
 
     let to_name = node_param_str(target, "To", "");
     let to_name = to_name.trim().to_string();
-    let Some(onto) = find_node_by_name(root, &to_name)
+    let Some(onto) = find_input_node(root, target, &to_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
         if ocl_error.is_none() && !to_name.is_empty() {
@@ -2254,7 +2462,7 @@ pub fn resolve_soft_transform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_node_by_name(root, &node_param_str(target, "Input", ""))?;
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_soft_transform(&mut geom, target);
     Some(geom)
@@ -2334,7 +2542,7 @@ pub fn resolve_subdivide_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let depth = node_param_f32(target, "Depth", 1.0).clamp(0.0, 6.0) as usize;
     Some(crate::remesh::subdivide(&geom, depth))
@@ -2365,7 +2573,7 @@ pub fn resolve_detangle_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_detangle(&mut geom, target);
     Some(geom)
@@ -2494,7 +2702,7 @@ pub fn resolve_suture_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let against_name = node_param_str(target, "Against", "");
@@ -2502,7 +2710,7 @@ pub fn resolve_suture_geometry_with_errors(
     let against = if against_name.is_empty() {
         None
     } else {
-        find_node_by_name(root, &against_name)
+        find_input_node(root, target, &against_name)
             .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     };
     apply_suture(&mut geom, against.as_ref(), target);
@@ -2611,7 +2819,7 @@ pub fn resolve_remesh_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     Some(crate::remesh::remesh(&geom, remesh_settings(target)))
 }
@@ -2655,7 +2863,7 @@ pub fn resolve_develop_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_develop(&mut geom, target, ocl_error);
     Some(geom)
@@ -2815,7 +3023,7 @@ pub fn resolve_visualize_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_visualize(&mut geom, target, ocl_error);
     Some(geom)
@@ -2939,7 +3147,7 @@ pub fn resolve_analysis_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_analysis(&mut geom, target, ocl_error);
     Some(geom)
@@ -3031,7 +3239,7 @@ pub fn resolve_time_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let frame = sim.frame;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_time(&mut geom, target, frame);
@@ -3144,7 +3352,7 @@ pub fn resolve_neighbour_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_neighbour(&mut geom, target, ocl_error);
     Some(geom)
@@ -3614,7 +3822,7 @@ pub fn resolve_attribute_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_attribute(&mut geom, target, ocl_error);
     Some(geom)
@@ -4005,7 +4213,7 @@ pub fn resolve_scatter_geometry_with_errors(
     if input_name.is_empty() {
         return None;
     }
-    let input_node = find_node_by_name(root, &input_name)?;
+    let input_node = find_input_node(root, target, &input_name)?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let num_points = node_param_f32(target, "Points", 100.0) as usize;
@@ -4463,7 +4671,7 @@ pub fn resolve_opencl_geometry_with_errors(
         // subnet's child once two instances exist.
         let sibling = find_parent_node(root, &target.id)
             .and_then(|p| p.children.iter().find(|c| c.name == input_name || c.id == input_name));
-        if let Some(input_node) = sibling.or_else(|| find_node_by_name(root, &input_name)) {
+        if let Some(input_node) = sibling.or_else(|| find_input_node(root, target, &input_name)) {
             generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
                 .unwrap_or_default()
         } else {
@@ -5009,6 +5217,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "boolean"
         || nt == "mold_shell"
         || nt == "embryo"
+        || nt == "switch"
         || nt == "volume"
         || nt == "deform"
         || nt == "valence"
@@ -5101,6 +5310,11 @@ pub fn network_sphere_vertices_with_errors(
         return out;
     }
     fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, top: bool, count: &mut usize, out: &mut Detail, ocl_error: &mut Option<String>, sim: &mut EvalSim) {
+        // The walk hands nodes to their resolvers directly, so it resolves
+        // references itself — dived into a composed subnet, its children are
+        // what is drawn, and their controls live on the subnet.
+        let resolved = resolve_param_refs(root, node, ocl_error);
+        let node = resolved.as_ref().unwrap_or(node);
         let is_visible = parent_visible && node.geometry_visible;
         if node.node_type.eq_ignore_ascii_case("sphere") {
             let idx = *count;
@@ -5333,6 +5547,15 @@ pub fn network_sphere_vertices_with_errors(
                     out.merge(&geom);
                 }
             }
+        } else if node.node_type.eq_ignore_ascii_case("switch") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_switch_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
         } else if node.node_type.eq_ignore_ascii_case("export") {
             let _idx = *count;
             *count += 1;
@@ -5524,7 +5747,9 @@ pub fn points_detail(node: &FsNode, center: Vec3) -> Detail {
 
 pub fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {
     fn visit(node: &FsNode, target: &FsNode, count: &mut usize) -> Option<usize> {
-        let is_target = std::ptr::eq(node, target);
+        // By id, not by pointer: a node evaluated with its parameter
+        // references resolved is a CLONE of the one in the tree.
+        let is_target = node.id == target.id;
         if node.node_type.eq_ignore_ascii_case("sphere") 
             || node.node_type.eq_ignore_ascii_case("line") 
             || node.node_type.eq_ignore_ascii_case("points")
@@ -6865,7 +7090,7 @@ pub fn resolve_simnet_geometry_with_errors(
         if input_name.is_empty() {
             Detail::new()
         } else {
-            find_node_by_name(root, &input_name)
+            find_input_node(root, target, &input_name)
                 .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
                 .unwrap_or_default()
         }
