@@ -364,6 +364,34 @@ pub enum ViewportMenuAction {
     Separator,
 }
 
+/// The network editor's right-click context menu (on empty space — a press on
+/// a node still opens that node's menu). Every row but the separator names a
+/// COMMAND ID rather than a piece of work, so the labels cannot drift from the
+/// palette's and a row is exactly as scriptable as the command behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkMenuAction {
+    /// Run `command::by_id(id)` — the row's label came from the same row.
+    Command(&'static str),
+    /// A "-" row: engraved, inert.
+    Separator,
+}
+
+/// The command ids the network context menu offers, in order; `None` is a
+/// separator. Add Node leads because right-clicking empty space USED to open
+/// the add-node palette outright, and that is still the common reason to come
+/// here.
+pub const NETWORK_MENU_COMMANDS: &[Option<&'static str>] = &[
+    Some("add_node"),
+    None,
+    Some("layout_nodes"),
+    Some("frame_all"),
+    Some("frame_cursor"),
+    None,
+    Some("reset_zoom"),
+    Some("toggle_network_plate"),
+    Some("toggle_circular_pane"),
+];
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum McpAction {
@@ -1311,6 +1339,10 @@ pub struct State {
     /// machinery as the node menu; this flag says the open menu is OURS).
     pub viewport_menu_active: bool,
     pub viewport_menu_actions: Vec<ViewportMenuAction>,
+    /// The network editor's right-click menu — the same thread-local again,
+    /// with the flag saying the open menu is this one.
+    pub network_menu_active: bool,
+    pub network_menu_actions: Vec<NetworkMenuAction>,
     /// The plate corner menu — same `context_menu` thread-local again; the slot
     /// says which plate's control opened it (and doubles as the pressed state
     /// the corner control paints with).
@@ -2758,6 +2790,9 @@ impl State {
             "Exit" => {
                 self.exit_requested = true;
             }
+            "Add Node" => {
+                self.open_node_palette();
+            }
             "Zoom In" => {
                 self.zoom(1.15, None);
             }
@@ -3689,6 +3724,84 @@ impl State {
         false
     }
 
+    /// Open the network editor's right-click context menu at the cursor. It is
+    /// what a press on EMPTY graph space opens; a press on a node still opens
+    /// that node's menu, which is the more specific thing under the pointer.
+    ///
+    /// Until 2026-09-22 this press opened the add-node palette outright, which
+    /// left the network the one pane whose right-click was not a context menu
+    /// — and left every other graph-wide command reachable only by chord or
+    /// through the palette. Add Node is the first row instead.
+    ///
+    /// Rows are built from `NETWORK_MENU_COMMANDS` through `command::by_id`,
+    /// so a label is the registry's label and a row cannot name work the
+    /// palette spells differently. A toggle command carries the same ●/○ mark
+    /// the viewport menu's radio rows use, read through
+    /// `command_toggle_state` — the one table the dialog's switches read too.
+    fn open_network_context_menu(&mut self) {
+        let mut options: Vec<String> = Vec::new();
+        let mut actions: Vec<NetworkMenuAction> = Vec::new();
+        for entry in NETWORK_MENU_COMMANDS {
+            match entry {
+                None => {
+                    if options.is_empty() || options.last().map(String::as_str) == Some("-") {
+                        continue;
+                    }
+                    options.push("-".to_string());
+                    actions.push(NetworkMenuAction::Separator);
+                }
+                Some(id) => {
+                    let Some(cmd) = crate::command::by_id(id) else { continue };
+                    options.push(match self.command_toggle_state(id) {
+                        Some(on) => format!("{} {}", if on { "●" } else { "○" }, cmd.label),
+                        None => cmd.label.to_string(),
+                    });
+                    actions.push(NetworkMenuAction::Command(cmd.id));
+                }
+            }
+        }
+        if options.last().map(String::as_str) == Some("-") {
+            options.pop();
+            actions.pop();
+        }
+
+        let target = self.slots.get_dyn(CONTENT_IDX).base().id();
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        self.network_menu_active = true;
+        self.network_menu_actions = actions;
+    }
+
+    fn network_menu_open(&self) -> bool {
+        cce_ui::widget::context_menu::is_visible() && self.network_menu_active
+    }
+
+    fn close_network_menu(&mut self) {
+        cce_ui::widget::context_menu::hide();
+        self.network_menu_active = false;
+        self.network_menu_actions.clear();
+    }
+
+    /// Route a left press while the network menu is open — same contract as
+    /// `handle_node_menu_click`. The menu is closed BEFORE the command runs,
+    /// since Add Node opens the dialog and a menu still standing over it would
+    /// be painted on top of the thing it asked for.
+    fn handle_network_menu_click(&mut self) -> bool {
+        if !self.network_menu_open() {
+            return false;
+        }
+        if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
+            let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
+            let picked = idx.and_then(|i| self.network_menu_actions.get(i).copied());
+            self.close_network_menu();
+            if let Some(NetworkMenuAction::Command(id)) = picked {
+                self.run_command(id);
+            }
+            return true;
+        }
+        self.close_network_menu();
+        false
+    }
+
     fn dispatch_node_menu(&mut self, slot: usize, action: NodeMenuAction) {
         match action {
             NodeMenuAction::Enter => {
@@ -4423,6 +4536,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             node_menu_actions: Vec::new(),
             viewport_menu_active: false,
             viewport_menu_actions: Vec::new(),
+            network_menu_active: false,
+            network_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
             page_image: None,
             seen_renderer: false,
@@ -6352,9 +6467,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.cursor_y = position.y as f32;
                 let mut changed = false;
 
-                // Track hover on the node/viewport context menus so the
-                // highlight follows.
-                if (self.node_menu_open() || self.viewport_menu_open())
+                // Track hover on the node/viewport/network context menus so
+                // the highlight follows.
+                if (self.node_menu_open() || self.viewport_menu_open() || self.network_menu_open())
                     && cce_ui::widget::context_menu::cursor_moved(self.cursor_x, self.cursor_y)
                 {
                     changed = true;
@@ -6687,6 +6802,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 return true;
                             }
                         }
+                        // The network editor's menu, same contract again.
+                        if self.network_menu_open() {
+                            if *button == MouseButton::Left && self.handle_network_menu_click() {
+                                return true;
+                            }
+                            self.close_network_menu();
+                            if *button == MouseButton::Left {
+                                return true;
+                            }
+                        }
                         if self.viewport_menu_open() {
                             if *button == MouseButton::Left && self.handle_viewport_menu_click() {
                                 return true;
@@ -6851,13 +6976,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         if *button == MouseButton::Right {
                             self.close_node_menu();
                             self.close_viewport_menu();
+                            self.close_network_menu();
                             if self.cursor_in_viewport() && !in_circle_network_pane {
                                 self.open_viewport_context_menu();
                                 return true;
                             }
                             if in_circle_network_pane {
                                 // On a node → its context menu; empty space →
-                                // the add-node palette.
+                                // the network's own, whose first row is Add
+                                // Node. The grid cursor moves to the clicked
+                                // cell FIRST, because that is where Add Node
+                                // will place what it adds — the menu is opened
+                                // over the cell the user pointed at, and the
+                                // cursor is the only thing carrying it there.
                                 if let Some(slot) = self.graph().node_at(self.cursor_x, self.cursor_y) {
                                     self.graph_mut().set_selected_node(Some(slot));
                                     self.sync_parameters_pane();
@@ -6867,7 +6998,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
                                 self.grid_cursor_col = col;
                                 self.grid_cursor_row = row;
-                                self.open_node_palette();
+                                self.open_network_context_menu();
                                 return true;
                             }
                             return false;
@@ -7402,7 +7533,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 }
 
                 if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) {
-                    // An open context menu — node, viewport, or plate-corner,
+                    // An open context menu — node, viewport, network or
+                    // plate-corner,
                     // all riding the shared context_menu thread-local — takes
                     // Escape ahead of connection-cancel. They were
                     // mouse-dismiss only, which left Escape wired to a
@@ -7412,6 +7544,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             self.close_node_menu();
                         } else if self.viewport_menu_open() {
                             self.close_viewport_menu();
+                        } else if self.network_menu_open() {
+                            self.close_network_menu();
                         } else {
                             self.close_plate_menu();
                         }

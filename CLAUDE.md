@@ -124,9 +124,9 @@ gone from cce-ui with the wgpu path).
   spreadsheet, playbar; NOT the viewport, whose plate is the window-spanning lip).
   Geometry is derived from the slot's live rect, so it holds across all three
   `rebuild_positions` branches; the circular network pane is special-cased onto its
-  arc. The menu is a third `cce_ui::widget::context_menu` consumer alongside the node
-  and viewport right-click menus, with the same `*_menu_actions` + `handle_*_menu_click`
-  contract. Collapse shrinks a plate to its title stub via `apply_collapsed_panes`, a
+  arc. The menu is a fourth `cce_ui::widget::context_menu` consumer alongside the node,
+  viewport and network right-click menus, with the same `*_menu_actions` +
+  `handle_*_menu_click` contract. Collapse shrinks a plate to its title stub via `apply_collapsed_panes`, a
   post-pass over `positions[..]` (one place, all three branches); the stub is exempt
   from the minimum-span guard or it would lose the control that expands it again.
 - `src/application.rs` — the `Application` impl: translates engine hooks into
@@ -675,6 +675,39 @@ node's Network > Plate row, the network pane's View menu ("Network Plate"), and
 the `toggle_network_plate` command. The action marks `settings_changed` and
 lets `execute_action` save once at its end, like every other viewport toggle,
 rather than writing the file itself.
+
+### The network editor's right-click menu
+
+A right press on EMPTY graph space opens the network's own context menu; a press
+ON a node still opens that node's menu, which is the more specific thing under
+the pointer. Until 2026-09-22 the empty-space press opened the **add-node
+palette** outright, which left the network the one pane whose right-click was
+not a context menu, and left every other graph-wide command reachable only by
+chord or through the palette. **Add Node is the first row** instead, and picking
+it opens the same palette.
+
+Rows are `NETWORK_MENU_COMMANDS` — a list of COMMAND IDS, `None` for a
+separator — resolved through `command::by_id`, so a label is the registry's
+label and `NetworkMenuAction::Command(id)` dispatches through `run_command`.
+The menu therefore cannot name work the palette spells differently, and a row is
+exactly as scriptable as the command behind it.
+`network_menu_rows_name_commands_that_exist` is the backstop, since a row whose
+id no longer resolves is simply skipped. A toggle command carries the viewport
+menu's `●`/`○` mark, read through `command_toggle_state` — the one table the
+dialog's switches read too.
+
+`add_node` is a registry row of its own now (`Run::Menu("Add Node")`), where the
+palette used to be reachable only from Tab's inline handler. It ships UNBOUND,
+like `deselect`: Tab already opens it from the event loop, and a default chord
+here would duplicate a key the loop claims.
+
+With the plate OFF the press never gets here — `in_network_pane` narrows to the
+nodes in overlay mode, so empty space is the scene's and opens the VIEWPORT
+menu. That is the overlay's whole rule, and it predates this menu.
+
+The press moves the grid cursor to the clicked cell BEFORE the menu goes up,
+because that cell is where Add Node will place what it adds — the cursor is the
+only thing carrying the pointed-at cell across to the palette.
 
 ### Keyboard graph navigation
 

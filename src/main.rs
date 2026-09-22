@@ -8679,6 +8679,87 @@ mod tests {
         assert_eq!(state.dialog_tab(), Tab::Commands);
     }
 
+    /// A right press on EMPTY network space opens the network's own context
+    /// menu — until 2026-09-22 it opened the add-node palette outright, which
+    /// left the network the one pane whose right-click was not a context menu,
+    /// and left every other graph-wide command reachable only by chord or
+    /// through the palette. Add Node is the first row, and picking it is what
+    /// opens the palette — at the cell the press landed on, since the press
+    /// moves the grid cursor there before the menu goes up.
+    #[test]
+    fn network_right_click_opens_a_menu_whose_first_row_is_add_node() {
+        use crate::dialog::Mode;
+        use crate::slots::CONTENT_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+
+        // A point in the network pane with no node under it: the plate is on,
+        // so the pane's rect is its own and empty space is still the graph's.
+        assert!(state.network_plate, "the plate is on by default");
+        let (cx, cy, cw, ch) = state.positions[CONTENT_IDX];
+        let (px, py) = (cx + cw * 0.85, cy + ch * 0.85);
+        state.handle_event(&WindowEvent::CursorMoved {
+            position: LocalPosition { x: px as f64, y: py as f64 },
+        });
+        assert!(state.in_network_pane(), "the press must land in the network pane");
+        assert!(
+            state.graph().node_at(px, py).is_none(),
+            "pick a cell with no node on it"
+        );
+        let cell = state.cell_at(px, py);
+
+        state.handle_event(&WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Right,
+        });
+        assert!(!state.dialog_visible(), "no palette straight off the press");
+        assert!(cce_ui::widget::context_menu::is_visible());
+        let options = cce_ui::widget::context_menu::options();
+        assert_eq!(options.first().map(String::as_str), Some("Add Node"));
+        assert!(
+            options.iter().any(|o| o == "Layout Nodes"),
+            "the graph-wide commands come with it: {options:?}"
+        );
+        assert!(
+            options.iter().any(|o| o.ends_with("Network Plate")),
+            "a toggle row carries its mark: {options:?}"
+        );
+        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cell);
+
+        // A left click on the first row runs Add Node: the menu goes, the
+        // palette comes up, and it will add at the cell that was clicked.
+        let rx = cce_ui::widget::context_menu::x() + 8.0;
+        let ry = cce_ui::widget::context_menu::row_y(0) + 4.0;
+        state.handle_event(&WindowEvent::CursorMoved {
+            position: LocalPosition { x: rx as f64, y: ry as f64 },
+        });
+        state.handle_event(&WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        });
+        assert!(!cce_ui::widget::context_menu::is_visible(), "the pick closes the menu");
+        assert!(state.dialog_visible());
+        assert_eq!(state.slots.dialog.mode, Mode::AddNode);
+        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cell);
+    }
+
+    /// Every row of the network context menu names a command that exists —
+    /// the labels are the registry's, so a renamed or deleted command would
+    /// otherwise drop a row from the menu in silence.
+    #[test]
+    fn network_menu_rows_name_commands_that_exist() {
+        for id in crate::app::NETWORK_MENU_COMMANDS.iter().flatten() {
+            assert!(
+                crate::command::by_id(id).is_some(),
+                "the network menu offers `{id}`, which is not a command"
+            );
+        }
+    }
+
     /// Tab opens the same plate in its AddNode mode: one list of node
     /// templates, no tab strip, no chord column.
     #[test]

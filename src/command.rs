@@ -156,6 +156,11 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "frame_all", label: "Frame All", context: Context::Network, run: Run::Key(Action::FrameAll), default_chord: Some("Shift+f") },
 
     // --- Network ---
+    // The add-node palette. Tab opens it inline (like Escape's cascade, and
+    // like `deselect` above, the row ships unbound rather than duplicating a
+    // key the event loop already claims), and it is the first row of the
+    // network's right-click menu, which dispatches through this id.
+    Command { id: "add_node", label: "Add Node", context: Context::Network, run: Run::Menu("Add Node"), default_chord: None },
     Command { id: "zoom_in", label: "Zoom In", context: Context::Network, run: Run::Menu("Zoom In"), default_chord: None },
     Command { id: "zoom_out", label: "Zoom Out", context: Context::Network, run: Run::Menu("Zoom Out"), default_chord: None },
     Command { id: "reset_zoom", label: "Reset Zoom", context: Context::Network, run: Run::Menu("Reset Zoom"), default_chord: None },
