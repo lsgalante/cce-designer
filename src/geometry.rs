@@ -918,8 +918,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_volume_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("mold_shell") {
         resolve_mold_shell_geometry_with_errors(root, target, visited, ocl_error, sim)
-    } else if target.node_type.eq_ignore_ascii_case("embryo") {
-        resolve_embryo_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("hull") {
+        resolve_hull_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("switch") {
         resolve_switch_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("boolean") {
@@ -1470,6 +1470,25 @@ pub fn resolve_relax_geometry_with_errors(
     let input_node = find_input_node(root, target, &input_name)?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
+    // Repel mode: the Relax SOP — spheres of Radius pushed apart until they
+    // stop overlapping, each point sliding in its tangent plane unless In 3D
+    // Space lets it leave. No rest shape, no springs; zero iterations is off.
+    if node_param_str(target, "Mode", "Springs").eq_ignore_ascii_case("repel") {
+        let iterations = node_param_f32(target, "Iterations", 8.0).max(0.0) as usize;
+        let radius = node_param_f32(target, "Radius", 0.05);
+        if iterations == 0 || radius <= 0.0 || geom.num_points() < 2 {
+            return Some(geom);
+        }
+        let in_3d = node_param_str(target, "In 3D Space", "false") == "true";
+        let normals = if in_3d { None } else { Some(point_normals(&geom)) };
+        let mut pts: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
+        crate::scatter::relax_points(&mut pts, normals.as_deref(), radius, iterations);
+        for (i, q) in pts.into_iter().enumerate() {
+            geom.set_pos(i, q);
+        }
+        return Some(geom);
+    }
+
     let rest_name = node_param_str(target, "Rest", "");
     let rest_name = rest_name.trim();
     if rest_name.is_empty() {
@@ -1967,49 +1986,21 @@ pub fn resolve_mold_shell_geometry_with_errors(
     Some(shell.unwrap_or(input))
 }
 
-/// The Embryo node: the seed geometry a simulation starts from — see
-/// `crate::embryo`. The parameters are read here by the template's names;
-/// the pipeline itself takes a plain struct so a test can drive it without
-/// a node tree.
-pub fn resolve_embryo_geometry_with_errors(
+/// The Hull node: the convex hull of the input's points, as a closed
+/// triangle mesh (`crate::hull`). Points that do not span a volume — fewer
+/// than four, or all coplanar — pass through as they are, so a scatter too
+/// thin to hull is at least still visible.
+pub fn resolve_hull_geometry_with_errors(
     root: &FsNode,
     target: &FsNode,
     visited: &mut Vec<String>,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let params = embryo_params(target);
-    let input = if params.source == crate::embryo::Source::Input {
-        let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
-        Some(generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?)
-    } else {
-        None
-    };
-    crate::embryo::embryo(input.as_ref(), &params)
-}
-
-/// An Embryo node's parameters, as the pipeline takes them.
-pub fn embryo_params(target: &FsNode) -> crate::embryo::EmbryoParams {
-    use crate::embryo::{EmbryoParams, Method, Source};
-    let d = EmbryoParams::default();
-    let flag = |name: &str, default: bool| node_param_str(target, name, if default { "true" } else { "false" }) == "true";
-    EmbryoParams {
-        source: Source::parse(&node_param_str(target, "Source", "Internal")),
-        method: Method::parse(&node_param_str(target, "Method", "Basic")),
-        base_resolution: node_param_f32(target, "Base Resolution", d.base_resolution as f32).max(3.0) as usize,
-        radius: node_param_f32(target, "Radius", d.radius),
-        scatter_count: node_param_f32(target, "Scatter Count", d.scatter_count as f32).max(0.0) as usize,
-        scatter_seed: node_param_f32(target, "Scatter Seed", d.scatter_seed),
-        relax_points: flag("Relax Points", d.relax_points),
-        scatter_relax_iterations: node_param_f32(target, "Scatter Relax Iterations", d.scatter_relax_iterations as f32).max(0.0) as usize,
-        scale_radii_by: node_param_f32(target, "Scale Radii By", d.scale_radii_by),
-        use_max_radius: flag("Use Max Relax Radius", d.use_max_radius),
-        max_radius: node_param_f32(target, "Scatter Relax Radius", d.max_radius),
-        relax_iterations: node_param_f32(target, "Relax Iterations", d.relax_iterations as f32).max(0.0) as usize,
-        relax_radius: node_param_f32(target, "Relax Radius", d.relax_radius),
-        relax_in_3d: flag("Relax in 3D Space", d.relax_in_3d),
-        subdivision_depth: node_param_f32(target, "Subdivision Depth", d.subdivision_depth as f32).clamp(0.0, 6.0) as usize,
-    }
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    let pts: Vec<Vec3> = (0..input.num_points()).map(|i| input.pos(i)).collect();
+    Some(crate::hull::convex_hull(&pts).unwrap_or(input))
 }
 
 /// The Switch node: one of up to four inputs, chosen by Index.
@@ -4226,6 +4217,34 @@ pub fn resolve_scatter_geometry_with_errors(
     // working with.
     let markers = node_param_str(target, "Markers", "true") != "false";
 
+    // Surface mode: points ON the surface, by area, optionally pushed apart
+    // across it — the Scatter SOP with Relax Points, which is what a seed
+    // for a hull wants. Volume mode below is what this node did first:
+    // points INSIDE the shape, by parity.
+    if node_param_str(target, "Mode", "Volume").eq_ignore_ascii_case("surface") {
+        let seed = node_param_f32(target, "Seed", 1.1);
+        let mut pts = crate::scatter::scatter_on_surface(&geom, num_points, seed);
+        let relax = node_param_str(target, "Relax Points", "false") == "true";
+        let iterations = node_param_f32(target, "Relax Iterations", 50.0).max(0.0) as usize;
+        if relax && iterations > 0 && !pts.is_empty() {
+            let scale = node_param_f32(target, "Scale Radii By", 1.248);
+            let max = (node_param_str(target, "Use Max Relax Radius", "true") == "true")
+                .then(|| node_param_f32(target, "Max Relax Radius", 10.0));
+            let r = crate::scatter::relax_radius(&geom, pts.len(), scale, max);
+            let grid = crate::spatial::TriGrid::build(&geom);
+            crate::scatter::relax_on_surface(&mut pts, &grid, r, iterations);
+        }
+        let mut out = Detail::new();
+        for p in pts {
+            if markers {
+                out.merge(&sphere_detail(p, radius, 6, 8));
+            } else {
+                out.add_point(p);
+            }
+        }
+        return Some(out);
+    }
+
     let ray_dir = Vec3::new(0.19, 0.98, 0.05).normalize();
     let mut triangles = Vec::new();
     let mut min_pos = Vec3::splat(f32::MAX);
@@ -5226,7 +5245,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "export"
         || nt == "boolean"
         || nt == "mold_shell"
-        || nt == "embryo"
+        || nt == "hull"
         || nt == "switch"
         || nt == "volume"
         || nt == "deform"
@@ -5548,12 +5567,12 @@ pub fn network_sphere_vertices_with_errors(
                     out.merge(&geom);
                 }
             }
-        } else if node.node_type.eq_ignore_ascii_case("embryo") {
+        } else if node.node_type.eq_ignore_ascii_case("hull") {
             let _idx = *count;
             *count += 1;
             if is_visible {
                 let mut visited = Vec::new();
-                if let Some(geom) = resolve_embryo_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                if let Some(geom) = resolve_hull_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }

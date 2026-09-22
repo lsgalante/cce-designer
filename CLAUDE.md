@@ -419,39 +419,59 @@ way — all in `src/geometry.rs`:
   clamped; an empty slot passes nothing. Only `Input` draws a wire, the
   limit every second operand has (Boolean's With, Copy's target).
 
-### The Embryo node
+### The Embryo node is a template of nodes
 
-`src/embryo.rs` is hou-control's `developer_embryo`, the Developer family's
-first Pre-Simulation operator — "the seed geometry a simulation starts from"
-— ported as a native node (`nodes/embryo.json`, evaluated by
-`resolve_embryo_geometry_with_errors`, the pipeline itself a plain struct so
-tests drive it without a node tree). The HDA is a small network behind two
-switches, and the module is that network in order: **Source** (a polygon
-sphere of Radius with Base Resolution rows and columns, or the Input),
-**Method** (Basic uses it as is; Scatter scatters Scatter Count points over
-it by area, relaxes them apart across the surface, and wraps them in a
-convex hull), then the Relax SOP on the result's points (off by default),
-Subdivision Depth, and normals last as `N`. The defaults are the HDA's, and
-`embryo_node_reads_its_template` pins the template to them.
+`nodes/embryo.json` is hou-control's `developer_embryo`, the Developer
+family's first Pre-Simulation operator — "the seed geometry a simulation
+starts from" — as a SUBNET of ten ordinary nodes wired the way the HDA's
+network is, its controls reaching the children through parameter references
+(above). Dive in and the pipeline is there to read, break and reuse: `input1`
+and a `sphere1` (Radius `chf("Radius")`, Rows and Columns
+`chi("Base Resolution")`) behind `source1`, a `switch` whose Index is
+`chi("Source")`; `scatter1` in Surface mode reading the Scatter folder's
+controls, `hull1` behind it, and `method1`, a switch on `chi("Method")`
+between the source and the hull; then `relax1` in Repel mode, `subdivide1`,
+`normal1`, `output1`. The defaults are the HDA's, and
+`embryo_template_builds_a_sphere_a_hull_or_the_input` drives the template
+end to end.
+
+It was a native node for one day (2026-09-21, `src/embryo.rs`, a pipeline in
+Rust), which is the wrong shape for this app: CLAUDE.md refuses `gem_graph`
+for the same reason, and a node you cannot dive into cannot be learned from.
+Recomposing it needed four reusable pieces, all of which outlive it:
+parameter references and the `switch` node (their own section above), the
+`hull` node (`src/hull.rs` — the incremental convex hull; points that span
+no volume pass through), and two modes on existing nodes (`src/scatter.rs`):
+**Scatter's Surface mode** (points ON the surface by area, seeded, optionally
+pushed apart across it with a radius derived from the area per point — the
+Scatter SOP with Relax Points) beside its original Volume mode, and
+**Relax's Repel mode** (spheres of Radius pushed apart, sliding in the
+tangent plane unless In 3D Space; zero iterations is off) beside its
+original Springs mode. A native `embryo` in an older save is recomposed on
+load (`recompose_native_embryo` in `merge_template_defs`): id, name,
+position, flag, values and meta child carry over, the template's children
+arrive fresh.
 
 Two deliberate differences from the HDA. **Subdivide does not smooth**: it
 is this app's `remesh::subdivide` (four triangles per triangle, points
 unmoved), where the HDA runs Catmull-Clark — same parameter, one operation
 rather than two under one name. **The second input is the first**: the HDA
-read its Source from input 2 (its audit notes that input had been wired to
-the first connector), and this app's nodes name one Input.
+read its Source from input 2, and this app's nodes name one Input.
 
-The convex hull is the one piece nothing here had, and it is the incremental
-algorithm rather than quickhull: a tetrahedron from the extreme points, then
-each point either lies inside or sees some faces, which are replaced by a fan
-from the horizon to the point. Points within a size-relative tolerance of a
-face count as inside — the HDA's Remove Inline Points — or a hull of a
-thousand coplanar slivers comes back. It is O(points × faces), which for a
-thousand scattered points is nothing; a hull of a million would want the
-conflict lists. The scatter's relaxation derives each point's push radius
-from the surface area per point (spheres of that radius roughly tile the
-surface), scaled by Scale Radii By, and puts every point back on the nearest
-surface point after each push.
+**Exactly one child of the template draws, `normal1`**, the last real node
+— as the Sphere's kernel node is its one drawing child. A subnet viewed from
+OUTSIDE shows its internals by their own flags (output children draw only
+at the displayed level), so with every chain node visible the hull drew
+five times over, each draw re-evaluating the pipeline: 2.4 s per edit on a
+release build, 0.1 s with one. Template child specs therefore carry
+`geometry_visible` through `load_fs_tree` (absent means on, as before).
+
+Nesting a subnet template inside a template (the Embryo's `sphere1` is the
+Sphere template) is what made `load_fs_tree`'s child resolution recursive:
+a base that is itself a subnet brings raw children of its own, and those
+resolve the same way, or the nested sphere's kernel node arrived with only
+the params its override named. Depth-bounded, so a template that contained
+itself would fail rather than recurse forever.
 
 ### The volume representation
 

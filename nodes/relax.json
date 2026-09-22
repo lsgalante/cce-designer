@@ -5,23 +5,12 @@
   "outputs": 1,
   "params": [
     { "name": "Input", "default": "", "type": "text" },
-    { "name": "Rest", "default": "", "type": "text" },
-    { "name": "Pin Group", "default": "", "type": "text" },
-    {
-      "name": "Stiffness",
-      "type": "slider",
-      "default": "0.50",
-      "min": 0.0,
-      "max": 1.0,
-      "step": 0.05
-    },
-    {
-      "name": "Iterations",
-      "type": "spinbox",
-      "default": "8",
-      "min": 1.0,
-      "max": 50.0,
-      "step": 1.0
-    }
+    { "name": "Mode", "type": "choice:Springs,Repel", "default": "Springs" },
+    { "name": "Rest", "default": "", "type": "text", "show_when": "Mode == Springs" },
+    { "name": "Pin Group", "default": "", "type": "text", "show_when": "Mode == Springs" },
+    { "name": "Stiffness", "type": "slider", "default": "0.50", "min": 0.0, "max": 1.0, "step": 0.05, "show_when": "Mode == Springs" },
+    { "name": "Iterations", "type": "spinbox", "default": "8", "min": 0.0, "max": 50.0, "step": 1.0 },
+    { "name": "Radius", "type": "slider", "default": "0.05", "min": 0.001, "max": 1.0, "step": 0.001, "show_when": "Mode == Repel" },
+    { "name": "In 3D Space", "type": "toggle", "default": "false", "show_when": "Mode == Repel" }
   ]
 }

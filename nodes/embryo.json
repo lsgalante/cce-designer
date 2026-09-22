@@ -1,24 +1,358 @@
 {
  "name": "Embryo",
- "type": "embryo",
+ "type": "node",
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "text", "default": "" },
-  { "name": "Source", "type": "choice:Internal,Input", "default": "Internal" },
-  { "name": "Method", "type": "choice:Basic,Scatter", "default": "Basic" },
-  { "name": "Base Resolution", "type": "spinbox", "default": "50", "min": 3, "max": 100, "step": 1, "show_when": "Source == Internal" },
-  { "name": "Radius", "type": "slider", "default": "0.5", "min": 0.01, "max": 10.0, "step": 0.01, "show_when": "Source == Internal" },
-  { "name": "Scatter Count", "type": "spinbox", "default": "1000", "min": 10, "max": 10000, "step": 10, "show_when": "Method == Scatter" },
-  { "name": "Scatter Seed", "type": "slider", "default": "1.1", "min": 0.0, "max": 10.0, "step": 0.1, "show_when": "Method == Scatter" },
-  { "name": "Relax Points", "type": "toggle", "default": "true", "show_when": "Method == Scatter" },
-  { "name": "Scatter Relax Iterations", "type": "spinbox", "default": "50", "min": 0, "max": 100, "step": 1, "show_when": "Method == Scatter && Relax Points == true" },
-  { "name": "Scale Radii By", "type": "slider", "default": "1.248", "min": 0.0, "max": 2.0, "step": 0.001, "show_when": "Method == Scatter && Relax Points == true" },
-  { "name": "Use Max Relax Radius", "type": "toggle", "default": "true", "show_when": "Method == Scatter && Relax Points == true" },
-  { "name": "Scatter Relax Radius", "type": "slider", "default": "10", "min": 0.0, "max": 100.0, "step": 0.1, "show_when": "Method == Scatter && Relax Points == true && Use Max Relax Radius == true" },
-  { "name": "Relax Iterations", "type": "spinbox", "default": "0", "min": 0, "max": 50, "step": 1 },
-  { "name": "Relax Radius", "type": "slider", "default": "1", "min": 0.001, "max": 1.0, "step": 0.001 },
-  { "name": "Relax in 3D Space", "type": "toggle", "default": "false" },
-  { "name": "Subdivision Depth", "type": "spinbox", "default": "0", "min": 0, "max": 3, "step": 1 }
+  {
+   "name": "Input",
+   "type": "text",
+   "default": ""
+  },
+  {
+   "name": "Source",
+   "type": "choice:Internal,Input",
+   "default": "Internal"
+  },
+  {
+   "name": "Method",
+   "type": "choice:Basic,Scatter",
+   "default": "Basic"
+  },
+  {
+   "name": "Base Resolution",
+   "type": "spinbox",
+   "default": "50",
+   "min": 3,
+   "max": 100,
+   "step": 1,
+   "show_when": "Source == Internal"
+  },
+  {
+   "name": "Radius",
+   "type": "slider",
+   "default": "0.5",
+   "min": 0.01,
+   "max": 10.0,
+   "step": 0.01,
+   "show_when": "Source == Internal"
+  },
+  {
+   "name": "Scatter Count",
+   "type": "spinbox",
+   "default": "1000",
+   "min": 10,
+   "max": 10000,
+   "step": 10,
+   "show_when": "Method == Scatter"
+  },
+  {
+   "name": "Scatter Seed",
+   "type": "slider",
+   "default": "1.1",
+   "min": 0.0,
+   "max": 10.0,
+   "step": 0.1,
+   "show_when": "Method == Scatter"
+  },
+  {
+   "name": "Relax Points",
+   "type": "toggle",
+   "default": "true",
+   "show_when": "Method == Scatter"
+  },
+  {
+   "name": "Scatter Relax Iterations",
+   "type": "spinbox",
+   "default": "50",
+   "min": 0,
+   "max": 100,
+   "step": 1,
+   "show_when": "Method == Scatter && Relax Points == true"
+  },
+  {
+   "name": "Scale Radii By",
+   "type": "slider",
+   "default": "1.248",
+   "min": 0.0,
+   "max": 2.0,
+   "step": 0.001,
+   "show_when": "Method == Scatter && Relax Points == true"
+  },
+  {
+   "name": "Use Max Relax Radius",
+   "type": "toggle",
+   "default": "true",
+   "show_when": "Method == Scatter && Relax Points == true"
+  },
+  {
+   "name": "Scatter Relax Radius",
+   "type": "slider",
+   "default": "10",
+   "min": 0.0,
+   "max": 100.0,
+   "step": 0.1,
+   "show_when": "Method == Scatter && Relax Points == true && Use Max Relax Radius == true"
+  },
+  {
+   "name": "Relax Iterations",
+   "type": "spinbox",
+   "default": "0",
+   "min": 0,
+   "max": 50,
+   "step": 1
+  },
+  {
+   "name": "Relax Radius",
+   "type": "slider",
+   "default": "1",
+   "min": 0.001,
+   "max": 1.0,
+   "step": 0.001
+  },
+  {
+   "name": "Relax in 3D Space",
+   "type": "toggle",
+   "default": "false"
+  },
+  {
+   "name": "Subdivision Depth",
+   "type": "spinbox",
+   "default": "0",
+   "min": 0,
+   "max": 3,
+   "step": 1
+  }
+ ],
+ "children": [
+  {
+   "name": "input1",
+   "type": "input",
+   "params": [],
+   "position": [
+    2.0,
+    0.0
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "sphere1",
+   "type": "sphere",
+   "position": [
+    0.0,
+    0.0
+   ],
+   "params": [
+    {
+     "name": "Radius",
+     "default": "chf(\"Radius\")"
+    },
+    {
+     "name": "Rows",
+     "default": "chi(\"Base Resolution\")"
+    },
+    {
+     "name": "Columns",
+     "default": "chi(\"Base Resolution\")"
+    },
+    {
+     "name": "Center Y",
+     "default": "0.0"
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "source1",
+   "type": "switch",
+   "position": [
+    1.0,
+    1.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "sphere1"
+    },
+    {
+     "name": "Input 2",
+     "default": "input1"
+    },
+    {
+     "name": "Index",
+     "default": "chi(\"Source\")"
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "scatter1",
+   "type": "scatter",
+   "position": [
+    2.0,
+    2.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "source1"
+    },
+    {
+     "name": "Mode",
+     "default": "Surface"
+    },
+    {
+     "name": "Points",
+     "default": "chi(\"Scatter Count\")"
+    },
+    {
+     "name": "Seed",
+     "default": "chf(\"Scatter Seed\")"
+    },
+    {
+     "name": "Relax Points",
+     "default": "chb(\"Relax Points\")"
+    },
+    {
+     "name": "Relax Iterations",
+     "default": "chi(\"Scatter Relax Iterations\")"
+    },
+    {
+     "name": "Scale Radii By",
+     "default": "chf(\"Scale Radii By\")"
+    },
+    {
+     "name": "Use Max Relax Radius",
+     "default": "chb(\"Use Max Relax Radius\")"
+    },
+    {
+     "name": "Max Relax Radius",
+     "default": "chf(\"Scatter Relax Radius\")"
+    },
+    {
+     "name": "Markers",
+     "default": "false"
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "hull1",
+   "type": "hull",
+   "position": [
+    2.0,
+    3.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "scatter1"
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "method1",
+   "type": "switch",
+   "position": [
+    1.0,
+    4.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "source1"
+    },
+    {
+     "name": "Input 2",
+     "default": "hull1"
+    },
+    {
+     "name": "Index",
+     "default": "chi(\"Method\")"
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "relax1",
+   "type": "relax",
+   "position": [
+    1.0,
+    5.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "method1"
+    },
+    {
+     "name": "Mode",
+     "default": "Repel"
+    },
+    {
+     "name": "Iterations",
+     "default": "chi(\"Relax Iterations\")"
+    },
+    {
+     "name": "Radius",
+     "default": "chf(\"Relax Radius\")"
+    },
+    {
+     "name": "In 3D Space",
+     "default": "chb(\"Relax in 3D Space\")"
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "subdivide1",
+   "type": "subdivide",
+   "position": [
+    1.0,
+    6.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "relax1"
+    },
+    {
+     "name": "Depth",
+     "default": "chi(\"Subdivision Depth\")"
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "normal1",
+   "type": "normal",
+   "position": [
+    1.0,
+    7.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "subdivide1"
+    }
+   ],
+   "geometry_visible": true
+  },
+  {
+   "name": "output1",
+   "type": "output",
+   "position": [
+    1.0,
+    8.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "normal1"
+    }
+   ],
+   "geometry_visible": false
+  }
  ]
 }

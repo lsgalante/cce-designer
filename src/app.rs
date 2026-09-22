@@ -692,6 +692,39 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     }
     retype_legacy(root);
 
+    // A NATIVE embryo (node type "embryo", 2026-09-21 only) is recomposed as
+    // an instance of the Embryo template, which is the same pipeline as a
+    // network: id, name, position, display flag and every parameter value
+    // carry over by name, the meta child is kept, and the template's
+    // children arrive with fresh ids. Wholesale rather than through the
+    // merge below, which never injects children.
+    fn recompose_native_embryo(node: &mut FsNode, templates: &[NodeTemplate]) {
+        for c in &mut node.children {
+            if c.node_type.eq_ignore_ascii_case("embryo") {
+                if let Some(t) = templates.iter().find(|t| t.node.name == "Embryo") {
+                    let mut fresh = t.node.clone();
+                    regenerate_node_ids(&mut fresh);
+                    fresh.id = c.id.clone();
+                    fresh.name = c.name.clone();
+                    fresh.position = c.position;
+                    fresh.geometry_visible = c.geometry_visible;
+                    for p in &c.params {
+                        if let Some(fp) = fresh.params.iter_mut().find(|fp| fp.name == p.name) {
+                            fp.default = p.default.clone();
+                        }
+                    }
+                    if let Some(meta) = c.children.iter().find(|m| m.node_type == "meta") {
+                        fresh.children.retain(|m| m.node_type != "meta");
+                        fresh.children.push(meta.clone());
+                    }
+                    *c = fresh;
+                }
+            }
+            recompose_native_embryo(c, templates);
+        }
+    }
+    recompose_native_embryo(root, templates);
+
     fn template_for<'a>(node: &FsNode, templates: &'a [NodeTemplate]) -> Option<&'a FsNode> {
         if node.node_type.eq_ignore_ascii_case("node") {
             let base = node
@@ -786,7 +819,14 @@ pub fn load_fs_tree() -> FsNode {
             }
         }
 
-        for mut node in raw_nodes.clone() {
+        // A child names its base template by type or by name, and takes
+        // the base's params with its own overrides on top. RECURSIVELY: a
+        // base that is itself a subnet (the Embryo's sphere1 is a Sphere)
+        // brings raw children of its own, and those resolve the same way,
+        // or the nested sphere's kernel node would arrive with only the
+        // params its template override named. Depth-bounded, because a
+        // template that contained itself would otherwise never finish.
+        fn resolve_children(node: &mut FsNode, raw_nodes: &[FsNode], depth: usize, owner: &str) {
             let mut resolved_children = Vec::new();
             for child in &node.children {
                 let base_template = raw_nodes.iter().find(|t| {
@@ -800,21 +840,33 @@ pub fn load_fs_tree() -> FsNode {
                     }
                     resolved_child.name = child.name.clone();
                     resolved_child.position = child.position;
+                    // The display flag too: a composed subnet's internals
+                    // are switched off in the template (only its output
+                    // draws), or viewing the subnet from outside draws the
+                    // chain's intermediate stages on top of its result.
+                    resolved_child.geometry_visible = child.geometry_visible;
                     // Merge parameters
                     for override_p in &child.params {
                         if let Some(base_p) = resolved_child.params.iter_mut().find(|p| p.name == override_p.name) {
                             base_p.default = override_p.default.clone();
                         }
                     }
+                    if depth < 8 {
+                        resolve_children(&mut resolved_child, raw_nodes, depth + 1, owner);
+                    }
                     resolved_children.push(resolved_child);
                 } else {
                     panic!(
                         "Node template of type '{}' not found for child '{}' in template '{}'",
-                        child.node_type, child.name, node.name
+                        child.node_type, child.name, owner
                     );
                 }
             }
             node.children = resolved_children;
+        }
+        for mut node in raw_nodes.clone() {
+            let owner = node.name.clone();
+            resolve_children(&mut node, &raw_nodes, 0, &owner);
             children.push(node);
         }
     }

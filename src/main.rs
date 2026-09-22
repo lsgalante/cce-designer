@@ -29,7 +29,8 @@ pub mod command;
 pub mod dialog;
 pub mod layout;
 pub mod mold;
-pub mod embryo;
+pub mod hull;
+pub mod scatter;
 pub mod page;
 pub mod thumbnail;
 
@@ -5639,13 +5640,13 @@ mod tests {
         assert!(rows[1].2.starts_with("spinbox"));
     }
 
-    // ----- The Embryo node (src/embryo.rs) -----
+    // ----- Hull, surface scatter, repel relax, and the Embryo template -----
 
     /// The hull of a cube's corners plus points inside it is the cube: eight
     /// points, twelve triangles, closed, with nothing left outside it.
     #[test]
     fn convex_hull_of_a_cube_with_interior_points_is_the_cube() {
-        use crate::embryo::convex_hull;
+        use crate::hull::convex_hull;
         let mut pts = Vec::new();
         for x in [-1.0, 1.0] {
             for y in [-1.0, 1.0] {
@@ -5662,8 +5663,6 @@ mod tests {
         assert_eq!(hull.num_points(), 8, "only the corners are on the hull");
         assert_eq!(hull.num_prims(), 12);
         assert!(hull.is_closed(), "a hull is watertight and consistently wound");
-        // Every face looks away from the centre, and every input point is on
-        // or behind every face.
         for prim in 0..hull.num_prims() {
             let ids = hull.prim_points(prim);
             let (a, b, c) = (hull.pos(ids[0] as usize), hull.pos(ids[1] as usize), hull.pos(ids[2] as usize));
@@ -5673,17 +5672,31 @@ mod tests {
                 assert!((*q - a).dot(n) <= 1e-4, "point {q:?} is outside face {prim}");
             }
         }
-        // No volume, no hull.
         let flat: Vec<Vec3> = (0..20).map(|i| Vec3::new(i as f32, (i * i) as f32 * 0.1, 0.0)).collect();
         assert!(convex_hull(&flat).is_none(), "coplanar points span no volume");
         assert!(convex_hull(&pts[..3]).is_none());
+
+        // The node: a hull of the input's points; too few to hull passes through.
+        let src = ref_node("s", "src", "points", vec![("Shape", "text", "Spiral"), ("Points", "spinbox", "60"), ("Markers", "text", "false")], vec![]);
+        let hull_node = ref_node("h", "hull1", "hull", vec![("Input", "text", "src")], vec![]);
+        let root = ref_node("root", "root", "node", vec![], vec![src, hull_node]);
+        let (g, err) = eval(&root, &root.children[1]);
+        assert!(err.is_none(), "{err:?}");
+        let g = g.unwrap();
+        assert!(g.num_prims() > 0 && g.is_closed(), "the spiral hulls into a closed mesh");
+        let line = ref_node("l", "line", "points", vec![("Shape", "text", "Line"), ("Points", "spinbox", "5"), ("Markers", "text", "false")], vec![]);
+        let hull2 = ref_node("h2", "hull2", "hull", vec![("Input", "text", "line")], vec![]);
+        let root2 = ref_node("root", "root", "node", vec![], vec![line, hull2]);
+        let g = eval(&root2, &root2.children[1]).0.unwrap();
+        assert_eq!((g.num_points(), g.num_prims()), (5, 0), "a line of points passes through unhulled");
     }
 
     /// Scattered points lie on the surface, in the number asked for, and a
-    /// seed reproduces its draw.
+    /// seed reproduces its draw; the node's Surface mode emits them, relaxed
+    /// apart when asked.
     #[test]
-    fn embryo_scatter_lands_on_the_surface_and_is_seeded() {
-        use crate::embryo::scatter_on_surface;
+    fn scatter_surface_mode_lands_on_the_surface_and_is_seeded() {
+        use crate::scatter::scatter_on_surface;
         let sphere = crate::geometry::sphere_detail(Vec3::ZERO, 0.5, 12, 16);
         let a = scatter_on_surface(&sphere, 300, 1.1);
         assert_eq!(a.len(), 300);
@@ -5695,112 +5708,178 @@ mod tests {
         assert_eq!(a, scatter_on_surface(&sphere, 300, 1.1), "same seed, same points");
         assert_ne!(a, scatter_on_surface(&sphere, 300, 2.0), "another seed, another draw");
         assert!(scatter_on_surface(&Detail::new(), 10, 1.0).is_empty());
-    }
 
-    /// The pipeline end to end: Basic is the internal sphere; Scatter is a
-    /// closed hull of at most Scatter Count points inside the sphere's
-    /// radius; Input reads what it is given; and every mesh carries N.
-    #[test]
-    fn embryo_builds_a_sphere_a_hull_or_the_input() {
-        use crate::embryo::{embryo, EmbryoParams, Method, Source};
-        let basic = embryo(None, &EmbryoParams::default()).expect("the internal sphere");
-        let sphere = crate::geometry::sphere_detail(Vec3::ZERO, 0.5, 50, 50);
-        assert_eq!(basic.num_points(), sphere.num_points());
-        assert_eq!(basic.num_prims(), sphere.num_prims());
-        assert!(basic.points().value("N", 0).is_some(), "normals are written last");
-
-        let scattered = embryo(None, &EmbryoParams { method: Method::Scatter, scatter_count: 400, ..EmbryoParams::default() })
-            .expect("a hull");
-        assert!(scattered.num_prims() > 0, "the scatter is hulled into a surface");
-        assert!(scattered.is_closed(), "the hull is watertight");
-        assert!(scattered.num_points() <= 400);
-        for p in 0..scattered.num_points() {
-            let r = scattered.pos(p).length();
-            assert!(r <= 0.5 + 1e-3, "hull point {p} at {r} lies inside the seed sphere");
+        let scatter = |relax: &str| {
+            let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "0.5")], vec![]);
+            let sc = ref_node("sc", "scatter1", "scatter", vec![
+                ("Input", "text", "src"), ("Mode", "choice:Volume,Surface", "Surface"), ("Points", "spinbox", "80"),
+                ("Seed", "slider", "1.1"), ("Relax Points", "toggle", relax), ("Relax Iterations", "spinbox", "30"),
+                ("Markers", "choice:true,false", "false"),
+            ], vec![]);
+            let root = ref_node("root", "root", "node", vec![], vec![src, sc]);
+            let (g, err) = eval(&root, &root.children[1]);
+            assert!(err.is_none(), "{err:?}");
+            (g.unwrap(), eval(&root, &root.children[0]).0.unwrap())
+        };
+        let (raw, src) = scatter("false");
+        assert_eq!(raw.num_points(), 80, "bare points, one per location");
+        let grid = crate::spatial::TriGrid::build(&src);
+        for p in 0..raw.num_points() {
+            assert!(grid.closest(raw.pos(p)).unwrap().distance < 1e-3);
         }
-        assert!(scattered.points().value("N", 0).is_some());
-
-        // Relaxing spreads the scatter: the hull of relaxed points reaches
-        // further round the sphere than the hull of the raw draw.
-        let raw = embryo(None, &EmbryoParams { method: Method::Scatter, scatter_count: 60, relax_points: false, ..EmbryoParams::default() }).unwrap();
-        let relaxed = embryo(None, &EmbryoParams { method: Method::Scatter, scatter_count: 60, ..EmbryoParams::default() }).unwrap();
-        let area = |d: &Detail| crate::embryo::surface_area(d);
-        assert!(area(&relaxed) > area(&raw) * 0.99, "relaxed hull area {} vs raw {}", area(&relaxed), area(&raw));
-
-        // Source Input: the seed is the input, and nothing without one.
-        let cube = crate::geometry::sphere_detail(Vec3::new(2.0, 0.0, 0.0), 0.25, 6, 8);
-        let from_input = embryo(Some(&cube), &EmbryoParams { source: Source::Input, ..EmbryoParams::default() }).unwrap();
-        assert_eq!(from_input.num_points(), cube.num_points());
-        assert!((from_input.pos(0) - cube.pos(0)).length() < 1e-6);
-        assert!(embryo(None, &EmbryoParams { source: Source::Input, ..EmbryoParams::default() }).is_none());
-
-        // Subdivision Depth multiplies the faces by four per level.
-        let sub = embryo(None, &EmbryoParams { base_resolution: 8, subdivision_depth: 1, ..EmbryoParams::default() }).unwrap();
-        let coarse = embryo(None, &EmbryoParams { base_resolution: 8, ..EmbryoParams::default() }).unwrap();
-        assert_eq!(sub.num_prims(), coarse.triangulate_points().len() / 3 * 4);
+        let (relaxed, _) = scatter("true");
+        assert_eq!(relaxed.num_points(), 80);
+        let nearest = |d: &Detail| -> f32 {
+            let mut worst = f32::MAX;
+            for i in 0..d.num_points() {
+                let mut best = f32::MAX;
+                for j in 0..d.num_points() {
+                    if i != j { best = best.min((d.pos(i) - d.pos(j)).length()); }
+                }
+                worst = worst.min(best);
+            }
+            worst
+        };
+        assert!(nearest(&relaxed) > nearest(&raw), "relaxing spreads the closest pair: {} vs {}", nearest(&relaxed), nearest(&raw));
+        for p in 0..relaxed.num_points() {
+            assert!(grid.closest(relaxed.pos(p)).unwrap().distance < 1e-3, "relaxed points stay on the surface");
+        }
     }
 
-    /// The Relax step slides points apart in their tangent planes: the
-    /// sphere's points end up better spaced but still on the sphere.
+    /// Relax in Repel mode slides a mesh's points apart in their tangent
+    /// planes, so they stay on the shape; In 3D Space lets them leave it.
     #[test]
-    fn embryo_relax_keeps_points_in_their_tangent_planes() {
-        use crate::embryo::{embryo, EmbryoParams};
-        let p = EmbryoParams { base_resolution: 10, relax_iterations: 5, relax_radius: 0.08, ..EmbryoParams::default() };
-        let relaxed = embryo(None, &p).unwrap();
-        let plain = embryo(None, &EmbryoParams { base_resolution: 10, ..EmbryoParams::default() }).unwrap();
+    fn relax_repel_mode_keeps_points_in_their_tangent_planes() {
+        let relax = |in_3d: &str, iterations: &str| {
+            let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "0.5")], vec![]);
+            let rx = ref_node("r", "relax1", "relax", vec![
+                ("Input", "text", "src"), ("Mode", "choice:Springs,Repel", "Repel"), ("Iterations", "spinbox", iterations),
+                ("Radius", "slider", "0.08"), ("In 3D Space", "toggle", in_3d),
+            ], vec![]);
+            let root = ref_node("root", "root", "node", vec![], vec![src, rx]);
+            (eval(&root, &root.children[1]).0.unwrap(), eval(&root, &root.children[0]).0.unwrap())
+        };
+        let (relaxed, plain) = relax("false", "5");
+        let centre = (0..plain.num_points()).map(|i| plain.pos(i)).sum::<Vec3>() / plain.num_points() as f32;
         let mut moved = 0;
         for i in 0..relaxed.num_points() {
-            let (a, b) = (relaxed.pos(i), plain.pos(i));
-            if (a - b).length() > 1e-5 {
-                moved += 1;
-            }
-            // A tangent-plane slide changes the radius only to second order.
-            assert!((a.length() - 0.5).abs() < 0.05, "point {i} left the sphere: r = {}", a.length());
+            if (relaxed.pos(i) - plain.pos(i)).length() > 1e-5 { moved += 1; }
+            assert!(((relaxed.pos(i) - centre).length() - 0.5).abs() < 0.05, "point {i} left the sphere");
         }
         assert!(moved > 0, "some point moved");
-        let free = embryo(None, &EmbryoParams { relax_in_3d: true, ..p.clone() }).unwrap();
-        let mut left = 0;
-        for i in 0..free.num_points() {
-            if (free.pos(i).length() - 0.5).abs() > 0.01 {
-                left += 1;
-            }
-        }
-        assert!(left > 0, "in 3D the points are free to leave the surface");
+        let (free, _) = relax("true", "5");
+        assert!((0..free.num_points()).any(|i| ((free.pos(i) - centre).length() - 0.5).abs() > 0.01), "in 3D the points are free to leave");
+        let (off, _) = relax("false", "0");
+        assert!((0..off.num_points()).all(|i| (off.pos(i) - plain.pos(i)).length() < 1e-6), "zero iterations is off");
     }
 
-    /// The node reads the template's parameters into the pipeline, and the
-    /// template's defaults are the HDA's.
+    /// The Embryo template, end to end: an instance whose children read
+    /// its controls through references. Basic is the internal sphere;
+    /// Scatter is a closed hull of at most Scatter Count points inside the
+    /// sphere's radius; Input reads what it is given; every mesh carries N.
     #[test]
-    fn embryo_node_reads_its_template() {
-        use crate::embryo::{EmbryoParams, Method, Source};
+    fn embryo_template_builds_a_sphere_a_hull_or_the_input() {
         let templates_root = crate::app::load_fs_tree();
         let t = templates_root.children.iter().find(|t| t.name == "Embryo").expect("the Embryo template");
-        assert_eq!(t.node_type, "embryo");
-        assert_eq!(crate::geometry::embryo_params(t), EmbryoParams::default(), "template defaults are the HDA's");
-
-        let mut inst = t.clone();
-        inst.id = "embryo1".into();
-        inst.name = "Embryo 1".into();
-        for (name, value) in [("Method", "Scatter"), ("Scatter Count", "200"), ("Source", "Internal")] {
-            inst.params.iter_mut().find(|p| p.name == name).unwrap().default = value.to_string();
+        assert_eq!(t.node_type, "node", "the Embryo is a subnet of nodes");
+        let names: Vec<&str> = t.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["input1", "sphere1", "source1", "scatter1", "hull1", "method1", "relax1", "subdivide1", "normal1", "output1"]);
+        for c in &t.children {
+            // The last real node is the one that draws — as the Sphere's
+            // kernel node is — since a subnet viewed from outside shows its
+            // internals by their flags and output children only draw at the
+            // displayed level. Every chain node visible drew the hull five
+            // times over and cost seconds per edit.
+            assert_eq!(c.geometry_visible, c.name == "normal1", "only normal1 draws: {} is {}", c.name, c.geometry_visible);
         }
-        let read = crate::geometry::embryo_params(&inst);
-        assert_eq!(read.method, Method::Scatter);
-        assert_eq!(read.scatter_count, 200);
-        assert_eq!(read.source, Source::Internal);
+        // Nested template resolution: the sphere inside carries its own
+        // resolved children, kernel node params included.
+        let sphere1 = t.children.iter().find(|c| c.name == "sphere1").unwrap();
+        let opencl1 = sphere1.children.iter().find(|c| c.name == "opencl1").expect("the nested sphere's kernel node");
+        assert!(opencl1.params.iter().any(|p| p.name == "Input"), "the nested kernel node has its template's params");
+        assert!(opencl1.params.iter().find(|p| p.name == "Code").unwrap().default.contains("chf(\"Radius\""));
 
-        let root = FsNode {
-            id: "root".into(), name: "root".into(), node_type: "node".into(),
-            children: vec![inst], params: vec![], geometry_visible: true, position: (0.0, 0.0), inputs: 0, outputs: 0,
+        let instance = |overrides: &[(&str, &str)], extra: Vec<FsNode>| {
+            let mut inst = t.clone();
+            crate::app::regenerate_node_ids(&mut inst);
+            inst.name = "embryo1".into();
+            for (n, v) in overrides {
+                inst.params.iter_mut().find(|p| p.name == *n).unwrap_or_else(|| panic!("param {n}")).default = v.to_string();
+            }
+            let mut children = extra;
+            children.push(inst);
+            ref_node("root", "root", "node", vec![], children)
         };
-        let mut visited = Vec::new();
-        let mut err = None;
-        let geom = crate::geometry::generate_single_node_geometry_with_errors(
-            &root, &root.children[0], &mut visited, &mut err,
-            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
-        ).expect("the node evaluates");
-        assert!(err.is_none());
-        assert!(geom.is_closed() && geom.num_points() <= 200);
+        let run = |root: &FsNode| {
+            let e = root.children.iter().find(|c| c.name == "embryo1").unwrap();
+            let (g, err) = eval(root, e);
+            assert!(err.is_none(), "{err:?}");
+            g.expect("the embryo evaluates")
+        };
+        let extent = |g: &Detail| g.positions().iter().map(|p| Vec3::from(*p).length()).fold(0.0, f32::max);
+
+        let basic = run(&instance(&[], vec![]));
+        assert!(basic.num_prims() > 0);
+        assert!((extent(&basic) - 0.5).abs() < 0.02, "Basic is the internal sphere of Radius 0.5: {}", extent(&basic));
+        assert!(basic.points().value("N", 0).is_some(), "normals are written last");
+        let big = run(&instance(&[("Radius", "1.5"), ("Base Resolution", "8")], vec![]));
+        assert!((extent(&big) - 1.5).abs() < 0.05, "Radius reaches the sphere through chf: {}", extent(&big));
+        assert!(big.num_points() < basic.num_points(), "Base Resolution reaches Rows and Columns through chi");
+
+        let scattered = run(&instance(&[("Method", "Scatter"), ("Scatter Count", "400"), ("Base Resolution", "16")], vec![]));
+        assert!(scattered.num_prims() > 0 && scattered.is_closed(), "Scatter hulls the points into a closed mesh");
+        assert!(scattered.num_points() <= 400);
+        assert!(extent(&scattered) <= 0.5 + 1e-3, "the hull lies inside the seed sphere");
+        assert!(scattered.points().value("N", 0).is_some());
+
+        let seed = ref_node("seed", "seed", "sphere", vec![("Radius", "slider", "0.25")], vec![]);
+        let root = instance(&[("Source", "Input"), ("Input", "seed")], vec![seed]);
+        let from_input = run(&root);
+        let seed_geom = eval(&root, &root.children[0]).0.unwrap();
+        assert_eq!(from_input.num_points(), seed_geom.num_points(), "Source Input is the wired node");
+        assert!((from_input.pos(0) - seed_geom.pos(0)).length() < 1e-6);
+        let e = instance(&[("Source", "Input")], vec![]);
+        assert!(eval(&e, &e.children[0]).0.is_none(), "Source Input with nothing wired seeds nothing");
+
+        let coarse = run(&instance(&[("Base Resolution", "8")], vec![]));
+        let sub = run(&instance(&[("Base Resolution", "8"), ("Subdivision Depth", "1")], vec![]));
+        // Against the real subdivide of the same mesh rather than ×4: the
+        // kernel sphere's pole triangles are degenerate and subdivide drops
+        // them.
+        assert_eq!(sub.num_prims(), crate::remesh::subdivide(&coarse, 1).num_prims(), "Subdivision Depth reaches Depth");
+    }
+
+    /// A native embryo from 2026-09-21 loads as an instance of the template,
+    /// with its values, its identity and its meta child intact.
+    #[test]
+    fn a_native_embryo_recomposes_on_load() {
+        use crate::app::ParamDef;
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let param = |n: &str, v: &str| ParamDef { name: n.into(), label: String::new(), param_type: "text".into(), default: v.into(), options: vec![], min: None, max: None, step: None, show_when: String::new() };
+        let meta = ref_node("m", "meta", "meta", vec![("Point Markers", "toggle", "true")], vec![]);
+        let mut native = ref_node("old-id", "embryo1", "embryo", vec![], vec![meta]);
+        native.params = vec![param("Input", ""), param("Method", "Scatter"), param("Scatter Count", "150"), param("Radius", "0.7"), param("Base Resolution", "16")];
+        native.position = (3.0, 4.0);
+        native.geometry_visible = true;
+        let mut root = ref_node("root", "root", "node", vec![], vec![native]);
+        crate::app::merge_template_defs(&mut root, &templates);
+        let e = &root.children[0];
+        assert_eq!(e.node_type, "node", "recomposed as a subnet");
+        assert_eq!((e.id.as_str(), e.name.as_str(), e.position, e.geometry_visible), ("old-id", "embryo1", (3.0, 4.0), true));
+        let get = |n: &str| e.params.iter().find(|p| p.name == n).unwrap().default.clone();
+        assert_eq!(get("Method"), "Scatter");
+        assert_eq!(get("Scatter Count"), "150");
+        assert_eq!(get("Radius"), "0.7");
+        assert_eq!(get("Scatter Seed"), "1.1", "a param the native node lacked takes the template default");
+        assert!(e.children.iter().any(|c| c.name == "hull1"));
+        assert!(e.children.iter().any(|c| c.node_type == "meta" && c.params.iter().any(|p| p.name == "Point Markers")), "the meta child is kept");
+        let (g, err) = eval(&root, e);
+        assert!(err.is_none(), "{err:?}");
+        let g = g.unwrap();
+        assert!(g.is_closed() && g.num_points() <= 150, "and it evaluates as the scatter it was");
+        let extent = g.positions().iter().map(|p| Vec3::from(*p).length()).fold(0.0, f32::max);
+        assert!(extent <= 0.7 + 1e-3 && extent > 0.5);
     }
 
     #[test]

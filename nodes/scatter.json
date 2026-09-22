@@ -4,31 +4,16 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    {
-      "name": "Input",
-      "default": "",
-      "type": "text"
-    },
-    {
-      "name": "Points",
-      "type": "spinbox",
-      "default": "100",
-      "min": 10.0,
-      "max": 5000.0,
-      "step": 10.0
-    },
-    {
-      "name": "Radius",
-      "type": "slider",
-      "default": "0.02",
-      "min": 0.005,
-      "max": 0.1,
-      "step": 0.005
-    },
-    {
-      "name": "Markers",
-      "type": "choice:true,false",
-      "default": "true"
-    }
+    { "name": "Input", "default": "", "type": "text" },
+    { "name": "Mode", "type": "choice:Volume,Surface", "default": "Volume" },
+    { "name": "Points", "type": "spinbox", "default": "100", "min": 10.0, "max": 10000.0, "step": 10.0 },
+    { "name": "Seed", "type": "slider", "default": "1.1", "min": 0.0, "max": 10.0, "step": 0.1, "show_when": "Mode == Surface" },
+    { "name": "Relax Points", "type": "toggle", "default": "false", "show_when": "Mode == Surface" },
+    { "name": "Relax Iterations", "type": "spinbox", "default": "50", "min": 0, "max": 100, "step": 1, "show_when": "Mode == Surface && Relax Points == true" },
+    { "name": "Scale Radii By", "type": "slider", "default": "1.248", "min": 0.0, "max": 2.0, "step": 0.001, "show_when": "Mode == Surface && Relax Points == true" },
+    { "name": "Use Max Relax Radius", "type": "toggle", "default": "true", "show_when": "Mode == Surface && Relax Points == true" },
+    { "name": "Max Relax Radius", "type": "slider", "default": "10", "min": 0.0, "max": 100.0, "step": 0.1, "show_when": "Mode == Surface && Relax Points == true && Use Max Relax Radius == true" },
+    { "name": "Radius", "type": "slider", "default": "0.02", "min": 0.005, "max": 0.1, "step": 0.005, "show_when": "Markers == true" },
+    { "name": "Markers", "type": "choice:true,false", "default": "true" }
   ]
 }
