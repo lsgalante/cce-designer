@@ -8757,6 +8757,177 @@ mod tests {
         assert_eq!(state.grid_cursor_region(), (2, 4, 1, 1));
     }
 
+    /// An expanded cursor selects every node standing inside it, and the
+    /// selection is what the network's operations act on: alt+move drags them
+    /// all (region and all, or the first press would collapse what it moved),
+    /// Delete removes them all, and Escape collapses the region.
+    #[test]
+    fn an_expanded_cursor_selects_every_node_inside_it() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+
+        let mut redraw = false;
+        for (name, x, y) in [("a", 8.0, 8.0), ("b", 10.0, 9.0), ("c", 14.0, 8.0)] {
+            state
+                .apply_action(
+                    crate::app::McpAction::AddNode {
+                        template_name: "Plane".into(),
+                        name: Some(name.into()),
+                        x,
+                        y,
+                    },
+                    &mut redraw,
+                )
+                .unwrap();
+        }
+        let slot = |state: &State, name: &str| {
+            state.current_dir().children.iter().position(|c| c.name == name).expect(name)
+        };
+        let (a, b, c) = (slot(&state, "a"), slot(&state, "b"), slot(&state, "c"));
+
+        // A region from (8, 8) to (11, 10) holds a and b, and not c at (14, 8).
+        state.grid_cursor_col = 8;
+        state.grid_cursor_row = 8;
+        state.grid_cursor_expanse = Some(((8, 8), (11, 10)));
+        assert_eq!(state.grid_cursor_region(), (8, 8, 4, 3));
+        assert_eq!(state.selected_slots(), vec![a, b]);
+        assert!(!state.selected_slots().contains(&c));
+
+        // alt+h moves both, and the region travels with them — stepping the
+        // anchor alone is exactly what drops a region.
+        state.run_command("move_left");
+        assert_eq!(state.current_dir().children[a].position, (7.0, 8.0));
+        assert_eq!(state.current_dir().children[b].position, (9.0, 9.0));
+        assert_eq!(state.current_dir().children[c].position, (14.0, 8.0), "not selected, not moved");
+        assert_eq!(state.grid_cursor_region(), (7, 8, 4, 3), "the region came along");
+        assert_eq!(state.selected_slots(), vec![a, b], "and still holds the same two");
+
+        // Escape collapses it, since nothing else would until the cursor
+        // wandered off the anchor.
+        assert!(state.deselect_node());
+        assert_eq!(state.grid_cursor_region(), (7, 8, 1, 1));
+        assert_eq!(
+            state.selected_slots(),
+            state.graph().selected_node().into_iter().collect::<Vec<_>>(),
+            "collapsed, the selection is the graph's own single one again"
+        );
+
+        // Delete takes the whole selection, not just one of it.
+        state.grid_cursor_expanse = Some(((7, 8), (10, 10)));
+        assert_eq!(state.selected_slots().len(), 2);
+        let before = state.current_dir().children.len();
+        state.handle_event(&crate::window::WindowEvent::KeyboardInput {
+            event: key_press(Key::Named(NamedKey::Delete)),
+        });
+        assert_eq!(state.current_dir().children.len(), before - 2);
+        assert!(state.current_dir().children.iter().any(|n| n.name == "c"), "c survived");
+    }
+
+    /// The selected nodes actually LOOK selected: each body is painted with
+    /// the highlight tint the widget gives its own single selection, so an
+    /// expanded cursor reads as a selection rather than as an empty outline
+    /// drawn over nodes.
+    #[test]
+    fn every_node_in_the_region_is_painted_selected() {
+        use cce_ui::scene::paint::Prim;
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+
+        // Cells inside the pane's visible span, clear of the project's own
+        // nodes — the paint is clipped to the pane, so an off-screen node
+        // would prove nothing.
+        let mut redraw = false;
+        for (name, x, y) in [("a", 1.0, 4.0), ("b", 2.0, 5.0), ("c", 3.0, 9.0)] {
+            state
+                .apply_action(
+                    crate::app::McpAction::AddNode {
+                        template_name: "Plane".into(),
+                        name: Some(name.into()),
+                        x,
+                        y,
+                    },
+                    &mut redraw,
+                )
+                .unwrap();
+        }
+        state.rebuild_positions();
+        state.apply_layout();
+        state.grid_cursor_col = 1;
+        state.grid_cursor_row = 4;
+        state.grid_cursor_expanse = Some(((1, 4), (2, 6)));
+        assert_eq!(state.selected_slots().len(), 2, "a and b, not c");
+
+        let hl = cce_ui::colors::highlight_primary_color();
+        let tinted_at = |list: &cce_ui::scene::paint::DisplayList, (cx, cy): (f32, f32)| {
+            list.items.iter().any(|item| match &item.prim {
+                Prim::Bevel { rect, tint, .. } => {
+                    tint[0] == hl[0]
+                        && tint[1] == hl[1]
+                        && tint[2] == hl[2]
+                        && (rect.x + rect.width * 0.5 - cx).abs() < 1.0
+                        && (rect.y + rect.height * 0.5 - cy).abs() < 1.0
+                }
+                _ => false,
+            })
+        };
+        let list = state.collect_display_list();
+        assert!(tinted_at(&list, state.cell_center(1, 4)), "a is painted selected");
+        assert!(tinted_at(&list, state.cell_center(2, 5)), "b is painted selected");
+        assert!(!tinted_at(&list, state.cell_center(3, 9)), "c is outside the region");
+    }
+
+    /// Copy takes the whole selection and paste lays it back out in the shape
+    /// it was copied in — a pasted chain arrives wired the way it was drawn,
+    /// not stacked in a column.
+    #[test]
+    fn copying_a_region_keeps_the_shape_on_paste() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+
+        let mut redraw = false;
+        for (name, x, y) in [("a", 8.0, 8.0), ("b", 10.0, 9.0)] {
+            state
+                .apply_action(
+                    crate::app::McpAction::AddNode {
+                        template_name: "Plane".into(),
+                        name: Some(name.into()),
+                        x,
+                        y,
+                    },
+                    &mut redraw,
+                )
+                .unwrap();
+        }
+        state.grid_cursor_col = 8;
+        state.grid_cursor_row = 8;
+        state.grid_cursor_expanse = Some(((8, 8), (11, 10)));
+        state.copy_selected_nodes();
+        assert_eq!(state.node_clipboard.len(), 2);
+
+        // Paste at a clear corner of the sheet: the set's top-left lands on
+        // the cursor and the second node keeps its (+2, +1) offset.
+        state.grid_cursor_col = 20;
+        state.grid_cursor_row = 20;
+        state.grid_cursor_expanse = None;
+        let before = state.current_dir().children.len();
+        assert!(state.paste_nodes());
+        assert_eq!(state.current_dir().children.len(), before + 2);
+        let pasted: Vec<(f32, f32)> = state.current_dir().children[before..]
+            .iter()
+            .map(|n| n.position)
+            .collect();
+        assert_eq!(pasted, vec![(20.0, 20.0), (22.0, 21.0)]);
+    }
+
     /// A press the graph itself took does not arm the expansion drag. The
     /// case that bites is a PORT: it starts a connection and consumes the
     /// press without selecting anything, so the empty-grid arm would read it

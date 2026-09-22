@@ -472,7 +472,21 @@ impl State {
                 for (qx, qy, qw, qh, qc, cell) in g.geometry_quads_tagged(clip) {
                     if g.is_node_rect(qx, qy, qw, qh) {
                         seen_node = true;
-                        bodies.push((qx, qy, qw, qh, same_rgb(qc, sel) || same_rgb(qc, drag)));
+                        // An EXPANDED cursor selects every node standing
+                        // inside it, and they wear the selected look. The
+                        // widget colours one body — its own `selected_idx` —
+                        // so the rest are recognised here, by the cell the
+                        // body is centred on: the same `grid_cursor_covers`
+                        // the selection itself is derived from, rather than a
+                        // second rect test that could disagree with it. Pane
+                        // 1 only, the grid cursor being pane 1's concept.
+                        let in_region = !second
+                            && self.grid_cursor_expanded()
+                            && {
+                                let (col, row) = self.cell_at(qx + qw * 0.5, qy + qh * 0.5);
+                                self.grid_cursor_covers(col, row)
+                            };
+                        bodies.push((qx, qy, qw, qh, in_region || same_rgb(qc, sel) || same_rgb(qc, drag)));
                     } else if seen_node {
                         overlays.push((qx, qy, qw, qh, qc));
                     } else if let Some(corners) = cell {

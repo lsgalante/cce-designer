@@ -735,9 +735,12 @@ zoom. Frame Cursor CENTRES the cursor cell; its first version called
 the command did nothing at all in the common case of a cursor that is visible
 but off in a corner — which is exactly when it gets pressed.
 
-`shift+hjkl` — the plugin's extend-the-selection family — is deliberately
-absent. The Graph widget carries a single `selected_node`, so four rows that
-quietly did what bare hjkl already does would be worse than the gap.
+`shift+hjkl` — the plugin's extend-the-selection family — is still absent, but
+the reason has changed. It used to be that the Graph widget carries a single
+`selected_node`, so four rows would quietly have done what bare hjkl already
+does. Since the cursor became a REGION (below) there is a real multi-selection
+to extend, and these four rows are implementable as growing the region's far
+corner; they are simply not written yet.
 
 Two chords moved to make room, both caught by `command::conflicts` rather than
 by hand: `edit_handles` from `Ctrl+H` to `Ctrl+Shift+H` (the ctrl+hjkl family
@@ -806,11 +809,45 @@ those places. Fifteen call sites write the cursor; a flag reset by hand at all
 of them is a flag that gets missed at one, and a cursor left stretched across
 the sheet is not a subtle wrong.
 
-Everything that reads the cursor as a CELL still reads the anchor: Add Node
-places there, Frame Cursor centres it, `sync_cursor_and_selection` selects what
-sits on it. The Graph widget carries a single `selected_node`, so the region
-selects nothing yet — the same limit that keeps `shift+hjkl` out of the
-keyboard scheme.
+**An expanded cursor selects every node standing inside it.**
+`State::selected_slots` is the selection, and it has two arms for a reason:
+one cell — the ordinary cursor — DEFERS to the graph's own `selected_node`,
+so nothing about a single selection changes (that one answer already carries
+the deselect memory, a click that arrived from another pane, and a selection
+made while the network was not focused); an expanded cursor names every node
+on a cell it covers instead. Its anchor is empty grid by construction — a
+press on a node drags the node — so there is no single selection to defer to.
+
+The network's operations act on that selection: **Delete**, the **`e`**
+geometry toggle, **Ctrl+C/X** and **alt+hjkl**. Two rules worth keeping:
+deletions run HIGHEST SLOT FIRST, or removing one shifts the slots above it
+and the second removal takes the wrong node; and the `e` toggle sets the whole
+selection to the opposite of the FIRST node's flag rather than flipping each,
+because a toggle over a mixed selection should settle it, not shuffle it.
+`network_move_node` moves the region along with the nodes — stepping the
+anchor alone is precisely what collapses a region, so the first alt+h would
+otherwise drop the selection it had just moved. The clipboard is a `Vec`, and
+a paste keeps the SHAPE it was copied in: the set's top-left lands on the
+cursor and each node keeps its offset, with a node whose cell is taken
+stepping aside to the nearest free one.
+
+Escape collapses the region (`deselect_node`), because of the two selections
+this is the one that needs clearing: a single selection under a plain cursor
+comes back on the next sync anyway, while a region stands until the cursor is
+moved off its anchor.
+
+Everything that reads the cursor as ONE CELL still reads the anchor: Add Node
+places there, Frame Cursor centres it, `sync_cursor_and_selection` sets the
+graph's own selection from it. That single selection is deliberately NOT set
+from the region: `read_panel_offsets` yanks the cursor onto the selected
+node's cell, which would move the anchor off its own region and collapse it
+on the next layout sync. So with a region up the params pane shows nothing —
+it shows one node's parameters, and the selection is many.
+
+The paint reads the same `grid_cursor_covers`: a node body is recognised by
+the cell it is centred on and drawn with the highlight tint the widget gives
+its own single selection, rather than by a second rect test that could
+disagree with the selection itself.
 
 Arming is gated on the graph NOT having taken the press (`widget_took`). The
 case that bites is a press on a PORT: it starts a connection and consumes the

@@ -1306,7 +1306,11 @@ pub struct State {
     pub params_pin: Option<usize>,
     /// The spreadsheet's pin — same shape, set from its plate's corner menu.
     pub spreadsheet_pin: Option<usize>,
-    pub node_clipboard: Option<FsNode>,
+    /// The copied nodes, with the positions they were copied FROM — a paste
+    /// lays them back out in the same shape, offset to the cursor. A Vec
+    /// rather than one node because an expanded cursor selects many, and a
+    /// copy that silently took one of them would be a trap.
+    pub node_clipboard: Vec<FsNode>,
     pub last_click: Option<(Instant, usize)>,
 
     pub shortcut_manager: ShortcutManager,
@@ -4538,7 +4542,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             viewport_pin: None,
             params_pin: None,
             spreadsheet_pin: None,
-            node_clipboard: None,
+            node_clipboard: Vec::new(),
             last_click: None,
             shortcut_manager,
             pending_command: None,
@@ -4872,6 +4876,55 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let (x0, y0, _, _) = self.cell_rect(col, row);
         let (x1, y1, w, h) = self.cell_rect(col + cols - 1, row + rows - 1);
         (x0, y0, x1 - x0 + w, y1 - y0 + h)
+    }
+
+    /// Whether the cursor's region stands on lattice cell `(col, row)`.
+    pub fn grid_cursor_covers(&self, col: i32, row: i32) -> bool {
+        let (c, r, cols, rows) = self.grid_cursor_region();
+        col >= c && col < c + cols && row >= r && row < r + rows
+    }
+
+    /// Whether the cursor is expanded past its one cell — what makes a
+    /// selection a MULTIPLE selection, and the one test the paint and the
+    /// operations share.
+    pub fn grid_cursor_expanded(&self) -> bool {
+        let (_, _, cols, rows) = self.grid_cursor_region();
+        cols > 1 || rows > 1
+    }
+
+    /// The nodes the cursor selects, as slots in the current level, in slot
+    /// order.
+    ///
+    /// One cell — the ordinary cursor — defers to the graph's own
+    /// `selected_node`, so nothing about a single selection changes here:
+    /// that one answer already carries the deselect memory, a click that
+    /// arrived from another pane, and a selection made while the network was
+    /// not focused. An EXPANDED cursor names every node standing inside it
+    /// instead; its anchor is empty grid by construction (a press on a node
+    /// drags the node), so there is no single selection to defer to.
+    pub fn selected_slots(&self) -> Vec<usize> {
+        if !self.grid_cursor_expanded() {
+            return self.graph().selected_node().into_iter().collect();
+        }
+        self.current_dir()
+            .children
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| self.grid_cursor_covers(c.position.0 as i32, c.position.1 as i32))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Move the cursor AND the region it carries by whole cells — what a
+    /// selection being dragged across the sheet needs, since stepping the
+    /// anchor alone is precisely the thing that collapses the region.
+    pub fn shift_grid_cursor(&mut self, dc: i32, dr: i32) {
+        self.grid_cursor_col += dc;
+        self.grid_cursor_row += dr;
+        if let Some((anchor, far)) = self.grid_cursor_expanse {
+            self.grid_cursor_expanse =
+                Some(((anchor.0 + dc, anchor.1 + dr), (far.0 + dc, far.1 + dr)));
+        }
     }
 
     /// Grow the live expansion drag to the cell under the cursor. `true` when
@@ -5765,6 +5818,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// Returns false when nothing was selected, so Escape can fall through to
     /// meaning nothing rather than reporting that it did something.
     pub(crate) fn deselect_node(&mut self) -> bool {
+        // An expanded cursor IS a selection, and of the two this is the one
+        // Escape has to be able to clear: the single selection under a plain
+        // cursor comes back on the next sync anyway, while a region would
+        // stand until the cursor was moved off its anchor.
+        if self.grid_cursor_expanded() {
+            self.grid_cursor_expanse = None;
+            self.grid_cursor_drag = None;
+            self.sync_parameters_pane();
+            return true;
+        }
         if self.graph().selected_node().is_none() {
             return false;
         }
@@ -5800,22 +5863,90 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         true
     }
 
-    /// Move the node under the cursor one cell, and the cursor with it — so a
-    /// run of alt+h drags a node across the sheet rather than leaving it
-    /// behind on the first press.
+    /// Copy the selected nodes, positions and all.
+    pub(crate) fn copy_selected_nodes(&mut self) {
+        let slots = self.selected_slots();
+        let dir = self.current_dir();
+        self.node_clipboard = slots
+            .into_iter()
+            .filter_map(|i| dir.children.get(i).cloned())
+            .collect();
+    }
+
+    /// Paste the clipboard at the grid cursor, KEEPING THE SHAPE it was
+    /// copied in: the set's top-left corner lands on the cursor cell and
+    /// every node keeps its offset from it, so a pasted chain arrives wired
+    /// the way it was drawn rather than stacked in a column.
+    ///
+    /// A node whose cell is taken steps aside to the nearest free one, which
+    /// is the one case where the shape gives: a paste that silently sat two
+    /// nodes on one crossing would be worse than a paste that is a cell out.
+    pub(crate) fn paste_nodes(&mut self) -> bool {
+        if self.node_clipboard.is_empty() {
+            return false;
+        }
+        let origin = self.node_clipboard.iter().fold((f32::MAX, f32::MAX), |(x, y), n| {
+            (x.min(n.position.0), y.min(n.position.1))
+        });
+        let (cx, cy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
+        let mut last = (cx, cy);
+        for source in self.node_clipboard.clone() {
+            let mut node = source;
+            regenerate_node_ids(&mut node);
+            let want = (cx + node.position.0 - origin.0, cy + node.position.1 - origin.1);
+            let (nx, ny) = self.find_empty_cell(want.0, want.1, None);
+            node.position = (nx, ny);
+            // Added = hidden, same as AddNode: a paste of a displayed node
+            // must not become a second visible sibling.
+            node.geometry_visible = false;
+            self.current_dir_mut().children.push(node);
+            last = (nx, ny);
+        }
+        // The cursor lands on the last node pasted, collapsed — the pasted
+        // nodes are new, and the region that selected the originals means
+        // nothing about them.
+        self.grid_cursor_col = last.0 as i32;
+        self.grid_cursor_row = last.1 as i32;
+        self.grid_cursor_expanse = None;
+        self.sync_nodes();
+        self.sync_cursor_and_selection();
+        self.rebuild_positions();
+        self.apply_layout();
+        self.update_panel_bounds();
+        self.rebuild_scene_geometry();
+        self.viewport_dirty = true;
+        true
+    }
+
+    /// Move the SELECTED nodes one cell, and the cursor with them — so a run
+    /// of alt+h drags them across the sheet rather than leaving them behind on
+    /// the first press.
+    ///
+    /// With an expanded cursor that is every node inside it, and the region
+    /// travels too: stepping the anchor alone is exactly what collapses a
+    /// region, so a selection would be dropped by the first press that moved
+    /// it. `network_nav` cannot do that job — for the plain cursor, stepping
+    /// off IS the point.
     pub(crate) fn network_move_node(&mut self, dc: i32, dr: i32) -> bool {
         if self.focused_pane != LEFT_MENUBAR_IDX {
             return false;
         }
-        let at_cursor = self.current_dir().children.iter().position(|child| {
-            child.position.0 as i32 == self.grid_cursor_col
-                && child.position.1 as i32 == self.grid_cursor_row
-        });
-        if let Some(idx) = at_cursor {
-            let (x, y) = self.current_dir().children[idx].position;
-            self.current_dir_mut().children[idx].position = (x + dc as f32, y + dr as f32);
+        let moving = self.selected_slots();
+        if !moving.is_empty() {
+            for idx in moving {
+                let (x, y) = self.current_dir().children[idx].position;
+                self.current_dir_mut().children[idx].position = (x + dc as f32, y + dr as f32);
+            }
             self.sync_nodes();
             self.sync_layout();
+        }
+        if self.grid_cursor_expanded() {
+            self.pan_velocity_x = 0.0;
+            self.pan_velocity_y = 0.0;
+            self.shift_grid_cursor(dc, dr);
+            self.deselected_cell = None;
+            self.keep_cursor_in_view();
+            return true;
         }
         self.network_nav(dc, dr)
     }
@@ -7677,7 +7808,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         {
                             if event.logical_key == Key::Named(NamedKey::Delete) {
                                 if is_plain_key && self.focused_pane == LEFT_MENUBAR_IDX {
-                                    if let Some(slot_idx) = self.graph().selected_node() {
+                                    // Every selected node, highest slot first:
+                                    // removing one shifts the slots above it,
+                                    // so any other order deletes the wrong
+                                    // nodes from the second one on.
+                                    for slot_idx in self.selected_slots().into_iter().rev() {
                                         if self.delete_node(slot_idx) {
                                             changed = true;
                                         }
@@ -7688,10 +7823,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                     match s.as_str() {
                                         "e" | "E" => {
                                             if self.focused_pane == LEFT_MENUBAR_IDX {
-                                                if let Some(slot_idx) = self.graph().selected_node() {
+                                                // The whole selection follows the
+                                                // FIRST node's flag rather than
+                                                // each flipping its own: a toggle
+                                                // over a mixed selection should
+                                                // settle it, not shuffle it.
+                                                let selected = self.selected_slots();
+                                                let target = selected
+                                                    .first()
+                                                    .map(|&i| !self.current_dir().children[i].geometry_visible);
+                                                for slot_idx in selected {
+                                                    let visible = target.unwrap_or(false);
                                                     let dir = self.current_dir();
                                                     if slot_idx < dir.children.len() && dir.children[slot_idx].node_type != "utility" {
-                                                        let visible = !dir.children[slot_idx].geometry_visible;
                                                         self.current_dir_mut().set_child_geometry_visible(slot_idx, visible);
                                                         self.sync_nodes();
                                                         self.rebuild_scene_geometry();
@@ -7745,45 +7889,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 } else if is_ctrl_only && self.focused_pane == LEFT_MENUBAR_IDX {
                                     match s.as_str() {
                                         "c" | "C" => {
-                                            if let Some(slot_idx) = self.graph().selected_node() {
-                                                let dir = self.current_dir();
-                                                if slot_idx < dir.children.len() {
-                                                    self.node_clipboard = Some(dir.children[slot_idx].clone());
-                                                }
-                                            }
+                                            self.copy_selected_nodes();
                                         }
                                         "x" | "X" => {
-                                            if let Some(slot_idx) = self.graph().selected_node() {
-                                                let dir = self.current_dir();
-                                                if slot_idx < dir.children.len() {
-                                                    self.node_clipboard = Some(dir.children[slot_idx].clone());
-                                                    self.delete_node(slot_idx);
+                                            self.copy_selected_nodes();
+                                            // Highest slot first, as the Delete
+                                            // key does and for the same reason.
+                                            for slot_idx in self.selected_slots().into_iter().rev() {
+                                                if self.delete_node(slot_idx) {
                                                     changed = true;
                                                 }
                                             }
                                         }
                                         "v" | "V" => {
-                                            if let Some(ref clipboard_node) = self.node_clipboard {
-                                                let mut node = clipboard_node.clone();
-                                                regenerate_node_ids(&mut node);
-                                                let start_x = self.grid_cursor_col as f32;
-                                                let start_y = self.grid_cursor_row as f32;
-                                                let (nx, ny) = self.find_empty_cell(start_x, start_y, None);
-                                                node.position = (nx, ny);
-                                                // Added = hidden, same as AddNode: a
-                                                // paste of a displayed node must not
-                                                // become a second visible sibling.
-                                                node.geometry_visible = false;
-                                                self.current_dir_mut().children.push(node);
-                                                self.grid_cursor_col = nx as i32;
-                                                self.grid_cursor_row = ny as i32;
-                                                self.sync_nodes();
-                                                self.sync_cursor_and_selection();
-                                                self.rebuild_positions();
-                                                self.apply_layout();
-                                                self.update_panel_bounds();
-                                                self.rebuild_scene_geometry();
-                                                self.viewport_dirty = true;
+                                            if self.paste_nodes() {
                                                 changed = true;
                                             }
                                         }
