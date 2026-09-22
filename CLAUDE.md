@@ -716,22 +716,25 @@ everything, with framing everything on `shift+f` — the plugin's split.
 The network grid has ONE size per axis: `style.surface.graph.spacing_x` /
 `spacing_y` in config.kdl, the pitch — the distance from the centre of one
 grid line to the centre of the next. A node's `position` (col, row) names a
-lattice intersection, and the node body is CENTRED on it. The body's size
-follows from the pitch by one rule, `Graph::node_size_for_pitch` in cce-ui
-(four fifths of the x pitch, two thirds of the y — the proportions the old
-cell grid had), and `State::node_size` reads that same rule, so the cursor
-this app draws and the nodes the widget draws cannot disagree. Until
-2026-09-22 the grid was rounded CELLS with grout between them, configured as
-a cell size (also the node size) plus a gap, and a node filled its cell.
+lattice intersection, and the node body is CENTRED on it. The body has a
+size of its own, `style.surface.graph.node.width` / `height`, which the
+pitch does not touch: a denser grid moves nodes closer, it does not shrink
+them (a first cut derived the body from the pitch; it was disconnected the
+same day). Until 2026-09-22 the grid was rounded CELLS with grout between
+them, configured as a cell size (also the node size) plus a gap, and a node
+filled its cell.
 
-`State::grid_pitch_x` / `grid_pitch_y` are the zoomed pitch; there is no
+`State::grid_pitch_x` / `grid_pitch_y` and `node_w` / `node_h` are the
+zoomed geometry — `configured_grid_geometry` at 100%, scaled TOGETHER by
+`scale_grid_geometry`, which is the only relation between them; there is no
 other grid geometry on `State`. `cell_center`, `cell_rect` and `cell_at` are
 the three derivations every consumer goes through — the cursor outline, the
 click-to-cell of an empty-space press (`round`, not `floor`, because a cell
 is centred on its crossing and a click between two nodes belongs to the
-nearer), Frame Cursor, the zoom anchor. `configured_grid_pitch` is the 100%
-baseline Reset Zoom returns to; `MIN_PITCH_*` / `MAX_PITCH_*` are the old
-node-body zoom limits expressed on the pitch.
+nearer), Frame Cursor, the zoom anchor. The configured geometry is the 100%
+baseline Reset Zoom returns to and Frame All scales down from (never past
+100%); `MIN_PITCH_*` / `MAX_PITCH_*` are the old node-body zoom limits
+expressed on the pitch.
 
 The widget paints the lattice as lines (`paint_grid`: gap colour, network
 opacity, `style.surface.graph.line_width` px, each line centred on its

@@ -932,28 +932,41 @@ impl Default for ViewportSettings {
     }
 }
 
-/// The network grid's pitch as configured — `style.surface.graph.spacing_x` /
-/// `spacing_y`: the distance from the centre of one grid line to the centre
-/// of the next, per axis. It is the grid's ONE size: nodes are centred on
-/// the lattice intersections, and the node body's size follows from the
-/// pitch (`Graph::node_size_for_pitch`, read through `State::node_size`).
-/// Until 2026-09-22 this was a cell size plus a gap, with a node filling
-/// its cell.
+/// The network grid's geometry as configured, at 100% zoom: the pitch
+/// (`style.surface.graph.spacing_x` / `spacing_y` — the distance from the
+/// centre of one grid line to the centre of the next, the grid's ONE size;
+/// nodes are centred on the lattice intersections) and the node body's own
+/// size (`style.surface.graph.node.width` / `height`), which the pitch does
+/// not touch: a denser grid moves nodes closer, it does not shrink them.
+/// Until 2026-09-22 the grid was a cell size plus a gap, with a node
+/// filling its cell.
 ///
 /// Config-owned, NOT state: it is user-authored, so the app reads it and
 /// never writes it back — the same split `../CLAUDE.md` describes for scroll
-/// behavior. Zoom scales it in memory; the configured value is the 100%
-/// baseline that Reset Zoom returns to.
-pub fn configured_grid_pitch() -> (f32, f32) {
-    (cce_ui::layout::graph_spacing_x(), cce_ui::layout::graph_spacing_y())
+/// behavior. Zoom scales all four in memory together; the configured values
+/// are the 100% baseline that Reset Zoom returns to.
+pub struct GridGeometry {
+    pub pitch_x: f32,
+    pub pitch_y: f32,
+    pub node_w: f32,
+    pub node_h: f32,
 }
 
-/// Zoom limits on the pitch. They are the old 30..500 x 15..250 limits on
-/// the node body, expressed on the pitch the body is now a share of.
-pub const MIN_PITCH_X: f32 = 30.0 / cce_ui::widget::Graph::NODE_W_OF_PITCH;
-pub const MAX_PITCH_X: f32 = 500.0 / cce_ui::widget::Graph::NODE_W_OF_PITCH;
-pub const MIN_PITCH_Y: f32 = 15.0 / cce_ui::widget::Graph::NODE_H_OF_PITCH;
-pub const MAX_PITCH_Y: f32 = 250.0 / cce_ui::widget::Graph::NODE_H_OF_PITCH;
+pub fn configured_grid_geometry() -> GridGeometry {
+    GridGeometry {
+        pitch_x: cce_ui::layout::graph_spacing_x(),
+        pitch_y: cce_ui::layout::graph_spacing_y(),
+        node_w: cce_ui::layout::graph_node_width(),
+        node_h: cce_ui::layout::graph_node_height(),
+    }
+}
+
+/// Zoom limits on the pitch — the old 30..500 x 15..250 limits on the node
+/// body, expressed on the pitch that body used to be a share of.
+pub const MIN_PITCH_X: f32 = 37.5;
+pub const MAX_PITCH_X: f32 = 625.0;
+pub const MIN_PITCH_Y: f32 = 22.5;
+pub const MAX_PITCH_Y: f32 = 375.0;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DesignSettings {
@@ -1376,11 +1389,14 @@ pub struct State {
     pub grid_snap_enabled: bool,
     pub network_grid_visible: bool,
     /// The network grid's pitch at the current zoom — centre of one grid
-    /// line to the centre of the next, per axis. The grid's one size; the
-    /// node body follows from it (`node_size`), and a node's (col, row) is
-    /// the intersection its centre sits on.
+    /// line to the centre of the next, per axis. The grid's one size; a
+    /// node's (col, row) is the intersection its centre sits on.
     pub grid_pitch_x: f32,
     pub grid_pitch_y: f32,
+    /// The node body's size at the current zoom — its own, not the pitch's;
+    /// zoom scales the two together and nothing else relates them.
+    pub node_w: f32,
+    pub node_h: f32,
 
     pub pan_x: f32,
     pub pan_y: f32,
@@ -2749,9 +2765,7 @@ impl State {
                 self.zoom(1.0 / 1.15, None);
             }
             "Reset Zoom" => {
-                let (px, py) = configured_grid_pitch();
-                self.grid_pitch_x = px;
-                self.grid_pitch_y = py;
+                self.set_grid_geometry(configured_grid_geometry());
                 self.sync_grid_settings();
             }
             "Detach Circular Window" | "Detach Pane" => {
@@ -4188,7 +4202,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let scale = cce_ui::scale::scale_factor() as f64;
         let settings = DesignSettings::load();
         // Grid geometry is config-owned, not part of the saved state.
-        let cfg_grid = configured_grid_pitch();
+        let cfg_grid = configured_grid_geometry();
         let (lw, lh) = if is_detached_network {
             (400.0f32, 400.0f32)
         } else {
@@ -4445,8 +4459,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
             network_grid_visible: true,
-            grid_pitch_x: cfg_grid.0,
-            grid_pitch_y: cfg_grid.1,
+            grid_pitch_x: cfg_grid.pitch_x,
+            grid_pitch_y: cfg_grid.pitch_y,
+            node_w: cfg_grid.node_w,
+            node_h: cfg_grid.node_h,
             pan_x,
             pan_y,
             pan_velocity_x: 0.0,
@@ -4648,11 +4664,28 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         state
     }
 
-    /// The node body's size at the current zoom — the widget's rule applied
-    /// to this pitch, so the cursor drawn here and the nodes the widget
+    /// The node body's size at the current zoom — what `sync_grid_settings`
+    /// hands the widget, so the cursor drawn here and the nodes the widget
     /// draws cannot disagree.
     pub fn node_size(&self) -> (f32, f32) {
-        cce_ui::widget::Graph::node_size_for_pitch(self.grid_pitch_x, self.grid_pitch_y)
+        (self.node_w, self.node_h)
+    }
+
+    /// Put the grid at a geometry outright (Reset Zoom, Frame All's fit).
+    pub fn set_grid_geometry(&mut self, g: GridGeometry) {
+        self.grid_pitch_x = g.pitch_x;
+        self.grid_pitch_y = g.pitch_y;
+        self.node_w = g.node_w;
+        self.node_h = g.node_h;
+    }
+
+    /// Scale the grid geometry by one factor — the pitch and the node body
+    /// together, which is the only way the two are related.
+    pub fn scale_grid_geometry(&mut self, f: f32) {
+        self.grid_pitch_x *= f;
+        self.grid_pitch_y *= f;
+        self.node_w *= f;
+        self.node_h *= f;
     }
 
     /// The window-space centre of lattice cell (col, row) in the network
@@ -4692,12 +4725,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let network_grid_visible = self.network_grid_visible;
         let grid_pitch_x = self.grid_pitch_x;
         let grid_pitch_y = self.grid_pitch_y;
+        let (node_w, node_h) = self.node_size();
         let pan_x = self.pan_x;
         let pan_y = self.pan_y;
         let grid_snap_enabled = self.grid_snap_enabled;
         let graph = self.graph_mut();
         graph.set_show_network_grid(network_grid_visible);
         graph.set_grid_pitch(grid_pitch_x, grid_pitch_y);
+        graph.set_node_size(node_w, node_h);
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
         if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
@@ -4722,6 +4757,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             let g2 = &mut *self.slots.content2;
             g2.set_show_network_grid(network_grid_visible);
             g2.set_grid_pitch(grid_pitch_x, grid_pitch_y);
+            g2.set_node_size(node_w, node_h);
             g2.set_grid_origin(qx, qy);
             g2.set_grid_snap_enabled(grid_snap_enabled);
         }
@@ -4839,8 +4875,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let old_px = self.grid_pitch_x;
         let old_py = self.grid_pitch_y;
 
+        // The x pitch is clamped and the y pitch follows by the SAME factor,
+        // so the node body — scaled by that factor too — keeps its shape.
         let new_px = (old_px * factor).clamp(MIN_PITCH_X, MAX_PITCH_X);
-        let new_py = (old_py * factor).clamp(MIN_PITCH_Y, MAX_PITCH_Y);
+        let factor = new_px / old_px;
+        let new_py = old_py * factor;
 
         if (new_px - old_px).abs() < 0.01 {
             return;
@@ -4859,8 +4898,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.pan_x = cx - area_x - col_f * new_px;
         self.pan_y = cy - area_y - row_f * new_py;
 
-        self.grid_pitch_x = new_px;
-        self.grid_pitch_y = new_py;
+        self.scale_grid_geometry(factor);
 
         self.sync_grid_settings();
     }
@@ -5670,19 +5708,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// being that there is one implementation behind every way of asking.
     pub(crate) fn frame_all_nodes(&mut self) {
             let active_nodes = self.current_dir().children.len();
-            // The framing baseline: a 100 x 60 pitch (80 x 40 node bodies),
-            // scaled down until everything fits.
-            let base_px = 100.0;
-            let base_py = 60.0;
+            // The framing baseline is the configured geometry (100% zoom),
+            // scaled down until everything fits — Frame All never zooms in
+            // past 100%.
+            let base = configured_grid_geometry();
             if active_nodes == 0 {
-                self.grid_pitch_x = base_px;
-                self.grid_pitch_y = base_py;
+                self.set_grid_geometry(base);
                 self.pan_x = 20.0;
                 self.pan_y = 20.0;
             } else {
                 // Node bodies' bounds, relative to the (0, 0) intersection,
-                // at the baseline pitch.
-                let (base_w, base_h) = cce_ui::widget::Graph::node_size_for_pitch(base_px, base_py);
+                // at the baseline.
+                let (base_px, base_py, base_w, base_h) = (base.pitch_x, base.pitch_y, base.node_w, base.node_h);
                 let mut b_xmin = f32::MAX;
                 let mut b_xmax = f32::MIN;
                 let mut b_ymin = f32::MAX;
@@ -5718,8 +5755,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 f = f.min(1.0).max(MIN_PITCH_X / base_px);
 
-                self.grid_pitch_x = (base_px * f).clamp(MIN_PITCH_X, MAX_PITCH_X);
-                self.grid_pitch_y = (base_py * f).clamp(MIN_PITCH_Y, MAX_PITCH_Y);
+                self.set_grid_geometry(base);
+                self.scale_grid_geometry(f);
                 let (node_w, node_h) = self.node_size();
 
                 let mut actual_xmin = f32::MAX;

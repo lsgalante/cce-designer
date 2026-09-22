@@ -187,9 +187,7 @@ impl State {
                             changed = true;
                         }
                         2 => { // Reset Zoom
-                            let (px, py) = crate::app::configured_grid_pitch();
-                            state.grid_pitch_x = px;
-                            state.grid_pitch_y = py;
+                            state.set_grid_geometry(crate::app::configured_grid_geometry());
                             state.sync_grid_settings();
                             changed = true;
                         }
