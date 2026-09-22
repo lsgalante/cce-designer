@@ -932,21 +932,28 @@ impl Default for ViewportSettings {
     }
 }
 
-/// The node grid's cell size and the gap between cells, as configured — `spacing_*` is the
-/// cell, `gap_*` the space after it, and one node slot to the next is the two added up.
+/// The network grid's pitch as configured — `style.surface.graph.spacing_x` /
+/// `spacing_y`: the distance from the centre of one grid line to the centre
+/// of the next, per axis. It is the grid's ONE size: nodes are centred on
+/// the lattice intersections, and the node body's size follows from the
+/// pitch (`Graph::node_size_for_pitch`, read through `State::node_size`).
+/// Until 2026-09-22 this was a cell size plus a gap, with a node filling
+/// its cell.
 ///
-/// Config-owned (`style.surface.graph.*`), NOT state: it is user-authored, so the app reads
-/// it and never writes it back — the same split `../CLAUDE.md` describes for scroll
-/// behavior. Zoom scales these in memory; the configured values are the 100% baseline that
-/// Reset Zoom returns to.
-pub fn configured_grid_geometry() -> (f32, f32, f32, f32) {
-    (
-        cce_ui::layout::graph_spacing_x(),
-        cce_ui::layout::graph_spacing_y(),
-        cce_ui::layout::graph_gap_col_w(),
-        cce_ui::layout::graph_gap_row_h(),
-    )
+/// Config-owned, NOT state: it is user-authored, so the app reads it and
+/// never writes it back — the same split `../CLAUDE.md` describes for scroll
+/// behavior. Zoom scales it in memory; the configured value is the 100%
+/// baseline that Reset Zoom returns to.
+pub fn configured_grid_pitch() -> (f32, f32) {
+    (cce_ui::layout::graph_spacing_x(), cce_ui::layout::graph_spacing_y())
 }
+
+/// Zoom limits on the pitch. They are the old 30..500 x 15..250 limits on
+/// the node body, expressed on the pitch the body is now a share of.
+pub const MIN_PITCH_X: f32 = 30.0 / cce_ui::widget::Graph::NODE_W_OF_PITCH;
+pub const MAX_PITCH_X: f32 = 500.0 / cce_ui::widget::Graph::NODE_W_OF_PITCH;
+pub const MIN_PITCH_Y: f32 = 15.0 / cce_ui::widget::Graph::NODE_H_OF_PITCH;
+pub const MAX_PITCH_Y: f32 = 250.0 / cce_ui::widget::Graph::NODE_H_OF_PITCH;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DesignSettings {
@@ -1368,10 +1375,12 @@ pub struct State {
     pub square_viewport: bool,
     pub grid_snap_enabled: bool,
     pub network_grid_visible: bool,
-    pub grid_size_x: f32,
-    pub grid_size_y: f32,
-    pub gap_row_h: f32,
-    pub gap_col_w: f32,
+    /// The network grid's pitch at the current zoom — centre of one grid
+    /// line to the centre of the next, per axis. The grid's one size; the
+    /// node body follows from it (`node_size`), and a node's (col, row) is
+    /// the intersection its centre sits on.
+    pub grid_pitch_x: f32,
+    pub grid_pitch_y: f32,
 
     pub pan_x: f32,
     pub pan_y: f32,
@@ -2740,11 +2749,9 @@ impl State {
                 self.zoom(1.0 / 1.15, None);
             }
             "Reset Zoom" => {
-                let (gx, gy, gw, gh) = configured_grid_geometry();
-                self.grid_size_x = gx;
-                self.grid_size_y = gy;
-                self.gap_col_w = gw;
-                self.gap_row_h = gh;
+                let (px, py) = configured_grid_pitch();
+                self.grid_pitch_x = px;
+                self.grid_pitch_y = py;
                 self.sync_grid_settings();
             }
             "Detach Circular Window" | "Detach Pane" => {
@@ -4181,7 +4188,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let scale = cce_ui::scale::scale_factor() as f64;
         let settings = DesignSettings::load();
         // Grid geometry is config-owned, not part of the saved state.
-        let cfg_grid = configured_grid_geometry();
+        let cfg_grid = configured_grid_pitch();
         let (lw, lh) = if is_detached_network {
             (400.0f32, 400.0f32)
         } else {
@@ -4438,10 +4445,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
             network_grid_visible: true,
-            grid_size_x: cfg_grid.0,
-            grid_size_y: cfg_grid.1,
-            gap_col_w: cfg_grid.2,
-            gap_row_h: cfg_grid.3,
+            grid_pitch_x: cfg_grid.0,
+            grid_pitch_y: cfg_grid.1,
             pan_x,
             pan_y,
             pan_velocity_x: 0.0,
@@ -4643,22 +4648,56 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         state
     }
 
+    /// The node body's size at the current zoom — the widget's rule applied
+    /// to this pitch, so the cursor drawn here and the nodes the widget
+    /// draws cannot disagree.
+    pub fn node_size(&self) -> (f32, f32) {
+        cce_ui::widget::Graph::node_size_for_pitch(self.grid_pitch_x, self.grid_pitch_y)
+    }
+
+    /// The window-space centre of lattice cell (col, row) in the network
+    /// pane: the pane origin, plus the pan, plus the cell's pitches. This is
+    /// where a node at that position is centred, and what the grid origin
+    /// handed to the widget means.
+    pub fn cell_center(&self, col: i32, row: i32) -> (f32, f32) {
+        let (px, py, _, _) = self.positions[CONTENT_IDX];
+        (
+            px + self.pan_x + col as f32 * self.grid_pitch_x,
+            py + self.pan_y + row as f32 * self.grid_pitch_y,
+        )
+    }
+
+    /// The window-space rect a node body occupies on lattice cell
+    /// (col, row) — centred on the intersection.
+    pub fn cell_rect(&self, col: i32, row: i32) -> (f32, f32, f32, f32) {
+        let (cx, cy) = self.cell_center(col, row);
+        let (w, h) = self.node_size();
+        (cx - w * 0.5, cy - h * 0.5, w, h)
+    }
+
+    /// The lattice cell nearest a window-space point in the network pane.
+    /// Nearest, not "the cell whose span contains it": a cell is centred on
+    /// its intersection, so a click between two nodes belongs to the closer.
+    pub fn cell_at(&self, x: f32, y: f32) -> (i32, i32) {
+        let (px, py, _, _) = self.positions[CONTENT_IDX];
+        let col = if self.grid_pitch_x > 0.0 { ((x - px - self.pan_x) / self.grid_pitch_x).round() } else { 0.0 };
+        let row = if self.grid_pitch_y > 0.0 { ((y - py - self.pan_y) / self.grid_pitch_y).round() } else { 0.0 };
+        (col as i32, row as i32)
+    }
+
     pub fn sync_grid_settings(&mut self) {
         let active_node_area_y = self.positions[CONTENT_IDX].1;
         let active_node_area_x = self.positions[CONTENT_IDX].0;
 
         let network_grid_visible = self.network_grid_visible;
-        let grid_size_x = self.grid_size_x;
-        let grid_size_y = self.grid_size_y;
-        let gap_row_h = self.gap_row_h;
-        let gap_col_w = self.gap_col_w;
+        let grid_pitch_x = self.grid_pitch_x;
+        let grid_pitch_y = self.grid_pitch_y;
         let pan_x = self.pan_x;
         let pan_y = self.pan_y;
         let grid_snap_enabled = self.grid_snap_enabled;
         let graph = self.graph_mut();
         graph.set_show_network_grid(network_grid_visible);
-        graph.set_grid_sizes(grid_size_x, grid_size_y);
-        graph.set_skipped_sizes(gap_row_h, gap_col_w);
+        graph.set_grid_pitch(grid_pitch_x, grid_pitch_y);
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
         if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
@@ -4682,8 +4721,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             use cce_ui::widget::GraphController as _;
             let g2 = &mut *self.slots.content2;
             g2.set_show_network_grid(network_grid_visible);
-            g2.set_grid_sizes(grid_size_x, grid_size_y);
-            g2.set_skipped_sizes(gap_row_h, gap_col_w);
+            g2.set_grid_pitch(grid_pitch_x, grid_pitch_y);
             g2.set_grid_origin(qx, qy);
             g2.set_grid_snap_enabled(grid_snap_enabled);
         }
@@ -4792,45 +4830,37 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
 
 
+    /// Zoom the network view about a window-space point (the cursor cell's
+    /// centre when none is given): the pitch scales, and the pan moves so the
+    /// lattice point under the anchor stays under it.
     pub fn zoom(&mut self, factor: f32, center: Option<(f32, f32)>) {
         self.pan_velocity_x = 0.0;
         self.pan_velocity_y = 0.0;
-        let old_gx = self.grid_size_x;
-        let old_gy = self.grid_size_y;
+        let old_px = self.grid_pitch_x;
+        let old_py = self.grid_pitch_y;
 
-        let new_gx = (old_gx * factor).clamp(30.0, 500.0);
-        let new_gy = (old_gy * factor).clamp(15.0, 250.0);
+        let new_px = (old_px * factor).clamp(MIN_PITCH_X, MAX_PITCH_X);
+        let new_py = (old_py * factor).clamp(MIN_PITCH_Y, MAX_PITCH_Y);
 
-        if (new_gx - old_gx).abs() < 0.01 {
+        if (new_px - old_px).abs() < 0.01 {
             return;
         }
 
-        let old_row_h = self.gap_row_h;
-        let old_col_w = self.gap_col_w;
-
-        let node_area_y = self.positions[CONTENT_IDX].1;
+        let (area_x, area_y, _, _) = self.positions[CONTENT_IDX];
         let (cx, cy) = match center {
             Some(pt) => pt,
-            None => {
-                let col = self.grid_cursor_col as f32;
-                let row = self.grid_cursor_row as f32;
-                (
-                    col * (old_gx + old_col_w) + 0.5 * old_gx + self.pan_x,
-                    row * (old_gy + old_row_h) + 0.5 * old_gy + self.pan_y + node_area_y,
-                )
-            }
+            None => self.cell_center(self.grid_cursor_col, self.grid_cursor_row),
         };
 
-        let col_f = (cx - self.pan_x) / old_gx;
-        let row_f = (cy - self.pan_y - node_area_y) / old_gy;
+        // The anchor's lattice coordinate, in pitches, is what must not move.
+        let col_f = (cx - area_x - self.pan_x) / old_px;
+        let row_f = (cy - area_y - self.pan_y) / old_py;
 
-        self.pan_x = cx - col_f * new_gx;
-        self.pan_y = cy - row_f * new_gy - node_area_y;
+        self.pan_x = cx - area_x - col_f * new_px;
+        self.pan_y = cy - area_y - row_f * new_py;
 
-        self.grid_size_x = new_gx;
-        self.grid_size_y = new_gy;
-        self.gap_row_h = old_row_h * (new_gy / old_gy);
-        self.gap_col_w = old_col_w * (new_gx / old_gx);
+        self.grid_pitch_x = new_px;
+        self.grid_pitch_y = new_py;
 
         self.sync_grid_settings();
     }
@@ -4838,11 +4868,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
     pub fn keep_cursor_in_view(&mut self) {
         let (px, py, pw, ph) = self.positions[CONTENT_IDX];
-
-        let cx = px + self.grid_cursor_col as f32 * (self.grid_size_x + self.gap_col_w) + self.pan_x;
-        let cy = py + self.grid_cursor_row as f32 * (self.grid_size_y + self.gap_row_h) + self.pan_y;
-        let cw = self.grid_size_x;
-        let ch = self.grid_size_y;
+        let (cx, cy, cw, ch) = self.cell_rect(self.grid_cursor_col, self.grid_cursor_row);
 
         if cx < px {
             self.pan_x -= cx - px;
@@ -5598,8 +5624,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
         self.pan_velocity_x = 0.0;
         self.pan_velocity_y = 0.0;
-        self.pan_x -= dc as f32 * (self.grid_size_x + self.gap_col_w);
-        self.pan_y -= dr as f32 * (self.grid_size_y + self.gap_row_h);
+        self.pan_x -= dc as f32 * self.grid_pitch_x;
+        self.pan_y -= dr as f32 * self.grid_pitch_y;
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
@@ -5623,16 +5649,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if pw <= 0.0 || ph <= 0.0 {
             return true;
         }
-        // Pan so the cursor CELL's centre lands at the pane's centre. The
-        // cell's offset from the sheet origin is its column times the column
-        // pitch, so the pan that centres it is the pane's half-extent minus
-        // that offset, minus half a cell.
-        self.pan_x = pw * 0.5
-            - self.grid_cursor_col as f32 * (self.grid_size_x + self.gap_col_w)
-            - self.grid_size_x * 0.5;
-        self.pan_y = ph * 0.5
-            - self.grid_cursor_row as f32 * (self.grid_size_y + self.gap_row_h)
-            - self.grid_size_y * 0.5;
+        // Pan so the cursor cell's centre — the lattice intersection it names
+        // — lands at the pane's centre: the pane's half-extent minus the
+        // cell's offset from the origin, which is its column times the pitch.
+        self.pan_x = pw * 0.5 - self.grid_cursor_col as f32 * self.grid_pitch_x;
+        self.pan_y = ph * 0.5 - self.grid_cursor_row as f32 * self.grid_pitch_y;
         self.pan_velocity_x = 0.0;
         self.pan_velocity_y = 0.0;
         self.sync_grid_settings();
@@ -5649,19 +5670,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// being that there is one implementation behind every way of asking.
     pub(crate) fn frame_all_nodes(&mut self) {
             let active_nodes = self.current_dir().children.len();
+            // The framing baseline: a 100 x 60 pitch (80 x 40 node bodies),
+            // scaled down until everything fits.
+            let base_px = 100.0;
+            let base_py = 60.0;
             if active_nodes == 0 {
-                self.grid_size_x = 80.0;
-                self.grid_size_y = 40.0;
-                self.gap_col_w = 20.0;
-                self.gap_row_h = 20.0;
+                self.grid_pitch_x = base_px;
+                self.grid_pitch_y = base_py;
                 self.pan_x = 20.0;
                 self.pan_y = 20.0;
             } else {
-                let base_gx = 80.0;
-                let base_gy = 40.0;
-                let base_col_w = 20.0;
-                let base_row_h = 20.0;
-
+                // Node bodies' bounds, relative to the (0, 0) intersection,
+                // at the baseline pitch.
+                let (base_w, base_h) = cce_ui::widget::Graph::node_size_for_pitch(base_px, base_py);
                 let mut b_xmin = f32::MAX;
                 let mut b_xmax = f32::MIN;
                 let mut b_ymin = f32::MAX;
@@ -5669,10 +5690,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 for slot_idx in 0..active_nodes {
                     let (col, row) = self.current_dir().children[slot_idx].position;
-                    let x_min = col * (base_gx + base_col_w);
-                    let x_max = x_min + base_gx;
-                    let y_min = row * (base_gy + base_row_h);
-                    let y_max = y_min + base_gy;
+                    let x_min = col * base_px - base_w * 0.5;
+                    let x_max = x_min + base_w;
+                    let y_min = row * base_py - base_h * 0.5;
+                    let y_max = y_min + base_h;
 
                     if x_min < b_xmin { b_xmin = x_min; }
                     if x_max > b_xmax { b_xmax = x_max; }
@@ -5695,12 +5716,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let fy = padded_h / h_base;
                 let mut f = fx.min(fy);
 
-                f = f.min(1.0).max(30.0 / base_gx);
+                f = f.min(1.0).max(MIN_PITCH_X / base_px);
 
-                self.grid_size_x = (base_gx * f).clamp(30.0, 500.0);
-                self.grid_size_y = (base_gy * f).clamp(15.0, 250.0);
-                self.gap_col_w = base_col_w * f;
-                self.gap_row_h = base_row_h * f;
+                self.grid_pitch_x = (base_px * f).clamp(MIN_PITCH_X, MAX_PITCH_X);
+                self.grid_pitch_y = (base_py * f).clamp(MIN_PITCH_Y, MAX_PITCH_Y);
+                let (node_w, node_h) = self.node_size();
 
                 let mut actual_xmin = f32::MAX;
                 let mut actual_xmax = f32::MIN;
@@ -5709,10 +5729,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 for slot_idx in 0..active_nodes {
                     let (col, row) = self.current_dir().children[slot_idx].position;
-                    let x_min = col * (self.grid_size_x + self.gap_col_w);
-                    let x_max = x_min + self.grid_size_x;
-                    let y_min = row * (self.grid_size_y + self.gap_row_h);
-                    let y_max = y_min + self.grid_size_y;
+                    let x_min = col * self.grid_pitch_x - node_w * 0.5;
+                    let x_max = x_min + node_w;
+                    let y_min = row * self.grid_pitch_y - node_h * 0.5;
+                    let y_max = y_min + node_h;
 
                     if x_min < actual_xmin { actual_xmin = x_min; }
                     if x_max > actual_xmax { actual_xmax = x_max; }
@@ -6518,8 +6538,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     }
                 }
                 let in_network_pane = self.in_network_pane();
-                let node_area_x = self.positions[CONTENT_IDX].0;
-                let node_area_y = self.positions[CONTENT_IDX].1;
 
                 // Panning asks the AREA, not the nodes: with the plate off a
                 // middle-drag over empty space still pans the graph, because
@@ -6808,8 +6826,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                     self.open_node_context_menu(slot);
                                     return true;
                                 }
-                                let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
-                                let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
+                                let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
                                 self.grid_cursor_col = col;
                                 self.grid_cursor_row = row;
                                 self.open_node_palette();
@@ -6929,8 +6946,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             self.sync_parameters_to_project();
                         }
                         if click_target.is_none() && in_circle_network_pane {
-                            let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
-                            let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
+                            let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
                             self.grid_cursor_col = col;
                             self.grid_cursor_row = row;
                             changed = true;
@@ -6996,8 +7012,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                         self.grid_cursor_row = pos.1 as i32;
                                     }
                                 } else {
-                                    let col = ((self.cursor_x - node_area_x - self.pan_x) / (self.grid_size_x + self.gap_col_w)).floor() as i32;
-                                    let row = ((self.cursor_y - node_area_y - self.pan_y) / (self.grid_size_y + self.gap_row_h)).floor() as i32;
+                                    let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
                                     self.grid_cursor_col = col;
                                     self.grid_cursor_row = row;
                                     changed = true;

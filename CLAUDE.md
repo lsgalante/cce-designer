@@ -711,6 +711,36 @@ by hand: `edit_handles` from `Ctrl+H` to `Ctrl+Shift+H` (the ctrl+hjkl family
 owns those now), and `f` now frames the CURSOR where it used to frame
 everything, with framing everything on `shift+f` — the plugin's split.
 
+### The network grid is a lattice, and a node sits on a crossing
+
+The network grid has ONE size per axis: `style.surface.graph.spacing_x` /
+`spacing_y` in config.kdl, the pitch — the distance from the centre of one
+grid line to the centre of the next. A node's `position` (col, row) names a
+lattice intersection, and the node body is CENTRED on it. The body's size
+follows from the pitch by one rule, `Graph::node_size_for_pitch` in cce-ui
+(four fifths of the x pitch, two thirds of the y — the proportions the old
+cell grid had), and `State::node_size` reads that same rule, so the cursor
+this app draws and the nodes the widget draws cannot disagree. Until
+2026-09-22 the grid was rounded CELLS with grout between them, configured as
+a cell size (also the node size) plus a gap, and a node filled its cell.
+
+`State::grid_pitch_x` / `grid_pitch_y` are the zoomed pitch; there is no
+other grid geometry on `State`. `cell_center`, `cell_rect` and `cell_at` are
+the three derivations every consumer goes through — the cursor outline, the
+click-to-cell of an empty-space press (`round`, not `floor`, because a cell
+is centred on its crossing and a click between two nodes belongs to the
+nearer), Frame Cursor, the zoom anchor. `configured_grid_pitch` is the 100%
+baseline Reset Zoom returns to; `MIN_PITCH_*` / `MAX_PITCH_*` are the old
+node-body zoom limits expressed on the pitch.
+
+The widget paints the lattice as lines (`paint_grid`: gap colour, network
+opacity, `style.surface.graph.line_width` px, each line centred on its
+coordinate so the width changes nothing about where anything sits) with the
+two lines through the (0, 0) crossing heavier as the origin axes. Its
+cell-and-gap setters (`set_grid_sizes` / `set_skipped_sizes`) survive as a
+description of the same lattice for cce-files and cce-graph, which still
+speak it; this app sets the pitch.
+
 ### Auto-layout
 
 `src/layout.rs` arranges a level's nodes from their wiring. The network is

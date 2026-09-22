@@ -4850,14 +4850,18 @@ mod tests {
         state.grid_cursor_col = 9;
         state.grid_cursor_row = 7;
         assert!(state.run_command("frame_cursor"));
-        let cell_x = 9.0 * (state.grid_size_x + state.gap_col_w) + state.pan_x;
-        let cell_y = 7.0 * (state.grid_size_y + state.gap_row_h) + state.pan_y;
+        // The cell's centre IS its lattice intersection. Pane-relative,
+        // because the command's rebuild_positions puts the real pane origin
+        // back under the cell_center the pan was computed for.
+        let (pane_x, pane_y, _, _) = state.positions[crate::slots::CONTENT_IDX];
+        let (cell_x, cell_y) = state.cell_center(9, 7);
+        let (cell_x, cell_y) = (cell_x - pane_x, cell_y - pane_y);
         assert!(
-            (cell_x + state.grid_size_x * 0.5 - 400.0).abs() < 1.0,
+            (cell_x - 400.0).abs() < 1.0,
             "the cursor cell is not centred horizontally: {cell_x}"
         );
         assert!(
-            (cell_y + state.grid_size_y * 0.5 - 300.0).abs() < 1.0,
+            (cell_y - 300.0).abs() < 1.0,
             "the cursor cell is not centred vertically: {cell_y}"
         );
 
