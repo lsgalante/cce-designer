@@ -113,12 +113,16 @@ pub const SWATCH_SIDE: f32 = 14.0;
 /// pane's toggles have.
 pub const TOGGLE_W: f32 = 36.0;
 const TOGGLE_H: f32 = ROW_H - 4.0;
-/// A slider row's control: the band plus a readout beside it. Wider than the
-/// toggle column, and NOT reserved on the other rows — the slider row has no
-/// chord, so it borrows the chord column rather than pushing every chord in
-/// the list left by half the plate.
+/// How far in from the row's right end a slider row's BAND begins. It runs
+/// from there out to the CHORD column's right edge, so it ends exactly where
+/// every other row's key binding ends and the toggle column stays clear —
+/// a band that stopped short of the chords read as a control someone had
+/// forgotten to finish. Not reserved on the other rows: the slider row has
+/// no chord, so it borrows the chord column rather than pushing every chord
+/// in the list left by half the plate.
 pub const SLIDER_W: f32 = 180.0;
-/// The readout's width and its gap from the band. The readout is drawn by
+/// The readout's width and its gap from the band. It sits to the LEFT of the
+/// band, because the band's right end is spoken for. The readout is drawn by
 /// the dialog, not by the toolkit slider's own: the dialog claims its rect as
 /// a text occluder, and the clamp lets through only text carrying the
 /// dialog's exact bounds (see `Dialog::popover`), so the stamp's readout
@@ -508,21 +512,33 @@ impl Dialog {
         self.slider_drag
     }
 
-    /// Where a slider row draws its control: the row's right end.
-    fn slider_rect(r: Rect) -> Rect {
-        Rect { x: r.x + r.width - 8.0 - SLIDER_W, y: r.y + 2.0, width: SLIDER_W, height: ROW_H - 4.0 }
+    /// The switch column's width: reserved on EVERY row as soon as any row
+    /// has a toggle, so the chord column keeps a straight edge.
+    fn toggle_col(&self) -> f32 {
+        if self.rows.iter().any(|r| r.toggle.is_some()) { TOGGLE_W + 12.0 } else { 0.0 }
     }
 
-    /// The band inside that control — the stamp is painted over exactly
-    /// this, so the pointer maps to the value where the band is drawn.
-    fn slider_band_rect(r: Rect) -> Rect {
-        let s = Self::slider_rect(r);
-        Rect { width: (s.width - READOUT_W - READOUT_GAP).max(10.0), ..s }
+    /// The band a slider row draws — the stamp is painted over exactly this,
+    /// so the pointer maps to the value where the band is drawn. It ends at
+    /// the chord column's right edge, not the row's, which is why it needs
+    /// the roster rather than the rect alone.
+    fn slider_band_rect(&self, r: Rect) -> Rect {
+        let x = r.x + r.width - 8.0 - SLIDER_W;
+        let right = r.x + r.width - 8.0 - self.toggle_col();
+        Rect { x, y: r.y + 2.0, width: (right - x).max(10.0), height: ROW_H - 4.0 }
+    }
+
+    /// The whole control: the band plus the readout lane ahead of it. This is
+    /// what the pointer tests against, so the wheel turns the slider over the
+    /// readout too.
+    fn slider_rect(&self, r: Rect) -> Rect {
+        let b = self.slider_band_rect(r);
+        Rect { x: b.x - READOUT_W - READOUT_GAP, width: b.width + READOUT_W + READOUT_GAP, ..b }
     }
 
     /// The band's (x, width), captured at a press for the drag.
-    fn slider_track(r: Rect) -> (f32, f32) {
-        let b = Self::slider_band_rect(r);
+    fn slider_track_of(&self, r: Rect) -> (f32, f32) {
+        let b = self.slider_band_rect(r);
         (b.x, b.width)
     }
 
@@ -743,7 +759,7 @@ impl Paint for Dialog {
         // the reservation the chords step left on toggle rows and the column
         // reads as ragged, which is worse than the strip of air it costs.
         let list = list_rect(rect);
-        let toggle_col = if self.rows.iter().any(|r| r.toggle.is_some()) { TOGGLE_W + 12.0 } else { 0.0 };
+        let toggle_col = self.toggle_col();
         if self.rows.is_empty() {
             let ty = cce_ui::layout::align_text_y(list.y, ROW_H, font_size, 0.0);
             let empty = match self.mode {
@@ -765,7 +781,11 @@ impl Paint for Dialog {
             // state could not be read. On the plate it reads like the rest.
             // A slider row's control is wider than the toggle column and
             // takes the chord column's place on that one row.
-            let ctl_col = if row.slider.is_some() { SLIDER_W + 12.0 } else { toggle_col };
+            let ctl_col = if row.slider.is_some() {
+                (r.x + r.width) - self.slider_rect(r).x + 4.0
+            } else {
+                toggle_col
+            };
             let hl = Rect { width: (r.width - ctl_col).max(0.0), ..r };
             if i == self.selected {
                 ctx.rounded_rect(hl, ctrl_r, (true, true, true, true), [accent[0], accent[1], accent[2], 0.16]);
@@ -826,15 +846,15 @@ impl Paint for Dialog {
                 Paint::paint(&*self.toggle_stamps[on as usize], tr, ctx);
             }
             if let Some(v) = row.slider {
-                let s = Self::slider_rect(r);
-                Paint::paint(&*self.slider_stamp, Self::slider_band_rect(r), ctx);
-                // The readout, right-aligned in its lane after the band —
+                let band = self.slider_band_rect(r);
+                Paint::paint(&*self.slider_stamp, band, ctx);
+                // The readout, right-aligned in its lane ahead of the band —
                 // the dialog's own text, so it clears the occlusion clamp.
                 let readout = format!("{}%", v.round() as i64);
                 let rw = display::measure_text_width(&readout, &family, font_size);
                 ctx.text_with(
                     readout,
-                    s.x + s.width - rw,
+                    band.x - READOUT_GAP - rw,
                     ty,
                     font_size,
                     label_color,
@@ -925,11 +945,15 @@ impl Input for Dialog {
                         self.selected = i;
                         if self.rows[i].slider.is_some() {
                             // On the band: take hold and jump there. On the
-                            // rest of the row: selected, and nothing to run.
+                            // rest of the row — the readout lane included:
+                            // selected, and nothing to run. A press tests the
+                            // BAND rather than the whole control, or a click
+                            // on the readout would jump the value to the end
+                            // of the range nearest it.
                             if let Some(r) = self.row_rect(rect, i) {
-                                let s = Self::slider_rect(r);
+                                let s = self.slider_band_rect(r);
                                 if *x >= s.x && *x < s.x + s.width {
-                                    self.slider_track = Self::slider_track(r);
+                                    self.slider_track = self.slider_track_of(r);
                                     self.slider_drag = true;
                                     self.slide_to(*x);
                                 }
@@ -979,7 +1003,7 @@ impl Input for Dialog {
                 if let Some(i) = self.row_at(rect, *x, *y) {
                     if self.rows[i].slider.is_some() {
                         if let Some(r) = self.row_rect(rect, i) {
-                            let s = Self::slider_rect(r);
+                            let s = self.slider_rect(r);
                             if *x >= s.x && *x < s.x + s.width {
                                 return self.scroll_slider(delta.notches_y());
                             }

@@ -926,10 +926,17 @@ because the miss is silent — the row just ships plain.
 network pane is focused — and only then, since zoom is that pane's — the
 list heads with a "Zoom" row (`ZOOM_ROW_ID`) carrying a `slider`: the
 toolkit's own `Slider`, painted from one stamp over the row's right end (it
-borrows the chord column rather than reserving `SLIDER_W` on every row),
-reading the network zoom as a percentage of the configured grid pitch
-(`State::zoom_percent`, 100 = Reset Zoom, range the pitch limits). A press
-on the band jumps to it and arms the app's widget-drag protocol on
+borrows the chord column rather than reserving `SLIDER_W` on every row). The
+band **begins `SLIDER_W` in from the row's right end and runs out to the CHORD
+column's right edge** — so it ends where every other row's key binding ends
+rather than stopping short of them, and the switch column stays clear; that
+edge moves with `toggle_col`, which is why the rects are methods rather than
+associated functions. The percentage readout therefore sits AHEAD of the band,
+the one place left for it, and a press tests the band alone — over the whole
+control a click on the readout would jump the value to whichever end of the
+range it abuts. It reads the network zoom as a percentage of the configured
+grid pitch (`State::zoom_percent`, 100 = Reset Zoom, range the pitch limits).
+A press on the band jumps to it and arms the app's widget-drag protocol on
 `DIALOG_IDX` (`Dialog::draggable` / `drag_*`, exactly as the Settings
 half's sliders arm it on `DIALOG_PARAMS_IDX`), so the value follows the
 pointer off the plate; the drained value lands through

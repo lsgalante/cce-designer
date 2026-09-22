@@ -8432,12 +8432,13 @@ mod tests {
         d.set_occluding(false);
 
         // The first row's rect, as the widget lays it out: the list starts
-        // below the strip and the query line; the control sits at the row's
-        // right end, the band ahead of the readout lane.
+        // below the strip and the query line; the band begins SLIDER_W in
+        // from the row's right end and runs out to the chord column's right
+        // edge — with no toggle row in this list, that is the row's own.
         let list_y = 12.0 + 30.0 + 8.0 + 30.0 + 8.0;
         let row_y = list_y + 12.0;
         let band_x = 520.0 - 12.0 - 8.0 - SLIDER_W;
-        let band_w = SLIDER_W - 60.0 - 8.0;
+        let band_w = SLIDER_W;
 
         // Press at three quarters along the band: the value lands three
         // quarters into the range, and the row is not activated as a pick.
@@ -8479,6 +8480,53 @@ mod tests {
         ctx.note_scroll_event();
         d.handle_event(&wheel(30.0, row_y), &mut ctx);
         assert_eq!(d.take_slider_change(), None, "over the label the wheel is the list's");
+    }
+
+    /// The band ends where the key bindings do. The chord column's right edge
+    /// steps left by the switch column as soon as any row carries a toggle,
+    /// and the band follows it — so the control lines up with the chords
+    /// beneath it instead of running on past them into the switches.
+    #[test]
+    fn dialog_slider_band_ends_at_the_chord_column() {
+        use crate::dialog::{Dialog, Row, SLIDER_W, TOGGLE_W};
+        use cce_ui::widget::{ElementState, MouseButton, WidgetHost};
+        let mut ctx = cce_ui::context::UiContext::new();
+        let mut d = Dialog::new();
+        d.set_visible(true);
+        WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
+        let (id, ptr) = (d.id(), d.as_ptr_mut());
+        ctx.register_widget(id, ptr);
+        d.set_rows(vec![
+            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0) },
+            Row { id: "show_grid".into(), label: "Show Grid".into(), chord: "Ctrl+G".into(), swatch: None, toggle: Some(true), slider: None },
+        ]);
+        d.set_slider_range(20.0, 320.0);
+        d.set_page(10);
+        d.set_occluding(false);
+
+        let row_y = 12.0 + 30.0 + 8.0 + 30.0 + 8.0 + 12.0;
+        let row_right = 520.0 - 12.0 - 8.0;
+        let band_right = row_right - (TOGGLE_W + 12.0);
+        assert!(band_right < row_right, "the switch column pulls the band in");
+
+        // The band's last pixel is the range's top; the switch column past it
+        // is not the band's.
+        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, band_right - 1.0, row_y, &mut ctx));
+        assert!(d.slider_dragging(), "the band reaches the chord column's edge");
+        let v = d.take_slider_change().expect("a press on the band reports a value");
+        assert!((v - 320.0).abs() < 4.0, "the band's end is the range's end, got {v}");
+        d.mouse_input(MouseButton::Left, ElementState::Released, band_right - 1.0, row_y, &mut ctx);
+
+        d.mouse_input(MouseButton::Left, ElementState::Pressed, band_right + 4.0, row_y, &mut ctx);
+        assert!(!d.slider_dragging(), "past the chord column the row is not the band");
+        assert_eq!(d.take_slider_change(), None);
+        d.mouse_input(MouseButton::Left, ElementState::Released, band_right + 4.0, row_y, &mut ctx);
+
+        // The readout lane sits ahead of the band and takes no hold either.
+        let lane_x = row_right - SLIDER_W - 60.0 - 8.0;
+        d.mouse_input(MouseButton::Left, ElementState::Pressed, lane_x + 4.0, row_y, &mut ctx);
+        assert!(!d.slider_dragging(), "the readout is a readout, not a track");
+        assert_eq!(d.take_slider_change(), None);
     }
 
     /// A right press is the dialog's while it is open: inside the plate it is
