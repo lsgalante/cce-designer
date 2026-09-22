@@ -787,6 +787,38 @@ cell-and-gap setters (`set_grid_sizes` / `set_skipped_sizes`) survive as a
 description of the same lattice for cce-files and cce-graph, which still
 speak it; this app sets the pitch.
 
+### The cursor is a region, and dragging the grid grows it
+
+A left press on EMPTY grid puts the cursor on the pressed cell — on the press,
+not the release — and arms an expansion drag from it. Dragging grows the cursor
+from that anchor to the cell under the pointer, and the region it reached stays
+after the release. `State::grid_cursor_region` is the one derivation,
+`(col, row, cols, rows)`, never smaller than one cell; `grid_cursor_rect` is the
+window-space union the outline is painted on, which for the usual one-cell
+cursor is exactly `cell_rect` of it.
+
+**The region collapses by itself.** `grid_cursor_expanse` stores the anchor
+alongside the far cell, and `grid_cursor_region` hands it back only while that
+anchor is still `(grid_cursor_col, grid_cursor_row)`. So every OTHER way the
+cursor moves — a nav key, a click, a load, the selection following a node —
+leaves the anchor behind and drops the region with it, without a line in any of
+those places. Fifteen call sites write the cursor; a flag reset by hand at all
+of them is a flag that gets missed at one, and a cursor left stretched across
+the sheet is not a subtle wrong.
+
+Everything that reads the cursor as a CELL still reads the anchor: Add Node
+places there, Frame Cursor centres it, `sync_cursor_and_selection` selects what
+sits on it. The Graph widget carries a single `selected_node`, so the region
+selects nothing yet — the same limit that keeps `shift+hjkl` out of the
+keyboard scheme.
+
+Arming is gated on the graph NOT having taken the press (`widget_took`). The
+case that bites is a press on a PORT: it starts a connection and consumes the
+press without selecting anything, so the empty-grid arm would read it as bare
+lattice and then swallow every motion event — leaving the rubber-band line
+frozen at the port it started from. The gesture is otherwise uncontested,
+because `Graph::draggable` is true only while it is moving a node.
+
 ### Auto-layout
 
 `src/layout.rs` arranges a level's nodes from their wiring. The network is

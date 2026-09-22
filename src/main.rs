@@ -8679,6 +8679,138 @@ mod tests {
         assert_eq!(state.dialog_tab(), Tab::Commands);
     }
 
+    /// A left press on empty grid puts the cursor on the pressed cell — on the
+    /// PRESS — and dragging from there expands it into a region, which stays
+    /// after the release. Moving the cursor any other way collapses it, since
+    /// the expanse is only read back while its anchor is the live cursor.
+    #[test]
+    fn dragging_the_network_grid_expands_the_cursor() {
+        use crate::slots::CONTENT_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+
+        // Two empty cells inside the pane's visible span, two columns and
+        // two rows apart.
+        let anchor = (1, 4);
+        let far = (3, 6);
+        for cell in [anchor, far] {
+            assert!(
+                !state.current_dir().children.iter().any(|c| (c.position.0 as i32, c.position.1 as i32) == cell),
+                "{cell:?} must be empty grid"
+            );
+        }
+        let move_to = |state: &mut State, (col, row): (i32, i32)| {
+            let (x, y) = state.cell_center(col, row);
+            state.handle_event(&WindowEvent::CursorMoved {
+                position: LocalPosition { x: x as f64, y: y as f64 },
+            });
+        };
+
+        move_to(&mut state, anchor);
+        state.handle_event(&WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        });
+        assert_eq!(
+            (state.grid_cursor_col, state.grid_cursor_row),
+            anchor,
+            "the press alone moves the cursor — not the release"
+        );
+        assert_eq!(state.grid_cursor_region(), (anchor.0, anchor.1, 1, 1));
+
+        // Dragging grows it from the anchor to the cell under the pointer.
+        move_to(&mut state, (2, 5));
+        assert_eq!(state.grid_cursor_region(), (1, 4, 2, 2));
+        move_to(&mut state, far);
+        assert_eq!(state.grid_cursor_region(), (1, 4, 3, 3));
+        assert_eq!(
+            (state.grid_cursor_col, state.grid_cursor_row),
+            anchor,
+            "the anchor is still the cursor cell — Add Node places there"
+        );
+
+        // The outline follows: the region's corner cells, unioned.
+        let (rx, ry, rw, rh) = state.grid_cursor_rect();
+        let (ax, ay, cw, ch) = state.cell_rect(anchor.0, anchor.1);
+        assert!((rx - ax).abs() < 0.01 && (ry - ay).abs() < 0.01);
+        assert!(rw > cw * 2.0 && rh > ch * 2.0, "{rw}x{rh} spans three cells each way");
+
+        // The release ends the drag and keeps the region.
+        state.handle_event(&WindowEvent::MouseInput {
+            state: ElementState::Released,
+            button: MouseButton::Left,
+        });
+        assert!(state.grid_cursor_drag.is_none());
+        assert_eq!(state.grid_cursor_region(), (1, 4, 3, 3), "the region outlives the drag");
+        // Motion with no drag armed leaves it alone.
+        move_to(&mut state, (0, 2));
+        assert_eq!(state.grid_cursor_region(), (1, 4, 3, 3));
+
+        // And any other move of the cursor collapses it, with nothing in that
+        // path saying so — the anchor simply stops matching.
+        state.run_command("nav_right");
+        assert_eq!(state.grid_cursor_region(), (2, 4, 1, 1));
+    }
+
+    /// A press the graph itself took does not arm the expansion drag. The
+    /// case that bites is a PORT: it starts a connection and consumes the
+    /// press without selecting anything, so the empty-grid arm would read it
+    /// as bare lattice and then swallow every motion event — leaving the
+    /// connection's rubber-band line frozen at the port it started from.
+    #[test]
+    fn a_port_press_does_not_arm_the_cursor_expansion() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+
+        // A real port centre, off the widget's own geometry — the ports sit
+        // outside the node body, so nothing but this gets one right.
+        let (px, py) = {
+            let g = state.slots.content.inner();
+            (0..state.current_dir().children.len())
+                .find_map(|i| {
+                    g.port_center(i, cce_ui::widget::display::graph::PortType::Output, 0)
+                })
+                .expect("a node with an output port")
+        };
+        state.handle_event(&WindowEvent::CursorMoved {
+            position: LocalPosition { x: px as f64, y: py as f64 },
+        });
+        // Nothing selected: the project loads with a selection, and with one
+        // standing the empty-grid arm is never reached at all — the guard
+        // this test is about would go untested.
+        state.graph_mut().set_selected_node(None);
+        state.handle_event(&WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        });
+        assert!(
+            state.graph().selected_node().is_none(),
+            "a port press selects nothing — which is what makes the arm below \
+             read it as empty grid unless the guard holds"
+        );
+        assert!(
+            state.grid_cursor_drag.is_none(),
+            "the graph took this press — the cursor must not start expanding"
+        );
+
+        // And the motion that follows is still the graph's, not eaten here.
+        let before = state.grid_cursor_region();
+        state.handle_event(&WindowEvent::CursorMoved {
+            position: LocalPosition { x: px as f64, y: (py + 120.0) as f64 },
+        });
+        assert_eq!(state.grid_cursor_region(), before, "no region grew out of it");
+    }
+
     /// A right press on EMPTY network space opens the network's own context
     /// menu — until 2026-09-22 it opened the add-node palette outright, which
     /// left the network the one pane whose right-click was not a context menu,

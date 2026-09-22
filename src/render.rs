@@ -518,8 +518,10 @@ impl State {
 
             if show_cursor && !second {
                 // A node-sized outline centred on the cursor's intersection —
-                // exactly where a node placed there would sit.
-                let (cx, cy, cw, ch) = self.cell_rect(self.grid_cursor_col, self.grid_cursor_row);
+                // exactly where a node placed there would sit — or, after a
+                // drag across the grid, the union of the region it expanded
+                // over. One cell is the usual case and the same rect as ever.
+                let (cx, cy, cw, ch) = self.grid_cursor_rect();
                 // The cursor is the focus language: a FILL-LESS tinted plate
                 // (transparent bevel + accent tint), which the shader renders
                 // as the wrapped glint alone — the plate roll's own specular

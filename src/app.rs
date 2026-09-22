@@ -1410,6 +1410,22 @@ pub struct State {
     pub cursor_y: f32,
     pub grid_cursor_col: i32,
     pub grid_cursor_row: i32,
+    /// The grid cursor EXPANDED over a region: the cell it was anchored at
+    /// when a drag began, and the far cell that drag reached.
+    ///
+    /// Read through [`grid_cursor_region`](State::grid_cursor_region), which
+    /// hands it back only while its anchor is still the live cursor cell.
+    /// That is the whole collapse rule: every OTHER way the cursor moves — a
+    /// nav key, a click, a load, a selection following a node — leaves the
+    /// anchor behind and the region goes with it, without a line in any of
+    /// those places. A flag reset by hand at fifteen call sites is a flag
+    /// that gets missed at one of them, and a cursor left stretched across
+    /// the sheet is not a subtle wrong.
+    pub grid_cursor_expanse: Option<((i32, i32), (i32, i32))>,
+    /// The anchor of a LIVE expansion drag — a left press on empty grid,
+    /// cleared on release. `Some` is what makes motion grow the region
+    /// rather than do nothing; the region it leaves behind outlives it.
+    pub grid_cursor_drag: Option<(i32, i32)>,
     pub modifiers: ModifiersState,
 
     pub width: f32,
@@ -4563,6 +4579,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             cursor_y: 0.0,
             grid_cursor_col: 0,
             grid_cursor_row: 0,
+            grid_cursor_expanse: None,
+            grid_cursor_drag: None,
             modifiers: ModifiersState::default(),
             width: lw,
             height: lh,
@@ -4829,6 +4847,44 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let col = if self.grid_pitch_x > 0.0 { ((x - px - self.pan_x) / self.grid_pitch_x).round() } else { 0.0 };
         let row = if self.grid_pitch_y > 0.0 { ((y - py - self.pan_y) / self.grid_pitch_y).round() } else { 0.0 };
         (col as i32, row as i32)
+    }
+
+    /// The lattice region the cursor covers: `(col, row, cols, rows)`, never
+    /// smaller than one cell. The expanse a drag left behind counts only
+    /// while its anchor is still where the cursor is — see
+    /// [`grid_cursor_expanse`](State::grid_cursor_expanse).
+    pub fn grid_cursor_region(&self) -> (i32, i32, i32, i32) {
+        let anchor = (self.grid_cursor_col, self.grid_cursor_row);
+        let far = match self.grid_cursor_expanse {
+            Some((a, far)) if a == anchor => far,
+            _ => anchor,
+        };
+        let (c0, c1) = (anchor.0.min(far.0), anchor.0.max(far.0));
+        let (r0, r1) = (anchor.1.min(far.1), anchor.1.max(far.1));
+        (c0, r0, c1 - c0 + 1, r1 - r0 + 1)
+    }
+
+    /// The window-space rect the cursor outline is drawn on: the union of the
+    /// region's corner cells, which for the usual one-cell cursor is exactly
+    /// `cell_rect` of it.
+    pub fn grid_cursor_rect(&self) -> (f32, f32, f32, f32) {
+        let (col, row, cols, rows) = self.grid_cursor_region();
+        let (x0, y0, _, _) = self.cell_rect(col, row);
+        let (x1, y1, w, h) = self.cell_rect(col + cols - 1, row + rows - 1);
+        (x0, y0, x1 - x0 + w, y1 - y0 + h)
+    }
+
+    /// Grow the live expansion drag to the cell under the cursor. `true` when
+    /// the region actually changed, which is the redraw.
+    fn grid_cursor_drag_motion(&mut self) -> bool {
+        let Some(anchor) = self.grid_cursor_drag else { return false };
+        let far = self.cell_at(self.cursor_x, self.cursor_y);
+        let next = (anchor != far).then_some((anchor, far));
+        if self.grid_cursor_expanse == next {
+            return false;
+        }
+        self.grid_cursor_expanse = next;
+        true
     }
 
     pub fn sync_grid_settings(&mut self) {
@@ -6492,6 +6548,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     return true;
                 }
 
+                // An expansion drag on the network grid, likewise armed by
+                // its own press and competing with nothing: the cursor grows
+                // from the pressed cell to the one under the pointer.
+                if self.grid_cursor_drag.is_some() {
+                    return self.grid_cursor_drag_motion();
+                }
+
                 // An armed corner-dot press becomes a layout drag once it
                 // moves; stubbed (collapsed/detached) panes stay click-only.
                 if let Some((idx, px, py)) = self.corner_press {
@@ -7122,11 +7185,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         }
                         if let Some(i) = click_target {
                             self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                            if {
+                            // Kept as a binding: the network's cursor-expansion
+                            // drag must not arm on a press the graph already
+                            // took. A press on a PORT is the case that bites —
+                            // it starts a connection and returns true without
+                            // selecting anything, so the "no selection" arm
+                            // below would read it as empty grid and swallow the
+                            // motion the rubber-band line is drawn from.
+                            let widget_took = {
                                 let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
                                 let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
-                            } {
+                            };
+                            if widget_took {
                                 changed = true;
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
@@ -7181,9 +7252,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                         self.grid_cursor_row = pos.1 as i32;
                                     }
                                 } else {
+                                    // Empty grid: the cursor goes to the cell
+                                    // pressed, on the PRESS, and the press arms
+                                    // an expansion drag from it. The graph
+                                    // widget is only `draggable` while it is
+                                    // moving a node, so nothing else wants this
+                                    // gesture — a press that never moves simply
+                                    // leaves a one-cell cursor behind.
                                     let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
                                     self.grid_cursor_col = col;
                                     self.grid_cursor_row = row;
+                                    self.grid_cursor_expanse = None;
+                                    if !widget_took {
+                                        self.grid_cursor_drag = Some((col, row));
+                                    }
                                     changed = true;
                                 }
                                 if let Some(dir_idx) = self.graph().double_clicked_node() {
@@ -7200,6 +7282,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
+                        // The expansion drag ends, but the region it grew
+                        // stays: it is the cursor now, until the cursor moves.
+                        self.grid_cursor_drag = None;
                         if self.orbit_drag.take().is_some() {
                             return true;
                         }
