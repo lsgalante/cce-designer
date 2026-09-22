@@ -8481,6 +8481,39 @@ mod tests {
         assert_eq!(d.take_slider_change(), None, "over the label the wheel is the list's");
     }
 
+    /// A right press is the dialog's while it is open: inside the plate it is
+    /// swallowed — no context menu opens for the pane beneath, which used to
+    /// come up over the modal with its labels clipped — and outside it
+    /// dismisses, as a left press does.
+    #[test]
+    fn dialog_owns_right_presses_while_open() {
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.run_command("toggle_dialog");
+        assert!(state.dialog_visible());
+        let (dx, dy, dw, dh) = state.positions[crate::slots::DIALOG_IDX];
+        assert!(dw > 0.0 && dh > 0.0, "the dialog is laid out");
+
+        // Inside: swallowed, nothing opens, the dialog stays.
+        state.cursor_x = dx + dw * 0.5;
+        state.cursor_y = dy + dh * 0.5;
+        assert_eq!(state.dialog_mouse_input(MouseButton::Right, ElementState::Pressed), Some(true));
+        assert!(state.dialog_visible());
+        assert!(!cce_ui::widget::context_menu::is_visible(), "no menu opened over the modal");
+        assert_eq!(state.dialog_mouse_input(MouseButton::Right, ElementState::Released), Some(true));
+
+        // Outside: dismisses, and is swallowed rather than reaching the pane.
+        state.cursor_x = (dx - 20.0).max(0.0);
+        state.cursor_y = (dy - 20.0).max(0.0);
+        assert_eq!(state.dialog_mouse_input(MouseButton::Right, ElementState::Pressed), Some(true));
+        assert!(!state.dialog_visible());
+        assert!(!cce_ui::widget::context_menu::is_visible());
+
+        // The middle button is still nobody's.
+        state.run_command("toggle_dialog");
+        assert_eq!(state.dialog_mouse_input(MouseButton::Middle, ElementState::Pressed), None);
+    }
+
     /// Backspace walks the query back, and the ranking follows it.
     #[test]
     fn dialog_backspace_widens_the_filter() {

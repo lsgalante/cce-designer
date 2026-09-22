@@ -1830,19 +1830,30 @@ impl State {
 
     /// A mouse button, while the dialog is open.
     ///
-    /// `None` hands the press back to the ordinary cascade — which happens
-    /// only for the buttons the dialog has no use for, so a right-click still
-    /// reaches whatever is under it outside the plate. `Some(handled)` means
-    /// the dialog dealt with it and nothing else should.
+    /// `None` hands the press back to the ordinary cascade — only the middle
+    /// button, which the dialog has no use for. `Some(handled)` means the
+    /// dialog dealt with it and nothing else should. A RIGHT press is the
+    /// dialog's too: inside the plate it is swallowed (nothing in the dialog
+    /// has a context menu, and until 2026-09-22 it fell through to the pane
+    /// beneath, whose menu then opened over a modal with its labels clipped
+    /// by the dialog's occluder — a menu with no legible entries), outside
+    /// it dismisses, exactly as a left press does.
     pub(crate) fn dialog_mouse_input(
         &mut self,
         button: MouseButton,
         state: ElementState,
     ) -> Option<bool> {
+        let (x, y) = (self.cursor_x, self.cursor_y);
+        if button == MouseButton::Right {
+            let inside = self.in_dialog_slot(DIALOG_IDX, x, y) || self.in_dialog_slot(DIALOG_PARAMS_IDX, x, y);
+            if !inside && state == ElementState::Pressed {
+                self.close_dialog();
+            }
+            return Some(true);
+        }
         if button != MouseButton::Left {
             return None;
         }
-        let (x, y) = (self.cursor_x, self.cursor_y);
 
         // A slider drag started in the settings body ends wherever the pointer
         // happens to be — including outside the plate. Ending it has to come
