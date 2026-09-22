@@ -87,6 +87,12 @@ pub struct Row {
     /// that carries one is picked in place: the command flips, the switch
     /// moves, and the dialog stays up — see `State::take_dialog_pick`.
     pub toggle: Option<bool>,
+    /// A SLIDER row's value, in the range `Dialog::set_slider_range` set —
+    /// the network zoom, as a percentage of the configured grid. Drawn as
+    /// the toolkit's `Slider` over the row's right end, dragged in place,
+    /// nudged by the arrow keys while selected; picking it runs nothing.
+    /// `None` for every other row. There is at most one such row.
+    pub slider: Option<f32>,
 }
 
 /// The dialog's outer size. Fixed rather than proportional: it is a focused
@@ -107,6 +113,19 @@ pub const SWATCH_SIDE: f32 = 14.0;
 /// pane's toggles have.
 pub const TOGGLE_W: f32 = 36.0;
 const TOGGLE_H: f32 = ROW_H - 4.0;
+/// A slider row's control: the band plus a readout beside it. Wider than the
+/// toggle column, and NOT reserved on the other rows — the slider row has no
+/// chord, so it borrows the chord column rather than pushing every chord in
+/// the list left by half the plate.
+pub const SLIDER_W: f32 = 180.0;
+/// The readout's width and its gap from the band. The readout is drawn by
+/// the dialog, not by the toolkit slider's own: the dialog claims its rect as
+/// a text occluder, and the clamp lets through only text carrying the
+/// dialog's exact bounds (see `Dialog::popover`), so the stamp's readout
+/// would paint and never show — as the Settings half's labels did before
+/// they were re-emitted retagged.
+const READOUT_W: f32 = 60.0;
+const READOUT_GAP: f32 = 8.0;
 /// Gap between the tab strip, the query line and the list.
 const GAP: f32 = 8.0;
 
@@ -214,6 +233,21 @@ pub struct Dialog {
     /// because `paint` takes `&self`, and building a widget per row per
     /// frame would be silly.
     toggle_stamps: [Adapted<Toggle>; 2],
+    /// The slider a slider row draws — the toolkit's own `Slider`, so a
+    /// slider in the dialog IS the slider in the params pane. One stamp,
+    /// because there is at most one slider row; its value is kept in step
+    /// with the row's at every mutation, since `paint` cannot set it.
+    slider_stamp: Adapted<Slider>,
+    /// A press landed on the slider's band and the pointer is moving it —
+    /// the app drives this through its widget-drag protocol (`draggable`
+    /// and the `drag_*` hooks), so the drag survives the pointer leaving
+    /// the plate.
+    slider_drag: bool,
+    /// The band's (x, width) captured at the press, so a drag keeps
+    /// mapping the pointer while the row scrolls under it.
+    slider_track: (f32, f32),
+    /// The value the pointer moved the slider to, drained by the app.
+    slider_change: Option<f32>,
 }
 
 impl Dialog {
@@ -222,6 +256,8 @@ impl Dialog {
         off.set_toggled(false);
         let mut on = Toggle::new();
         on.set_toggled(true);
+        let mut slider_stamp = Slider::new().with_readout(false);
+        slider_stamp.set_scroll(false);
         let mut d = Adapted::new(Dialog {
             mode: Mode::Tabbed,
             tab: Tab::Commands,
@@ -240,6 +276,10 @@ impl Dialog {
             tab_click: None,
             occluding: true,
             toggle_stamps: [off, on],
+            slider_stamp,
+            slider_drag: false,
+            slider_track: (0.0, 1.0),
+            slider_change: None,
         });
         d.set_visible(false);
         d
@@ -433,6 +473,73 @@ impl Dialog {
         self.tab_click.take()
     }
 
+    /// The slider row's index, if the list has one.
+    fn slider_row(&self) -> Option<usize> {
+        self.rows.iter().position(|r| r.slider.is_some())
+    }
+
+    /// The range a slider row's value is read in (and the readout shows).
+    pub fn set_slider_range(&mut self, min: f32, max: f32) {
+        self.slider_stamp.set_range(min, max);
+        self.sync_slider_stamp();
+    }
+
+    /// Move the slider row — and the stamp that draws it — to a value.
+    pub fn set_slider_value(&mut self, v: f32) {
+        if let Some(i) = self.slider_row() {
+            self.rows[i].slider = Some(v);
+        }
+        self.slider_stamp.set_scaled_value(v);
+    }
+
+    fn sync_slider_stamp(&mut self) {
+        if let Some(v) = self.slider_row().and_then(|i| self.rows[i].slider) {
+            self.slider_stamp.set_scaled_value(v);
+        }
+    }
+
+    pub fn take_slider_change(&mut self) -> Option<f32> {
+        self.slider_change.take()
+    }
+
+    /// Whether a press has taken hold of the slider — the app arms its
+    /// widget drag on this.
+    pub fn slider_dragging(&self) -> bool {
+        self.slider_drag
+    }
+
+    /// Where a slider row draws its control: the row's right end.
+    fn slider_rect(r: Rect) -> Rect {
+        Rect { x: r.x + r.width - 8.0 - SLIDER_W, y: r.y + 2.0, width: SLIDER_W, height: ROW_H - 4.0 }
+    }
+
+    /// The band inside that control — the stamp is painted over exactly
+    /// this, so the pointer maps to the value where the band is drawn.
+    fn slider_band_rect(r: Rect) -> Rect {
+        let s = Self::slider_rect(r);
+        Rect { width: (s.width - READOUT_W - READOUT_GAP).max(10.0), ..s }
+    }
+
+    /// The band's (x, width), captured at a press for the drag.
+    fn slider_track(r: Rect) -> (f32, f32) {
+        let b = Self::slider_band_rect(r);
+        (b.x, b.width)
+    }
+
+    /// Put the slider where the pointer is along the captured band. Jumps,
+    /// rather than dragging relative to a grab: the band has no thumb to
+    /// grab, and a click on a zoom scale should mean "this much".
+    fn slide_to(&mut self, px: f32) -> bool {
+        let (tx, tw) = self.slider_track;
+        let t = ((px - tx) / tw).clamp(0.0, 1.0);
+        let (min, max) = self.slider_stamp.range();
+        let v = min + t * (max - min);
+        let old = self.slider_row().and_then(|i| self.rows[i].slider);
+        self.set_slider_value(v);
+        self.slider_change = Some(v);
+        old != Some(v)
+    }
+
     /// Swap in a freshly ranked row list, keeping the selection in range.
     ///
     /// The selection goes back to the top rather than trying to follow the
@@ -443,6 +550,7 @@ impl Dialog {
         self.rows = rows;
         self.selected = 0;
         self.set_scroll_px(0.0);
+        self.sync_slider_stamp();
     }
 }
 
@@ -640,7 +748,10 @@ impl Paint for Dialog {
             // tinted bevel it vanished outright: the selected row, the one
             // row whose state Enter is about to flip, was the one row whose
             // state could not be read. On the plate it reads like the rest.
-            let hl = Rect { width: (r.width - toggle_col).max(0.0), ..r };
+            // A slider row's control is wider than the toggle column and
+            // takes the chord column's place on that one row.
+            let ctl_col = if row.slider.is_some() { SLIDER_W + 12.0 } else { toggle_col };
+            let hl = Rect { width: (r.width - ctl_col).max(0.0), ..r };
             if i == self.selected {
                 ctx.rounded_rect(hl, ctrl_r, (true, true, true, true), [accent[0], accent[1], accent[2], 0.16]);
                 ctx.bevel_tinted(hl, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
@@ -655,7 +766,7 @@ impl Paint for Dialog {
             };
             // The label's clip stops short of the chord column so a long
             // label is cut by it rather than running under it.
-            let chord_right = r.x + r.width - 8.0 - toggle_col;
+            let chord_right = r.x + r.width - 8.0 - ctl_col;
             let label_right = chord_right - if chord_w > 0.0 { chord_w + 12.0 } else { 0.0 };
             let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
             // The swatch: a small rounded tile ahead of the label, ringed
@@ -698,6 +809,23 @@ impl Paint for Dialog {
                     height: TOGGLE_H,
                 };
                 Paint::paint(&*self.toggle_stamps[on as usize], tr, ctx);
+            }
+            if let Some(v) = row.slider {
+                let s = Self::slider_rect(r);
+                Paint::paint(&*self.slider_stamp, Self::slider_band_rect(r), ctx);
+                // The readout, right-aligned in its lane after the band —
+                // the dialog's own text, so it clears the occlusion clamp.
+                let readout = format!("{}%", v.round() as i64);
+                let rw = display::measure_text_width(&readout, &family, font_size);
+                ctx.text_with(
+                    readout,
+                    s.x + s.width - rw,
+                    ty,
+                    font_size,
+                    label_color,
+                    Some(family.clone()),
+                    own,
+                );
             }
         }
         });
@@ -780,6 +908,19 @@ impl Input for Dialog {
                     }
                     if let Some(i) = self.row_at(rect, *x, *y) {
                         self.selected = i;
+                        if self.rows[i].slider.is_some() {
+                            // On the band: take hold and jump there. On the
+                            // rest of the row: selected, and nothing to run.
+                            if let Some(r) = self.row_rect(rect, i) {
+                                let s = Self::slider_rect(r);
+                                if *x >= s.x && *x < s.x + s.width {
+                                    self.slider_track = Self::slider_track(r);
+                                    self.slider_drag = true;
+                                    self.slide_to(*x);
+                                }
+                            }
+                            return true;
+                        }
                         self.activated = self.rows.get(i).map(|r| r.id.clone());
                         return true;
                     }
@@ -789,6 +930,9 @@ impl Input for Dialog {
                 true
             }
             Event::MouseButton { button: MouseButton::Left, state: ElementState::Released, .. } => {
+                if std::mem::take(&mut self.slider_drag) {
+                    return true;
+                }
                 if std::mem::take(&mut self.sb_dragging) {
                     // The release starts the hold before the bar sinks.
                     self.sb_activity.bump();
@@ -797,6 +941,9 @@ impl Input for Dialog {
                 false
             }
             Event::PointerMove { x, y, .. } => {
+                if self.slider_drag {
+                    return self.slide_to(*x);
+                }
                 if self.sb_dragging {
                     return self.sb_drag_to(rect, *y);
                 }
@@ -830,6 +977,26 @@ impl Input for Dialog {
             _ => false,
         }
     }
+
+    // The slider drag rides the app's widget-drag protocol (armed by
+    // `State::dialog_mouse_input` once a press has taken the band), so the
+    // pointer keeps moving the value after it leaves the plate, as a params
+    // pane slider's does.
+    fn draggable(&self, _rect: Rect) -> bool {
+        self.slider_drag
+    }
+    fn is_dragging(&self) -> bool {
+        self.slider_drag
+    }
+    fn drag_begin(&mut self, px: f32, _py: f32, _rect: Rect) {
+        self.slide_to(px);
+    }
+    fn drag_update(&mut self, px: f32, _py: f32, _rect: Rect) -> bool {
+        self.slide_to(px)
+    }
+    fn drag_end(&mut self) {
+        self.slider_drag = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -838,6 +1005,14 @@ impl Input for Dialog {
 
 use crate::app::{param_display, ParamDef, State};
 use crate::slots::{DIALOG_IDX, DIALOG_PARAMS_IDX};
+
+/// The Commands list's zoom row: not a registry command but a control — a
+/// slider over the network zoom, present only while the network pane is
+/// focused, since zoom is that pane's and a slider for a pane you are not
+/// looking at would be a strange thing to offer. Picking it runs nothing;
+/// dragging it, or the arrow keys while it is selected, zoom in place with
+/// the dialog up, the way the toggle rows stay up.
+pub const ZOOM_ROW_ID: &str = "zoom_level";
 
 /// Where a Settings row's value actually lives.
 ///
@@ -1065,7 +1240,8 @@ impl State {
     pub fn refresh_dialog_rows(&mut self) {
         let query = self.slots.dialog.query.clone();
         let rows: Vec<Row> = match self.slots.dialog.mode {
-            Mode::Tabbed => crate::command::palette_entries(&query, self.focused_context())
+            Mode::Tabbed => {
+                let mut rows: Vec<Row> = crate::command::palette_entries(&query, self.focused_context())
                 .iter()
                 .map(|c| Row {
                     id: c.id.to_string(),
@@ -1081,8 +1257,31 @@ impl State {
                         cce_ui::color::to_linear([self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0])
                     }),
                     toggle: self.command_toggle_state(c.id),
+                    slider: None,
                 })
-                .collect(),
+                .collect();
+                // The zoom slider heads the network pane's list, ranked like
+                // a row labelled "Zoom" so a query still finds (or drops) it.
+                if self.focused_context() == crate::command::Context::Network
+                    && !crate::command::fuzzy_rank(&query, &["Zoom"]).is_empty()
+                {
+                    let cfg = crate::app::configured_grid_geometry();
+                    let pct = |pitch: f32| pitch / cfg.pitch_x.max(1e-3) * 100.0;
+                    self.slots.dialog.set_slider_range(pct(crate::app::MIN_PITCH_X), pct(crate::app::MAX_PITCH_X));
+                    rows.insert(
+                        0,
+                        Row {
+                            id: ZOOM_ROW_ID.to_string(),
+                            label: "Zoom".to_string(),
+                            chord: String::new(),
+                            swatch: None,
+                            toggle: None,
+                            slider: Some(self.zoom_percent()),
+                        },
+                    );
+                }
+                rows
+            }
             Mode::AddNode => {
                 // In a utility dir geometry templates are rejected at
                 // placement — don't offer them.
@@ -1104,11 +1303,43 @@ impl State {
                         chord: String::new(),
                         swatch: None,
                         toggle: None,
+                        slider: None,
                     })
                     .collect()
             }
         };
         self.slots.dialog.set_rows(rows);
+    }
+
+    /// The network zoom as the slider row reads it: the current x pitch as a
+    /// percentage of the configured one, so 100 is Reset Zoom.
+    pub fn zoom_percent(&self) -> f32 {
+        let cfg = crate::app::configured_grid_geometry();
+        if cfg.pitch_x > 0.0 {
+            self.grid_pitch_x / cfg.pitch_x * 100.0
+        } else {
+            100.0
+        }
+    }
+
+    /// Zoom the network to a percentage of the configured grid, about the
+    /// cursor cell — what the slider row's drag lands on. `zoom` clamps, so
+    /// the row is re-read afterwards rather than trusted.
+    pub fn set_zoom_percent(&mut self, pct: f32) {
+        let cfg = crate::app::configured_grid_geometry();
+        if self.grid_pitch_x > 0.0 {
+            let factor = cfg.pitch_x * pct / 100.0 / self.grid_pitch_x;
+            if (factor - 1.0).abs() > 1e-4 {
+                self.zoom(factor, None);
+            }
+        }
+        self.refresh_dialog_zoom();
+    }
+
+    /// Re-read the slider row from the live zoom, in place.
+    fn refresh_dialog_zoom(&mut self) {
+        let pct = self.zoom_percent();
+        self.slots.dialog.set_slider_value(pct);
     }
 
     /// What a toggle command's switch currently shows, or `None` for a
@@ -1157,6 +1388,7 @@ impl State {
         for (row, state) in self.slots.dialog.rows.iter_mut().zip(states) {
             row.toggle = state;
         }
+        self.refresh_dialog_zoom();
     }
 
     /// The Settings half's rows, each read from whatever owns its value.
@@ -1457,6 +1689,15 @@ impl State {
                     self.take_dialog_pick(id);
                 }
             }
+            // The arrows nudge the selected slider row by a Zoom In / Zoom
+            // Out step; on any other row they mean nothing here.
+            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
+                if self.slots.dialog.selected_id() == Some(ZOOM_ROW_ID) {
+                    let f = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { 1.15 } else { 1.0 / 1.15 };
+                    self.zoom(f, None);
+                    self.refresh_dialog_zoom();
+                }
+            }
             Key::Named(NamedKey::Backspace) => {
                 if self.slots.dialog.query.pop().is_some() {
                     self.refresh_dialog_rows();
@@ -1498,6 +1739,11 @@ impl State {
     /// click, since both arrive here.
     pub(crate) fn take_dialog_pick(&mut self, id: String) {
         let mode = self.slots.dialog.mode;
+        // The zoom row is a control, not a command: Enter on it does nothing
+        // and the dialog stays up for the arrows and the pointer.
+        if mode == Mode::Tabbed && id == ZOOM_ROW_ID {
+            return;
+        }
         if mode == Mode::Tabbed && self.command_toggle_state(&id).is_some() {
             self.run_command(&id);
             self.refresh_dialog_toggles();
@@ -1548,6 +1794,10 @@ impl State {
             self.take_dialog_pick(id);
             changed = true;
         }
+        if let Some(pct) = self.slots.dialog.take_slider_change() {
+            self.set_zoom_percent(pct);
+            changed = true;
+        }
         changed
     }
 
@@ -1583,6 +1833,23 @@ impl State {
             self.drag_widget = None;
             self.drag_press_cursor = None;
             self.sync_dialog_settings_to_project();
+            return Some(true);
+        }
+
+        // The same for the Commands list's slider row, whose drag the
+        // dialog slot itself drives.
+        if state == ElementState::Released && self.drag_widget == Some(DIALOG_IDX) {
+            let ptr = &mut self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
+            unsafe {
+                (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context);
+                (*ptr).handle_event(
+                    &cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y },
+                    &mut self.ui_context,
+                );
+            }
+            self.drag_widget = None;
+            self.drag_press_cursor = None;
+            self.drain_dialog_clicks();
             return Some(true);
         }
 
@@ -1623,6 +1890,18 @@ impl State {
 
         let ev = cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y };
         self.dispatch_uncovered(DIALOG_IDX, &ev);
+        // A press that took the slider's band arms the same widget drag the
+        // settings body's sliders arm, so the value follows the pointer
+        // wherever it goes until the release.
+        if state == ElementState::Pressed && self.slots.dialog.slider_dragging() {
+            let ev = cce_ui::widget::Event::DragStart { start_x: x, start_y: y };
+            let ptr = &mut self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
+            unsafe {
+                (*ptr).handle_event(&ev, &mut self.ui_context);
+            }
+            self.drag_widget = Some(DIALOG_IDX);
+            self.drag_press_cursor = Some((x, y));
+        }
         self.drain_dialog_clicks();
         Some(true)
     }

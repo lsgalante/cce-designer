@@ -3475,7 +3475,7 @@ mod tests {
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 520.0, height: 420.0 };
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -3521,7 +3521,7 @@ mod tests {
         d.set_visible(true);
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -8252,8 +8252,10 @@ mod tests {
 
         assert!(state.run_command("toggle_dialog"));
         assert!(state.dialog_visible());
+        // Every command, plus the network pane's zoom slider row when that
+        // pane is focused (it is by default) — a control, not a command.
         assert_eq!(
-            state.slots.dialog.rows.len(),
+            state.slots.dialog.rows.iter().filter(|r| r.slider.is_none()).count(),
             crate::command::COMMANDS.len(),
             "an empty query lists everything"
         );
@@ -8353,6 +8355,116 @@ mod tests {
         assert_eq!(state.command_toggle_state("show_network_pane"), Some(state.show_network));
     }
 
+    /// The Commands list heads with a zoom SLIDER while the network pane is
+    /// focused, and only then: zoom is that pane's. It reads the live zoom
+    /// as a percentage of the configured grid, the arrows nudge it in place
+    /// with the dialog up, Enter on it runs nothing, and a query that does
+    /// not match "Zoom" drops it like any other row.
+    #[test]
+    fn dialog_zoom_slider_row_belongs_to_the_network_pane() {
+        use crate::dialog::ZOOM_ROW_ID;
+        let mut state = State::new(false);
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        state.run_command("command_palette");
+        assert!(state.dialog_visible());
+        let rows = &state.slots.dialog.rows;
+        assert_eq!(rows[0].id, ZOOM_ROW_ID, "the zoom row heads the network list");
+        assert!((rows[0].slider.unwrap() - state.zoom_percent()).abs() < 1e-3);
+        assert!(rows.iter().filter(|r| r.slider.is_some()).count() == 1);
+
+        // The arrows nudge the zoom, the dialog stays up, the row follows.
+        let before = state.zoom_percent();
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
+        assert!(state.dialog_visible());
+        assert!(state.zoom_percent() > before, "right arrow zooms in");
+        assert!((state.slots.dialog.rows[0].slider.unwrap() - state.zoom_percent()).abs() < 1e-3);
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+        assert!((state.zoom_percent() - before).abs() < 0.5, "left arrow zooms back out");
+
+        // Enter on it is a no-op that keeps the dialog up.
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(state.dialog_visible());
+        assert!((state.zoom_percent() - before).abs() < 0.5);
+
+        // A slider value lands as a zoom, clamped to the pitch limits.
+        state.set_zoom_percent(150.0);
+        assert!((state.zoom_percent() - 150.0).abs() < 0.5);
+        state.set_zoom_percent(100_000.0);
+        assert!((state.grid_pitch_x - crate::app::MAX_PITCH_X).abs() < 0.5, "clamped to the max pitch");
+        assert!((state.slots.dialog.rows[0].slider.unwrap() - state.zoom_percent()).abs() < 1e-3);
+        state.set_zoom_percent(100.0);
+
+        // A query that does not match "Zoom" drops the row.
+        for c in ["s", "a", "v"] {
+            state.dialog_key_input(&key_press(Key::Character(c.into())));
+        }
+        assert!(state.slots.dialog.rows.iter().all(|r| r.slider.is_none()));
+        state.close_dialog();
+
+        // Another pane focused: no slider row at all.
+        state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
+        state.run_command("command_palette");
+        assert!(state.slots.dialog.rows.iter().all(|r| r.id != ZOOM_ROW_ID && r.slider.is_none()));
+    }
+
+    /// At the widget: a press on the slider row's band takes hold, jumps the
+    /// value to the pointer's place along the band in the range set, and
+    /// reports it once; a press on the row away from the band selects and
+    /// reports nothing, and never "activates" the row as a pick.
+    #[test]
+    fn dialog_slider_row_press_reports_the_value_under_the_pointer() {
+        use crate::dialog::{Dialog, Row, SLIDER_W};
+        use cce_ui::widget::{ElementState, MouseButton, WidgetHost};
+        let mut ctx = cce_ui::context::UiContext::new();
+        let mut d = Dialog::new();
+        d.set_visible(true);
+        WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
+        let (id, ptr) = (d.id(), d.as_ptr_mut());
+        ctx.register_widget(id, ptr);
+        let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None };
+        d.set_rows(vec![
+            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0) },
+            plain(1),
+            plain(2),
+        ]);
+        d.set_slider_range(20.0, 320.0);
+        d.set_page(10);
+        d.set_occluding(false);
+
+        // The first row's rect, as the widget lays it out: the list starts
+        // below the strip and the query line; the control sits at the row's
+        // right end, the band ahead of the readout lane.
+        let list_y = 12.0 + 30.0 + 8.0 + 30.0 + 8.0;
+        let row_y = list_y + 12.0;
+        let band_x = 520.0 - 12.0 - 8.0 - SLIDER_W;
+        let band_w = SLIDER_W - 60.0 - 8.0;
+
+        // Press at three quarters along the band: the value lands three
+        // quarters into the range, and the row is not activated as a pick.
+        let px = band_x + band_w * 0.75;
+        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, px, row_y, &mut ctx));
+        assert!(d.slider_dragging());
+        let v = d.take_slider_change().expect("a press on the band reports a value");
+        assert!((v - (20.0 + 0.75 * 300.0)).abs() < 3.0, "value {v} is not three quarters of the range");
+        assert_eq!(d.rows[0].slider, Some(v), "the row follows");
+        assert_eq!(d.take_activated(), None, "the band is a control, not a pick");
+        assert_eq!(d.take_slider_change(), None, "reported once");
+        d.mouse_input(MouseButton::Left, ElementState::Released, px, row_y, &mut ctx);
+        assert!(!d.slider_dragging());
+
+        // A press on the row's label end selects it and reports nothing.
+        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, 30.0, row_y, &mut ctx));
+        assert_eq!(d.selected, 0);
+        assert!(!d.slider_dragging());
+        assert_eq!(d.take_slider_change(), None);
+        assert_eq!(d.take_activated(), None);
+        d.mouse_input(MouseButton::Left, ElementState::Released, 30.0, row_y, &mut ctx);
+
+        // An ordinary row still picks.
+        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, 30.0, row_y + 24.0, &mut ctx));
+        assert_eq!(d.take_activated().as_deref(), Some("c1"));
+    }
+
     /// Backspace walks the query back, and the ranking follows it.
     #[test]
     fn dialog_backspace_widens_the_filter() {
@@ -8366,7 +8478,10 @@ mod tests {
             state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
         }
         assert_eq!(state.slots.dialog.query, "");
-        assert_eq!(state.slots.dialog.rows.len(), crate::command::COMMANDS.len());
+        assert_eq!(
+            state.slots.dialog.rows.iter().filter(|r| r.slider.is_none()).count(),
+            crate::command::COMMANDS.len()
+        );
     }
 
     /// The dialog owns the keyboard outright while it is open.

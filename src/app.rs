@@ -6512,6 +6512,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 self.sync_parameters_to_project();
                             } else if idx == crate::slots::DIALOG_PARAMS_IDX {
                                 self.sync_dialog_settings_to_project();
+                            } else if idx == crate::slots::DIALOG_IDX {
+                                // The Commands list's zoom slider, mid-drag.
+                                self.drain_dialog_clicks();
                             }
                         }
                     }

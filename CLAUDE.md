@@ -922,6 +922,23 @@ viewer state. `dialog_toggle_rows_cover_every_toggle_command` fails when a
 `toggle_*` / `show_*_pane` command is added without an arm in the table,
 because the miss is silent — the row just ships plain.
 
+**The zoom slider is a row of the Commands list, not a command.** While the
+network pane is focused — and only then, since zoom is that pane's — the
+list heads with a "Zoom" row (`ZOOM_ROW_ID`) carrying a `slider`: the
+toolkit's own `Slider`, painted from one stamp over the row's right end (it
+borrows the chord column rather than reserving `SLIDER_W` on every row),
+reading the network zoom as a percentage of the configured grid pitch
+(`State::zoom_percent`, 100 = Reset Zoom, range the pitch limits). A press
+on the band jumps to it and arms the app's widget-drag protocol on
+`DIALOG_IDX` (`Dialog::draggable` / `drag_*`, exactly as the Settings
+half's sliders arm it on `DIALOG_PARAMS_IDX`), so the value follows the
+pointer off the plate; the drained value lands through
+`State::set_zoom_percent`, which zooms about the cursor cell and re-reads
+the row, since `zoom` clamps. Left/Right nudge it by a Zoom In / Out step
+while it is selected; Enter on it runs nothing. The dialog stays up
+throughout, as it does for the toggle rows. Ranked like a row labelled
+"Zoom", so a query still finds or drops it.
+
 **Alt+D, not Super+D.** Every Super chord is the compositor's before any client
 sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
 launcher), and Super held is the DE's window-adjust modifier besides. Alt is the
