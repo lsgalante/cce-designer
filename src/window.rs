@@ -641,6 +641,17 @@ impl State {
                 "start_frame": pb.start_frame.round() as i64,
                 "end_frame": pb.end_frame.round() as i64,
             });
+            // The network grid as it is right now, beside what config says
+            // it is at 100%: the one way to check, from outside, that a
+            // config edit reached the lattice on screen.
+            let cfg = crate::app::configured_grid_geometry();
+            v["grid"] = serde_json::json!({
+                "pitch": [self.grid_pitch_x, self.grid_pitch_y],
+                "node_size": [self.node_w, self.node_h],
+                "zoom_percent": self.zoom_percent(),
+                "configured_pitch": [cfg.pitch_x, cfg.pitch_y],
+                "configured_node_size": [cfg.node_w, cfg.node_h],
+            });
             return Ok(v);
         }
         let mut req = if call.arguments.is_object() {

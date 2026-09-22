@@ -724,6 +724,16 @@ same day). Until 2026-09-22 the grid was rounded CELLS with grout between
 them, configured as a cell size (also the node size) plus a gap, and a node
 filled its cell.
 
+**Which file sets the pitch is easy to get wrong.** cce-ui merges the
+per-app override `~/.config/cce/cce-designer/config.kdl` OVER the main
+`~/.config/cce/config.kdl`, key by key, so a `spacing_x` in the per-app
+file wins over any edit to the main one — a whole afternoon of "the grid
+size is not changing" (2026-09-22) was a stale `spacing_x=71` in the
+override, left from the cell model. `get_state` over MCP reports `grid`
+(the live pitch and node size, the zoom percent, and the CONFIGURED pitch
+and node size), which is the one way to check from outside that a config
+edit reached the lattice.
+
 `State::grid_pitch_x` / `grid_pitch_y` and `node_w` / `node_h` are the
 zoomed geometry — `configured_grid_geometry` at 100%, scaled TOGETHER by
 `scale_grid_geometry`, which is the only relation between them; there is no
