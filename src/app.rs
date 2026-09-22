@@ -3422,9 +3422,8 @@ impl State {
             return false;
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
-            let my = cce_ui::widget::context_menu::y();
-            let idx = ((self.cursor_y - my) / 24.0).floor() as usize;
-            let picked = self.node_menu_slot.zip(self.node_menu_actions.get(idx).copied());
+            let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
+            let picked = self.node_menu_slot.zip(idx.and_then(|i| self.node_menu_actions.get(i).copied()));
             self.close_node_menu();
             if let Some((slot, action)) = picked {
                 self.dispatch_node_menu(slot, action);
@@ -3662,9 +3661,8 @@ impl State {
             return false;
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
-            let my = cce_ui::widget::context_menu::y();
-            let idx = ((self.cursor_y - my) / 24.0).floor() as usize;
-            let picked = self.viewport_menu_actions.get(idx).copied();
+            let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
+            let picked = idx.and_then(|i| self.viewport_menu_actions.get(i).copied());
             self.close_viewport_menu();
             if let Some(action) = picked {
                 match action {

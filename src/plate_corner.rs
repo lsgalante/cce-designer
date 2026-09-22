@@ -309,9 +309,8 @@ impl State {
             return false;
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
-            let my = cce_ui::widget::context_menu::y();
-            let row = ((self.cursor_y - my) / 24.0).floor() as usize;
-            let picked = self.plate_menu_slot.zip(self.plate_menu_actions.get(row).copied());
+            let row = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
+            let picked = self.plate_menu_slot.zip(row.and_then(|r| self.plate_menu_actions.get(r).copied()));
             self.close_plate_menu();
             if let Some((idx, action)) = picked {
                 self.dispatch_plate_menu(idx, action);
