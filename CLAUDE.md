@@ -934,8 +934,11 @@ on the band jumps to it and arms the app's widget-drag protocol on
 half's sliders arm it on `DIALOG_PARAMS_IDX`), so the value follows the
 pointer off the plate; the drained value lands through
 `State::set_zoom_percent`, which zooms about the cursor cell and re-reads
-the row, since `zoom` clamps. Left/Right nudge it by a Zoom In / Out step
-while it is selected; Enter on it runs nothing. The dialog stays up
+the row, since `zoom` clamps. The wheel over the control turns it (2% of
+the range a notch, up meaning in — the viewport zoom wheel's sign) where
+over the rest of the list it scrolls; `dialog_mouse_wheel` drains the
+change like a click. Left/Right nudge it by a Zoom In / Out step while it
+is selected; Enter on it runs nothing. The dialog stays up
 throughout, as it does for the toggle rows. Ranked like a row labelled
 "Zoom", so a query still finds or drops it.
 

@@ -526,6 +526,21 @@ impl Dialog {
         (b.x, b.width)
     }
 
+    /// Step the slider by wheel notches: 2% of the range each, the toolkit
+    /// slider's own rate, up meaning more — the sign the viewport's zoom
+    /// wheel has, since this IS a zoom.
+    fn scroll_slider(&mut self, notches: f32) -> bool {
+        let (min, max) = self.slider_stamp.range();
+        let Some(cur) = self.slider_row().and_then(|i| self.rows[i].slider) else { return false };
+        let v = (cur + notches * 0.02 * (max - min)).clamp(min.min(max), max.max(min));
+        if (v - cur).abs() < 1e-6 {
+            return false;
+        }
+        self.set_slider_value(v);
+        self.slider_change = Some(v);
+        true
+    }
+
     /// Put the slider where the pointer is along the captured band. Jumps,
     /// rather than dragging relative to a grab: the band has no thumb to
     /// grab, and a click on a zoom scale should mean "this much".
@@ -955,9 +970,21 @@ impl Input for Dialog {
                 self.hover_tab = tab;
                 changed
             }
-            Event::MouseWheel { delta, .. } => {
+            Event::MouseWheel { delta, x, y, .. } => {
                 if !self.shows_list() || self.rows.is_empty() {
                     return false;
+                }
+                // Over the slider row's control the wheel turns the slider,
+                // not the list — the rest of the row still scrolls.
+                if let Some(i) = self.row_at(rect, *x, *y) {
+                    if self.rows[i].slider.is_some() {
+                        if let Some(r) = self.row_rect(rect, i) {
+                            let s = Self::slider_rect(r);
+                            if *x >= s.x && *x < s.x + s.width {
+                                return self.scroll_slider(delta.notches_y());
+                            }
+                        }
+                    }
                 }
                 // The DE scroll model: a notch is one row and glides there, a
                 // trackpad tracks 1:1 and coasts on the lift (`tick` advances).
@@ -1916,7 +1943,10 @@ impl State {
             return self.dispatch_uncovered(DIALOG_PARAMS_IDX, &ev);
         }
         if self.in_dialog_slot(DIALOG_IDX, x, y) {
-            return self.dispatch_uncovered(DIALOG_IDX, &ev);
+            let taken = self.dispatch_uncovered(DIALOG_IDX, &ev);
+            // A wheel over the zoom slider row moved it: land the value.
+            self.drain_dialog_clicks();
+            return taken;
         }
         false
     }

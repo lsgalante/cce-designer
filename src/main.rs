@@ -8463,6 +8463,22 @@ mod tests {
         // An ordinary row still picks.
         assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, 30.0, row_y + 24.0, &mut ctx));
         assert_eq!(d.take_activated().as_deref(), Some("c1"));
+
+        // The wheel over the control turns the slider — a notch up is 2% of
+        // the range more, as on the toolkit's slider — and over the label
+        // end it scrolls the list instead, reporting nothing.
+        let before = d.rows[0].slider.unwrap();
+        let wheel = |x: f32, y: f32| cce_ui::widget::Event::MouseWheel {
+            delta: cce_ui::widget::MouseScrollDelta::LineDelta(0.0, 1.0),
+            x, y, local_x: x, local_y: y,
+        };
+        ctx.note_scroll_event();
+        assert!(d.handle_event(&wheel(band_x + 10.0, row_y), &mut ctx));
+        let v = d.take_slider_change().expect("a wheel over the band reports a value");
+        assert!((v - (before + 0.02 * 300.0)).abs() < 1e-3, "notch up: {before} -> {v}");
+        ctx.note_scroll_event();
+        d.handle_event(&wheel(30.0, row_y), &mut ctx);
+        assert_eq!(d.take_slider_change(), None, "over the label the wheel is the list's");
     }
 
     /// Backspace walks the query back, and the ranking follows it.
