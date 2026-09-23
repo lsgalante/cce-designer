@@ -134,7 +134,9 @@ mod tests {
         let mut state = State::new(false);
         assert_eq!(state.chooser_start_dir(), None, "scratch project must not pin a dir");
 
-        let dir = std::env::temp_dir().join("cce-designer-test-projects").join("gears");
+        let dir = std::env::temp_dir()
+            .join(format!("cce-designer-test-projects-{}", std::process::id()))
+            .join("gears");
         std::fs::create_dir_all(&dir).unwrap();
         state.loaded_project_path = Some(dir.clone());
         assert_eq!(state.chooser_start_dir().as_deref(), dir.parent(),
@@ -6179,7 +6181,8 @@ mod tests {
     #[test]
     fn test_the_png_knows_its_own_physical_size() {
         use crate::page::Page;
-        let dir = std::env::temp_dir().join("cce-designer-page-tests");
+        let dir = std::env::temp_dir()
+            .join(format!("cce-designer-page-tests-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("sheet.png");
         let p = Page::new([8.5, 11.0], 300, [1.0, 1.0, 1.0, 1.0]);
