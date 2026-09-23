@@ -93,6 +93,11 @@ pub struct Row {
     /// nudged by the arrow keys while selected; picking it runs nothing.
     /// `None` for every other row. There is at most one such row.
     pub slider: Option<f32>,
+    /// Truncate the label on the LEFT when it does not fit, rather than on
+    /// the right: the tail of a path is what identifies it, and a row that
+    /// cut `/home/me/projects/thing` down to `/home/me/pro...` would name
+    /// every project in the directory equally badly.
+    pub truncate_head: bool,
 }
 
 /// The dialog's outer size. Fixed rather than proportional: it is a focused
@@ -660,13 +665,22 @@ impl Paint for Dialog {
         // the occluder the dialog itself registers. The cost is that bounds
         // no longer trim an overlong label, so the rows truncate by hand.
         let own = Some([rect.x, rect.y, rect.x + rect.width, rect.y + rect.height]);
+        let cols_for = |width: f32| -> usize {
+            (width / display::measure_text_width("M", &family, font_size).max(1.0)).floor() as usize
+        };
         let fit = |text: &str, width: f32| -> String {
             if width <= 0.0 {
                 return String::new();
             }
-            let cols = (width / display::measure_text_width("M", &family, font_size).max(1.0))
-                .floor() as usize;
-            display::truncate_tail(text, cols)
+            display::truncate_tail(text, cols_for(width))
+        };
+        // The same budget, cut from the other end — a path's tail is what
+        // identifies it.
+        let fit_head = |text: &str, width: f32| -> String {
+            if width <= 0.0 {
+                return String::new();
+            }
+            display::truncate_head(text, cols_for(width))
         };
 
         // --- The header. In AddNode there are no halves to move between, so
@@ -817,7 +831,11 @@ impl Paint for Dialog {
                 label_x += side + 8.0;
             }
             ctx.text_with(
-                fit(&row.label, label_right - label_x),
+                if row.truncate_head {
+                    fit_head(&row.label, label_right - label_x)
+                } else {
+                    fit(&row.label, label_right - label_x)
+                },
                 label_x,
                 ty,
                 font_size,
@@ -1065,6 +1083,14 @@ use crate::slots::{DIALOG_IDX, DIALOG_PARAMS_IDX};
 /// the dialog up, the way the toggle rows stay up.
 pub const ZOOM_ROW_ID: &str = "zoom_level";
 
+/// The Commands list's other non-command row: the open project's PATH, with
+/// its file name in the chord column the way a command's chord sits there —
+/// the palette's readout of what is being edited. Picking it copies the path
+/// to the clipboard, which is the one thing anyone wants a path on screen
+/// for. It heads the list, where it reads as the document the rest of the
+/// commands act on.
+pub const PATH_ROW_ID: &str = "project_path";
+
 /// Where a Settings row's value actually lives.
 ///
 /// Not the live `State` fields, and not `DesignSettings`: both are DOWNSTREAM
@@ -1309,8 +1335,32 @@ impl State {
                     }),
                     toggle: self.command_toggle_state(c.id),
                     slider: None,
+                    truncate_head: false,
                 })
                 .collect();
+                // The open project's path heads the list — ranked against
+                // the path text, so typing any part of it (the project's
+                // name included, that being the tail) finds or drops the row
+                // like any other. Absent when no project is loaded: the
+                // bundled `default_project.json` leaves `loaded_project_path`
+                // None on purpose, and a row offering to copy a path to a
+                // versioned file in the source tree would be a trap.
+                if let Some((path, name)) = self.project_path_readout() {
+                    if !crate::command::fuzzy_rank(&query, &[path.as_str()]).is_empty() {
+                        rows.insert(
+                            0,
+                            Row {
+                                id: PATH_ROW_ID.to_string(),
+                                label: path,
+                                chord: name,
+                                swatch: None,
+                                toggle: None,
+                                slider: None,
+                                truncate_head: true,
+                            },
+                        );
+                    }
+                }
                 // The zoom slider heads the network pane's list, ranked like
                 // a row labelled "Zoom" so a query still finds (or drops) it.
                 if self.focused_context() == crate::command::Context::Network
@@ -1328,6 +1378,7 @@ impl State {
                             swatch: None,
                             toggle: None,
                             slider: Some(self.zoom_percent()),
+                            truncate_head: false,
                         },
                     );
                 }
@@ -1355,11 +1406,43 @@ impl State {
                         swatch: None,
                         toggle: None,
                         slider: None,
+                        truncate_head: false,
                     })
                     .collect()
             }
         };
         self.slots.dialog.set_rows(rows);
+    }
+
+    /// The open project's path and its file name, for the palette's path row
+    /// — `None` when no project is loaded.
+    ///
+    /// The name is `file_name()`, which is the same thing the WINDOW TITLE
+    /// shows, so the palette and the title bar cannot disagree about what is
+    /// open. A project is a DIRECTORY holding `state.json`, so that name is
+    /// the directory's; the bundled `default_project.json` is the one single
+    /// file, and it never gets here because loading it leaves
+    /// `loaded_project_path` None — the app's own position is that nothing is
+    /// loaded, and Set As Default says the same.
+    pub fn project_path_readout(&self) -> Option<(String, String)> {
+        let path = self.loaded_project_path.as_ref()?;
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        Some((path.to_string_lossy().into_owned(), name))
+    }
+
+    /// Put the open project's path on the clipboard, returning what was
+    /// copied — the palette's path row, and the only thing a path on screen
+    /// is ever wanted for. `None` when there is no project to name.
+    pub fn copy_project_path(&mut self) -> Option<String> {
+        let (path, _) = self.project_path_readout()?;
+        // Not under test. `wl-copy` has to OUTLIVE its caller to serve the
+        // selection, and it inherits the test binary's captured stdout — so a
+        // test that really copied left cargo waiting on a pipe held open by a
+        // clipboard daemon, which looks exactly like a hung test suite.
+        #[cfg(not(test))]
+        cce_ui::widget::clipboard::copy_to_clipboard(&path);
+        self.update_status_text(&format!("Copied {path}"));
+        Some(path)
     }
 
     /// The network zoom as the slider row reads it: the current x pitch as a
@@ -1793,6 +1876,14 @@ impl State {
         // The zoom row is a control, not a command: Enter on it does nothing
         // and the dialog stays up for the arrows and the pointer.
         if mode == Mode::Tabbed && id == ZOOM_ROW_ID {
+            return;
+        }
+        // The path row: copy, say so, and close. A copy is done the moment it
+        // happens — unlike a toggle, there is nothing to sit and adjust — so
+        // it leaves the way a command does.
+        if mode == Mode::Tabbed && id == PATH_ROW_ID {
+            self.close_dialog();
+            self.copy_project_path();
             return;
         }
         if mode == Mode::Tabbed && self.command_toggle_state(&id).is_some() {

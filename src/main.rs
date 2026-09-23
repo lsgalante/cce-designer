@@ -3475,7 +3475,7 @@ mod tests {
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 520.0, height: 420.0 };
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None, truncate_head: false })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -3521,7 +3521,7 @@ mod tests {
         d.set_visible(true);
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None, truncate_head: false })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -8422,9 +8422,9 @@ mod tests {
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let (id, ptr) = (d.id(), d.as_ptr_mut());
         ctx.register_widget(id, ptr);
-        let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None };
+        let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None, truncate_head: false };
         d.set_rows(vec![
-            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0) },
+            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0), truncate_head: false },
             plain(1),
             plain(2),
         ]);
@@ -8498,8 +8498,8 @@ mod tests {
         let (id, ptr) = (d.id(), d.as_ptr_mut());
         ctx.register_widget(id, ptr);
         d.set_rows(vec![
-            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0) },
-            Row { id: "show_grid".into(), label: "Show Grid".into(), chord: "Ctrl+G".into(), swatch: None, toggle: Some(true), slider: None },
+            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0), truncate_head: false },
+            Row { id: "show_grid".into(), label: "Show Grid".into(), chord: "Ctrl+G".into(), swatch: None, toggle: Some(true), slider: None, truncate_head: false },
         ]);
         d.set_slider_range(20.0, 320.0);
         d.set_page(10);
@@ -8686,7 +8686,6 @@ mod tests {
     /// the expanse is only read back while its anchor is the live cursor.
     #[test]
     fn dragging_the_network_grid_expands_the_cursor() {
-        use crate::slots::CONTENT_IDX;
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{ElementState, MouseButton};
         let mut state = State::new(false);
@@ -9286,6 +9285,69 @@ mod tests {
                 "the network menu offers `{id}`, which is not a command"
             );
         }
+    }
+
+    /// The Commands half heads with the open project's PATH: the label is the
+    /// path (truncated on the left when it does not fit — the tail is what
+    /// identifies it), the chord column is the file name, and picking it
+    /// copies the path and closes. With no project loaded there is no row,
+    /// which is the same position `loaded_project_path` and the window title
+    /// take about the bundled default.
+    #[test]
+    fn the_palette_heads_with_the_open_projects_path() {
+        use crate::dialog::PATH_ROW_ID;
+        let dir = std::env::temp_dir()
+            .join(format!("cce-designer-path-row-{}", std::process::id()))
+            .join("my_project");
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut state = State::new(false);
+        state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
+
+        // Nothing loaded — the bundled default leaves no path behind, so the
+        // palette offers no row rather than one naming a versioned file.
+        assert!(state.project_path_readout().is_none());
+        state.run_command("command_palette");
+        assert!(
+            !state.slots.dialog.rows.iter().any(|r| r.id == PATH_ROW_ID),
+            "no project, no row"
+        );
+        state.close_dialog();
+
+        state.save_to_file(&dir).expect("save");
+        state.load_from_file(&dir).expect("load");
+        assert_eq!(state.loaded_project_path.as_deref(), Some(dir.as_path()));
+
+        state.run_command("command_palette");
+        let row = state.slots.dialog.rows.first().expect("rows").clone();
+        assert_eq!(row.id, PATH_ROW_ID, "it heads the list");
+        assert_eq!(row.label, dir.to_string_lossy(), "the label is the whole path");
+        assert_eq!(row.chord, "my_project", "the file name reads in the chord column");
+        assert!(row.truncate_head, "a path is cut from the left");
+
+        // It ranks like any other row: a query that matches the path keeps it,
+        // one that does not drops it.
+        for c in ["m", "y", "_", "p"] {
+            state.dialog_key_input(&typed(c));
+        }
+        assert!(state.slots.dialog.rows.iter().any(|r| r.id == PATH_ROW_ID));
+        for c in ["z", "z", "z"] {
+            state.dialog_key_input(&typed(c));
+        }
+        assert!(!state.slots.dialog.rows.iter().any(|r| r.id == PATH_ROW_ID));
+
+        // Picking it copies the path and leaves, the way a command does.
+        state.close_dialog();
+        state.run_command("command_palette");
+        state.take_dialog_pick(PATH_ROW_ID.to_string());
+        assert!(!state.dialog_visible(), "a copy is done the moment it happens");
+        assert!(
+            state.last_status_text.contains(&dir.to_string_lossy().to_string()),
+            "the status line says what was copied: {}",
+            state.last_status_text
+        );
+
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
     /// Tab opens the same plate in its AddNode mode: one list of node

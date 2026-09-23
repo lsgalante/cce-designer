@@ -1086,6 +1086,28 @@ viewer state. `dialog_toggle_rows_cover_every_toggle_command` fails when a
 `toggle_*` / `show_*_pane` command is added without an arm in the table,
 because the miss is silent — the row just ships plain.
 
+**The open project's PATH heads the Commands list**, as a row rather than a
+command (`PATH_ROW_ID`): the label is the path, the chord column carries the
+file name — the palette's readout of what is being edited, in the column a
+command's chord would use — and picking it copies the path to the clipboard
+and closes, a copy being done the moment it happens. It ranks against the
+path text like any other row, so a query finds or drops it.
+
+Two details. The label truncates on the LEFT (`Row::truncate_head`, the
+paint's `fit_head`), because the tail of a path is what identifies it and a
+row cut down to `/home/me/pro...` would name every project in the directory
+equally badly. And there is NO row when no project is loaded: the bundled
+`default_project.json` leaves `loaded_project_path` None on purpose (the
+window title and Set As Default take the same position), and a row offering
+to copy a path into a versioned file in the source tree would be a trap.
+`project_path_readout` reads the name with `file_name()`, the same call the
+window title makes, so the two cannot disagree about what is open.
+
+The actual clipboard write is `#[cfg(not(test))]`. `wl-copy` has to OUTLIVE
+its caller to serve the selection, and it inherits the test binary's captured
+stdout — so a test that really copied left cargo waiting on a pipe held open
+by a clipboard daemon, which looks exactly like a hung suite.
+
 **The zoom slider is a row of the Commands list, not a command.** While the
 network pane is focused — and only then, since zoom is that pane's — the
 list heads with a "Zoom" row (`ZOOM_ROW_ID`) carrying a `slider`: the
