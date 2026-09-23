@@ -999,6 +999,7 @@ pub struct GridGeometry {
     pub node_h: f32,
 }
 
+#[cfg(not(test))]
 pub fn configured_grid_geometry() -> GridGeometry {
     GridGeometry {
         pitch_x: cce_ui::layout::graph_spacing_x(),
@@ -1006,6 +1007,34 @@ pub fn configured_grid_geometry() -> GridGeometry {
         node_w: cce_ui::layout::graph_node_width(),
         node_h: cce_ui::layout::graph_node_height(),
     }
+}
+
+/// The lattice the SUITE runs on, fixed rather than read from
+/// `~/.config/cce/config.kdl`.
+///
+/// The grid tests press at pixel coordinates derived from `cell_center` and
+/// assert which node the press landed on, so the pitch decides whether they
+/// pass — and it was coming from whichever config.kdl happened to be on the
+/// machine. `dragging_a_selected_node_carries_the_selection` is the one that
+/// showed it: at cce-ui's own defaults (187.5 x 112.5) its row 11 lands at
+/// 1237 px in a 900 px test window, so the press misses the node and the
+/// drag never arms. It passed only because the author's config set 140 x 70.
+/// A fresh clone, a second machine or CI would all have failed it, and the
+/// failure would have read as a broken drag rather than a borrowed lattice.
+///
+/// These ARE those numbers — the lattice the grid tests were written against,
+/// kept so that pinning them changes no test's meaning. They are deliberately
+/// not cce-ui's defaults: matching those would mean rewriting the cell
+/// arithmetic of a subtle drag test to fit a coarser grid, which is a real
+/// change to what it checks, made for the sake of a number that is arbitrary
+/// either way. What matters is that the number is the suite's own.
+///
+/// `graph_grid_snap` is NOT pinned here: it is read inside cce-ui's Graph
+/// widget rather than through this crate, so there is nothing to intercept —
+/// it is off both by cce-ui default and in practice.
+#[cfg(test)]
+pub fn configured_grid_geometry() -> GridGeometry {
+    GridGeometry { pitch_x: 140.0, pitch_y: 70.0, node_w: 80.0, node_h: 40.0 }
 }
 
 /// Zoom limits on the pitch — the old 30..500 x 15..250 limits on the node

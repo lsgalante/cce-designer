@@ -5140,6 +5140,39 @@ mod tests {
         );
     }
 
+    /// The suite runs on a lattice of its own, not the machine's.
+    ///
+    /// `configured_grid_geometry` read `style.surface.graph.spacing_x` and
+    /// friends straight out of `~/.config/cce/config.kdl`, so the grid tests
+    /// — which press at pixel coordinates from `cell_center` and assert which
+    /// node was hit — passed or failed by whoever's config was installed.
+    /// `dragging_a_selected_node_carries_the_selection` genuinely failed at
+    /// cce-ui's own defaults: its row 11 lands at 1237 px in a 900 px test
+    /// window, so the press misses and the drag never arms. It had been
+    /// passing on the author's 140 x 70.
+    ///
+    /// Asserting the constants back is the point rather than a tautology: it
+    /// is what fails if the pin is ever unwired back to the config, and the
+    /// live `State` is checked alongside them so the pin has to reach the app
+    /// and not just the helper.
+    #[test]
+    fn the_suite_runs_on_a_lattice_of_its_own() {
+        let g = crate::app::configured_grid_geometry();
+        assert_eq!(
+            (g.pitch_x, g.pitch_y, g.node_w, g.node_h),
+            (140.0, 70.0, 80.0, 40.0),
+            "the suite's lattice moved — if this came from config.kdl, the grid \
+             tests now depend on the machine running them"
+        );
+
+        let state = State::new(false);
+        assert_eq!(
+            (state.grid_pitch_x, state.grid_pitch_y, state.node_w, state.node_h),
+            (140.0, 70.0, 80.0, 40.0),
+            "State::new did not start on the pinned lattice"
+        );
+    }
+
     /// The network plate is optional, and the option is reachable three ways
     /// that cannot disagree: the View settings node's toggle, the network
     /// pane's View menu, and the command palette.

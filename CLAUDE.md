@@ -334,9 +334,36 @@ thing under test), runs the plate toggle, and asserts both that a settings
 file was actually written — or the check is vacuous — and that the real one
 did not move.
 
-What tests still READ is the real `~/.config/cce/config.kdl`, for grid pitch
-and the rest of the toolkit config. That is untouched and deliberate: it is
-read-only, and the suite's expectations are already calibrated against it.
+**The suite's LATTICE is pinned for the same reason**, one layer up:
+`configured_grid_geometry` read `style.surface.graph.spacing_x` and friends
+straight out of `~/.config/cce/config.kdl`, and the grid tests press at pixel
+coordinates derived from `cell_center` and assert which node the press landed
+on — so the pitch on the machine decided whether they passed.
+`dragging_a_selected_node_carries_the_selection` really did fail at cce-ui's
+own defaults (187.5 x 112.5 puts its row 11 at 1237 px in a 900 px test
+window, so the press misses the node and the drag never arms); it passed only
+because the author's config.kdl set 140 x 70. A fresh clone, a second machine
+or CI would all have failed it, reading as a broken drag rather than a
+borrowed lattice.
+
+Under `cfg(test)` the four values are fixed at those 140 / 70 / 80 / 40 — the
+lattice the grid tests were written against, so pinning them changed no test's
+meaning. Deliberately NOT cce-ui's defaults: matching those would mean
+rewriting the cell arithmetic of a subtle drag test to fit a coarser grid,
+a real change to what it checks for the sake of a number that is arbitrary
+either way. What matters is that the number is the suite's own.
+`the_suite_runs_on_a_lattice_of_its_own` asserts the constants back — not a
+tautology but the thing that fails if the pin is ever unwired to the config
+again — and checks the live `State` alongside them, so the pin has to reach
+the app and not just the helper. Verified by running the suite under an EMPTY
+`$XDG_CONFIG_HOME`, under one setting 999 x 777 with 500 x 400 nodes, and
+under the real config: 305 passing, identically, all three.
+
+`graph_grid_snap` is not pinned — it is read inside cce-ui's Graph widget
+rather than through this crate, so there is nothing here to intercept; it is
+off both by cce-ui default and in practice. Config the suite still reads is
+cosmetic in the same way (colors, fonts, plate radii), and no test asserts on
+it; the empty-`$XDG_CONFIG_HOME` run is how to check that claim again.
 
 ### Conditional parameter rows
 
