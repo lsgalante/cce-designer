@@ -5142,6 +5142,42 @@ mod tests {
         );
     }
 
+    /// The recent-files list is not the user's, under test.
+    ///
+    /// The toolkit derives that path from the EXE's basename, so each test
+    /// binary wrote a real `~/.config/cce/cce_designer-<hash>/` of its own —
+    /// seven had accumulated by 2026-09-23. Reading was no safer than
+    /// writing: a test that loaded the real list would assert against
+    /// whatever projects happen to be on the machine running it.
+    ///
+    /// Both halves are asserted because they fail differently — a load that
+    /// reached the real file makes this suite's behaviour depend on the
+    /// machine, a save leaves a directory behind on it — and because the
+    /// gate is one `cfg!(test)` in each of two functions, so one can be
+    /// removed without the other.
+    #[test]
+    fn the_recent_files_list_is_not_the_users() {
+        assert!(
+            State::load_recent_files().is_empty(),
+            "the suite loaded the real recent-files list"
+        );
+
+        let real = cce_ui::config::get_app_recent_files_path();
+        let before = std::fs::read(&real).ok();
+
+        let mut state = State::new(false);
+        state.add_recent_file(
+            std::env::temp_dir().join(format!("cce-designer-recent-{}", std::process::id())),
+        );
+
+        assert_eq!(
+            std::fs::read(&real).ok(),
+            before,
+            "{} changed — a test wrote a real recent-files list",
+            real.display()
+        );
+    }
+
     /// The suite runs on a lattice of its own, not the machine's.
     ///
     /// `configured_grid_geometry` read `style.surface.graph.spacing_x` and

@@ -1324,6 +1324,30 @@ name and every wire to them ambiguous.
 ## Repo hygiene
 
 `scratch/` holds ad-hoc debug scripts/logs and `screenshot*.png` at the root are
-debugging artifacts — not source, don't extend them. All tests live in
-`src/main.rs`'s `#[cfg(test)]` module; add new ones there. Commit messages follow
-`feat:` / `fix:` / `refactor:` style (see `git log`).
+debugging artifacts — not source, don't extend them. Tests live in
+`src/main.rs`'s `#[cfg(test)]` module; add new ones there. The exception is
+`tests/`, which holds the two tests that SCAN the crate's own source —
+`doc_claims.rs` (CLAUDE.md's `(~Nk lines)` figures) and `user_paths.rs` (below)
+— and they are out there because a scanner under `src/` is the first thing it
+finds. Both are deliberately mirrored per crate rather than shared, since every
+crate here is its own git repository that must build standalone; they need
+nothing but `std`, so copying one into a sibling is the whole job. Commit
+messages follow `feat:` / `fix:` / `refactor:` style (see `git log`).
+
+**`tests/user_paths.rs` refuses source that builds a path the user owns**, the
+class of bug that had this suite rewriting `~/.config/cce/cce-designer/state.kdl`
+on every run (see "App-written settings" above). Two rules, one per shape that
+actually shipped: no line assembles a config path out of `.config` by hand —
+`cce_ui::config::cce_config_dir()` is the only way in, because that is what the
+`cfg(test)` redirect keys off — and every `temp_dir()` is scoped with
+`std::process::id()` within a line or two, since /tmp is one namespace shared
+with every other user and every concurrent run. Verified by reintroducing each
+bug: both are caught, naming the file and line. The `temp_dir()` rule is not
+limited to tests, because a fixed /tmp name is no better in shipped code.
+
+Two runtime guards sit alongside it in `src/main.rs`, since a scan cannot see
+behaviour: `the_suite_does_not_write_the_users_own_settings` and
+`the_recent_files_list_is_not_the_users` each snapshot the real file, exercise
+the write path, and assert it did not move — the second checking the load side
+too, because reading the user's recent list would make the suite's behaviour
+depend on the machine.
