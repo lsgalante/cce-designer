@@ -185,7 +185,7 @@ impl State {
 
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
-        self.append_meta_point_numbers(&mut pc);
+        self.append_point_numbers(&mut pc);
         self.append_scale_readout(&mut pc);
         self.append_viewer_state_overlay(&mut pc);
         self.append_popovers(&mut pc);
@@ -996,8 +996,8 @@ impl State {
     /// clipped to the viewport pane. The mvp cache refreshes whenever the
     /// camera or pane changes (`stage_frame`), so the labels track orbits;
     /// a frame staged before the first scene staging simply draws none.
-    fn append_meta_point_numbers(&self, pc: &mut PaintCtx) {
-        if !self.show_viewport || self.meta_number_labels.is_empty() {
+    fn append_point_numbers(&self, pc: &mut PaintCtx) {
+        if !self.show_viewport || self.overlay_number_labels.is_empty() {
             return;
         }
         let Some(mvp) = self.last_scene_mvp else { return };
@@ -1006,7 +1006,7 @@ impl State {
             return;
         }
         pc.clip(rect(vx, vy, vw, vh), |pc| {
-            for (pos, idx) in &self.meta_number_labels {
+            for (pos, idx) in &self.overlay_number_labels {
                 let clip_pos = mvp * glam::Vec4::new(pos[0], pos[1], pos[2], 1.0);
                 if clip_pos.w <= 0.0 {
                     continue;
@@ -1200,28 +1200,32 @@ impl State {
         self.rt_geometry_version += 1;
         self.viewport_dirty = true;
 
-        // Per-node meta overlays ride the same rebuild: markers and point
-        // numbers for nodes whose meta child asks for them.
-        let mut sim_cache = std::mem::take(&mut self.sim_cache);
-        let (markers, labels, wires, normals) = {
-            let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            // Same scoping as the scene walk above: overlays annotate what is
-            // on screen, so they walk the same current level.
-            collect_meta_overlays(&self.fs_root, self.viewport_editor_dir(), self.meta_marker_size, self.meta_marker_color, &mut sim)
-        };
-        self.sim_cache = sim_cache;
-        self.meta_marker_verts = markers;
-        self.meta_number_labels = labels;
-        self.meta_wire_verts = wires;
-        self.meta_normal_verts = normals;
+        // The point overlays ride the same rebuild, off the same `geom`:
+        // they annotate what is on screen, and what is on screen is exactly
+        // this Detail.
+        let (markers, labels, normals) = scene_point_overlays(
+            &geom,
+            self.show_point_markers,
+            self.show_point_numbers,
+            self.show_point_normals,
+            self.point_marker_size,
+            self.point_marker_color,
+        );
+        self.overlay_marker_verts = markers;
+        self.overlay_number_labels = labels;
+        self.overlay_normal_verts = normals;
+        // The wire pass's edges, likewise — topological, and only while the
+        // wireframe is actually on.
+        self.scene_edge_verts =
+            if self.wireframe { scene_edge_verts(&geom) } else { Vec::new() };
 
         // Visualize's vector markers ride the same LINE_LIST channel as the
         // normal whiskers.
-        self.meta_normal_verts.extend(crate::geometry::vis_marker_vertices(
+        self.overlay_normal_verts.extend(crate::geometry::vis_marker_vertices(
             &geom,
             cce_ui::colors::to_linear_rgb,
         ));
-        self.meta_points_dirty = true;
+        self.overlay_dirty = true;
 
         // Last, not first: the page's status line would otherwise be
         // overwritten by the geometry pass's own, and a level showing a page
@@ -1251,147 +1255,118 @@ impl State {
     }
 }
 
-/// The per-node meta (preferences) overlay walk: for every node whose `meta`
-/// child asks for Point Markers or Point Numbers — and whose geometry is
-/// visible through the same parent chain the scene walk uses — evaluate the
-/// node and collect marker geometry and/or (position, vertex index) labels.
-/// Positions dedupe the triangle soup's repeats; a label keeps the FIRST
-/// index at its position, matching the spreadsheet's vertex numbering.
-/// `start` scopes the walk to the displayed network level (the scene walk's
-/// contract — pass `root` for both to cover the whole tree); evaluation
-/// stays rooted at `root`.
-pub(crate) fn collect_meta_overlays(
-    root: &FsNode,
-    start: &FsNode,
+/// The point overlays on the displayed scene: marker geometry for Show
+/// Point Markers, `(position, index)` labels for Show Point Numbers, and
+/// normal whiskers for Show Point Normals — each read straight off the
+/// merged scene `Detail` the geometry rebuild has already produced.
+///
+/// It reads that one `Detail` rather than walking the tree because the
+/// overlays are a property of the VIEW, not of individual nodes. While they
+/// were per-node `meta` preferences this had to be a second walk that
+/// re-evaluated every flagged node on its own — the same repeated evaluation
+/// that made a five-flag Embryo cost 2.4 s an edit. The scene is evaluated
+/// once now, and the overlays cost a pass over its points.
+pub(crate) fn scene_point_overlays(
+    geom: &crate::detail::Detail,
+    markers_on: bool,
+    numbers_on: bool,
+    normals_on: bool,
     point_size: f32,
     marker_color: [f32; 3],
-    sim: &mut crate::geometry::EvalSim,
 ) -> (
     Vec<crate::geometry::Vertex3D>,
     Vec<([f32; 3], u32)>,
     Vec<crate::geometry::Vertex3D>,
-    Vec<crate::geometry::Vertex3D>,
 ) {
     let mut markers = Vec::new();
     let mut labels = Vec::new();
-    let mut wires = Vec::new();
     let mut normals = Vec::new();
-    fn visit(
-        root: &FsNode,
-        node: &FsNode,
-        parent_visible: bool,
-        point_size: f32,
-        marker_color: [f32; 3],
-        markers: &mut Vec<crate::geometry::Vertex3D>,
-        labels: &mut Vec<([f32; 3], u32)>,
-        wires: &mut Vec<crate::geometry::Vertex3D>,
-        normals: &mut Vec<crate::geometry::Vertex3D>,
-        sim: &mut crate::geometry::EvalSim,
-    ) {
-        let is_visible = parent_visible && node.geometry_visible;
-        let want_markers = is_visible && crate::app::meta_pref(node, "Point Markers");
-        let want_numbers = is_visible && crate::app::meta_pref(node, "Point Numbers");
-        let want_wires = is_visible && crate::app::meta_pref(node, "Wireframe");
-        let want_normals = is_visible && crate::app::meta_pref(node, "Point Normals");
-        if want_markers || want_numbers || want_wires || want_normals {
-            let mut visited = Vec::new();
-            let mut err = None;
-            if let Some(geom) = crate::geometry::generate_single_node_geometry_with_errors(
-                root, node, &mut visited, &mut err, sim,
-            ) {
-                if want_wires {
-                    // The geometry's own edge list as LINE_LIST pairs, carrying
-                    // its own colors. Two changes from the soup version, both
-                    // of them the topology finally being visible: an edge two
-                    // faces share is drawn once instead of twice, and a quad
-                    // shows as a quad — the fan diagonal was never an edge of
-                    // the mesh, only of its triangulation.
-                    for e in geom.edges() {
-                        for &p in e {
-                            let p = p as usize;
-                            wires.push(crate::geometry::Vertex3D {
-                                position: geom.positions()[p],
-                                color: geom.color(p),
-                            });
-                        }
-                    }
+    if markers_on {
+        // One marker per point. The soup emitted one per corner and leaned
+        // on points_vertices deduping by position.
+        let src: Vec<crate::geometry::Vertex3D> = geom
+            .positions()
+            .iter()
+            .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
+            .collect();
+        markers.extend(crate::geometry::points_vertices(
+            &src,
+            point_size,
+            cce_ui::colors::to_linear_rgb(marker_color),
+        ));
+    }
+    if normals_on {
+        // Smooth point normals: for each point, the normalized sum of the
+        // face normals of the primitives touching it. Template meshes wind
+        // CCW seen from outside (the raster culling convention), so the
+        // plain cross(B-A, C-A) points outward. The kernel outputs' Norm
+        // attribute is a default up-vector — useless here.
+        //
+        // The soup had to reconstruct "which triangles touch this point" by
+        // hashing quantized positions, every frame. That was a weld in all
+        // but name, and it is what point_prims answers directly.
+        use glam::Vec3;
+        let len = point_size * 4.0;
+        let color = cce_ui::colors::to_linear_rgb([0.45, 0.8, 1.0]);
+        for p in 0..geom.num_points() {
+            let mut sum = Vec3::ZERO;
+            for &prim in geom.point_prims(p) {
+                let pts = geom.prim_points(prim as usize);
+                if pts.len() < 3 {
+                    continue;
                 }
-                if want_markers {
-                    // One marker per point. The soup emitted one per corner and
-                    // leaned on points_vertices deduping by position.
-                    let src: Vec<crate::geometry::Vertex3D> = geom
-                        .positions()
-                        .iter()
-                        .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
-                        .collect();
-                    markers.extend(crate::geometry::points_vertices(
-                        &src,
-                        point_size,
-                        cce_ui::colors::to_linear_rgb(marker_color),
-                    ));
-                }
-                if want_normals {
-                    // Smooth point normals: for each point, the normalized sum
-                    // of the face normals of the primitives touching it.
-                    // Template meshes wind CCW seen from outside (the raster
-                    // culling convention), so the plain cross(B-A, C-A) points
-                    // outward. The kernel outputs' Norm attribute is a default
-                    // up-vector — useless here.
-                    //
-                    // The soup had to reconstruct "which triangles touch this
-                    // point" by hashing quantized positions, every frame. That
-                    // was a weld in all but name, and it is what point_prims
-                    // answers directly.
-                    use glam::Vec3;
-                    let len = point_size * 4.0;
-                    let color = cce_ui::colors::to_linear_rgb([0.45, 0.8, 1.0]);
-                    for p in 0..geom.num_points() {
-                        let mut sum = Vec3::ZERO;
-                        for &prim in geom.point_prims(p) {
-                            let pts = geom.prim_points(prim as usize);
-                            if pts.len() < 3 {
-                                continue;
-                            }
-                            let a = geom.pos(pts[0] as usize);
-                            let b = geom.pos(pts[1] as usize);
-                            let c = geom.pos(pts[2] as usize);
-                            let n = (b - a).cross(c - a);
-                            if n.length_squared() > 1e-12 {
-                                sum += n;
-                            }
-                        }
-                        let n = sum.normalize_or_zero();
-                        if n == Vec3::ZERO {
-                            continue;
-                        }
-                        let pos = geom.positions()[p];
-                        let tip = geom.pos(p) + n * len;
-                        normals.push(crate::geometry::Vertex3D { position: pos, color });
-                        normals.push(crate::geometry::Vertex3D { position: tip.to_array(), color });
-                    }
-                }
-                if want_numbers {
-                    // The point's index, which is now also its spreadsheet row.
-                    // The soup numbered by first-corner-at-this-position, so
-                    // the overlay and the spreadsheet disagreed.
-                    for p in 0..geom.num_points() {
-                        labels.push((geom.positions()[p], p as u32));
-                    }
+                let a = geom.pos(pts[0] as usize);
+                let b = geom.pos(pts[1] as usize);
+                let c = geom.pos(pts[2] as usize);
+                let n = (b - a).cross(c - a);
+                if n.length_squared() > 1e-12 {
+                    sum += n;
                 }
             }
+            let n = sum.normalize_or_zero();
+            if n == Vec3::ZERO {
+                continue;
+            }
+            let pos = geom.positions()[p];
+            let tip = geom.pos(p) + n * len;
+            normals.push(crate::geometry::Vertex3D { position: pos, color });
+            normals.push(crate::geometry::Vertex3D { position: tip.to_array(), color });
         }
-        for c in &node.children {
-            visit(root, c, is_visible, point_size, marker_color, markers, labels, wires, normals, sim);
+    }
+    if numbers_on {
+        // The point's index, which is also its spreadsheet row. The soup
+        // numbered by first-corner-at-this-position, so the overlay and the
+        // spreadsheet disagreed.
+        //
+        // A dense mesh can label tens of thousands of points and the text
+        // pass is per-frame, so cap it rather than melt the frame rate.
+        const MAX_LABELS: usize = 2000;
+        for p in 0..geom.num_points().min(MAX_LABELS) {
+            labels.push((geom.positions()[p], p as u32));
         }
     }
-    for c in &start.children {
-        visit(root, c, true, point_size, marker_color, &mut markers, &mut labels, &mut wires, &mut normals, sim);
+    (markers, labels, normals)
+}
+
+/// The scene's own edges as LINE_LIST pairs for the wire pass, carrying the
+/// geometry's vertex colours.
+///
+/// The TOPOLOGICAL edge list, not the triangle soup's: an edge two faces
+/// share is drawn once instead of twice, and a quad shows as a quad — the
+/// fan diagonal was never an edge of the mesh, only of its triangulation.
+/// The soup version was what the global Show Wireframe drew until
+/// 2026-09-23, while the per-node meta Wireframe drew this one; with the
+/// per-node flag retired there is one wireframe, and it is this one.
+pub(crate) fn scene_edge_verts(geom: &crate::detail::Detail) -> Vec<crate::geometry::Vertex3D> {
+    let mut wires = Vec::new();
+    for e in geom.edges() {
+        for &p in e {
+            let p = p as usize;
+            wires.push(crate::geometry::Vertex3D {
+                position: geom.positions()[p],
+                color: geom.color(p),
+            });
+        }
     }
-    // A dense mesh can label tens of thousands of points; the text pass is
-    // per-frame, so cap it rather than melt the frame rate.
-    const MAX_LABELS: usize = 2000;
-    if labels.len() > MAX_LABELS {
-        labels.truncate(MAX_LABELS);
-    }
-    (markers, labels, wires, normals)
+    wires
 }

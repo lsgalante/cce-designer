@@ -914,10 +914,10 @@ mod tests {
         state.apply_settings_from_menubar_subnets();
         assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
         assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
-        assert!((state.meta_marker_size - 0.05).abs() < 1e-6);
-        assert!((state.meta_marker_color[0] - 1.0).abs() < 0.01);
-        assert!((state.meta_marker_color[1] - 0.5).abs() < 0.01);
-        assert!((state.meta_marker_color[2] - 0.0).abs() < 0.01);
+        assert!((state.point_marker_size - 0.05).abs() < 1e-6);
+        assert!((state.point_marker_color[0] - 1.0).abs() < 0.01);
+        assert!((state.point_marker_color[1] - 0.5).abs() < 0.01);
+        assert!((state.point_marker_color[2] - 0.0).abs() < 0.01);
     }
 
     /// An old save carries Main/View/Guides/Render at the root with the user's
@@ -2529,13 +2529,13 @@ mod tests {
         assert_eq!(gn.2, "text");
     }
 
-    /// The per-node meta (preferences) child: ensure adds it to every
-    /// geometry-producing node (idempotently, restoring stripped params),
-    /// leaves cameras and the Session tree alone, evaluation ignores it,
-    /// and the overlay walk turns its Point Markers / Point Numbers prefs
-    /// into marker geometry and index labels for visible nodes only.
+    /// The point overlays are a VIEW setting, not a node property: the
+    /// three flags decide them for the whole displayed scene, read off the
+    /// merged Detail the geometry rebuild already produced. Their per-node
+    /// `meta` children are stripped from any tree that still carries them,
+    /// cameras and the root meta node untouched.
     #[test]
-    fn test_meta_node_prefs_and_overlays() {
+    fn test_point_overlays_are_a_global_view_setting() {
         let templates_root = crate::app::load_fs_tree();
         let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
         let camera_t = templates_root.children.iter().find(|t| t.name == "Camera").unwrap();
@@ -2550,45 +2550,55 @@ mod tests {
         camera.id = "cam".to_string();
         camera.name = "Camera 1".to_string();
 
+        let meta_child = |id: &str| FsNode {
+            id: id.to_string(),
+            name: "meta".to_string(),
+            node_type: "meta".to_string(),
+            children: vec![],
+            params: vec![],
+            geometry_visible: false,
+            position: (0.0, 4.0),
+            inputs: 0,
+            outputs: 0,
+        };
+        // A tree as an older save carries it: a meta child on the sphere and
+        // on its internal stages, plus the ROOT meta node beside them.
+        sphere.children.push(meta_child("s_meta"));
+        let opencl_idx = sphere.children.iter().position(|c| c.name == "opencl1").unwrap();
+        sphere.children[opencl_idx].children.push(meta_child("s_ocl_meta"));
+        let mut session = meta_child("root_meta");
+        session.geometry_visible = true;
+
         let mut root = FsNode {
             id: "root".to_string(),
             name: "root".to_string(),
             node_type: "node".to_string(),
-            children: vec![sphere, camera],
+            children: vec![sphere, camera, session],
             params: vec![],
             geometry_visible: true,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
         };
-        crate::app::ensure_meta_children(&mut root);
 
-        // The sphere gains a meta child with both prefs; so do its opencl and
-        // output stages (uniform rule: every geometry-producing node).
-        let s = &root.children[0];
-        let meta = s.children.iter().find(|c| c.node_type == "meta").expect("sphere meta");
-        assert_eq!(
-            meta.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-            ["Point Markers", "Point Numbers", "Point Normals", "Wireframe"]
+        crate::app::strip_meta_children(&mut root);
+
+        // Gone from the placed nodes, at every depth…
+        assert!(!root.children[0].children.iter().any(|c| c.node_type == "meta"));
+        let opencl = root.children[0].children.iter().find(|c| c.name == "opencl1").unwrap();
+        assert!(!opencl.children.iter().any(|c| c.node_type == "meta"));
+        // …and the root meta node, which is the SESSION container and not a
+        // per-node child at all, is still standing.
+        assert!(
+            root.children.iter().any(|c| c.id == "root_meta" && c.node_type == "meta"),
+            "the strip took the root meta node"
         );
-        assert!(meta.params.iter().all(|p| p.default == "false"));
-        let opencl = s.children.iter().find(|c| c.name == "opencl1").unwrap();
-        assert!(opencl.children.iter().any(|c| c.node_type == "meta"));
-        // The camera does not.
-        assert!(!root.children[1].children.iter().any(|c| c.node_type == "meta"));
-
-        // Idempotent, and stripped params come back.
+        // Idempotent.
         let before = serde_json::to_string(&root).unwrap();
-        crate::app::ensure_meta_children(&mut root);
+        crate::app::strip_meta_children(&mut root);
         assert_eq!(before, serde_json::to_string(&root).unwrap());
-        root.children[0].children.iter_mut().find(|c| c.node_type == "meta").unwrap()
-            .params.retain(|p| p.name != "Point Numbers");
-        crate::app::ensure_meta_children(&mut root);
-        assert!(crate::app::meta_pref(&root.children[0], "Point Numbers") == false);
-        assert!(root.children[0].children.iter().find(|c| c.node_type == "meta").unwrap()
-            .params.iter().any(|p| p.name == "Point Numbers"));
 
-        // Evaluation is unaffected by the meta children.
+        // Evaluation is unaffected by their going.
         let mut visited = Vec::new();
         let mut err = None;
         let mut cache = crate::geometry::SimCache::default();
@@ -2598,41 +2608,30 @@ mod tests {
             &mut visited,
             &mut err,
             &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
-        ).expect("sphere with meta evaluates");
+        ).expect("the stripped sphere evaluates");
         assert!(err.is_none(), "{err:?}");
-        assert_eq!(geom.num_points(), crate::geometry::sphere_point_len(16, 24));
+        let points = crate::geometry::sphere_point_len(16, 24);
+        assert_eq!(geom.num_points(), points);
 
-        // Overlays: nothing while the prefs are off…
-        let mut cache = crate::geometry::SimCache::default();
-        let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
-        assert!(markers.is_empty() && labels.is_empty() && wires.is_empty() && normals.is_empty());
+        // Nothing while the three flags are off…
+        let (markers, labels, normals) =
+            crate::render::scene_point_overlays(&geom, false, false, false, 0.02, [1.0, 0.5, 0.0]);
+        assert!(markers.is_empty() && labels.is_empty() && normals.is_empty());
 
-        // …all four overlays for the flagged sphere: 240 marker verts per
-        // POINT, one label per point, and one LINE_LIST pair per mesh edge.
-        // All three used to be "per distinct quantized position", reconstructed
-        // every frame; they are now just the point and edge lists.
-        {
-            let meta = root.children[0].children.iter_mut()
-                .find(|c| c.node_type == "meta").unwrap();
-            for p in meta.params.iter_mut() { p.default = "true".to_string(); }
-        }
-        assert!(crate::app::meta_pref(&root.children[0], "Point Markers"));
-        assert!(crate::app::meta_pref(&root.children[0], "Wireframe"));
-        let mut cache = crate::geometry::SimCache::default();
-        let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
-        assert_eq!(labels.len(), crate::geometry::sphere_point_len(16, 24), "one label per point");
-        assert_eq!(markers.len(), labels.len() * 240);
+        // …and all three off the one Detail: 240 marker verts per POINT, one
+        // label per point, one whisker pair per point.
+        let (markers, labels, normals) =
+            crate::render::scene_point_overlays(&geom, true, true, true, 0.02, [1.0, 0.5, 0.0]);
+        assert_eq!(labels.len(), points, "one label per point");
+        assert_eq!(markers.len(), points * 240);
         assert!(labels.iter().any(|(_, i)| *i > 0));
         // The marker color parameter flows into the vertices (linearized).
         let expect = cce_ui::colors::to_linear_rgb([1.0, 0.5, 0.0]);
         assert!(markers.iter().all(|v| v.color == expect));
-        assert_eq!(wires.len(), geom.edges().len() * 2, "one pair per unique edge");
-        // Normals: one whisker per distinct point, pointing OUT of the
-        // sphere (center (0, 0.55, 0)) — this pins the winding/negation
-        // convention, not just the count.
-        assert_eq!(normals.len(), labels.len() * 2);
+        // Normals: one whisker per point, pointing OUT of the sphere
+        // (center (0, 0.55, 0)) — this pins the winding/negation convention,
+        // not just the count.
+        assert_eq!(normals.len(), points * 2);
         for pair in normals.chunks_exact(2) {
             let d = |p: &[f32; 3]| {
                 let (dx, dy, dz) = (p[0], p[1] - 0.55, p[2]);
@@ -2645,12 +2644,21 @@ mod tests {
             );
         }
 
-        // …and none once the node's geometry is hidden.
-        root.children[0].geometry_visible = false;
-        let mut cache = crate::geometry::SimCache::default();
-        let (markers, labels, wires, normals) = crate::render::collect_meta_overlays(
-            &root, &root, 0.02, [1.0, 0.5, 0.0], &mut crate::geometry::EvalSim::new(0, 0, &mut cache));
-        assert!(markers.is_empty() && labels.is_empty() && wires.is_empty() && normals.is_empty());
+        // Each flag is independent — no flag drags another in.
+        let (m, l, n) =
+            crate::render::scene_point_overlays(&geom, true, false, false, 0.02, [1.0, 0.5, 0.0]);
+        assert!(!m.is_empty() && l.is_empty() && n.is_empty());
+        let (m, l, n) =
+            crate::render::scene_point_overlays(&geom, false, true, false, 0.02, [1.0, 0.5, 0.0]);
+        assert!(m.is_empty() && !l.is_empty() && n.is_empty());
+
+        // The wire pass draws the mesh's TOPOLOGICAL edges — one pair per
+        // unique edge, not per triangle side. This is what the global Show
+        // Wireframe draws now; it drew the triangle soup until the per-node
+        // meta Wireframe (which drew this) was retired into it.
+        let wires = crate::render::scene_edge_verts(&geom);
+        assert_eq!(wires.len(), geom.edges().len() * 2, "one pair per unique edge");
+        assert!(wires.len() < geom.num_prims() * 6, "still drawing the soup's edges");
     }
 
     /// The Plane template's construction controls: Rows/Columns set the grid
@@ -6023,7 +6031,10 @@ mod tests {
         assert_eq!(get("Radius"), "0.7");
         assert_eq!(get("Scatter Seed"), "1.1", "a param the native node lacked takes the template default");
         assert!(e.children.iter().any(|c| c.name == "hull1"));
-        assert!(e.children.iter().any(|c| c.node_type == "meta" && c.params.iter().any(|p| p.name == "Point Markers")), "the meta child is kept");
+        // The per-node meta child an older save carried is stripped, here as
+        // everywhere else: merge_template_defs takes them before it matches
+        // anything, so a recompose never has one to carry over.
+        assert!(!e.children.iter().any(|c| c.node_type == "meta"), "a meta child survived the recompose");
         let (g, err) = eval(&root, e);
         assert!(err.is_none(), "{err:?}");
         let g = g.unwrap();

@@ -190,6 +190,12 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "toggle_camera_pivot", label: "Show Camera Pivot", context: Context::Viewport, run: Run::Key(Action::ToggleCameraPivot), default_chord: None },
     Command { id: "toggle_wireframe", label: "Show Wireframe", context: Context::Viewport, run: Run::Key(Action::ToggleWireframe), default_chord: None },
     Command { id: "wireframe_color", label: "Wireframe Color", context: Context::Viewport, run: Run::Key(Action::WireframeColor), default_chord: None },
+    // The point overlays on the visible scene. Per-node `meta` child
+    // preferences until 2026-09-23; global display settings now, reached
+    // here like every other viewport toggle.
+    Command { id: "toggle_point_markers", label: "Show Point Markers", context: Context::Viewport, run: Run::Key(Action::TogglePointMarkers), default_chord: None },
+    Command { id: "toggle_point_numbers", label: "Show Point Numbers", context: Context::Viewport, run: Run::Key(Action::TogglePointNumbers), default_chord: None },
+    Command { id: "toggle_point_normals", label: "Show Point Normals", context: Context::Viewport, run: Run::Key(Action::TogglePointNormals), default_chord: None },
     Command { id: "toggle_square_viewport", label: "Square Aspect", context: Context::Viewport, run: Run::Key(Action::ToggleSquareViewport), default_chord: Some("Ctrl+a") },
 
     // --- Parameters ---

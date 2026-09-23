@@ -816,7 +816,6 @@ impl State {
                         } else {
                             node.name = state.get_lowest_unused_name(&node.name);
                         }
-                        crate::app::ensure_meta_on(&mut node);
                         // New nodes arrive with their display flag OFF: the
                         // one-visible-per-directory rule means showing is an
                         // explicit act ('e', the click toggle), never a side

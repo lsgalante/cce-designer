@@ -12,6 +12,14 @@ pub enum Action {
     ToggleCameraPivot,
     ToggleWireframe,
     WireframeColor,
+    /// The three point overlays on the visible scene — markers, index
+    /// numbers, normal whiskers. Global display settings reached from the
+    /// command palette; they were per-node `meta` child preferences until
+    /// 2026-09-23, which meant a display choice had to be made one node at
+    /// a time, on a hidden child you had to dive in to find.
+    TogglePointMarkers,
+    TogglePointNumbers,
+    TogglePointNormals,
     ToggleCircularPane,
     DetachCircularWindow,
     Save,

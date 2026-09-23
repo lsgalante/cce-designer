@@ -386,7 +386,6 @@ impl State {
             let mut proj: Project = serde_json::from_str(&content)?;
             proj.sanitize_node_names();
             crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
-            crate::app::ensure_meta_children(&mut proj.root);
             let saved_pane_vis = Self::project_pane_visibility(&proj.root);
             self.fs_root = proj.root;
             // The project's viewport settings — the Guides and Render
@@ -453,7 +452,6 @@ impl State {
         let mut proj: Project = serde_json::from_str(&content)?;
         proj.sanitize_node_names();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
-        crate::app::ensure_meta_children(&mut proj.root);
         let saved_pane_vis = Self::project_pane_visibility(&proj.root);
         self.fs_root = proj.root;
         // As in the default-project branch: the file's viewport settings
@@ -996,11 +994,11 @@ impl State {
         ensure_param(guides_node, "Origin Guide Size", "spinbox", &origin_size_seed, &[], Some(1.0), Some(50.0), Some(1.0));
         let grid_color_seed = migrated_grid_color.unwrap_or_else(|| color_to_hex(vp_grid_color));
         ensure_param(guides_node, "Grid Color", "color", &grid_color_seed, &[], None, None, None);
-        // Size of the per-node meta "Point Markers" overlay, in thousandths
+        // Size of the Show Point Markers overlay, in thousandths
         // (the Grid Thickness convention): 20 = 0.02 world units.
-        let marker_size_seed = ((self.meta_marker_size * 1000.0).round() as i32).to_string();
+        let marker_size_seed = ((self.point_marker_size * 1000.0).round() as i32).to_string();
         ensure_param(guides_node, "Point Marker Size", "spinbox", &marker_size_seed, &[], Some(5.0), Some(100.0), Some(1.0));
-        let marker_color_seed = color_to_hex(self.meta_marker_color);
+        let marker_color_seed = color_to_hex(self.point_marker_color);
         ensure_param(guides_node, "Point Marker Color", "color", &marker_color_seed, &[], None, None, None);
         // What a world unit is in the real world. The geometry never
         // converts; the viewport's scale readout and `View 1:1` do.
@@ -1152,16 +1150,16 @@ impl State {
                     "Grid Color" => if let Some(col) = hex_to_color(&p.default) { self.viewport_mut().grid_color = col; }
                     "Point Marker Size" => if let Ok(val) = p.default.parse::<f32>() {
                         let size = val / 1000.0;
-                        if (size - self.meta_marker_size).abs() > 1e-6 {
-                            self.meta_marker_size = size;
+                        if (size - self.point_marker_size).abs() > 1e-6 {
+                            self.point_marker_size = size;
                             // The marker geometry bakes the radius in, so a
                             // size change re-collects the overlays.
                             self.rebuild_scene_geometry();
                         }
                     }
                     "Point Marker Color" => if let Some(col) = hex_to_color(&p.default) {
-                        if col != self.meta_marker_color {
-                            self.meta_marker_color = col;
+                        if col != self.point_marker_color {
+                            self.point_marker_color = col;
                             // Baked into the marker verts, like the radius.
                             self.rebuild_scene_geometry();
                         }

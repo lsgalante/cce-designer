@@ -519,81 +519,38 @@ pub fn flatten_node_templates(root: &FsNode) -> Vec<NodeTemplate> {
     out
 }
 
-/// Whether a node gets a `meta` (per-node preferences) child: every node the
-/// user places that can produce geometry — subnet instances and the native
-/// geometry types. Cameras, settings containers, and meta itself do not.
-fn meta_eligible(node: &FsNode) -> bool {
-    node.node_type.eq_ignore_ascii_case("node")
-        || crate::geometry::is_geometry_node_type(&node.node_type)
-}
-
-/// Ensure `node` (and its subtree) carries the per-node `meta` child where
-/// eligible, and that every existing meta has the full preference set —
-/// the migration path for saved scenes, and the instantiation path for new
-/// nodes. Idempotent; never touches the Session settings tree.
-pub fn ensure_meta_on(node: &mut FsNode) {
-    if node.node_type.eq_ignore_ascii_case("session") || node.node_type.eq_ignore_ascii_case("meta")
-    {
-        return;
-    }
-    if meta_eligible(node) {
-        if !node.children.iter().any(|c| c.node_type == "meta") {
-            node.children.push(FsNode {
-                id: generate_node_id(),
-                name: "meta".to_string(),
-                node_type: "meta".to_string(),
-                children: vec![],
-                params: vec![],
-                geometry_visible: false,
-                position: (0.0, 4.0),
-                inputs: 0,
-                outputs: 0,
-            });
-        }
-        let meta = node.children.iter_mut().find(|c| c.node_type == "meta").unwrap();
-        for (name, default) in [
-            ("Point Markers", "false"),
-            ("Point Numbers", "false"),
-            ("Point Normals", "false"),
-            ("Wireframe", "false"),
-        ] {
-            if !meta.params.iter().any(|p| p.name == name) {
-                meta.params.push(ParamDef {
-                    name: name.to_string(),
-                    label: String::new(),
-                    param_type: "toggle".to_string(),
-                    default: default.to_string(),
-                    options: Vec::new(),
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(),
-                });
-            }
+/// Strip the per-node `meta` (preferences) children from a loaded tree.
+///
+/// Every geometry node used to carry one, holding four display switches —
+/// Point Markers, Point Numbers, Point Normals, Wireframe. They were
+/// retired on 2026-09-23: what they controlled is a property of the VIEW,
+/// not of the scene, so it belongs to the viewport's own settings and the
+/// command palette (`toggle_point_markers` and friends), not to a hidden
+/// child you had to dive into a node to find and set one node at a time.
+///
+/// A migration rather than a no-op because those children ride saved
+/// projects: left in place they would show in every network as a child that
+/// does nothing, and the loader would keep them alive forever. Their VALUES
+/// are deliberately dropped — four per-node booleans do not reduce to one
+/// global switch, and inferring one ("any node asked for markers") would
+/// turn one node's preference into a setting over the whole scene.
+///
+/// The root `meta` node is a different thing entirely and is not touched
+/// here: it is the session-settings container, reached through `fs_root`'s
+/// own children rather than as a child of a placed node.
+pub fn strip_meta_children(root: &mut FsNode) {
+    fn strip(node: &mut FsNode) {
+        node.children.retain(|c| c.node_type != "meta");
+        for c in &mut node.children {
+            strip(c);
         }
     }
-    for c in &mut node.children {
-        ensure_meta_on(c);
-    }
-}
-
-/// [`ensure_meta_on`] over every node of a project tree (the root itself is a
-/// container, not a placed node).
-pub fn ensure_meta_children(root: &mut FsNode) {
+    // Entered through the root's children, exactly as `ensure_meta_children`
+    // was: the root is a container, not a placed node, and its own direct
+    // `meta` child is the SESSION node, which this must not take.
     for c in &mut root.children {
-        ensure_meta_on(c);
+        strip(c);
     }
-}
-
-/// Read a boolean preference off a node's `meta` child; absent meta or
-/// absent param reads false.
-pub fn meta_pref(node: &FsNode, name: &str) -> bool {
-    node.children
-        .iter()
-        .find(|c| c.node_type == "meta")
-        .and_then(|m| m.params.iter().find(|p| p.name == name))
-        .map(|p| p.default == "true")
-        .unwrap_or(false)
 }
 
 /// Merge template evolution into a loaded project tree, so saved scenes gain
@@ -725,6 +682,15 @@ impl Project {
 }
 
 pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
+    // The retired per-node `meta` children go first, before any matching:
+    // the merge compares a subnet instance's children against its template's
+    // name-for-name, and a stale `meta` on one side and not the other is a
+    // mismatch that costs the instance its refresh. Here rather than at the
+    // call sites because this is the one function EVERY deserialization runs
+    // — file load, the sync-channel reload, the thumbnail and the export CLI
+    // — and a migration missed at one load path is the whole failure mode.
+    strip_meta_children(root);
+
     // Legacy retypes, session->meta style: renamed native types are rewritten
     // in place (params and name intact) BEFORE matching, so old saves find the
     // renamed template and gain its new params through the normal merge.
@@ -742,8 +708,7 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     // A NATIVE embryo (node type "embryo", 2026-09-21 only) is recomposed as
     // an instance of the Embryo template, which is the same pipeline as a
     // network: id, name, position, display flag and every parameter value
-    // carry over by name, the meta child is kept, and the template's
-    // children arrive with fresh ids. Wholesale rather than through the
+    // carry over by name, and the template's children arrive with fresh ids. Wholesale rather than through the
     // merge below, which never injects children.
     fn recompose_native_embryo(node: &mut FsNode, templates: &[NodeTemplate]) {
         for c in &mut node.children {
@@ -971,6 +936,17 @@ pub struct ViewportSettings {
     /// the project, but whether its surface is drawn is how you like to work.
     #[serde(default = "default_network_plate")]
     pub network_plate: bool,
+    /// The three point overlays. Display settings like the guide toggles
+    /// above, and persisted in the same place: they were per-node `meta`
+    /// child preferences until 2026-09-23, which made a view choice into a
+    /// property of the scene. Absent from older files — off, as the meta
+    /// defaults were.
+    #[serde(default)]
+    pub show_point_markers: bool,
+    #[serde(default)]
+    pub show_point_numbers: bool,
+    #[serde(default)]
+    pub show_point_normals: bool,
 }
 
 fn default_network_plate() -> bool {
@@ -988,6 +964,9 @@ impl Default for ViewportSettings {
             show_cube_enabled: false,
             show_origin_enabled: true,
             network_plate: true,
+            show_point_markers: false,
+            show_point_numbers: false,
+            show_point_normals: false,
             origin_size: 1.0,
             grid_thickness: default_grid_thickness(),
             grid_color: default_grid_color(),
@@ -1352,12 +1331,10 @@ pub struct SceneMeshes {
     /// Selected-Group membership markers: while a Group node is selected, one
     /// marker per vertex it tags, so the selection SHOWS the group.
     pub group_points: cce_ui::vk::MeshId,
-    /// Per-node meta "Point Markers" overlay.
-    pub meta_points: cce_ui::vk::MeshId,
-    /// Per-node meta "Wireframe" overlay (LINE_LIST edge pairs).
-    pub meta_wires: cce_ui::vk::MeshId,
-    /// Per-node meta "Point Normals" overlay (LINE_LIST whiskers).
-    pub meta_normals: cce_ui::vk::MeshId,
+    /// The Show Point Markers overlay.
+    pub overlay_points: cce_ui::vk::MeshId,
+    /// The Show Point Normals overlay (LINE_LIST whiskers).
+    pub overlay_normals: cce_ui::vk::MeshId,
 }
 
 /// A left-press on the detached circular window's chrome that becomes an
@@ -1741,29 +1718,39 @@ pub struct State {
     pub group_points_dirty: bool,
     pub group_point_vertex_count: u32,
     pub last_group_points_key: Option<(String, Vec<(String, String)>, u64, i32)>,
-    /// Per-node meta (preferences) overlays, rebuilt with the scene: marker
-    /// geometry for nodes whose meta asks for Point Markers, and (position,
-    /// vertex index) labels for Point Numbers — the labels project through
-    /// `last_scene_mvp` into 2D text each frame.
-    pub meta_marker_verts: Vec<Vertex3D>,
-    pub meta_points_dirty: bool,
-    pub meta_point_count: u32,
-    pub meta_number_labels: Vec<([f32; 3], u32)>,
-    /// Per-node meta "Wireframe": LINE_LIST edge pairs of the flagged nodes'
-    /// triangles, drawn as a wire pass over the scene fill.
-    pub meta_wire_verts: Vec<Vertex3D>,
-    pub meta_wire_count: u32,
-    /// Per-node meta "Point Normals": LINE_LIST whiskers from each distinct
-    /// point along its smooth vertex normal (computed from topology — the
-    /// kernel outputs carry only a default up-normal attribute).
-    pub meta_normal_verts: Vec<Vertex3D>,
-    pub meta_normal_count: u32,
-    /// World-unit radius of the meta "Point Markers" overlay — the Guides
-    /// subnet's "Point Marker Size" control (stored there in thousandths).
-    pub meta_marker_size: f32,
-    /// sRGB color of the meta "Point Markers" overlay — the Guides subnet's
-    /// "Point Marker Color" control (stored there as hex, like Grid Color).
-    pub meta_marker_color: [f32; 3],
+    /// The point overlays on the visible scene, rebuilt with it: marker
+    /// geometry for Show Point Markers, and (position, vertex index) labels
+    /// for Show Point Numbers — the labels project through `last_scene_mvp`
+    /// into 2D text each frame.
+    ///
+    /// These were per-node preferences on a hidden `meta` child until
+    /// 2026-09-23, so seeing the point numbering of what was on screen meant
+    /// diving into each node and flipping its own switch. They are display
+    /// settings, and display settings belong to the view: three commands in
+    /// the palette (`toggle_point_markers` / `_numbers` / `_normals`) over
+    /// the flags below, persisted in `ViewportSettings` beside Show Grid.
+    pub overlay_marker_verts: Vec<Vertex3D>,
+    pub overlay_dirty: bool,
+    pub overlay_point_count: u32,
+    pub overlay_number_labels: Vec<([f32; 3], u32)>,
+    /// Show Point Normals: LINE_LIST whiskers from each distinct point along
+    /// its smooth vertex normal (computed from topology — the kernel outputs
+    /// carry only a default up-normal attribute).
+    pub overlay_normal_verts: Vec<Vertex3D>,
+    pub overlay_normal_count: u32,
+    /// The three overlay switches, flipped by their palette commands and
+    /// persisted in `ViewportSettings`.
+    pub show_point_markers: bool,
+    pub show_point_numbers: bool,
+    pub show_point_normals: bool,
+    /// The visible scene's own edges for the wire pass (LINE_LIST pairs),
+    /// rebuilt with the scene while Show Wireframe is on and empty while it
+    /// is off. Topological — see `render::scene_edge_verts`.
+    pub scene_edge_verts: Vec<Vertex3D>,
+    /// World-unit radius of the Show Point Markers overlay.
+    pub point_marker_size: f32,
+    /// sRGB color of the Show Point Markers overlay.
+    pub point_marker_color: [f32; 3],
     /// What one world unit IS — the Guides subnet's "World Unit" choice
     /// (mm / cm / m / in), persisted with the project. Geometry never
     /// converts; this is the declaration that lets the viewport state its
@@ -1935,6 +1922,9 @@ impl State {
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
                 network_plate: self.network_plate,
+                show_point_markers: self.show_point_markers,
+                show_point_numbers: self.show_point_numbers,
+                show_point_normals: self.show_point_normals,
             },
             default_project: self.default_project_setting.clone(),
         };
@@ -4251,9 +4241,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
     pub fn delete_node(&mut self, slot: usize) -> bool {
         let len = self.current_dir().children.len();
-        // The Session node is permanent, and so is each node's meta
-        // (preferences) child: every deletion route (context menu, Delete
-        // key, MCP) funnels through here, so this is the one gate.
+        // The root meta node (nee Session) is permanent: every deletion
+        // route (context menu, Delete key, MCP) funnels through here, so
+        // this is the one gate.
         if slot < len
             && matches!(self.current_dir().children[slot].node_type.as_str(), "session" | "meta")
         {
@@ -4478,7 +4468,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if let Ok(mut proj) = serde_json::from_str::<Project>(&content) {
                     proj.sanitize_node_names();
                     merge_template_defs(&mut proj.root, &node_templates);
-                    ensure_meta_children(&mut proj.root);
                     loaded_project = Some(proj);
                 }
             }
@@ -4848,16 +4837,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             group_points_dirty: false,
             group_point_vertex_count: 0,
             last_group_points_key: None,
-            meta_marker_verts: Vec::new(),
-            meta_points_dirty: false,
-            meta_point_count: 0,
-            meta_number_labels: Vec::new(),
-            meta_wire_verts: Vec::new(),
-            meta_wire_count: 0,
-            meta_normal_verts: Vec::new(),
-            meta_normal_count: 0,
-            meta_marker_size: 0.02,
-            meta_marker_color: [0.85, 0.85, 1.0],
+            overlay_marker_verts: Vec::new(),
+            overlay_dirty: false,
+            overlay_point_count: 0,
+            overlay_number_labels: Vec::new(),
+            overlay_normal_verts: Vec::new(),
+            overlay_normal_count: 0,
+            show_point_markers: settings.viewport.show_point_markers,
+            show_point_numbers: settings.viewport.show_point_numbers,
+            show_point_normals: settings.viewport.show_point_normals,
+            scene_edge_verts: Vec::new(),
+            point_marker_size: 0.02,
+            point_marker_color: [0.85, 0.85, 1.0],
             world_unit: cce_ui::units::Unit::Mm,
             pick_cache: None,
             last_scene_mvp: None,
@@ -6457,6 +6448,29 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let val = !self.wireframe;
                 self.wireframe = val;
                 self.write_render_toggle("Show Wireframe", val);
+                // The edge list is collected with the scene and dropped
+                // while the wireframe is off, so switching it on has to
+                // rebuild — there is nothing staged to draw otherwise.
+                self.rebuild_scene_geometry();
+            }
+            // The three point overlays. Each is collected in
+            // `rebuild_scene_geometry` off the scene's own Detail, so the
+            // flip has to re-run it: the meshes are built from the flags,
+            // not filtered at draw time.
+            Action::TogglePointMarkers => {
+                self.show_point_markers = !self.show_point_markers;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::TogglePointNumbers => {
+                self.show_point_numbers = !self.show_point_numbers;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::TogglePointNormals => {
+                self.show_point_normals = !self.show_point_normals;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
             }
             Action::WireframeColor => self.open_dialog_on_settings(),
             Action::ToggleSquareViewport => {
@@ -8576,16 +8590,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if self.spheres_dirty {
             self.spheres_dirty = false;
             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&self.rt_sphere_verts));
-            // Edge mesh for the wire pass: each triangle's three edges as
-            // LINE_LIST vertex pairs, carrying the same colors.
-            let mut edges = Vec::with_capacity(self.rt_sphere_verts.len() * 2);
-            for tri in self.rt_sphere_verts.chunks_exact(3) {
-                for (a, b) in [(0, 1), (1, 2), (2, 0)] {
-                    edges.push(tri[a]);
-                    edges.push(tri[b]);
-                }
-            }
-            renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&edges));
+            // Edge mesh for the wire pass, collected with the scene.
+            renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&self.scene_edge_verts));
         }
 
         // The Render node's point display: rebuilt whenever the geometry or
@@ -8621,16 +8627,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.viewport_dirty = true;
         }
 
-        // Per-node meta markers and wires, staged by rebuild_scene_geometry.
-        if self.meta_points_dirty {
-            self.meta_points_dirty = false;
-            renderer.update_mesh(meshes.meta_points, bytemuck::cast_slice(&self.meta_marker_verts));
-            self.meta_point_count = self.meta_marker_verts.len() as u32;
-            renderer.update_mesh(meshes.meta_wires, bytemuck::cast_slice(&self.meta_wire_verts));
-            self.meta_wire_count = self.meta_wire_verts.len() as u32;
+        // The point overlays, staged by rebuild_scene_geometry.
+        if self.overlay_dirty {
+            self.overlay_dirty = false;
+            renderer.update_mesh(meshes.overlay_points, bytemuck::cast_slice(&self.overlay_marker_verts));
+            self.overlay_point_count = self.overlay_marker_verts.len() as u32;
             renderer
-                .update_mesh(meshes.meta_normals, bytemuck::cast_slice(&self.meta_normal_verts));
-            self.meta_normal_count = self.meta_normal_verts.len() as u32;
+                .update_mesh(meshes.overlay_normals, bytemuck::cast_slice(&self.overlay_normal_verts));
+            self.overlay_normal_count = self.overlay_normal_verts.len() as u32;
             self.viewport_dirty = true;
         }
     }
@@ -8687,9 +8691,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
             points: renderer.create_mesh(&[]),
             group_points: renderer.create_mesh(&[]),
-            meta_points: renderer.create_mesh(&[]),
-            meta_wires: renderer.create_mesh(&[]),
-            meta_normals: renderer.create_mesh(&[]),
+            overlay_points: renderer.create_mesh(&[]),
+            overlay_normals: renderer.create_mesh(&[]),
         });
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush.
@@ -8863,18 +8866,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     // Per-node meta "Point Markers", same full-opacity tier.
-                    if self.meta_point_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.meta_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                    if self.overlay_point_count > 0 {
+                        draws.push(SceneDraw { mesh: meshes.overlay_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                     }
                     if self.vertex_count_spheres > 0 {
-                        // With wires coming — the global toggle's or any
-                        // node's meta Wireframe — the fill is pushed back by
-                        // its slope-scaled offset so the lattice reads solid.
-                        let base = if self.wireframe || self.meta_wire_count > 0 {
-                            self.wire_width
-                        } else {
-                            0.0
-                        };
+                        // With wires coming, the fill is pushed back by its
+                        // slope-scaled offset so the lattice reads solid.
+                        let base = if self.wireframe { self.wire_width } else { 0.0 };
                         draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base });
                         if self.wireframe {
                             // The wire pass rides ON TOP of the fill (never
@@ -8896,16 +8894,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             let wire_alpha = self.wire_color[3].clamp(0.0, 1.0);
                             draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0 });
                         }
-                        // Per-node meta Wireframe: the same wire pass, scoped
-                        // to the flagged nodes' edges, in geometry colors.
-                        if self.meta_wire_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.meta_wires, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: self.wire_width, wire_base_width: 0.0 });
-                        }
-                        // Per-node meta Point Normals: thin cyan whiskers,
+                        // Show Point Normals: thin cyan whiskers,
                         // width deliberately fixed (a chunky Wire Width is a
                         // wireframe styling choice, not a normals one).
-                        if self.meta_normal_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.meta_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                        if self.overlay_normal_count > 0 {
+                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
