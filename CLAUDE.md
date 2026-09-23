@@ -285,9 +285,20 @@ src/render.rs, walked with the scene's visibility chain).
 startup (the Main node's File > "Set As Default" button; absent = the bundled
 `default_project.json`). It is a POINTER, never a rewrite of
 default_project.json — that file is versioned and is the detached-window sync
-channel. A default whose path no longer exists is dropped from the settings on
-launch. Detached windows ignore it: they must keep seeding from the sync
+channel. Detached windows ignore it: they must keep seeding from the sync
 channel.
+
+**A default that cannot be opened is not forgotten.** The launch falls back to
+the bundled project and says so on the status line, keeping the pointer. Until
+2026-09-23 a path that did not exist was DELETED from the settings, reasoning
+that a dead default should not fail on every launch — the trade is the wrong
+way round. Failing costs one line of stderr and a fallback that already works;
+forgetting costs a setting the user can only restore by reopening the project
+and pressing the button again. And a path is absent for reasons that pass — a
+cloud-synced folder the daemon has not mounted yet, an external drive, an
+autostart that beat the network — so the one launch that raced the filesystem
+took the setting with it, silently. (Found exactly that way: a default under
+`~/Dropbox` that stopped opening, with the key simply gone from state.kdl.)
 
 `DesignSettings` (viewport/graph display state the app rewrites itself:
 colors, grid sizes, show flags) persists to `state.kdl` — deliberately NOT

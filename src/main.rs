@@ -141,6 +141,37 @@ mod tests {
             "chooser must start where the current project lives");
     }
 
+    /// A default project that is not there at launch is not FORGOTTEN. It
+    /// used to be deleted from the settings on the reasoning that a dead
+    /// pointer should not fail every launch — but a path is absent for
+    /// reasons that pass (a cloud-synced folder the daemon has not mounted
+    /// yet, an external drive, an autostart that beat the network), and the
+    /// one launch that raced the filesystem took a setting the user could
+    /// only restore by reopening the project and pressing the button again.
+    #[test]
+    fn a_default_project_that_is_missing_is_not_forgotten() {
+        let gone = std::env::temp_dir().join(format!("cce-designer-no-such-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&gone);
+        assert!(!gone.exists());
+
+        let mut state = State::new(false);
+        let before = state.fs_root.children.len();
+        state.default_project_setting = Some(gone.to_string_lossy().into_owned());
+        state.load_default_project_setting();
+
+        assert_eq!(
+            state.default_project_setting.as_deref(),
+            Some(gone.to_string_lossy().as_ref()),
+            "the pointer survives a launch that could not see it"
+        );
+        assert_eq!(state.fs_root.children.len(), before, "and the bundled project still stands");
+        assert!(
+            state.last_status_text.contains("not found"),
+            "the status line says so: {}",
+            state.last_status_text
+        );
+    }
+
     /// The default-project pointer must survive the KDL round trip state.kdl
     /// actually goes through — serde alone passing means nothing if
     /// json_to_kdl_string / parse_kdl_to_json drop or retype the field.

@@ -507,21 +507,30 @@ impl State {
 
     /// Open the configured startup project, if any. Main window only — the
     /// detached windows must keep seeding from default_project.json, which is
-    /// their sync channel with the parent. A missing or unloadable default
-    /// falls back to what State::new already loaded, and a default that no
-    /// longer exists is dropped from the settings so it does not fail on every
-    /// launch from now on.
+    /// their sync channel with the parent.
+    ///
+    /// A default that cannot be opened — gone, or unreadable — falls back to
+    /// what `State::new` already loaded and **keeps the setting**, saying so
+    /// on the status line. It used to DELETE the pointer on a path that did
+    /// not exist, reasoning that a dead default should not fail on every
+    /// launch. The trade is the wrong way round: failing costs one line of
+    /// stderr and a fallback that already works, while forgetting costs the
+    /// user a setting they cannot get back without reopening the project and
+    /// pressing the button again. And a path is absent for reasons that pass
+    /// — a cloud-synced folder the daemon has not mounted yet, an external
+    /// drive, a machine that autostarts the app before the network is up —
+    /// so the one launch that raced the filesystem took the setting with it.
     pub(crate) fn load_default_project_setting(&mut self) {
         let Some(configured) = self.default_project_setting.clone() else { return };
         let path = std::path::PathBuf::from(&configured);
         if !path.exists() {
-            eprintln!("Default project is gone, clearing the setting: {configured}");
-            self.default_project_setting = None;
-            self.save_settings();
+            eprintln!("Default project is not there right now: {configured}");
+            self.update_status_text(&format!("Default project not found: {configured}"));
             return;
         }
         if let Err(e) = self.load_from_file(&path) {
             eprintln!("Failed to load default project {configured}: {e:?}");
+            self.update_status_text(&format!("Default project would not open: {configured}"));
         }
     }
 
