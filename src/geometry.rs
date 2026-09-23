@@ -4816,8 +4816,56 @@ struct OpenClCache {
 
 static OPENCL_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<OpenClCache>>> = std::sync::OnceLock::new();
 
+/// Every `clGetPlatformIDs` in this process goes through here, one at a time.
+///
+/// **Enumerating OpenCL platforms is not safe to call concurrently on this
+/// stack.** Mesa's Rusticl ICD closes a file descriptor it does not own while
+/// enumerating — caught under `strace -k` on 2026-09-23, the stack reading
+/// `__close` <- libRusticlOpenCL <- `clIcdGetPlatformIDsKHR` <-
+/// `clGetPlatformIDs`. The fd it closes has already been recycled to whatever
+/// another thread opened a moment earlier, so that thread's next `read` comes
+/// back `EBADF` on a file nothing was wrong with.
+///
+/// What it looked like: roughly one suite run in eight failed somewhere
+/// unrelated, most often `test_every_template_names_a_type_something_resolves`
+/// reporting "load_fs_tree returned 50 of 51 templates" — a node template
+/// whose `fs::read_to_string` had been handed EBADF and which `load_fs_tree`
+/// then dropped without a word. Four tests probed the platform independently
+/// to decide whether to skip, and with the suite running its tests in
+/// parallel those probes overlapped each other and everything else.
+///
+/// Serializing is this side of the fix and [`has_opencl_platform`] is the
+/// other: together they take a process from dozens of overlapping
+/// enumerations to two that cannot overlap. The bug is in the ICD and cannot
+/// be fixed from here — what can be fixed is how often, and how
+/// concurrently, we ask.
+fn probe_platforms() -> Vec<opencl3::platform::Platform> {
+    static PROBE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A poisoned probe lock carries no state worth protecting.
+    let _serialize = PROBE.lock().unwrap_or_else(|e| e.into_inner());
+    get_platforms().unwrap_or_default()
+}
+
+/// Whether this machine has an OpenCL platform at all, asked ONCE per process.
+///
+/// The answer cannot change while the process runs, and asking costs an
+/// enumeration — which, per [`probe_platforms`], is the thing that corrupts
+/// unrelated file descriptors. Every test that skips itself without a
+/// platform reads this rather than probing for itself.
+pub(crate) fn has_opencl_platform() -> bool {
+    static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS.get_or_init(|| {
+        // `CCE_KERNEL_CPU=1` means the CPU backend, so there is nothing to
+        // ask — and asking is what loads the ICD and costs a descriptor.
+        // Answering without probing is what makes the variable a usable
+        // workaround for the bug above rather than half of one: it took the
+        // suite from roughly one run in eight to none.
+        !crate::kernel_cpu::forced() && !probe_platforms().is_empty()
+    })
+}
+
 fn init_opencl() -> Option<OpenClCache> {
-    let platforms = get_platforms().ok()?;
+    let platforms = probe_platforms();
     if platforms.is_empty() {
         return None;
     }
@@ -4857,6 +4905,14 @@ pub fn run_opencl_kernel(code: &str, geom: &mut Geometry) -> Result<(), String> 
 }
 
 pub fn run_opencl_kernel_with_params(code: &str, geom: &mut Geometry, params: &[f32]) -> Result<(), String> {
+    // One gate, so no path can load the ICD once the CPU backend is forced —
+    // not the fallback in `apply_opencl`, not the cross-backend test that
+    // calls straight in here. Reported as the no-platform error every caller
+    // already handles, because "you told me not to use OpenCL" and "there is
+    // no OpenCL" want the same response from all of them.
+    if crate::kernel_cpu::forced() {
+        return Err("No OpenCL platforms/devices found (CCE_KERNEL_CPU is set)".to_string());
+    }
     let is_generator = code.contains("out_count");
     if geom.vertices.is_empty() && !is_generator {
         return Ok(());
@@ -6323,7 +6379,7 @@ mod tests {
 
     #[test]
     fn test_attribute_abi_matches_across_both_backends() {
-        if opencl3::platform::get_platforms().unwrap_or_default().is_empty() {
+        if !crate::geometry::has_opencl_platform() {
             println!("Skipping cross-backend attribute ABI test: no OpenCL platform");
             return;
         }
@@ -6538,7 +6594,7 @@ mod tests {
 
     #[test]
     fn test_opencl_deformer_mode() {
-        if opencl3::platform::get_platforms().unwrap_or_default().is_empty() {
+        if !crate::geometry::has_opencl_platform() {
             println!("Skipping OpenCL deformer test: No OpenCL platforms found");
             return;
         }
@@ -6568,7 +6624,7 @@ mod tests {
 
     #[test]
     fn test_opencl_generator_mode() {
-        if opencl3::platform::get_platforms().unwrap_or_default().is_empty() {
+        if !crate::geometry::has_opencl_platform() {
             println!("Skipping OpenCL generator test: No OpenCL platforms found");
             return;
         }
@@ -6890,7 +6946,7 @@ mod tests {
 
     #[test]
     fn test_opencl_local_node() {
-        if opencl3::platform::get_platforms().unwrap_or_default().is_empty() {
+        if !crate::geometry::has_opencl_platform() {
             println!("Skipping OpenCL local node test: No OpenCL platforms found");
             return;
         }

@@ -365,6 +365,55 @@ off both by cce-ui default and in practice. Config the suite still reads is
 cosmetic in the same way (colors, fonts, plate radii), and no test asserts on
 it; the empty-`$XDG_CONFIG_HOME` run is how to check that claim again.
 
+### The OpenCL ICD corrupts unrelated file descriptors
+
+**Mesa's Rusticl ICD closes a file descriptor it does not own**, somewhere
+under `clGetPlatformIDs`. Caught under `strace -k` on 2026-09-23, the stack
+reading `__close` <- `libRusticlOpenCL.so` <- `clIcdGetPlatformIDsKHR` <-
+`clGetPlatformIDs`. By the time it closes, that descriptor number has been
+recycled to whatever another thread opened a moment earlier, so that thread's
+next `read` comes back **EBADF on a file nothing is wrong with**.
+
+It surfaced as a flake with no apparent connection to any of this: roughly one
+`cargo test` run in eight failed somewhere unrelated, most often
+`test_every_template_names_a_type_something_resolves` reporting "load_fs_tree
+returned 50 of 51 templates". The victim is whichever file lost the race —
+`sphere.json`, `output.json`, `hull.json`, a different one each time — and the
+tests that then failed were simply the ones that needed it.
+
+Three things follow, and the order they were tried in is worth keeping,
+because two of the three plausible fixes did nothing:
+
+- **Probing less often does NOT help.** Four tests each called
+  `get_platforms()` to decide whether to skip; caching the answer
+  (`has_opencl_platform`) and serializing every enumeration behind one mutex
+  (`probe_platforms`) took a process from dozens of overlapping enumerations
+  to two that cannot overlap — and the failure rate did not move (9 in 80,
+  against 10 in 60 before). The dangerous window is opening the ICD at all,
+  once per process, not how many times we ask afterwards. Both are kept
+  anyway: they are right on their own terms and cost nothing.
+- **Forcing the CPU backend did not help either, until it actually meant it.**
+  `CCE_KERNEL_CPU=1` selected the CPU kernel path but everything still
+  *probed*, and `cpu_matches_opencl_on_every_shipped_kernel` called straight
+  into `run_opencl_kernel_with_params`. That function now refuses at the top
+  when the backend is forced — one gate, reported as the no-platform error
+  every caller already handles — so forced-CPU never loads the ICD.
+- **What actually works is not loading the ICD.** `CCE_KERNEL_CPU=1 cargo
+  test` is the reliable way to run the suite, and `OCL_ICD_VENDORS=<empty
+  dir>` is the sharper instrument for confirming the ICD is the cause: with no
+  vendor to load, the EBADF failures disappear outright.
+
+The bug is in the ICD and cannot be fixed from here. What can be fixed is
+never being silent about the damage: `load_fs_tree` used to drop a template it
+could not read or parse inside an `if let Ok` pair, so the node just left the
+palette — which looks nothing like an I/O error and nothing like a parse error
+either. It says which file and why now, on stderr. That one change is what
+turned an afternoon of bisecting into a diagnosis.
+
+The app is far less exposed than the suite: it reads its templates at startup,
+on one thread, before OpenCL is in play. The suite is exposed because libtest
+runs its tests in parallel.
+
 ### Conditional parameter rows
 
 A `ParamDef` may carry `show_when`, a condition over its SIBLINGS' current

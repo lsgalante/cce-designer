@@ -858,11 +858,27 @@ pub fn load_fs_tree() -> FsNode {
         paths.sort();
         
         let mut raw_nodes = Vec::new();
+        // A template that cannot be read or parsed is DROPPED, and saying so
+        // is the whole point of these two arms. It used to be an `if let Ok`
+        // pair: the node simply left the palette, which looks nothing like a
+        // parse error and nothing like an I/O error either. That silence cost
+        // an afternoon on 2026-09-23, when a stray `close()` from the OpenCL
+        // ICD (see `has_opencl_platform` in geometry.rs) was handing these
+        // reads EBADF at random and the only symptom was a template count
+        // that came up one short in a test far away.
         for path in paths {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(node) = serde_json::from_str::<FsNode>(&content) {
-                    raw_nodes.push(node);
-                }
+            match fs::read_to_string(&path) {
+                Ok(content) => match serde_json::from_str::<FsNode>(&content) {
+                    Ok(node) => raw_nodes.push(node),
+                    Err(e) => eprintln!(
+                        "cce-designer: dropping node template {} — it does not parse: {e}",
+                        path.display()
+                    ),
+                },
+                Err(e) => eprintln!(
+                    "cce-designer: dropping node template {} — it could not be read: {e}",
+                    path.display()
+                ),
             }
         }
 
@@ -1070,21 +1086,38 @@ fn hex_to_float_array(hex: &str) -> Option<[f32; 3]> {
 }
 
 /// Where `cfg(test)` builds keep the files the installed app keeps under
-/// `<config home>/cce/cce-designer/` — a directory of this process's own,
+/// `<config home>/cce/cce-designer/` — a directory of this TEST's own,
 /// created on first use.
 ///
-/// Per PROCESS, so two suites running at once (another session's, a second
-/// terminal's) cannot read each other's writes, and stable within one, so a
-/// save and the load after it agree about where the file is.
+/// Per process, so two suites running at once (another session's, a second
+/// terminal's) cannot read each other's writes. And per TEST within a
+/// process, because settings are shared mutable state and libtest runs tests
+/// in parallel threads: `the_suite_does_not_write_the_users_own_settings`
+/// runs the plate toggle, which SAVES `network_plate = false`, and with one
+/// file between them every `State::new` racing it loaded that and came up
+/// with the plate switched off — `test_the_network_plate_is_an_option`
+/// failing perhaps one run in six, in an assertion about a row in the View
+/// node. Nothing in the suite had ever toggled a setting before
+/// 2026-09-23, so this was not a pre-existing race so much as one that
+/// arrived with the test that could trigger it.
+///
+/// libtest names each thread after the test running on it, which is what
+/// makes the split possible without every test having to opt in. A thread
+/// with no name — a helper the test spawned — shares the process-wide
+/// directory, which is the old behaviour and is right: it belongs to
+/// whichever test spawned it.
 #[cfg(test)]
 pub(crate) fn test_config_dir() -> std::path::PathBuf {
-    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-    DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("cce-designer-test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        dir
-    })
-    .clone()
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let root = ROOT
+        .get_or_init(|| std::env::temp_dir().join(format!("cce-designer-test-{}", std::process::id())))
+        .clone();
+    let dir = match std::thread::current().name() {
+        Some(t) => root.join(t.replace(|c: char| !c.is_ascii_alphanumeric(), "_")),
+        None => root,
+    };
+    let _ = fs::create_dir_all(&dir);
+    dir
 }
 
 impl DesignSettings {
