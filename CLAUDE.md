@@ -308,6 +308,36 @@ files migrate on load. Scroll behavior (`scroll_speed`, `inertial_scroll`,
 `scroll_friction`) is intentionally absent: it is config-owned
 (`input.inertial` in config.kdl) and must not be shadowed by app state.
 
+**The path honors `$XDG_CONFIG_HOME`**, resolved through
+`cce_ui::config::cce_config_dir()` like every other app in the workspace —
+this one hardcoded `$HOME/.config` until 2026-09-23 and was the only holdout.
+
+**And under `cfg(test)` it is a temp directory**, which is the part worth
+knowing. `State::new` loads the bundled project, and
+`apply_settings_from_menubar_subnets` copies that project's meta subnets over
+the live viewport flags; so any test that then reached `save_settings` —
+`run_command("toggle_network_plate")`, the dialog's toggle rows — wrote the
+BUNDLED project's show_grid / show_cube / show_origin over the user's real
+state.kdl. `cargo test` reset three of the user's own toggles on every run,
+and the run was green either way. `Project::load_recent_files` /
+`save_recent_files` are gated the same way, for a variant of the same reason:
+cce-ui derives that path from the EXE's basename, so test binaries had left
+seven real `~/.config/cce/cce_designer-<hash>/` directories behind.
+
+The redirect is in `DesignSettings::file_path` itself rather than in an
+environment variable the test module sets, because a variable leaves the
+guarantee resting on every future test remembering to set it BEFORE touching
+`State` — and the test that forgets destroys real settings, leaving nothing
+behind but toggles that came back wrong. `the_suite_does_not_write_the_users_own_settings`
+is the backstop: it spells the real path out itself (`file_path()` being the
+thing under test), runs the plate toggle, and asserts both that a settings
+file was actually written — or the check is vacuous — and that the real one
+did not move.
+
+What tests still READ is the real `~/.config/cce/config.kdl`, for grid pitch
+and the rest of the toolkit config. That is untouched and deliberate: it is
+read-only, and the suite's expectations are already calibrated against it.
+
 ### Conditional parameter rows
 
 A `ParamDef` may carry `show_when`, a condition over its SIBLINGS' current

@@ -57,7 +57,19 @@ impl State {
         self.title = title;
     }
 
+    /// The recent list, from `<config home>/cce/<app>/recent-files.kdl`.
+    ///
+    /// Empty under test, and the write below is skipped there for the same
+    /// reason [`DesignSettings::file_path`](crate::app::DesignSettings) is
+    /// redirected: the toolkit derives that path from the EXE's basename, so
+    /// a test binary wrote a real `~/.config/cce/cce_designer-<hash>/` of its
+    /// own — seven of them had accumulated by 2026-09-23. Reading is no safer
+    /// than writing, either: a test that loaded the real list would assert
+    /// against whatever projects happen to be on the machine running it.
     pub(crate) fn load_recent_files() -> Vec<std::path::PathBuf> {
+        if cfg!(test) {
+            return Vec::new();
+        }
         cce_ui::config::load_recent_files()
             .into_iter()
             .map(std::path::PathBuf::from)
@@ -65,6 +77,9 @@ impl State {
     }
 
     fn save_recent_files(files: &[std::path::PathBuf]) {
+        if cfg!(test) {
+            return;
+        }
         let string_files: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
         cce_ui::config::save_recent_files(&string_files);
     }

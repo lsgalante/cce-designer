@@ -1040,15 +1040,53 @@ fn hex_to_float_array(hex: &str) -> Option<[f32; 3]> {
     cce_ui::color::parse_hex_rgb(hex)
 }
 
+/// Where `cfg(test)` builds keep the files the installed app keeps under
+/// `<config home>/cce/cce-designer/` — a directory of this process's own,
+/// created on first use.
+///
+/// Per PROCESS, so two suites running at once (another session's, a second
+/// terminal's) cannot read each other's writes, and stable within one, so a
+/// save and the load after it agree about where the file is.
+#[cfg(test)]
+pub(crate) fn test_config_dir() -> std::path::PathBuf {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("cce-designer-test-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    })
+    .clone()
+}
+
 impl DesignSettings {
-    fn file_path() -> std::path::PathBuf {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let mut path = std::path::PathBuf::from(home);
-        path.push(".config");
-        path.push("cce");
-        path.push("cce-designer");
-        path.push("state.kdl");
-        path
+    /// `<config home>/cce/cce-designer/state.kdl`, resolved through the
+    /// toolkit's own base directory so `$XDG_CONFIG_HOME` is honored. Every
+    /// other app in the workspace already goes through `cce_config_dir`;
+    /// this one hardcoded `$HOME/.config` and was the only holdout.
+    #[cfg(not(test))]
+    pub(crate) fn file_path() -> std::path::PathBuf {
+        cce_ui::config::cce_config_dir().join("cce-designer").join("state.kdl")
+    }
+
+    /// The same file under test, in a temp directory — and that redirect is
+    /// not a convenience.
+    ///
+    /// `State::new` loads the BUNDLED project, whose meta subnets overwrite
+    /// the live viewport flags through `apply_settings_from_menubar_subnets`.
+    /// So any test that then reached `save_settings` — `toggle_network_plate`,
+    /// the dialog's toggle rows — wrote the bundled project's
+    /// show_grid / show_cube / show_origin over the user's own state.kdl.
+    /// `cargo test` reset three of the user's toggles on every run, and
+    /// nothing about the run looked wrong afterwards.
+    ///
+    /// The redirect lives in the path itself rather than in an environment
+    /// variable the test module sets, because that would leave the guarantee
+    /// resting on every future test remembering to set the variable before
+    /// touching `State` — and the one test that forgets destroys real
+    /// settings silently. There is nothing here to remember.
+    #[cfg(test)]
+    pub(crate) fn file_path() -> std::path::PathBuf {
+        test_config_dir().join("state.kdl")
     }
 
     fn load_kdl(path: &std::path::Path) -> Option<Self> {

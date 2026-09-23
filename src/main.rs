@@ -5097,16 +5097,59 @@ mod tests {
         assert!(!state.layout_current_level());
     }
 
+    /// `cargo test` must not write the user's own settings.
+    ///
+    /// It did, until 2026-09-23. `DesignSettings::file_path` hardcoded
+    /// `$HOME/.config/cce/cce-designer/state.kdl`, and `State::new` loads the
+    /// BUNDLED project, whose meta subnets overwrite the live viewport flags —
+    /// so any test that reached `save_settings` wrote the bundled project's
+    /// show_grid / show_cube / show_origin over the user's. Every run of the
+    /// suite silently reset three of their toggles, and the run looked green.
+    ///
+    /// The real path is spelled out here rather than read from `file_path()`,
+    /// which is the thing under test and now answers with a temp directory.
+    #[test]
+    fn the_suite_does_not_write_the_users_own_settings() {
+        let real = cce_ui::config::cce_config_dir().join("cce-designer").join("state.kdl");
+        let before = std::fs::read(&real).ok();
+
+        assert!(
+            !crate::app::DesignSettings::file_path()
+                .starts_with(cce_ui::config::cce_config_dir()),
+            "the suite writes settings inside the real cce config directory"
+        );
+
+        // The flip that carried the damage: it marks settings dirty and
+        // `execute_action` saves at the end of the action.
+        let mut state = State::new(false);
+        let plate = state.network_plate;
+        assert!(state.run_command("toggle_network_plate"));
+        assert_ne!(state.network_plate, plate, "the toggle did not flip the plate");
+
+        // Without this the test passes on a save that never happened, which
+        // is exactly the bug wearing a different face.
+        assert!(
+            crate::app::DesignSettings::file_path().exists(),
+            "no settings file was written at all — the assertion below proves nothing"
+        );
+        assert_eq!(
+            std::fs::read(&real).ok(),
+            before,
+            "{} changed — a test wrote the user's real settings",
+            real.display()
+        );
+    }
+
     /// The network plate is optional, and the option is reachable three ways
     /// that cannot disagree: the View settings node's toggle, the network
     /// pane's View menu, and the command palette.
     ///
-    /// The toggle is NOT exercised here. Flipping it marks settings dirty and
-    /// `execute_action` then writes `~/.config/cce/cce-designer/state.kdl` —
-    /// the real one, since tests run with the real HOME — so a test that
-    /// toggled it would rewrite the user's own settings as a side effect. What
-    /// is asserted instead is everything around the flip: the default, the
-    /// wiring, and the mirror.
+    /// The flip itself is exercised by
+    /// `the_suite_does_not_write_the_users_own_settings`, which is what it is
+    /// for: until the settings path was redirected under test, flipping the
+    /// plate here would have rewritten the user's own state.kdl as a side
+    /// effect. What is asserted below is everything around the flip — the
+    /// default, the wiring, and the mirror.
     #[test]
     fn test_the_network_plate_is_an_option() {
         use crate::command::{by_id, Run};
