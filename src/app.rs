@@ -376,6 +376,25 @@ pub enum NetworkMenuAction {
     Separator,
 }
 
+/// A mouse drag that moves the whole selection, not just the node under the
+/// pointer.
+///
+/// The widget drags ONE node — it has one `dragging_idx` — so the companions
+/// are moved here, rigidly, by the offset the dragged node has travelled.
+/// Their ORIGINAL cells are kept rather than stepped each frame: a drag is a
+/// continuous gesture reported in whole cells, so accumulating the steps would
+/// drift the group apart the first time two motion events resolved to the same
+/// cell.
+#[derive(Debug, Clone)]
+pub struct NodeDragGroup {
+    /// The slot the pointer grabbed — the widget's own dragged node.
+    pub dragged: usize,
+    /// The cell it started on; every offset is measured from here.
+    pub from: (i32, i32),
+    /// The rest of the selection, with the cells they started on.
+    pub others: Vec<(usize, (f32, f32))>,
+}
+
 /// The command ids the network context menu offers, in order; `None` is a
 /// separator. Add Node leads because right-clicking empty space USED to open
 /// the add-node palette outright, and that is still the common reason to come
@@ -1426,6 +1445,9 @@ pub struct State {
     /// that gets missed at one of them, and a cursor left stretched across
     /// the sheet is not a subtle wrong.
     pub grid_cursor_expanse: Option<((i32, i32), (i32, i32))>,
+    /// A node drag that is carrying the whole selection. `None` for an
+    /// ordinary one-node drag, which the widget handles by itself.
+    pub node_drag_group: Option<NodeDragGroup>,
     /// The anchor of a LIVE expansion drag — a left press on empty grid,
     /// cleared on release. `Some` is what makes motion grow the region
     /// rather than do nothing; the region it leaves behind outlives it.
@@ -4585,6 +4607,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             grid_cursor_row: 0,
             grid_cursor_expanse: None,
             grid_cursor_drag: None,
+            node_drag_group: None,
             modifiers: ModifiersState::default(),
             width: lw,
             height: lh,
@@ -5871,6 +5894,28 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         true
     }
 
+    /// Lay the drag group's companions out around `dest`, the cell the dragged
+    /// node is on (or heading for), keeping the shape the selection had when
+    /// the drag began.
+    ///
+    /// They translate rigidly and are NOT walked off occupied cells the way
+    /// the widget walks the node it drags: a whole selection that rearranged
+    /// itself around whatever it passed over would not be the selection you
+    /// picked up. It is the same bargain `network_move_node` has always made
+    /// with alt+hjkl.
+    fn drag_group_to(&mut self, dest: (i32, i32)) {
+        let Some(group) = self.node_drag_group.clone() else { return };
+        let (dc, dr) = (dest.0 - group.from.0, dest.1 - group.from.1);
+        let len = self.current_dir().children.len();
+        for (slot, origin) in group.others {
+            if slot < len {
+                self.current_dir_mut().children[slot].position =
+                    (origin.0 + dc as f32, origin.1 + dr as f32);
+            }
+        }
+        self.sync_nodes();
+    }
+
     /// Close an expansion drag by shrinking the region onto what it caught:
     /// the bounding box of the selected nodes, or — with nothing caught — one
     /// cell at the middle of where the region stood.
@@ -6460,6 +6505,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 child.position = node.position;
             }
         }
+        // Not while a group drag is carrying the selection: the anchor is
+        // holding the region still on purpose, and yanking it onto the
+        // dragged node's cell would collapse the selection mid-gesture.
+        if self.node_drag_group.is_some() {
+            return;
+        }
         if let Some(sel_idx) = self.graph().selected_node() {
             if let Some(node) = updated_nodes.get(sel_idx) {
                 self.grid_cursor_col = node.position.0 as i32;
@@ -6916,6 +6967,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                         } {
                             changed = true;
+                            if idx == CONTENT_IDX && self.node_drag_group.is_some() {
+                                // The companions follow in whole cells, from
+                                // where the widget says the dragged body will
+                                // LAND (`drop_target_cell_rect` runs
+                                // commit_drag's own resolution) — so the
+                                // selection previews the same arrangement the
+                                // release will make, rather than one measured
+                                // off the free-floating ghost.
+                                if let Some((rx, ry, rw, rh)) = self.graph().drop_target_cell_rect() {
+                                    let dest = self.cell_at(rx + rw * 0.5, ry + rh * 0.5);
+                                    self.drag_group_to(dest);
+                                }
+                            }
                             if idx == PARAM_IDX {
                                 self.sync_parameters_to_project();
                             } else if idx == crate::slots::DIALOG_PARAMS_IDX {
@@ -7480,8 +7544,34 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                     let dir = self.current_dir();
                                     if slot_idx < dir.children.len() {
                                         let pos = dir.children[slot_idx].position;
-                                        self.grid_cursor_col = pos.0 as i32;
-                                        self.grid_cursor_row = pos.1 as i32;
+                                        // A press on a node INSIDE the
+                                        // selection picks up the whole of it
+                                        // and leaves the cursor alone: moving
+                                        // the anchor onto the pressed node is
+                                        // exactly what collapses a region, so
+                                        // the selection would be gone before
+                                        // the drag began. A press on a node
+                                        // outside it does move the anchor, and
+                                        // that collapse is the right one —
+                                        // clicking an unselected node selects
+                                        // that node.
+                                        let selected = self.selected_slots();
+                                        if selected.len() > 1 && selected.contains(&slot_idx) {
+                                            let cells: Vec<(usize, (f32, f32))> = selected
+                                                .iter()
+                                                .copied()
+                                                .filter(|&i| i != slot_idx)
+                                                .map(|i| (i, dir.children[i].position))
+                                                .collect();
+                                            self.node_drag_group = Some(NodeDragGroup {
+                                                dragged: slot_idx,
+                                                from: (pos.0 as i32, pos.1 as i32),
+                                                others: cells,
+                                            });
+                                        } else {
+                                            self.grid_cursor_col = pos.0 as i32;
+                                            self.grid_cursor_row = pos.1 as i32;
+                                        }
                                     }
                                 } else {
                                     // Empty grid: the cursor goes to the cell
@@ -7596,7 +7686,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                         child.position = node.position;
                                     }
                                 }
-                                if let Some(sel_idx) = self.graph().selected_node() {
+                                if let Some(group) = self.node_drag_group.take() {
+                                    // Re-lay the companions from the cell the
+                                    // dragged node actually COMMITTED to: the
+                                    // widget walks it off an occupied cell, so
+                                    // the preview's offset can be a cell out
+                                    // from the one that landed.
+                                    let dest = updated_nodes
+                                        .get(group.dragged)
+                                        .map(|n| (n.position.0 as i32, n.position.1 as i32))
+                                        .unwrap_or(group.from);
+                                    self.node_drag_group = Some(group.clone());
+                                    self.drag_group_to(dest);
+                                    self.node_drag_group = None;
+                                    // The region travels with what it holds,
+                                    // as it does for alt+hjkl — the anchor sat
+                                    // still through the drag precisely so it
+                                    // would still be there to move.
+                                    self.shift_grid_cursor(dest.0 - group.from.0, dest.1 - group.from.1);
+                                } else if let Some(sel_idx) = self.graph().selected_node() {
                                     if let Some(node) = updated_nodes.get(sel_idx) {
                                         self.grid_cursor_col = node.position.0 as i32;
                                         self.grid_cursor_row = node.position.1 as i32;

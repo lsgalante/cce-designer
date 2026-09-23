@@ -8759,6 +8759,86 @@ mod tests {
         assert_eq!(state.grid_cursor_region(), (3, 5, 1, 1));
     }
 
+    /// Dragging a node that is part of the selection carries the whole
+    /// selection with it, rigidly, and the region travels too. Dragging a node
+    /// OUTSIDE the selection is the ordinary one-node drag, and collapses the
+    /// selection onto what was grabbed.
+    #[test]
+    fn dragging_a_selected_node_carries_the_selection() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+
+        let mut redraw = false;
+        for (name, x, y) in [("a", 1.0, 5.0), ("b", 2.0, 7.0), ("c", 1.0, 11.0)] {
+            state
+                .apply_action(
+                    crate::app::McpAction::AddNode {
+                        template_name: "Plane".into(),
+                        name: Some(name.into()),
+                        x,
+                        y,
+                    },
+                    &mut redraw,
+                )
+                .unwrap();
+        }
+        state.rebuild_positions();
+        state.apply_layout();
+        let slot = |state: &State, name: &str| {
+            state.current_dir().children.iter().position(|c| c.name == name).expect(name)
+        };
+        let (a, b, c) = (slot(&state, "a"), slot(&state, "b"), slot(&state, "c"));
+
+        let move_to = |state: &mut State, (col, row): (i32, i32)| {
+            let (x, y) = state.cell_center(col, row);
+            state.handle_event(&WindowEvent::CursorMoved {
+                position: LocalPosition { x: x as f64, y: y as f64 },
+            });
+        };
+
+        // Select a and b by dragging a box round them; it settles onto their
+        // bounding box, (1, 5) to (2, 7).
+        move_to(&mut state, (0, 4));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        move_to(&mut state, (3, 9));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert_eq!(state.grid_cursor_region(), (1, 5, 2, 3));
+        assert_eq!(state.selected_slots(), vec![a, b]);
+
+        // Grab b — one of the selected — and drag it one cell right and one
+        // down. Both travel; c, unselected, does not.
+        move_to(&mut state, (2, 7));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(state.node_drag_group.is_some(), "the press picked up the selection");
+        assert_eq!(state.grid_cursor_region(), (1, 5, 2, 3), "the press left the region alone");
+        move_to(&mut state, (3, 8));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+
+        assert!(state.node_drag_group.is_none());
+        assert_eq!(state.current_dir().children[b].position, (3.0, 8.0), "the grabbed node");
+        assert_eq!(state.current_dir().children[a].position, (2.0, 6.0), "carried along");
+        assert_eq!(state.current_dir().children[c].position, (1.0, 11.0), "not selected");
+        assert_eq!(state.grid_cursor_region(), (2, 6, 2, 3), "the region came too");
+        assert_eq!(state.selected_slots(), vec![a, b], "still the same two");
+
+        // Grabbing c, which is NOT selected, is the ordinary one-node drag:
+        // the anchor moves onto it and the region collapses with it.
+        move_to(&mut state, (1, 11));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(state.node_drag_group.is_none(), "one node, the widget's own drag");
+        assert_eq!(state.grid_cursor_region(), (1, 11, 1, 1), "collapsed onto what was grabbed");
+        move_to(&mut state, (0, 11));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert_eq!(state.current_dir().children[c].position, (0.0, 11.0));
+        assert_eq!(state.current_dir().children[a].position, (2.0, 6.0), "a stayed put");
+    }
+
     /// A drag that CAUGHT nodes settles onto their bounding box — the loose
     /// box you drew comes back fitted to what it selected, and the selection
     /// itself does not change, the box containing no cell the region did not.

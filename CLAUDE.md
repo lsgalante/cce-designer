@@ -97,7 +97,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~8k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~8.9k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
@@ -848,7 +848,7 @@ on a cell it covers instead. Its anchor is empty grid by construction — a
 press on a node drags the node — so there is no single selection to defer to.
 
 The network's operations act on that selection: **Delete**, the **`e`**
-geometry toggle, **Ctrl+C/X** and **alt+hjkl**. Two rules worth keeping:
+geometry toggle, **Ctrl+C/X**, **alt+hjkl**, and the **mouse**. Two rules worth keeping:
 deletions run HIGHEST SLOT FIRST, or removing one shifts the slots above it
 and the second removal takes the wrong node; and the `e` toggle sets the whole
 selection to the opposite of the FIRST node's flag rather than flipping each,
@@ -859,6 +859,29 @@ otherwise drop the selection it had just moved. The clipboard is a `Vec`, and
 a paste keeps the SHAPE it was copied in: the set's top-left lands on the
 cursor and each node keeps its offset, with a node whose cell is taken
 stepping aside to the nearest free one.
+
+**Dragging a selected node carries the whole selection** (`NodeDragGroup`,
+`drag_group_to`). The widget drags ONE node — it has one `dragging_idx` — so
+the companions are moved here, rigidly, by the offset the dragged node has
+travelled, measured from the cells they started on rather than stepped each
+frame (a drag is continuous but resolves to whole cells, so accumulating the
+steps would drift the group apart the first time two motions named one cell).
+They are NOT walked off occupied cells the way the widget walks the node it
+drags: a selection that rearranged itself around whatever it passed over would
+not be the selection you picked up — the same bargain alt+hjkl has always made.
+The preview follows `drop_target_cell_rect`, which runs `commit_drag`'s own
+resolution, and the release re-lays them from the cell that actually committed,
+since the widget can walk the dragged node a cell aside from the preview.
+
+Two things make that gesture work at all. **A press on a node inside the
+selection leaves the cursor alone**: the press path otherwise moves the anchor
+onto the pressed node, which is exactly what collapses a region, so the
+selection would be gone before the drag began. A press on a node OUTSIDE the
+selection does move it, and that collapse is the right one — clicking an
+unselected node selects that node. And `read_panel_offsets` returns early while
+a group drag is live, for the same reason: it yanks the cursor onto the
+selected node's cell, and the anchor is deliberately standing still. On release
+the region is shifted by the committed offset, as alt+hjkl shifts it.
 
 Escape collapses the region (`deselect_node`), because of the two selections
 this is the one that needs clearing: a single selection under a plain cursor
