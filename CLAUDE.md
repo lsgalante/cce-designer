@@ -713,10 +713,11 @@ only thing carrying the pointed-at cell across to the palette.
 
 The network pane's keyboard scheme is the plugin's, ported: **hjkl rather than
 arrows** — the arrows are the playbar transport in every pane and context — bare
-to move the grid cursor, `alt` to move the node under it, `ctrl` to pan the
-view, plus `f` to frame the cursor and `shift+f` to frame everything. All
-fourteen are registry commands in `Context::Network`, so they are rebindable
-through `input.kdl` and listed in the palette.
+to move the grid cursor, `shift` to extend it into a region, `alt` to move the
+selected nodes, `ctrl` to pan the view, plus `f` to frame the cursor and
+`shift+f` to frame everything. All eighteen are registry commands in
+`Context::Network`, so they are rebindable through `input.kdl` and listed in
+the palette.
 
 **The grid cursor IS the selection.** `sync_cursor_and_selection` selects
 whatever node sits in the cursor's cell, so navigating selects, and stepping off
@@ -727,20 +728,33 @@ invisibly while you were looking at the viewport (the selection did not follow,
 because `sync_cursor_and_selection` has its own pane check) and was somewhere
 unexpected when you came back.
 
-`alt` moves the node AND the cursor, so a run of `alt+h` drags a node across the
-sheet rather than leaving it behind on the first press. `ctrl` pans by one CELL
+`alt` moves the SELECTION and the cursor, so a run of `alt+h` drags what is
+selected across the sheet rather than leaving it behind on the first press. `ctrl` pans by one CELL
 rather than a fixed pixel count, so a pan step means the same thing at every
 zoom. Frame Cursor CENTRES the cursor cell; its first version called
 `keep_cursor_in_view`, which pans only when the cursor has gone off an edge, so
 the command did nothing at all in the common case of a cursor that is visible
 but off in a corner — which is exactly when it gets pressed.
 
-`shift+hjkl` — the plugin's extend-the-selection family — is still absent, but
-the reason has changed. It used to be that the Graph widget carries a single
-`selected_node`, so four rows would quietly have done what bare hjkl already
-does. Since the cursor became a REGION (below) there is a real multi-selection
-to extend, and these four rows are implementable as growing the region's far
-corner; they are simply not written yet.
+`shift+hjkl` — the plugin's extend-the-selection family — grows the cursor's
+region (below) by one cell. It was absent while the graph's single
+`selected_node` was the whole selection, when four rows would have done what
+bare hjkl already does; there is a real multi-selection to extend now.
+
+**The anchor never moves.** `network_extend` walks the region's FAR corner and
+leaves the anchor where it is, exactly as a drag does, so `shift+l` then
+`shift+h` returns to where it started rather than walking the whole region
+right and back. A far corner that meets the anchor again drops the expanse
+outright, so a region shrunk to nothing is the plain one-cell cursor and not a
+1×1 region that merely behaves like one — and carrying on past the anchor grows
+it the other way. Extending from a cursor that sits ON a node keeps that node
+selected, the anchor's cell being part of its own region, which is what makes
+the family an extend rather than a second way to start a selection.
+
+It scrolls the FAR cell into view (`keep_cell_in_view`, which
+`keep_cursor_in_view` is now a one-line wrapper of): the anchor is the end that
+is not moving, and following it would scroll the wrong end of the selection
+into view.
 
 Two chords moved to make room, both caught by `command::conflicts` rather than
 by hand: `edit_handles` from `Ctrl+H` to `Ctrl+Shift+H` (the ctrl+hjkl family

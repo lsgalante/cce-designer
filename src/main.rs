@@ -4881,8 +4881,8 @@ mod tests {
     }
 
     /// The navigation scheme is the plugin's, and the registry says so: hjkl
-    /// bare, alt and ctrl, plus the two framings — fourteen rows, all in the
-    /// network context, none of them colliding.
+    /// bare, shift, alt and ctrl, plus the two framings — eighteen rows, all
+    /// in the network context, none of them colliding.
     #[test]
     fn test_the_navigation_scheme_matches_the_plugins() {
         use crate::command::{by_id, Context};
@@ -4890,6 +4890,7 @@ mod tests {
             // Uppercase because `describe` prints single letters as capitals,
             // the way every menu in the app writes a chord.
             ("nav_left", "H"), ("nav_down", "J"), ("nav_up", "K"), ("nav_right", "L"),
+            ("extend_left", "Shift+H"), ("extend_down", "Shift+J"), ("extend_up", "Shift+K"), ("extend_right", "Shift+L"),
             ("move_left", "Alt+H"), ("move_down", "Alt+J"), ("move_up", "Alt+K"), ("move_right", "Alt+L"),
             ("view_left", "Ctrl+H"), ("view_down", "Ctrl+J"), ("view_up", "Ctrl+K"), ("view_right", "Ctrl+L"),
             ("frame_cursor", "F"), ("frame_all", "Shift+F"),
@@ -8824,6 +8825,79 @@ mod tests {
         });
         assert_eq!(state.current_dir().children.len(), before - 2);
         assert!(state.current_dir().children.iter().any(|n| n.name == "c"), "c survived");
+    }
+
+    /// shift+hjkl grows the cursor's region from a FIXED anchor, so the
+    /// selection extends the way the plugin's does: shift+l then shift+h
+    /// comes back to where it started rather than walking the region sideways,
+    /// and a far corner that meets the anchor again leaves a plain one-cell
+    /// cursor rather than a 1x1 region.
+    #[test]
+    fn shift_hjkl_extends_the_selection_from_a_fixed_anchor() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+
+        let mut redraw = false;
+        for (name, x, y) in [("a", 1.0, 4.0), ("b", 2.0, 4.0), ("c", 3.0, 4.0)] {
+            state
+                .apply_action(
+                    crate::app::McpAction::AddNode {
+                        template_name: "Plane".into(),
+                        name: Some(name.into()),
+                        x,
+                        y,
+                    },
+                    &mut redraw,
+                )
+                .unwrap();
+        }
+        let slot = |state: &State, name: &str| {
+            state.current_dir().children.iter().position(|c| c.name == name).expect(name)
+        };
+        let (a, b, c) = (slot(&state, "a"), slot(&state, "b"), slot(&state, "c"));
+
+        // The cursor starts ON a node, and extending KEEPS it: the anchor's
+        // cell is part of its own region, which is what makes this an extend
+        // rather than a second way to start a selection.
+        state.grid_cursor_col = 1;
+        state.grid_cursor_row = 4;
+        state.sync_cursor_and_selection();
+        assert_eq!(state.selected_slots(), vec![a]);
+
+        assert!(state.run_command("extend_right"));
+        assert_eq!(state.grid_cursor_region(), (1, 4, 2, 1));
+        assert_eq!(state.selected_slots(), vec![a, b]);
+        assert!(state.run_command("extend_right"));
+        assert_eq!(state.selected_slots(), vec![a, b, c]);
+        assert_eq!(
+            (state.grid_cursor_col, state.grid_cursor_row),
+            (1, 4),
+            "the anchor is the fixed end"
+        );
+
+        // Back the way it came, and the region shrinks rather than walking.
+        assert!(state.run_command("extend_left"));
+        assert_eq!(state.selected_slots(), vec![a, b]);
+        assert!(state.run_command("extend_left"));
+        assert_eq!(state.grid_cursor_region(), (1, 4, 1, 1), "collapsed, not 1x1-with-an-expanse");
+        assert!(state.grid_cursor_expanse.is_none());
+        assert_eq!(state.selected_slots(), vec![a], "the plain single selection again");
+
+        // The other way round: past the anchor, so the region grows leftward.
+        assert!(state.run_command("extend_left"));
+        assert_eq!(state.grid_cursor_region(), (0, 4, 2, 1));
+        assert!(state.run_command("extend_up"));
+        assert_eq!(state.grid_cursor_region(), (0, 3, 2, 2));
+
+        // And the family is the network pane's, like the other three.
+        state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
+        let before = state.grid_cursor_region();
+        state.run_command("extend_right");
+        assert_eq!(state.grid_cursor_region(), before, "not the viewport's key");
     }
 
     /// The selected nodes actually LOOK selected: each body is painted with

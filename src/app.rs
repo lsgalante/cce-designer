@@ -5127,8 +5127,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
 
     pub fn keep_cursor_in_view(&mut self) {
+        self.keep_cell_in_view(self.grid_cursor_col, self.grid_cursor_row);
+    }
+
+    /// Pan the least that brings one lattice cell fully into the pane. The
+    /// cursor's own is the usual one; an EXTEND walks the region's far corner
+    /// instead, and following the anchor there would scroll the wrong end of
+    /// the selection into view — the anchor is the end that is not moving.
+    pub fn keep_cell_in_view(&mut self, col: i32, row: i32) {
         let (px, py, pw, ph) = self.positions[CONTENT_IDX];
-        let (cx, cy, cw, ch) = self.cell_rect(self.grid_cursor_col, self.grid_cursor_row);
+        let (cx, cy, cw, ch) = self.cell_rect(col, row);
 
         if cx < px {
             self.pan_x -= cx - px;
@@ -5863,6 +5871,36 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         true
     }
 
+    /// Grow (or shrink) the cursor's region by one cell — the shift+hjkl
+    /// family, the plugin's extend-the-selection scheme.
+    ///
+    /// The ANCHOR never moves: it is the fixed end of the region, exactly as
+    /// it is for a drag, so shift+l then shift+h returns to where it started
+    /// rather than walking the whole region right and back. A far corner that
+    /// meets the anchor again drops the expanse outright, so a shrunk-to-
+    /// nothing region is the plain one-cell cursor and not a 1x1 region that
+    /// merely behaves like one.
+    ///
+    /// Extending from a cursor that sits ON a node keeps that node in the
+    /// selection — the anchor's cell is part of its own region — which is what
+    /// makes the family an EXTEND rather than a second way to start one.
+    pub(crate) fn network_extend(&mut self, dc: i32, dr: i32) -> bool {
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            return false;
+        }
+        let anchor = (self.grid_cursor_col, self.grid_cursor_row);
+        let far = match self.grid_cursor_expanse {
+            Some((a, far)) if a == anchor => far,
+            _ => anchor,
+        };
+        let far = (far.0 + dc, far.1 + dr);
+        self.grid_cursor_expanse = (far != anchor).then_some((anchor, far));
+        self.pan_velocity_x = 0.0;
+        self.pan_velocity_y = 0.0;
+        self.keep_cell_in_view(far.0, far.1);
+        true
+    }
+
     /// Copy the selected nodes, positions and all.
     pub(crate) fn copy_selected_nodes(&mut self) {
         let slots = self.selected_slots();
@@ -6106,9 +6144,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleDialog => self.toggle_dialog(),
             // The network navigation families. Each returns false when the
             // network pane does not have focus, which is how one gate covers
-            // all fourteen of them.
+            // all eighteen of them.
             Action::NetworkNav(dc, dr) => {
                 self.network_nav(dc, dr);
+            }
+            Action::NetworkExtend(dc, dr) => {
+                self.network_extend(dc, dr);
             }
             Action::NetworkMove(dc, dr) => {
                 self.network_move_node(dc, dr);

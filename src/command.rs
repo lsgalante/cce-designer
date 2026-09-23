@@ -140,6 +140,14 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "nav_down", label: "Cursor Down", context: Context::Network, run: Run::Key(Action::NetworkNav(0, 1)), default_chord: Some("j") },
     Command { id: "nav_up", label: "Cursor Up", context: Context::Network, run: Run::Key(Action::NetworkNav(0, -1)), default_chord: Some("k") },
     Command { id: "nav_right", label: "Cursor Right", context: Context::Network, run: Run::Key(Action::NetworkNav(1, 0)), default_chord: Some("l") },
+    // shift+hjkl — the plugin's extend-the-selection family. It was absent
+    // while the graph's single `selected_node` was the whole selection; the
+    // cursor is a REGION now, so these grow its far corner and the nodes
+    // inside it are the selection (see `State::selected_slots`).
+    Command { id: "extend_left", label: "Extend Selection Left", context: Context::Network, run: Run::Key(Action::NetworkExtend(-1, 0)), default_chord: Some("Shift+h") },
+    Command { id: "extend_down", label: "Extend Selection Down", context: Context::Network, run: Run::Key(Action::NetworkExtend(0, 1)), default_chord: Some("Shift+j") },
+    Command { id: "extend_up", label: "Extend Selection Up", context: Context::Network, run: Run::Key(Action::NetworkExtend(0, -1)), default_chord: Some("Shift+k") },
+    Command { id: "extend_right", label: "Extend Selection Right", context: Context::Network, run: Run::Key(Action::NetworkExtend(1, 0)), default_chord: Some("Shift+l") },
     Command { id: "move_left", label: "Move Node Left", context: Context::Network, run: Run::Key(Action::NetworkMove(-1, 0)), default_chord: Some("Alt+h") },
     Command { id: "move_down", label: "Move Node Down", context: Context::Network, run: Run::Key(Action::NetworkMove(0, 1)), default_chord: Some("Alt+j") },
     Command { id: "move_up", label: "Move Node Up", context: Context::Network, run: Run::Key(Action::NetworkMove(0, -1)), default_chord: Some("Alt+k") },
