@@ -5871,6 +5871,66 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         true
     }
 
+    /// Close an expansion drag by shrinking the region onto what it caught:
+    /// the bounding box of the selected nodes, or — with nothing caught — one
+    /// cell at the middle of where the region stood.
+    ///
+    /// A region is a way of POINTING at nodes, and once the pointing is done
+    /// the empty margin the pointer swept through is noise: it hides nothing,
+    /// it selects nothing, and it makes the next alt+hjkl or Add Node read off
+    /// an anchor out in open grid. Settling it also makes the region say what
+    /// was selected — a box drawn loosely around two nodes comes back fitted
+    /// to them, which is the selection made visible.
+    ///
+    /// Nothing caught settles to the MIDDLE rather than to the anchor: the
+    /// anchor is where the gesture began, and a drag that selected nothing is
+    /// most likely aimed at the space it ended up circling. Even spans round
+    /// down, toward the region's own first cell.
+    ///
+    /// The selection is unchanged by all of this — the bounding box of the
+    /// selected nodes contains no cell the region did not — which is what
+    /// lets it run unconditionally at the end of every drag.
+    pub(crate) fn settle_cursor_expansion(&mut self) -> bool {
+        if !self.grid_cursor_expanded() {
+            return false;
+        }
+        let (col, row, cols, rows) = self.grid_cursor_region();
+        let cells: Vec<(i32, i32)> = self
+            .selected_slots()
+            .into_iter()
+            .map(|i| {
+                let p = self.current_dir().children[i].position;
+                (p.0 as i32, p.1 as i32)
+            })
+            .collect();
+        match cells.split_first() {
+            None => {
+                self.grid_cursor_col = col + (cols - 1) / 2;
+                self.grid_cursor_row = row + (rows - 1) / 2;
+                self.grid_cursor_expanse = None;
+            }
+            Some((first, rest)) => {
+                let (mut c0, mut r0, mut c1, mut r1) = (first.0, first.1, first.0, first.1);
+                for &(c, r) in rest {
+                    c0 = c0.min(c);
+                    r0 = r0.min(r);
+                    c1 = c1.max(c);
+                    r1 = r1.max(r);
+                }
+                self.grid_cursor_col = c0;
+                self.grid_cursor_row = r0;
+                self.grid_cursor_expanse =
+                    ((c1, r1) != (c0, r0)).then_some(((c0, r0), (c1, r1)));
+            }
+        }
+        // A settle that lands on a node selects it, and one that lands on
+        // empty grid clears the single selection — the ordinary cursor rules,
+        // which is what the cursor is again whenever the region collapsed.
+        self.deselected_cell = None;
+        self.sync_cursor_and_selection();
+        true
+    }
+
     /// Grow (or shrink) the cursor's region by one cell — the shift+hjkl
     /// family, the plugin's extend-the-selection scheme.
     ///
@@ -7454,9 +7514,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         self.sync_pane_focus();
                     }
                     ElementState::Released => {
-                        // The expansion drag ends, but the region it grew
-                        // stays: it is the cursor now, until the cursor moves.
-                        self.grid_cursor_drag = None;
+                        // The expansion drag ends by SETTLING onto what it
+                        // caught — see `settle_cursor_expansion`.
+                        if self.grid_cursor_drag.take().is_some() && self.settle_cursor_expansion() {
+                            changed = true;
+                        }
                         if self.orbit_drag.take().is_some() {
                             return true;
                         }

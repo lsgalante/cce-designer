@@ -8741,21 +8741,92 @@ mod tests {
         assert!((rx - ax).abs() < 0.01 && (ry - ay).abs() < 0.01);
         assert!(rw > cw * 2.0 && rh > ch * 2.0, "{rw}x{rh} spans three cells each way");
 
-        // The release ends the drag and keeps the region.
+        // The release SETTLES the region: this drag caught no nodes, so it
+        // comes back as one cell at the middle of where it stood — (1, 4)
+        // through (3, 6), whose middle is (2, 5).
         state.handle_event(&WindowEvent::MouseInput {
             state: ElementState::Released,
             button: MouseButton::Left,
         });
         assert!(state.grid_cursor_drag.is_none());
-        assert_eq!(state.grid_cursor_region(), (1, 4, 3, 3), "the region outlives the drag");
-        // Motion with no drag armed leaves it alone.
-        move_to(&mut state, (0, 2));
-        assert_eq!(state.grid_cursor_region(), (1, 4, 3, 3));
+        assert_eq!(state.grid_cursor_region(), (2, 5, 1, 1));
+        assert!(state.grid_cursor_expanse.is_none(), "collapsed outright, not a 1x1 region");
 
-        // And any other move of the cursor collapses it, with nothing in that
-        // path saying so — the anchor simply stops matching.
+        // Motion with no drag armed leaves the cursor alone.
+        move_to(&mut state, (0, 2));
+        assert_eq!(state.grid_cursor_region(), (2, 5, 1, 1));
         state.run_command("nav_right");
-        assert_eq!(state.grid_cursor_region(), (2, 4, 1, 1));
+        assert_eq!(state.grid_cursor_region(), (3, 5, 1, 1));
+    }
+
+    /// A drag that CAUGHT nodes settles onto their bounding box — the loose
+    /// box you drew comes back fitted to what it selected, and the selection
+    /// itself does not change, the box containing no cell the region did not.
+    #[test]
+    fn a_drag_settles_onto_the_nodes_it_caught() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+
+        // Two nodes well inside a box drawn from (0, 3) to (3, 9).
+        let mut redraw = false;
+        for (name, x, y) in [("a", 1.0, 5.0), ("b", 2.0, 7.0)] {
+            state
+                .apply_action(
+                    crate::app::McpAction::AddNode {
+                        template_name: "Plane".into(),
+                        name: Some(name.into()),
+                        x,
+                        y,
+                    },
+                    &mut redraw,
+                )
+                .unwrap();
+        }
+        state.rebuild_positions();
+        state.apply_layout();
+        let slot = |state: &State, name: &str| {
+            state.current_dir().children.iter().position(|c| c.name == name).expect(name)
+        };
+        let (a, b) = (slot(&state, "a"), slot(&state, "b"));
+
+        let move_to = |state: &mut State, (col, row): (i32, i32)| {
+            let (x, y) = state.cell_center(col, row);
+            state.handle_event(&WindowEvent::CursorMoved {
+                position: LocalPosition { x: x as f64, y: y as f64 },
+            });
+        };
+        move_to(&mut state, (0, 3));
+        state.handle_event(&WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        });
+        move_to(&mut state, (3, 9));
+        assert_eq!(state.grid_cursor_region(), (0, 3, 4, 7), "the box as drawn");
+        assert_eq!(state.selected_slots(), vec![a, b]);
+
+        state.handle_event(&WindowEvent::MouseInput {
+            state: ElementState::Released,
+            button: MouseButton::Left,
+        });
+        assert_eq!(state.grid_cursor_region(), (1, 5, 2, 3), "fitted to a and b");
+        assert_eq!(state.selected_slots(), vec![a, b], "and holding the same two");
+
+        // One node caught collapses the region onto it, and the ordinary
+        // single selection takes over from there.
+        state.grid_cursor_col = 0;
+        state.grid_cursor_row = 3;
+        state.grid_cursor_expanse = Some(((0, 3), (3, 6)));
+        assert_eq!(state.selected_slots(), vec![a]);
+        assert!(state.settle_cursor_expansion());
+        assert_eq!(state.grid_cursor_region(), (1, 5, 1, 1));
+        assert!(state.grid_cursor_expanse.is_none());
+        assert_eq!(state.graph().selected_node(), Some(a), "the cursor sits on it now");
     }
 
     /// An expanded cursor selects every node standing inside it, and the

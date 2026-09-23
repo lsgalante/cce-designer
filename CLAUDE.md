@@ -808,11 +808,26 @@ speak it; this app sets the pitch.
 
 A left press on EMPTY grid puts the cursor on the pressed cell — on the press,
 not the release — and arms an expansion drag from it. Dragging grows the cursor
-from that anchor to the cell under the pointer, and the region it reached stays
-after the release. `State::grid_cursor_region` is the one derivation,
+from that anchor to the cell under the pointer. `State::grid_cursor_region` is the one derivation,
 `(col, row, cols, rows)`, never smaller than one cell; `grid_cursor_rect` is the
 window-space union the outline is painted on, which for the usual one-cell
 cursor is exactly `cell_rect` of it.
+
+**The release SETTLES the region** onto what it caught
+(`settle_cursor_expansion`): the bounding box of the selected nodes, or — with
+nothing caught — one cell at the MIDDLE of where the region stood, even spans
+rounding down toward its first cell. A region is a way of pointing at nodes,
+and once the pointing is done the empty margin the pointer swept through is
+noise: it hides nothing, it selects nothing, and it leaves the next alt+hjkl or
+Add Node reading off an anchor out in open grid. Settling also makes the region
+say what was selected — a box drawn loosely around two nodes comes back fitted
+to them. Nothing caught settles to the middle rather than back to the anchor,
+because the anchor is merely where the gesture began and a drag that selected
+nothing is aimed at the space it ended up circling.
+
+The SELECTION never changes in a settle — the bounding box of the selected
+nodes contains no cell the region did not — which is what lets it run at the
+end of every drag without a thought for what it might drop.
 
 **The region collapses by itself.** `grid_cursor_expanse` stores the anchor
 alongside the far cell, and `grid_cursor_region` hands it back only while that
