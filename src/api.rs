@@ -92,7 +92,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool(
             "toggle_geometry",
-            "Toggle geometry visibility for the node at the given slot (not valid on utility nodes).",
+            "Toggle geometry visibility for the node at the given slot.",
             json!({
                 "type": "object",
                 "properties": { "slot": slot("Child index in the current network level") },

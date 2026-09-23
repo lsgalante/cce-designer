@@ -19,10 +19,10 @@
 //! the shortest, so a node always sits below every one of its inputs rather
 //! than beside one of them.
 //!
-//! Utility nodes are pinned. The settings tree lives at a place the user put
-//! it, and an "arrange everything" that relocated the meta node would be a
-//! surprise every time. Their cells are treated as occupied so nothing lands
-//! on top of them.
+//! Nothing is pinned any more. The settings tree — the root meta node and
+//! its four utility subnets — was, because it lived where the user put it and
+//! relocating it would have been a surprise every time; it is retired, and
+//! `Node::pinned` outlives it for whatever wants it next.
 
 /// One node's layout input: what it is called, what it reads, where it is now,
 /// and whether it may be moved.

@@ -20,6 +20,13 @@ pub enum Action {
     TogglePointMarkers,
     TogglePointNumbers,
     TogglePointNormals,
+    /// The path-traced preview, the wireframe's single-colour mode, and the
+    /// point display. All three were toggles on the root meta node's utility
+    /// subnets and reachable ONLY there; with those nodes retired they are
+    /// commands, which is what makes them reachable at all.
+    ToggleRayTracedPreview,
+    ToggleWireSingleColor,
+    ToggleRenderPoints,
     ToggleCircularPane,
     DetachCircularWindow,
     Save,

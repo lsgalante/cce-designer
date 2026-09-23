@@ -198,7 +198,7 @@ impl FsNode {
     /// of them learned about new container types: subnet-like types by name,
     /// otherwise anything that actually has children.
     pub fn is_enterable(&self) -> bool {
-        matches!(self.node_type.as_str(), "node" | "utility" | "simnet" | "session")
+        matches!(self.node_type.as_str(), "node" | "simnet")
             || !self.children.is_empty()
     }
 
@@ -247,6 +247,17 @@ pub struct ProjectViewState {
     pub current_path: Vec<usize>,
     #[serde(default)]
     pub selected_node: Option<usize>,
+    /// Which panes are OPEN, by name ("network", "viewport", "parameters",
+    /// "spreadsheet", "playbar").
+    ///
+    /// Pane visibility rode the root meta node's `view` subnet params into
+    /// the file until 2026-09-23 — five toggles on a node that existed to
+    /// hold them. It is pane state like the collapse list and the splitter
+    /// proportions below, so it sits with them. `None` (older saves, and
+    /// saves written before the move) keeps the live layout, which is what
+    /// the absent-value case always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_panes: Option<Vec<String>>,
     /// Collapsed plate panes by name ("network", "parameters", "spreadsheet",
     /// "playbar"). Absent from older saves — an empty list expands everything,
     /// so loading is deterministic either way.
@@ -289,7 +300,7 @@ pub struct ProjectViewState {
     /// camera-pivot marker and its size, and the view itself (orbit, zoom,
     /// pivot). Absent in older saves keeps the live values. A named camera's
     /// own params still win over these when it is active and in the
-    /// directory (`apply_settings_from_menubar_subnets`).
+    /// directory.
     #[serde(default)]
     pub default_view: Option<DefaultCameraView>,
 }
@@ -340,7 +351,7 @@ pub struct Project {
 pub enum NodeMenuAction {
     /// Dive into the node's subnet (the double-click behavior).
     Enter,
-    /// Flip the node's geometry visibility (utility nodes excluded).
+    /// Flip the node's geometry visibility.
     ToggleGeometry,
     /// Enter/exit the curve viewer state (curve nodes only).
     EditCurve,
@@ -586,9 +597,8 @@ pub fn strip_meta_children(root: &mut FsNode) {
 /// between a template's name and its index ("Sphere 1"), simply goes, so a
 /// migrated save reads like a fresh one; any other whitespace becomes an
 /// underscore, so "My Region" keeps its two words. And the whole thing is
-/// lowercased, as Houdini names its nodes (`sphere1`, `camera1`) — the
-/// app's own utility nodes included (`/meta/guides`), since a path
-/// convention with exceptions is two conventions. Empty comes back as
+/// lowercased, as Houdini names its nodes (`sphere1`, `camera1`), since a
+/// path convention with exceptions is two conventions. Empty comes back as
 /// `node`, since a node with no name has no path at all.
 pub fn sanitize_node_name(name: &str) -> String {
     let lowered = name.to_lowercase();
@@ -724,10 +734,6 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                         if let Some(fp) = fresh.params.iter_mut().find(|fp| fp.name == p.name) {
                             fp.default = p.default.clone();
                         }
-                    }
-                    if let Some(meta) = c.children.iter().find(|m| m.node_type == "meta") {
-                        fresh.children.retain(|m| m.node_type != "meta");
-                        fresh.children.push(meta.clone());
                     }
                     *c = fresh;
                 }
@@ -947,6 +953,97 @@ pub struct ViewportSettings {
     pub show_point_numbers: bool,
     #[serde(default)]
     pub show_point_normals: bool,
+    /// World-unit radius and colour of the Show Point Markers overlay.
+    #[serde(default = "default_point_marker_size")]
+    pub point_marker_size: f32,
+    #[serde(default = "default_point_marker_color")]
+    pub point_marker_color: [f32; 3],
+    /// What one world unit IS (mm / cm / m / in). A DECLARATION — geometry
+    /// never converts; it feeds the scale readout and `View 1:1`.
+    #[serde(default = "default_world_unit")]
+    pub world_unit: String,
+    /// The path-traced preview.
+    #[serde(default)]
+    pub rt_mode: bool,
+    /// The network pane's circular shape.
+    #[serde(default)]
+    pub circular_pane: bool,
+}
+
+fn default_point_marker_size() -> f32 {
+    0.02
+}
+
+fn default_point_marker_color() -> [f32; 3] {
+    [0.85, 0.85, 1.0]
+}
+
+fn default_world_unit() -> String {
+    "mm".to_string()
+}
+
+/// How the geometry itself is drawn — the wire pass and the point display.
+///
+/// These lived on the root meta node's `render` utility subnet until
+/// 2026-09-23, which made them per-PROJECT: opening someone else's scene
+/// reset how you looked at geometry. They are display preferences like the
+/// guides, so they persist here, and the dialog's Settings half is where
+/// they are edited.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RenderSettings {
+    #[serde(default)]
+    pub wireframe: bool,
+    #[serde(default)]
+    pub wire_single_color: bool,
+    /// RGBA: the alpha is the wireframe's OWN opacity, in both colour modes
+    /// (the geometry Opacity below is polygons-only).
+    #[serde(default = "default_wire_color")]
+    pub wire_color: [f32; 4],
+    #[serde(default = "default_wire_width")]
+    pub wire_width: f32,
+    #[serde(default = "default_geo_opacity")]
+    pub geo_opacity: f32,
+    #[serde(default)]
+    pub render_points: bool,
+    #[serde(default = "default_point_size")]
+    pub point_size: f32,
+    #[serde(default = "default_point_color")]
+    pub point_color: [f32; 3],
+}
+
+fn default_wire_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_wire_width() -> f32 {
+    1.0
+}
+
+fn default_geo_opacity() -> f32 {
+    1.0
+}
+
+fn default_point_size() -> f32 {
+    0.02
+}
+
+fn default_point_color() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+impl Default for RenderSettings {
+    fn default() -> Self {
+        Self {
+            wireframe: false,
+            wire_single_color: false,
+            wire_color: default_wire_color(),
+            wire_width: default_wire_width(),
+            geo_opacity: default_geo_opacity(),
+            render_points: false,
+            point_size: default_point_size(),
+            point_color: default_point_color(),
+        }
+    }
 }
 
 fn default_network_plate() -> bool {
@@ -967,6 +1064,11 @@ impl Default for ViewportSettings {
             show_point_markers: false,
             show_point_numbers: false,
             show_point_normals: false,
+            point_marker_size: default_point_marker_size(),
+            point_marker_color: default_point_marker_color(),
+            world_unit: default_world_unit(),
+            rt_mode: false,
+            circular_pane: false,
             origin_size: 1.0,
             grid_thickness: default_grid_thickness(),
             grid_color: default_grid_color(),
@@ -1043,6 +1145,8 @@ pub const MAX_PITCH_Y: f32 = 375.0;
 pub struct DesignSettings {
     #[serde(default)]
     pub viewport: ViewportSettings,
+    #[serde(default)]
+    pub render: RenderSettings,
     /// Project to open at startup instead of the bundled default — the Main
     /// node's "Set As Default" button. A path string (what
     /// `loaded_project_path` held when it was set); absent = the bundled
@@ -1062,6 +1166,22 @@ fn float_array_to_hex(rgb: &[f32; 3]) -> String {
 
 fn hex_to_float_array(hex: &str) -> Option<[f32; 3]> {
     cce_ui::color::parse_hex_rgb(hex)
+}
+
+fn float_array_to_hex4(rgba: &[f32; 4]) -> String {
+    let c = |v: f32| (v * 255.0).clamp(0.0, 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}{:02x}", c(rgba[0]), c(rgba[1]), c(rgba[2]), c(rgba[3]))
+}
+
+fn hex_to_float_array4(hex: &str) -> Option<[f32; 4]> {
+    let h = hex.trim_start_matches('#');
+    if h.len() == 8 {
+        let v = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok().map(|b| b as f32 / 255.0);
+        Some([v(0)?, v(2)?, v(4)?, v(6)?])
+    } else {
+        let rgb = cce_ui::color::parse_hex_rgb(hex)?;
+        Some([rgb[0], rgb[1], rgb[2], 1.0])
+    }
 }
 
 /// Where `cfg(test)` builds keep the files the installed app keeps under
@@ -1112,9 +1232,10 @@ impl DesignSettings {
     /// The same file under test, in a temp directory — and that redirect is
     /// not a convenience.
     ///
-    /// `State::new` loads the BUNDLED project, whose meta subnets overwrite
-    /// the live viewport flags through `apply_settings_from_menubar_subnets`.
-    /// So any test that then reached `save_settings` — `toggle_network_plate`,
+    /// `State::new` loads the BUNDLED project, whose meta subnets overwrote
+    /// the live viewport flags on every parameter change (the meta node is
+    /// retired, but the hazard was real and the redirect is what caught it).
+    /// Any test that then reached `save_settings` — `toggle_network_plate`,
     /// the dialog's toggle rows — wrote the bundled project's
     /// show_grid / show_cube / show_origin over the user's own state.kdl.
     /// `cargo test` reset three of the user's toggles on every run, and
@@ -1135,24 +1256,32 @@ impl DesignSettings {
         Some(Self::from_kdl_str(&content))
     }
 
+    /// Every colour field, as `(block, field, components)`. KDL carries them
+    /// as hex strings — `#rrggbb`, or `#rrggbbaa` for the four-component wire
+    /// colour — so both directions walk this one table. It was a hand-written
+    /// pair of `if let`s per colour, which is why only two of the five were
+    /// ever converted once the render block arrived.
+    const COLOR_FIELDS: &'static [(&'static str, &'static str, usize)] = &[
+        ("viewport", "bg_color", 3),
+        ("viewport", "grid_color", 3),
+        ("viewport", "point_marker_color", 3),
+        ("render", "wire_color", 4),
+        ("render", "point_color", 3),
+    ];
+
     pub(crate) fn from_kdl_str(content: &str) -> Self {
         let mut json_val = cce_ui::config::parse_kdl_to_json(content);
-        // Convert hex strings back to color arrays
         if let Some(obj) = json_val.as_object_mut() {
-            if let Some(viewport) = obj.get_mut("viewport").and_then(|v| v.as_object_mut()) {
-                if let Some(serde_json::Value::String(hex_str)) = viewport.get("bg_color") {
-                    if let Some(arr) = hex_to_float_array(hex_str) {
-                        if let Ok(arr_val) = serde_json::to_value(arr) {
-                            viewport.insert("bg_color".to_string(), arr_val);
-                        }
-                    }
-                }
-                if let Some(serde_json::Value::String(hex_str)) = viewport.get("grid_color") {
-                    if let Some(arr) = hex_to_float_array(hex_str) {
-                        if let Ok(arr_val) = serde_json::to_value(arr) {
-                            viewport.insert("grid_color".to_string(), arr_val);
-                        }
-                    }
+            for &(block, field, n) in Self::COLOR_FIELDS {
+                let Some(b) = obj.get_mut(block).and_then(|v| v.as_object_mut()) else { continue };
+                let Some(serde_json::Value::String(hex)) = b.get(field) else { continue };
+                let parsed = if n == 4 {
+                    hex_to_float_array4(hex).and_then(|a| serde_json::to_value(a).ok())
+                } else {
+                    hex_to_float_array(hex).and_then(|a| serde_json::to_value(a).ok())
+                };
+                if let Some(v) = parsed {
+                    b.insert(field.to_string(), v);
                 }
             }
         }
@@ -1196,20 +1325,17 @@ impl DesignSettings {
 
     pub(crate) fn to_kdl_str(&self) -> Option<String> {
         if let Ok(mut json_val) = serde_json::to_value(self) {
-            // Convert color arrays to hex strings
             if let Some(obj) = json_val.as_object_mut() {
-                if let Some(viewport) = obj.get_mut("viewport").and_then(|v| v.as_object_mut()) {
-                    if let Some(val) = viewport.get("bg_color") {
-                        if let Ok(arr) = serde_json::from_value::<[f32; 3]>(val.clone()) {
-                            let hex_str = float_array_to_hex(&arr);
-                            viewport.insert("bg_color".to_string(), serde_json::Value::String(hex_str));
-                        }
-                    }
-                    if let Some(val) = viewport.get("grid_color") {
-                        if let Ok(arr) = serde_json::from_value::<[f32; 3]>(val.clone()) {
-                            let hex_str = float_array_to_hex(&arr);
-                            viewport.insert("grid_color".to_string(), serde_json::Value::String(hex_str));
-                        }
+                for &(block, field, n) in Self::COLOR_FIELDS {
+                    let Some(b) = obj.get_mut(block).and_then(|v| v.as_object_mut()) else { continue };
+                    let Some(val) = b.get(field).cloned() else { continue };
+                    let hex = if n == 4 {
+                        serde_json::from_value::<[f32; 4]>(val).ok().map(|a| float_array_to_hex4(&a))
+                    } else {
+                        serde_json::from_value::<[f32; 3]>(val).ok().map(|a| float_array_to_hex(&a))
+                    };
+                    if let Some(hex) = hex {
+                        b.insert(field.to_string(), serde_json::Value::String(hex));
                     }
                 }
             }
@@ -1887,26 +2013,6 @@ impl State {
 
 
 
-    pub fn update_recent_files_layout(&mut self) {
-        let mut opts = vec!["- Select -".to_string()];
-        for path in &self.recent_files {
-            opts.push(path.to_string_lossy().to_string());
-        }
-        opts.push("Other".to_string());
-
-        let main_node = self
-            .session_node_mut()
-            .and_then(|s| s.children.iter_mut().find(|c| c.name == "main"));
-        if let Some(main_node) = main_node {
-            if let Some(p) = main_node.params.iter_mut().find(|p| p.name == "Open") {
-                p.options = opts;
-                if !p.options.contains(&p.default) {
-                    p.default = "- Select -".to_string();
-                }
-            }
-        }
-        self.sync_parameters_pane();
-    }
 
     pub fn save_settings(&mut self) {
         let settings = DesignSettings {
@@ -1925,6 +2031,21 @@ impl State {
                 show_point_markers: self.show_point_markers,
                 show_point_numbers: self.show_point_numbers,
                 show_point_normals: self.show_point_normals,
+                point_marker_size: self.point_marker_size,
+                point_marker_color: self.point_marker_color,
+                world_unit: self.world_unit.suffix().to_string(),
+                rt_mode: self.viewport().rt_mode,
+                circular_pane: self.circular_network_pane,
+            },
+            render: RenderSettings {
+                wireframe: self.wireframe,
+                wire_single_color: self.wire_single_color,
+                wire_color: self.wire_color,
+                wire_width: self.wire_width,
+                geo_opacity: self.geo_opacity,
+                render_points: self.render_points,
+                point_size: self.point_size,
+                point_color: self.point_color,
             },
             default_project: self.default_project_setting.clone(),
         };
@@ -2478,37 +2599,6 @@ impl State {
         self.splitter_layout.clamp(self.width, self.detached_circular_network);
     }
 
-    /// The Session node: the permanent root container for the session-wide
-    /// settings nodes (Main/View/Guides/Render). `ensure_menubar_subnets`
-    /// guarantees it exists, so `None` only before the first ensure.
-    pub fn session_node(&self) -> Option<&FsNode> {
-        self.fs_root.children.iter().find(|c| c.node_type == "meta")
-    }
-
-    pub fn session_node_mut(&mut self) -> Option<&mut FsNode> {
-        self.fs_root.children.iter_mut().find(|c| c.node_type == "meta")
-    }
-
-    /// Is the network currently inside a settings directory (the Session node
-    /// or any utility node)? Geometry templates are refused there. Checks the
-    /// whole path, not `current_path[0]` — the settings nodes live NESTED
-    /// under Session now, so the old first-segment check would miss them.
-    pub fn in_settings_dir(&self) -> bool {
-        let mut node = &self.fs_root;
-        for &idx in &self.current_path {
-            match node.children.get(idx) {
-                Some(child) => {
-                    if matches!(child.node_type.as_str(), "utility" | "session" | "meta") {
-                        return true;
-                    }
-                    node = child;
-                }
-                None => return false,
-            }
-        }
-        false
-    }
-
     pub fn current_dir(&self) -> &FsNode {
         let mut node = &self.fs_root;
         for &i in &self.current_path {
@@ -2730,7 +2820,6 @@ impl State {
                     }
 
                     if param_changed {
-                        self.apply_settings_from_menubar_subnets();
                         self.sync_grid_settings();
                         self.rebuild_scene_geometry();
                         self.sync_nodes();
@@ -3153,91 +3242,14 @@ impl State {
         }
     }
 
-    /// Write a toggle on the session's Render utility node — the source
-    /// `apply_settings_from_menubar_subnets` reads render settings from —
-    /// so a command that changed the live state leaves the node agreeing
-    /// with it. Nothing when the project has no Render node yet.
-    pub(crate) fn write_render_toggle(&mut self, name: &str, val: bool) {
-        self.write_meta_toggle("render", name, val);
-    }
 
-    /// The Guides node's counterpart: what Show Grid, Show Cube and Show
-    /// Origin write, for the same reason Show Wireframe writes the Render
-    /// node — see [`State::write_meta_toggle`].
-    pub(crate) fn write_guides_toggle(&mut self, name: &str, val: bool) {
-        self.write_meta_toggle("guides", name, val);
-    }
 
-    /// Write a toggle's value onto the utility subnet that OWNS it.
-    ///
-    /// A command that flips only the live flag has flipped it until the next
-    /// parameter edit anywhere: `apply_settings_from_menubar_subnets` copies
-    /// the meta node's subnets onto the live state on every change, so the
-    /// stored value wins and the toggle silently reverts. Show Cube did
-    /// exactly that on 2026-09-21 — hidden by its command, back the moment a
-    /// node's parameter was edited. The subnet param is the value's one
-    /// owner (the dialog's Settings half writes there too), so a command
-    /// that changes the value writes it there.
-    pub(crate) fn write_meta_toggle(&mut self, subnet: &str, name: &str, val: bool) {
-        if let Some(p) = self
-            .fs_root
-            .children
-            .iter_mut()
-            .find(|c| c.node_type == "meta")
-            .and_then(|s| s.children.iter_mut().find(|c| c.name == subnet))
-            .and_then(|n| n.params.iter_mut().find(|p| p.name == name))
-        {
-            p.default = if val { "true" } else { "false" }.to_string();
-        }
-    }
 
-    pub(crate) fn refresh_main_node_live_toggles(&mut self, slot_idx: usize) {
-        let live_main: [(&str, bool); 2] = [
-            ("Circular Pane", self.circular_network_pane),
-            ("Ray Traced Preview", self.viewport().rt_mode),
-        ];
-        let live_view: [(&str, bool); 6] = [
-            ("Show Network Plate", self.network_plate),
-            ("Show Network Pane", self.show_network),
-            ("Show Viewport Pane", self.show_viewport),
-            ("Show Parameters Pane", self.show_parameters),
-            ("Show Spreadsheet Pane", self.show_spreadsheet),
-            ("Show Playbar Pane", self.show_playbar),
-        ];
-        let live_guides: [(&str, bool); 3] = [
-            ("Show Grid Guide", self.viewport().show_grid),
-            ("Show Reference Cube", self.viewport().show_cube),
-            ("Show Origin Axes", self.viewport().show_origin),
-        ];
-        let live_render: [(&str, bool); 2] = [
-            ("Show Wireframe", self.wireframe),
-            ("Wire Single Color", self.wire_single_color),
-        ];
-        let dir = self.param_editor_dir_mut();
-        let Some(child) = dir.children.get_mut(slot_idx) else { return };
-        let live: &[(&str, bool)] = match child.name.as_str() {
-            "main" => &live_main,
-            "view" => &live_view,
-            "guides" => &live_guides,
-            "render" => &live_render,
-            _ => return,
-        };
-        for &(name, on) in live {
-            if let Some(p) = child.params.iter_mut().find(|p| p.name == name && p.param_type == "toggle") {
-                p.default = if on { "true" } else { "false" }.to_string();
-            }
-        }
-    }
 
     pub fn sync_parameters_pane(&mut self) {
         // Selection reads through the param-editor accessors: whichever
         // network editor took the last node click feeds the pane, at ITS
         // level — no matter the tab.
-        if !self.is_detached_network {
-            if let Some(slot_idx) = self.param_editor_selected() {
-                self.refresh_main_node_live_toggles(slot_idx);
-            }
-        }
         let params = if !self.is_detached_network {
             if let Some(slot_idx) = self.param_editor_selected() {
                 let dir = self.param_editor_dir();
@@ -3517,7 +3529,7 @@ impl State {
 
     /// Open the node right-click context menu at the cursor for `slot`. The
     /// items are contextual: Enter (dive into the subnet) for enterable nodes,
-    /// Show/Hide Geometry for non-utility nodes, and Delete always.
+    /// Show/Hide Geometry, and Delete.
     fn open_node_context_menu(&mut self, slot: usize) {
         let (is_utility, geom_visible, enterable, curve_editing) = {
             let dir = self.current_dir();
@@ -3531,7 +3543,7 @@ impl State {
                 self.viewer_tool.as_ref().map(|t| t.node_id == node.id).unwrap_or(false)
             });
             (
-                matches!(node.node_type.as_str(), "utility" | "session" | "meta"),
+                false,
                 node.geometry_visible,
                 enterable,
                 curve_editing,
@@ -3541,7 +3553,7 @@ impl State {
             let dir = self.current_dir();
             dir.children
                 .get(slot)
-                .map(|n| !matches!(n.node_type.as_str(), "session" | "meta"))
+                .map(|_| true)
                 .unwrap_or(false)
         };
         let mut options: Vec<String> = Vec::new();
@@ -4241,14 +4253,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
     pub fn delete_node(&mut self, slot: usize) -> bool {
         let len = self.current_dir().children.len();
-        // The root meta node (nee Session) is permanent: every deletion
-        // route (context menu, Delete key, MCP) funnels through here, so
-        // this is the one gate.
-        if slot < len
-            && matches!(self.current_dir().children[slot].node_type.as_str(), "session" | "meta")
-        {
-            return false;
-        }
         if slot < len {
             self.current_dir_mut().children.remove(slot);
             if let Some(sel_idx) = self.graph().selected_node() {
@@ -4580,6 +4584,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             viewport.show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
             viewport.bg_color = settings.viewport.bg_color;
             viewport.grid_color = settings.viewport.grid_color;
+            viewport.rt_mode = settings.viewport.rt_mode;
             viewport.active_camera = active_camera.clone();
         }
 
@@ -4742,7 +4747,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             graph_inertial_scroll: true,
             graph_scroll_friction: 0.90,
             last_config_read: Instant::now(),
-            circular_network_pane: is_detached_network,
+            circular_network_pane: is_detached_network || settings.viewport.circular_pane,
             circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
             is_detached_network,
             detached_circular_network: false,
@@ -4814,20 +4819,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             last_viewport_height: 0,
             last_viewport_active_camera: String::new(),
             last_viewport_show_viewport: false,
-            wireframe: false,
+            wireframe: settings.render.wireframe,
             last_viewport_wireframe: false,
-            wire_single_color: false,
-            wire_color: [1.0, 1.0, 1.0, 1.0],
-            wire_width: 1.0,
+            wire_single_color: settings.render.wire_single_color,
+            wire_color: settings.render.wire_color,
+            wire_width: settings.render.wire_width,
             last_viewport_wire_single_color: false,
             last_viewport_wire_color: [1.0, 1.0, 1.0, 1.0],
             last_applied_wire_color: None,
             last_viewport_wire_width: 1.0,
-            geo_opacity: 1.0,
+            geo_opacity: settings.render.geo_opacity,
             last_viewport_geo_opacity: 1.0,
-            render_points: false,
-            point_size: 0.02,
-            point_color: [1.0, 1.0, 1.0],
+            render_points: settings.render.render_points,
+            point_size: settings.render.point_size,
+            point_color: settings.render.point_color,
             last_points_key: None,
             point_vertex_count: 0,
             last_viewport_render_points: false,
@@ -4847,9 +4852,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             show_point_numbers: settings.viewport.show_point_numbers,
             show_point_normals: settings.viewport.show_point_normals,
             scene_edge_verts: Vec::new(),
-            point_marker_size: 0.02,
-            point_marker_color: [0.85, 0.85, 1.0],
-            world_unit: cce_ui::units::Unit::Mm,
+            point_marker_size: settings.viewport.point_marker_size,
+            point_marker_color: settings.viewport.point_marker_color,
+            world_unit: cce_ui::units::Unit::parse(&settings.viewport.world_unit)
+                .unwrap_or(cce_ui::units::Unit::Mm),
             pick_cache: None,
             last_scene_mvp: None,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
@@ -4865,8 +4871,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         state.update_graph_settings_from_config();
         state.update_window_title();
         colors::set_node_color(state.node_color);
-        state.ensure_menubar_subnets();
-        state.apply_settings_from_menubar_subnets();
+        state.migrate_meta_settings_node();
         state.sync_nodes();
         state.rebuild_scene_geometry();
         state.sync_grid_settings();
@@ -5786,7 +5791,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 widget.set_rect(x, y, w, h);
             }
         }
-        self.update_recent_files_layout();
     }
 
     pub fn update_panel_bounds(&mut self) {
@@ -5895,7 +5899,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     .map(|p| p.default.clone()),
                 position: c.position,
                 // Utility trees stay where they were put; see the module doc.
-                pinned: matches!(c.node_type.as_str(), "utility" | "session" | "meta"),
+                pinned: false,
             })
             .collect();
         let moved = crate::layout::arrange(&nodes);
@@ -6414,21 +6418,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleGrid => {
                 let val = !self.viewport().show_grid;
                 self.viewport_mut().show_grid = val;
-                self.write_guides_toggle("Show Grid Guide", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, val);
                 settings_changed = true;
             }
             Action::ToggleCube => {
                 let val = !self.viewport().show_cube;
                 self.viewport_mut().show_cube = val;
-                self.write_guides_toggle("Show Reference Cube", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 1, val);
                 settings_changed = true;
             }
             Action::ToggleOrigin => {
                 let val = !self.viewport().show_origin;
                 self.viewport_mut().show_origin = val;
-                self.write_guides_toggle("Show Origin Axes", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 settings_changed = true;
             }
@@ -6440,14 +6441,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 settings_changed = true;
             }
             Action::ToggleWireframe => {
-                // The Render utility node's "Show Wireframe" toggle is the
-                // value `apply_settings_from_menubar_subnets` reads back on
-                // EVERY parameter edit, so flipping the flag alone would
-                // revert on the next unrelated edit: the node's toggle is
-                // written too, and the pane shows the switch moved.
                 let val = !self.wireframe;
                 self.wireframe = val;
-                self.write_render_toggle("Show Wireframe", val);
                 // The edge list is collected with the scene and dropped
                 // while the wireframe is off, so switching it on has to
                 // rebuild — there is nothing staged to draw otherwise.
@@ -6470,6 +6465,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::TogglePointNormals => {
                 self.show_point_normals = !self.show_point_normals;
                 self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::ToggleRenderPoints => {
+                self.render_points = !self.render_points;
+                self.viewport_dirty = true;
+                settings_changed = true;
+            }
+            Action::ToggleWireSingleColor => {
+                self.wire_single_color = !self.wire_single_color;
+                self.viewport_dirty = true;
+                settings_changed = true;
+            }
+            Action::ToggleRayTracedPreview => {
+                let val = !self.viewport().rt_mode;
+                self.viewport_mut().rt_mode = val;
+                self.viewport_dirty = true;
                 settings_changed = true;
             }
             Action::WireframeColor => self.open_dialog_on_settings(),
@@ -6520,7 +6531,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // The Main node owns this one, as Guides owns the guide
                 // toggles above: without the write, the next parameter edit
                 // put the pane back the way the node said.
-                self.write_meta_toggle("main", "Circular Pane", val);
                 self.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 self.rebuild_positions();
                 self.apply_layout();
@@ -8160,7 +8170,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                                 for slot_idx in selected {
                                                     let visible = target.unwrap_or(false);
                                                     let dir = self.current_dir();
-                                                    if slot_idx < dir.children.len() && dir.children[slot_idx].node_type != "utility" {
+                                                    if slot_idx < dir.children.len() {
                                                         self.current_dir_mut().set_child_geometry_visible(slot_idx, visible);
                                                         self.sync_nodes();
                                                         self.rebuild_scene_geometry();
@@ -8477,8 +8487,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.viewport_mut().pending_yaw = 0.0;
             self.viewport_mut().pending_pitch = 0.0;
         }
-
-        self.update_recent_files_layout();
 
         // Drag-release fling: the velocity a middle / space+left drag had
         // when the button went up keeps the canvas sliding under friction.

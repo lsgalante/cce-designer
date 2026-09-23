@@ -339,7 +339,6 @@ impl State {
                         2 => {
                             state.circular_network_pane = !state.circular_network_pane;
                             let val = state.circular_network_pane;
-                            state.write_meta_toggle("main", "Circular Pane", val);
                             state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
                             state.rebuild_positions();
                             state.apply_layout();
@@ -691,7 +690,7 @@ impl State {
             }
             McpAction::Enter { slot } => {
                 let dir = state.current_dir();
-                if slot < dir.children.len() && (dir.children[slot].node_type == "node" || dir.children[slot].node_type == "utility" || !dir.children[slot].children.is_empty()) {
+                if slot < dir.children.len() && (dir.children[slot].node_type == "node" || !dir.children[slot].children.is_empty()) {
                     state.current_path.push(slot);
                     state.on_path_changed();
                     state.sync_parameters_pane();
@@ -724,7 +723,6 @@ impl State {
                         // Same sequence as the interactive param-pane
                         // path, so settings params (viewport flags,
                         // grid) actually take effect via automation.
-                        state.apply_settings_from_menubar_subnets();
                         state.sync_grid_settings();
                         state.sync_nodes();
                         state.rebuild_scene_geometry();
@@ -775,9 +773,7 @@ impl State {
             McpAction::ToggleGeometry { slot } => {
                 let active_nodes = state.current_dir().children.len();
                 if slot < active_nodes {
-                    if state.current_dir().children[slot].node_type == "utility" {
-                        Err("Cannot toggle geometry visibility on utility nodes".to_string())
-                    } else {
+                    {
                         let visible = !state.current_dir().children[slot].geometry_visible;
                         state.current_dir_mut().set_child_geometry_visible(slot, visible);
                         state.sync_nodes();
@@ -799,16 +795,7 @@ impl State {
                     // Fresh ids, like paste: a verbatim clone shares the
                     // template's ids across every instance.
                     crate::app::regenerate_node_ids(&mut node);
-                    let mut allowed = true;
-                    let is_in_utility = state.in_settings_dir();
-                    if is_in_utility {
-                        if crate::geometry::is_geometry_node_type(&node.node_type) {
-                            allowed = false;
-                        }
-                    }
-                    if !allowed {
-                        Err("Utility nodes cannot contain geometry.".to_string())
-                    } else {
+                    {
                         let (nx, ny) = state.find_empty_cell(x, y, None);
                         node.position = (nx, ny);
                         if let Some(n) = name {
@@ -836,14 +823,6 @@ impl State {
                 }
             }
             McpAction::DeleteNode { slot } => {
-                if slot < state.current_dir().children.len()
-                    && matches!(
-                        state.current_dir().children[slot].node_type.as_str(),
-                        "session" | "meta"
-                    )
-                {
-                    return Err("Meta nodes are permanent and cannot be deleted".to_string());
-                }
                 if state.delete_node(slot) {
                     // delete_node clears/shifts the selection; the param pane
                     // resync normally comes from process_window_event's tail.
@@ -980,7 +959,6 @@ impl State {
             McpAction::ToggleCircularPane => {
                 state.circular_network_pane = !state.circular_network_pane;
                 let val = state.circular_network_pane;
-                state.write_meta_toggle("main", "Circular Pane", val);
                 state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
                 state.rebuild_positions();
                 state.apply_layout();

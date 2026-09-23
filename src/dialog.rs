@@ -11,9 +11,8 @@
 //! (`DIALOG_PARAMS_IDX`, a `ParametersBg`) laid out inside this one's body, so
 //! a slider in the dialog is the same slider as a slider in the params pane
 //! rather than a second implementation that drifts from it. The values behind
-//! those rows stay owned by the meta node's utility subnets, which is where
-//! `apply_settings_from_menubar_subnets` reads them from — see
-//! `State::dialog_settings_rows`.
+//! those rows are the live `State` fields, persisted by `DesignSettings` —
+//! see [`SETTINGS`] and `Owner`.
 //!
 //! App-owned on the narrow traits wrapped in `Adapted<Dialog>`, like
 //! [`crate::playbar::Playbar`], and a subtree painter for the same reason:
@@ -104,7 +103,13 @@ pub struct Row {
 /// list, and a list that grows with the window turns into a wall of rows with
 /// the one you want somewhere in it.
 const DIALOG_W: f32 = 520.0;
-const DIALOG_H: f32 = 420.0;
+/// The plate's height, clamped to the window by [`layout_in`].
+///
+/// 420 until 2026-09-23, which was sized for a Settings half of thirteen
+/// rows. Retiring the root meta node moved everything its four utility
+/// subnets held into that table — it is nearer thirty now — and a list that
+/// shows eight of them is a list you scroll rather than read.
+const DIALOG_H: f32 = 640.0;
 
 const PAD: f32 = 12.0;
 /// Tab strip height, and the query line's.
@@ -1091,93 +1096,175 @@ pub const ZOOM_ROW_ID: &str = "zoom_level";
 /// commands act on.
 pub const PATH_ROW_ID: &str = "project_path";
 
-/// Where a Settings row's value actually lives.
+/// Prefix of a recent-project row's id; the rest is the path.
 ///
-/// Not the live `State` fields, and not `DesignSettings`: both are DOWNSTREAM
-/// of the meta node. `apply_settings_from_menubar_subnets` copies the utility
-/// subnets onto the live state on every param change, so a write straight to
-/// `State::grid_thickness` would survive exactly until the next one. The
-/// subnet param is the value's owner; this enum says which owner each row has,
-/// so the dialog edits values in the one place that keeps them.
+/// The recent list was the Main utility node's "Open" dropdown, and it went
+/// with that node — leaving `State::recent_files` written on every save and
+/// read by nothing. It is a list of documents, so it belongs where the open
+/// document's own path already is: rows under the path row, each opening its
+/// project. Ranked against the path text like everything else.
+pub const RECENT_ROW_PREFIX: &str = "recent:";
+
+/// How many recent projects the list offers. `recent_files` keeps ten; five
+/// is what fits above the commands without the palette reading as a file
+/// manager, and a query narrows the rest.
+pub const RECENT_ROW_LIMIT: usize = 5;
+
+/// Where a Settings row's value lives.
+///
+/// It used to be neither the live `State` fields nor `DesignSettings`: both
+/// were DOWNSTREAM of the root meta node, whose utility subnets were copied
+/// over live state on every param change, so a write straight to
+/// `State::grid_thickness` survived exactly until the next one. With that
+/// node retired the live field IS the value; this enum says which of the
+/// three remaining kinds of owner each row has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
-    /// A param on a utility subnet under the root meta node (`Main`, `View`,
-    /// `Guides`), named here by subnet and param name.
-    Subnet(&'static str, &'static str),
+    /// A display setting the app owns outright: a live field on `State`,
+    /// persisted by `DesignSettings` into `state.kdl`. Named by the key
+    /// `settings_field_read` / `settings_field_write` dispatch on.
+    ///
+    /// These were `Subnet(node, param)` — a param on a utility node under the
+    /// root meta node — until 2026-09-23. That node tree WAS the store of
+    /// record: `apply_settings_from_menubar_subnets` copied it onto the live
+    /// state after every edit, so writing a live field directly survived
+    /// until the next unrelated change and no longer. With the meta node
+    /// retired the live field is simply the value, and the row writes it.
+    Field(&'static str),
     /// A toggle the command registry already owns end to end: the command does
-    /// the live flip, the menu checkmark AND the per-camera writeback in one
-    /// place. Square Aspect and Show Camera Pivot are per-CAMERA settings with
-    /// no node at all behind the Default Camera, and their commands are the
-    /// only code that gets both cases right — so the row dispatches instead of
-    /// writing, and reads its displayed value off the live state.
+    /// the live flip, the menu checkmark AND any writeback in one place.
+    /// Square Aspect and Show Camera Pivot are per-CAMERA settings with no
+    /// node at all behind the Default Camera, and their commands are the only
+    /// code that gets both cases right — so the row dispatches instead of
+    /// writing, and reads its displayed value off `command_toggle_state`, the
+    /// same table the palette's own switches read.
     Command(&'static str),
-    /// A param on the ACTIVE camera node, with the live field as the fallback:
-    /// the Default Camera has no node, so there is nothing to write but the
-    /// field, and `apply_settings_from_menubar_subnets` leaves it alone.
+    /// A param on the ACTIVE camera node, with the live field as the
+    /// fallback: the Default Camera has no node, so there is nothing to write
+    /// but the field.
     ActiveCamera(&'static str),
+}
+
+/// The control a [`Setting`] row draws, for the rows that have no param
+/// elsewhere to borrow a shape from.
+///
+/// `Owner::Field` rows need this because their value is a bare Rust field —
+/// there is no `ParamDef` behind them carrying a type and a range the way a
+/// subnet param did. Spelling it here keeps the table the single description
+/// of the Settings half.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Ctl {
+    Toggle,
+    /// `#rrggbb`.
+    Color,
+    /// `#rrggbbaa` — the wire colour, whose alpha is its own opacity.
+    Rgba,
+    /// An integer spinbox over `min..=max`. The stored float is scaled by
+    /// `unit` (thousandths for Grid Thickness, tenths for Origin Size), which
+    /// is the convention those params already used.
+    Spin { min: f32, max: f32, unit: f32 },
+    /// A float slider, `min..=max`, shown to `dec` decimals.
+    Slider { min: f32, max: f32, dec: usize },
+    /// A fixed set of strings.
+    Choice(&'static [&'static str]),
 }
 
 /// One row of the Settings half.
 pub struct Setting {
     /// What the dialog calls it — and, because `param_display` keys a row by
-    /// its label, the identity the writeback resolves back to this row. Unique
-    /// across the table, section titles included.
-    ///
-    /// Spelled out rather than borrowed from the owning param's own label: the
-    /// subnets' labels are tuned for the section they sit in ("Plate", under
-    /// the View node's Network section) and stop making sense anywhere else.
+    /// its label, the identity the writeback resolves back to this row.
+    /// Unique across the table, section titles included.
     pub label: &'static str,
     pub owner: Option<Owner>,
+    /// The control, for `Owner::Field` rows. `Command` rows are always
+    /// switches and `ActiveCamera` rows borrow the camera param's shape.
+    pub ctl: Option<Ctl>,
 }
 
 impl Setting {
     const fn section(label: &'static str) -> Self {
-        Setting { label, owner: None }
+        Setting { label, owner: None, ctl: None }
     }
 
-    const fn row(label: &'static str, owner: Owner) -> Self {
-        Setting { label, owner: Some(owner) }
+    /// A row whose value the command registry owns.
+    const fn cmd(label: &'static str, id: &'static str) -> Self {
+        Setting { label, owner: Some(Owner::Command(id)), ctl: Some(Ctl::Toggle) }
+    }
+
+    /// A row over a live field.
+    const fn field(label: &'static str, key: &'static str, ctl: Ctl) -> Self {
+        Setting { label, owner: Some(Owner::Field(key)), ctl: Some(ctl) }
+    }
+
+    const fn camera(label: &'static str, name: &'static str) -> Self {
+        Setting { label, owner: Some(Owner::ActiveCamera(name)), ctl: None }
     }
 }
 
 /// The Settings half, in order.
 ///
-/// Scope is exactly what `DesignSettings` persists — the viewport and graph
-/// DISPLAY state, which is the part of the app's configuration that is a
-/// preference rather than part of a project. What is deliberately NOT here:
-/// the render subnet (per-project look), the pane-visibility toggles (the
-/// View menu and the plate corners already own those, and a settings dialog
-/// is a strange place to hide a pane from), and keybindings, which this DE
-/// edits as `input.kdl` on purpose. The one exception is the wireframe
-/// pair: the palette's Wireframe Color command lands on the colour, so it
-/// is a row here with the single-colour switch that makes it apply, their
-/// owner still the Render node — per-project, unlike the rest of this
-/// table.
+/// Scope is exactly what `DesignSettings` persists: the DISPLAY state, which
+/// is the part of the app's configuration that is a preference rather than
+/// part of a project. That is now the whole of it — the four utility subnets
+/// under the root meta node (`main`, `view`, `guides`, `render`) held these
+/// values until 2026-09-23, and every one of them that was reachable only by
+/// selecting one of those nodes is a row here. Anything left out would not
+/// be "hidden in the node tree", it would be gone.
+///
+/// Still deliberately NOT here: the pane-visibility toggles (the View menu
+/// and the plate corners own those, and a settings dialog is a strange place
+/// to hide a pane from), the active camera (the viewport menubar's own menu,
+/// whose entries are the camera NODES and so cannot be a fixed table), and
+/// keybindings, which this DE edits as `input.kdl` on purpose.
 pub const SETTINGS: &[Setting] = &[
     Setting::section("Viewport"),
-    Setting::row("Background Color", Owner::Subnet("main", "Background Color")),
-    Setting::row("Square Aspect", Owner::Command("toggle_square_viewport")),
+    Setting::field("Background Color", "bg_color", Ctl::Color),
+    Setting::cmd("Square Aspect", "toggle_square_viewport"),
+    Setting::cmd("Ray Traced Preview", "toggle_ray_traced_preview"),
+    Setting::field("World Unit", "world_unit", Ctl::Choice(&["mm", "cm", "m", "in"])),
+    Setting::section("Geometry"),
+    Setting::field("Opacity", "geo_opacity", Ctl::Slider { min: 0.0, max: 1.0, dec: 2 }),
     Setting::section("Wireframe"),
-    Setting::row("Wireframe Color", Owner::Subnet("render", "Wire Color")),
+    Setting::cmd("Show Wireframe", "toggle_wireframe"),
+    Setting::field("Wireframe Color", "wire_color", Ctl::Rgba),
     // The colour applies only in single-colour mode (off, the wires carry
     // the geometry's vertex colours and the colour row sets their alpha
     // alone) — so the switch sits beside the colour, or a colour set here
     // looks ignored.
-    Setting::row("Wireframe Single Color", Owner::Subnet("render", "Wire Single Color")),
+    Setting::cmd("Wireframe Single Color", "toggle_wire_single_color"),
+    Setting::field("Wire Thickness", "wire_width", Ctl::Slider { min: 1.0, max: 8.0, dec: 1 }),
+    Setting::section("Points"),
+    Setting::cmd("Show Points", "toggle_render_points"),
+    Setting::field("Point Size", "point_size", Ctl::Slider { min: 0.0, max: 0.1, dec: 3 }),
+    Setting::field("Point Color", "point_color", Ctl::Color),
+    Setting::cmd("Show Point Markers", "toggle_point_markers"),
+    Setting::field("Point Marker Size", "point_marker_size", Ctl::Spin { min: 5.0, max: 100.0, unit: 1000.0 }),
+    Setting::field("Point Marker Color", "point_marker_color", Ctl::Color),
+    Setting::cmd("Show Point Numbers", "toggle_point_numbers"),
+    Setting::cmd("Show Point Normals", "toggle_point_normals"),
     Setting::section("Grid"),
-    Setting::row("Show Grid", Owner::Subnet("guides", "Show Grid Guide")),
-    Setting::row("Grid Color", Owner::Subnet("guides", "Grid Color")),
-    Setting::row("Grid Thickness", Owner::Subnet("guides", "Grid Thickness")),
+    Setting::cmd("Show Grid", "toggle_grid"),
+    Setting::field("Grid Color", "grid_color", Ctl::Color),
+    Setting::field("Grid Thickness", "grid_thickness", Ctl::Spin { min: 2.0, max: 200.0, unit: 1000.0 }),
     Setting::section("Guides"),
-    Setting::row("Show Origin Axes", Owner::Subnet("guides", "Show Origin Axes")),
-    Setting::row("Origin Size", Owner::Subnet("guides", "Origin Guide Size")),
-    Setting::row("Show Reference Cube", Owner::Subnet("guides", "Show Reference Cube")),
+    Setting::cmd("Show Origin Axes", "toggle_origin"),
+    Setting::field("Origin Size", "origin_size", Ctl::Spin { min: 1.0, max: 50.0, unit: 10.0 }),
+    Setting::cmd("Show Reference Cube", "toggle_cube"),
     Setting::section("Camera"),
-    Setting::row("Show Camera Pivot", Owner::Command("toggle_camera_pivot")),
-    Setting::row("Camera Pivot Size", Owner::ActiveCamera("Camera Pivot Size")),
+    Setting::cmd("Show Camera Pivot", "toggle_camera_pivot"),
+    Setting::camera("Camera Pivot Size", "Camera Pivot Size"),
     Setting::section("Network"),
-    Setting::row("Show Network Plate", Owner::Subnet("view", "Show Network Plate")),
+    Setting::cmd("Show Network Plate", "toggle_network_plate"),
+    Setting::cmd("Circular Pane", "toggle_circular_pane"),
 ];
+
+#[cfg(test)]
+fn field_key(s: &Setting) -> &'static str {
+    match s.owner {
+        Some(Owner::Field(key)) => key,
+        _ => panic!("'{}' is not a Field row", s.label),
+    }
+}
 
 fn setting_by_label(label: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|s| s.label == label)
@@ -1190,15 +1277,30 @@ fn relabel(src: &ParamDef, label: &'static str) -> ParamDef {
 }
 
 fn bool_param(label: &'static str, on: bool) -> ParamDef {
+    shaped(label, "toggle", if on { "true" } else { "false" }.to_string(), None, None, None, &[])
+}
+
+/// A synthetic `ParamDef` for a row with no param of its own behind it: the
+/// label is both its name and its display key, which is how the writeback
+/// resolves a control back to its `Setting`.
+fn shaped(
+    label: &str,
+    param_type: &str,
+    default: String,
+    min: Option<f32>,
+    max: Option<f32>,
+    step: Option<f32>,
+    options: &[&str],
+) -> ParamDef {
     ParamDef {
         name: label.to_string(),
         label: label.to_string(),
-        param_type: "toggle".to_string(),
-        default: if on { "true" } else { "false" }.to_string(),
-        options: Vec::new(),
-        min: None,
-        max: None,
-        step: None,
+        param_type: param_type.to_string(),
+        default,
+        options: options.iter().map(|s| s.to_string()).collect(),
+        min,
+        max,
+        step,
         show_when: String::new(),
     }
 }
@@ -1361,6 +1463,41 @@ impl State {
                         );
                     }
                 }
+                // The recent projects, under the path row — the open
+                // document, then the ones before it. The project already
+                // open is not offered again.
+                let open_now = self.loaded_project_path.clone();
+                let recent: Vec<std::path::PathBuf> = self
+                    .recent_files
+                    .iter()
+                    .filter(|p| Some(*p) != open_now.as_ref())
+                    .take(RECENT_ROW_LIMIT)
+                    .cloned()
+                    .collect();
+                for path in recent.iter().rev() {
+                    let text = path.to_string_lossy().to_string();
+                    if crate::command::fuzzy_rank(&query, &[text.as_str()]).is_empty() {
+                        continue;
+                    }
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    rows.insert(
+                        0,
+                        Row {
+                            id: format!("{RECENT_ROW_PREFIX}{text}"),
+                            label: text,
+                            chord: name,
+                            swatch: None,
+                            toggle: None,
+                            slider: None,
+                            // Same reason as the path row: the tail of a
+                            // path is what identifies it.
+                            truncate_head: true,
+                        },
+                    );
+                }
                 // The zoom slider heads the network pane's list, ranked like
                 // a row labelled "Zoom" so a query still finds (or drops) it.
                 if self.focused_context() == crate::command::Context::Network
@@ -1385,18 +1522,11 @@ impl State {
                 rows
             }
             Mode::AddNode => {
-                // In a utility dir geometry templates are rejected at
-                // placement — don't offer them.
-                let in_utility = self.in_settings_dir();
-                let offered: Vec<&str> = self
-                    .node_templates
-                    .iter()
-                    .filter(|t| {
-                        !in_utility
-                            || !crate::geometry::is_geometry_node_type(&t.node.node_type)
-                    })
-                    .map(|t| t.label.as_str())
-                    .collect();
+                // Every template, everywhere. The settings directories that
+                // refused geometry were the root meta node's utility subnets,
+                // and they are gone.
+                let offered: Vec<&str> =
+                    self.node_templates.iter().map(|t| t.label.as_str()).collect();
                 crate::command::fuzzy_rank(&query, &offered)
                     .into_iter()
                     .map(|i| Row {
@@ -1497,6 +1627,9 @@ impl State {
             "toggle_point_markers" => self.show_point_markers,
             "toggle_point_numbers" => self.show_point_numbers,
             "toggle_point_normals" => self.show_point_normals,
+            "toggle_render_points" => self.render_points,
+            "toggle_wire_single_color" => self.wire_single_color,
+            "toggle_ray_traced_preview" => self.viewport().rt_mode,
             "toggle_square_viewport" => self.square_viewport,
             "toggle_network_plate" => self.network_plate,
             "toggle_circular_pane" => self.circular_network_pane,
@@ -1535,15 +1668,6 @@ impl State {
     /// place, shared with the params pane, instead of a second copy here that
     /// could disagree about what a spinbox is.
     fn dialog_settings_params(&self) -> Vec<ParamDef> {
-        let subnet_param = |subnet: &str, name: &str| -> Option<&ParamDef> {
-            self.session_node()?
-                .children
-                .iter()
-                .find(|c| c.name == subnet)?
-                .params
-                .iter()
-                .find(|p| p.name == name)
-        };
         let camera_param = |name: &str| -> Option<&ParamDef> {
             if self.active_camera == "Default Camera" {
                 return None;
@@ -1560,49 +1684,31 @@ impl State {
         let mut out = Vec::with_capacity(SETTINGS.len());
         for s in SETTINGS {
             match s.owner {
-                None => out.push(ParamDef {
-                    name: s.label.to_string(),
-                    label: s.label.to_string(),
-                    param_type: "section".to_string(),
-                    default: String::new(),
-                    options: Vec::new(),
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(),
-                }),
-                Some(Owner::Subnet(subnet, name)) => {
-                    // A subnet param that does not exist is a row that cannot
-                    // work, so it is not offered — the subnets are recreated
-                    // on every load, but a detached window has no meta node at
-                    // all.
-                    if let Some(p) = subnet_param(subnet, name) {
-                        out.push(relabel(p, s.label));
-                    }
+                None => out.push(shaped(s.label, "section", String::new(), None, None, None, &[])),
+                Some(Owner::Field(key)) => {
+                    let ctl = s.ctl.expect("a Field row declares its control");
+                    out.push(self.settings_field_param(s.label, key, ctl));
                 }
                 Some(Owner::Command(id)) => {
-                    let on = match id {
-                        "toggle_square_viewport" => self.square_viewport,
-                        "toggle_camera_pivot" => self.viewport().show_camera_pivot,
-                        _ => false,
-                    };
-                    out.push(bool_param(s.label, on));
+                    // The same table the palette's own switches read, so a
+                    // row here and a row there cannot disagree about which
+                    // way a toggle is set.
+                    out.push(bool_param(s.label, self.command_toggle_state(id).unwrap_or(false)));
                 }
                 Some(Owner::ActiveCamera(name)) => match camera_param(name) {
                     Some(p) => out.push(relabel(p, s.label)),
-                    // No camera node behind the Default Camera: the live field
-                    // is the value, in the same tenths the camera param uses.
-                    None => out.push(ParamDef {
-                        name: s.label.to_string(),
-                        label: s.label.to_string(),
-                        param_type: "spinbox".to_string(),
-                        default: ((self.camera_pivot_size * 10.0).round() as i32).to_string(),
-                        options: Vec::new(),
-                        min: Some(1.0),
-                        max: Some(50.0),
-                        step: Some(1.0),
-                        show_when: String::new(),
-                    }),
+                    // No camera node behind the Default Camera: the live
+                    // field is the value, in the same tenths the camera param
+                    // uses.
+                    None => out.push(shaped(
+                        s.label,
+                        "spinbox",
+                        ((self.camera_pivot_size * 10.0).round() as i32).to_string(),
+                        Some(1.0),
+                        Some(50.0),
+                        Some(1.0),
+                        &[],
+                    )),
                 },
             }
         }
@@ -1616,6 +1722,171 @@ impl State {
             }
         }
         trimmed
+    }
+
+    /// One `Owner::Field` row: the live value, in the shape its `Ctl` names.
+    fn settings_field_param(&self, label: &'static str, key: &str, ctl: Ctl) -> ParamDef {
+        match ctl {
+            Ctl::Toggle => bool_param(label, self.settings_field_bool(key)),
+            Ctl::Color => {
+                let c = self.settings_field_color(key);
+                shaped(label, "color", crate::project::color_to_hex(c), None, None, None, &[])
+            }
+            Ctl::Rgba => {
+                let c = match key {
+                    "wire_color" => self.wire_color,
+                    _ => [0.0, 0.0, 0.0, 1.0],
+                };
+                shaped(label, "rgba", crate::project::color_to_hex8(c), None, None, None, &[])
+            }
+            Ctl::Spin { min, max, unit } => shaped(
+                label,
+                "spinbox",
+                ((self.settings_field_f32(key) * unit).round() as i32).to_string(),
+                Some(min),
+                Some(max),
+                Some(1.0),
+                &[],
+            ),
+            Ctl::Slider { min, max, dec } => shaped(
+                label,
+                &format!("slider:{min:.*}:{max:.*}:{dec}", dec, dec),
+                format!("{:.*}", dec, self.settings_field_f32(key)),
+                Some(min),
+                Some(max),
+                None,
+                &[],
+            ),
+            Ctl::Choice(options) => {
+                shaped(label, "choice", self.settings_field_text(key), None, None, None, options)
+            }
+        }
+    }
+
+    fn settings_field_bool(&self, key: &str) -> bool {
+        match key {
+            "wire_single_color" => self.wire_single_color,
+            "render_points" => self.render_points,
+            _ => false,
+        }
+    }
+
+    fn settings_field_color(&self, key: &str) -> [f32; 3] {
+        match key {
+            "bg_color" => self.viewport().bg_color,
+            "grid_color" => self.viewport().grid_color,
+            "point_color" => self.point_color,
+            "point_marker_color" => self.point_marker_color,
+            _ => [0.0; 3],
+        }
+    }
+
+    fn settings_field_f32(&self, key: &str) -> f32 {
+        match key {
+            "grid_thickness" => self.grid_thickness,
+            "origin_size" => self.origin_size,
+            "point_marker_size" => self.point_marker_size,
+            "wire_width" => self.wire_width,
+            "geo_opacity" => self.geo_opacity,
+            "point_size" => self.point_size,
+            _ => 0.0,
+        }
+    }
+
+    fn settings_field_text(&self, key: &str) -> String {
+        match key {
+            "world_unit" => self.world_unit.suffix().to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// Write one `Owner::Field` row's new value onto the live state.
+    ///
+    /// `settings_field_keys_are_all_handled` walks the table against these
+    /// four readers and this writer, because a key that no arm names reads
+    /// as a default and writes nowhere — a row that looks live and is inert.
+    fn settings_field_write(&mut self, key: &str, ctl: Ctl, value: &str) {
+        match ctl {
+            Ctl::Toggle => {
+                let on = value == "true";
+                match key {
+                    "wire_single_color" => self.wire_single_color = on,
+                    "render_points" => self.render_points = on,
+                    _ => {}
+                }
+            }
+            Ctl::Color => {
+                let Some(c) = crate::project::hex_to_color(value) else { return };
+                match key {
+                    "bg_color" => self.viewport_mut().bg_color = c,
+                    "grid_color" => self.viewport_mut().grid_color = c,
+                    "point_color" => self.point_color = c,
+                    "point_marker_color" => self.point_marker_color = c,
+                    _ => {}
+                }
+            }
+            Ctl::Rgba => {
+                let Some(c) = crate::project::hex_to_rgba(value) else { return };
+                if key == "wire_color" {
+                    // Setting a wire colour means wanting to see it: the
+                    // colour applies in single-colour mode only, so a colour
+                    // edit turns that mode on if it was off. Twice read as
+                    // "the colour did not take" (2026-09-21).
+                    let changed = c != self.wire_color;
+                    self.wire_color = c;
+                    if changed && !self.wire_single_color {
+                        self.wire_single_color = true;
+                    }
+                }
+            }
+            Ctl::Spin { unit, .. } => {
+                let Ok(v) = value.parse::<f32>() else { return };
+                let v = v / unit;
+                match key {
+                    "grid_thickness" => self.grid_thickness = v,
+                    "origin_size" => self.origin_size = v,
+                    "point_marker_size" => self.point_marker_size = v,
+                    _ => {}
+                }
+            }
+            Ctl::Slider { min, max, .. } => {
+                let Ok(v) = value.parse::<f32>() else { return };
+                let v = v.clamp(min, max);
+                match key {
+                    "wire_width" => self.wire_width = v,
+                    "geo_opacity" => self.geo_opacity = v,
+                    "point_size" => self.point_size = v,
+                    _ => {}
+                }
+            }
+            Ctl::Choice(_) => {
+                if key == "world_unit" {
+                    if let Some(u) = cce_ui::units::Unit::parse(value) {
+                        self.world_unit = u;
+                        self.viewport_dirty = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// One Settings row's value as the dialog would show it. Test-facing:
+    /// `dialog_settings_rows_name_owners_that_exist` round-trips every
+    /// `Owner::Field` row through this and [`State::settings_write_row`],
+    /// which is the only way to catch a key that no dispatch arm names.
+    #[cfg(test)]
+    pub(crate) fn settings_row_value(&self, label: &str) -> String {
+        let s = SETTINGS.iter().find(|s| s.label == label).expect("no such Settings row");
+        let ctl = s.ctl.expect("that row declares no control");
+        self.settings_field_param(s.label, field_key(s), ctl).default
+    }
+
+    /// Write one Settings row, as the writeback does.
+    #[cfg(test)]
+    pub(crate) fn settings_write_row(&mut self, label: &str, value: &str) {
+        let s = SETTINGS.iter().find(|s| s.label == label).expect("no such Settings row");
+        let ctl = s.ctl.expect("that row declares no control");
+        self.settings_field_write(field_key(s), ctl, value);
     }
 
     /// Push the Settings rows into the dialog's params body, and remember them
@@ -1650,14 +1921,9 @@ impl State {
             let Some(owner) = setting.owner else { continue };
             changed = true;
             match owner {
-                Owner::Subnet(subnet, name) => {
-                    if let Some(session) = self.session_node_mut() {
-                        if let Some(node) = session.children.iter_mut().find(|c| c.name == subnet) {
-                            if let Some(p) = node.params.iter_mut().find(|p| p.name == name) {
-                                p.default = value.clone();
-                            }
-                        }
-                    }
+                Owner::Field(key) => {
+                    let ctl = setting.ctl.expect("a Field row declares its control");
+                    self.settings_field_write(key, ctl, value);
                 }
                 Owner::Command(id) => commands.push(id),
                 Owner::ActiveCamera(name) => {
@@ -1697,7 +1963,6 @@ impl State {
             self.run_command(id);
         }
 
-        self.apply_settings_from_menubar_subnets();
         // The viewport meshes bake their sizes and colors in, so a changed
         // thickness/size/tint is a re-generate, not a re-draw. This is the
         // same set the settings-file reload in `tick_frame` regenerates.
@@ -1888,6 +2153,18 @@ impl State {
             self.close_dialog();
             self.copy_project_path();
             return;
+        }
+        // A recent project: open it, and say so if it will not open — a
+        // path in this list can have been moved or deleted since.
+        if mode == Mode::Tabbed {
+            if let Some(path) = id.strip_prefix(RECENT_ROW_PREFIX) {
+                let path = std::path::PathBuf::from(path);
+                self.close_dialog();
+                if let Err(e) = self.load_from_file(&path) {
+                    self.update_status_text(&format!("Could not open {}: {e}", path.display()));
+                }
+                return;
+            }
         }
         if mode == Mode::Tabbed && self.command_toggle_state(&id).is_some() {
             self.run_command(&id);

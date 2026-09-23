@@ -321,19 +321,20 @@ mod tests {
         assert_eq!(shape.default, "None");
     }
 
-    /// The button must exist on Main, inside the File section, before Exit.
+    /// Set As Default is reachable. It was a button on the Main utility
+    /// node's File section; with that node retired it is a registry command
+    /// like the rest of that section, findable in the palette.
     #[test]
     fn test_main_node_offers_set_as_default() {
-        let mut state = State::new(false);
-        state.ensure_menubar_subnets();
-        let (s_idx, m_idx) = session_and_main(&state);
-        let main = &state.fs_root.children[s_idx].children[m_idx];
-        let names: Vec<&str> = main.params.iter().map(|p| p.name.as_str()).collect();
-        let idx = names.iter().position(|n| *n == "Set As Default").expect("Set As Default param");
-        let save_as = names.iter().position(|n| *n == "Save As").unwrap();
-        let exit = names.iter().position(|n| *n == "Exit").unwrap();
-        assert!(save_as < idx && idx < exit, "Set As Default out of place: {names:?}");
-        assert_eq!(main.params[idx].param_type, "button");
+        use crate::command::{by_id, Run};
+        let cmd = by_id("set_as_default").expect("no set_as_default command");
+        assert_eq!(cmd.label, "Set As Default");
+        assert_eq!(cmd.run, Run::Menu("Set As Default"));
+        // Its File-section neighbours are commands too, or the retirement
+        // of the Main node took them with it.
+        for id in ["new_project", "open_project", "save_document", "save_document_as", "exit"] {
+            assert!(by_id(id).is_some(), "the File section lost '{id}'");
+        }
     }
 
     /// A scratch project has no path — the click must not invent a default.
@@ -748,41 +749,59 @@ mod tests {
     }
 
     /// DE chrome is config-owned (`style.surface.relief.profile` /
-    /// `.edge_profile` / `style.surface.param.color`), so Main's retired Style
-    /// section must not come back from an older project file — while it did,
-    /// loading a project silently outranked the user's config.kdl.
+    /// `.edge_profile` / `style.surface.param.color`), and a project file
+    /// must not outrank the user's config.kdl. It did while the Main utility
+    /// node carried a Style section; the retirement of that whole node tree
+    /// is what closes it for good, so what is asserted now is that a save
+    /// carrying those params brings nothing back.
     #[test]
     fn test_legacy_style_params_are_dropped_from_main() {
         let mut state = State::new(false);
-        state.ensure_menubar_subnets();
-        let (s_idx, main_idx) = session_and_main(&state);
+        // A pre-removal save: the four utility subnets flat at the root,
+        // Main carrying its retired Style section.
+        let style = |name: &str, ty: &str, val: &str| crate::app::ParamDef {
+            name: name.to_string(),
+            label: String::new(),
+            param_type: ty.to_string(),
+            default: val.to_string(),
+            options: Vec::new(),
+            min: None,
+            max: None,
+            step: None,
+            show_when: String::new(),
+        };
+        state.fs_root.children.push(crate::app::FsNode {
+            id: "legacy-main".to_string(),
+            name: "main".to_string(),
+            node_type: "utility".to_string(),
+            children: vec![],
+            params: vec![
+                style("Style", "section", ""),
+                style("Bevel Profile", "ramp", "smooth;0.000:0.000,1.000:1.000"),
+                style("Edge Profile", "ramp", "smooth;0.000:0.000,1.000:1.000"),
+                style("Plate Color", "rgba", "#11223344"),
+            ],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        });
 
-        // Re-seed the params exactly as a pre-removal save carries them.
-        for (name, ty, val) in [
-            ("Style", "section", ""),
-            ("Bevel Profile", "ramp", "smooth;0.000:0.000,0.500:0.900,1.000:1.000"),
-            ("Edge Profile", "ramp", "smooth;0.000:0.000,1.000:1.000"),
-            ("Plate Color", "rgba", "#11223344"),
-        ] {
-            state.fs_root.children[s_idx].children[main_idx].params.push(crate::app::ParamDef {
-                name: name.to_string(),
-                label: String::new(),
-                param_type: ty.to_string(),
-                default: val.to_string(),
-                options: Vec::new(),
-                min: None,
-                max: None,
-                step: None,
-                show_when: String::new(),
-            });
-        }
+        state.migrate_meta_settings_node();
 
-        state.ensure_menubar_subnets();
-        let (s_idx, main_idx) = session_and_main(&state);
-        let names: Vec<&str> = state.fs_root.children[s_idx].children[main_idx]
-            .params.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            !state.fs_root.children.iter().any(|c| c.node_type == "utility"),
+            "a utility subnet survived the migration"
+        );
+        let names: Vec<&str> = state
+            .fs_root
+            .children
+            .iter()
+            .flat_map(|c| c.params.iter())
+            .map(|p| p.name.as_str())
+            .collect();
         for retired in ["Style", "Bevel Profile", "Edge Profile", "Plate Color"] {
-            assert!(!names.contains(&retired), "retired style param survived load: {retired} in {names:?}");
+            assert!(!names.contains(&retired), "retired style param survived load: {retired}");
         }
     }
 
@@ -807,14 +826,6 @@ mod tests {
         }
     }
 
-    /// The settings nodes live inside the permanent root meta node (nee
-    /// Session) now; tests that need Main resolve it through there.
-    fn session_and_main(state: &State) -> (usize, usize) {
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta node");
-        let m_idx = state.fs_root.children[s_idx].children.iter().position(|c| c.name == "main").expect("main inside Session");
-        (s_idx, m_idx)
-    }
-
     /// `View 1:1` puts the pivot plane at true size: afterwards one world
     /// unit spans its real length on the display, so the readout's ratio
     /// is 1. Exercised on the default camera (zoom) at a centimetre world
@@ -823,7 +834,6 @@ mod tests {
     #[test]
     fn view_one_to_one_reaches_true_scale() {
         let mut state = State::new(false);
-        state.ensure_menubar_subnets();
         state.world_unit = cce_ui::units::Unit::Cm;
         // The default camera's eye ray is fixed, so 1:1 is a zoom — the one
         // number the readout's cached state can follow here without a
@@ -849,114 +859,202 @@ mod tests {
         assert!((mm - 1.0).abs() < 1e-3, "mm ratio {mm}");
     }
 
-    /// The root meta node (nee Session): exists at root, typed "meta" but
-    /// still a subnet, holds exactly the four settings nodes, and refuses
-    /// deletion through the one gate every deletion route funnels into.
+    /// The root meta node is gone, and a save that still carries one is
+    /// migrated rather than opened with it.
+    ///
+    /// It was the permanent root container for four utility subnets holding
+    /// every session-wide display setting — and it was the STORE OF RECORD
+    /// for them, copied back over live state after each parameter edit. That
+    /// made a display preference a piece of project data, editable only by
+    /// finding the right node. The settings live on `State` now and persist
+    /// to `state.kdl`; `migrate_meta_settings_node` reads an old file's
+    /// values across once and takes the node out.
     #[test]
     fn test_session_node_exists_and_cannot_be_deleted() {
         let mut state = State::new(false);
-        state.ensure_menubar_subnets();
+        assert!(
+            !state.fs_root.children.iter().any(|c| c.node_type == "meta"),
+            "a fresh tree grew a meta node"
+        );
 
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta node");
-        let session = &state.fs_root.children[s_idx];
-        assert_eq!(session.name, "meta");
-        assert!(session.is_enterable(), "the root meta stays a subnet");
-        let names: Vec<&str> = session.children.iter().map(|c| c.name.as_str()).collect();
-        for expected in ["main", "view", "guides", "render"] {
-            assert!(names.contains(&expected), "Session is missing {expected}: {names:?}");
-        }
-        // None of the four remain at root.
-        for c in &state.fs_root.children {
-            assert!(
-                !(c.node_type == "utility" && matches!(c.name.as_str(), "main" | "view" | "guides" | "render")),
-                "settings node '{}' still at root", c.name
-            );
-        }
+        // An old save: a "session"-typed container with the four subnets,
+        // carrying values that are not the defaults.
+        let p = |name: &str, ty: &str, val: &str| crate::app::ParamDef {
+            name: name.to_string(),
+            label: String::new(),
+            param_type: ty.to_string(),
+            default: val.to_string(),
+            options: Vec::new(),
+            min: None,
+            max: None,
+            step: None,
+            show_when: String::new(),
+        };
+        let subnet = |name: &str, params: Vec<crate::app::ParamDef>| crate::app::FsNode {
+            id: format!("legacy-{name}"),
+            name: name.to_string(),
+            node_type: "utility".to_string(),
+            children: vec![],
+            params,
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        state.fs_root.children.push(crate::app::FsNode {
+            id: "legacy-session".to_string(),
+            name: "Session".to_string(),
+            node_type: "session".to_string(),
+            children: vec![
+                subnet("guides", vec![
+                    p("Point Marker Size", "spinbox", "50"),
+                    p("Point Marker Color", "color", "#ff8000"),
+                    p("World Unit", "choice", "cm"),
+                    p("Grid Thickness", "spinbox", "40"),
+                    p("Show Reference Cube", "toggle", "true"),
+                ]),
+                subnet("render", vec![
+                    p("Show Wireframe", "toggle", "true"),
+                    p("Wire Thickness", "slider", "4.0"),
+                    p("Point Color", "color", "#00ff00"),
+                ]),
+                subnet("main", vec![p("Circular Pane", "toggle", "true")]),
+            ],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        });
 
-        let before = state.fs_root.children.len();
-        assert!(!state.delete_node(s_idx), "delete_node deleted the root meta node");
-        assert_eq!(state.fs_root.children.len(), before, "root meta vanished anyway");
-        assert!(state.fs_root.children[s_idx].node_type == "meta");
+        state.migrate_meta_settings_node();
 
-        // An old save's "session"-typed container retypes to meta in place,
-        // children intact.
-        state.fs_root.children[s_idx].node_type = "session".to_string();
-        state.fs_root.children[s_idx].name = "Session".to_string();
-        state.ensure_menubar_subnets();
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta")
-            .expect("session retyped to meta");
-        assert_eq!(state.fs_root.children[s_idx].name, "meta");
-        let names: Vec<&str> =
-            state.fs_root.children[s_idx].children.iter().map(|c| c.name.as_str()).collect();
-        for expected in ["main", "view", "guides", "render"] {
-            assert!(names.contains(&expected), "retype lost {expected}: {names:?}");
-        }
+        // The node is gone, along with every utility subnet it held.
+        assert!(!state.fs_root.children.iter().any(|c| {
+            matches!(c.node_type.as_str(), "meta" | "session" | "utility")
+        }), "the meta node survived the migration");
 
-        // Guides carries the Point Marker Size control (thousandths), and
-        // applying the settings drives the overlay size.
-        {
-            let guides = state.fs_root.children[s_idx].children.iter_mut()
-                .find(|c| c.name == "guides").unwrap();
-            let p = guides.params.iter_mut().find(|p| p.name == "Point Marker Size")
-                .expect("Guides has Point Marker Size");
-            assert_eq!(p.default, "20", "default = 0.02 world units");
-            p.default = "50".to_string();
-            let c = guides.params.iter_mut().find(|p| p.name == "Point Marker Color")
-                .expect("Guides has Point Marker Color");
-            assert_eq!(c.param_type, "color");
-            c.default = "#ff8000".to_string();
-            let u = guides.params.iter_mut().find(|p| p.name == "World Unit")
-                .expect("Guides has World Unit");
-            assert_eq!(u.param_type, "choice");
-            assert_eq!(u.default, "mm", "a world unit is a millimetre until declared otherwise");
-            u.default = "cm".to_string();
-        }
-        state.apply_settings_from_menubar_subnets();
+        // And its values are the live settings — the point of migrating at
+        // all rather than simply dropping the node.
         assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
         assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
         assert!((state.point_marker_size - 0.05).abs() < 1e-6);
         assert!((state.point_marker_color[0] - 1.0).abs() < 0.01);
         assert!((state.point_marker_color[1] - 0.5).abs() < 0.01);
         assert!((state.point_marker_color[2] - 0.0).abs() < 0.01);
+        assert!((state.grid_thickness - 0.04).abs() < 1e-6);
+        assert!(state.viewport().show_cube);
+        assert!(state.wireframe);
+        assert!((state.wire_width - 4.0).abs() < 1e-6);
+        assert_eq!(state.point_color[1], 1.0);
+        assert!(state.circular_network_pane);
+
+        // Idempotent: a second pass has nothing to find and changes nothing.
+        let before = serde_json::to_string(&state.fs_root).unwrap();
+        state.migrate_meta_settings_node();
+        assert_eq!(before, serde_json::to_string(&state.fs_root).unwrap());
     }
 
-    /// An old save carries Main/View/Guides/Render at the root with the user's
-    /// values in their params — migration must MOVE them (values intact), not
-    /// recreate them fresh.
+    /// A node the user put INSIDE the meta subnet is re-homed, not eaten.
+    ///
+    /// Adding a non-geometry node in there was allowed, so the migration
+    /// cannot treat everything under that container as the app's own —
+    /// dropping the node with it would silently delete the user's work, and
+    /// the only trace would be its absence.
+    #[test]
+    fn the_migration_rehomes_a_node_the_user_left_in_the_meta_subnet() {
+        let mut state = State::new(false);
+        let mine = crate::app::FsNode {
+            id: "mine".to_string(),
+            name: "my_notes".to_string(),
+            node_type: "node".to_string(),
+            children: vec![],
+            params: vec![],
+            geometry_visible: false,
+            position: (2.0, 3.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        state.fs_root.children.push(crate::app::FsNode {
+            id: "legacy-meta".to_string(),
+            name: "meta".to_string(),
+            node_type: "meta".to_string(),
+            children: vec![
+                crate::app::FsNode {
+                    id: "legacy-guides".to_string(),
+                    name: "guides".to_string(),
+                    node_type: "utility".to_string(),
+                    children: vec![],
+                    params: vec![],
+                    geometry_visible: true,
+                    position: (0.0, 4.0),
+                    inputs: 1,
+                    outputs: 1,
+                },
+                mine,
+            ],
+            params: vec![],
+            geometry_visible: true,
+            position: (0.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        });
+
+        state.migrate_meta_settings_node();
+
+        assert!(!state.fs_root.children.iter().any(|c| c.node_type == "meta"));
+        let kept = state
+            .fs_root
+            .children
+            .iter()
+            .find(|c| c.id == "mine")
+            .expect("the user's node was eaten with the meta subnet");
+        assert_eq!(kept.name, "my_notes");
+        // Re-homed onto a free cell — the root may already have something
+        // standing where it was.
+        assert!(
+            state.fs_root.children.iter().filter(|c| c.position == kept.position).count() == 1,
+            "it landed on top of another node"
+        );
+    }
+
+    /// An OLDER save still carries Main/View/Guides/Render flat at the root,
+    /// with no meta node above them at all — the shape before the Session
+    /// node existed. The migration has to reach that generation too, or the
+    /// four nodes stay in the network forever doing nothing.
     #[test]
     fn test_old_saves_migrate_settings_nodes_into_session() {
         let mut state = State::new(false);
-        state.ensure_menubar_subnets();
+        state.viewport_mut().show_grid = true;
+        state.fs_root.children.push(crate::app::FsNode {
+            id: "flat-guides".to_string(),
+            name: "guides".to_string(),
+            node_type: "utility".to_string(),
+            children: vec![],
+            params: vec![crate::app::ParamDef {
+                name: "Show Grid Guide".to_string(),
+                label: String::new(),
+                param_type: "toggle".to_string(),
+                default: "false".to_string(),
+                options: vec![],
+                min: None,
+                max: None,
+                step: None,
+                show_when: String::new(),
+            }],
+            geometry_visible: true,
+            position: (0.0, 4.0),
+            inputs: 1,
+            outputs: 1,
+        });
 
-        // Simulate the old shape: pull the four back out to root, drop the
-        // Session node, and plant a probe param ensure doesn't own — the live-
-        // synced toggles are rewritten from app state by design, so only a
-        // foreign param can distinguish MOVED (probe survives) from RECREATED
-        // (probe gone).
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").unwrap();
-        let mut session = state.fs_root.children.remove(s_idx);
-        for mut child in session.children.drain(..) {
-            if child.name == "guides" {
-                child.params.push(crate::app::ParamDef {
-                    name: "migration probe".to_string(),
-                    label: String::new(),
-                    param_type: "text".to_string(),
-                    default: "survived".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(),
-                });
-            }
-            state.fs_root.children.push(child);
-        }
+        state.migrate_meta_settings_node();
 
-        state.ensure_menubar_subnets();
-        let s_idx = state.fs_root.children.iter().position(|c| c.node_type == "meta").expect("root meta recreated");
-        let guides = state.fs_root.children[s_idx].children.iter().find(|c| c.name == "guides").expect("Guides migrated in");
-        let v = guides.params.iter().find(|p| p.name == "migration probe").map(|p| p.default.as_str());
-        assert_eq!(v, Some("survived"), "migration recreated Guides instead of moving it");
+        assert!(
+            !state.fs_root.children.iter().any(|c| c.node_type == "utility"),
+            "a root-level settings node survived"
+        );
+        assert!(!state.viewport().show_grid, "its value did not reach the live state");
     }
 
     /// Ctrl+S saves in place, Ctrl+Shift+S is Save As — and the Shift must
@@ -1122,7 +1220,6 @@ mod tests {
 
         let mut a = State::new(false);
         a.width = 1600.0;
-        a.ensure_menubar_subnets();
         assert!(a.show_viewport && !a.show_spreadsheet, "test assumes the default pane set");
         a.execute_menu_action("Show Viewport Pane");
         a.execute_menu_action("Show Spreadsheet Pane");
@@ -1143,7 +1240,6 @@ mod tests {
 
         let mut b = State::new(false);
         b.width = 800.0;
-        b.ensure_menubar_subnets();
         b.load_from_file(&dir).expect("load");
         assert!(!b.show_viewport, "viewport hidden in the save must load hidden");
         assert!(b.show_spreadsheet, "spreadsheet shown in the save must load shown");
@@ -1167,7 +1263,6 @@ mod tests {
 
         // A detached pane window must ignore the same file's pane state.
         let mut d = State::new(true);
-        d.ensure_menubar_subnets();
         let vp_before = d.show_viewport;
         d.load_from_file(&dir).expect("load detached");
         assert_eq!(d.show_viewport, vp_before, "detached windows keep their own pane layout");
@@ -1186,7 +1281,6 @@ mod tests {
 
         let mut a = State::new(false);
         a.resize(1600.0, 900.0, 1.0);
-        a.ensure_menubar_subnets();
         a.execute_menu_action("Show Spreadsheet Pane");
         assert!(a.show_spreadsheet);
         a.floating_network_layout.2 = 520.0;
@@ -1204,7 +1298,6 @@ mod tests {
 
         let mut b = State::new(false);
         b.resize(1600.0, 900.0, 1.0);
-        b.ensure_menubar_subnets();
         b.load_from_file(&dir).expect("load");
         assert!((b.floating_network_layout.2 - 520.0).abs() < 0.5, "network width: {}", b.floating_network_layout.2);
         assert!((b.floating_param_width - 360.0).abs() < 0.5, "param width: {}", b.floating_param_width);
@@ -1216,14 +1309,12 @@ mod tests {
         // Half the window: the same fractions land at half the pixels.
         let mut c = State::new(false);
         c.resize(800.0, 450.0, 1.0);
-        c.ensure_menubar_subnets();
         c.load_from_file(&dir).expect("load half-size");
         assert!((c.floating_network_layout.2 - 260.0).abs() < 0.5, "scaled network width: {}", c.floating_network_layout.2);
         assert!((c.floating_param_width - 180.0).abs() < 0.5, "scaled param width: {}", c.floating_param_width);
 
         // A detached pane window keeps its own plates.
         let mut d = State::new(true);
-        d.ensure_menubar_subnets();
         let before = d.floating_param_width;
         d.load_from_file(&dir).expect("load detached");
         assert_eq!(d.floating_param_width, before);
@@ -1240,7 +1331,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         let mut state = State::new(false);
-        state.ensure_menubar_subnets();
         // The tree baseline is taken before the meta-node migrations run
         // (startup's project load re-baselines); this test is about the
         // layout half, so baseline here.
@@ -3502,7 +3592,6 @@ mod tests {
         assert_eq!(vw_e, 764.0);
     }
 
-    #[test]
     /// The list's scrollbar is cce-mail's: sunk until a scroll raises it,
     /// draggable while raised, sunk again after the hold — and while sunk it
     /// takes no input, so a press on its lane reaches the row beneath.
@@ -3587,6 +3676,7 @@ mod tests {
         assert!(d.scroll_px > before, "a wheel notch glides the list: {} -> {}", before, d.scroll_px);
     }
 
+    #[test]
     fn test_keyboard_shortcut_system() {
         // Test parsing simple shortcut
         let ctrl_g = Shortcut::parse("Ctrl+g").unwrap();
@@ -3651,11 +3741,19 @@ mod tests {
         // geometry pass sat under every label, and the labels of buttons
         // beneath the params pane's "Open" dropdown bled through it.
         let mut state = State::new(false);
-        state.ensure_menubar_subnets();
-        let (s_idx, m_idx) = session_and_main(&state);
-        state.current_path.push(s_idx);
-        state.on_path_changed();
-        state.graph_mut().set_selected_node(Some(m_idx));
+        // Any node with a choice param will do; the Main utility node's
+        // "Open" dropdown was this test's subject until that node was
+        // retired. Scatter's Mode is a choice.
+        let scatter = state
+            .node_templates
+            .iter()
+            .find(|t| t.label == "Scatter")
+            .expect("a Scatter template")
+            .node
+            .clone();
+        state.fs_root.children.push(scatter);
+        let idx = state.fs_root.children.len() - 1;
+        state.graph_mut().set_selected_node(Some(idx));
         state.sync_parameters_pane();
 
         {
@@ -3667,7 +3765,7 @@ mod tests {
                 .iter_mut()
                 .flatten()
                 .next()
-                .expect("Main's params include a dropdown (Open)");
+                .expect("Scatter's params include a dropdown (Mode)");
             dropdown.open = true;
             // The popover expands on a wall-clock animation, and every geometry
             // reader uses `anim_snap`, a snapshot refreshed only on tick/event —
@@ -3685,10 +3783,11 @@ mod tests {
                 matches!(&item.prim, cce_ui::scene::paint::Prim::Text { text, .. } if text == needle)
             })
         };
-        // "New" is a button label sitting under the open dropdown;
-        // "Other" only exists inside the popover's option list.
-        let label_idx = text_pos("New").expect("button label in display list");
-        let option_idx = text_pos("Other").expect("popover option text in display list");
+        // "Points" is a param label sitting under the open dropdown;
+        // "Surface" is not Mode's current value, so it exists only inside
+        // the popover's option list.
+        let label_idx = text_pos("Points").expect("param label in display list");
+        let option_idx = text_pos("Surface").expect("popover option text in display list");
         assert!(option_idx > label_idx, "popover text must draw after widget labels");
         let has_bg_between = list.items[label_idx..option_idx]
             .iter()
@@ -4272,9 +4371,10 @@ mod tests {
 
     /// The Wireframe Color command is a palette row that PREVIEWS the colour
     /// — the row carries the live wire colour as its swatch — and, picked,
-    /// lands on the Settings half's Wireframe Color row, whose owner is the
-    /// Render node's "Wire Color" (the value's one home). The palette row
-    /// shows the value; the settings row edits it.
+    /// lands on the Settings half's Wireframe Color row, which edits the
+    /// live `wire_color` (its owner was the Render node's "Wire Color" until
+    /// that node was retired). The palette row shows the value; the settings
+    /// row edits it.
     #[test]
     fn test_wireframe_color_row_previews_and_lands_on_settings() {
         use crate::command::{by_id, Run};
@@ -4302,7 +4402,7 @@ mod tests {
 
         // Picked from the list: the dialog closes, the command reopens it on
         // Settings, and the Wireframe Color row is there as a colour control
-        // owned by the Render node.
+        // over the live wire colour.
         state.take_dialog_pick("wireframe_color".to_string());
         assert!(state.dialog_visible());
         assert_eq!(state.dialog_tab(), Tab::Settings);
@@ -4310,19 +4410,31 @@ mod tests {
         assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Color" && t == "rgba"), "{shown:?}");
         assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Single Color" && t == "toggle"), "{shown:?}");
         let s = crate::dialog::SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
-        assert_eq!(s.owner, Some(crate::dialog::Owner::Subnet("render", "Wire Color")));
+        assert_eq!(s.owner, Some(crate::dialog::Owner::Field("wire_color")));
 
         // Editing both rows reaches the live state: the colour AND the switch
         // that makes the wire pass use it (off, the wires carry the
         // geometry's colours and the colour row is their alpha alone).
-        assert!(!state.wire_single_color, "single-colour mode is off by default");
+        state.wire_single_color = false;
+        state.wire_color = [1.0, 1.0, 1.0, 1.0];
+        state.refresh_dialog_settings();
         let mut rows = state.dialog_settings_shown.clone();
         rows.iter_mut().find(|(k, _, _)| k == "Wireframe Color").unwrap().1 = "#000000ff".to_string();
-        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Single Color").unwrap().1 = "true".to_string();
         state.slots.dialog_params_mut().set_display_params(&rows);
         state.sync_dialog_settings_to_project();
         assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0], "the colour row writes the live wire colour");
-        assert!(state.wire_single_color, "the switch row turns single-colour mode on");
+        // Setting a colour means wanting to see it, so single-colour mode
+        // comes on with it — off, the wires carry the geometry's own colours
+        // and this row is only their alpha.
+        assert!(state.wire_single_color, "a colour edit turns single-colour mode on");
+
+        // And the switch is a row of its own, dispatching its command.
+        state.refresh_dialog_settings();
+        let mut rows = state.dialog_settings_shown.clone();
+        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Single Color").unwrap().1 = "false".to_string();
+        state.slots.dialog_params_mut().set_display_params(&rows);
+        state.sync_dialog_settings_to_project();
+        assert!(!state.wire_single_color, "the switch row did not reach the flag");
     }
 
     /// Frame All frames the displayed geometry from wherever the view is:
@@ -4364,108 +4476,159 @@ mod tests {
         assert!(state.viewport().zoom < 1.0, "a 0.25 sphere frames closer than the stock view: zoom {}", state.viewport().zoom);
     }
 
-    /// The viewport settings live in the scene file: the Render node's
+    /// What the scene file carries, and what it no longer does.
+    ///
+    /// It used to carry the viewport DISPLAY settings — the Render node's
     /// wireframe state and colour, the Guides node's grid and origin, Main's
-    /// background, and the Default Camera view (square aspect, pivot marker,
-    /// orbit/zoom/pivot). A fresh State whose live values differ takes the
-    /// file's on load. Before this, `ensure_menubar_subnets` re-seeded the
-    /// nodes from live state on load and the file's values were lost.
+    /// background — because the nodes holding them rode `fs_root` into the
+    /// file. That made a preference part of the project: opening someone
+    /// else's scene reset how you looked at geometry. Those settings persist
+    /// to `state.kdl` now, and the scene file keeps what is genuinely the
+    /// project's: the Default Camera VIEW (square aspect, pivot marker,
+    /// orbit/zoom/pivot), which is where you were standing in this scene.
     #[test]
     fn viewport_settings_round_trip_through_the_scene_file() {
         let dir = std::env::temp_dir().join(format!("cce-designer-vp-settings-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut a = State::new(false);
-        a.ensure_menubar_subnets();
         // The Default Camera is active: a camera NODE's own Square Aspect and
         // pivot params would override the saved view's, by design.
         a.active_camera = "Default Camera".to_string();
-        a.wireframe = true;
-        a.wire_single_color = true;
-        a.wire_color = [0.0, 0.0, 0.0, 1.0];
-        a.wire_width = 3.0;
-        a.viewport_mut().show_grid = false;
-        a.viewport_mut().show_origin = true;
-        a.viewport_mut().bg_color = [0.1, 0.2, 0.3];
         a.square_viewport = true;
         a.viewport_mut().show_camera_pivot = true;
         a.viewport_mut().rotation_y = 0.7;
         a.viewport_mut().zoom = 0.4;
         a.viewport_mut().pivot = Vec3::new(3.0, 0.5, -2.0);
+        // A display setting, deliberately NOT expected to travel.
+        a.wireframe = true;
         a.save_to_file(&dir).expect("save");
 
         let mut b = State::new(false);
-        b.ensure_menubar_subnets();
-        assert!(!b.wireframe && !b.wire_single_color, "a fresh state starts without wires");
+        b.wireframe = false;
         b.load_from_file(&dir).expect("load");
-        assert!(b.wireframe, "Show Wireframe loads from the file");
-        assert!(b.wire_single_color, "Wire Single Color loads from the file");
-        assert_eq!(b.wire_color, [0.0, 0.0, 0.0, 1.0]);
-        assert!((b.wire_width - 3.0).abs() < 1e-4);
-        assert!(!b.viewport().show_grid, "Show Grid loads from the file");
-        assert!(b.viewport().show_origin, "Show Origin loads from the file");
-        let bg = b.viewport().bg_color;
-        assert!((bg[0] - 0.1).abs() < 0.01 && (bg[1] - 0.2).abs() < 0.01 && (bg[2] - 0.3).abs() < 0.01, "background {bg:?}");
         assert!(b.square_viewport, "Square Aspect loads from the file");
         assert!(b.viewport().show_camera_pivot, "the pivot marker loads from the file");
         assert!((b.viewport().rotation_y - 0.7).abs() < 1e-4);
         assert!((b.viewport().zoom - 0.4).abs() < 1e-4);
         assert_eq!(b.viewport().pivot, Vec3::new(3.0, 0.5, -2.0));
-        // And the nodes agree with the live state after the load.
-        let render = b.fs_root.children.iter().find(|c| c.node_type == "meta").unwrap()
-            .children.iter().find(|c| c.name == "render").unwrap();
-        assert_eq!(render.params.iter().find(|p| p.name == "Show Wireframe").unwrap().default, "true");
+        assert!(!b.wireframe, "a display preference rode the project file");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Changing the wire colour turns single-colour mode on — on the node
-    /// and live — so the colour shows; a load does not (a file that says
-    /// off stays off, whatever colour it carries), and turning the switch
-    /// off afterwards sticks until the colour changes again.
+    /// …and the display settings round-trip through `state.kdl` instead,
+    /// every one of them, including the colours that pass through hex on the
+    /// way. The colour table was a hand-written pair of `if let`s per field
+    /// and covered two of the five, so a new colour setting serialized as a
+    /// JSON array and came back as the default.
+    #[test]
+    fn display_settings_round_trip_through_state_kdl() {
+        use crate::app::DesignSettings;
+        let mut a = State::new(false);
+        a.viewport_mut().show_grid = false;
+        a.viewport_mut().show_cube = true;
+        a.viewport_mut().bg_color = [0.1, 0.2, 0.3];
+        a.viewport_mut().grid_color = [0.4, 0.5, 0.6];
+        a.viewport_mut().rt_mode = true;
+        a.grid_thickness = 0.04;
+        a.origin_size = 2.5;
+        a.show_point_markers = true;
+        a.show_point_numbers = true;
+        a.point_marker_size = 0.05;
+        a.point_marker_color = [1.0, 0.5, 0.0];
+        a.world_unit = cce_ui::units::Unit::Cm;
+        a.wireframe = true;
+        a.wire_single_color = true;
+        a.wire_color = [0.2, 0.4, 0.6, 0.5];
+        a.wire_width = 3.0;
+        a.geo_opacity = 0.75;
+        a.render_points = true;
+        a.point_size = 0.05;
+        a.point_color = [0.0, 1.0, 0.0];
+        a.save_settings();
+
+        let kdl = std::fs::read_to_string(DesignSettings::file_path()).expect("state.kdl was written");
+        let back = DesignSettings::from_kdl_str(&kdl);
+        let close = |x: f32, y: f32| (x - y).abs() < 0.01;
+
+        assert!(!back.viewport.show_grid_enabled);
+        assert!(back.viewport.show_cube_enabled);
+        assert!(back.viewport.rt_mode);
+        assert!(close(back.viewport.grid_thickness, 0.04));
+        assert!(close(back.viewport.origin_size, 2.5));
+        assert!(back.viewport.show_point_markers && back.viewport.show_point_numbers);
+        assert!(!back.viewport.show_point_normals);
+        assert!(close(back.viewport.point_marker_size, 0.05));
+        assert_eq!(back.viewport.world_unit, "cm");
+        for (got, want) in [
+            (back.viewport.bg_color, [0.1, 0.2, 0.3]),
+            (back.viewport.grid_color, [0.4, 0.5, 0.6]),
+            (back.viewport.point_marker_color, [1.0, 0.5, 0.0]),
+            (back.render.point_color, [0.0, 1.0, 0.0]),
+        ] {
+            for k in 0..3 {
+                assert!(close(got[k], want[k]), "colour {got:?} came back as {want:?}");
+            }
+        }
+        assert!(back.render.wireframe && back.render.wire_single_color);
+        // The wire colour is the four-component one: its ALPHA is the wire's
+        // own opacity, and dropping it would silently make every wireframe
+        // fully opaque.
+        for k in 0..4 {
+            assert!(close(back.render.wire_color[k], [0.2, 0.4, 0.6, 0.5][k]), "{:?}", back.render.wire_color);
+        }
+        assert!(close(back.render.wire_width, 3.0));
+        assert!(close(back.render.geo_opacity, 0.75));
+        assert!(back.render.render_points);
+        assert!(close(back.render.point_size, 0.05));
+    }
+
+    /// Changing the wire colour turns single-colour mode on, so the colour
+    /// shows; turning the switch off afterwards sticks, and a LOAD never
+    /// flips it — a project that says off stays off whatever colour it
+    /// carries.
     #[test]
     fn changing_the_wire_colour_turns_single_colour_mode_on() {
         let mut state = State::new(false);
-        state.ensure_menubar_subnets();
-        state.apply_settings_from_menubar_subnets();
-        assert!(!state.wire_single_color);
-        let render_param = |state: &State, name: &str| -> String {
-            state.fs_root.children.iter().find(|c| c.node_type == "meta").unwrap()
-                .children.iter().find(|c| c.name == "render").unwrap()
-                .params.iter().find(|p| p.name == name).unwrap().default.clone()
-        };
-        // An edit through the node, as the params pane and the dialog make it.
-        {
-            let meta = state.fs_root.children.iter_mut().find(|c| c.node_type == "meta").unwrap();
-            let render = meta.children.iter_mut().find(|c| c.name == "render").unwrap();
-            render.params.iter_mut().find(|p| p.name == "Wire Color").unwrap().default = "#000000ff".to_string();
-        }
-        state.apply_settings_from_menubar_subnets();
-        assert!(state.wire_single_color, "a colour change switches single-colour mode on");
-        assert_eq!(render_param(&state, "Wire Single Color"), "true", "and the node's switch shows it");
-        // Off again by hand stays off while the colour is unchanged.
-        state.write_render_toggle("Wire Single Color", false);
-        state.apply_settings_from_menubar_subnets();
-        assert!(!state.wire_single_color);
+        state.wire_single_color = false;
+        state.wire_color = [1.0, 1.0, 1.0, 1.0];
 
-        // A load: the file's colour differs from the fresh state's, its
-        // switch is off, and it stays off.
+        // An edit through the dialog's Settings half, which is the only way
+        // in now that the Render node is gone.
+        state.open_dialog();
+        state.slots.dialog.tab = crate::dialog::Tab::Settings;
+        state.refresh_dialog_settings();
+        let mut rows = state.dialog_settings_shown.clone();
+        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Color").unwrap().1 = "#000000ff".to_string();
+        state.slots.dialog_params_mut().set_display_params(&rows);
+        state.sync_dialog_settings_to_project();
+        assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0]);
+        assert!(state.wire_single_color, "a colour change switches single-colour mode on");
+
+        // Off again by hand stays off while the colour is unchanged: the
+        // auto-enable fires on a CHANGE, not on every settings pass.
+        state.wire_single_color = false;
+        state.refresh_dialog_settings();
+        state.sync_dialog_settings_to_project();
+        assert!(!state.wire_single_color, "an unrelated poll flipped it back on");
+
+        // A load carries the project's geometry and leaves the wire
+        // settings — preferences now — exactly where they are.
         let dir = std::env::temp_dir().join(format!("cce-designer-wire-colour-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         state.save_to_file(&dir).expect("save");
-        let mut fresh = State::new(false);
-        fresh.ensure_menubar_subnets();
-        fresh.load_from_file(&dir).expect("load");
-        assert_eq!(fresh.wire_color, [0.0, 0.0, 0.0, 1.0]);
-        assert!(!fresh.wire_single_color, "a load never flips the switch");
+        state.load_from_file(&dir).expect("load");
+        assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0]);
+        assert!(!state.wire_single_color, "a load never flips the switch");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The wireframe toggle is a palette row that flips the live flag AND
-    /// the Render node's "Show Wireframe" switch. The node matters: it is
-    /// what `apply_settings_from_menubar_subnets` reads back on every
-    /// parameter edit, so a flag flipped alone would revert on the next
-    /// unrelated edit. No settings write is involved, so running it here
-    /// touches nothing outside the test.
+    /// The wireframe toggle is a palette row that flips the live flag, and
+    /// the flag is the whole of it. The value used to live on the Render
+    /// utility node, which `apply_settings_from_menubar_subnets` read back
+    /// over live state after every parameter edit anywhere — so a flag
+    /// flipped alone reverted on the next unrelated change, and the command
+    /// had to write the node too. There is no node and no read-back now.
     #[test]
     fn test_toggle_wireframe_flips_the_flag_and_the_render_node() {
         use crate::command::{by_id, Run};
@@ -4473,28 +4636,19 @@ mod tests {
         assert_eq!(cmd.label, "Show Wireframe");
         assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::ToggleWireframe));
 
-        let render_toggle = |state: &State| -> String {
-            state
-                .fs_root
-                .children
-                .iter()
-                .find(|c| c.node_type == "meta")
-                .and_then(|s| s.children.iter().find(|c| c.name == "render"))
-                .and_then(|n| n.params.iter().find(|p| p.name == "Show Wireframe"))
-                .map(|p| p.default.clone())
-                .expect("a Render node with a Show Wireframe toggle")
-        };
         let mut state = State::new(false);
-        assert!(!state.wireframe, "wireframe is off unless the project turned it on");
+        state.wireframe = false;
         assert!(state.run_command("toggle_wireframe"));
         assert!(state.wireframe);
-        assert_eq!(render_toggle(&state), "true");
-        // The read-back path agrees with the flag instead of reverting it.
-        state.apply_settings_from_menubar_subnets();
-        assert!(state.wireframe);
+        assert_eq!(state.command_toggle_state("toggle_wireframe"), Some(true));
+        // An unrelated settings poll no longer reverts it.
+        state.open_dialog();
+        state.slots.dialog.tab = crate::dialog::Tab::Settings;
+        state.refresh_dialog_settings();
+        state.sync_dialog_settings_to_project();
+        assert!(state.wireframe, "a settings pass read the flag back over itself");
         assert!(state.run_command("toggle_wireframe"));
         assert!(!state.wireframe);
-        assert_eq!(render_toggle(&state), "false");
     }
 
     /// The registry's own invariants. Ids are what `input.kdl` binds and
@@ -5243,84 +5397,49 @@ mod tests {
         assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::ToggleNetworkPlate));
         assert!(cmd.default_chord.is_some(), "the plate toggle has no chord");
 
-        // The View settings node mirrors the live flag, so the row in the
-        // params pane shows what is actually on screen.
+        // The live flag and the dialog's switch are one reading: the row
+        // in the Settings half is `Owner::Command`, so it goes through
+        // `command_toggle_state` rather than mirroring the flag onto a node
+        // that could fall out of step with it.
         let mut state = State::new(false);
-        let session = state
-            .fs_root
-            .children
-            .iter()
-            .position(|c| c.node_type == "meta")
-            .expect("root meta node");
-        let view = state.fs_root.children[session]
-            .children
-            .iter()
-            .position(|c| c.name == "view")
-            .expect("View node");
-        let plate_row = |state: &State| {
-            state.fs_root.children[session].children[view]
-                .params
-                .iter()
-                .find(|p| p.name == "Show Network Plate")
-                .map(|p| (p.default.clone(), p.label.clone()))
-        };
-        assert_eq!(
-            plate_row(&state),
-            Some(("true".to_string(), "Plate".to_string())),
-            "the View node has no Plate row, or it does not read as on"
-        );
+        assert_eq!(state.command_toggle_state("toggle_network_plate"), Some(true));
+        assert!(state.run_command("toggle_network_plate"));
+        assert!(!state.network_plate);
+        assert_eq!(state.command_toggle_state("toggle_network_plate"), Some(false));
 
-        state.network_plate = false;
-        state.current_path = vec![session];
-        state.refresh_main_node_live_toggles(view);
-        assert_eq!(
-            plate_row(&state).map(|(v, _)| v),
-            Some("false".to_string()),
-            "the View node's row did not follow the live flag"
-        );
+        let row = crate::dialog::SETTINGS
+            .iter()
+            .find(|s| s.label == "Show Network Plate")
+            .expect("a Show Network Plate row");
+        assert_eq!(row.owner, Some(crate::dialog::Owner::Command("toggle_network_plate")));
     }
 
     /// The viewport guide toggles survive the next parameter edit.
     ///
-    /// `apply_settings_from_menubar_subnets` copies the Guides node onto the
-    /// live flags on EVERY parameter change, so a command that flipped only
-    /// the flag was undone by the next edit anywhere — Show Cube hid the
-    /// cube, and editing any node's parameter brought it back. The command
-    /// has to write the Guides node, the value's owner, as Show Wireframe
-    /// writes the Render node.
+    /// `apply_settings_from_menubar_subnets` used to copy the Guides utility
+    /// node onto the live flags on EVERY parameter change, so a command that
+    /// flipped only the flag was undone by the next edit anywhere — Show
+    /// Cube hid the cube, and editing any node's parameter brought it back.
+    /// The fix was to write the node as well; the node is gone now and the
+    /// flag is simply the value, which is the same guarantee with nothing
+    /// left to fall out of step. Still asserted, because the failure it
+    /// catches (an edit reverting a display toggle) is invisible in a test
+    /// that only flips the toggle.
     #[test]
     fn guide_toggles_survive_the_settings_apply_pass() {
         let mut state = State::new(false);
-        let guides_value = |state: &State, name: &str| -> String {
-            state
-                .session_node()
-                .and_then(|s| s.children.iter().find(|c| c.name == "guides"))
-                .and_then(|g| g.params.iter().find(|p| p.name == name))
-                .map(|p| p.default.clone())
-                .expect("the Guides param")
-        };
-        for (command, param) in [
-            ("toggle_cube", "Show Reference Cube"),
-            ("toggle_grid", "Show Grid Guide"),
-            ("toggle_origin", "Show Origin Axes"),
-        ] {
+        for command in ["toggle_cube", "toggle_grid", "toggle_origin", "toggle_point_markers"] {
             let flag = |state: &State| match command {
                 "toggle_cube" => state.viewport().show_cube,
                 "toggle_grid" => state.viewport().show_grid,
-                _ => state.viewport().show_origin,
+                "toggle_origin" => state.viewport().show_origin,
+                _ => state.show_point_markers,
             };
             let before = flag(&state);
-            assert_eq!(guides_value(&state, param), before.to_string(), "{param} starts in step with the flag");
-
             assert!(state.run_command(command));
             assert_eq!(flag(&state), !before, "{command} flipped the flag");
-            assert_eq!(guides_value(&state, param), (!before).to_string(), "{command} wrote the Guides node");
 
-            // What every parameter edit runs.
-            state.apply_settings_from_menubar_subnets();
-            assert_eq!(flag(&state), !before, "{command} was undone by the apply pass");
-
-            // And a real edit through the action path, on an unrelated node.
+            // A real edit through the action path, on an unrelated node.
             let mut redraw = false;
             let sphere = state.current_dir().children.iter().position(|c| c.name.starts_with("sphere")).expect("a sphere");
             state
@@ -5329,12 +5448,10 @@ mod tests {
             assert_eq!(flag(&state), !before, "{command} was undone by a parameter edit");
         }
 
-        // Circular Pane lives on the Main node and had the same hole.
+        // Circular Pane had the same hole.
         let before = state.circular_network_pane;
         assert!(state.run_command("toggle_circular_pane"));
         assert_eq!(state.circular_network_pane, !before);
-        state.apply_settings_from_menubar_subnets();
-        assert_eq!(state.circular_network_pane, !before, "Circular Pane was undone by the apply pass");
     }
 
     /// A replacement renderer invalidates the page pane's image id, and the
@@ -8350,38 +8467,82 @@ mod tests {
         key_press(Key::Character(c.to_string()))
     }
 
-    /// Every Settings row still names something that exists.
+    /// Every Settings row still names something that exists, and every
+    /// `Owner::Field` key is one the readers and the writer both handle.
     ///
-    /// The failure this catches is silent and the reason the table is a table:
-    /// `dialog_settings_params` SKIPS a row whose owning param it cannot find,
-    /// so renaming a subnet param quietly shortens the Settings half and
-    /// nothing says why. Same argument as
-    /// `test_every_menu_command_names_a_label_that_is_dispatched`.
+    /// The failure this catches is silent, and it is the reason the table is
+    /// a table: a `Field` key that no arm names reads as a zero and writes
+    /// nowhere, so the row draws, accepts an edit and does nothing. (Before
+    /// the meta node was retired the same failure was a renamed subnet param
+    /// SKIPPING its row, which quietly shortened the Settings half.) Same
+    /// argument as `test_every_menu_command_names_a_label_that_is_dispatched`.
     #[test]
     fn dialog_settings_rows_name_owners_that_exist() {
-        use crate::dialog::Owner;
-        let state = State::new(false);
-        let session = state.session_node().expect("the root meta node");
+        use crate::dialog::{Ctl, Owner};
+        let mut state = State::new(false);
         for s in crate::dialog::SETTINGS {
             match s.owner {
-                None => {}
-                Some(Owner::Subnet(subnet, name)) => {
-                    let node = session
-                        .children
-                        .iter()
-                        .find(|c| c.name == subnet)
-                        .unwrap_or_else(|| panic!("no '{subnet}' subnet for row '{}'", s.label));
+                None => assert!(s.ctl.is_none(), "section '{}' declares a control", s.label),
+                Some(Owner::Field(key)) => {
+                    let ctl = s.ctl.unwrap_or_else(|| panic!("row '{}' declares no control", s.label));
+                    // The round trip IS the check: read the row, write the
+                    // value straight back, and read again. A key no arm
+                    // names reads a default and writes nothing, so the two
+                    // reads differ the moment the default is not the live
+                    // value — which is why each row is nudged first.
+                    match ctl {
+                        Ctl::Toggle => {
+                            let before = state.settings_row_value(s.label);
+                            let flipped = if before == "true" { "false" } else { "true" };
+                            state.settings_write_row(s.label, flipped);
+                            assert_eq!(state.settings_row_value(s.label), flipped,
+                                "row '{}' (key '{key}') did not take a write", s.label);
+                        }
+                        Ctl::Color => {
+                            state.settings_write_row(s.label, "#123456");
+                            assert_eq!(state.settings_row_value(s.label), "#123456",
+                                "row '{}' (key '{key}') did not take a write", s.label);
+                        }
+                        Ctl::Rgba => {
+                            state.settings_write_row(s.label, "#12345678");
+                            assert_eq!(state.settings_row_value(s.label), "#12345678",
+                                "row '{}' (key '{key}') did not take a write", s.label);
+                        }
+                        Ctl::Spin { min, max, .. } => {
+                            let v = ((min + max) / 2.0).round() as i32;
+                            state.settings_write_row(s.label, &v.to_string());
+                            assert_eq!(state.settings_row_value(s.label), v.to_string(),
+                                "row '{}' (key '{key}') did not take a write", s.label);
+                        }
+                        Ctl::Slider { min, max, dec } => {
+                            let v = format!("{:.*}", dec, (min + max) / 2.0);
+                            state.settings_write_row(s.label, &v);
+                            assert_eq!(state.settings_row_value(s.label), v,
+                                "row '{}' (key '{key}') did not take a write", s.label);
+                        }
+                        Ctl::Choice(options) => {
+                            let last = options.last().expect("a choice with no options");
+                            state.settings_write_row(s.label, last);
+                            assert_eq!(state.settings_row_value(s.label), *last,
+                                "row '{}' (key '{key}') did not take a write", s.label);
+                        }
+                    }
+                }
+                Some(Owner::Command(id)) => {
                     assert!(
-                        node.params.iter().any(|p| p.name == name),
-                        "'{subnet}' has no param '{name}' — row '{}' would vanish",
+                        crate::command::by_id(id).is_some(),
+                        "row '{}' names no command '{id}'",
+                        s.label
+                    );
+                    // A Command row paints as a switch, so the command has
+                    // to answer the toggle table or the row shows as off
+                    // whatever the setting is.
+                    assert!(
+                        state.command_toggle_state(id).is_some(),
+                        "row '{}' names command '{id}', which has no toggle state",
                         s.label
                     );
                 }
-                Some(Owner::Command(id)) => assert!(
-                    crate::command::by_id(id).is_some(),
-                    "row '{}' names no command '{id}'",
-                    s.label
-                ),
                 // The active camera's params exist only once a camera node
                 // does; the Default Camera branch is exercised below.
                 Some(Owner::ActiveCamera(_)) => {}
@@ -8789,10 +8950,14 @@ mod tests {
         assert!(!state.slots.dialog_params.visible());
     }
 
-    /// A Settings row writes to whatever OWNS its value, not to the live field
-    /// — which is the only write that survives, since
-    /// `apply_settings_from_menubar_subnets` copies the subnets over the live
-    /// state on every param change.
+    /// A Settings row writes to whatever OWNS its value.
+    ///
+    /// That used to mean a param on a utility subnet, never the live field:
+    /// `apply_settings_from_menubar_subnets` copied those subnets back over
+    /// live state on every param change, so a direct write survived until
+    /// the next edit and no longer. The live field IS the value now, and a
+    /// `Command` row goes through the command so the menus and the persist
+    /// come with it.
     #[test]
     fn dialog_settings_write_reaches_the_owning_subnet() {
         use crate::dialog::Tab;
@@ -8800,25 +8965,112 @@ mod tests {
         state.run_command("toggle_dialog");
         state.set_dialog_tab(Tab::Settings);
 
+        // A Command row: Show Grid dispatches `toggle_grid`.
         let was = state.viewport().show_grid;
-        // What a click on the toggle leaves behind: the control reports the
-        // flipped value, and the poll picks it up.
         let mut rows = state.dialog_settings_shown.clone();
         let row = rows.iter_mut().find(|(k, _, _)| k == "Show Grid").expect("the Show Grid row");
         row.1 = if was { "false" } else { "true" }.to_string();
         state.slots.dialog_params_mut().set_display_params(&rows);
         state.sync_dialog_settings_to_project();
-
         assert_eq!(state.viewport().show_grid, !was, "the live state followed");
-        let guides = state
-            .session_node()
-            .expect("meta")
-            .children
-            .iter()
-            .find(|c| c.name == "guides")
-            .expect("Guides");
-        let p = guides.params.iter().find(|p| p.name == "Show Grid Guide").expect("the param");
-        assert_eq!(p.default == "true", !was, "and so did its owner");
+        assert_eq!(state.command_toggle_state("toggle_grid"), Some(!was), "and the switch shows it");
+
+        // A Field row: Grid Thickness is a spinbox in thousandths.
+        let mut rows = state.dialog_settings_shown.clone();
+        rows.iter_mut().find(|(k, _, _)| k == "Grid Thickness").expect("the row").1 = "40".to_string();
+        state.slots.dialog_params_mut().set_display_params(&rows);
+        state.sync_dialog_settings_to_project();
+        assert!((state.grid_thickness - 0.04).abs() < 1e-6, "{}", state.grid_thickness);
+
+        // And it survives an unrelated parameter edit, which is the whole
+        // reason the subnets had to be the owner before.
+        let mut redraw = false;
+        let sphere = state.current_dir().children.iter().position(|c| c.name.starts_with("sphere")).expect("a sphere");
+        state
+            .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.8".into() }, &mut redraw)
+            .expect("set a sphere param");
+        assert_eq!(state.viewport().show_grid, !was, "a param edit reverted the toggle");
+        assert!((state.grid_thickness - 0.04).abs() < 1e-6, "a param edit reverted the thickness");
+    }
+
+    /// The recent projects are rows of the Commands list.
+    ///
+    /// The list was the Main utility node's "Open" dropdown and went with
+    /// that node, which left `recent_files` written on every save and read
+    /// by nothing — a feature with no way in. It is a list of documents, so
+    /// it sits under the open document's own path row.
+    #[test]
+    fn the_palette_offers_the_recent_projects() {
+        use crate::dialog::RECENT_ROW_PREFIX;
+        let mut state = State::new(false);
+        let a = std::path::PathBuf::from("/tmp/cce-recent-alpha");
+        let b = std::path::PathBuf::from("/tmp/cce-recent-beta");
+        state.recent_files = vec![a.clone(), b.clone()];
+
+        state.open_dialog();
+        let rows: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        let id_a = format!("{RECENT_ROW_PREFIX}{}", a.display());
+        let id_b = format!("{RECENT_ROW_PREFIX}{}", b.display());
+        let ia = rows.iter().position(|r| *r == id_a).expect("no row for the newest recent project");
+        let ib = rows.iter().position(|r| *r == id_b).expect("no row for the older recent project");
+        assert!(ia < ib, "the recent list is not in most-recent-first order");
+        // The row shows the path, truncated from the LEFT — the tail is what
+        // identifies a project — with the file name in the chord column.
+        let row = &state.slots.dialog.rows[ia];
+        assert_eq!(row.label, a.display().to_string());
+        assert_eq!(row.chord, "cce-recent-alpha");
+        assert!(row.truncate_head);
+        // And it ranks against the path text like any other row.
+        state.slots.dialog.query = "beta".to_string();
+        state.refresh_dialog_rows();
+        let rows: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        assert!(rows.contains(&id_b) && !rows.contains(&id_a), "{rows:?}");
+        state.close_dialog();
+
+        // The project already open is not offered a second time.
+        state.loaded_project_path = Some(a.clone());
+        state.open_dialog();
+        let rows: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        assert!(!rows.contains(&id_a), "the open project is listed as a recent one");
+        assert!(rows.contains(&id_b));
+    }
+
+    /// Every display setting the retired utility subnets held is reachable —
+    /// as a Settings row, a command, or both.
+    ///
+    /// This is the check the removal turns on. Those four nodes were the only
+    /// way to reach a good half of these values, so a setting left out of the
+    /// table when they went is not "hidden in the node tree", it is GONE, and
+    /// nothing else in the suite would notice.
+    #[test]
+    fn every_retired_subnet_setting_is_reachable() {
+        let labels: Vec<&str> = crate::dialog::SETTINGS.iter().map(|s| s.label).collect();
+        for label in [
+            // guides
+            "Show Grid", "Grid Color", "Grid Thickness", "Show Origin Axes",
+            "Origin Size", "Show Reference Cube", "Point Marker Size",
+            "Point Marker Color", "World Unit",
+            // render
+            "Show Wireframe", "Wireframe Single Color", "Wireframe Color",
+            "Wire Thickness", "Opacity", "Show Points", "Point Size", "Point Color",
+            // main
+            "Background Color", "Ray Traced Preview", "Circular Pane",
+            // camera
+            "Show Camera Pivot", "Camera Pivot Size", "Square Aspect",
+            // network
+            "Show Network Plate",
+        ] {
+            assert!(labels.contains(&label), "'{label}' has no Settings row and no other way in");
+        }
+        // The Main node's buttons are commands, and the active camera keeps
+        // the viewport menubar's own menu — neither is a row here.
+        for id in [
+            "new_project", "open_project", "save_document", "save_document_as",
+            "set_as_default", "exit", "undo", "redo",
+            "zoom_in", "zoom_out", "reset_zoom", "detach_circular_window",
+        ] {
+            assert!(crate::command::by_id(id).is_some(), "the Main node's '{id}' has no command");
+        }
     }
 
     /// Reopening starts clean: on Commands, with an empty query.
@@ -9560,44 +9812,34 @@ mod tests {
         assert_eq!(added.position, (3.0, 2.0), "placed at the grid cursor");
     }
 
-    /// Geometry templates are refused inside a utility dir, so the list does
-    /// not offer them there — the same filter the popup was fed.
+    /// The Add Node list offers every template, everywhere.
+    ///
+    /// It used to hide the geometry ones inside a "utility dir" — the root
+    /// meta node and its `main`/`view`/`guides`/`render` subnets, where
+    /// placing geometry was refused. Those nodes are gone with the settings
+    /// they held, so there is no such directory left to be in and no filter
+    /// to apply.
     #[test]
     fn dialog_add_node_hides_geometry_templates_in_a_utility_dir() {
         let mut state = State::new(false);
-        let offered_at_root = {
-            state.open_node_palette();
-            let n = state.slots.dialog.rows.len();
-            state.close_dialog();
-            n
-        };
+        state.open_node_palette();
+        let at_root = state.slots.dialog.rows.len();
+        assert_eq!(at_root, state.node_templates.len(), "the palette dropped templates");
+        assert!(state.slots.dialog.rows.iter().any(|r| r.label == "Grid"));
+        assert!(state.slots.dialog.rows.iter().any(|r| r.label == "Box"));
+        state.close_dialog();
 
-        // Into the root meta node, which `in_settings_dir` reports as utility.
-        let meta = state
+        // Inside a subnet, the same list.
+        let sphere = state
             .fs_root
             .children
             .iter()
-            .position(|c| c.node_type == "meta")
-            .expect("the root meta node");
-        state.current_path.push(meta);
-        assert!(state.in_settings_dir());
-
+            .position(|c| c.name.starts_with("sphere"))
+            .expect("a sphere at the root");
+        state.current_path.push(sphere);
+        state.on_path_changed();
         state.open_node_palette();
-        let offered_in_utility = state.slots.dialog.rows.len();
-        assert!(
-            offered_in_utility < offered_at_root,
-            "{offered_in_utility} offered in a utility dir vs {offered_at_root} at the root"
-        );
-        assert!(
-            !state.slots.dialog.rows.iter().any(|r| r.label == "Grid"),
-            "a geometry template would be refused at placement"
-        );
-        // Box/Sphere/Plane/Extrude are `"type": "node"` SUBNET templates, not
-        // native geometry types, so `is_geometry_node_type` does not claim
-        // them and the filter leaves them offered. Pre-existing, and exactly
-        // what the popup was fed — asserted so the next reader does not take
-        // it for a hole in this filter.
-        assert!(state.slots.dialog.rows.iter().any(|r| r.label == "Box"));
+        assert_eq!(state.slots.dialog.rows.len(), at_root);
     }
 
     /// Ctrl+P lands on Commands rather than toggling, which is the one thing

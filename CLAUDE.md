@@ -186,7 +186,7 @@ gone from cce-ui with the wgpu path).
   instead of orbiting the camera. The framework owns everything that turned out
   to be the same for any such tool: projection of world positions to handles
   through `State::last_scene_mvp` + `last_scene_view_rect` (both LOGICAL px,
-  the rect divided by scale where it is cached — the same path as the meta
+  the rect divided by scale where it is cached — the same path as the
   Point Numbers overlay), hit-testing against `cursor_x/y`, dragging by
   unprojecting the cursor at the grabbed handle's captured NDC depth, snapping,
   the HUD, per-gesture undo (`cce_ui::history::History` of handle snapshots on
@@ -236,53 +236,101 @@ The `zcce_inspector_v1` integration (window-position tracking + widget-state
 streaming to cce-test-interface) was dropped in the engine migration; the HTTP API
 is the introspection surface.
 
-### The root meta node (nee Session)
+### There are no meta nodes (retired 2026-09-23)
 
-Session-wide settings live under one permanent root node: `meta` (node type
-`meta` — retyped/renamed from the old `Session`/`session` on load, children
-intact) contains the main/view/guides/render utility subnets that used to
-sit flat in `/`. It is the root network's counterpart of every node's
-per-node `meta` child, but still a subnet. `ensure_menubar_subnets` creates
-it and MIGRATES older saves into it (root-level settings nodes moved, not
-recreated — params survive; a `session`-typed container retypes in place).
-It cannot be deleted: `delete_node` refuses the `meta` (and legacy
-`session`) type — the one gate every deletion route funnels through — the
-context menu omits Delete, and the graph draws it without a geometry
-toggle. `State::session_node()` / `in_settings_dir()` are the accessors —
-the latter walks the whole `current_path`, since a first-segment check
-stopped working the day the settings nodes gained a parent. Guides holds
-"Point Marker Size" (thousandths of a world unit), driving the per-node
-meta Point Markers overlay via `State::meta_marker_size`, and **"World Unit"**
-(a `choice`: mm / cm / m / in, `State::world_unit`) — what one world unit IS.
-Geometry never converts; the declaration feeds two things through the display
-metric (`cce_ui::units`): the viewport's bottom-left **scale readout**
-(`append_scale_readout`: `1:2.3`, `1 mm = 0.43 mm on screen`, marked when the
-metric is only assumed) and the viewport context menu's **View 1:1**
-(`view_one_to_one`), which moves the active camera along its eye ray so the
-pivot plane shows one world unit at its true length — the default camera by
-zoom, a camera node by rewriting its Position, as Frame All does. The
-projection is a perspective (vertical FOV 0.9 rad), so 1:1 holds on the
-pivot plane only; `view_scale_ratio` is the readout's number.
+Two different things were called `meta`, and both are gone. What replaced
+them is the one rule worth remembering: **a display setting belongs to the
+view, so it is a live field on `State`, persisted to `state.kdl`, and
+reached from the command palette.** Never a node.
 
-### The meta node (per-node preferences)
+**The root `meta` node (nee Session)** was a permanent, undeletable root
+subnet holding four utility subnets — `main`, `view`, `guides`, `render` —
+whose params were every session-wide setting. It was the STORE OF RECORD:
+`ensure_menubar_subnets` rebuilt it from live state and
+`apply_settings_from_menubar_subnets` copied it back OVER live state after
+every parameter edit anywhere. Three things followed, all bad. A display
+preference was project data, carried in the file and reset by opening
+someone else's scene. Half of those settings were reachable only by finding
+the right node in the right subnet. And a command that flipped a live flag
+was undone by the next unrelated edit unless it also wrote the node — which
+is what `write_guides_toggle` / `write_render_toggle` existed for, and what
+made "Show Cube hides the cube until you touch any parameter" a real bug.
 
-Every geometry-producing node carries a **`meta` child** (node type `meta`) —
-per-node preferences, edited by entering the node and selecting it. Current
-prefs: "Point Markers" and "Point Numbers" (viewport overlays on that node's
-output; numbers project through the cached raster mvp into the 2D text pass,
-`append_meta_point_numbers`). `ensure_meta_on` / `ensure_meta_children`
-(src/app.rs) create it at instantiation and at every project load — the same
-migration pattern as the Session node — and also restore missing pref params,
-so adding a pref is one entry in `ensure_meta_on`'s list plus its consumer.
-`meta_pref(node, name)` is the read. Meta is undeletable (the `delete_node`
-gate alongside `session`), shows no geometry toggle, and is invisible to
-evaluation. Overlay data rebuilds with the scene (`collect_meta_overlays` in
-src/render.rs, walked with the scene's visibility chain).
+**The per-node `meta` child** was a hidden child on every geometry node
+carrying four display switches (Point Markers, Point Numbers, Point Normals,
+Wireframe), so seeing the point numbering of what was on screen meant diving
+into each node and flipping its own switch, one node at a time. Wireframe
+was already duplicated by a global `toggle_wireframe`.
+
+Where it all went:
+
+- **Display settings** are live `State` fields, persisted by
+  `DesignSettings` into `state.kdl` (`viewport` and the new `render` block),
+  and edited in the dialog's **Settings** half — `SETTINGS` in
+  `src/dialog.rs`, whose rows are `Owner::Field` (a live field, with a `Ctl`
+  saying what control draws it), `Owner::Command` (a registry toggle, read
+  through `command_toggle_state`), or `Owner::ActiveCamera`. The table is now
+  the app's whole display configuration, so a value left out of it is GONE,
+  not merely hidden — `every_retired_subnet_setting_is_reachable` is the
+  backstop, and `dialog_settings_rows_name_owners_that_exist` round-trips
+  every `Field` row because a key no dispatch arm names draws, accepts an
+  edit and does nothing.
+- **The three point overlays** are `toggle_point_markers` / `_numbers` /
+  `_normals`, collected in `rebuild_scene_geometry` off the merged scene
+  `Detail` (`render::scene_point_overlays`) rather than by a second walk that
+  re-evaluated every flagged node. **Wireframe folded into the existing
+  `toggle_wireframe`**, and the survivor draws the TOPOLOGICAL edge list
+  (`render::scene_edge_verts`) the per-node flag used, not the triangle soup
+  the global one did — shared edges once, quads as quads.
+- **Main's buttons** (New/Open/Save/Save As/Set As Default/Exit, Undo/Redo,
+  the zoom family, Detach Circular Window) were already registry commands.
+  Three settings that were toggles on those nodes and reachable NOWHERE else
+  became commands: `toggle_ray_traced_preview`, `toggle_wire_single_color`,
+  `toggle_render_points`.
+- **The recent-projects list** was the Main node's "Open" dropdown, which
+  would have left `recent_files` written and read by nothing. It is rows at
+  the head of the palette's Commands list (`RECENT_ROW_PREFIX`), under the
+  open project's own path row; picking one opens it.
+- **Pane visibility** was the `view` subnet's five toggles riding `fs_root`
+  into the file. It is genuinely project state, so it moved to
+  `ProjectViewState::visible_panes` beside the collapse list and the
+  splitters. `State::PANE_FLAGS` is the one table the save and the load share.
+- **The active camera** keeps the viewport menubar's own menu, whose entries
+  are the camera NODES — not something a fixed table can hold.
+
+`Project::migrate_meta_settings_node` runs on every load: it takes the meta
+node (and the four subnets, which PRE-Session saves parked flat at the root —
+hence no early return on the container alone), reads its values onto the live
+state, and saves them to `state.kdl`. Per-node children go in
+`app::strip_meta_children`, called from `merge_template_defs` because that is
+the one function every deserialization runs. Their VALUES are dropped
+deliberately: four per-node booleans do not reduce to one global switch, and
+inferring one would turn a single node's preference into a setting over the
+whole scene.
+
+Gone with them: `session_node()`, `in_settings_dir()` (there is no settings
+directory, so Add Node offers every template everywhere), `write_meta_toggle`
+and its two wrappers, `refresh_main_node_live_toggles`,
+`update_recent_files_layout`, the `utility` / `session` / `meta` node types,
+the undeletable-node gate in `delete_node`, and `layout.rs`'s pinning (whose
+only pinned nodes were these).
+
+**"World Unit"** (mm / cm / m / in, `State::world_unit`) survives as a
+Settings row — what one world unit IS. Geometry never converts; the
+declaration feeds two things through the display metric (`cce_ui::units`):
+the viewport's bottom-left **scale readout** (`append_scale_readout`:
+`1:2.3`, `1 mm = 0.43 mm on screen`, marked when the metric is only assumed)
+and the viewport context menu's **View 1:1** (`view_one_to_one`), which moves
+the active camera along its eye ray so the pivot plane shows one world unit
+at its true length — the default camera by zoom, a camera node by rewriting
+its Position, as Frame All does. The projection is a perspective (vertical
+FOV 0.9 rad), so 1:1 holds on the pivot plane only; `view_scale_ratio` is the
+readout's number.
 
 ### App-written settings: `~/.config/cce/cce-designer/state.kdl`
 
 `default_project` in state.kdl points at the project the main window opens on
-startup (the Main node's File > "Set As Default" button; absent = the bundled
+startup (the `set_as_default` command; absent = the bundled
 `default_project.json`). It is a POINTER, never a rewrite of
 default_project.json — that file is versioned and is the detached-window sync
 channel. Detached windows ignore it: they must keep seeding from the sync
@@ -313,9 +361,10 @@ files migrate on load. Scroll behavior (`scroll_speed`, `inertial_scroll`,
 this one hardcoded `$HOME/.config` until 2026-09-23 and was the only holdout.
 
 **And under `cfg(test)` it is a temp directory**, which is the part worth
-knowing. `State::new` loads the bundled project, and
-`apply_settings_from_menubar_subnets` copies that project's meta subnets over
-the live viewport flags; so any test that then reached `save_settings` —
+knowing. `State::new` loads the bundled project, whose meta subnets used to
+be copied over the live viewport flags after every parameter change (the
+meta node is retired, but the hazard was real and this redirect is what
+caught it); so any test that then reached `save_settings` —
 `run_command("toggle_network_plate")`, the dialog's toggle rows — wrote the
 BUNDLED project's show_grid / show_cube / show_origin over the user's real
 state.kdl. `cargo test` reset three of the user's own toggles on every run,
@@ -566,8 +615,7 @@ Scatter SOP with Relax Points) beside its original Volume mode, and
 tangent plane unless In 3D Space; zero iterations is off) beside its
 original Springs mode. A native `embryo` in an older save is recomposed on
 load (`recompose_native_embryo` in `merge_template_defs`): id, name,
-position, flag, values and meta child carry over, the template's children
-arrive fresh.
+position, flag and values carry over, the template's children arrive fresh.
 
 Two deliberate differences from the HDA. **Subdivide does not smooth**: it
 is this app's `remesh::subdivide` (four triangles per triangle, points
@@ -1257,25 +1305,25 @@ sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
 launcher), and Super held is the DE's window-adjust modifier besides. Alt is the
 app's own — the `move_*` family already lives there.
 
-**A Settings row edits the meta node, never the live field.** The values behind
-those rows have exactly one owner, and it is not `State` and not
-`DesignSettings`: `apply_settings_from_menubar_subnets` copies the utility
-subnets (`Main`, `View`, `Guides`) onto the live state on EVERY param change, so
-a write straight to `State::grid_thickness` survives until the next one and no
-longer. `SETTINGS` is the table of which row belongs to which owner, and `Owner`
-has three arms for the three kinds there turn out to be: a subnet param, a
-registry command (Square Aspect and Show Camera Pivot are per-CAMERA, with no
-node at all behind the Default Camera — their commands are the only code that
+**A Settings row edits the live field** — see "There are no meta nodes"
+above, which is where these values used to live and why a direct write did
+not stick. `SETTINGS` is the table of which row belongs to which owner, and
+`Owner` has three arms for the three kinds there turn out to be: a live
+field (`Field`, with a `Ctl` saying what control draws it, since a bare Rust
+field carries no type or range the way a param did), a registry command
+(`Command` — Square Aspect and Show Camera Pivot are per-CAMERA, with no node
+at all behind the Default Camera, and their commands are the only code that
 gets both cases right), and an active-camera param with the live field as its
-fallback. Writeback is `sync_parameters_to_project`'s shape, polled rather than
-pushed for the same reason: a `ParametersBg` reports its values, it does not
-emit events. `dialog_settings_rows_name_owners_that_exist` is the backstop,
-because the failure is silent — `dialog_settings_params` SKIPS a row whose param
-it cannot find, so a rename quietly shortens the Settings half.
+fallback. Writeback is `sync_parameters_to_project`'s shape, polled rather
+than pushed for the same reason: a `ParametersBg` reports its values, it does
+not emit events. `dialog_settings_rows_name_owners_that_exist` is the
+backstop, because the failure is silent — a `Field` key no dispatch arm names
+reads a default and writes nowhere, so the row draws, takes an edit and does
+nothing, which is why that test round-trips every one of them.
 
 **The dialog is painted after the overlay passes, not in the widget walk.** A
 high `z_order` is not enough: `append_frame_text`, `append_scale_readout` and the
-meta-point overlays all run AFTER the whole walk, so the graph's node labels drew
+point-number overlay all run AFTER the whole walk, so the graph's node labels drew
 straight over a dialog that had already covered them. `append_dialog` runs
 between the plate corners and the context menu instead.
 
@@ -1351,9 +1399,7 @@ lowercase, as Houdini's are, and carry no spaces (since 2026-09-21).
 between a template name and its index goes ("Sphere 1" → "sphere1", which
 is also what minting now produces), any other whitespace becomes an
 underscore ("My Region" → "my_region"), the whole thing is lowercased, and
-empty comes back as `node`. The app's OWN nodes follow it — the root meta
-node's utility subnets are `main`, `view`, `guides` and `render`, and every
-lookup names them so — because a path convention with exceptions is two
+empty comes back as `node`, because a path convention with exceptions is two
 conventions. The template merge matches an instance to its template
 case-insensitively ("sphere3" → "Sphere"). It runs at every entry point — minting, the
 `add_node` name override, `rename_node` — and as a LOAD-TIME MIGRATION on
