@@ -1165,6 +1165,8 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_mold_shell_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("hull") {
         resolve_hull_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("wrangle") {
+        resolve_wrangle_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("switch") {
         resolve_switch_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("boolean") {
@@ -2246,6 +2248,54 @@ pub fn resolve_hull_geometry_with_errors(
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let pts: Vec<Vec3> = (0..input.num_points()).map(|i| input.pos(i)).collect();
     Some(crate::hull::convex_hull(&pts).unwrap_or(input))
+}
+
+/// The Wrangle node: a Rhai script run once per element (`src/wrangle.rs`).
+///
+/// A wrangle with no input still runs — in Detail class, once, which is how
+/// a script builds geometry from nothing with `addpoint` / `addprim`. The
+/// channels the script names as literals are resolved HERE, before the run,
+/// through the expression scope: `ch("../Radius")` on a parameter that is
+/// itself an expression sees the evaluated value, and neither language has
+/// to know the other exists. A failing script reports through the error
+/// slot and the input passes through unchanged.
+pub fn resolve_wrangle_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_name = node_param_str(target, "Input", "");
+    let input = match find_input_node(root, target, &input_name) {
+        Some(n) => generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim).unwrap_or_default(),
+        None => Detail::new(),
+    };
+    let code = node_param_str(target, "Code", "");
+    let class = crate::wrangle::parse_class(&node_param_str(target, "Class", "Points"));
+    let group = node_param_str(target, "Group", "");
+
+    let mut chans = std::collections::HashMap::new();
+    {
+        use crate::expr::Scope as _;
+        let mut scope = TreeScope::new(root, target, sim.frame);
+        for path in crate::wrangle::channel_refs(&code) {
+            let r = scope
+                .channel(&path, ChKind::Float)
+                .and_then(|n| scope.channel(&path, ChKind::Str).map(|s| crate::wrangle::Chan::new(n.as_num(), s.as_str())));
+            chans.insert(path, r);
+        }
+    }
+
+    match crate::wrangle::run_wrangle(input.clone(), &code, class, &group, sim.frame, chans) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            if ocl_error.is_none() {
+                *ocl_error = Some(format!("{}: {e}", target.name));
+            }
+            Some(input)
+        }
+    }
 }
 
 /// The Switch node: one of up to four inputs, chosen by Index.
@@ -5544,6 +5594,7 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "boolean"
         || nt == "mold_shell"
         || nt == "hull"
+        || nt == "wrangle"
         || nt == "switch"
         || nt == "volume"
         || nt == "deform"
@@ -5871,6 +5922,15 @@ pub fn network_sphere_vertices_with_errors(
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_hull_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+        } else if node.node_type.eq_ignore_ascii_case("wrangle") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_wrangle_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }

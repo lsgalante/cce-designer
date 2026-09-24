@@ -595,6 +595,15 @@ that the parallelism a GPU offers belongs somewhere other than the user's
 generator code. Four steps, in dependency order; the first three do not have
 to be undone to reach the fourth.
 
+> **Started (2026-09-24).** The `wrangle` node is in: `src/wrangle.rs` on
+> Rhai 1.26, `nodes/wrangle.json`, Class Points / Primitives / Detail over a
+> Group, the `@name` sugar with typed attribute creation, `ch` / `chs` / `chv`
+> / `chi` resolved through `TreeScope` before the run, topology and nearest,
+> deferred `addpoint` / `addprim` / `removepoint`, both budgets. Nine tests
+> in `main.rs`. Not yet: a code editor worth the name in the params pane
+> (the `code` row is a single-line text box), `@N` write-back feeding the
+> normal overlay, and a vertex class.
+
 **Step 1 — a `wrangle` node on an embedded engine.** Houdini's attribwrangle,
 the thing users actually reach for, on a scripting engine someone else
 maintains. Rhai is the pick: pure Rust with no C toolchain, which every client

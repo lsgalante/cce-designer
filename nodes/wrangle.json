@@ -1,0 +1,16 @@
+{
+  "name": "Wrangle",
+  "type": "wrangle",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    { "name": "Input", "default": "", "type": "text" },
+    { "name": "Class", "type": "choice:Points,Primitives,Detail", "default": "Points" },
+    { "name": "Group", "default": "", "type": "text" },
+    {
+      "name": "Code",
+      "type": "code",
+      "default": "// Runs once per point. @P is the position, @name any attribute;\n// ch(\"Name\") reads a parameter, neighbours(@ptnum) the topology.\n@P.y += sin(@P.x * 4.0) * 0.15;\n"
+    }
+  ]
+}

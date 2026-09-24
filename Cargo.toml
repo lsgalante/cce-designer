@@ -22,6 +22,7 @@ opencl3 = "0.9"
 log = "0.4"
 env_logger = "0.11"
 png = "0.17"
+rhai = "1"
 
 [[bin]]
 name = "cce-designer"

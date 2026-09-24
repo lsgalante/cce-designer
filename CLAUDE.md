@@ -708,6 +708,66 @@ resolve the same way, or the nested sphere's kernel node arrived with only
 the params its override named. Depth-bounded, so a template that contained
 itself would fail rather than recurse forever.
 
+### The wrangle node
+
+`src/wrangle.rs` is a script run once per element, on Rhai — Phase 7 step 1
+of `shapeshifter.md`, and the app's scripting surface for per-element work
+where the `opencl` node used to be the only one. The engine is a dependency;
+what the module owns is the BINDING to the `Detail`, and it is VEX-shaped on
+purpose so `@P.y += sin(@P.x) * 0.1;` reads as it does there.
+
+`@name` is sugar. Rhai has no `@` token, so `desugar` rewrites `@name` into
+an index on an element marker (`__at["name"]`) outside strings and
+comments, and everything after it — `.x`, `+=`, `[0]` — is Rhai's own syntax
+on the value that came back. The indexers reach the geometry through a
+shared context; the marker is a VARIABLE in the scope, not a constant,
+because Rhai refuses to assign through an indexer on a constant and `@P = …`
+is exactly that (the first cut used `push_constant` and every write failed
+with "Cannot assign to indexer of constant"). Naming an attribute creates it,
+typed by the first value written — a float, an int (a bool is an int), a
+`vec3`, an array of two or four — and a write to an existing attribute
+converts to ITS type, so `@mass = 2` into a float attribute is `2.0`. A
+float2 reads back as a `vec3` with z = 0, a float4 as an array. `@P`, `@Cd`,
+`@N` (computed on read when absent), `@id`, `@ptnum` / `@primnum`, `@numpt` /
+`@numprim` and `@Frame` are intrinsics; on the Primitives class `@P` is the
+centroid and read-only, and on Detail `@name` is a detail attribute.
+
+**`ch("path")` is resolved BEFORE the run, not called during it.**
+`channel_refs` scans the script for the paths it names as string literals,
+and the evaluator in `geometry.rs` resolves each through the expression
+`TreeScope` — the one scope, so a parameter that is itself an expression is
+evaluated first and the script sees its value; that is the seam Phase 7's
+step 2 names, and neither language knows the other exists. Two things follow:
+`ch` costs a map lookup per element rather than a tree walk, and a path built
+at runtime is an error that says why. `chs` reads text, `chv` a float3, `chi`
+truncates.
+
+`neighbours(pt)`, `prims(pt)`, `points(prim)` read the derived topology and
+`nearest(pos, r)` the point grid — built once at the first call from the
+positions as they then stand, and keyed by radius. `point(name, i)` /
+`setpoint`, `prim` / `setprim`, `detail` / `setdetail`, `ingroup` /
+`setgroup` reach elements other than the current one. `addpoint`, `addprim`
+and `removepoint` are DEFERRED and applied after the run, so a script
+iterating points sees a stable count; `addpoint` returns the index the point
+will have, which is what makes `addprim([a, b, c])` in Detail class a way to
+build geometry from no input at all — a wrangle with nothing wired still runs.
+
+Ints and floats mix (`@P.y * 2` works), which Rhai does not do on its own;
+the mixed arithmetic and comparison operators are registered by hand, as are
+`vec3`'s. Two budgets: `OPS_PER_ELEMENT` operations per element, which is
+`kernel_cpu`'s step budget as a setting rather than a hand-rolled counter,
+and `RUN_BUDGET` seconds of wall clock for the whole run, checked in
+`on_progress` every few thousand operations. Any failure — syntax, a runtime
+error on an element, a budget — fails the WHOLE run, named by node and
+element (`wrangle1: point 4: …`), and the input passes through untouched: a
+half-wrangled geometry is not a result. Compiled scripts cache by desugared
+source in a thread-local, as `OPENCL_CACHE` keys kernels.
+
+CPU only, deliberately: an interpreter is an order of magnitude or more
+below native Rust, which is fine for tens of thousands of elements per edit
+and wrong for a solver at a million per frame. That is Phase 7's step 4
+(WGSL compute through the renderer), not a reason to grow this.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,
