@@ -6300,6 +6300,31 @@ mod tests {
         assert_eq!(state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap().default, "chi(\"../orb/Rows\") * 2");
     }
 
+    /// A code parameter never becomes an expression, however its text reads:
+    /// a one-line script that IS `ch("../a/Radius")` is a program to run,
+    /// and flagging it would evaluate it to a number first. Neither the
+    /// template loader nor a scripted set_param flags one.
+    #[test]
+    fn a_code_parameter_is_never_an_expression() {
+        use crate::app::{infer_template_exprs, McpAction};
+        let mut node = ref_node("w", "w1", "opencl", vec![("Code", "code", "ch(\"../a/Radius\")"), ("Radius", "slider", "ch(\"../a/Radius\")")], vec![]);
+        for p in &mut node.params {
+            p.expr = false;
+        }
+        infer_template_exprs(&mut node);
+        assert!(!node.params[0].expr, "the code stays a program");
+        assert!(node.params[1].expr, "the slider becomes an expression");
+
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "OpenCL".into(), name: Some("k".into()), x: 3.0, y: 9.0 }, &mut redraw).unwrap();
+        let k = state.current_dir().children.iter().position(|c| c.name == "k").unwrap();
+        state.apply_action(McpAction::SetParam { slot: k, name: "Code".into(), value: "chf(\"../sphere1/Radius\")".into() }, &mut redraw).unwrap();
+        let code = state.current_dir().children[k].params.iter().find(|p| p.name == "Code").unwrap();
+        assert!(!code.expr);
+        assert_eq!(code.param_type, "code");
+    }
+
     /// Inside the SECOND instance of a subnet, a child wired to a sibling by
     /// name finds its own sibling, not the first instance's.
     #[test]

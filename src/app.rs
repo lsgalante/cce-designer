@@ -117,6 +117,17 @@ pub struct ParamDef {
     pub expr: bool,
 }
 
+impl ParamDef {
+    /// Whether a value that READS as a reference should become an
+    /// expression here. Not for a code parameter: a kernel or a wrangle
+    /// script is a program, and one whose whole text happens to be
+    /// `ch("../a/Radius")` is a one-line program, not a channel — flagging
+    /// it would evaluate the script to a number before it ever ran.
+    pub fn takes_expressions(&self) -> bool {
+        !(self.param_type == "code" || self.name == "Code")
+    }
+}
+
 fn default_param_type() -> String { "string".to_string() }
 
 /// Expand a leading `~` to the home directory. A path typed into a text field
@@ -763,7 +774,7 @@ impl Project {
 /// one a typed or scripted value gets — arithmetic alone is not enough.
 pub fn infer_template_exprs(node: &mut FsNode) {
     for p in &mut node.params {
-        if !p.expr && crate::expr::looks_like_expression(&p.default) {
+        if !p.expr && p.takes_expressions() && crate::expr::looks_like_expression(&p.default) {
             p.expr = true;
         }
     }
@@ -2905,7 +2916,7 @@ impl State {
                                 // A reference typed into a plain row becomes
                                 // an expression — the one way to make one
                                 // without the row menu.
-                                if !p.expr && crate::expr::looks_like_expression(&p.default) {
+                                if !p.expr && p.takes_expressions() && crate::expr::looks_like_expression(&p.default) {
                                     p.expr = true;
                                 }
                                 if p.param_type == "button" && p.default == "clicked" {

@@ -723,7 +723,7 @@ impl State {
                         p.default = value;
                         // A value that reads as a reference becomes an
                         // expression, as one typed into the pane does.
-                        if !p.expr && crate::expr::looks_like_expression(&p.default) {
+                        if !p.expr && p.takes_expressions() && crate::expr::looks_like_expression(&p.default) {
                             p.expr = true;
                         }
                         // Same sequence as the interactive param-pane
