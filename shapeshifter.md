@@ -629,16 +629,27 @@ edit and wrong for a solver at a million per frame, which is step 4's job. A
 script that fails reports through the node-error slot, as a kernel does, and
 leaves the input passing through.
 
-**Step 2 — parameter expressions, through the same engine.** A value that
-begins with `=` evaluates as a Rhai expression with `ch()`, `@Frame`, the
-math library and the detail attributes of the node's INPUT in scope — so a
-Transform's Translate can be `= detail("bbox_max") * 0.5` and a Scatter's
-Count `= ch("../Density") * detail("area")`. The prefix is what makes it
-unambiguous: `1:2:3` is a float3 literal and stays one, and a bare `ch("X")`
-keeps working as the trivial expression it already is. The params pane shows
-an expression as text, as it shows a reference. One engine closes both gaps;
-a second mini-language for expressions would be the mistake the kernel
-preprocessor already is.
+**Step 2 — parameter expressions, on `expr.rs`, not on Rhai.** The
+parameter half is its own small language, `src/expr.rs`: a parameter whose
+`expr` flag is set holds an expression rather than a value — `ch(path)` with
+Houdini's relative paths, arithmetic, comparisons, `$F` / `$FF`, a fixed
+function set, `if(cond, a, b)` in place of a ternary because `:` separates a
+float3's components — and is evaluated every time the node is, through the
+one `Scope` that `geometry.rs` implements over the tree. Settled
+2026-09-24: keep it, and keep Rhai OUT of parameters. Two engines rather than
+one, deliberately, because the two jobs want opposite things. A parameter
+expression is read by every node in the graph on every evaluation, so it
+wants a language small enough to be parsed and checked in a line and modelled
+as a FLAG rather than sniffed from the text — a kernel's Code contains
+`chf(`, a node name is an identifier and `0.5` is an expression too, so a
+prefix convention would be wrong somewhere. A wrangle wants the opposite:
+loops, functions, a standard library, an operation budget, and a runtime
+the app does not maintain. Sharing one engine would drag Rhai's parse cost
+and surface into every parameter read, or starve the wrangle of the language
+it needs. The seam between them is the channel: a wrangle's `ch("Name")` in
+step 1 resolves through `expr.rs`'s scope, so a referenced parameter that is
+itself an expression evaluates before the wrangle sees it, and neither
+language has to know the other exists.
 
 **Step 3 — port the four kernel templates native, then retire OpenCL.**
 Sphere, Box, Plane and Extrude are the only kernels that ship. A native
@@ -701,7 +712,8 @@ hand-rolled interpreter for a second language. And Mesa's lavapipe runs real
 Vulkan compute on the CPU with no code change, which is a headless story
 OpenCL never had.
 
-Touches: a new `wrangle.rs` and the Rhai dependency (steps 1–2);
+Touches: a new `wrangle.rs` and the Rhai dependency (step 1); `expr.rs`
+only at the channel seam (step 2);
 `geometry.rs`, `kernel_cpu.rs`, `nodes/{sphere,box,plane,extrude,opencl}.json`
 and `Cargo.toml` (step 3, all deletions); `cce-ui/src/vk` for the compute-job
 API and a `compute/` directory of WGSL operators here (step 4).
@@ -811,6 +823,6 @@ this becomes worth arguing about.
 
 Phase 7 is the one phase that removes more than it adds. Its first three steps
 replace a hand-maintained C interpreter and a GPU runtime nothing else uses
-with one embedded engine that serves both the wrangle and parameter
-expressions; the fourth puts GPU parallelism where it pays, under the solver
-operators, through the renderer the app already has.
+with an embedded engine for the wrangle beside the small expression language
+parameters already have; the fourth puts GPU parallelism where it pays, under
+the solver operators, through the renderer the app already has.
