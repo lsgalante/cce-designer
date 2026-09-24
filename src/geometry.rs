@@ -720,11 +720,23 @@ fn find_ref_param<'a>(node: &'a FsNode, name: &str) -> Option<(&'a ParamDef, Opt
 /// What an expression on `node` sees: the tree for its channels, the frame
 /// for `$F`, and the chain of parameters being evaluated, so a reference
 /// that comes back round to itself is an error rather than a stack overflow.
-struct TreeScope<'a> {
+///
+/// Public so a SCRIPT on a node (the wrangle) can read channels through
+/// the same scope its parameters do: a `ch("../a/Radius")` in a script
+/// then sees an expression-valued Radius evaluated, not its text.
+pub struct TreeScope<'a> {
     root: &'a FsNode,
     node: &'a FsNode,
     frame: i32,
     stack: Vec<(String, String)>,
+}
+
+impl<'a> TreeScope<'a> {
+    /// A scope for something on `node` — an expression on one of its
+    /// parameters, or a script it runs — evaluated at `frame`.
+    pub fn new(root: &'a FsNode, node: &'a FsNode, frame: i32) -> Self {
+        TreeScope { root, node, frame, stack: Vec::new() }
+    }
 }
 
 impl<'a> crate::expr::Scope for TreeScope<'a> {
