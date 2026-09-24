@@ -22,7 +22,6 @@ pub mod viewport_3d;
 pub mod api;
 pub mod window;
 pub mod geometry;
-pub mod kernel_cpu;
 pub mod project;
 pub mod render;
 pub mod shortcut;
@@ -237,7 +236,7 @@ mod tests {
         let child = |name: &str| FsNode {
             id: name.to_string(),
             name: name.to_string(),
-            node_type: "opencl".to_string(),
+            node_type: "grid".to_string(),
             children: vec![],
             params: vec![],
             geometry_visible: true,
@@ -2315,7 +2314,7 @@ mod tests {
             &mut ocl_err,
             &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
         ).expect("Group geometry generation failed");
-        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+        assert!(ocl_err.is_none(), "node error: {:?}", ocl_err);
 
         let members = crate::geometry::group_member_positions(&geom, "group1");
         assert!(!members.is_empty(), "the box should tag the upper hemisphere");
@@ -2820,16 +2819,25 @@ mod tests {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
         let group_t = templates_root.children.iter().find(|t| t.name == "Group").unwrap();
-        let opencl_t = templates_root.children.iter().find(|t| t.node_type == "opencl").unwrap();
         let output_t = templates_root.children.iter().find(|t| t.node_type == "output").unwrap();
 
         // An "old save": a Sphere instance from before the construction
         // controls AND from before the port — a subnet of opencl1 → output1
         // holding only Radius, with a user value, and a stale kernel.
-        let mut opencl1 = opencl_t.clone();
-        opencl1.id = "s_opencl1".to_string();
-        opencl1.name = "opencl1".to_string();
-        opencl1.params.iter_mut().find(|p| p.name == "Code").unwrap().default = "OLD KERNEL".to_string();
+        let opencl1 = FsNode {
+            id: "s_opencl1".to_string(),
+            name: "opencl1".to_string(),
+            node_type: "opencl".to_string(),
+            children: vec![],
+            params: vec![crate::app::ParamDef {
+                name: "Code".into(), label: String::new(), param_type: "code".into(), default: "OLD KERNEL".into(),
+                options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
+            }],
+            geometry_visible: true,
+            position: (4.0, 2.0),
+            inputs: 1,
+            outputs: 1,
+        };
         let mut output1 = output_t.clone();
         output1.id = "s_output1".to_string();
         output1.name = "output1".to_string();
@@ -3215,7 +3223,7 @@ mod tests {
                 &mut ocl_err,
                 &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
             ).expect("Geometry generation failed");
-            assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+            assert!(ocl_err.is_none(), "node error: {:?}", ocl_err);
             geom
         };
 
@@ -3243,54 +3251,6 @@ mod tests {
         // Columns/Rows control the cell counts per axis.
         let geom_3 = generate(&[("Columns", "4"), ("Rows", "8")], "plane_inst_3");
         assert_eq!(geom_3.num_points(), 5 * 9, "a 4x8 cell grid is 5x9 points");
-    }
-
-    #[test]
-    fn test_dynamic_parameters_parsing_and_preprocessing() {
-        let code = r#"
-            float freq = chf("freq", 4.0f);
-            int count = chi("count", 15);
-            float3 col = chv("col", 0.8f, 0.2f, 0.2f);
-            float scale = chf("scale");
-        "#;
-        
-        let parsed = crate::geometry::parse_dynamic_params(code);
-        assert_eq!(parsed.len(), 4);
-        
-        assert_eq!(parsed[0].name, "freq");
-        assert_eq!(parsed[0].param_type, "slider");
-        assert_eq!(parsed[0].default, "4.0");
-        
-        assert_eq!(parsed[1].name, "scale");
-        assert_eq!(parsed[1].param_type, "slider");
-        assert_eq!(parsed[1].default, "0.5");
-        
-        assert_eq!(parsed[2].name, "count");
-        assert_eq!(parsed[2].param_type, "spinbox");
-        assert_eq!(parsed[2].default, "15");
-        
-        assert_eq!(parsed[3].name, "col");
-        assert_eq!(parsed[3].param_type, "float3");
-        assert_eq!(parsed[3].default, "0.80:0.20:0.20");
-        
-        let mut target = FsNode {
-            id: "node1".to_string(),
-            name: "OpenCL Node".to_string(),
-            node_type: "opencl".to_string(),
-            children: Vec::new(),
-            params: parsed,
-            geometry_visible: true,
-            position: (0.0, 0.0),
-            inputs: 1,
-            outputs: 1,
-        };
-        
-        target.params[1].default = "1.25".to_string(); // "scale"
-        let preprocessed = crate::geometry::preprocess_opencl_code(code);
-        assert!(preprocessed.contains("param_values[0]"));
-        assert!(preprocessed.contains("((int)param_values[2])"));
-        assert!(preprocessed.contains("(float3)(param_values[3], param_values[4], param_values[5])"));
-        assert!(preprocessed.contains("param_values[1]"));
     }
 
     #[test]
@@ -6241,7 +6201,7 @@ mod tests {
     #[test]
     fn a_code_parameter_is_never_an_expression() {
         use crate::app::{infer_template_exprs, McpAction};
-        let mut node = ref_node("w", "w1", "opencl", vec![("Code", "code", "ch(\"../a/Radius\")"), ("Radius", "slider", "ch(\"../a/Radius\")")], vec![]);
+        let mut node = ref_node("w", "w1", "wrangle", vec![("Code", "code", "ch(\"../a/Radius\")"), ("Radius", "slider", "ch(\"../a/Radius\")")], vec![]);
         for p in &mut node.params {
             p.expr = false;
         }
@@ -6251,7 +6211,7 @@ mod tests {
 
         let mut state = State::new(false);
         let mut redraw = false;
-        state.apply_action(McpAction::AddNode { template_name: "OpenCL".into(), name: Some("k".into()), x: 3.0, y: 9.0 }, &mut redraw).unwrap();
+        state.apply_action(McpAction::AddNode { template_name: "Wrangle".into(), name: Some("k".into()), x: 3.0, y: 9.0 }, &mut redraw).unwrap();
         let k = state.current_dir().children.iter().position(|c| c.name == "k").unwrap();
         state.apply_action(McpAction::SetParam { slot: k, name: "Code".into(), value: "chf(\"../sphere1/Radius\")".into() }, &mut redraw).unwrap();
         let code = state.current_dir().children[k].params.iter().find(|p| p.name == "Code").unwrap();
@@ -10615,5 +10575,28 @@ mod tests {
         let g = g.unwrap();
         let moved = (0..g.num_points()).filter(|&p| (g.pos(p).y - before.pos(p).y).abs() > 1e-6).count();
         assert!(moved > 0, "the default script deforms the input");
+    }
+
+    /// An `opencl` node in a save older than the retirement is not dropped:
+    /// it passes its input through and says what it is, on the status line
+    /// and in the CLI's warning, so the fix is one rewrite as a wrangle.
+    #[test]
+    fn a_retired_opencl_node_passes_its_input_through_and_says_so() {
+        let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "1.0")], vec![]);
+        let k = ref_node("k", "opencl1", "opencl", vec![("Input", "text", "src"), ("Code", "code", "__kernel void process() {}")], vec![]);
+        let root = ref_node("root", "root", "node", vec![], vec![src, k]);
+        let before = eval(&root, &root.children[0]).0.unwrap();
+        let (g, err) = eval(&root, &root.children[1]);
+        let err = err.expect("the retired node reports itself");
+        assert!(err.starts_with("opencl1: OpenCL nodes are retired"), "{err}");
+        assert!(err.contains("wrangle"), "and points at the replacement: {err}");
+        let g = g.expect("the input passes through");
+        assert_eq!(g.num_points(), before.num_points());
+        assert_eq!(g.pos(5), before.pos(5));
+        assert!(crate::geometry::is_geometry_node_type("opencl"), "the type still resolves, to that arm");
+
+        // And no template offers it any more.
+        let templates = crate::app::load_fs_tree();
+        assert!(!templates.children.iter().any(|t| t.node_type == "opencl"), "nodes/opencl.json is gone");
     }
 }

@@ -2,7 +2,7 @@
 use cce_ui::colors;
 use cce_ui::widget::WidgetHost;
 
-use crate::app::{State, FsNode};
+use crate::app::State;
 use crate::slots::{
     WIDGET_COUNT,
     CONTENT_IDX, VIEWPORT_IDX, PARAM_IDX,
@@ -1192,23 +1192,8 @@ impl State {
         };
         self.sim_cache = sim_cache;
 
-        fn has_visible_opencl(node: &FsNode) -> bool {
-            if node.node_type.eq_ignore_ascii_case("opencl") && node.geometry_visible {
-                return true;
-            }
-            for child in &node.children {
-                if has_visible_opencl(child) {
-                    return true;
-                }
-            }
-            false
-        }
-
-        let displayed_opencl = has_visible_opencl(self.viewport_editor_dir());
         if let Some(e) = ocl_error {
-            self.update_status_text(&format!("OpenCL Error: {}", e));
-        } else if displayed_opencl {
-            self.update_status_text("OpenCL kernel executed successfully.");
+            self.update_status_text(&format!("Node error: {}", e));
         } else {
             self.update_status_text("Geometry updated successfully.");
         }
@@ -1216,7 +1201,7 @@ impl State {
         let verts = crate::geometry::detail_vertices(&geom);
         self.vertex_count_spheres = verts.len() as u32;
         // Cache for the path tracer, so RT mode never re-runs the node
-        // graph / OpenCL kernels; the version bump invalidates its scene.
+        // graph; the version bump invalidates its scene.
         // The raster mesh uploads from this same cache on the next
         // `stage_renderer` flush.
         self.rt_sphere_verts = verts;

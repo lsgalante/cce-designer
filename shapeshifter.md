@@ -660,14 +660,16 @@ step 1 resolves through `expr.rs`'s scope, so a referenced parameter that is
 itself an expression evaluates before the wrangle sees it, and neither
 language has to know the other exists.
 
-> **Started (2026-09-24): the four are native.** `src/shapes.rs` — Sphere
-> (all three methods, Cube as quads), Box (with a Center, without its dead
-> Input), Plane, and Extrude as a WHOLE (walls on boundary edges only,
-> where the kernel walled every interior edge). Saved kernel subnets
-> migrate on load through `nativize_kernel_subnets`; the bundled project
-> files were converted in place. The `opencl` node, `kernel_cpu.rs`, the
-> launcher and `opencl3` still ship — the retirement is the half of this
-> step still to do.
+> **Landed (2026-09-24).** `src/shapes.rs` — Sphere (all three methods,
+> Cube as quads), Box (with a Center, without its dead Input), Plane, and
+> Extrude as a WHOLE (walls on boundary edges only, where the kernel walled
+> every interior edge). Saved kernel subnets migrate on load through
+> `nativize_kernel_subnets`; the bundled project files were converted in
+> place. Then the retirement: the `opencl` node, `kernel_cpu.rs`, the
+> launcher and preprocessor, `opencl3`, `CCE_KERNEL_CPU` and the ICD
+> hazard are gone. An `opencl` node in an old save passes its input through
+> and reports itself. The suite runs with no GPU, no OpenCL and no
+> environment variable.
 
 **Step 3 — port the four kernel templates native, then retire OpenCL.**
 Sphere, Box, Plane and Extrude are the only kernels that ship. A native

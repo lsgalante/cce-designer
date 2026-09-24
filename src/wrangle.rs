@@ -4,9 +4,10 @@
 //! Houdini's attribwrangle, on an engine someone else maintains. The script
 //! language is Rhai, chosen in `shapeshifter.md` Phase 7 for being pure Rust
 //! with no C toolchain, sandboxed behind an operation budget — the step budget
-//! `kernel_cpu` reimplements by hand — and compiled once to an AST that is
-//! cached by source, as `OPENCL_CACHE` keys kernels. What this module adds is
-//! the BINDING: how a script reaches the geometry, and nothing else.
+//! the retired `kernel_cpu` interpreter used to count by hand — and compiled
+//! once to an AST that is cached by source, as the retired launcher cached
+//! kernels. What this module adds is the BINDING: how a script reaches the
+//! geometry, and nothing else.
 //!
 //! The vocabulary, deliberately VEX-shaped so it reads as it does there:
 //!

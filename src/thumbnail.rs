@@ -3,7 +3,7 @@
 //!
 //! Loads a project's `state.json`, regenerates its geometry from the node
 //! graph (the same `network_sphere_vertices_with_errors` the viewport uses,
-//! OpenCL nodes included), auto-frames a camera on the scene bounds, and
+//! wrangles included), auto-frames a camera on the scene bounds, and
 //! renders through `cce_ui::vk::RtOffscreen` — no window, no compositor, any
 //! graphics-capable Vulkan device. cce-files shells out to this for its
 //! preview cache.
@@ -47,8 +47,8 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
     // network level the project was saved at: root as both eval and walk root.
     let geom = network_sphere_vertices_with_errors(&proj.root, &proj.root, &mut ocl_error, &mut sim);
     if let Some(e) = ocl_error {
-        // Non-fatal: OpenCL nodes just contribute nothing, like the viewport.
-        eprintln!("thumbnail: OpenCL error (geometry partially skipped): {e}");
+        // Non-fatal: a failing node just contributes nothing, like the viewport.
+        eprintln!("thumbnail: node error (geometry partially skipped): {e}");
     }
     let verts = crate::geometry::detail_vertices(&geom);
     let (tris, mats) = rt_scene_from_verts(&verts);

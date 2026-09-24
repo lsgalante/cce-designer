@@ -3123,40 +3123,6 @@ impl State {
             "Export" => {
                 self.run_export();
             }
-            "Update Parameters" => {
-                if let Some(slot_idx) = self.graph().selected_node() {
-                    let dir = self.current_dir_mut();
-                    if let Some(child) = dir.children.get_mut(slot_idx) {
-                        if child.node_type == "opencl" {
-                            let code_val = child.params.iter()
-                                .find(|p| p.name == "Code")
-                                .map(|p| p.default.clone())
-                                .unwrap_or_default();
-                            let parsed_params = crate::geometry::parse_dynamic_params(&code_val);
-                            let mut new_params = Vec::new();
-                            for base_name in &["Input", "Code", "Update Parameters"] {
-                                if let Some(p) = child.params.iter().find(|p| p.name == *base_name) {
-                                    new_params.push(p.clone());
-                                }
-                            }
-                            for mut parsed in parsed_params {
-                                if let Some(existing) = child.params.iter().find(|p| p.name == parsed.name) {
-                                    parsed.default = existing.default.clone();
-                                }
-                                new_params.push(parsed);
-                            }
-                            child.params = new_params;
-                            let updated_disp = param_display(&child.params);
-                            self.param_mut().set_display_params(&updated_disp);
-                            self.rebuild_scene_geometry();
-                            self.sync_nodes();
-                        }
-                    }
-                }
-            }
-            "New Project" | "New" => {
-                self.new_project();
-            }
             "Set As Default" => {
                 self.set_current_as_default();
             }

@@ -90,7 +90,7 @@ pub fn run(
     if let Some(e) = ocl_error {
         // Non-fatal, like the thumbnail: the rest of the scene still exports,
         // and a silent partial file would be worse than a warning.
-        eprintln!("cce-designer --export: OpenCL error (geometry partially skipped): {e}");
+        eprintln!("cce-designer --export: node error (geometry partially skipped): {e}");
     }
     if geom.num_prims() == 0 {
         return Err("the geometry has no primitives".to_string());

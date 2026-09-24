@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `cce-designer` is a node-based procedural 3D design app (Houdini-style) for the cce
-desktop environment: a node graph is evaluated into geometry — OpenCL kernels do the
-generation — and displayed in a 3D viewport with both a raster pass and a path-traced
+desktop environment: a node graph is evaluated into geometry — native Rust
+operators, plus a Rhai wrangle for per-element scripting — and displayed in a 3D viewport with both a raster pass and a path-traced
 (RT) preview mode.
 
 This crate is one member of the multi-repo `cce` Cargo workspace; workspace-wide rules
@@ -27,11 +27,11 @@ Two binaries: `cce-designer` (the app) and `vk-smoke` (`src/vk_smoke.rs`) — a
 standalone renderer smoke test that opens its own window; run it inside a Wayland
 session with `cargo run -p cce-designer --bin vk-smoke`.
 
-Some tests (e.g. `test_sphere_subnet_geometry_generation`) execute real OpenCL
-kernels THROUGH the OpenCL runtime when one exists; without one they exercise
-the CPU reference backend via the automatic fallback, so the suite is green
-headless. `kernel_cpu`'s template tests always run the CPU side; the
-cross-validation test compares backends and skips silently with no platform.
+The suite is pure CPU and needs no GPU, no OpenCL and no Wayland. (Until
+2026-09-24 it ran node kernels through the OpenCL runtime when one existed,
+with a CPU interpreter as the headless fallback, and `CCE_KERNEL_CPU=1` was
+the reliable way to run it — see "OpenCL is retired" below for why that is
+gone.)
 
 ### CLI modes
 
@@ -139,18 +139,6 @@ gone from cce-ui with the wgpu path).
   order over the widget slots, circular-pane clipping via `PaintItem::clip_circle`,
   network fade via text alpha. Rebuilt every drawn frame; the engine tessellates,
   shapes, and draws it.
-- `src/kernel_cpu.rs` — the CPU reference backend for node kernels: a
-  tree-walking interpreter for the C subset the kernels use (scalars, arrays,
-  user functions with pointer params, casts, the positional buffer ABI),
-  running the exact launcher contract of `run_opencl_kernel_with_params`. It is
-  the SEMANTIC REFERENCE — `cpu_matches_opencl_on_every_shipped_kernel`
-  compares the two backends vertex-by-vertex on every template kernel when a
-  platform exists, and the absolute template tests keep kernel coverage green
-  headless. Selected automatically when there is no OpenCL platform (one
-  stderr note), or forced with `CCE_KERNEL_CPU=1`. A kernel that fails ON a
-  present platform does not fall back — the error is in the kernel, and the
-  GPU diagnostics should surface. Step-budgeted so a non-terminating kernel is
-  an error, not a UI freeze. No vector types / barriers / local memory.
 - `src/geometry.rs` — node-graph evaluation. Every evaluator threads an
   `EvalSim` (current frame + `SimCache` + feedback stack) alongside the error
   slot. The `simnet` node type iterates: the chain between its `input` and
@@ -173,11 +161,9 @@ gone from cce-ui with the wgpu path).
   displayed level `input`/`output` children draw their resolved geometry (top
   level of the walk only, so outer views don't draw subnet chains twice).
   Frame changes invalidate the scene only when the
-  graph `contains_simnet`. Each OpenCL node's kernel code is
-  preprocessed: `chf("name", default)` / `chi` / `chv` calls are parsed into dynamic
-  UI parameters (`parse_dynamic_params`) and rewritten to `param_values[i]` reads
-  (`preprocess_opencl_code`). `network_sphere_vertices_with_errors` walks the graph
-  from output nodes; OpenCL failures are collected, not fatal.
+  graph `contains_simnet`. `network_sphere_vertices_with_errors` walks the
+  graph from output nodes; node failures are collected into one error slot
+  (still named `ocl_error` from the days it held OpenCL's), not fatal.
 - `src/viewport_3d.rs` — app-owned `Viewport3D` widget (camera orbit/zoom, inertial
   scroll, `rt_mode` flag switching the pane to the `cce_ui::vk` compute path tracer).
 - `src/viewer_state.rs` — the **viewer-state framework**: interactive viewport
@@ -414,54 +400,34 @@ off both by cce-ui default and in practice. Config the suite still reads is
 cosmetic in the same way (colors, fonts, plate radii), and no test asserts on
 it; the empty-`$XDG_CONFIG_HOME` run is how to check that claim again.
 
-### The OpenCL ICD corrupts unrelated file descriptors
+### OpenCL is retired (2026-09-24)
 
-**Mesa's Rusticl ICD closes a file descriptor it does not own**, somewhere
-under `clGetPlatformIDs`. Caught under `strace -k` on 2026-09-23, the stack
-reading `__close` <- `libRusticlOpenCL.so` <- `clIcdGetPlatformIDsKHR` <-
-`clGetPlatformIDs`. By the time it closes, that descriptor number has been
-recycled to whatever another thread opened a moment earlier, so that thread's
-next `read` comes back **EBADF on a file nothing is wrong with**.
+There is no OpenCL in this crate any more: no `opencl` node, no
+`kernel_cpu.rs`, no launcher, no `opencl3` dependency, no
+`CCE_KERNEL_CPU`. Phase 7 of `shapeshifter.md` is where the decision is
+argued; the short form is that the only scripting surface was a C subset
+carried by two backends that had to agree, every shipped kernel was serial
+(`if (id == 0)`), and the four templates that used them are native nodes
+now. Per-element scripting is the `wrangle` node (Rhai, CPU). GPU
+parallelism, when a solver needs it, comes back as WGSL compute through
+cce-ui's renderer — step 4 of the same phase — not as OpenCL.
 
-It surfaced as a flake with no apparent connection to any of this: roughly one
-`cargo test` run in eight failed somewhere unrelated, most often
-`test_every_template_names_a_type_something_resolves` reporting "load_fs_tree
-returned 50 of 51 templates". The victim is whichever file lost the race —
-`sphere.json`, `output.json`, `hull.json`, a different one each time — and the
-tests that then failed were simply the ones that needed it.
+**An `opencl` node in an old save is not dropped.** `retired_opencl_node`
+passes its input through and reports `<name>: OpenCL nodes are retired;
+rewrite the kernel as a wrangle` through the error slot, so the status line
+says what happened and the fix is one rewrite. The type stays in
+`is_geometry_node_type` for exactly that arm.
 
-Three things follow, and the order they were tried in is worth keeping,
-because two of the three plausible fixes did nothing:
-
-- **Probing less often does NOT help.** Four tests each called
-  `get_platforms()` to decide whether to skip; caching the answer
-  (`has_opencl_platform`) and serializing every enumeration behind one mutex
-  (`probe_platforms`) took a process from dozens of overlapping enumerations
-  to two that cannot overlap — and the failure rate did not move (9 in 80,
-  against 10 in 60 before). The dangerous window is opening the ICD at all,
-  once per process, not how many times we ask afterwards. Both are kept
-  anyway: they are right on their own terms and cost nothing.
-- **Forcing the CPU backend did not help either, until it actually meant it.**
-  `CCE_KERNEL_CPU=1` selected the CPU kernel path but everything still
-  *probed*, and `cpu_matches_opencl_on_every_shipped_kernel` called straight
-  into `run_opencl_kernel_with_params`. That function now refuses at the top
-  when the backend is forced — one gate, reported as the no-platform error
-  every caller already handles — so forced-CPU never loads the ICD.
-- **What actually works is not loading the ICD.** `CCE_KERNEL_CPU=1 cargo
-  test` is the reliable way to run the suite, and `OCL_ICD_VENDORS=<empty
-  dir>` is the sharper instrument for confirming the ICD is the cause: with no
-  vendor to load, the EBADF failures disappear outright.
-
-The bug is in the ICD and cannot be fixed from here. What can be fixed is
-never being silent about the damage: `load_fs_tree` used to drop a template it
-could not read or parse inside an `if let Ok` pair, so the node just left the
-palette — which looks nothing like an I/O error and nothing like a parse error
-either. It says which file and why now, on stderr. That one change is what
-turned an afternoon of bisecting into a diagnosis.
-
-The app is far less exposed than the suite: it reads its templates at startup,
-on one thread, before OpenCL is in play. The suite is exposed because libtest
-runs its tests in parallel.
+**What left with it, for the record.** Mesa's Rusticl ICD closed a file
+descriptor it did not own under `clGetPlatformIDs` (caught under `strace
+-k` on 2026-09-23), which had the suite failing one run in eight on
+whichever template file lost the race, and made `CCE_KERNEL_CPU=1` the only
+reliable way to run it. Probing less often did not help; forcing the CPU
+backend did not help until it also stopped loading the ICD; what worked was
+not loading it. The retirement is the final form of that fix. The
+diagnosis is in the git history of this section (commit `8fd0c29`) if the
+pattern ever recurs with another driver: a `read` returning EBADF on a file
+nothing is wrong with, in a process that has loaded a vendor ICD.
 
 ### Conditional parameter rows
 
@@ -687,10 +653,9 @@ name, position, flag and values stay, the children go, and a parameter the
 native template lacks goes with them. Only when the `opencl` child is
 actually there, so a subnet someone built by hand and called "sphere2"
 keeps what is inside it. The bundled `default_project.json` and
-`project.json` were converted in place. The `opencl` node itself still
-ships and still runs; retiring it and both kernel backends is the rest of
-step 3, and `test_loader_merges_new_template_params` is the migration's
-test.
+`project.json` were converted in place, and
+`test_loader_merges_new_template_params` is the migration's test. The
+`opencl` node and both kernel backends were retired the same day (above).
 
 ### The Embryo node is a template of nodes
 
@@ -750,7 +715,7 @@ itself would fail rather than recurse forever.
 
 `src/wrangle.rs` is a script run once per element, on Rhai — Phase 7 step 1
 of `shapeshifter.md`, and the app's scripting surface for per-element work
-where the `opencl` node used to be the only one. The engine is a dependency;
+where the retired `opencl` node used to be the only one. The engine is a dependency;
 what the module owns is the BINDING to the `Detail`, and it is VEX-shaped on
 purpose so `@P.y += sin(@P.x) * 0.1;` reads as it does there.
 
@@ -793,13 +758,13 @@ build geometry from no input at all — a wrangle with nothing wired still runs.
 Ints and floats mix (`@P.y * 2` works), which Rhai does not do on its own;
 the mixed arithmetic and comparison operators are registered by hand, as are
 `vec3`'s. Two budgets: `OPS_PER_ELEMENT` operations per element, which is
-`kernel_cpu`'s step budget as a setting rather than a hand-rolled counter,
+the retired `kernel_cpu`'s step budget as a setting rather than a hand-rolled counter,
 and `RUN_BUDGET` seconds of wall clock for the whole run, checked in
 `on_progress` every few thousand operations. Any failure — syntax, a runtime
 error on an element, a budget — fails the WHOLE run, named by node and
 element (`wrangle1: point 4: …`), and the input passes through untouched: a
 half-wrangled geometry is not a result. Compiled scripts cache by desugared
-source in a thread-local, as `OPENCL_CACHE` keys kernels.
+source in a thread-local, as the retired launcher cached kernels.
 
 CPU only, deliberately: an interpreter is an order of magnitude or more
 below native Rust, which is fine for tens of thousands of elements per edit
@@ -1579,10 +1544,10 @@ where the template puts them (after the last template param the instance
 already has — so the Sphere's Method lands above Radius in an old save, not
 below Color), existing ones keep their value but take the template's UI
 metadata, and a subnet template (the Embryo, since the four kernel subnets
-went native) refreshes its children's params and any kernel child's `Code`
+went native) refreshes its children's params and any child's `Code`
 outright — **the template owns the surface and implementation, the
-instance owns its values.** A kernel hand-edited inside a template
-instance reverts on load; custom kernels belong in bare OpenCL nodes,
+instance owns its values.** A script hand-edited inside a template
+instance reverts on load; custom scripts belong in bare wrangle nodes,
 which the merge never touches.
 Native nodes match their template by type, subnet instances by name
 ("sphere3" → "Sphere", case-insensitively) plus a full child name/type match; the merge never

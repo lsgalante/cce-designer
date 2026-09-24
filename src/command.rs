@@ -203,7 +203,6 @@ pub const COMMANDS: &[Command] = &[
 
     // --- Parameters ---
     Command { id: "export", label: "Export", context: Context::Parameters, run: Run::Menu("Export"), default_chord: None },
-    Command { id: "update_parameters", label: "Update Parameters", context: Context::Parameters, run: Run::Menu("Update Parameters"), default_chord: None },
 
     // --- Playbar ---
     Command { id: "play_pause", label: "Play / Pause", context: Context::Playbar, run: Run::Key(Action::PlayPause), default_chord: Some("Up") },

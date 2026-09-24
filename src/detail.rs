@@ -1738,7 +1738,7 @@ impl Detail {
     /// The point behind every corner [`Detail::triangulate`] emits, in the
     /// same order.
     ///
-    /// Lets a caller that had to flatten to triangles — the OpenCL launcher,
+    /// Lets a caller that had to flatten to triangles — the OpenCL launcher once,
     /// until the Phase 1 ABI binds attributes directly — put results back on
     /// the points they came from instead of welding the output and losing
     /// every identity.
