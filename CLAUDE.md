@@ -585,6 +585,30 @@ way — all in `src/geometry.rs`:
   clamped; an empty slot passes nothing. Only `Input` draws a wire, the
   limit every second operand has (Boolean's With, Copy's target).
 
+### The Sphere's construction methods
+
+`nodes/sphere.json` carries a **Method** dropdown — `UV`, `Icosphere`,
+`Cube` — and one kernel that builds all three: a single loop over triangle
+INDICES, each decoded by method into three corners on the unit sphere, then
+one shared block that turns it outward, places it, shades it and writes it.
+UV is Rows x Columns, the sphere this node always built, corner for corner
+(its rows skip the outward turn so the pole slivers keep their order).
+Icosphere splits each of the icosahedron's 20 faces into Frequency^2
+triangles by integer barycentric weights summed in ONE fixed expression, so
+a corner on an edge two faces share lands on the same bits from either side
+and the 1e-4 weld joins them — the welded count is `10f^2 + 2`, which
+`sphere_method_builds_a_uv_ico_or_cube_sphere` asserts along with
+closedness. Cube lays a Resolution x Resolution grid on each face and pushes
+it out through the spherified-cube map rather than a bare normalize, which
+crowds the corners; `6r^2 + 2` points. Rows/Columns, Frequency and
+Resolution each show only under their method (`show_when`).
+
+**A choice reaches a kernel as its option INDEX** (`geometry::param_number`,
+the one conversion behind both `chi("Method")` in a kernel and a
+`chi("Method")` parameter reference). The kernel path used to parse the
+option's TEXT, so every dropdown read as 0 from inside a kernel — a
+dropdown on a kernel node was simply not possible before this.
+
 ### The Embryo node is a template of nodes
 
 `nodes/embryo.json` is hou-control's `developer_embryo`, the Developer

@@ -655,13 +655,17 @@ pub fn has_param_refs(node: &FsNode) -> bool {
     node.params.iter().any(|p| parse_param_ref(&p.default).is_some())
 }
 
-/// A parameter's value converted for a reference of `kind`.
-fn convert_ref_value(kind: RefKind, p: &ParamDef) -> String {
+/// A parameter's value as a NUMBER — what a kernel's `chf` / `chi` / `chb`
+/// and a numeric reference both read. A toggle is 0 or 1; a choice is its
+/// option INDEX, the position in the template's list, the way an ordinal
+/// menu evaluates in Houdini. The index is what lets a subnet's dropdown
+/// drive a child switch's Index or a kernel's `chi("Method")`: the option
+/// text parses as nothing, and until 2026-09-24 the kernel path parsed it
+/// anyway, so every choice read as 0 from inside a kernel.
+pub fn param_number(p: &ParamDef) -> f32 {
     let raw = p.default.trim();
     let is_choice = p.param_type == "choice" || p.param_type.starts_with("choice:");
-    // The option index is what a choice IS to a number: the position in the
-    // template's list, the way an ordinal menu evaluates in Houdini.
-    let choice_index = || -> Option<usize> {
+    if is_choice {
         let options: Vec<String> = if !p.options.is_empty() {
             p.options.clone()
         } else {
@@ -670,19 +674,27 @@ fn convert_ref_value(kind: RefKind, p: &ParamDef) -> String {
                 .map(|o| o.split(',').map(|x| x.trim().to_string()).collect())
                 .unwrap_or_default()
         };
-        options.iter().position(|o| o.eq_ignore_ascii_case(raw))
-    };
-    let as_number = || -> f32 {
-        if is_choice {
-            choice_index().map_or(0.0, |i| i as f32)
-        } else if raw.eq_ignore_ascii_case("true") {
-            1.0
-        } else if raw.eq_ignore_ascii_case("false") {
-            0.0
-        } else {
-            raw.parse::<f32>().unwrap_or(0.0)
-        }
-    };
+        options.iter().position(|o| o.eq_ignore_ascii_case(raw)).map_or(0.0, |i| i as f32)
+    } else {
+        number_of_str(raw)
+    }
+}
+
+/// A bare value's number: `true` / `false` as 1 / 0, else parsed, else 0.
+fn number_of_str(raw: &str) -> f32 {
+    if raw.eq_ignore_ascii_case("true") {
+        1.0
+    } else if raw.eq_ignore_ascii_case("false") {
+        0.0
+    } else {
+        raw.parse::<f32>().unwrap_or(0.0)
+    }
+}
+
+/// A parameter's value converted for a reference of `kind`.
+fn convert_ref_value(kind: RefKind, p: &ParamDef) -> String {
+    let raw = p.default.trim();
+    let as_number = || param_number(p);
     match kind {
         RefKind::Str => raw.to_string(),
         RefKind::Float => {
@@ -4708,20 +4720,24 @@ pub fn resolve_opencl_geometry_with_errors(
     if !code.is_empty() {
         let parsed_params = parse_dynamic_params(&code);
         let mut flat_values = Vec::new();
+        // The kernel's own parameter, else the enclosing subnet's — the
+        // parent's value RESOLVED: a Sphere instance whose Radius is
+        // ch("Radius") hands its kernel the subnet's number, not the
+        // reference string (which parses as nothing and left the kernel at
+        // its default). The DEFINITION is looked up rather than the value
+        // string, because a choice is worth its option index and only the
+        // definition knows the options.
+        let resolved_parent = find_parent_node(root, &target.id)
+            .map(|parent| resolve_param_refs(root, parent, ocl_error).unwrap_or_else(|| parent.clone()));
+        let find_def = |name: &str| -> Option<&ParamDef> {
+            target.params.iter().find(|d| d.name.eq_ignore_ascii_case(name)).or_else(|| {
+                resolved_parent.as_ref().and_then(|parent| parent.params.iter().find(|d| d.name.eq_ignore_ascii_case(name)))
+            })
+        };
         for p in &parsed_params {
-            let mut val_str = node_param_str(target, &p.name, &p.default);
-            if !target.params.iter().any(|p_def| p_def.name.eq_ignore_ascii_case(&p.name)) {
-                if let Some(parent) = find_parent_node(root, &target.id) {
-                    // The parent's value RESOLVED: a Sphere instance whose
-                    // Radius is ch("Radius") hands its kernel the subnet's
-                    // number, not the reference string (which parses as
-                    // nothing and left the kernel at its default).
-                    let resolved_parent = resolve_param_refs(root, parent, ocl_error);
-                    let parent = resolved_parent.as_ref().unwrap_or(parent);
-                    val_str = node_param_str(parent, &p.name, &val_str);
-                }
-            }
+            let def = find_def(&p.name);
             if p.param_type == "float3" {
+                let val_str = def.map_or(p.default.as_str(), |d| d.default.as_str());
                 let parts: Vec<&str> = val_str.split(':').collect();
                 let (x, y, z) = if parts.len() >= 3 {
                     (parts[0].parse::<f32>().unwrap_or(0.0), parts[1].parse::<f32>().unwrap_or(0.0), parts[2].parse::<f32>().unwrap_or(0.0))
@@ -4732,14 +4748,7 @@ pub fn resolve_opencl_geometry_with_errors(
                 flat_values.push(y);
                 flat_values.push(z);
             } else {
-                let val = if val_str.eq_ignore_ascii_case("true") {
-                    1.0
-                } else if val_str.eq_ignore_ascii_case("false") {
-                    0.0
-                } else {
-                    val_str.parse::<f32>().unwrap_or(0.0)
-                };
-                flat_values.push(val);
+                flat_values.push(def.map_or_else(|| number_of_str(&p.default), param_number));
             }
         }
 

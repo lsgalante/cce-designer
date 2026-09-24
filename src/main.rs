@@ -2875,11 +2875,12 @@ mod tests {
         };
         crate::app::merge_template_defs(&mut root, &templates);
 
-        // Sphere: new params appended with template defaults, value kept,
-        // kernel refreshed.
+        // Sphere: new params inserted where the template puts them (Method
+        // ahead of the rows it governs, Frequency and Resolution after
+        // them) with template defaults, value kept, kernel refreshed.
         let s = &root.children[0];
         let names: Vec<&str> = s.params.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["Radius", "Rows", "Columns", "Center X", "Center Y", "Center Z", "Color"]);
+        assert_eq!(names, ["Radius", "Method", "Rows", "Columns", "Frequency", "Resolution", "Center X", "Center Y", "Center Z", "Color"]);
         assert_eq!(s.params[0].default, "0.70", "instance value survives");
         let code = &s.children.iter().find(|c| c.name == "opencl1").unwrap()
             .params.iter().find(|p| p.name == "Code").unwrap().default;
@@ -2983,6 +2984,104 @@ mod tests {
             build(&[("Rows", "0"), ("Columns", "0")]).num_points(),
             crate::geometry::sphere_point_len(2, 3)
         );
+    }
+
+    /// The Sphere's Method dropdown picks the construction: UV (Rows x
+    /// Columns, the sphere this node always built), Icosphere (an
+    /// icosahedron's 20 faces each split into Frequency^2 triangles) and
+    /// Cube (a Resolution x Resolution grid on each face of a cube, pushed
+    /// onto the sphere). The welded point counts are the closed forms —
+    /// 10f^2 + 2 and 6r^2 + 2 — which hold only if every corner two faces
+    /// share lands on the same point, and closedness says the winding came
+    /// out consistent after the outward turn. Method reaches the kernel as
+    /// an option INDEX: the choice's text used to parse as 0, so a kernel
+    /// could not read a dropdown at all.
+    #[test]
+    fn sphere_method_builds_a_uv_ico_or_cube_sphere() {
+        let templates_root = crate::app::load_fs_tree();
+        let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
+        let method = sphere_t.params.iter().find(|p| p.name == "Method").expect("a Method dropdown");
+        assert_eq!(method.param_type, "choice:UV,Icosphere,Cube");
+        assert_eq!(method.default, "UV", "the default stays the sphere every saved project was built with");
+        let build = |params: &[(&str, &str)]| {
+            let mut inst = sphere_t.clone();
+            inst.id = "s".to_string();
+            inst.name = "sphere1".to_string();
+            for child in &mut inst.children {
+                child.id = format!("{}_{}", inst.id, child.name);
+            }
+            for (pname, val) in params {
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default = val.to_string();
+            }
+            let root = FsNode {
+                id: "root".to_string(),
+                name: "root".to_string(),
+                node_type: "node".to_string(),
+                children: vec![inst],
+                params: vec![],
+                geometry_visible: true,
+                position: (0.0, 0.0),
+                inputs: 0,
+                outputs: 0,
+            };
+            let mut visited = Vec::new();
+            let mut err = None;
+            let mut cache = crate::geometry::SimCache::default();
+            let geom = crate::geometry::generate_single_node_geometry_with_errors(
+                &root,
+                &root.children[0],
+                &mut visited,
+                &mut err,
+                &mut crate::geometry::EvalSim::new(0, 0, &mut cache),
+            ).expect("sphere generation failed");
+            assert!(err.is_none(), "{err:?}");
+            geom
+        };
+        let on_sphere = |geom: &crate::detail::Detail, radius: f32| {
+            for pos in geom.positions() {
+                let r = ((pos[0]).powi(2) + (pos[1] - 0.55).powi(2) + (pos[2]).powi(2)).sqrt();
+                assert!((r - radius).abs() < 1e-3, "point {pos:?} is {r} from the centre, not {radius}");
+            }
+        };
+
+        let uv = build(&[("Method", "UV")]);
+        assert_eq!(uv.num_points(), crate::geometry::sphere_point_len(16, 24));
+
+        for (freq, expect) in [("1", 12), ("2", 42), ("4", 162), ("7", 492)] {
+            let ico = build(&[("Method", "Icosphere"), ("Frequency", freq)]);
+            assert_eq!(ico.num_points(), expect, "icosphere at frequency {freq}");
+            assert_eq!(ico.num_prims(), 20 * freq.parse::<usize>().unwrap().pow(2));
+            assert!(ico.is_closed(), "icosphere at frequency {freq} is not closed");
+            on_sphere(&ico, 0.5);
+        }
+
+        for (res, expect) in [("1", 8), ("3", 56), ("8", 386)] {
+            let cube = build(&[("Method", "Cube"), ("Resolution", res), ("Radius", "0.8")]);
+            assert_eq!(cube.num_points(), expect, "cube sphere at resolution {res}");
+            assert_eq!(cube.num_prims(), 6 * res.parse::<usize>().unwrap().pow(2) * 2);
+            assert!(cube.is_closed(), "cube sphere at resolution {res} is not closed");
+            on_sphere(&cube, 0.8);
+        }
+
+        // The out-of-range guards: a frequency of 0 builds the icosahedron.
+        assert_eq!(build(&[("Method", "Icosphere"), ("Frequency", "0")]).num_points(), 12);
+    }
+
+    /// `param_number` is what a kernel's `chi()` reads: a choice is its
+    /// option index, a toggle 0 or 1, a number itself, and text 0.
+    #[test]
+    fn a_choice_reads_as_its_option_index_from_a_kernel() {
+        use crate::geometry::param_number;
+        let p = |ty: &str, val: &str| crate::app::ParamDef {
+            name: "X".into(), label: String::new(), param_type: ty.into(), default: val.into(),
+            options: vec![], min: None, max: None, step: None, show_when: String::new(),
+        };
+        assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "Cube")), 2.0);
+        assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "icosphere")), 1.0, "case-insensitive, like the reference path");
+        assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "Nope")), 0.0, "an unknown option is the first");
+        assert_eq!(param_number(&p("toggle", "true")), 1.0);
+        assert_eq!(param_number(&p("slider", "0.25")), 0.25);
+        assert_eq!(param_number(&p("string", "hello")), 0.0);
     }
 
     /// A Scatter consumed downstream must still evaluate: the dispatch pushes
