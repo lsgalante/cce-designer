@@ -615,6 +615,7 @@ impl State {
             name: "Project".to_string(),
             root: self.fs_root.clone(),
             view_state: self.project_view_state(),
+            format: crate::app::PROJECT_FORMAT,
         }
     }
 
@@ -720,6 +721,11 @@ impl State {
                 if let Some(child) = dir.children.get_mut(slot) {
                     if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
                         p.default = value;
+                        // A value that reads as a reference becomes an
+                        // expression, as one typed into the pane does.
+                        if !p.expr && crate::expr::looks_like_expression(&p.default) {
+                            p.expr = true;
+                        }
                         // Same sequence as the interactive param-pane
                         // path, so settings params (viewport flags,
                         // grid) actually take effect via automation.
@@ -836,7 +842,17 @@ impl State {
             McpAction::RenameNode { slot, new_name } => {
                 let len = state.current_dir().children.len();
                 if slot < len {
-                    state.current_dir_mut().children[slot].name = crate::app::sanitize_node_name(&new_name);
+                    let new_name = crate::app::sanitize_node_name(&new_name);
+                    let (id, old_name) = {
+                        let n = &state.current_dir().children[slot];
+                        (n.id.clone(), n.name.clone())
+                    };
+                    // Everything that names the node follows it: the wires,
+                    // the expressions anywhere in the tree, the active camera.
+                    crate::geometry::rename_node_in_tree(&mut state.fs_root, &id, &new_name);
+                    if state.active_camera == old_name {
+                        state.active_camera = new_name.clone();
+                    }
                     state.sync_nodes();
                     // Connections reference nodes by name (Input params), so a
                     // rename changes downstream evaluation.
@@ -874,7 +890,7 @@ impl State {
                         min: None,
                         max: None,
                         step: None,
-                        show_when: String::new(),
+                        show_when: String::new(), expr: false,
                     };
                     state.current_dir_mut().children[slot].params.push(param);
                     state.sync_nodes();

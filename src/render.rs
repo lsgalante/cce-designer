@@ -595,6 +595,30 @@ impl State {
                 w.paint_self(&self.ui_context, pc);
             });
 
+            // Expression rows carry Houdini's tint: a translucent green over
+            // the row, so a driven parameter reads as driven before its text
+            // is read. Rows are index-parallel to `param_display`, which is
+            // what the pane was handed.
+            if let Some(child) = self.param_editor_selected().and_then(|slot| self.param_editor_dir().children.get(slot)) {
+                let rows = crate::app::param_display(&child.params);
+                let is_expr = |key: &str| {
+                    child.params.iter().any(|p| {
+                        let k = if p.label.is_empty() { &p.name } else { &p.label };
+                        k == key && p.expr
+                    })
+                };
+                if rows.iter().any(|r| is_expr(&r.0)) {
+                    let rects = self.param_row_rects();
+                    pc.clip(view, |pc| {
+                        for (row, &(rx, ry, rw, rh)) in rows.iter().zip(rects.iter()) {
+                            if rh > 0.0 && is_expr(&row.0) {
+                                pc.rounded_rect(rect(rx, ry, rw, rh), 6.0, (true, true, true, true), [0.35, 0.8, 0.45, 0.16]);
+                            }
+                        }
+                    });
+                }
+            }
+
             if let Some((quads, true)) = &param_scrollbar {
                 for &(qx, qy, qw, qh, qc) in quads {
                     pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);

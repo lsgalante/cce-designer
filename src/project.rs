@@ -243,6 +243,7 @@ impl State {
             let proj = Project {
                 name: "Default Project".to_string(),
                 root: self.fs_root.clone(),
+                format: crate::app::PROJECT_FORMAT,
                 view_state: self.project_view_state(),
             };
             let content = serde_json::to_string_pretty(&proj)?;
@@ -264,6 +265,7 @@ impl State {
         let proj = Project {
             name: project_name,
             root: self.fs_root.clone(),
+            format: crate::app::PROJECT_FORMAT,
             view_state: self.project_view_state(),
         };
         let content = serde_json::to_string_pretty(&proj)?;
@@ -390,6 +392,7 @@ impl State {
             let content = fs::read_to_string(path)?;
             let mut proj: Project = serde_json::from_str(&content)?;
             proj.sanitize_node_names();
+            proj.migrate_param_refs();
             crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
             self.fs_root = proj.root;
             // A load is not a colour change: an older save's wire colour is
@@ -448,6 +451,7 @@ impl State {
         let content = fs::read_to_string(&state_file_path)?;
         let mut proj: Project = serde_json::from_str(&content)?;
         proj.sanitize_node_names();
+        proj.migrate_param_refs();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         self.fs_root = proj.root;
         // As in the default-project branch.

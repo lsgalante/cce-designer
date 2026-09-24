@@ -551,30 +551,75 @@ wires it as a node parameter), so the free-form float ramp is ported as the
 three-way choice the falloff parameters already use. Linear is the default
 because linear is what the cast that worked used.
 
-### Parameter references, sibling-first inputs, and the Switch node
+### Parameter expressions (`ch()` references, Houdini's way)
 
-Three pieces added on 2026-09-21 so a node can be BUILT FROM other nodes
+`src/expr.rs` is the expression language and `geometry.rs`'s `TreeScope`
+is what binds it to the node tree. **A parameter holds a value or an
+expression, and `ParamDef::expr` says which** — a flag, not a guess about
+the text, because a kernel's Code contains `chf(`, a node name is an
+identifier and `0.5` parses as an expression too. Houdini makes the same
+choice (a parm has a channel or it does not). An expression parameter is
+evaluated every time its node is: `resolve_param_refs(root, node, frame,
+error)` hands back a clone whose `expr` params are VALUES, at the top of
+`generate_single_node_geometry_with_errors`, the scene walk's `visit`, and
+the kernel path's parent read.
+
+**Paths are Houdini's.** Relative to the node holding the expression: a bare
+name is the node's OWN parameter, `..` its parent, `../sphere1/Radius` a
+sibling's, a leading `/` the root. `.x` / `.y` / `.z` reads a float3
+component. `ch()` / `chf()` read a number (a toggle 1 or 0, a choice its
+option INDEX — `chi("../Method")` is what lets a subnet's dropdown drive a
+child switch's Index), `chi()` truncates, `chb()` is 1 or 0, `chs()` the
+string (a choice's option text). The rest is `+ - * / % ^`, comparisons,
+`&& || !`, `$F` (the evaluation's frame), strings with `+`, and a fixed
+function set (`if(c, a, b)`, `clamp`, `fit`, `lerp`, `min`/`max`, `rand(seed)`,
+the usual math). No ternary — `:` separates a float3's components, which
+are three expressions each (`chf("../a/Size.x"):0:0`). An expression that
+reads an expression follows the chain; a circle is an error on the node,
+never a stack overflow. The written-back value is formatted for the
+TARGET row (`format_for_param`): a number into a toggle is `true`/`false`,
+into a choice its option name, into a spinbox an integer.
+
+**Until 2026-09-24 a bare `ch("Name")` meant the PARENT's parameter** (the
+whole value had to be one reference, nothing else). `Project::format` is
+the version that tells the two apart: 0 (absent) loads through
+`migrate_param_refs`, which turns each old reference into an expression
+with `../` added to a bare name, and saves as 1 — beside
+`sanitize_node_names` on every load path, and never twice, since a bare
+name in a format-1 file is the node's own parameter. Templates go through
+`infer_template_exprs` instead: a default that READS as a reference is one
+(`embryo.json` says `chf("../Radius")` now). The same inference applies to a
+value typed into a plain row or scripted through `set_param`: a reference
+becomes an expression; bare arithmetic does not, and is asked for through
+the row menu.
+
+**The params pane's right-click menu** (`param_row_at` → `open_param_context_menu`,
+a fifth `context_menu` consumer with the `*_menu_actions` +
+`handle_*_menu_click` contract, and `run_param_action` as the one entry the
+menu and the tests share) is Houdini's: **Copy Parameter**, **Paste
+Relative Reference** (`relative_ref_path`: `../sphere1`), **Paste Absolute
+Reference** (`/sphere1`), and **Edit Expression** / **Delete Expression** —
+the latter bakes the CURRENT value back as a value, as Delete Channels
+does. `copied_param` holds a node ID, not a path, so a rename between copy
+and paste still pastes the right path. The paste writes `chs()` when the
+target row holds text or a choice and `ch()` otherwise, by the TARGET,
+because that is what the value has to fit. Expression rows draw with a
+green tint (`render.rs`, PARAM_IDX arm) and as text in the pane
+(`param_display`), since a slider cannot hold one.
+
+**A rename carries every reference to the node** (`rename_node_in_tree`):
+expression paths that pass through it are rewritten textually
+(`expr::rewrite_paths`, so spacing survives), resolved from where each
+stands BEFORE the name changes since a path is names; sibling wires whose
+value is the old name follow, as the load-time sanitizer rewrites them;
+and the active camera. A same-named node elsewhere is not this one.
+
+### Sibling-first inputs and the Switch node
+
+Two pieces added on 2026-09-21 so a node can be BUILT FROM other nodes
 the way a Houdini HDA is — the Embryo is the first to be recomposed that
-way — all in `src/geometry.rs`:
+way — both in `src/geometry.rs`:
 
-- **A parameter value that is `ch("Name")` reads the enclosing subnet's
-  parameter `Name`** at evaluation time. `chf` / `chi` / `chb` are the
-  kernel vocabulary applied to references: `chi("Method")` on a choice with
-  options Basic, Scatter is 0 or 1, which is what lets a subnet's choice
-  drive a child switch's Index; `chb` reads a toggle as `true`/`false`. A
-  `../` per level climbs further (`ch("../../X")`); `ch("Name")` and
-  `ch("../Name")` both mean the parent. The whole value is the reference or
-  it is not one — there is no expression language, and a kernel's Code,
-  which merely contains `chf(`, is left alone. `resolve_param_refs` runs at
-  the top of `generate_single_node_geometry_with_errors` AND at the top of
-  the scene walk's `visit` (the walk hands nodes to their resolvers
-  directly), on a clone made only for nodes that actually reference. A
-  reference to nothing is reported through the node-error slot and the
-  value left as written, and a reference to a reference follows the chain
-  (bounded), so a composed node inside a composed node still reaches the
-  outermost control. The params pane shows a referencing value as text
-  (`param_display`), since a slider cannot hold it and a spinbox would write
-  zero back over it.
 - **`find_input_node(root, target, name)` looks for a SIBLING first, then
   anywhere.** Every resolver used to search the whole tree from the top, so
   inside the second instance of a subnet a child wired to "input1" found the
@@ -616,10 +661,10 @@ family's first Pre-Simulation operator — "the seed geometry a simulation
 starts from" — as a SUBNET of ten ordinary nodes wired the way the HDA's
 network is, its controls reaching the children through parameter references
 (above). Dive in and the pipeline is there to read, break and reuse: `input1`
-and a `sphere1` (Radius `chf("Radius")`, Rows and Columns
-`chi("Base Resolution")`) behind `source1`, a `switch` whose Index is
-`chi("Source")`; `scatter1` in Surface mode reading the Scatter folder's
-controls, `hull1` behind it, and `method1`, a switch on `chi("Method")`
+and a `sphere1` (Radius `chf("../Radius")`, Rows and Columns
+`chi("../Base Resolution")`) behind `source1`, a `switch` whose Index is
+`chi("../Source")`; `scatter1` in Surface mode reading the Scatter folder's
+controls, `hull1` behind it, and `method1`, a switch on `chi("../Method")`
 between the source and the hull; then `relax1` in Repel mode, `subdivide1`,
 `normal1`, `output1`. The defaults are the HDA's, and
 `embryo_template_builds_a_sphere_a_hull_or_the_input` drives the template
@@ -629,7 +674,8 @@ It was a native node for one day (2026-09-21, `src/embryo.rs`, a pipeline in
 Rust), which is the wrong shape for this app: CLAUDE.md refuses `gem_graph`
 for the same reason, and a node you cannot dive into cannot be learned from.
 Recomposing it needed four reusable pieces, all of which outlive it:
-parameter references and the `switch` node (their own section above), the
+parameter references (now expressions, their own section above) and the
+`switch` node, the
 `hull` node (`src/hull.rs` — the incremental convex hull; points that span
 no volume pass through), and two modes on existing nodes (`src/scatter.rs`):
 **Scatter's Surface mode** (points ON the surface by area, seeded, optionally

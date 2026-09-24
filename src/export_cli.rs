@@ -32,6 +32,7 @@ pub fn run(
         .map_err(|e| format!("parse {}: {e}", state_file.display()))?;
     let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
     proj.sanitize_node_names();
+    proj.migrate_param_refs();
     crate::app::merge_template_defs(&mut proj.root, &templates);
 
     let mut ocl_error = None;

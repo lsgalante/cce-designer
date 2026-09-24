@@ -60,7 +60,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool(
             "set_param",
-            "Set a parameter on the node at the given slot. All values are strings (e.g. \"1.5\", \"0.2,0.4,1\").",
+            "Set a parameter on the node at the given slot. All values are strings (e.g. \"1.5\", \"0.2,0.4,1\"). A value that reads as an expression — ch(\"../sphere1/Radius\") * 2, $F / 24 — becomes one (Houdini paths: relative to the node, .. its parent, / the root, a bare name its own parameter).",
             json!({
                 "type": "object",
                 "properties": {

@@ -595,68 +595,28 @@ pub fn find_input_node<'a>(root: &'a FsNode, target: &FsNode, name: &str) -> Opt
         .or_else(|| find_node_by_name(root, name))
 }
 
-/// How a parameter reference wants the value it points at.
-///
-/// The kernel vocabulary (`chf` / `chi` / `chb`, which kernels already read
-/// their parameters through) plus `ch` for the string as it is. The
-/// conversions are what make a subnet's CHOICE drive a child's INDEX:
-/// `chi("Method")` on a choice with options Basic, Scatter is 0 or 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefKind {
-    Str,
-    Float,
-    Int,
-    Bool,
-}
+pub use crate::expr::{ChKind, Value};
 
-/// A parameter reference, parsed: `ch("Name")` and its kinds, with a `../`
-/// per level above the enclosing subnet — `ch("Name")` and `ch("../Name")`
-/// both mean the node's parent, `ch("../../Name")` its grandparent, as in
-/// Houdini, where a channel reference is a path.
-///
-/// The WHOLE value is the reference or it is not one: there is no expression
-/// language here, and a value that merely contains `ch(` (a kernel's Code)
-/// is left alone.
-pub fn parse_param_ref(value: &str) -> Option<(RefKind, usize, String)> {
-    let v = value.trim();
-    let (kind, rest) = if let Some(r) = v.strip_prefix("chf(") {
-        (RefKind::Float, r)
-    } else if let Some(r) = v.strip_prefix("chi(") {
-        (RefKind::Int, r)
-    } else if let Some(r) = v.strip_prefix("chb(") {
-        (RefKind::Bool, r)
-    } else if let Some(r) = v.strip_prefix("ch(") {
-        (RefKind::Str, r)
-    } else {
-        return None;
-    };
-    let inner = rest.strip_suffix(')')?.trim();
-    let quote = inner.chars().next()?;
-    if quote != '"' && quote != '\'' {
-        return None;
-    }
-    let path = inner.strip_prefix(quote)?.strip_suffix(quote)?;
-    let mut levels = 0;
-    let mut name = path;
-    while let Some(r) = name.strip_prefix("../") {
-        levels += 1;
-        name = r;
-    }
-    let name = name.trim();
-    if name.is_empty() || name.contains('/') {
-        return None;
-    }
-    Some((kind, levels.max(1), name.to_string()))
-}
-
-/// Whether any of `node`'s own parameters is a reference — the cheap test
+/// Whether any of `node`'s parameters holds an expression — the cheap test
 /// that lets evaluation skip the clone for the common node.
 pub fn has_param_refs(node: &FsNode) -> bool {
-    node.params.iter().any(|p| parse_param_ref(&p.default).is_some())
+    node.params.iter().any(|p| p.expr)
+}
+
+/// A choice's options: the `options` list, else the `choice:A,B` type.
+pub fn choice_options(p: &ParamDef) -> Vec<String> {
+    if !p.options.is_empty() {
+        p.options.clone()
+    } else {
+        p.param_type
+            .strip_prefix("choice:")
+            .map(|o| o.split(',').map(|x| x.trim().to_string()).collect())
+            .unwrap_or_default()
+    }
 }
 
 /// A parameter's value as a NUMBER — what a kernel's `chf` / `chi` / `chb`
-/// and a numeric reference both read. A toggle is 0 or 1; a choice is its
+/// and an expression's `ch()` both read. A toggle is 0 or 1; a choice is its
 /// option INDEX, the position in the template's list, the way an ordinal
 /// menu evaluates in Houdini. The index is what lets a subnet's dropdown
 /// drive a child switch's Index or a kernel's `chi("Method")`: the option
@@ -666,15 +626,7 @@ pub fn param_number(p: &ParamDef) -> f32 {
     let raw = p.default.trim();
     let is_choice = p.param_type == "choice" || p.param_type.starts_with("choice:");
     if is_choice {
-        let options: Vec<String> = if !p.options.is_empty() {
-            p.options.clone()
-        } else {
-            p.param_type
-                .strip_prefix("choice:")
-                .map(|o| o.split(',').map(|x| x.trim().to_string()).collect())
-                .unwrap_or_default()
-        };
-        options.iter().position(|o| o.eq_ignore_ascii_case(raw)).map_or(0.0, |i| i as f32)
+        choice_options(p).iter().position(|o| o.eq_ignore_ascii_case(raw)).map_or(0.0, |i| i as f32)
     } else {
         number_of_str(raw)
     }
@@ -691,71 +643,340 @@ fn number_of_str(raw: &str) -> f32 {
     }
 }
 
-/// A parameter's value converted for a reference of `kind`.
-fn convert_ref_value(kind: RefKind, p: &ParamDef) -> String {
-    let raw = p.default.trim();
-    let as_number = || param_number(p);
-    match kind {
-        RefKind::Str => raw.to_string(),
-        RefKind::Float => {
-            let v = as_number();
-            if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{v}") }
+/// The nodes from the root's first level down to `id`, the root itself
+/// excluded — empty for the root, None for an id not in the tree.
+pub fn node_chain<'a>(root: &'a FsNode, id: &str) -> Option<Vec<&'a FsNode>> {
+    fn visit<'a>(node: &'a FsNode, id: &str, stack: &mut Vec<&'a FsNode>) -> bool {
+        for c in &node.children {
+            stack.push(c);
+            if c.id == id || visit(c, id, stack) {
+                return true;
+            }
+            stack.pop();
         }
-        RefKind::Int => format!("{}", as_number().trunc() as i64),
-        RefKind::Bool => (as_number() != 0.0).to_string(),
+        false
+    }
+    let mut stack = Vec::new();
+    if root.id == id {
+        return Some(stack);
+    }
+    if visit(root, id, &mut stack) { Some(stack) } else { None }
+}
+
+/// A node's absolute path as names: `["sphere1", "opencl1"]`.
+pub fn node_path_names(root: &FsNode, id: &str) -> Option<Vec<String>> {
+    node_chain(root, id).map(|chain| chain.iter().map(|n| n.name.clone()).collect())
+}
+
+/// The node part of a channel path walked from `start` — `..` its parent,
+/// `.` itself, a name one of its children. Every step is reported by name,
+/// because the error lands on the node for the user to read.
+fn walk_ref_path<'a>(root: &'a FsNode, start: &'a FsNode, segments: &[&str]) -> Result<&'a FsNode, String> {
+    let mut cur = start;
+    for seg in segments {
+        cur = match *seg {
+            "." => cur,
+            ".." => find_parent_node(root, &cur.id)
+                .or_else(|| if cur.id == root.id { None } else { Some(root) })
+                .ok_or_else(|| format!("`..` climbs above the root from {}", cur.name))?,
+            name => cur
+                .children
+                .iter()
+                .find(|c| c.name == name)
+                .or_else(|| cur.children.iter().find(|c| c.name.eq_ignore_ascii_case(name)))
+                .ok_or_else(|| format!("no node `{name}` in {}", if cur.id == root.id { "/" } else { cur.name.as_str() }))?,
+        };
+    }
+    Ok(cur)
+}
+
+/// A channel path split: whether it is absolute, its node segments, and its
+/// final parameter segment.
+fn split_ref_path(path: &str) -> (bool, Vec<&str>, &str) {
+    let t = path.trim();
+    let absolute = t.starts_with('/');
+    let mut segs: Vec<&str> = t.split('/').filter(|s| !s.is_empty()).collect();
+    let param = segs.pop().unwrap_or("");
+    (absolute, segs, param)
+}
+
+/// A parameter named by the last path segment, with an optional `.x` / `.y`
+/// / `.z` component for a float3 — tried as a whole name first, so a
+/// parameter that really is called `Size.x` still resolves.
+fn find_ref_param<'a>(node: &'a FsNode, name: &str) -> Option<(&'a ParamDef, Option<usize>)> {
+    if let Some(p) = node.params.iter().find(|p| p.name.eq_ignore_ascii_case(name)) {
+        return Some((p, None));
+    }
+    let (base, comp) = name.rsplit_once('.')?;
+    let comp = match comp {
+        "x" | "0" => 0,
+        "y" | "1" => 1,
+        "z" | "2" => 2,
+        _ => return None,
+    };
+    node.params.iter().find(|p| p.name.eq_ignore_ascii_case(base)).map(|p| (p, Some(comp)))
+}
+
+/// What an expression on `node` sees: the tree for its channels, the frame
+/// for `$F`, and the chain of parameters being evaluated, so a reference
+/// that comes back round to itself is an error rather than a stack overflow.
+struct TreeScope<'a> {
+    root: &'a FsNode,
+    node: &'a FsNode,
+    frame: i32,
+    stack: Vec<(String, String)>,
+}
+
+impl<'a> crate::expr::Scope for TreeScope<'a> {
+    fn channel(&mut self, path: &str, kind: ChKind) -> Result<Value, String> {
+        let (absolute, segs, pname) = split_ref_path(path);
+        if pname.is_empty() {
+            return Err(format!("{}: ch(\"{path}\") names no parameter", self.node.name));
+        }
+        // The REAL node, looked up by id: `self.node` may be a resolved clone,
+        // and a relative path starts from where it sits in the tree.
+        let start = if absolute {
+            self.root
+        } else {
+            crate::viewer_state::find_node_by_id(self.root, &self.node.id).unwrap_or(self.node)
+        };
+        let node = walk_ref_path(self.root, start, &segs).map_err(|e| format!("{}: ch(\"{path}\"): {e}", self.node.name))?;
+        let (p, comp) = find_ref_param(node, pname)
+            .ok_or_else(|| format!("{}: ch(\"{path}\") names no parameter {pname} on {}", self.node.name, if node.id == self.root.id { "/" } else { &node.name }))?;
+        let raw = if p.expr {
+            let key = (node.id.clone(), p.name.clone());
+            if self.stack.contains(&key) {
+                return Err(format!("{}: ch(\"{path}\") is a circular reference", self.node.name));
+            }
+            if self.stack.len() >= 32 {
+                return Err(format!("{}: ch(\"{path}\") chains too deep", self.node.name));
+            }
+            self.stack.push(key);
+            let mut inner = TreeScope { root: self.root, node, frame: self.frame, stack: std::mem::take(&mut self.stack) };
+            let r = eval_param_value(&mut inner, p);
+            self.stack = inner.stack;
+            self.stack.pop();
+            r?
+        } else {
+            p.default.clone()
+        };
+        let value = match comp {
+            Some(i) => Value::Num(raw.split(':').nth(i).and_then(|c| c.trim().parse::<f64>().ok()).unwrap_or(0.0)),
+            None => {
+                let mut lit = p.clone();
+                lit.default = raw;
+                lit.expr = false;
+                match kind {
+                    ChKind::Str => Value::Str(lit.default.trim().to_string()),
+                    _ => Value::Num(param_number(&lit) as f64),
+                }
+            }
+        };
+        Ok(match kind {
+            ChKind::Float | ChKind::Str => value,
+            ChKind::Int => Value::Num(value.as_num().trunc()),
+            ChKind::Bool => Value::Num(if value.truthy() { 1.0 } else { 0.0 }),
+        })
+    }
+
+    fn var(&self, name: &str) -> Option<Value> {
+        match name {
+            "F" | "FF" => Some(Value::Num(self.frame as f64)),
+            _ => None,
+        }
     }
 }
 
-/// `target` with every parameter reference replaced by the value it names,
-/// or `None` when it has none — so the common node costs one scan and no
-/// clone. An unresolvable reference (no such ancestor, no such parameter)
-/// is reported through `error` and the value left as written, which is the
-/// difference between a node that silently reads zero and one that says why.
-///
-/// References chain: a subnet parameter that is itself a reference to ITS
-/// parent resolves on through, so a composed node nested in a composed node
-/// still reaches the outermost control. Bounded, because a chain can loop.
-pub fn resolve_param_refs(root: &FsNode, target: &FsNode, error: &mut Option<String>) -> Option<FsNode> {
+/// An evaluated value written back in the parameter's own vocabulary: a
+/// toggle's `true` / `false`, a choice's option NAME (an index picks one), a
+/// spinbox's integer, anything else the value's text.
+pub fn format_for_param(v: &Value, p: &ParamDef) -> String {
+    let ty = p.param_type.as_str();
+    if ty == "toggle" {
+        return v.truthy().to_string();
+    }
+    if ty == "choice" || ty.starts_with("choice:") {
+        return match v {
+            Value::Num(n) => {
+                let options = choice_options(p);
+                if options.is_empty() {
+                    crate::expr::fmt_num(*n)
+                } else {
+                    let i = (n.round().max(0.0) as usize).min(options.len() - 1);
+                    options[i].clone()
+                }
+            }
+            Value::Str(s) => s.clone(),
+        };
+    }
+    if ty == "spinbox" || ty.starts_with("spinbox:") {
+        if let Value::Num(n) = v {
+            return crate::expr::fmt_num(n.trunc());
+        }
+    }
+    v.as_str()
+}
+
+/// One parameter's expression evaluated to its value string. A float3 is
+/// three expressions separated by `:` — each component its own, as
+/// Houdini's channels are — so `chf("../a/Size.x"):0:0` reads naturally.
+fn eval_param_value(scope: &mut TreeScope, p: &ParamDef) -> Result<String, String> {
+    let is_float3 = p.param_type == "float3" || p.param_type.starts_with("float3:");
+    if is_float3 {
+        let parts: Vec<&str> = p.default.split(':').collect();
+        if parts.len() == 3 {
+            let mut out = Vec::with_capacity(3);
+            for part in parts {
+                let t = part.trim();
+                if t.parse::<f64>().is_ok() {
+                    out.push(t.to_string());
+                } else {
+                    let e = crate::expr::parse(t).map_err(|e| format!("{}: {} — {e}", scope.node.name, p.name))?;
+                    out.push(crate::expr::fmt_num(e.eval(scope)?.as_num()));
+                }
+            }
+            return Ok(out.join(":"));
+        }
+    }
+    let e = crate::expr::parse(&p.default).map_err(|e| format!("{}: {} — {e}", scope.node.name, p.name))?;
+    let v = e.eval(scope)?;
+    Ok(format_for_param(&v, p))
+}
+
+/// `target` with every expression replaced by the value it evaluates to at
+/// `frame`, or `None` when it has none — so the common node costs one scan
+/// and no clone. A failing expression (bad syntax, a path to nothing, a
+/// circle) is reported through `error` and its text left as written, which
+/// the resolvers then read as they always have — a number that parses as
+/// nothing is 0. The clone's parameters come back as VALUES (`expr` off),
+/// so nothing downstream evaluates twice.
+pub fn resolve_param_refs(root: &FsNode, target: &FsNode, frame: i32, error: &mut Option<String>) -> Option<FsNode> {
     if !has_param_refs(target) {
         return None;
     }
-    fn lookup(root: &FsNode, from: &FsNode, kind: RefKind, levels: usize, name: &str, depth: usize) -> Result<String, String> {
-        let mut anc = from;
-        for _ in 0..levels {
-            anc = find_parent_node(root, &anc.id).ok_or_else(|| {
-                format!("{}: {name} is {levels} level(s) up, but {} has no parent that far", from.name, from.name)
-            })?;
-        }
-        let p = anc
-            .params
-            .iter()
-            .find(|p| p.name.eq_ignore_ascii_case(name))
-            .ok_or_else(|| format!("{}: ch(\"{name}\") names no parameter on {}", from.name, anc.name))?;
-        if let Some((k2, l2, n2)) = parse_param_ref(&p.default) {
-            if depth >= 8 {
-                return Err(format!("{}: ch(\"{name}\") chains too deep", from.name));
-            }
-            let through = lookup(root, anc, k2, l2, &n2, depth + 1)?;
-            let mut resolved = p.clone();
-            resolved.default = through;
-            return Ok(convert_ref_value(kind, &resolved));
-        }
-        Ok(convert_ref_value(kind, p))
-    }
     let mut out = target.clone();
     for p in &mut out.params {
-        if let Some((kind, levels, name)) = parse_param_ref(&p.default) {
-            match lookup(root, target, kind, levels, &name, 0) {
-                Ok(v) => p.default = v,
-                Err(e) => {
-                    if error.is_none() {
-                        *error = Some(e);
-                    }
+        if !p.expr {
+            continue;
+        }
+        let mut scope = TreeScope { root, node: target, frame, stack: vec![(target.id.clone(), p.name.clone())] };
+        match eval_param_value(&mut scope, p) {
+            Ok(v) => {
+                p.default = v;
+                p.expr = false;
+            }
+            Err(e) => {
+                if error.is_none() {
+                    *error = Some(e);
                 }
             }
         }
     }
     Some(out)
+}
+
+/// The path an expression on `from` would use to reach `to`, relative and
+/// without the parameter: `../sphere1` for a sibling, `..` for the parent,
+/// `` for the node itself. What Paste Relative Reference writes.
+pub fn relative_ref_path(root: &FsNode, from: &str, to: &str) -> Option<String> {
+    let a = node_path_names(root, from)?;
+    let b = node_path_names(root, to)?;
+    let common = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    let mut segs: Vec<String> = vec!["..".to_string(); a.len() - common];
+    segs.extend(b[common..].iter().cloned());
+    Some(segs.join("/"))
+}
+
+/// The absolute path to `to`, `/a/b`, for Paste Absolute Reference.
+pub fn absolute_ref_path(root: &FsNode, to: &str) -> Option<String> {
+    node_path_names(root, to).map(|names| format!("/{}", names.join("/")))
+}
+
+/// Rename the node `id` to `new_name` and keep everything that names it
+/// pointing at it: the wires — sibling parameters whose value is the old
+/// name, as the load-time sanitizer rewrites them — and every expression
+/// anywhere in the tree whose channel path passes through the node.
+/// Expressions are rewritten by resolving each path from where it stands
+/// BEFORE the name changes, since a path is names and the old one is what
+/// still resolves.
+pub fn rename_node_in_tree(root: &mut FsNode, id: &str, new_name: &str) -> bool {
+    let Some(chain) = node_chain(root, id) else { return false };
+    let Some(node) = chain.last() else { return false };
+    let old_name = node.name.clone();
+    if old_name == new_name {
+        return false;
+    }
+    let parent_id = chain.iter().rev().nth(1).map(|p| p.id.clone()).unwrap_or_else(|| root.id.clone());
+
+    // Pass one, immutable: every expression that changes.
+    let mut edits: Vec<(String, String, String)> = Vec::new();
+    fn collect(root: &FsNode, node: &FsNode, id: &str, new_name: &str, edits: &mut Vec<(String, String, String)>) {
+        for p in &node.params {
+            if !p.expr {
+                continue;
+            }
+            let rewritten = crate::expr::rewrite_paths(&p.default, |path| {
+                let (absolute, segs, pname) = split_ref_path(path);
+                let mut cur = if absolute { root } else { node };
+                let mut out: Vec<String> = Vec::new();
+                let mut changed = false;
+                for seg in segs {
+                    match seg {
+                        "." => {
+                            out.push(".".into());
+                        }
+                        ".." => {
+                            cur = find_parent_node(root, &cur.id)?;
+                            out.push("..".into());
+                        }
+                        name => {
+                            cur = cur.children.iter().find(|c| c.name == name)?;
+                            if cur.id == id {
+                                out.push(new_name.to_string());
+                                changed = true;
+                            } else {
+                                out.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+                if !changed {
+                    return None;
+                }
+                out.push(pname.to_string());
+                Some(format!("{}{}", if absolute { "/" } else { "" }, out.join("/")))
+            });
+            if rewritten != p.default {
+                edits.push((node.id.clone(), p.name.clone(), rewritten));
+            }
+        }
+        for c in &node.children {
+            collect(root, c, id, new_name, edits);
+        }
+    }
+    collect(root, root, id, new_name, &mut edits);
+
+    // Pass two, mutable: the expressions, the wires, the name.
+    for (nid, pname, value) in edits {
+        if let Some(n) = crate::viewer_state::find_node_by_id_mut(root, &nid) {
+            if let Some(p) = n.params.iter_mut().find(|p| p.name == pname) {
+                p.default = value;
+            }
+        }
+    }
+    if let Some(parent) = crate::viewer_state::find_node_by_id_mut(root, &parent_id) {
+        for sibling in &mut parent.children {
+            for p in &mut sibling.params {
+                if !p.expr && p.default == old_name {
+                    p.default = new_name.to_string();
+                }
+            }
+        }
+    }
+    if let Some(n) = crate::viewer_state::find_node_by_id_mut(root, id) {
+        n.name = new_name.to_string();
+    }
+    true
 }
 
 /// One simnet's solved state, kept between evaluations so playing forward costs
@@ -868,7 +1089,7 @@ pub fn generate_single_node_geometry_with_errors(
     // Parameter references resolve here, once, for every resolver below:
     // a child of a composed subnet reads its parent's controls through
     // `ch("Name")` and the resolvers never know.
-    let resolved = resolve_param_refs(root, target, ocl_error);
+    let resolved = resolve_param_refs(root, target, sim.frame, ocl_error);
     let target = resolved.as_ref().unwrap_or(target);
 
     let res = if target.node_type.eq_ignore_ascii_case("sphere") {
@@ -994,7 +1215,7 @@ pub fn generate_single_node_geometry_with_errors(
             }
             // Resolved, like the kernel's parent read above: a subnet's
             // Input may itself be a reference.
-            let resolved_parent = resolve_param_refs(root, parent, ocl_error);
+            let resolved_parent = resolve_param_refs(root, parent, sim.frame, ocl_error);
             let parent = resolved_parent.as_ref().unwrap_or(parent);
             let input_name = node_param_str(parent, "Input", "");
             if !input_name.is_empty() {
@@ -4679,7 +4900,7 @@ pub fn parse_dynamic_params(code: &str) -> Vec<ParamDef> {
                                     min,
                                     max,
                                     step,
-                                    show_when: String::new(),
+                                    show_when: String::new(), expr: false,
                                 });
                             }
                         }
@@ -4728,7 +4949,7 @@ pub fn resolve_opencl_geometry_with_errors(
         // string, because a choice is worth its option index and only the
         // definition knows the options.
         let resolved_parent = find_parent_node(root, &target.id)
-            .map(|parent| resolve_param_refs(root, parent, ocl_error).unwrap_or_else(|| parent.clone()));
+            .map(|parent| resolve_param_refs(root, parent, sim.frame, ocl_error).unwrap_or_else(|| parent.clone()));
         let find_def = |name: &str| -> Option<&ParamDef> {
             target.params.iter().find(|d| d.name.eq_ignore_ascii_case(name)).or_else(|| {
                 resolved_parent.as_ref().and_then(|parent| parent.params.iter().find(|d| d.name.eq_ignore_ascii_case(name)))
@@ -5407,7 +5628,7 @@ pub fn network_sphere_vertices_with_errors(
         // The walk hands nodes to their resolvers directly, so it resolves
         // references itself — dived into a composed subnet, its children are
         // what is drawn, and their controls live on the subnet.
-        let resolved = resolve_param_refs(root, node, ocl_error);
+        let resolved = resolve_param_refs(root, node, sim.frame, ocl_error);
         let node = resolved.as_ref().unwrap_or(node);
         let is_visible = parent_visible && node.geometry_visible;
         if node.node_type.eq_ignore_ascii_case("sphere") {
@@ -6578,7 +6799,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 })
                 .collect(),
             geometry_visible: true,
@@ -6709,7 +6930,7 @@ mod tests {
                     min: Some(1.0),
                     max: Some(10.0),
                     step: Some(1.0),
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
                 ParamDef {
                     name: "Shape".to_string(),
@@ -6720,7 +6941,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
             ],
             geometry_visible: true,
@@ -6784,7 +7005,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -6807,7 +7028,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
                 ParamDef {
                     name: "Translation".to_string(),
@@ -6818,7 +7039,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -6865,7 +7086,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
                 ParamDef {
                     name: "Translation".to_string(),
@@ -6876,7 +7097,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -6920,7 +7141,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
                 ParamDef {
                     name: "Translation".to_string(),
@@ -6931,7 +7152,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -6977,7 +7198,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -7001,7 +7222,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
                 ParamDef {
                     name: "Code".to_string(),
@@ -7019,7 +7240,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -7068,7 +7289,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -7092,7 +7313,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
                 ParamDef {
                     name: "Points".to_string(),
@@ -7103,7 +7324,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 },
                 ParamDef {
                     name: "Radius".to_string(),
@@ -7114,7 +7335,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 }
             ],
             geometry_visible: true,
@@ -7388,7 +7609,7 @@ mod simnet_tests {
             min: None,
             max: None,
             step: None,
-            show_when: String::new(),
+            show_when: String::new(), expr: false,
         }
     }
 

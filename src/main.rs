@@ -32,6 +32,7 @@ pub mod mold;
 pub mod hull;
 pub mod scatter;
 pub mod page;
+pub mod expr;
 pub mod thumbnail;
 
 #[cfg(test)]
@@ -552,7 +553,7 @@ mod tests {
         group.name = "My Region".into();
         group.node_type = "group".into();
         group.children.clear();
-        group.params = vec![ParamDef { name: "Input".into(), label: "Input".into(), param_type: "text".into(), default: "Sphere 1".into(), options: vec![], min: None, max: None, step: None, show_when: String::new() }];
+        group.params = vec![ParamDef { name: "Input".into(), label: "Input".into(), param_type: "text".into(), default: "Sphere 1".into(), options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false }];
         let mut clash = group.clone();
         clash.id = "c".into();
         clash.name = "sphere1".into();
@@ -561,6 +562,8 @@ mod tests {
         proj.root.children.push(clash);
 
         proj.sanitize_node_names();
+
+        proj.migrate_param_refs();
 
         let names: Vec<&str> = proj.root.children.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"camera1"));
@@ -577,6 +580,7 @@ mod tests {
         // A clean file is left exactly alone.
         let before = serde_json::to_string(&proj).unwrap();
         proj.sanitize_node_names();
+        proj.migrate_param_refs();
         assert_eq!(serde_json::to_string(&proj).unwrap(), before);
     }
 
@@ -768,7 +772,7 @@ mod tests {
             min: None,
             max: None,
             step: None,
-            show_when: String::new(),
+            show_when: String::new(), expr: false,
         };
         state.fs_root.children.push(crate::app::FsNode {
             id: "legacy-main".to_string(),
@@ -888,7 +892,7 @@ mod tests {
             min: None,
             max: None,
             step: None,
-            show_when: String::new(),
+            show_when: String::new(), expr: false,
         };
         let subnet = |name: &str, params: Vec<crate::app::ParamDef>| crate::app::FsNode {
             id: format!("legacy-{name}"),
@@ -1040,7 +1044,7 @@ mod tests {
                 min: None,
                 max: None,
                 step: None,
-                show_when: String::new(),
+                show_when: String::new(), expr: false,
             }],
             geometry_visible: true,
             position: (0.0, 4.0),
@@ -3144,7 +3148,7 @@ mod tests {
         use crate::geometry::param_number;
         let p = |ty: &str, val: &str| crate::app::ParamDef {
             name: "X".into(), label: String::new(), param_type: ty.into(), default: val.into(),
-            options: vec![], min: None, max: None, step: None, show_when: String::new(),
+            options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
         };
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "Cube")), 2.0);
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "icosphere")), 1.0, "case-insensitive, like the reference path");
@@ -3390,6 +3394,7 @@ mod tests {
             name: "Test Project".to_string(),
             root,
             view_state,
+            format: crate::app::PROJECT_FORMAT,
         };
 
         let content = serde_json::to_string(&proj).expect("failed to serialize");
@@ -4115,6 +4120,7 @@ mod tests {
             max: None,
             step: None,
             show_when: show_when.into(),
+            expr: false,
         }
     }
 
@@ -4378,7 +4384,7 @@ mod tests {
                         min: None,
                         max: None,
                         step: None,
-                        show_when: String::new(),
+                        show_when: String::new(), expr: false,
                     })
                     .collect(),
                 geometry_visible: true,
@@ -5863,7 +5869,7 @@ mod tests {
                         Some(o) => ("choice".to_string(), o.split(',').map(str::to_string).collect()),
                         None => (t.to_string(), Vec::new()),
                     };
-                    ParamDef { name: n.into(), label: String::new(), param_type: ptype, default: d.into(), options, min: None, max: None, step: None, show_when: String::new() }
+                    ParamDef { name: n.into(), label: String::new(), param_type: ptype, default: d.into(), options, min: None, max: None, step: None, show_when: String::new(), expr: crate::expr::looks_like_expression(d) }
                 })
                 .collect(),
             geometry_visible: true,
@@ -5890,34 +5896,150 @@ mod tests {
         (hi - lo) * 0.5
     }
 
-    /// The reference syntax: the whole value, one of four kinds, a `../` per
-    /// level, and nothing that merely contains `ch(`.
+    /// The expression language: arithmetic with Houdini's precedence, the
+    /// channel functions with their conversions, `$F`, strings, and the
+    /// functions. `Scope` is a table here, so none of this touches a tree.
     #[test]
-    fn param_references_parse() {
-        use crate::geometry::{parse_param_ref, RefKind};
-        assert_eq!(parse_param_ref("ch(\"Radius\")"), Some((RefKind::Str, 1, "Radius".into())));
-        assert_eq!(parse_param_ref("  chf('Base Resolution')  "), Some((RefKind::Float, 1, "Base Resolution".into())));
-        assert_eq!(parse_param_ref("chi(\"../Source\")"), Some((RefKind::Int, 1, "Source".into())));
-        assert_eq!(parse_param_ref("chb(\"../../Relax Points\")"), Some((RefKind::Bool, 2, "Relax Points".into())));
-        assert_eq!(parse_param_ref("0.5"), None);
-        assert_eq!(parse_param_ref("float r = chf(\"Radius\", 0.5);"), None, "a kernel is not a reference");
-        assert_eq!(parse_param_ref("ch(Radius)"), None, "unquoted is not a reference");
-        assert_eq!(parse_param_ref("ch(\"\")"), None);
+    fn expressions_parse_and_evaluate() {
+        use crate::expr::{parse, ChKind, Scope, Value};
+        struct Table(i32);
+        impl Scope for Table {
+            fn channel(&mut self, path: &str, kind: ChKind) -> Result<Value, String> {
+                let v = match path {
+                    "../Radius" => Value::Num(0.5),
+                    "../sphere1/Rows" => Value::Num(16.0),
+                    "Mode" => Value::Num(1.0),
+                    "../text1/Font" => Value::Str("Inter".into()),
+                    _ => return Err(format!("no {path}")),
+                };
+                Ok(match kind {
+                    ChKind::Int => Value::Num(v.as_num().trunc()),
+                    ChKind::Bool => Value::Num(if v.truthy() { 1.0 } else { 0.0 }),
+                    _ => v,
+                })
+            }
+            fn var(&self, name: &str) -> Option<Value> {
+                (name == "F").then(|| Value::Num(self.0 as f64))
+            }
+        }
+        let ev = |src: &str| parse(src).unwrap_or_else(|e| panic!("{src}: {e}")).eval(&mut Table(12)).unwrap_or_else(|e| panic!("{src}: {e}"));
+        assert_eq!(ev("1 + 2 * 3"), Value::Num(7.0));
+        assert_eq!(ev("(1 + 2) * 3"), Value::Num(9.0));
+        assert_eq!(ev("2 ^ 3 ^ 2"), Value::Num(512.0), "power is right-associative");
+        assert_eq!(ev("-2 ^ 2"), Value::Num(-4.0), "unary minus binds looser than power, as in Houdini");
+        assert_eq!(ev("7 % 4"), Value::Num(3.0));
+        assert_eq!(ev("ch(\"../Radius\") * 2 + 1"), Value::Num(2.0));
+        assert_eq!(ev("chi(\"../sphere1/Rows\") / 3"), Value::Num(16.0 / 3.0));
+        assert_eq!(ev("chb(\"Mode\")"), Value::Num(1.0));
+        assert_eq!(ev("chs(\"../text1/Font\") + \" Bold\""), Value::Str("Inter Bold".into()));
+        assert_eq!(ev("$F / 24"), Value::Num(0.5));
+        assert_eq!(ev("if($F > 10, 1, 0)"), Value::Num(1.0));
+        assert_eq!(ev("$F > 10 && $F < 20"), Value::Num(1.0));
+        assert_eq!(ev("!($F == 12)"), Value::Num(0.0));
+        assert_eq!(ev("clamp(5, 0, 1) + min(3, 1, 2) + max(-1, -2)"), Value::Num(1.0));
+        assert_eq!(ev("fit(5, 0, 10, 0, 1)"), Value::Num(0.5));
+        assert_eq!(ev("floor(2.7) + ceil(2.2) + round(2.5) + int(-2.7)"), Value::Num(6.0));
+        assert_eq!(ev("sqrt(16) + abs(-1) + pow(2, 3)"), Value::Num(13.0));
+        assert!((ev("sin(PI / 2)").as_num() - 1.0).abs() < 1e-9);
+        assert_eq!(ev("rand(3)"), ev("rand(3)"), "rand is a function of its seed");
+        assert_ne!(ev("rand(3)"), ev("rand(4)"));
+        assert_eq!(ev("\"a\" == \"a\""), Value::Num(1.0));
+
+        // Errors name what went wrong.
+        for (src, needle) in [("1 +", "unexpected end"), ("ch(Radius)", "unknown name"), ("foo(1)", "unknown function"), ("1 / 0", "division by zero"), ("ch(\"nope\")", "no nope"), ("$X", "unknown variable"), ("1 2", "trailing")] {
+            let err = match parse(src) {
+                Ok(e) => e.eval(&mut Table(0)).unwrap_err(),
+                Err(e) => e,
+            };
+            assert!(err.contains(needle), "{src}: {err}");
+        }
+
+        // Formatting: integers bare, floats as the f32 they are read as.
+        assert_eq!(crate::expr::fmt_num(2.0), "2");
+        assert_eq!(crate::expr::fmt_num(0.1 + 0.2), "0.3");
+        assert_eq!(crate::expr::fmt_num(-1.5), "-1.5");
     }
 
-    /// A child reads its subnet's controls: a number straight through, a
-    /// choice as its option index, a toggle as a bool, and a reference that
-    /// points at a reference follows the chain to the outermost control.
+    /// What is and is not inferred to be an expression when typed or
+    /// scripted into a plain parameter: a reference is, arithmetic on a
+    /// literal, a node name, a number and a kernel are not.
+    #[test]
+    fn a_typed_reference_is_an_expression_and_a_kernel_is_not() {
+        use crate::expr::looks_like_expression;
+        assert!(looks_like_expression("ch(\"../sphere1/Radius\")"));
+        assert!(looks_like_expression("chf(\"../Radius\") * 2"));
+        assert!(looks_like_expression("$F / 24"));
+        assert!(!looks_like_expression("1 + 2"), "arithmetic alone is asked for through Edit Expression");
+        assert!(!looks_like_expression("0.5"));
+        assert!(!looks_like_expression("sphere1"));
+        assert!(!looks_like_expression("true"));
+        assert!(!looks_like_expression("0.00:0.80:0.00"));
+        assert!(!looks_like_expression("float r = chf(\"Radius\", 0.5);"), "a kernel is not a reference");
+        let kernel = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/nodes/sphere.json")).unwrap();
+        assert!(!looks_like_expression(&kernel));
+    }
+
+    /// A rename rewrites the channel paths that pass through the node —
+    /// textually, so the user's spacing survives — and leaves every other
+    /// path alone.
+    #[test]
+    fn rename_rewrites_the_paths_through_a_node() {
+        use crate::expr::rewrite_paths;
+        let src = "ch( \"../sphere1/Radius\" ) * chs('../text1/Font') + chf(\"/sphere1/Rows\")";
+        let out = rewrite_paths(src, |path| path.contains("sphere1").then(|| path.replace("sphere1", "ball")));
+        assert_eq!(out, "ch( \"../ball/Radius\" ) * chs('../text1/Font') + chf(\"/ball/Rows\")");
+        assert_eq!(rewrite_paths("touch(\"x\")", |_| Some("no".into())), "touch(\"x\")", "only channel calls are paths");
+    }
+
+    /// The pre-expression reference migrates to Houdini's semantics: a bare
+    /// name meant the parent and gains `../`, an explicit `../` is kept, and
+    /// anything else is not a legacy reference.
+    #[test]
+    fn legacy_references_migrate_to_the_parent_path() {
+        use crate::expr::migrate_legacy_ref;
+        assert_eq!(migrate_legacy_ref("ch(\"Radius\")").as_deref(), Some("ch(\"../Radius\")"));
+        assert_eq!(migrate_legacy_ref("  chf('Base Resolution')  ").as_deref(), Some("chf(\"../Base Resolution\")"));
+        assert_eq!(migrate_legacy_ref("chi(\"../Source\")").as_deref(), Some("chi(\"../Source\")"));
+        assert_eq!(migrate_legacy_ref("chb(\"../../Relax Points\")").as_deref(), Some("chb(\"../../Relax Points\")"));
+        assert_eq!(migrate_legacy_ref("0.5"), None);
+        assert_eq!(migrate_legacy_ref("float r = chf(\"Radius\", 0.5);"), None, "a kernel is not a reference");
+        assert_eq!(migrate_legacy_ref("ch(Radius)"), None, "unquoted is not a reference");
+        assert_eq!(migrate_legacy_ref("ch(\"\")"), None);
+        assert_eq!(migrate_legacy_ref("ch(\"../a/Radius\")"), None, "a path was never the old form");
+
+        // And a whole project: format 0 migrates once, format 1 is left alone.
+        let mut proj = crate::app::Project {
+            name: "old".into(),
+            root: ref_node("root", "root", "node", vec![], vec![
+                ref_node("sub", "sub1", "node", vec![("Size", "slider", "0.8")], vec![
+                    ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "chf(\"Size\")")], vec![]),
+                ]),
+            ]),
+            view_state: Default::default(),
+            format: 0,
+        };
+        proj.root.children[0].children[0].params[0].expr = false;
+        proj.migrate_param_refs();
+        let r = &proj.root.children[0].children[0].params[0];
+        assert_eq!(r.default, "chf(\"../Size\")");
+        assert!(r.expr);
+        assert_eq!(proj.format, crate::app::PROJECT_FORMAT);
+        // A NEW file's bare name is the node's own parameter and stays.
+        proj.root.children[0].children[0].params[0].default = "chf(\"Radius\")".into();
+        proj.migrate_param_refs();
+        assert_eq!(proj.root.children[0].children[0].params[0].default, "chf(\"Radius\")");
+    }
+
     #[test]
     fn param_references_resolve_against_the_enclosing_subnet() {
-        use crate::geometry::{resolve_param_refs, RefKind};
-        let sphere = ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "ch(\"Radius\")")], vec![]);
+        use crate::geometry::resolve_param_refs;
+        let sphere = ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "ch(\"../Radius\")")], vec![]);
         let output = ref_node("o", "output1", "output", vec![("Input", "text", "sphere1")], vec![]);
         let inner = ref_node("sub", "shape1", "node",
             vec![("Radius", "slider", "chf(\"../Size\")"), ("Mode", "choice:Basic,Scatter", "Scatter"), ("On", "toggle", "true")],
             vec![sphere, output]);
         let probe = ref_node("p", "probe", "switch",
-            vec![("Index", "spinbox", "chi(\"Mode\")"), ("Flag", "text", "chb(\"On\")"), ("Name", "text", "ch(\"Mode\")"), ("Plain", "text", "kept")],
+            vec![("Index", "spinbox", "chi(\"../Mode\")"), ("Flag", "text", "chb(\"../On\")"), ("Name", "text", "chs(\"../Mode\")"), ("Plain", "text", "kept")],
             vec![]);
         let mut inner = inner;
         inner.children.push(probe);
@@ -5927,14 +6049,13 @@ mod tests {
         // The probe's params, resolved against shape1.
         let probe = &root.children[0].children[0].children[2];
         let mut err = None;
-        let resolved = resolve_param_refs(&root, probe, &mut err).expect("it has references");
+        let resolved = resolve_param_refs(&root, probe, 0, &mut err).expect("it has references");
         assert!(err.is_none(), "{err:?}");
         let get = |n: &str| resolved.params.iter().find(|p| p.name == n).unwrap().default.clone();
         assert_eq!(get("Index"), "1", "chi on a choice is its option index");
-        assert_eq!(get("Flag"), "true");
+        assert_eq!(get("Flag"), "1", "chb into a text row is 1 or 0");
         assert_eq!(get("Name"), "Scatter");
         assert_eq!(get("Plain"), "kept");
-        let _ = RefKind::Str;
 
         // Evaluated, the sphere's Radius chains: sphere1 → shape1's Radius,
         // which is itself chf("../Size") → outer1's 0.8.
@@ -5945,23 +6066,237 @@ mod tests {
 
         // A node with no references is left alone: no clone, no error.
         let mut none = None;
-        assert!(resolve_param_refs(&root, &root.children[0].children[0].children[1], &mut none).is_none());
+        assert!(resolve_param_refs(&root, &root.children[0].children[0].children[1], 0, &mut none).is_none());
         assert!(none.is_none());
 
         // A reference to nothing is reported, and the value left as written.
-        let bad = ref_node("b", "bad1", "sphere", vec![("Radius", "slider", "ch(\"Nope\")")], vec![]);
+        let bad = ref_node("b", "bad1", "sphere", vec![("Radius", "slider", "ch(\"../Nope\")")], vec![]);
         let holder = ref_node("h", "holder1", "node", vec![], vec![bad]);
         let root2 = ref_node("root", "root", "node", vec![], vec![holder]);
         let mut err = None;
-        let r = resolve_param_refs(&root2, &root2.children[0].children[0], &mut err).unwrap();
-        assert_eq!(r.params[0].default, "ch(\"Nope\")");
-        assert!(err.as_deref().unwrap_or("").contains("names no parameter on holder1"), "{err:?}");
+        let r = resolve_param_refs(&root2, &root2.children[0].children[0], 0, &mut err).unwrap();
+        assert_eq!(r.params[0].default, "ch(\"../Nope\")");
+        assert!(err.as_deref().unwrap_or("").contains("names no parameter Nope on holder1"), "{err:?}");
         // Too many levels up, likewise.
         let far = ref_node("f", "far1", "sphere", vec![("Radius", "slider", "ch(\"../../../X\")")], vec![]);
         let root3 = ref_node("root", "root", "node", vec![], vec![far]);
         let mut err = None;
-        resolve_param_refs(&root3, &root3.children[0], &mut err);
+        resolve_param_refs(&root3, &root3.children[0], 0, &mut err);
         assert!(err.is_some());
+    }
+
+    /// Channel paths over a tree, Houdini's way: a bare name is the node's
+    /// own parameter, `..` the parent, a sibling by name, `/` the root; a
+    /// float3 component through `.y`; an expression that reads an expression
+    /// follows the chain; `$F` is the evaluation's frame; and a circle is an
+    /// error, not a stack overflow.
+    #[test]
+    fn channel_paths_resolve_over_the_tree() {
+        use crate::geometry::resolve_param_refs;
+        let a = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.25"), ("Center", "float3", "1:2:3")], vec![]);
+        let b = ref_node("b", "b1", "sphere", vec![
+            ("Radius", "slider", "ch(\"../a1/Radius\") * 2"),
+            ("Rows", "spinbox", "ch(\"Radius\") * 100"),
+            ("Y", "slider", "ch(\"../a1/Center.y\") + ch(\"/sub1/a1/Center.z\")"),
+            ("Frame", "slider", "$F / 2"),
+            ("Up", "slider", "ch(\"../Size\") + ch(\"/Top\")"),
+            ("Mode", "choice:Basic,Scatter", "1"),
+            ("On", "toggle", "ch(\"../a1/Radius\") > 0"),
+            ("Label", "text", "chs(\"../a1/Radius\") + \" units\""),
+            ("Center", "float3", "chf(\"../a1/Center.x\"):0:ch(\"../Size\")"),
+        ], vec![]);
+        let sub = ref_node("sub", "sub1", "node", vec![("Size", "slider", "0.5")], vec![a, b]);
+        let root = ref_node("root", "root", "node", vec![("Top", "slider", "10")], vec![sub]);
+        // The choice's value is an index written as an expression; flag it.
+        let mut root = root;
+        root.children[0].children[1].params.iter_mut().find(|p| p.name == "Mode").unwrap().expr = true;
+
+        let b = &root.children[0].children[1];
+        let mut err = None;
+        let r = resolve_param_refs(&root, b, 12, &mut err).expect("b1 has expressions");
+        assert!(err.is_none(), "{err:?}");
+        let get = |n: &str| r.params.iter().find(|p| p.name == n).unwrap().default.clone();
+        assert_eq!(get("Radius"), "0.5", "a sibling by path");
+        assert_eq!(get("Rows"), "50", "a bare name is the node's OWN parameter, read through its expression");
+        assert_eq!(get("Y"), "5", "components, relative and absolute");
+        assert_eq!(get("Frame"), "6");
+        assert_eq!(get("Up"), "10.5", "the parent and the root");
+        assert_eq!(get("Mode"), "Scatter", "a number into a choice picks the option");
+        assert_eq!(get("On"), "true", "a number into a toggle is true or false");
+        assert_eq!(get("Label"), "0.25 units");
+        assert_eq!(get("Center"), "1:0:0.5", "a float3 is three expressions");
+        assert!(r.params.iter().all(|p| !p.expr), "the resolved clone holds values");
+
+        // A circle: two parameters reading each other.
+        let x = ref_node("x", "x1", "sphere", vec![("Radius", "slider", "ch(\"../y1/Radius\")")], vec![]);
+        let y = ref_node("y", "y1", "sphere", vec![("Radius", "slider", "ch(\"../x1/Radius\") + 1")], vec![]);
+        let ring = ref_node("root", "root", "node", vec![], vec![x, y]);
+        let mut err = None;
+        let r = resolve_param_refs(&ring, &ring.children[0], 0, &mut err).unwrap();
+        assert!(err.as_deref().unwrap_or("").contains("circular"), "{err:?}");
+        assert_eq!(r.params[0].default, "ch(\"../y1/Radius\")", "left as written");
+        // A parameter reading itself is the shortest circle.
+        let me = ref_node("m", "me", "sphere", vec![("Radius", "slider", "ch(\"Radius\") + 1")], vec![]);
+        let solo = ref_node("root", "root", "node", vec![], vec![me]);
+        let mut err = None;
+        resolve_param_refs(&solo, &solo.children[0], 0, &mut err);
+        assert!(err.as_deref().unwrap_or("").contains("circular"), "{err:?}");
+
+        // A path to a node that is not there names the step that failed.
+        let lost = ref_node("l", "lost", "sphere", vec![("Radius", "slider", "ch(\"../nope/Radius\")")], vec![]);
+        let root4 = ref_node("root", "root", "node", vec![], vec![lost]);
+        let mut err = None;
+        resolve_param_refs(&root4, &root4.children[0], 0, &mut err);
+        assert!(err.as_deref().unwrap_or("").contains("no node `nope`"), "{err:?}");
+        // A syntax error names the parameter.
+        let broken = ref_node("k", "broken", "sphere", vec![("Radius", "slider", "1 +")], vec![]);
+        let mut broken = broken;
+        broken.params[0].expr = true;
+        let root5 = ref_node("root", "root", "node", vec![], vec![broken]);
+        let mut err = None;
+        resolve_param_refs(&root5, &root5.children[0], 0, &mut err);
+        assert!(err.as_deref().unwrap_or("").contains("broken: Radius"), "{err:?}");
+    }
+
+    /// The paths a paste writes, and what a rename does to the paths that
+    /// stand: `rename_node_in_tree` rewrites every expression whose path
+    /// passes through the node and every wire naming it, and leaves a
+    /// same-named node elsewhere alone.
+    #[test]
+    fn renaming_a_node_carries_its_references() {
+        use crate::geometry::{absolute_ref_path, relative_ref_path, rename_node_in_tree};
+        let a = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.25")], vec![]);
+        let b = ref_node("b", "b1", "sphere", vec![
+            ("Radius", "slider", "ch( \"../a1/Radius\" ) * 2"),
+            ("Input", "text", "a1"),
+        ], vec![]);
+        let deep = ref_node("d", "deep1", "sphere", vec![("Radius", "slider", "chf(\"/sub1/a1/Radius\") + ch(\"../../a1/Radius\")")], vec![]);
+        let inner = ref_node("in", "inner1", "node", vec![], vec![deep]);
+        let other = ref_node("oa", "a1", "sphere", vec![("Radius", "slider", "ch(\"../a1/Radius\")")], vec![]);
+        let elsewhere = ref_node("el", "elsewhere", "node", vec![], vec![other]);
+        let sub = ref_node("sub", "sub1", "node", vec![("Size", "slider", "0.5")], vec![a, b, inner]);
+        let mut root = ref_node("root", "root", "node", vec![], vec![sub, elsewhere]);
+
+        assert_eq!(relative_ref_path(&root, "b", "a").as_deref(), Some("../a1"));
+        assert_eq!(relative_ref_path(&root, "d", "a").as_deref(), Some("../../a1"));
+        assert_eq!(relative_ref_path(&root, "b", "sub").as_deref(), Some(".."));
+        assert_eq!(relative_ref_path(&root, "b", "b").as_deref(), Some(""));
+        assert_eq!(relative_ref_path(&root, "a", "d").as_deref(), Some("../inner1/deep1"));
+        assert_eq!(absolute_ref_path(&root, "d").as_deref(), Some("/sub1/inner1/deep1"));
+
+        assert!(rename_node_in_tree(&mut root, "a", "ball"));
+        let get = |root: &FsNode, path: &[usize], n: &str| {
+            let mut node = root;
+            for &i in path {
+                node = &node.children[i];
+            }
+            node.params.iter().find(|p| p.name == n).unwrap().default.clone()
+        };
+        assert_eq!(root.children[0].children[0].name, "ball");
+        assert_eq!(get(&root, &[0, 1], "Radius"), "ch( \"../ball/Radius\" ) * 2", "spacing kept");
+        assert_eq!(get(&root, &[0, 1], "Input"), "ball", "the wire follows");
+        assert_eq!(get(&root, &[0, 2, 0], "Radius"), "chf(\"/sub1/ball/Radius\") + ch(\"../../ball/Radius\")");
+        assert_eq!(get(&root, &[1, 0], "Radius"), "ch(\"../a1/Radius\")", "the OTHER a1 is not this one");
+        assert!(!rename_node_in_tree(&mut root, "a", "ball"), "a rename to the same name is nothing");
+        assert!(!rename_node_in_tree(&mut root, "zzz", "x"), "and so is one of a node that is not there");
+    }
+
+    /// The parameter row menu, end to end: a right press on a row in the
+    /// params pane opens it (and nothing else claims the press), Copy
+    /// Parameter then Paste Relative Reference on another node's row writes
+    /// the Houdini path and flags the row, which the pane then shows as
+    /// text; Delete Expression writes the evaluated value back as a value;
+    /// Edit Expression flags a value without changing it.
+    #[test]
+    fn the_row_menu_copies_and_pastes_references() {
+        use crate::app::{McpAction, ParamMenuAction};
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        state
+            .apply_action(McpAction::AddNode { template_name: "Sphere".into(), name: Some("ball".into()), x: 1.0, y: 8.0 }, &mut redraw)
+            .unwrap();
+        let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        let (sphere, ball) = (slot_of(&state, "sphere1"), slot_of(&state, "ball"));
+
+        // Show sphere1 in the pane and find its Radius row.
+        let show = |state: &mut State, slot: usize| {
+            state.graph_mut().set_selected_node(Some(slot));
+            state.sync_parameters_pane();
+            state.rebuild_positions();
+            state.apply_layout();
+            assert_eq!(state.param_editor_selected(), Some(slot));
+        };
+        let row_center = |state: &State, pname: &str| -> (f32, f32) {
+            let child = &state.current_dir().children[state.param_editor_selected().unwrap()];
+            let rows = crate::app::param_display(&child.params);
+            let i = rows.iter().position(|r| r.0 == pname).expect(pname);
+            let rects = state.param_row_rects();
+            let (x, y, w, h) = rects[i];
+            (x + w * 0.5, y + h * 0.5)
+        };
+        show(&mut state, sphere);
+        let (x, y) = row_center(&state, "Radius");
+        assert_eq!(state.param_row_at(x, y), Some((sphere, "Radius".to_string())));
+        assert_eq!(state.param_row_at(x, state.positions[crate::slots::PARAM_IDX].1 - 5.0), None, "above the pane is no row");
+
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
+        assert!(state.param_menu_open(), "a right press on a row opens its menu");
+        assert!(!state.viewport_menu_open());
+        assert_eq!(state.param_menu_actions, vec![ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression], "nothing copied yet, and the row holds a value");
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });
+
+        // Copy, then paste onto ball's Radius — a sibling, so `../sphere1`.
+        let sphere_id = state.current_dir().children[sphere].id.clone();
+        let ball_id = state.current_dir().children[ball].id.clone();
+        state.run_param_action(&sphere_id, "Radius", ParamMenuAction::CopyParameter);
+        assert_eq!(state.copied_param, Some((sphere_id.clone(), "Radius".to_string())));
+        show(&mut state, ball);
+        let (x, y) = row_center(&state, "Radius");
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
+        assert!(state.param_menu_actions.contains(&ParamMenuAction::PasteRelative), "with a copy, paste is offered");
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });
+        state.run_param_action(&ball_id, "Radius", ParamMenuAction::PasteRelative);
+        let radius = |state: &State, slot: usize| state.current_dir().children[slot].params.iter().find(|p| p.name == "Radius").unwrap().clone();
+        assert_eq!(radius(&state, ball).default, "ch(\"../sphere1/Radius\")");
+        assert!(radius(&state, ball).expr);
+        let rows = crate::app::param_display(&state.current_dir().children[ball].params);
+        assert_eq!(rows.iter().find(|r| r.0 == "Radius").unwrap().2, "text", "the pane shows an expression as text");
+
+        // The reference is live: ball follows sphere1's Radius.
+        state.apply_action(McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
+        let mut err = None;
+        let r = crate::geometry::resolve_param_refs(&state.fs_root, &state.current_dir().children[ball], 0, &mut err).unwrap();
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(r.params.iter().find(|p| p.name == "Radius").unwrap().default, "0.9");
+
+        // Absolute paste, then Delete Expression bakes the current value.
+        state.run_param_action(&ball_id, "Radius", ParamMenuAction::PasteAbsolute);
+        assert_eq!(radius(&state, ball).default, "ch(\"/sphere1/Radius\")");
+        state.run_param_action(&ball_id, "Radius", ParamMenuAction::DeleteExpression);
+        assert_eq!(radius(&state, ball).default, "0.9");
+        assert!(!radius(&state, ball).expr);
+        // Edit Expression flags without changing.
+        state.run_param_action(&ball_id, "Radius", ParamMenuAction::EditExpression);
+        assert_eq!(radius(&state, ball).default, "0.9");
+        assert!(radius(&state, ball).expr);
+
+        // And a reference typed straight into a row (or scripted) becomes one.
+        state.apply_action(McpAction::SetParam { slot: ball, name: "Rows".into(), value: "chi(\"../sphere1/Rows\") * 2".into() }, &mut redraw).unwrap();
+        let rows_p = state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap();
+        assert!(rows_p.expr);
+
+        // A rename carries the paste along.
+        state.apply_action(McpAction::RenameNode { slot: sphere, new_name: "orb".into() }, &mut redraw).unwrap();
+        assert_eq!(state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap().default, "chi(\"../orb/Rows\") * 2");
     }
 
     /// Inside the SECOND instance of a subnet, a child wired to a sibling by
@@ -6025,7 +6360,7 @@ mod tests {
         let a = ref_node("a", "small", "sphere", vec![("Radius", "slider", "0.2")], vec![]);
         let b = ref_node("b", "big", "sphere", vec![("Radius", "slider", "0.7")], vec![]);
         let sw = ref_node("sw", "switch1", "switch",
-            vec![("Input", "text", "small"), ("Input 2", "text", "big"), ("Index", "spinbox", "chi(\"Size\")")], vec![]);
+            vec![("Input", "text", "small"), ("Input 2", "text", "big"), ("Index", "spinbox", "chi(\"../Size\")")], vec![]);
         let out = ref_node("o", "output1", "output", vec![("Input", "text", "switch1")], vec![]);
         let mut a = a; a.geometry_visible = false;
         let mut b = b; b.geometry_visible = false;
@@ -6059,7 +6394,9 @@ mod tests {
         for c in &mut sphere.children {
             c.id = format!("sph_{}", c.name);
         }
-        sphere.params.iter_mut().find(|p| p.name == "Radius").unwrap().default = "ch(\"Radius\")".into();
+        let radius = sphere.params.iter_mut().find(|p| p.name == "Radius").unwrap();
+        radius.default = "ch(\"../Radius\")".into();
+        radius.expr = true;
         let out = ref_node("o", "output1", "output", vec![("Input", "text", "sphere1")], vec![]);
         let sub = ref_node("sub", "subnet1", "node", vec![("Input", "text", ""), ("Radius", "slider", "0.9")], vec![sphere, out]);
         let root = ref_node("root", "root", "node", vec![], vec![sub]);
@@ -6076,11 +6413,11 @@ mod tests {
     fn param_display_shows_references_as_text() {
         use crate::app::ParamDef;
         let params = vec![
-            ParamDef { name: "Radius".into(), label: String::new(), param_type: "slider".into(), default: "ch(\"Radius\")".into(), options: vec![], min: Some(0.0), max: Some(2.0), step: None, show_when: String::new() },
-            ParamDef { name: "Rows".into(), label: String::new(), param_type: "spinbox".into(), default: "16".into(), options: vec![], min: Some(2.0), max: Some(128.0), step: Some(1.0), show_when: String::new() },
+            ParamDef { name: "Radius".into(), label: String::new(), param_type: "slider".into(), default: "ch(\"../Radius\")".into(), options: vec![], min: Some(0.0), max: Some(2.0), step: None, show_when: String::new(), expr: true },
+            ParamDef { name: "Rows".into(), label: String::new(), param_type: "spinbox".into(), default: "16".into(), options: vec![], min: Some(2.0), max: Some(128.0), step: Some(1.0), show_when: String::new(), expr: false },
         ];
         let rows = crate::app::param_display(&params);
-        assert_eq!(rows[0], ("Radius".to_string(), "ch(\"Radius\")".to_string(), "text".to_string()));
+        assert_eq!(rows[0], ("Radius".to_string(), "ch(\"../Radius\")".to_string(), "text".to_string()));
         assert!(rows[1].2.starts_with("spinbox"));
     }
 
@@ -6300,7 +6637,7 @@ mod tests {
         use crate::app::ParamDef;
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
-        let param = |n: &str, v: &str| ParamDef { name: n.into(), label: String::new(), param_type: "text".into(), default: v.into(), options: vec![], min: None, max: None, step: None, show_when: String::new() };
+        let param = |n: &str, v: &str| ParamDef { name: n.into(), label: String::new(), param_type: "text".into(), default: v.into(), options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false };
         let meta = ref_node("m", "meta", "meta", vec![("Point Markers", "toggle", "true")], vec![]);
         let mut native = ref_node("old-id", "embryo1", "embryo", vec![], vec![meta]);
         native.params = vec![param("Input", ""), param("Method", "Scatter"), param("Scatter Count", "150"), param("Radius", "0.7"), param("Base Resolution", "16")];
@@ -6349,7 +6686,7 @@ mod tests {
                         min: None,
                         max: None,
                         step: None,
-                        show_when: String::new(),
+                        show_when: String::new(), expr: false,
                     })
                     .collect(),
                 geometry_visible: true,
@@ -6967,7 +7304,7 @@ mod tests {
                 min: None,
                 max: None,
                 step: None,
-                show_when: String::new(),
+                show_when: String::new(), expr: false,
             });
 
         let (g, err) = eval_node(&root, "distance 1");
@@ -7801,7 +8138,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 })
                 .collect(),
             geometry_visible: true,
@@ -7845,7 +8182,7 @@ mod tests {
                     min: None,
                     max: None,
                     step: None,
-                    show_when: String::new(),
+                    show_when: String::new(), expr: false,
                 })
                 .collect(),
             geometry_visible: true,

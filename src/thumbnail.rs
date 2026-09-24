@@ -29,6 +29,7 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
     // scene shows what opening it would show.
     let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
     proj.sanitize_node_names();
+    proj.migrate_param_refs();
     crate::app::merge_template_defs(&mut proj.root, &templates);
 
     let mut ocl_error = None;

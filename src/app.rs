@@ -107,6 +107,14 @@ pub struct ParamDef {
     /// stating that directly is easier to get right than stating its negation.
     #[serde(default)]
     pub show_when: String,
+    /// Whether `default` is an EXPRESSION to evaluate rather than a value —
+    /// `ch("../sphere1/Radius") * 2`, `$F / 24` (see `expr.rs`). A flag and
+    /// not a guess about the text, because a kernel's Code contains `chf(`,
+    /// a node name is an identifier and `0.5` parses as an expression too;
+    /// Houdini makes the same choice. The instance owns it with the value:
+    /// the template merge never touches it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expr: bool,
 }
 
 fn default_param_type() -> String { "string".to_string() }
@@ -343,7 +351,17 @@ pub struct Project {
     pub root: FsNode,
     #[serde(default)]
     pub view_state: ProjectViewState,
+    /// The file format this project was saved in, so a load can tell an old
+    /// meaning from a new one. 0 (absent) is every save before 2026-09-24,
+    /// when a bare `ch("Name")` meant the PARENT's parameter; 1 is Houdini's
+    /// semantics, where it means the node's own — `migrate_param_refs` is
+    /// the step between them, and it must not run twice.
+    #[serde(default)]
+    pub format: u32,
 }
+
+/// The format `Project` saves in — see its `format` field.
+pub const PROJECT_FORMAT: u32 = 1;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -360,6 +378,22 @@ pub enum NodeMenuAction {
 }
 
 /// The 3D viewport's right-click context menu actions.
+/// One entry in a parameter row's right-click menu — Houdini's Copy
+/// Parameter / Paste Relative References, and the switch between a value
+/// and an expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamMenuAction {
+    CopyParameter,
+    PasteRelative,
+    PasteAbsolute,
+    /// Keep the value, but as an expression: the row turns to text so
+    /// arithmetic can be typed around it.
+    EditExpression,
+    /// Houdini's Delete Channels: the expression's CURRENT value, as a value.
+    DeleteExpression,
+    Separator,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewportMenuAction {
     /// Move the active camera so the visible node geometry fills the view.
@@ -495,10 +529,10 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
         } else {
             p.default.clone()
         };
-        // A value that is a reference (`ch("Radius")`) is shown as the text
+        // An expression (`ch("../sphere1/Radius") * 2`) is shown as the text
         // it is: a slider cannot hold it, and a spinbox would show zero and
         // then write zero back over it.
-        let ptype = if crate::geometry::parse_param_ref(&value).is_some() {
+        let ptype = if p.expr {
             "text".to_string()
         } else if p.param_type == "slider" {
             let min = p.min.unwrap_or(0.0);
@@ -691,6 +725,53 @@ impl Project {
     }
 }
 
+impl Project {
+    /// Format 0 → 1: every parameter that was a pre-expression reference —
+    /// the whole value `ch("Name")`, `chf` / `chi` / `chb`, with `../` per
+    /// level — becomes an expression with Houdini's semantics. A bare name
+    /// meant the parent, so it gains `../`; an explicit `../` already meant
+    /// what it means now. Runs beside `sanitize_node_names` on every load
+    /// path, and on a format-1 file does nothing, which is what the version
+    /// is for: a bare name in a NEW file is the node's own parameter and
+    /// must not be rewritten.
+    pub fn migrate_param_refs(&mut self) {
+        if self.format >= PROJECT_FORMAT {
+            return;
+        }
+        fn walk(node: &mut FsNode) {
+            for p in &mut node.params {
+                if !p.expr {
+                    if let Some(new) = crate::expr::migrate_legacy_ref(&p.default) {
+                        p.default = new;
+                        p.expr = true;
+                    }
+                }
+            }
+            for c in &mut node.children {
+                walk(c);
+            }
+        }
+        walk(&mut self.root);
+        self.format = PROJECT_FORMAT;
+    }
+}
+
+/// A template's parameters whose defaults READ as expressions become ones:
+/// `chf("../Radius")` in `embryo.json` is a reference by any reading, and a
+/// template author should not have to say `"expr": true` beside it (though
+/// they may). `looks_like_expression` is the inference, and it is the same
+/// one a typed or scripted value gets — arithmetic alone is not enough.
+pub fn infer_template_exprs(node: &mut FsNode) {
+    for p in &mut node.params {
+        if !p.expr && crate::expr::looks_like_expression(&p.default) {
+            p.expr = true;
+        }
+    }
+    for c in &mut node.children {
+        infer_template_exprs(c);
+    }
+}
+
 pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     // The retired per-node `meta` children go first, before any matching:
     // the merge compares a subnet instance's children against its template's
@@ -850,7 +931,10 @@ pub fn load_fs_tree() -> FsNode {
         for path in paths {
             match fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<FsNode>(&content) {
-                    Ok(node) => raw_nodes.push(node),
+                    Ok(mut node) => {
+                        infer_template_exprs(&mut node);
+                        raw_nodes.push(node);
+                    }
                     Err(e) => eprintln!(
                         "cce-designer: dropping node template {} — it does not parse: {e}",
                         path.display()
@@ -893,6 +977,10 @@ pub fn load_fs_tree() -> FsNode {
                     for override_p in &child.params {
                         if let Some(base_p) = resolved_child.params.iter_mut().find(|p| p.name == override_p.name) {
                             base_p.default = override_p.default.clone();
+                            // The flag travels with the value: an override
+                            // that is a reference (the Embryo's sphere1
+                            // reading `chf("../Radius")`) stays one.
+                            base_p.expr = override_p.expr;
                         }
                     }
                     if depth < 8 {
@@ -1575,6 +1663,15 @@ pub struct State {
     /// machinery as the node menu; this flag says the open menu is OURS).
     pub viewport_menu_active: bool,
     pub viewport_menu_actions: Vec<ViewportMenuAction>,
+    /// A parameter row's right-click menu — the same thread-local; the
+    /// target is (node id, parameter name) rather than a slot and a row, so
+    /// it holds across a re-layout of the pane.
+    pub param_menu_active: bool,
+    pub param_menu_actions: Vec<ParamMenuAction>,
+    pub param_menu_target: Option<(String, String)>,
+    /// Copy Parameter's clipboard: (node id, parameter name). An id, so a
+    /// rename between the copy and the paste still pastes the right path.
+    pub copied_param: Option<(String, String)>,
     /// The network editor's right-click menu — the same thread-local again,
     /// with the flag saying the open menu is this one.
     pub network_menu_active: bool,
@@ -2805,6 +2902,12 @@ impl State {
                             if p.default != *u_val {
                                 p.default = u_val.clone();
                                 param_changed = true;
+                                // A reference typed into a plain row becomes
+                                // an expression — the one way to make one
+                                // without the row menu.
+                                if !p.expr && crate::expr::looks_like_expression(&p.default) {
+                                    p.expr = true;
+                                }
                                 if p.param_type == "button" && p.default == "clicked" {
                                     triggered_buttons.push(p.name.clone());
                                     p.default = "".to_string();
@@ -3823,6 +3926,194 @@ impl State {
         self.sync_parameters_pane();
     }
 
+    /// The parameter row under a window point in the params pane: the slot
+    /// the pane shows and the parameter's NAME — the row's display key
+    /// resolved back, as the write-back resolves it. None off a row, off the
+    /// pane, or on a section header.
+    pub fn param_row_at(&self, x: f32, y: f32) -> Option<(usize, String)> {
+        if !self.show_parameters || self.is_detached_network {
+            return None;
+        }
+        let (px, py, pw, ph) = self.positions[crate::slots::PARAM_IDX];
+        if x < px || x > px + pw || y < py || y > py + ph {
+            return None;
+        }
+        let slot = self.param_editor_selected()?;
+        let rects = self.param_row_rects();
+        let child = self.param_editor_dir().children.get(slot)?;
+        let rows = param_display(&child.params);
+        let i = rects
+            .iter()
+            .position(|&(rx, ry, rw, rh)| rh > 0.0 && x >= rx && x <= rx + rw && y >= ry && y <= ry + rh)?;
+        let row = rows.get(i)?;
+        if row.2 == "section" {
+            return None;
+        }
+        let p = child.params.iter().find(|p| {
+            let key = if p.label.is_empty() { &p.name } else { &p.label };
+            *key == row.0
+        })?;
+        Some((slot, p.name.clone()))
+    }
+
+    /// The params pane's row rects, index-parallel to `param_display` of the
+    /// node it shows — the one geometry the row menu's hit test and the
+    /// expression tint both read.
+    pub fn param_row_rects(&self) -> Vec<(f32, f32, f32, f32)> {
+        self.slots.param.as_any().downcast_ref::<ParametersBg>().map(|pb| pb.get_param_rects()).unwrap_or_default()
+    }
+
+    /// Open a parameter row's right-click menu.
+    fn open_param_context_menu(&mut self, slot: usize, pname: String) {
+        let (node_id, is_expr) = {
+            let child = &self.param_editor_dir().children[slot];
+            (child.id.clone(), child.params.iter().find(|p| p.name == pname).is_some_and(|p| p.expr))
+        };
+        let mut options = vec!["Copy Parameter".to_string()];
+        let mut actions = vec![ParamMenuAction::CopyParameter];
+        if self.copied_param.is_some() {
+            options.push("Paste Relative Reference".to_string());
+            actions.push(ParamMenuAction::PasteRelative);
+            options.push("Paste Absolute Reference".to_string());
+            actions.push(ParamMenuAction::PasteAbsolute);
+        }
+        options.push("-".to_string());
+        actions.push(ParamMenuAction::Separator);
+        if is_expr {
+            options.push("Delete Expression".to_string());
+            actions.push(ParamMenuAction::DeleteExpression);
+        } else {
+            options.push("Edit Expression".to_string());
+            actions.push(ParamMenuAction::EditExpression);
+        }
+        let target = self.slots.get_dyn(crate::slots::PARAM_IDX).base().id();
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        self.param_menu_active = true;
+        self.param_menu_actions = actions;
+        self.param_menu_target = Some((node_id, pname));
+    }
+
+    pub fn param_menu_open(&self) -> bool {
+        cce_ui::widget::context_menu::is_visible() && self.param_menu_active
+    }
+
+    fn close_param_menu(&mut self) {
+        cce_ui::widget::context_menu::hide();
+        self.param_menu_active = false;
+        self.param_menu_actions.clear();
+        self.param_menu_target = None;
+    }
+
+    /// Route a left press while the row menu is open — same contract as
+    /// `handle_viewport_menu_click`.
+    fn handle_param_menu_click(&mut self) -> bool {
+        if !self.param_menu_open() {
+            return false;
+        }
+        if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
+            let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
+            let picked = idx.and_then(|i| self.param_menu_actions.get(i).copied());
+            let target = self.param_menu_target.clone();
+            self.close_param_menu();
+            if let (Some(action), Some((node_id, pname))) = (picked, target) {
+                self.run_param_action(&node_id, &pname, action);
+            }
+            return true;
+        }
+        self.close_param_menu();
+        false
+    }
+
+    /// One row-menu action on one parameter, by node id and name — the
+    /// entry the menu, a test and any future command share.
+    pub fn run_param_action(&mut self, node_id: &str, pname: &str, action: ParamMenuAction) {
+        let node_label = crate::geometry::node_path_names(&self.fs_root, node_id)
+            .map(|n| format!("/{}", n.join("/")))
+            .unwrap_or_else(|| node_id.to_string());
+        match action {
+            ParamMenuAction::Separator => return,
+            ParamMenuAction::CopyParameter => {
+                self.copied_param = Some((node_id.to_string(), pname.to_string()));
+                self.update_status_text(&format!("Copied {node_label}/{pname} — paste it as a reference on another parameter."));
+                return;
+            }
+            ParamMenuAction::PasteRelative | ParamMenuAction::PasteAbsolute => {
+                let Some((src_id, src_p)) = self.copied_param.clone() else {
+                    self.update_status_text("Nothing copied — Copy Parameter first.");
+                    return;
+                };
+                let path = if action == ParamMenuAction::PasteRelative {
+                    crate::geometry::relative_ref_path(&self.fs_root, node_id, &src_id)
+                } else {
+                    crate::geometry::absolute_ref_path(&self.fs_root, &src_id)
+                };
+                let Some(path) = path else {
+                    self.update_status_text("The copied parameter's node is gone.");
+                    return;
+                };
+                // `chs` for a row that holds text, `ch` for one that holds a
+                // number — by the TARGET, since that is what the value has
+                // to fit: a choice pasted onto a switch's Index wants the
+                // option's index, pasted onto a text row its name.
+                let target_type = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+                    .and_then(|n| n.params.iter().find(|p| p.name == pname))
+                    .map(|p| p.param_type.clone())
+                    .unwrap_or_default();
+                let func = if target_type == "text" || target_type == "string" || target_type.starts_with("choice") { "chs" } else { "ch" };
+                let full = if path.is_empty() { src_p.clone() } else { format!("{path}/{src_p}") };
+                let value = format!("{func}(\"{full}\")");
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                    .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
+                {
+                    p.default = value.clone();
+                    p.expr = true;
+                }
+                self.update_status_text(&format!("{pname} = {value}"));
+            }
+            ParamMenuAction::EditExpression => {
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                    .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
+                {
+                    p.expr = true;
+                }
+                self.update_status_text(&format!("{pname} is an expression — type ch(\"../node/Param\"), $F, arithmetic."));
+            }
+            ParamMenuAction::DeleteExpression => {
+                // The expression's value NOW becomes the value, as Houdini's
+                // Delete Channels keeps what the channel was showing. One that
+                // does not evaluate keeps its text, no longer as an expression.
+                let frame = self.sim_frame();
+                let evaluated = crate::viewer_state::find_node_by_id(&self.fs_root, node_id).and_then(|node| {
+                    let mut err = None;
+                    let resolved = crate::geometry::resolve_param_refs(&self.fs_root, node, frame, &mut err)?;
+                    resolved.params.into_iter().find(|p| p.name == pname).map(|p| (p.default, err))
+                });
+                let mut note = None;
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                    .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
+                {
+                    p.expr = false;
+                    match evaluated {
+                        Some((value, None)) => {
+                            p.default = value.clone();
+                            note = Some(format!("{pname} = {value}, no longer an expression."));
+                        }
+                        Some((_, Some(e))) => note = Some(format!("{pname} kept as text — it did not evaluate: {e}")),
+                        None => {}
+                    }
+                }
+                if let Some(n) = note {
+                    self.update_status_text(&n);
+                }
+            }
+        }
+        // The SetParam resync sequence.
+        self.sync_grid_settings();
+        self.sync_nodes();
+        self.rebuild_scene_geometry();
+        self.sync_parameters_pane();
+    }
+
     /// Open the viewport right-click context menu at the cursor.
     fn open_viewport_context_menu(&mut self) {
         let mut options = vec!["Frame All".to_string(), "View 1:1".to_string()];
@@ -3853,7 +4144,7 @@ impl State {
         self.viewport_menu_actions = actions;
     }
 
-    fn viewport_menu_open(&self) -> bool {
+    pub fn viewport_menu_open(&self) -> bool {
         cce_ui::widget::context_menu::is_visible() && self.viewport_menu_active
     }
 
@@ -4501,6 +4792,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             if let Ok(content) = fs::read_to_string(&default_proj_path) {
                 if let Ok(mut proj) = serde_json::from_str::<Project>(&content) {
                     proj.sanitize_node_names();
+                    proj.migrate_param_refs();
                     merge_template_defs(&mut proj.root, &node_templates);
                     loaded_project = Some(proj);
                 }
@@ -4702,6 +4994,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             node_menu_actions: Vec::new(),
             viewport_menu_active: false,
             viewport_menu_actions: Vec::new(),
+            param_menu_active: false,
+            param_menu_actions: Vec::new(),
+            param_menu_target: None,
+            copied_param: None,
             network_menu_active: false,
             network_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
@@ -7342,6 +7638,29 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 return true;
                             }
                         }
+                        // The parameter row menu, same contract again.
+                        if self.param_menu_open() {
+                            if *button == MouseButton::Left && self.handle_param_menu_click() {
+                                return true;
+                            }
+                            self.close_param_menu();
+                            if *button == MouseButton::Left {
+                                return true;
+                            }
+                        }
+                        // A right press on a parameter row opens its menu,
+                        // ahead of everything else a press in that pane could
+                        // mean — the pane's widgets have no right-click of
+                        // their own to lose.
+                        if *button == MouseButton::Right {
+                            if let Some((slot, pname)) = self.param_row_at(self.cursor_x, self.cursor_y) {
+                                self.close_node_menu();
+                                self.close_viewport_menu();
+                                self.close_network_menu();
+                                self.open_param_context_menu(slot, pname);
+                                return true;
+                            }
+                        }
 
                         if *button == MouseButton::Left && self.circular_network_pane {
                             // A border press focuses the pane and consumes. It used to also arm
@@ -7493,6 +7812,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             self.close_node_menu();
                             self.close_viewport_menu();
                             self.close_network_menu();
+                            self.close_param_menu();
                             if self.cursor_in_viewport() && !in_circle_network_pane {
                                 self.open_viewport_context_menu();
                                 return true;
@@ -8128,6 +8448,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             self.close_node_menu();
                         } else if self.viewport_menu_open() {
                             self.close_viewport_menu();
+                        } else if self.param_menu_open() {
+                            self.close_param_menu();
                         } else if self.network_menu_open() {
                             self.close_network_menu();
                         } else {

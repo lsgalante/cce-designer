@@ -145,15 +145,18 @@
    "params": [
     {
      "name": "Radius",
-     "default": "chf(\"Radius\")"
+     "default": "chf(\"../Radius\")",
+     "expr": true
     },
     {
      "name": "Rows",
-     "default": "chi(\"Base Resolution\")"
+     "default": "chi(\"../Base Resolution\")",
+     "expr": true
     },
     {
      "name": "Columns",
-     "default": "chi(\"Base Resolution\")"
+     "default": "chi(\"../Base Resolution\")",
+     "expr": true
     },
     {
      "name": "Center Y",
@@ -180,7 +183,8 @@
     },
     {
      "name": "Index",
-     "default": "chi(\"Source\")"
+     "default": "chi(\"../Source\")",
+     "expr": true
     }
    ],
    "geometry_visible": false
@@ -203,31 +207,38 @@
     },
     {
      "name": "Points",
-     "default": "chi(\"Scatter Count\")"
+     "default": "chi(\"../Scatter Count\")",
+     "expr": true
     },
     {
      "name": "Seed",
-     "default": "chf(\"Scatter Seed\")"
+     "default": "chf(\"../Scatter Seed\")",
+     "expr": true
     },
     {
      "name": "Relax Points",
-     "default": "chb(\"Relax Points\")"
+     "default": "chb(\"../Relax Points\")",
+     "expr": true
     },
     {
      "name": "Relax Iterations",
-     "default": "chi(\"Scatter Relax Iterations\")"
+     "default": "chi(\"../Scatter Relax Iterations\")",
+     "expr": true
     },
     {
      "name": "Scale Radii By",
-     "default": "chf(\"Scale Radii By\")"
+     "default": "chf(\"../Scale Radii By\")",
+     "expr": true
     },
     {
      "name": "Use Max Relax Radius",
-     "default": "chb(\"Use Max Relax Radius\")"
+     "default": "chb(\"../Use Max Relax Radius\")",
+     "expr": true
     },
     {
      "name": "Max Relax Radius",
-     "default": "chf(\"Scatter Relax Radius\")"
+     "default": "chf(\"../Scatter Relax Radius\")",
+     "expr": true
     },
     {
      "name": "Markers",
@@ -269,7 +280,8 @@
     },
     {
      "name": "Index",
-     "default": "chi(\"Method\")"
+     "default": "chi(\"../Method\")",
+     "expr": true
     }
    ],
    "geometry_visible": false
@@ -292,15 +304,18 @@
     },
     {
      "name": "Iterations",
-     "default": "chi(\"Relax Iterations\")"
+     "default": "chi(\"../Relax Iterations\")",
+     "expr": true
     },
     {
      "name": "Radius",
-     "default": "chf(\"Relax Radius\")"
+     "default": "chf(\"../Relax Radius\")",
+     "expr": true
     },
     {
      "name": "In 3D Space",
-     "default": "chb(\"Relax in 3D Space\")"
+     "default": "chb(\"../Relax in 3D Space\")",
+     "expr": true
     }
    ],
    "geometry_visible": false
@@ -319,7 +334,8 @@
     },
     {
      "name": "Depth",
-     "default": "chi(\"Subdivision Depth\")"
+     "default": "chi(\"../Subdivision Depth\")",
+     "expr": true
     }
    ],
    "geometry_visible": false

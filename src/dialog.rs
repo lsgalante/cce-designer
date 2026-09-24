@@ -1301,7 +1301,7 @@ fn shaped(
         min,
         max,
         step,
-        show_when: String::new(),
+        show_when: String::new(), expr: false,
     }
 }
 
