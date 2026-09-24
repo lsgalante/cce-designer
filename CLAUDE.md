@@ -921,6 +921,18 @@ It scrolls the FAR cell into view (`keep_cell_in_view`, which
 is not moving, and following it would scroll the wrong end of the selection
 into view.
 
+**Frame All fits the name labels, not just the bodies.** A label hangs off
+its node's right edge (`Graph::node_labels`: an 8 px gap and a 14 px font,
+both scaled with the body against its 80 px baseline, the font clamped to
+6..48), so framing the bodies alone cut the right-hand column's names off.
+`State::node_extent` repeats that rule — the widget offers no query for it —
+using the widget's own `TextLabel::estimate_width`, the number it culls the
+label against, so the two cannot disagree. The fit is iterated rather than
+solved once, because the extent is not linear in the zoom: the font floor and
+the width's rounding mean a fit computed at 100% overstates what a small zoom
+saves. `frame_all_keeps_the_node_labels_inside_the_pane` is the check, and it
+fails on the body-only fit.
+
 Two chords moved to make room, both caught by `command::conflicts` rather than
 by hand: `edit_handles` from `Ctrl+H` to `Ctrl+Shift+H` (the ctrl+hjkl family
 owns those now), and `f` now frames the CURSOR where it used to frame

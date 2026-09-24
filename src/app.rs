@@ -6239,93 +6239,96 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         true
     }
 
-    /// Fit every node in the current level into the network pane.
+    /// The extent a node takes up on the sheet at a grid geometry, relative
+    /// to the (0, 0) crossing — `(x_min, x_max, y_min, y_max)`. The body,
+    /// AND the name label the widget draws to its right: framing the bodies
+    /// alone left the labels of the right-hand column cut off, which is what
+    /// Frame All exists to avoid.
+    ///
+    /// The label's placement is `Graph::node_labels`'s rule, repeated here
+    /// because the widget offers no query for it: an 8 px gap and a 14 px
+    /// font, both scaled with the body against its 80 px baseline, the font
+    /// clamped to 6..48, the width the widget's own estimate — the number it
+    /// culls the label against, so the two cannot disagree about where a
+    /// label ends. The label is centred on the body and shorter than it at
+    /// every zoom Frame All can choose, but its own height is folded in
+    /// anyway rather than argued away.
+    fn node_extent(name: &str, (col, row): (f32, f32), g: &GridGeometry) -> (f32, f32, f32, f32) {
+        let x_min = col * g.pitch_x - g.node_w * 0.5;
+        let y_min = row * g.pitch_y - g.node_h * 0.5;
+        let scale_f = g.node_w / 80.0;
+        let font_size = (14.0 * scale_f).clamp(6.0, 48.0);
+        let label_w = TextLabel::estimate_width(name, font_size);
+        let cy = row * g.pitch_y;
+        (
+            x_min,
+            x_min + g.node_w + 8.0 * scale_f + label_w,
+            y_min.min(cy - font_size * 0.5),
+            (y_min + g.node_h).max(cy + font_size * 0.5),
+        )
+    }
+
+    /// The union of `node_extent` over the current level, or None when the
+    /// level is empty.
+    fn level_extent(&self, g: &GridGeometry) -> Option<(f32, f32, f32, f32)> {
+        self.current_dir().children.iter().fold(None, |acc, child| {
+            let (x0, x1, y0, y1) = Self::node_extent(&child.name, child.position, g);
+            Some(match acc {
+                None => (x0, x1, y0, y1),
+                Some((ax0, ax1, ay0, ay1)) => (ax0.min(x0), ax1.max(x1), ay0.min(y0), ay1.max(y1)),
+            })
+        })
+    }
+
+    /// Fit every node in the current level — body and name label — into the
+    /// network pane.
     ///
     /// Extracted verbatim from the `f` key's inline arm so the command
     /// registry and the key run the same code — the point of the registry
     /// being that there is one implementation behind every way of asking.
     pub(crate) fn frame_all_nodes(&mut self) {
-            let active_nodes = self.current_dir().children.len();
-            // The framing baseline is the configured geometry (100% zoom),
-            // scaled down until everything fits — Frame All never zooms in
-            // past 100%.
-            let base = configured_grid_geometry();
-            if active_nodes == 0 {
-                self.set_grid_geometry(base);
-                self.pan_x = 20.0;
-                self.pan_y = 20.0;
-            } else {
-                // Node bodies' bounds, relative to the (0, 0) intersection,
-                // at the baseline.
-                let (base_px, base_py, base_w, base_h) = (base.pitch_x, base.pitch_y, base.node_w, base.node_h);
-                let mut b_xmin = f32::MAX;
-                let mut b_xmax = f32::MIN;
-                let mut b_ymin = f32::MAX;
-                let mut b_ymax = f32::MIN;
+        // The framing baseline is the configured geometry (100% zoom),
+        // scaled down until everything fits — Frame All never zooms in
+        // past 100%.
+        let base = configured_grid_geometry();
+        let at = |f: f32| GridGeometry {
+            pitch_x: base.pitch_x * f,
+            pitch_y: base.pitch_y * f,
+            node_w: base.node_w * f,
+            node_h: base.node_h * f,
+        };
+        let (_px, _py, pw, ph) = self.positions[CONTENT_IDX];
+        let padding = 40.0;
+        let padded_w = (pw - 2.0 * padding).max(10.0);
+        let padded_h = (ph - 2.0 * padding).max(10.0);
 
-                for slot_idx in 0..active_nodes {
-                    let (col, row) = self.current_dir().children[slot_idx].position;
-                    let x_min = col * base_px - base_w * 0.5;
-                    let x_max = x_min + base_w;
-                    let y_min = row * base_py - base_h * 0.5;
-                    let y_max = y_min + base_h;
-
-                    if x_min < b_xmin { b_xmin = x_min; }
-                    if x_max > b_xmax { b_xmax = x_max; }
-                    if y_min < b_ymin { b_ymin = y_min; }
-                    if y_max > b_ymax { b_ymax = y_max; }
+        if self.level_extent(&base).is_none() {
+            self.set_grid_geometry(base);
+            self.pan_x = 20.0;
+            self.pan_y = 20.0;
+        } else {
+            // The extent is not linear in the zoom: a label's font stops
+            // shrinking at 6 px and its width is rounded up, so the fit
+            // computed at 100% overstates how much a small zoom saves. Each
+            // pass refits at the zoom the last one chose; the factor only
+            // ever falls, and a pass that changes nothing ends it.
+            let mut f = 1.0f32;
+            for _ in 0..4 {
+                let (x0, x1, y0, y1) = self.level_extent(&at(f)).unwrap();
+                let fit = (padded_w / (x1 - x0)).min(padded_h / (y1 - y0)).min(1.0);
+                if fit >= 1.0 {
+                    break;
                 }
-
-                let w_base = b_xmax - b_xmin;
-                let h_base = b_ymax - b_ymin;
-
-                 let (_px, _py, pw, ph) = self.positions[CONTENT_IDX];
-                 let viewport_w = pw;
-                 let viewport_h = ph;
-
-                let padding = 40.0;
-                let padded_w = (viewport_w - 2.0 * padding).max(10.0);
-                let padded_h = (viewport_h - 2.0 * padding).max(10.0);
-
-                let fx = padded_w / w_base;
-                let fy = padded_h / h_base;
-                let mut f = fx.min(fy);
-
-                f = f.min(1.0).max(MIN_PITCH_X / base_px);
-
-                self.set_grid_geometry(base);
-                self.scale_grid_geometry(f);
-                let (node_w, node_h) = self.node_size();
-
-                let mut actual_xmin = f32::MAX;
-                let mut actual_xmax = f32::MIN;
-                let mut actual_ymin = f32::MAX;
-                let mut actual_ymax = f32::MIN;
-
-                for slot_idx in 0..active_nodes {
-                    let (col, row) = self.current_dir().children[slot_idx].position;
-                    let x_min = col * self.grid_pitch_x - node_w * 0.5;
-                    let x_max = x_min + node_w;
-                    let y_min = row * self.grid_pitch_y - node_h * 0.5;
-                    let y_max = y_min + node_h;
-
-                    if x_min < actual_xmin { actual_xmin = x_min; }
-                    if x_max > actual_xmax { actual_xmax = x_max; }
-                    if y_min < actual_ymin { actual_ymin = y_min; }
-                    if y_max > actual_ymax { actual_ymax = y_max; }
-                }
-
-                let actual_w = actual_xmax - actual_xmin;
-                let actual_h = actual_ymax - actual_ymin;
-
-                self.pan_x = (viewport_w - actual_w) / 2.0 - actual_xmin;
-                self.pan_y = (viewport_h - actual_h) / 2.0 - actual_ymin;
+                f *= fit;
             }
+            f = f.max(MIN_PITCH_X / base.pitch_x);
 
-            self.sync_grid_settings();
-            self.rebuild_positions();
-            self.apply_layout();
-            self.update_panel_bounds();
+            self.set_grid_geometry(at(f));
+            let (x0, x1, y0, y1) = self.level_extent(&at(f)).unwrap();
+            self.pan_x = (pw - (x1 - x0)) / 2.0 - x0;
+            self.pan_y = (ph - (y1 - y0)) / 2.0 - y0;
+        }
+
         self.sync_grid_settings();
         self.rebuild_positions();
         self.apply_layout();

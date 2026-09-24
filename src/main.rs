@@ -9878,4 +9878,75 @@ mod tests {
             }
         }
     }
+    /// Frame All fits the name labels, not just the bodies. A node's label
+    /// hangs off its right edge — at 100% zoom, `8 + estimate_width(name,
+    /// 14)` px past the body — so a level whose bodies fit the pane with a
+    /// long name on the right-hand node used to frame with that name cut
+    /// off. The pane's right edge is where the label has to end now.
+    #[test]
+    fn frame_all_keeps_the_node_labels_inside_the_pane() {
+        use cce_ui::widget::TextLabel;
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        // Clear the bundled level so only these two nodes are framed.
+        let existing = state.current_dir().children.len();
+        for slot in (0..existing).rev() {
+            state.delete_node(slot);
+        }
+
+        // The widget's own label rule, spelled out here rather than read
+        // back off the app, since agreeing with the widget is the claim.
+        let label_right = |state: &State, slot: usize| {
+            let child = &state.current_dir().children[slot];
+            let (x, _y, w, _h) = state.cell_rect(child.position.0 as i32, child.position.1 as i32);
+            let scale_f = w / 80.0;
+            let font_size = (14.0 * scale_f).clamp(6.0, 48.0);
+            x + w + 8.0 * scale_f + TextLabel::estimate_width(&child.name, font_size)
+        };
+        let (px, _py, pw, _ph) = state.positions[crate::slots::CONTENT_IDX];
+        let padding = 40.0;
+
+        let mut redraw = false;
+        let long_name = "a_node_whose_name_runs_well_past_the_edge_of_its_own_body_and_then_some";
+        // Two nodes whose bodies span most of the pane at 100%: the bodies
+        // alone fit, the right-hand label does not.
+        let cols = ((pw - 2.0 * padding) / 140.0).floor() - 2.0;
+        for (name, x) in [("a", 0.0), (long_name, cols)] {
+            state
+                .apply_action(
+                    crate::app::McpAction::AddNode { template_name: "Plane".into(), name: Some(name.into()), x, y: 0.0 },
+                    &mut redraw,
+                )
+                .unwrap();
+        }
+        state.rebuild_positions();
+        state.apply_layout();
+        let long = state.current_dir().children.iter().position(|c| c.name == long_name).expect("long node");
+
+        state.frame_all_nodes();
+
+        let right = label_right(&state, long);
+        assert!(
+            right <= px + pw - padding + 0.5,
+            "the long label ends at {right:.1}, past the pane's padded right edge {:.1} (pitch {:.1})",
+            px + pw - padding,
+            state.grid_pitch_x
+        );
+        let (ax, _, _, _) = state.cell_rect(0, 0);
+        assert!(ax >= px + padding - 0.5, "the left-hand body starts at {ax:.1}, inside the padding");
+        // The fit is by the labels: the bodies alone would have fitted at
+        // 100%, so the zoom had to come down for the name.
+        assert!(state.grid_pitch_x < 140.0, "the zoom stayed at 100% ({}), so the label was not counted", state.grid_pitch_x);
+
+        // And a level whose labels already fit frames at 100% — the label
+        // rule must not shrink a level that has room.
+        state.apply_action(crate::app::McpAction::RenameNode { slot: long, new_name: "b".into() }, &mut redraw).unwrap();
+        state.frame_all_nodes();
+        assert!((state.grid_pitch_x - 140.0).abs() < 0.01, "short labels fit at 100%, got pitch {}", state.grid_pitch_x);
+        assert!(label_right(&state, long) <= px + pw - padding + 0.5);
+    }
 }
