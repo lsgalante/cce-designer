@@ -5463,7 +5463,15 @@ pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vert
                 let p10 = sp(theta1, phi0);
                 let p11 = sp(theta1, phi1);
                 let p01 = sp(theta0, phi1);
-                for p in [p00, p10, p11, p00, p11, p01] {
+                // Counter-clockwise seen from OUTSIDE, as `sphere_detail`
+                // winds and as the raster fill's back-face cull expects.
+                // This kept the retired soup's inward order until
+                // 2026-09-24, so the cull drew the INSIDE of each marker's
+                // far half and nothing of its near half — and a marker on a
+                // surface showed only where that far half poked out of the
+                // mesh, vanishing from the views where it did not.
+                // `point_markers_wind_outward` holds the sign.
+                for p in [p00, p11, p10, p00, p01, p11] {
                     out.push(Vertex3D { position: p, color });
                 }
             }

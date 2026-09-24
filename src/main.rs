@@ -2343,6 +2343,46 @@ mod tests {
         assert_eq!(markers.len() % 240, 0);
     }
 
+    /// A marker sphere winds counter-clockwise seen from OUTSIDE — the
+    /// raster fill's culling convention, and what `sphere_detail` does.
+    /// Until 2026-09-24 `points_vertices` kept the retired soup's inward
+    /// winding, so the cull threw away the near half of every marker and
+    /// drew the inside of the far half instead: a marker on a surface was
+    /// visible only where that far half poked out of the mesh, which is
+    /// what "the group marker disappears when I look up at it from below"
+    /// was. The signed volume by the divergence theorem is the test — it
+    /// is positive exactly when every facet faces outward.
+    #[test]
+    fn point_markers_wind_outward() {
+        let centre = [0.3f32, -0.2, 0.7];
+        let src = [crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
+        let r = 0.1f32;
+        let markers = crate::geometry::points_vertices(&src, r, [1.0; 3]);
+        assert_eq!(markers.len() % 3, 0);
+        let c = glam::Vec3::from_array(centre);
+        let mut volume = 0.0f32;
+        let mut inward_facets = 0;
+        for tri in markers.chunks(3) {
+            let a = glam::Vec3::from_array(tri[0].position) - c;
+            let b = glam::Vec3::from_array(tri[1].position) - c;
+            let d = glam::Vec3::from_array(tri[2].position) - c;
+            volume += a.dot(b.cross(d)) / 6.0;
+            // Every facet's plain cross product must point away from the centre.
+            let n = (b - a).cross(d - a);
+            if n.dot(a + b + d) < 0.0 {
+                inward_facets += 1;
+            }
+        }
+        let expected = 4.0 / 3.0 * std::f32::consts::PI * r.powi(3);
+        assert!(volume > 0.0, "marker winds inward: signed volume {volume}");
+        // An inscribed 4x10 polyhedron holds about 80% of the true sphere.
+        assert!(
+            volume > expected * 0.6 && volume < expected,
+            "signed volume {volume} is not a sphere of radius {r} ({expected})"
+        );
+        assert_eq!(inward_facets, 0, "{inward_facets} facets face into the marker");
+    }
+
     /// The Attribute node's three operations over a sphere: Create tags every
     /// vertex, Modify combines into existing tags (and reaches the Pos/Col
     /// built-ins), Delete removes them, a Group name restricts the edit to
