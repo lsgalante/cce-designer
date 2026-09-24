@@ -826,7 +826,7 @@ mod tests {
             RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, STATUS_IDX, BREADCRUMB_IDX,
             SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
             NETWORK_PANEL2_IDX, CONTENT2_IDX, BREADCRUMB2_IDX, PAGE_IDX,
-            DIALOG_IDX, DIALOG_PARAMS_IDX,
+            DIALOG_IDX,
         ];
         assert_eq!(roster.len(), WIDGET_COUNT, "roster length vs WIDGET_COUNT");
         for (i, idx) in roster.iter().enumerate() {
@@ -3717,7 +3717,7 @@ mod tests {
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 520.0, height: 420.0 };
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None, truncate_head: false })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), control: None, truncate_head: false })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -3763,7 +3763,7 @@ mod tests {
         d.set_visible(true);
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let rows: Vec<Row> = (0..60)
-            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None, truncate_head: false })
+            .map(|i| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), control: None, truncate_head: false })
             .collect();
         d.set_rows(rows);
         d.set_page(10);
@@ -4489,65 +4489,47 @@ mod tests {
     /// that node was retired). The palette row shows the value; the settings
     /// row edits it.
     #[test]
-    fn test_wireframe_color_row_previews_and_lands_on_settings() {
-        use crate::command::{by_id, Run};
-        use crate::dialog::Tab;
-        let cmd = by_id("wireframe_color").expect("no wireframe_color command");
-        assert_eq!(cmd.label, "Wireframe Color");
-        assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::WireframeColor));
+    fn the_wireframe_colour_is_a_colour_row_of_the_palette() {
+        use crate::dialog::{setting_row_id, Control, Owner, SETTINGS};
+        assert!(crate::command::by_id("wireframe_color").is_none(), "the command went with the Settings half");
 
         let mut state = State::new(false);
         state.wire_color = [0.2, 0.6, 0.9, 0.5];
         state.run_command("command_palette");
+        let id = setting_row_id("Wireframe Color");
         let row = state
             .slots
             .dialog
             .rows
             .iter()
-            .find(|r| r.id == "wireframe_color")
+            .find(|r| r.id == id)
             .expect("the palette lists Wireframe Color");
-        let sw = row.swatch.expect("the row carries a swatch");
-        let want = cce_ui::color::to_linear([0.2, 0.6, 0.9, 1.0]);
-        for k in 0..4 {
-            assert!((sw[k] - want[k]).abs() < 1e-6, "swatch channel {k}: {} vs {}", sw[k], want[k]);
-        }
-        assert!(state.slots.dialog.rows.iter().filter(|r| r.id != "wireframe_color").all(|r| r.swatch.is_none()));
+        assert_eq!(row.label, "Wireframe Color");
+        assert!(row.chord.is_empty(), "a setting has no chord");
+        // The control carries the live colour with its alpha, and a
+        // toolkit colour selector stands behind it at the same value.
+        assert_eq!(row.control, Some(Control::Color { hex: crate::project::color_to_hex8([0.2, 0.6, 0.9, 0.5]), alpha: true }));
+        let sel = state.slots.dialog.color_selector(&id).expect("a colour selector behind the row");
+        assert_eq!(sel.get_value_string().as_deref(), Some(crate::project::color_to_hex8([0.2, 0.6, 0.9, 0.5]).as_str()));
+        let s = SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
+        assert_eq!(s.owner, Owner::Field("wire_color"));
 
-        // Picked from the list: the dialog closes, the command reopens it on
-        // Settings, and the Wireframe Color row is there as a colour control
-        // over the live wire colour.
-        state.take_dialog_pick("wireframe_color".to_string());
-        assert!(state.dialog_visible());
-        assert_eq!(state.dialog_tab(), Tab::Settings);
-        let shown = state.dialog_settings_shown.clone();
-        assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Color" && t == "rgba"), "{shown:?}");
-        assert!(shown.iter().any(|(k, _, t)| k == "Wireframe Single Color" && t == "toggle"), "{shown:?}");
-        let s = crate::dialog::SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
-        assert_eq!(s.owner, Some(crate::dialog::Owner::Field("wire_color")));
-
-        // Editing both rows reaches the live state: the colour AND the switch
+        // Editing the row reaches the live state: the colour AND the switch
         // that makes the wire pass use it (off, the wires carry the
-        // geometry's colours and the colour row is their alpha alone).
+        // geometry's colours and the colour row is their alpha alone). The
+        // dialog stays up, and the row re-reads the value.
         state.wire_single_color = false;
-        state.wire_color = [1.0, 1.0, 1.0, 1.0];
-        state.refresh_dialog_settings();
-        let mut rows = state.dialog_settings_shown.clone();
-        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Color").unwrap().1 = "#000000ff".to_string();
-        state.slots.dialog_params_mut().set_display_params(&rows);
-        state.sync_dialog_settings_to_project();
+        state.apply_setting("Wireframe Color", "#000000ff");
         assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0], "the colour row writes the live wire colour");
-        // Setting a colour means wanting to see it, so single-colour mode
-        // comes on with it — off, the wires carry the geometry's own colours
-        // and this row is only their alpha.
         assert!(state.wire_single_color, "a colour edit turns single-colour mode on");
+        assert!(state.dialog_visible());
+        let row = state.slots.dialog.rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(row.control, Some(Control::Color { hex: "#000000ff".into(), alpha: true }));
 
-        // And the switch is a row of its own, dispatching its command.
-        state.refresh_dialog_settings();
-        let mut rows = state.dialog_settings_shown.clone();
-        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Single Color").unwrap().1 = "false".to_string();
-        state.slots.dialog_params_mut().set_display_params(&rows);
-        state.sync_dialog_settings_to_project();
+        // And the switch is a command row of its own, flipped in place.
+        state.take_dialog_pick("toggle_wire_single_color".to_string());
         assert!(!state.wire_single_color, "the switch row did not reach the flag");
+        assert!(state.dialog_visible());
     }
 
     /// Frame All frames the displayed geometry from wherever the view is:
@@ -4658,6 +4640,7 @@ mod tests {
         a.render_points = true;
         a.point_size = 0.05;
         a.point_color = [0.0, 1.0, 0.0];
+        a.group_marker_scale = 2.5;
         a.save_settings();
 
         let kdl = std::fs::read_to_string(DesignSettings::file_path()).expect("state.kdl was written");
@@ -4694,6 +4677,7 @@ mod tests {
         assert!(close(back.render.geo_opacity, 0.75));
         assert!(back.render.render_points);
         assert!(close(back.render.point_size, 0.05));
+        assert!(close(back.render.group_marker_scale, 2.5));
     }
 
     /// Changing the wire colour turns single-colour mode on, so the colour
@@ -4706,24 +4690,18 @@ mod tests {
         state.wire_single_color = false;
         state.wire_color = [1.0, 1.0, 1.0, 1.0];
 
-        // An edit through the dialog's Settings half, which is the only way
+        // An edit through the dialog's colour row, which is the only way
         // in now that the Render node is gone.
         state.open_dialog();
-        state.slots.dialog.tab = crate::dialog::Tab::Settings;
-        state.refresh_dialog_settings();
-        let mut rows = state.dialog_settings_shown.clone();
-        rows.iter_mut().find(|(k, _, _)| k == "Wireframe Color").unwrap().1 = "#000000ff".to_string();
-        state.slots.dialog_params_mut().set_display_params(&rows);
-        state.sync_dialog_settings_to_project();
+        state.apply_setting("Wireframe Color", "#000000ff");
         assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0]);
         assert!(state.wire_single_color, "a colour change switches single-colour mode on");
 
         // Off again by hand stays off while the colour is unchanged: the
         // auto-enable fires on a CHANGE, not on every settings pass.
         state.wire_single_color = false;
-        state.refresh_dialog_settings();
-        state.sync_dialog_settings_to_project();
-        assert!(!state.wire_single_color, "an unrelated poll flipped it back on");
+        state.apply_setting("Wireframe Color", "#000000ff");
+        assert!(!state.wire_single_color, "an unrelated pass flipped it back on");
 
         // A load carries the project's geometry and leaves the wire
         // settings — preferences now — exactly where they are.
@@ -4754,11 +4732,10 @@ mod tests {
         assert!(state.run_command("toggle_wireframe"));
         assert!(state.wireframe);
         assert_eq!(state.command_toggle_state("toggle_wireframe"), Some(true));
-        // An unrelated settings poll no longer reverts it.
+        // An unrelated settings apply no longer reverts it.
         state.open_dialog();
-        state.slots.dialog.tab = crate::dialog::Tab::Settings;
-        state.refresh_dialog_settings();
-        state.sync_dialog_settings_to_project();
+        let thickness = state.settings_row_value("Wire Thickness");
+        state.apply_setting("Wire Thickness", &thickness);
         assert!(state.wireframe, "a settings pass read the flag back over itself");
         assert!(state.run_command("toggle_wireframe"));
         assert!(!state.wireframe);
@@ -5510,21 +5487,25 @@ mod tests {
         assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::ToggleNetworkPlate));
         assert!(cmd.default_chord.is_some(), "the plate toggle has no chord");
 
-        // The live flag and the dialog's switch are one reading: the row
-        // in the Settings half is `Owner::Command`, so it goes through
-        // `command_toggle_state` rather than mirroring the flag onto a node
-        // that could fall out of step with it.
+        // The live flag and the dialog's switch are one reading: the
+        // command's palette row goes through `command_toggle_state` rather
+        // than mirroring the flag onto a node that could fall out of step
+        // with it.
         let mut state = State::new(false);
         assert_eq!(state.command_toggle_state("toggle_network_plate"), Some(true));
         assert!(state.run_command("toggle_network_plate"));
         assert!(!state.network_plate);
         assert_eq!(state.command_toggle_state("toggle_network_plate"), Some(false));
 
-        let row = crate::dialog::SETTINGS
+        state.run_command("command_palette");
+        let row = state
+            .slots
+            .dialog
+            .rows
             .iter()
-            .find(|s| s.label == "Show Network Plate")
-            .expect("a Show Network Plate row");
-        assert_eq!(row.owner, Some(crate::dialog::Owner::Command("toggle_network_plate")));
+            .find(|r| r.id == "toggle_network_plate")
+            .expect("a Network Plate row");
+        assert_eq!(row.toggle(), Some(false), "the row's switch reads the live flag");
     }
 
     /// The viewport guide toggles survive the next parameter edit.
@@ -8951,9 +8932,8 @@ mod tests {
         let mut state = State::new(false);
         for s in crate::dialog::SETTINGS {
             match s.owner {
-                None => assert!(s.ctl.is_none(), "section '{}' declares a control", s.label),
-                Some(Owner::Field(key)) => {
-                    let ctl = s.ctl.unwrap_or_else(|| panic!("row '{}' declares no control", s.label));
+                Owner::Field(key) => {
+                    let ctl = s.ctl;
                     // The round trip IS the check: read the row, write the
                     // value straight back, and read again. A key no arm
                     // names reads a default and writes nothing, so the two
@@ -8997,31 +8977,17 @@ mod tests {
                         }
                     }
                 }
-                Some(Owner::Command(id)) => {
-                    assert!(
-                        crate::command::by_id(id).is_some(),
-                        "row '{}' names no command '{id}'",
-                        s.label
-                    );
-                    // A Command row paints as a switch, so the command has
-                    // to answer the toggle table or the row shows as off
-                    // whatever the setting is.
-                    assert!(
-                        state.command_toggle_state(id).is_some(),
-                        "row '{}' names command '{id}', which has no toggle state",
-                        s.label
-                    );
-                }
                 // The active camera's params exist only once a camera node
                 // does; the Default Camera branch is exercised below.
-                Some(Owner::ActiveCamera(_)) => {}
+                Owner::ActiveCamera(_) => {}
             }
         }
     }
 
-    /// Row labels are the writeback's identity — `param_display` keys a row by
-    /// its label and `sync_dialog_settings_to_project` resolves it back the
-    /// same way — so two rows sharing one would write each other's values.
+    /// Row labels are the writeback's identity — a setting row's id is its
+    /// label under `SETTING_ROW_PREFIX`, and `setting_of_row` resolves it
+    /// back the same way — so two rows sharing one would write each other's
+    /// values.
     #[test]
     fn dialog_settings_labels_are_unique() {
         let mut seen: Vec<&str> = Vec::new();
@@ -9040,10 +9006,10 @@ mod tests {
 
         assert!(state.run_command("toggle_dialog"));
         assert!(state.dialog_visible());
-        // Every command, plus the network pane's zoom slider row when that
-        // pane is focused (it is by default) — a control, not a command.
+        // Every command — beside the setting rows, and the network pane's
+        // zoom slider row when that pane is focused (it is by default).
         assert_eq!(
-            state.slots.dialog.rows.iter().filter(|r| r.slider.is_none()).count(),
+            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID).count(),
             crate::command::COMMANDS.len(),
             "an empty query lists everything"
         );
@@ -9070,7 +9036,7 @@ mod tests {
             state.slots.dialog.rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
         );
         let row = &state.slots.dialog.rows[state.slots.dialog.selected];
-        assert_eq!(row.toggle, None, "Deselect runs and is done; it draws no switch");
+        assert_eq!(row.toggle(), None, "Deselect runs and is done; it draws no switch");
 
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert!(!state.dialog_visible(), "a plain command closes the dialog behind it");
@@ -9091,7 +9057,7 @@ mod tests {
         assert_eq!(state.slots.dialog.selected_id(), Some("toggle_square_viewport"));
         let before = state.square_viewport;
         let row = state.slots.dialog.rows[state.slots.dialog.selected].clone();
-        assert_eq!(row.toggle, Some(before), "the switch shows the live value");
+        assert_eq!(row.toggle(), Some(before), "the switch shows the live value");
 
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert_eq!(state.square_viewport, !before, "Enter ran the command");
@@ -9099,13 +9065,13 @@ mod tests {
         assert_eq!(state.slots.dialog.query, "squa", "with its query intact");
         assert_eq!(state.slots.dialog.selected_id(), Some("toggle_square_viewport"), "and its selection");
         let row = &state.slots.dialog.rows[state.slots.dialog.selected];
-        assert_eq!(row.toggle, Some(!before), "the switch moved with the value");
+        assert_eq!(row.toggle(), Some(!before), "the switch moved with the value");
 
         // And back again, without leaving.
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert_eq!(state.square_viewport, before);
         assert!(state.dialog_visible());
-        assert_eq!(state.slots.dialog.rows[state.slots.dialog.selected].toggle, Some(before));
+        assert_eq!(state.slots.dialog.rows[state.slots.dialog.selected].toggle(), Some(before));
 
         // A click on the row is the same pick as Enter.
         state.take_dialog_pick("toggle_square_viewport".to_string());
@@ -9157,15 +9123,15 @@ mod tests {
         assert!(state.dialog_visible());
         let rows = &state.slots.dialog.rows;
         assert_eq!(rows[0].id, ZOOM_ROW_ID, "the zoom row heads the network list");
-        assert!((rows[0].slider.unwrap() - state.zoom_percent()).abs() < 1e-3);
-        assert!(rows.iter().filter(|r| r.slider.is_some()).count() == 1);
+        assert!((rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
+        assert!(rows.iter().filter(|r| r.id == ZOOM_ROW_ID).count() == 1);
 
         // The arrows nudge the zoom, the dialog stays up, the row follows.
         let before = state.zoom_percent();
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
         assert!(state.dialog_visible());
         assert!(state.zoom_percent() > before, "right arrow zooms in");
-        assert!((state.slots.dialog.rows[0].slider.unwrap() - state.zoom_percent()).abs() < 1e-3);
+        assert!((state.slots.dialog.rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
         assert!((state.zoom_percent() - before).abs() < 0.5, "left arrow zooms back out");
 
@@ -9179,20 +9145,20 @@ mod tests {
         assert!((state.zoom_percent() - 150.0).abs() < 0.5);
         state.set_zoom_percent(100_000.0);
         assert!((state.grid_pitch_x - crate::app::MAX_PITCH_X).abs() < 0.5, "clamped to the max pitch");
-        assert!((state.slots.dialog.rows[0].slider.unwrap() - state.zoom_percent()).abs() < 1e-3);
+        assert!((state.slots.dialog.rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
         state.set_zoom_percent(100.0);
 
         // A query that does not match "Zoom" drops the row.
         for c in ["s", "a", "v"] {
             state.dialog_key_input(&key_press(Key::Character(c.into())));
         }
-        assert!(state.slots.dialog.rows.iter().all(|r| r.slider.is_none()));
+        assert!(state.slots.dialog.rows.iter().all(|r| r.id != ZOOM_ROW_ID));
         state.close_dialog();
 
         // Another pane focused: no slider row at all.
         state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
         state.run_command("command_palette");
-        assert!(state.slots.dialog.rows.iter().all(|r| r.id != ZOOM_ROW_ID && r.slider.is_none()));
+        assert!(state.slots.dialog.rows.iter().all(|r| r.id != ZOOM_ROW_ID));
     }
 
     /// At the widget: a press on the slider row's band takes hold, jumps the
@@ -9201,7 +9167,7 @@ mod tests {
     /// reports nothing, and never "activates" the row as a pick.
     #[test]
     fn dialog_slider_row_press_reports_the_value_under_the_pointer() {
-        use crate::dialog::{Dialog, Row, SLIDER_W};
+        use crate::dialog::{Control, Dialog, Row, SLIDER_W};
         use cce_ui::widget::{ElementState, MouseButton, WidgetHost};
         let mut ctx = cce_ui::context::UiContext::new();
         let mut d = Dialog::new();
@@ -9209,21 +9175,20 @@ mod tests {
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
         let (id, ptr) = (d.id(), d.as_ptr_mut());
         ctx.register_widget(id, ptr);
-        let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), swatch: None, toggle: None, slider: None, truncate_head: false };
+        let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), control: None, truncate_head: false };
         d.set_rows(vec![
-            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0), truncate_head: false },
+            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), control: Some(Control::Slider { value: 100.0, min: 20.0, max: 320.0, dec: 0, step: 10.0, suffix: "%" }), truncate_head: false },
             plain(1),
             plain(2),
         ]);
-        d.set_slider_range(20.0, 320.0);
         d.set_page(10);
         d.set_occluding(false);
 
         // The first row's rect, as the widget lays it out: the list starts
-        // below the strip and the query line; the band begins SLIDER_W in
-        // from the row's right end and runs out to the chord column's right
-        // edge — with no toggle row in this list, that is the row's own.
-        let list_y = 12.0 + 30.0 + 8.0 + 30.0 + 8.0;
+        // below the query line; the band begins SLIDER_W in from the row's
+        // right end and runs out to the chord column's right edge — with no
+        // toggle row in this list, that is the row's own.
+        let list_y = 12.0 + 30.0 + 8.0;
         let row_y = list_y + 12.0;
         let band_x = 520.0 - 12.0 - 8.0 - SLIDER_W;
         let band_w = SLIDER_W;
@@ -9233,9 +9198,9 @@ mod tests {
         let px = band_x + band_w * 0.75;
         assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, px, row_y, &mut ctx));
         assert!(d.slider_dragging());
-        let v = d.take_slider_change().expect("a press on the band reports a value");
+        let v = d.take_slider_change().map(|(_, v)| v).expect("a press on the band reports a value");
         assert!((v - (20.0 + 0.75 * 300.0)).abs() < 3.0, "value {v} is not three quarters of the range");
-        assert_eq!(d.rows[0].slider, Some(v), "the row follows");
+        assert_eq!(d.rows[0].slider_value(), Some(v), "the row follows");
         assert_eq!(d.take_activated(), None, "the band is a control, not a pick");
         assert_eq!(d.take_slider_change(), None, "reported once");
         d.mouse_input(MouseButton::Left, ElementState::Released, px, row_y, &mut ctx);
@@ -9256,14 +9221,14 @@ mod tests {
         // The wheel over the control turns the slider — a notch up is 2% of
         // the range more, as on the toolkit's slider — and over the label
         // end it scrolls the list instead, reporting nothing.
-        let before = d.rows[0].slider.unwrap();
+        let before = d.rows[0].slider_value().unwrap();
         let wheel = |x: f32, y: f32| cce_ui::widget::Event::MouseWheel {
             delta: cce_ui::widget::MouseScrollDelta::LineDelta(0.0, 1.0),
             x, y, local_x: x, local_y: y,
         };
         ctx.note_scroll_event();
         assert!(d.handle_event(&wheel(band_x + 10.0, row_y), &mut ctx));
-        let v = d.take_slider_change().expect("a wheel over the band reports a value");
+        let v = d.take_slider_change().map(|(_, v)| v).expect("a wheel over the band reports a value");
         assert!((v - (before + 0.02 * 300.0)).abs() < 1e-3, "notch up: {before} -> {v}");
         ctx.note_scroll_event();
         d.handle_event(&wheel(30.0, row_y), &mut ctx);
@@ -9276,7 +9241,7 @@ mod tests {
     /// beneath it instead of running on past them into the switches.
     #[test]
     fn dialog_slider_band_ends_at_the_chord_column() {
-        use crate::dialog::{Dialog, Row, SLIDER_W, TOGGLE_W};
+        use crate::dialog::{Control, Dialog, Row, SLIDER_W, TOGGLE_W};
         use cce_ui::widget::{ElementState, MouseButton, WidgetHost};
         let mut ctx = cce_ui::context::UiContext::new();
         let mut d = Dialog::new();
@@ -9285,14 +9250,13 @@ mod tests {
         let (id, ptr) = (d.id(), d.as_ptr_mut());
         ctx.register_widget(id, ptr);
         d.set_rows(vec![
-            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), swatch: None, toggle: None, slider: Some(100.0), truncate_head: false },
-            Row { id: "show_grid".into(), label: "Show Grid".into(), chord: "Ctrl+G".into(), swatch: None, toggle: Some(true), slider: None, truncate_head: false },
+            Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), control: Some(Control::Slider { value: 100.0, min: 20.0, max: 320.0, dec: 0, step: 10.0, suffix: "%" }), truncate_head: false },
+            Row { id: "show_grid".into(), label: "Show Grid".into(), chord: "Ctrl+G".into(), control: Some(Control::Toggle(true)), truncate_head: false },
         ]);
-        d.set_slider_range(20.0, 320.0);
         d.set_page(10);
         d.set_occluding(false);
 
-        let row_y = 12.0 + 30.0 + 8.0 + 30.0 + 8.0 + 12.0;
+        let row_y = 12.0 + 30.0 + 8.0 + 12.0;
         let row_right = 520.0 - 12.0 - 8.0;
         let band_right = row_right - (TOGGLE_W + 12.0);
         assert!(band_right < row_right, "the switch column pulls the band in");
@@ -9301,7 +9265,7 @@ mod tests {
         // is not the band's.
         assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, band_right - 1.0, row_y, &mut ctx));
         assert!(d.slider_dragging(), "the band reaches the chord column's edge");
-        let v = d.take_slider_change().expect("a press on the band reports a value");
+        let v = d.take_slider_change().map(|(_, v)| v).expect("a press on the band reports a value");
         assert!((v - 320.0).abs() < 4.0, "the band's end is the range's end, got {v}");
         d.mouse_input(MouseButton::Left, ElementState::Released, band_right - 1.0, row_y, &mut ctx);
 
@@ -9364,7 +9328,7 @@ mod tests {
         }
         assert_eq!(state.slots.dialog.query, "");
         assert_eq!(
-            state.slots.dialog.rows.iter().filter(|r| r.slider.is_none()).count(),
+            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID).count(),
             crate::command::COMMANDS.len()
         );
     }
@@ -9389,34 +9353,42 @@ mod tests {
         assert_eq!(state.slots.dialog.query, "l");
     }
 
-    /// Tab moves between the halves, and entering Settings lays its body out
-    /// and fills it.
+    /// The settings are rows of the one list, each carrying its control —
+    /// ranked with the commands, so a query finds a colour the way it finds
+    /// a command. There is no second half: Tab in this mode does nothing,
+    /// and nothing draws a strip.
     #[test]
-    fn dialog_tab_switches_halves_and_settings_has_rows() {
-        use cce_ui::widget::WidgetHost as _;
-        use crate::dialog::Tab;
+    fn the_palette_lists_the_settings_as_control_rows() {
+        use crate::dialog::{setting_row_id, Control, SETTINGS};
         let mut state = State::new(false);
         state.run_command("toggle_dialog");
-        assert_eq!(state.dialog_tab(), Tab::Commands);
+        let ids: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        for s in SETTINGS {
+            assert!(ids.contains(&setting_row_id(s.label)), "'{}' has no row", s.label);
+        }
+        let control = |label: &str| {
+            state.slots.dialog.rows.iter().find(|r| r.id == setting_row_id(label)).and_then(|r| r.control.clone())
+        };
+        assert!(matches!(control("Grid Color"), Some(Control::Color { alpha: false, .. })));
+        assert!(matches!(control("Grid Thickness"), Some(Control::Slider { dec: 0, .. })), "a spin is a whole-number slider");
+        assert!(matches!(control("Geometry Opacity"), Some(Control::Slider { dec: 2, .. })));
+        assert!(matches!(control("World Unit"), Some(Control::Choice { .. })));
+        assert!(matches!(control("Group Marker Scale"), Some(Control::Slider { .. })));
+        // A command's switch is its own row; the settings table lists none
+        // of them twice.
+        assert!(control("Show Grid").is_none());
+        assert!(state.slots.dialog.rows.iter().any(|r| r.id == "toggle_grid" && r.toggle().is_some()));
 
+        // Tab does not move anywhere, and the dialog stays.
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Tab)));
-        assert_eq!(state.dialog_tab(), Tab::Settings);
-        assert!(state.slots.dialog_params.visible(), "the settings body shows");
-        assert!(
-            state.positions[crate::slots::DIALOG_PARAMS_IDX].2 > 0.0,
-            "and is laid out inside the dialog"
-        );
-        // Every non-section row of the table, minus the ones whose owner is
-        // missing in a fresh project — there are none, per the test above.
-        let rows = state.dialog_settings_shown.clone();
-        assert_eq!(rows.len(), crate::dialog::SETTINGS.len());
-        assert!(rows.iter().any(|(k, _, t)| k == "Show Grid" && t == "toggle"));
-        assert!(rows.iter().any(|(k, _, t)| k == "Grid Color" && t == "color"));
-        assert!(rows.iter().any(|(k, _, t)| k == "Grid Thickness" && t.starts_with("spinbox")));
+        assert!(state.dialog_visible());
 
-        state.dialog_key_input(&key_press(Key::Named(NamedKey::Tab)));
-        assert_eq!(state.dialog_tab(), Tab::Commands);
-        assert!(!state.slots.dialog_params.visible());
+        // The filter ranks a setting like a command: "gridc" finds Grid
+        // Color ahead of everything.
+        for c in ["g", "r", "i", "d", "c"] {
+            state.dialog_key_input(&typed(c));
+        }
+        assert_eq!(state.slots.dialog.selected_id(), Some(setting_row_id("Grid Color").as_str()));
     }
 
     /// A Settings row writes to whatever OWNS its value.
@@ -9429,27 +9401,44 @@ mod tests {
     /// come with it.
     #[test]
     fn dialog_settings_write_reaches_the_owning_subnet() {
-        use crate::dialog::Tab;
+        use crate::dialog::{setting_row_id, Control};
         let mut state = State::new(false);
         state.run_command("toggle_dialog");
-        state.set_dialog_tab(Tab::Settings);
 
-        // A Command row: Show Grid dispatches `toggle_grid`.
+        // A toggle command's row: Show Grid dispatches `toggle_grid` and
+        // the dialog stays up.
         let was = state.viewport().show_grid;
-        let mut rows = state.dialog_settings_shown.clone();
-        let row = rows.iter_mut().find(|(k, _, _)| k == "Show Grid").expect("the Show Grid row");
-        row.1 = if was { "false" } else { "true" }.to_string();
-        state.slots.dialog_params_mut().set_display_params(&rows);
-        state.sync_dialog_settings_to_project();
+        state.take_dialog_pick("toggle_grid".to_string());
         assert_eq!(state.viewport().show_grid, !was, "the live state followed");
         assert_eq!(state.command_toggle_state("toggle_grid"), Some(!was), "and the switch shows it");
+        assert!(state.dialog_visible());
 
-        // A Field row: Grid Thickness is a spinbox in thousandths.
-        let mut rows = state.dialog_settings_shown.clone();
-        rows.iter_mut().find(|(k, _, _)| k == "Grid Thickness").expect("the row").1 = "40".to_string();
-        state.slots.dialog_params_mut().set_display_params(&rows);
-        state.sync_dialog_settings_to_project();
+        // A Field row: Grid Thickness is a whole number in thousandths.
+        state.apply_setting("Grid Thickness", "40");
         assert!((state.grid_thickness - 0.04).abs() < 1e-6, "{}", state.grid_thickness);
+        let row = state.slots.dialog.rows.iter().find(|r| r.id == setting_row_id("Grid Thickness")).unwrap();
+        assert!(matches!(row.control, Some(Control::Slider { value, .. }) if (value - 40.0).abs() < 1e-6), "the row re-read the value");
+
+        // The arrows work the selected row's control in place: a choice
+        // steps, a slider nudges, each landing on the live state.
+        let unit_row = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("World Unit")).unwrap();
+        state.slots.dialog.selected = unit_row;
+        let before = state.world_unit;
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
+        assert_ne!(state.world_unit, before, "right arrow steps the unit");
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+        assert_eq!(state.world_unit, before, "left arrow steps it back");
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert_ne!(state.world_unit, before, "Enter steps a choice too");
+        assert!(state.dialog_visible(), "and keeps the dialog up");
+
+        let scale_row = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("Group Marker Scale")).unwrap();
+        state.slots.dialog.selected = scale_row;
+        let before = state.group_marker_scale;
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
+        assert!(state.group_marker_scale > before, "right arrow grows the markers");
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+        assert!((state.group_marker_scale - before).abs() < 1e-5, "left arrow shrinks them back");
 
         // And it survives an unrelated parameter edit, which is the whole
         // reason the subnets had to be the owner before.
@@ -9513,24 +9502,34 @@ mod tests {
     /// nothing else in the suite would notice.
     #[test]
     fn every_retired_subnet_setting_is_reachable() {
+        // The values are setting rows; the toggles are commands, whose
+        // palette rows carry their switches — each listed once.
         let labels: Vec<&str> = crate::dialog::SETTINGS.iter().map(|s| s.label).collect();
         for label in [
             // guides
-            "Show Grid", "Grid Color", "Grid Thickness", "Show Origin Axes",
-            "Origin Size", "Show Reference Cube", "Point Marker Size",
+            "Grid Color", "Grid Thickness", "Origin Size", "Point Marker Size",
             "Point Marker Color", "World Unit",
             // render
-            "Show Wireframe", "Wireframe Single Color", "Wireframe Color",
-            "Wire Thickness", "Opacity", "Show Points", "Point Size", "Point Color",
+            "Wireframe Color", "Wire Thickness", "Geometry Opacity", "Point Size", "Point Color",
             // main
-            "Background Color", "Ray Traced Preview", "Circular Pane",
+            "Background Color",
             // camera
-            "Show Camera Pivot", "Camera Pivot Size", "Square Aspect",
-            // network
-            "Show Network Plate",
+            "Camera Pivot Size",
         ] {
             assert!(labels.contains(&label), "'{label}' has no Settings row and no other way in");
         }
+        let mut state = State::new(false);
+        for id in [
+            "toggle_grid", "toggle_origin", "toggle_cube", "toggle_wireframe",
+            "toggle_wire_single_color", "toggle_render_points", "toggle_ray_traced_preview",
+            "toggle_circular_pane", "toggle_camera_pivot", "toggle_square_viewport",
+            "toggle_network_plate",
+        ] {
+            assert!(crate::command::by_id(id).is_some(), "the toggle '{id}' has no command");
+            assert!(state.command_toggle_state(id).is_some(), "the toggle '{id}' draws no switch");
+        }
+        state.run_command("command_palette");
+        assert!(state.slots.dialog.rows.iter().any(|r| r.id == "toggle_grid" && r.toggle().is_some()));
         // The Main node's buttons are commands, and the active camera keeps
         // the viewport menubar's own menu — neither is a row here.
         for id in [
@@ -9545,17 +9544,14 @@ mod tests {
     /// Reopening starts clean: on Commands, with an empty query.
     #[test]
     fn dialog_reopens_without_the_last_search() {
-        use crate::dialog::Tab;
         let mut state = State::new(false);
         state.run_command("toggle_dialog");
         state.dialog_key_input(&typed("g"));
-        state.set_dialog_tab(Tab::Settings);
         state.run_command("toggle_dialog");
         assert!(!state.dialog_visible());
 
         state.run_command("toggle_dialog");
         assert_eq!(state.slots.dialog.query, "");
-        assert_eq!(state.dialog_tab(), Tab::Commands);
     }
 
     /// A left press on empty grid puts the cursor on the pressed cell — on the
@@ -10232,14 +10228,12 @@ mod tests {
     /// templates, no tab strip, no chord column.
     #[test]
     fn dialog_add_node_mode_lists_the_templates() {
-        use cce_ui::widget::WidgetHost as _;
         use crate::dialog::Mode;
         let mut state = State::new(false);
         state.open_node_palette();
 
         assert!(state.dialog_visible());
         assert_eq!(state.slots.dialog.mode, Mode::AddNode);
-        assert!(!state.slots.dialog_params.visible(), "no settings body in this mode");
         assert_eq!(state.slots.dialog.rows.len(), state.node_templates.len());
         assert!(
             state.slots.dialog.rows.iter().all(|r| r.chord.is_empty()),
@@ -10311,20 +10305,23 @@ mod tests {
         assert_eq!(state.slots.dialog.rows.len(), at_root);
     }
 
-    /// Ctrl+P lands on Commands rather than toggling, which is the one thing
+    /// Ctrl+P opens the list rather than toggling, which is the one thing
     /// that distinguishes it from Alt+D now that both open the same dialog.
     #[test]
     fn command_palette_opens_the_dialog_on_commands() {
-        use crate::dialog::{Mode, Tab};
+        use crate::dialog::Mode;
         let mut state = State::new(false);
         state.run_command("toggle_dialog");
-        state.set_dialog_tab(Tab::Settings);
-        assert_eq!(state.dialog_tab(), Tab::Settings);
+        assert!(state.dialog_visible());
+        state.dialog_key_input(&typed("g"));
 
         state.run_command("command_palette");
         assert!(state.dialog_visible(), "it lands, it does not toggle");
-        assert_eq!(state.dialog_tab(), Tab::Commands);
-        assert_eq!(state.slots.dialog.mode, Mode::Tabbed);
+        assert_eq!(state.slots.dialog.mode, Mode::Commands);
+        assert_eq!(state.slots.dialog.query, "", "landing starts a fresh query");
+
+        state.run_command("toggle_dialog");
+        assert!(!state.dialog_visible(), "Alt+D toggles");
     }
 
     /// No designer code path spawns a cce-cloud popup any more.

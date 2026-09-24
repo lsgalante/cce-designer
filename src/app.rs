@@ -1152,6 +1152,15 @@ pub struct RenderSettings {
     pub point_size: f32,
     #[serde(default = "default_point_color")]
     pub point_color: [f32; 3],
+    /// The Selected-Group markers' radius as a multiple of `point_size` —
+    /// they draw on the same vertices as the Render points, so the ratio is
+    /// what keeps both legible. Hard-coded at 1.25 until 2026-09-24.
+    #[serde(default = "default_group_marker_scale")]
+    pub group_marker_scale: f32,
+}
+
+fn default_group_marker_scale() -> f32 {
+    1.25
 }
 
 fn default_wire_color() -> [f32; 4] {
@@ -1185,6 +1194,7 @@ impl Default for RenderSettings {
             render_points: false,
             point_size: default_point_size(),
             point_color: default_point_color(),
+            group_marker_scale: default_group_marker_scale(),
         }
     }
 }
@@ -1690,12 +1700,6 @@ pub struct State {
 
     pub slots: Box<WidgetSlots>,
     pub positions: Vec<(f32, f32, f32, f32)>,
-    /// The Alt+D dialog's Settings rows as last handed to its `ParametersBg` —
-    /// the baseline `sync_dialog_settings_to_project` diffs the controls
-    /// against. The params pane gets away without one because it can compare a
-    /// reported value to the `ParamDef` it came from; the dialog's rows are
-    /// assembled from several owners, so what was shown is its own fact.
-    pub dialog_settings_shown: Vec<(String, String, String)>,
     pub splitter_layout: cce_ui::layout::SplitterLayout,
     /// The node right-click context menu: the targeted node slot and the
     /// actions parallel to the visible items pushed into `context_menu::show`.
@@ -1980,6 +1984,9 @@ pub struct State {
     pub render_points: bool,
     pub point_size: f32,
     pub point_color: [f32; 3],
+    /// Selected-Group marker radius as a multiple of `point_size` (a
+    /// setting row of the dialog; persisted in the render block).
+    pub group_marker_scale: f32,
     /// (geometry version, quantized size, color) the points mesh was last
     /// built from; `point_vertex_count` gates the draw.
     pub last_points_key: Option<(u64, i32, [u8; 3])>,
@@ -2198,6 +2205,7 @@ impl State {
                 render_points: self.render_points,
                 point_size: self.point_size,
                 point_color: self.point_color,
+                group_marker_scale: self.group_marker_scale,
             },
             default_project: self.default_project_setting.clone(),
         };
@@ -4726,7 +4734,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 n.id.clone(),
                 n.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>(),
                 self.rt_geometry_version,
-                (self.point_size * 1000.0).round() as i32,
+                (self.point_size * self.group_marker_scale * 1000.0).round() as i32,
             )
         });
         let mut group_update = None;
@@ -4742,11 +4750,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
                     let members = crate::geometry::group_member_positions(&geom, &group_name);
                     // The Highlight bake's warm accent, so the markers and the
-                    // tint read as one feature. Slightly larger than the
-                    // Render node's points so both stay legible together.
+                    // tint read as one feature. Larger than the Render node's
+                    // points by Group Marker Scale so both stay legible
+                    // together.
                     marker_verts = crate::geometry::points_vertices(
                         &members,
-                        self.point_size * 1.25,
+                        self.point_size * self.group_marker_scale,
                         cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]),
                     );
                 }
@@ -4901,13 +4910,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 v
             },
             dialog: crate::dialog::Dialog::new(),
-            dialog_params: {
-                // Shown only while the dialog's Settings tab is up; laid out
-                // inside the dialog's plate, so it draws no plate of its own.
-                let mut p = ParametersBg::new();
-                p.set_visible(false);
-                p
-            },
         });
 
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
@@ -4999,7 +5001,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             event_sender: None,
             slots,
             positions,
-            dialog_settings_shown: Vec::new(),
             splitter_layout,
             node_menu_slot: None,
             node_menu_actions: Vec::new(),
@@ -5170,6 +5171,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             render_points: settings.render.render_points,
             point_size: settings.render.point_size,
             point_color: settings.render.point_color,
+            group_marker_scale: settings.render.group_marker_scale,
             last_points_key: None,
             point_vertex_count: 0,
             last_viewport_render_points: false,
@@ -6677,10 +6679,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         match action {
             // Ctrl+P lands on Commands specifically, where Alt+D toggles the
             // dialog as a whole — the one difference between the two rows.
-            Action::CommandPalette => {
-                self.open_dialog();
-                self.set_dialog_tab(crate::dialog::Tab::Commands);
-            }
+            Action::CommandPalette => self.open_dialog(),
             Action::ToggleDialog => self.toggle_dialog(),
             // The network navigation families. Each returns false when the
             // network pane does not have focus, which is how one gate covers
@@ -6823,7 +6822,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.viewport_dirty = true;
                 settings_changed = true;
             }
-            Action::WireframeColor => self.open_dialog_on_settings(),
             Action::ToggleSquareViewport => {
                 self.square_viewport = !self.square_viewport;
                 let val = self.square_viewport;
@@ -7446,10 +7444,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             }
                             if idx == PARAM_IDX {
                                 self.sync_parameters_to_project();
-                            } else if idx == crate::slots::DIALOG_PARAMS_IDX {
-                                self.sync_dialog_settings_to_project();
                             } else if idx == crate::slots::DIALOG_IDX {
-                                // The Commands list's zoom slider, mid-drag.
+                                // A dialog slider, mid-drag.
                                 self.drain_dialog_clicks();
                             }
                         }

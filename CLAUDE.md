@@ -252,12 +252,13 @@ Where it all went:
 
 - **Display settings** are live `State` fields, persisted by
   `DesignSettings` into `state.kdl` (`viewport` and the new `render` block),
-  and edited in the dialog's **Settings** half — `SETTINGS` in
+  and edited as rows of the dialog's one list — `SETTINGS` in
   `src/dialog.rs`, whose rows are `Owner::Field` (a live field, with a `Ctl`
-  saying what control draws it), `Owner::Command` (a registry toggle, read
-  through `command_toggle_state`), or `Owner::ActiveCamera`. The table is now
-  the app's whole display configuration, so a value left out of it is GONE,
-  not merely hidden — `every_retired_subnet_setting_is_reachable` is the
+  saying what control draws it) or `Owner::ActiveCamera`; the toggles are
+  registry commands whose palette rows carry a switch, read through
+  `command_toggle_state`. The table plus the toggle commands are the app's
+  whole display configuration, so a value left out of both is GONE, not
+  merely hidden — `every_retired_subnet_setting_is_reachable` is the
   backstop, and `dialog_settings_rows_name_owners_that_exist` round-trips
   every `Field` row because a key no dispatch arm names draws, accepts an
   edit and does nothing.
@@ -1453,7 +1454,7 @@ ranking was never the problem.
 
 `command_palette` (Ctrl+P) and `toggle_dialog` (Alt+D) both reach the same
 dialog and differ in exactly one way, which is the reason both rows exist:
-Ctrl+P LANDS on Commands, Alt+D toggles the dialog as a whole.
+Ctrl+P OPENS it (with a fresh query, never closing), Alt+D toggles it.
 
 `test_every_menu_command_names_a_label_that_is_dispatched` scans `app.rs` for
 `execute_menu_action`'s arms. Scanning source is an odd way to assert it, but
@@ -1464,42 +1465,105 @@ argues for: a label kept in two places drifts, and a renamed one fails silently
 
 ### The dialog (Alt+D, Ctrl+P, Tab)
 
-`src/dialog.rs` is the app's one modal overlay, and **every filterable list in
-the designer is now an opening of it**. It is two roster slots — `DIALOG_IDX`,
-an app-owned `Dialog` that paints the plate, the header, the query line and the
-row list, and `DIALOG_PARAMS_IDX`, a **second `ParametersBg`** laid out inside
-it. The settings controls are that second params pane rather than new widgets,
-because a slider in the dialog should be the same slider as a slider in the
-params pane; what the dialog adds is the row TABLE, not the rows.
+`src/dialog.rs` is the app's one modal overlay, and **every filterable list
+in the designer is an opening of it**. It is one roster slot, `DIALOG_IDX`,
+an app-owned `Dialog` that paints the plate, the query line and the row
+list — and the rows' controls, from the toolkit's own stamps (`Toggle`,
+`Slider`) and hosted `ColorSelector`s, so a slider in the dialog is the same
+slider as a slider in the params pane.
 
 `Mode` says what an opening is for, and it is the reason there is one widget
 rather than two:
 
-- `Mode::Tabbed` (**Alt+D**, and **Ctrl+P** onto Commands) — a tab strip over
-  two halves. **Commands** is the registry fuzzy-filtered in place;
-  **Settings** is the viewport/graph display state `DesignSettings` persists.
-- `Mode::AddNode` (**Tab**, in the network pane) — one list of node templates,
-  a title where the strip goes, and a pick that instantiates at the grid
-  cursor. No tabs: adding a node is a contextual act, not a peer of the app's
-  settings. Tab is what opened it, so Tab closes it again.
+- `Mode::Commands` (**Alt+D**, **Ctrl+P**) — ONE list: every registry
+  command, fuzzy-filtered in place, and every display setting
+  `DesignSettings` persists, ranked among them. Until 2026-09-24 the
+  settings were a second HALF behind a tab strip, a second `ParametersBg`
+  slot (`DIALOG_PARAMS_IDX`) laid out inside the plate with section headers
+  and no filter. A setting is something you ask for by name exactly as a
+  command is, so it ranks in the same list; the strip, its two labels, the
+  section rows and the second slot are gone, and with them the double
+  paint, the `dispatch_uncovered` routing into a second slot and the
+  `dialog_settings_shown` baseline the writeback diffed against.
+- `Mode::AddNode` (**Tab**, in the network pane) — one list of node
+  templates, and a pick that instantiates at the grid cursor. Tab is what
+  opened it, so Tab closes it again. The query hint names the mode; there
+  is no title band, so the two openings are the same plate.
 
 Both modes share the plate, the keys and `fuzzy_rank`, which is the whole
 point — the app used to put two filterable lists in front of the user that
 looked and behaved nothing alike.
 
-**Toggle commands are switches in the Commands list, and picking one does
-not close it.** `State::command_toggle_state(id)` is the table: it reads the
-same field each toggle command flips (the read the View menu's checkmarks
-are set from), and a row it answers carries a `toggle` that paints as the
-toolkit's own `Toggle` in a right-hand column reserved for every row, so the
-chord column keeps a straight edge. Enter or a click on such a row runs the
-command, re-reads the switches in place (`refresh_dialog_toggles` — not
-`refresh_dialog_rows`, which re-ranks and would throw the selection to the
-top) and leaves the dialog up: Show Grid, Show Cube and Square Aspect are set
-together while looking at the viewport. Snapping is a switch only inside a
-viewer state. `dialog_toggle_rows_cover_every_toggle_command` fails when a
-`toggle_*` / `show_*_pane` command is added without an arm in the table,
-because the miss is silent — the row just ships plain.
+**A row's control is `Row::control`, an `Option<Control>`**, and a row that
+has one is worked IN PLACE — the dialog stays up, the control re-reads, the
+selection stays where it was:
+
+- `Toggle` — a toggle command's switch (`command_toggle_state` is the
+  table, the same read the View menu's checkmarks are set from), painted as
+  the toolkit's `Toggle` in a right-hand column reserved for every row as
+  soon as any row has one, so the chord column keeps a straight edge. Enter
+  or a click flips it. `dialog_toggle_rows_cover_every_toggle_command` fails
+  when a `toggle_*` / `show_*_pane` command is added without an arm in the
+  table, because the miss is silent — the row just ships plain.
+- `Slider` — a value over a range, to `dec` decimals; `dec` 0 snaps to
+  whole numbers, which is the spinbox shape (Grid Thickness in thousandths,
+  Origin Size in tenths — the units those params always used). One toolkit
+  `Slider` stamp in a `RefCell` serves every slider row, set to each row's
+  range and value as it is painted. The band **begins `SLIDER_W` in from the
+  row's right end and runs out to the CHORD column's right edge**, so it
+  ends where every other row's key binding ends and the switch column stays
+  clear; the readout sits AHEAD of the band, and a press tests the band
+  alone — over the whole control a click on the readout would jump the
+  value to whichever end of the range it abuts. A press jumps to the
+  pointer and arms the app's widget-drag protocol on `DIALOG_IDX`
+  (`Dialog::draggable` / `drag_*`), so the value follows the pointer off the
+  plate; the wheel over the control turns it (2% of the range a notch) where
+  over the rest of the list it scrolls; Left/Right nudge it by the row's
+  `step` while it is selected; Enter on it runs nothing. The **zoom row**
+  (`ZOOM_ROW_ID`, only while the network pane is focused, since zoom is that
+  pane's) is one of these over `State::zoom_percent` (100 = Reset Zoom,
+  range the pitch limits), landing through `set_zoom_percent`, which zooms
+  about the cursor cell and re-reads the row, since `zoom` clamps.
+- `Choice` — a fixed set (World Unit). The current option reads in the
+  chord column between two arrows; Enter or a click steps to the next,
+  Left/Right either way.
+- `Color` — a hex colour, with or without alpha. Behind each colour row the
+  dialog keeps one toolkit `ColorSelector` (`Dialog::colors`, by row id,
+  kept across re-rankings so a query that drops the row does not kill its
+  picker): a real widget, not a stamp, because it carries state — a hex
+  edit in progress, a `cce-color-editor` process streaming values. It is
+  painted over the band and handed presses on the band with the band as its
+  rect (`color_event`); `Dialog::tick` polls it; a change comes out of
+  `take_color_changes`. **While its hex well is being typed into it has the
+  keyboard ahead of everything** — `dialog_key_input` forwards to
+  `editing_color` first, so Escape and Enter end the edit rather than the
+  dialog.
+
+**A setting row edits the live field** — see "There are no meta nodes"
+above, which is where these values used to live and why a direct write did
+not stick. `SETTINGS` is the table of which row belongs to which owner:
+`Owner::Field` (a live field, with a `Ctl` saying what control draws it,
+since a bare Rust field carries no type or range the way a param did) or
+`Owner::ActiveCamera` (an active-camera param with the live field as its
+fallback — the Default Camera has no node). The toggles the retired
+subnets held are NOT rows of the table: each is a registry command with a
+switch on its own row, and a second row per toggle would have listed every
+switch twice. A row's id is its label under `SETTING_ROW_PREFIX`
+(`setting_of_row` resolves it back), its control is built by
+`setting_control` from the value `setting_value` reads (the params pane's
+encodings — a hex, a whole number in the spin's unit, an option's text),
+and every change lands through `apply_setting(label, value)`: write to the
+owner, then the one regenerate-and-persist pass (the viewport meshes bake
+their sizes and colours in) and `refresh_dialog_controls`, which re-reads
+every control in place — not `refresh_dialog_rows`, which re-ranks and
+would throw the selection to the top. `dialog_settings_rows_name_owners_that_exist`
+is the backstop, because the failure is silent — a `Field` key no dispatch
+arm names reads a default and writes nowhere, so the row draws, takes an
+edit and does nothing, which is why that test round-trips every one of them.
+**Group Marker Scale** is the one row added with the collapse: the
+Selected-Group markers' radius as a multiple of Point Size
+(`State::group_marker_scale`, persisted in the render block; 1.25 was the
+hard-coded ratio).
 
 **The open project's PATH heads the Commands list**, as a row rather than a
 command (`PATH_ROW_ID`): the label is the path, the chord column carries the
@@ -1523,53 +1587,10 @@ its caller to serve the selection, and it inherits the test binary's captured
 stdout — so a test that really copied left cargo waiting on a pipe held open
 by a clipboard daemon, which looks exactly like a hung suite.
 
-**The zoom slider is a row of the Commands list, not a command.** While the
-network pane is focused — and only then, since zoom is that pane's — the
-list heads with a "Zoom" row (`ZOOM_ROW_ID`) carrying a `slider`: the
-toolkit's own `Slider`, painted from one stamp over the row's right end (it
-borrows the chord column rather than reserving `SLIDER_W` on every row). The
-band **begins `SLIDER_W` in from the row's right end and runs out to the CHORD
-column's right edge** — so it ends where every other row's key binding ends
-rather than stopping short of them, and the switch column stays clear; that
-edge moves with `toggle_col`, which is why the rects are methods rather than
-associated functions. The percentage readout therefore sits AHEAD of the band,
-the one place left for it, and a press tests the band alone — over the whole
-control a click on the readout would jump the value to whichever end of the
-range it abuts. It reads the network zoom as a percentage of the configured
-grid pitch (`State::zoom_percent`, 100 = Reset Zoom, range the pitch limits).
-A press on the band jumps to it and arms the app's widget-drag protocol on
-`DIALOG_IDX` (`Dialog::draggable` / `drag_*`, exactly as the Settings
-half's sliders arm it on `DIALOG_PARAMS_IDX`), so the value follows the
-pointer off the plate; the drained value lands through
-`State::set_zoom_percent`, which zooms about the cursor cell and re-reads
-the row, since `zoom` clamps. The wheel over the control turns it (2% of
-the range a notch, up meaning in — the viewport zoom wheel's sign) where
-over the rest of the list it scrolls; `dialog_mouse_wheel` drains the
-change like a click. Left/Right nudge it by a Zoom In / Out step while it
-is selected; Enter on it runs nothing. The dialog stays up
-throughout, as it does for the toggle rows. Ranked like a row labelled
-"Zoom", so a query still finds or drops it.
-
 **Alt+D, not Super+D.** Every Super chord is the compositor's before any client
 sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
 launcher), and Super held is the DE's window-adjust modifier besides. Alt is the
 app's own — the `move_*` family already lives there.
-
-**A Settings row edits the live field** — see "There are no meta nodes"
-above, which is where these values used to live and why a direct write did
-not stick. `SETTINGS` is the table of which row belongs to which owner, and
-`Owner` has three arms for the three kinds there turn out to be: a live
-field (`Field`, with a `Ctl` saying what control draws it, since a bare Rust
-field carries no type or range the way a param did), a registry command
-(`Command` — Square Aspect and Show Camera Pivot are per-CAMERA, with no node
-at all behind the Default Camera, and their commands are the only code that
-gets both cases right), and an active-camera param with the live field as its
-fallback. Writeback is `sync_parameters_to_project`'s shape, polled rather
-than pushed for the same reason: a `ParametersBg` reports its values, it does
-not emit events. `dialog_settings_rows_name_owners_that_exist` is the
-backstop, because the failure is silent — a `Field` key no dispatch arm names
-reads a default and writes nowhere, so the row draws, takes an edit and does
-nothing, which is why that test round-trips every one of them.
 
 **The dialog is painted after the overlay passes, not in the widget walk.** A
 high `z_order` is not enough: `append_frame_text`, `append_scale_readout` and the
@@ -1584,15 +1605,16 @@ engine's popover-occlusion clamp, which reads `UiContext::active_popovers` — s
 `Dialog::popover` claims the dialog's whole rect, and the designer's
 registration loop picks it up. The clamp exempts text whose own bounds COINCIDE
 with the occluder, so every label inside the dialog carries the dialog's rect and
-truncates itself; the settings body is painted twice for this (once for its
-controls, once to re-emit its text retagged), since a `PaintCtx` can be handed
-text back but not geometry.
+truncates itself; a hosted colour selector is painted twice for this (once
+for its well and swatch, once into a scratch `PaintCtx` whose text alone is
+re-emitted retagged), since a `PaintCtx` can be handed text back but not
+geometry.
 
 **`Dialog::occluding` exists because that one claim serves two mechanisms that
 want opposite answers.** `UiContext::is_coordinate_covered` reads the same
 `popover_rect` — off every REGISTERED widget, not just the ones in
 `active_popovers` — to decide a press landed under something else. With the claim
-standing, every control in the Settings half is covered by the plate it is drawn
+standing, every control inside the plate is covered by the plate it is drawn
 on and nothing can be clicked; the toggles looked laid out, painted, and
 completely inert. `State::dispatch_uncovered` lowers the flag for the length of a
 dispatch into the dialog and puts it back, invalidating the coverage memo on both

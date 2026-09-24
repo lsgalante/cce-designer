@@ -189,7 +189,6 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "toggle_origin", label: "Show Origin", context: Context::Viewport, run: Run::Key(Action::ToggleOrigin), default_chord: None },
     Command { id: "toggle_camera_pivot", label: "Show Camera Pivot", context: Context::Viewport, run: Run::Key(Action::ToggleCameraPivot), default_chord: None },
     Command { id: "toggle_wireframe", label: "Show Wireframe", context: Context::Viewport, run: Run::Key(Action::ToggleWireframe), default_chord: None },
-    Command { id: "wireframe_color", label: "Wireframe Color", context: Context::Viewport, run: Run::Key(Action::WireframeColor), default_chord: None },
     // The point overlays on the visible scene. Per-node `meta` child
     // preferences until 2026-09-23; global display settings now, reached
     // here like every other viewport toggle.
@@ -326,12 +325,20 @@ pub fn from_palette_row(row: &str) -> Option<&'static Command> {
 /// order among equals.
 pub fn palette_entries(query: &str, focused: Context) -> Vec<&'static Command> {
     let labels: Vec<&str> = COMMANDS.iter().map(|c| c.label).collect();
-    let mut ranked: Vec<&'static Command> =
-        fuzzy_rank(query, &labels).into_iter().map(|i| &COMMANDS[i]).collect();
-    // A stable partition, so the fuzzy ranking survives inside each half.
+    let contexts: Vec<Context> = COMMANDS.iter().map(|c| c.context).collect();
+    rank_with_focus(query, &labels, &contexts, focused).into_iter().map(|i| &COMMANDS[i]).collect()
+}
+
+/// `fuzzy_rank` over `labels`, then the entries whose context is the
+/// focused pane's partitioned to the front — stably, so the fuzzy ranking
+/// survives inside each half, and without dropping anything (a palette that
+/// hides what you are looking for is worse than one that lists it second).
+/// The dialog ranks its setting rows alongside the commands through this,
+/// as `Context::Always` entries.
+pub fn rank_with_focus(query: &str, labels: &[&str], contexts: &[Context], focused: Context) -> Vec<usize> {
+    let mut ranked = fuzzy_rank(query, labels);
     if focused != Context::Always {
-        let (mine, rest): (Vec<_>, Vec<_>) =
-            ranked.into_iter().partition(|c| c.context == focused);
+        let (mine, rest): (Vec<_>, Vec<_>) = ranked.into_iter().partition(|&i| contexts[i] == focused);
         ranked = mine;
         ranked.extend(rest);
     }

@@ -9,7 +9,7 @@ use crate::slots::{
     BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
     SPREADSHEET_MENUBAR_IDX, SPREADSHEET_IDX,
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
-    DIALOG_IDX, DIALOG_PARAMS_IDX,
+    DIALOG_IDX,
 };
 use crate::geometry::network_sphere_vertices_with_errors;
 use cce_ui::scene::layout::Rect;
@@ -175,7 +175,7 @@ impl State {
             // viewport overlays run AFTER the whole walk, so the graph's node
             // labels and the scale readout drew straight over a dialog that
             // had already covered them.
-            if i == DIALOG_IDX || i == DIALOG_PARAMS_IDX {
+            if i == DIALOG_IDX {
                 continue;
             }
             unsafe {
@@ -285,36 +285,6 @@ impl State {
             // the slot and the chord column keeps its own font and bounds.
             append_widget_plate(w, pc);
             w.paint_self(&self.ui_context, pc);
-        } else if idx == DIALOG_PARAMS_IDX {
-            // The dialog's settings body: PARAM_IDX's arm without the plate,
-            // because it is laid out INSIDE the dialog's plate and a second
-            // one would draw a panel on a panel. The scrollbar straddle goes
-            // with it — over a plate it is not straddling, it is just on top.
-            let (px, py, pw, ph) = self.positions[DIALOG_PARAMS_IDX];
-            let view = rect(px, py, pw, ph);
-            pc.clip(view, |pc| {
-                w.paint_self(&self.ui_context, pc);
-            });
-            let scrollbar = self
-                .slots
-                .dialog_params
-                .as_any()
-                .downcast_ref::<cce_ui::widget::ParametersBg>()
-                .expect("DIALOG_PARAMS_IDX must be a ParametersBg")
-                .scrollbar_visible()
-                .then(|| {
-                    self.slots
-                        .dialog_params
-                        .as_any()
-                        .downcast_ref::<cce_ui::widget::ParametersBg>()
-                        .expect("DIALOG_PARAMS_IDX must be a ParametersBg")
-                        .scrollbar_quads()
-                });
-            if let Some(quads) = scrollbar {
-                for &(qx, qy, qw, qh, qc) in &quads {
-                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
-                }
-            }
         } else if idx == PLAYBAR_IDX {
             // Modern-paint pane: the plate from the legacy views like the other
             // panes, then paint_self emits the transport controls — geometry AND
@@ -825,7 +795,6 @@ impl State {
                 || i == PARAM_IDX
                 || i == SPREADSHEET_IDX
                 || i == DIALOG_IDX
-                || i == DIALOG_PARAMS_IDX
             {
                 continue;
             }
@@ -936,50 +905,6 @@ impl State {
             return;
         }
         self.paint_widget(DIALOG_IDX, pc, show_cursor, visited, clip, None);
-        if !self.slots.dialog_params.visible() {
-            return;
-        }
-        // The settings body is painted twice, on purpose.
-        //
-        // Its labels have to carry the DIALOG's bounds or the occluder the
-        // dialog registers (see `Dialog::popover`) clamps them away: the
-        // clamp's exemption is bounds that COINCIDE with the occluder, and a
-        // params row's bounds are its row's. The first pass lays down the
-        // controls — its labels land inside the occluder and are clamped to
-        // nothing, which is exactly what should happen to a row-bounded label
-        // under this plate. The second pass re-emits only the text, retagged
-        // with the dialog's bounds, which is what is actually read.
-        //
-        // Two passes rather than one because a `PaintCtx` cannot be handed a
-        // prim back: text can be re-emitted through `text_with`, geometry
-        // cannot, so the geometry has to come from a pass that writes
-        // straight into `pc`. It costs a dozen labels' shaping while the
-        // Settings half is open.
-        let (dx, dy, dw, dh) = self.positions[DIALOG_IDX];
-        let own = Some([dx, dy, dx + dw, dy + dh]);
-        self.paint_widget(DIALOG_PARAMS_IDX, pc, show_cursor, visited, clip, None);
-        let mut scratch = PaintCtx::new();
-        visited[DIALOG_PARAMS_IDX] = false;
-        self.paint_widget(DIALOG_PARAMS_IDX, &mut scratch, show_cursor, visited, clip, None);
-        for item in scratch.finish().items {
-            if let Prim::Text { text, x, y, font_size, color, font, .. } = item.prim {
-                pc.text_with(text, x, y, font_size, color, font, own);
-            }
-        }
-
-        let mut popover_pc = cce_ui::layout::PopoverCollector::new();
-        self.slots.dialog_params.render_popover(&mut popover_pc);
-        for (color, px, py, pw, ph) in popover_pc.rects {
-            pc.quad(rect(px, py, pw, ph), color);
-        }
-        for (t, size, x, y, tc, font_opt, _) in popover_pc.texts {
-            let color = [
-                (tc[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                (tc[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                (tc[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-            ];
-            pc.text_with(t, x, y, size, color, font_opt, own);
-        }
     }
 
     fn append_popovers(&self, pc: &mut PaintCtx) {
@@ -990,11 +915,6 @@ impl State {
             }
             let is_menubar = i == HEADER_IDX || i == LEFT_MENUBAR_IDX || i == RIGHT_MENUBAR_IDX || i == PARAM_MENUBAR_IDX || i == SPREADSHEET_MENUBAR_IDX;
             if is_menubar {
-                continue;
-            }
-            if i == DIALOG_PARAMS_IDX {
-                // Drawn by `append_dialog`, after this pass: a popover of the
-                // dialog's belongs above the dialog, not under it.
                 continue;
             }
             if self.focused_widget == Some(i) || i == PARAM_IDX {

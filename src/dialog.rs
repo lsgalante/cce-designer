@@ -1,18 +1,21 @@
-//! The dialog (`Alt+D`): run a command, or change a setting, without leaving
-//! the keyboard.
+//! The dialog (`Alt+D`, `Ctrl+P`, `Tab`): one filterable list of everything
+//! the app can be asked to do or to show differently.
 //!
-//! Two halves behind one chord because they answer the same question — "make
-//! the app do the thing". The Commands half is the registry
-//! ([`crate::command`]) fuzzy-filtered in place; the Settings half is the
-//! viewport/graph display state that `DesignSettings` persists.
+//! Every registry command is a row, and so is every display setting
+//! `DesignSettings` persists — a colour, a size, a unit — each carrying its
+//! control inline: a switch, a slider, a choice, a colour well. Until
+//! 2026-09-24 the settings were a second HALF behind a tab strip, a
+//! `ParametersBg` laid out inside the plate: two lists behind one chord, one
+//! of which could not be filtered, with the tab strip and its section
+//! headers as the only way to tell them apart. A setting is something you
+//! ask the app for by name, exactly as a command is, so it ranks in the same
+//! list and the strip is gone.
 //!
-//! This widget owns the FRAME — plate, tab strip, query line, command list —
-//! and not the settings controls. Those are a second roster slot
-//! (`DIALOG_PARAMS_IDX`, a `ParametersBg`) laid out inside this one's body, so
-//! a slider in the dialog is the same slider as a slider in the params pane
-//! rather than a second implementation that drifts from it. The values behind
-//! those rows are the live `State` fields, persisted by `DesignSettings` —
-//! see [`SETTINGS`] and `Owner`.
+//! This widget owns the FRAME — plate, query line, row list — and paints the
+//! rows' controls from the toolkit's own stamps (`Toggle`, `Slider`) and
+//! hosted `ColorSelector`s, so a slider in the dialog is the same slider as
+//! a slider in the params pane. The values behind the setting rows are the
+//! live `State` fields — see [`SETTINGS`] and [`Owner`].
 //!
 //! App-owned on the narrow traits wrapped in `Adapted<Dialog>`, like
 //! [`crate::playbar::Playbar`], and a subtree painter for the same reason:
@@ -21,52 +24,83 @@
 //! like the playbar — the designer computes the same rects from
 //! `positions[DIALOG_IDX]` when it needs them outside a paint.
 
+use std::cell::RefCell;
+
 use cce_ui::colors;
 use cce_ui::scene::layout::Rect;
-use cce_ui::scene::paint::PaintCtx;
+use cce_ui::scene::paint::{PaintCtx, Prim};
 use cce_ui::widget::*;
-
-/// Which half of the dialog is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Commands,
-    Settings,
-}
-
-impl Tab {
-    pub const ALL: [Tab; 2] = [Tab::Commands, Tab::Settings];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Tab::Commands => "Commands",
-            Tab::Settings => "Settings",
-        }
-    }
-}
 
 /// What the dialog was opened to do.
 ///
-/// One widget, two entry points, because a picker and a settings page are the
-/// same plate with the same keys — what differs is the strip at the top and
-/// what a row MEANS. Splitting them into two widgets is how an app ends up
-/// with two filterable lists that behave differently, which is the thing this
-/// dialog replaced.
+/// One widget, two entry points, because a picker and a settings list are
+/// the same plate with the same keys — what differs is what a row MEANS.
+/// Splitting them into two widgets is how an app ends up with two filterable
+/// lists that behave differently, which is the thing this dialog replaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// `Alt+D`: the tab strip, Commands and Settings.
-    Tabbed,
-    /// `Tab` in the network pane: one list, a title where the strip goes, and
-    /// a pick that instantiates a node template at the grid cursor. No tabs —
-    /// adding a node is a contextual act, not a peer of the app's settings.
+    /// `Alt+D` / `Ctrl+P`: the commands and the settings, one list.
+    Commands,
+    /// `Tab` in the network pane: one list of node templates, and a pick
+    /// that instantiates one at the grid cursor. Tab is what opened it, so
+    /// Tab closes it again.
     AddNode,
+}
+
+/// The control a row carries, drawn over its right end and worked in place —
+/// the dialog stays up while any of these is used, since a setting you can
+/// only touch once before the panel vanishes is a button with extra steps.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Control {
+    /// A switch: a toggle command's state, or a boolean setting. Picking
+    /// the row flips it.
+    Toggle(bool),
+    /// A slider over `min..=max`, read out to `dec` decimals with `suffix`;
+    /// the arrows nudge it by `step` while the row is selected, the wheel
+    /// over the band turns it, a press on the band jumps to the pointer.
+    /// A `dec` of zero snaps to whole numbers — the spinbox shape.
+    Slider { value: f32, min: f32, max: f32, dec: usize, step: f32, suffix: &'static str },
+    /// One of a fixed set: picking the row steps to the next option, the
+    /// arrows step either way.
+    Choice { options: Vec<String>, index: usize },
+    /// A colour, `#rrggbb` (or `#rrggbbaa` with `alpha`), drawn as the
+    /// toolkit's colour selector: a hex well and a swatch that opens the
+    /// picker.
+    Color { hex: String, alpha: bool },
+}
+
+impl Control {
+    /// The value a setting row writes back, in the string the setting's
+    /// writer takes — the same encodings the params pane uses.
+    pub fn value_string(&self) -> String {
+        match self {
+            Control::Toggle(on) => if *on { "true" } else { "false" }.to_string(),
+            Control::Slider { value, dec, .. } => format!("{:.*}", dec, value),
+            Control::Choice { options, index } => options.get(*index).cloned().unwrap_or_default(),
+            Control::Color { hex, .. } => hex.clone(),
+        }
+    }
+
+    /// Clamp `v` into a slider's range, snapping to whole numbers when the
+    /// readout shows none.
+    fn quantize(&self, v: f32) -> f32 {
+        match self {
+            Control::Slider { min, max, dec, .. } => {
+                let v = v.clamp(min.min(*max), max.max(*min));
+                if *dec == 0 { v.round() } else { v }
+            }
+            _ => v,
+        }
+    }
 }
 
 /// One row: what picking it means, plus what to draw.
 #[derive(Debug, Clone)]
 pub struct Row {
-    /// What the app does with this row: a command id in [`Mode::Tabbed`], a
-    /// node template's name in [`Mode::AddNode`]. Owned rather than
-    /// `&'static str` because a template name is read off disk.
+    /// What the app does with this row: a command id or a setting row id
+    /// in [`Mode::Commands`], a node template's name in [`Mode::AddNode`].
+    /// Owned rather than `&'static str` because a template name is read
+    /// off disk.
     pub id: String,
     pub label: String,
     /// The chord as a human reads it, empty when there is none. Drawn in its
@@ -74,29 +108,45 @@ pub struct Row {
     /// replacing it — which the `cce-cloud` palette could only approximate by
     /// padding the label out, since all it could send was one line of text.
     pub chord: String,
-    /// A colour the row previews, drawn as a swatch ahead of the label —
-    /// linear RGBA, as the paint path takes it. `None` for the ordinary row.
-    /// The Wireframe Color command carries the live wire colour here, so
-    /// the palette shows what the setting currently is before it is opened.
-    pub swatch: Option<[f32; 4]>,
-    /// The current state of a TOGGLE command — Show Grid, Square Aspect,
-    /// the pane toggles — drawn as a switch in a column of its own, so the
-    /// list shows what each toggle currently is the way the View menu's
-    /// checkmarks do. `None` for a command that runs and is done. A row
-    /// that carries one is picked in place: the command flips, the switch
-    /// moves, and the dialog stays up — see `State::take_dialog_pick`.
-    pub toggle: Option<bool>,
-    /// A SLIDER row's value, in the range `Dialog::set_slider_range` set —
-    /// the network zoom, as a percentage of the configured grid. Drawn as
-    /// the toolkit's `Slider` over the row's right end, dragged in place,
-    /// nudged by the arrow keys while selected; picking it runs nothing.
-    /// `None` for every other row. There is at most one such row.
-    pub slider: Option<f32>,
+    /// The row's control, if it is one — see [`Control`]. `None` for a
+    /// command that runs and is done.
+    pub control: Option<Control>,
     /// Truncate the label on the LEFT when it does not fit, rather than on
     /// the right: the tail of a path is what identifies it, and a row that
     /// cut `/home/me/projects/thing` down to `/home/me/pro...` would name
     /// every project in the directory equally badly.
     pub truncate_head: bool,
+}
+
+impl Row {
+    /// A row with no control: a command, a template, a path.
+    pub fn plain(id: impl Into<String>, label: impl Into<String>, chord: impl Into<String>) -> Row {
+        Row { id: id.into(), label: label.into(), chord: chord.into(), control: None, truncate_head: false }
+    }
+
+    /// The switch's state, for a toggle row.
+    pub fn toggle(&self) -> Option<bool> {
+        match self.control {
+            Some(Control::Toggle(on)) => Some(on),
+            _ => None,
+        }
+    }
+
+    /// The slider's value, for a slider row.
+    pub fn slider_value(&self) -> Option<f32> {
+        match self.control {
+            Some(Control::Slider { value, .. }) => Some(value),
+            _ => None,
+        }
+    }
+
+    fn is_slider(&self) -> bool {
+        matches!(self.control, Some(Control::Slider { .. }))
+    }
+
+    fn is_color(&self) -> bool {
+        matches!(self.control, Some(Control::Color { .. }))
+    }
 }
 
 /// The dialog's outer size. Fixed rather than proportional: it is a focused
@@ -112,35 +162,30 @@ const DIALOG_W: f32 = 520.0;
 const DIALOG_H: f32 = 640.0;
 
 const PAD: f32 = 12.0;
-/// Tab strip height, and the query line's.
-const TAB_H: f32 = 30.0;
 const QUERY_H: f32 = 30.0;
 pub const ROW_H: f32 = 24.0;
-/// Side of a row's colour swatch, logical px.
-pub const SWATCH_SIDE: f32 = 14.0;
 /// A toggle row's switch: the toolkit's `Toggle`, at the row's height less a
 /// hair of air, and about twice as wide as tall — the proportion the params
 /// pane's toggles have.
 pub const TOGGLE_W: f32 = 36.0;
 const TOGGLE_H: f32 = ROW_H - 4.0;
-/// How far in from the row's right end a slider row's BAND begins. It runs
-/// from there out to the CHORD column's right edge, so it ends exactly where
-/// every other row's key binding ends and the toggle column stays clear —
-/// a band that stopped short of the chords read as a control someone had
-/// forgotten to finish. Not reserved on the other rows: the slider row has
-/// no chord, so it borrows the chord column rather than pushing every chord
-/// in the list left by half the plate.
+/// How far in from the row's right end a slider or colour row's BAND begins.
+/// It runs from there out to the CHORD column's right edge, so it ends
+/// exactly where every other row's key binding ends and the toggle column
+/// stays clear — a band that stopped short of the chords read as a control
+/// someone had forgotten to finish. Not reserved on the other rows: a
+/// control row has no chord, so it borrows the chord column rather than
+/// pushing every chord in the list left by half the plate.
 pub const SLIDER_W: f32 = 180.0;
 /// The readout's width and its gap from the band. It sits to the LEFT of the
 /// band, because the band's right end is spoken for. The readout is drawn by
 /// the dialog, not by the toolkit slider's own: the dialog claims its rect as
 /// a text occluder, and the clamp lets through only text carrying the
 /// dialog's exact bounds (see `Dialog::popover`), so the stamp's readout
-/// would paint and never show — as the Settings half's labels did before
-/// they were re-emitted retagged.
+/// would paint and never show.
 const READOUT_W: f32 = 60.0;
 const READOUT_GAP: f32 = 8.0;
-/// Gap between the tab strip, the query line and the list.
+/// Gap between the query line and the list.
 const GAP: f32 = 8.0;
 
 /// The dialog's rect inside a `width` x `height` window: centered
@@ -154,52 +199,26 @@ pub fn layout_in(width: f32, height: f32) -> (f32, f32, f32, f32) {
     (x, y, w, h)
 }
 
-fn tab_strip(rect: Rect) -> Rect {
-    Rect { x: rect.x + PAD, y: rect.y + PAD, width: (rect.width - 2.0 * PAD).max(0.0), height: TAB_H }
-}
-
-/// One tab's segment of the strip — the strip split evenly, which is what
-/// makes the pair read as one segmented control rather than two buttons.
-fn tab_rect(rect: Rect, tab: Tab) -> Rect {
-    let strip = tab_strip(rect);
-    let n = Tab::ALL.len() as f32;
-    let w = strip.width / n;
-    let i = Tab::ALL.iter().position(|t| *t == tab).unwrap_or(0) as f32;
-    Rect { x: strip.x + i * w, y: strip.y, width: w, height: strip.height }
-}
-
-/// The query line. Commands only — the Settings half has no filter, since its
-/// rows are a fixed handful and a filter over them would hide more than it
-/// found.
+/// The query line, at the top of the plate.
 fn query_rect(rect: Rect) -> Rect {
-    let strip = tab_strip(rect);
-    Rect { x: strip.x, y: strip.y + strip.height + GAP, width: strip.width, height: QUERY_H }
+    Rect { x: rect.x + PAD, y: rect.y + PAD, width: (rect.width - 2.0 * PAD).max(0.0), height: QUERY_H }
 }
 
-/// The command list's viewport.
+/// The list's viewport.
 fn list_rect(rect: Rect) -> Rect {
     let q = query_rect(rect);
     let top = q.y + q.height + GAP;
     Rect { x: q.x, y: top, width: q.width, height: (rect.y + rect.height - PAD - top).max(0.0) }
 }
 
-/// The Settings half's body — where the dialog's `ParametersBg` goes. It
-/// starts where the query line would, there being no query line.
-pub fn settings_rect(x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
-    let strip = tab_strip(Rect { x, y, width: w, height: h });
-    let top = strip.y + strip.height + GAP;
-    (strip.x, top, strip.width, (y + h - PAD - top).max(0.0))
-}
-
-/// How many rows the command list can show at once, for a dialog of this size.
+/// How many rows the list can show at once, for a dialog of this size.
 pub fn visible_rows(x: f32, y: f32, w: f32, h: f32) -> usize {
     (list_rect(Rect { x, y, width: w, height: h }).height / ROW_H).floor().max(0.0) as usize
 }
 
 pub struct Dialog {
     pub mode: Mode,
-    pub tab: Tab,
-    /// What has been typed into the Commands half's filter.
+    /// What has been typed into the filter.
     pub query: String,
     /// The filtered, ranked rows — rebuilt by the app whenever `query`
     /// changes, never here: ranking needs the registry AND the focused pane,
@@ -231,11 +250,8 @@ pub struct Dialog {
     /// app's key handling both need it and neither has the rect to hand.
     page: usize,
     hover_row: Option<usize>,
-    hover_tab: Option<Tab>,
     /// A row the pointer activated, drained by the app.
     activated: Option<String>,
-    /// A tab the pointer chose, drained by the app.
-    tab_click: Option<Tab>,
     /// Whether the dialog is currently claiming its rect as an occluder — see
     /// [`Paint::popover`]. Lowered for the length of an event dispatch into
     /// the dialog, because the one claim serves two mechanisms that want
@@ -247,21 +263,28 @@ pub struct Dialog {
     /// because `paint` takes `&self`, and building a widget per row per
     /// frame would be silly.
     toggle_stamps: [Adapted<Toggle>; 2],
-    /// The slider a slider row draws — the toolkit's own `Slider`, so a
-    /// slider in the dialog IS the slider in the params pane. One stamp,
-    /// because there is at most one slider row; its value is kept in step
-    /// with the row's at every mutation, since `paint` cannot set it.
-    slider_stamp: Adapted<Slider>,
-    /// A press landed on the slider's band and the pointer is moving it —
-    /// the app drives this through its widget-drag protocol (`draggable`
-    /// and the `drag_*` hooks), so the drag survives the pointer leaving
-    /// the plate.
-    slider_drag: bool,
+    /// The slider every slider row draws — the toolkit's own `Slider`, so a
+    /// slider in the dialog IS the slider in the params pane. One stamp for
+    /// all of them, set to each row's range and value as it is painted;
+    /// interior mutability because `paint` takes `&self`.
+    slider_stamp: RefCell<Adapted<Slider>>,
+    /// The row whose band a press took hold of, while the pointer is moving
+    /// it — the app drives this through its widget-drag protocol
+    /// (`draggable` and the `drag_*` hooks), so the drag survives the
+    /// pointer leaving the plate.
+    slider_drag: Option<usize>,
     /// The band's (x, width) captured at the press, so a drag keeps
     /// mapping the pointer while the row scrolls under it.
     slider_track: (f32, f32),
-    /// The value the pointer moved the slider to, drained by the app.
-    slider_change: Option<f32>,
+    /// The row and value the pointer moved a slider to, drained by the app.
+    slider_change: Option<(String, f32)>,
+    /// One toolkit colour selector per colour row, by row id — real widgets,
+    /// not stamps, because each carries state of its own: a hex edit in
+    /// progress, a picker process streaming values. Kept across
+    /// re-rankings so a query that drops the row does not kill its picker.
+    colors: Vec<(String, Adapted<ColorSelector>)>,
+    /// Colour rows the selectors changed, `(row id, hex)`, drained by the app.
+    color_changes: Vec<(String, String)>,
 }
 
 impl Dialog {
@@ -273,8 +296,7 @@ impl Dialog {
         let mut slider_stamp = Slider::new().with_readout(false);
         slider_stamp.set_scroll(false);
         let mut d = Adapted::new(Dialog {
-            mode: Mode::Tabbed,
-            tab: Tab::Commands,
+            mode: Mode::Commands,
             query: String::new(),
             rows: Vec::new(),
             selected: 0,
@@ -285,15 +307,15 @@ impl Dialog {
             sb_drag_offset: 0.0,
             page: 1,
             hover_row: None,
-            hover_tab: None,
             activated: None,
-            tab_click: None,
             occluding: true,
             toggle_stamps: [off, on],
-            slider_stamp,
-            slider_drag: false,
+            slider_stamp: RefCell::new(slider_stamp),
+            slider_drag: None,
             slider_track: (0.0, 1.0),
             slider_change: None,
+            colors: Vec::new(),
+            color_changes: Vec::new(),
         });
         d.set_visible(false);
         d
@@ -322,12 +344,6 @@ impl Dialog {
         self.occluding = on;
     }
 
-    /// Whether the body is the filterable row list — everything but the
-    /// Settings half, which hands its body to `DIALOG_PARAMS_IDX`.
-    pub fn shows_list(&self) -> bool {
-        self.mode == Mode::AddNode || self.tab == Tab::Commands
-    }
-
     /// The furthest the list scrolls: the last page flush with the bottom.
     fn max_scroll_px(&self) -> f32 {
         ((self.rows.len() as f32 - self.page.max(1) as f32) * ROW_H).max(0.0)
@@ -349,14 +365,9 @@ impl Dialog {
     /// body bar does — or `None` when the rows fit and there is no bar. The
     /// one source for paint, the press and the drag. The bar rides the
     /// plate's CENTRE line, as both of cce-mail's bars ride theirs — over
-    /// the rows, reserving no lane, in front only while raised — at the
-    /// page-level width the Settings half's pane uses, so the two halves'
-    /// bars match; the track stops 4px short at each end like every toolkit
-    /// bar.
+    /// the rows, reserving no lane, in front only while raised; the track
+    /// stops 4px short at each end like every toolkit bar.
     pub fn scrollbar_geom(&self, rect: Rect) -> Option<(f32, f32, f32, f32, f32, f32)> {
-        if !self.shows_list() {
-            return None;
-        }
         let max_scroll = self.max_scroll_px();
         if max_scroll <= 0.0 {
             return None;
@@ -440,13 +451,6 @@ impl Dialog {
         (i >= 0.0 && (i as usize) < self.rows.len()).then_some(i as usize)
     }
 
-    fn tab_at(&self, rect: Rect, x: f32, y: f32) -> Option<Tab> {
-        Tab::ALL.into_iter().find(|t| {
-            let r = tab_rect(rect, *t);
-            x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
-        })
-    }
-
     /// Keep `selected` inside the scrolled window.
     pub fn scroll_to_selected(&mut self) {
         let view = self.page.max(1) as f32 * ROW_H;
@@ -479,68 +483,122 @@ impl Dialog {
         self.rows.get(self.selected).map(|r| r.id.as_str())
     }
 
+    /// The selected row's control, if it has one.
+    pub fn selected_control(&self) -> Option<&Control> {
+        self.rows.get(self.selected).and_then(|r| r.control.as_ref())
+    }
+
     pub fn take_activated(&mut self) -> Option<String> {
         self.activated.take()
     }
 
-    pub fn take_tab_click(&mut self) -> Option<Tab> {
-        self.tab_click.take()
-    }
-
-    /// The slider row's index, if the list has one.
-    fn slider_row(&self) -> Option<usize> {
-        self.rows.iter().position(|r| r.slider.is_some())
-    }
-
-    /// The range a slider row's value is read in (and the readout shows).
-    pub fn set_slider_range(&mut self, min: f32, max: f32) {
-        self.slider_stamp.set_range(min, max);
-        self.sync_slider_stamp();
-    }
-
-    /// Move the slider row — and the stamp that draws it — to a value.
-    pub fn set_slider_value(&mut self, v: f32) {
-        if let Some(i) = self.slider_row() {
-            self.rows[i].slider = Some(v);
+    /// Replace one row's control in place — the app re-reads a control from
+    /// the live value after applying it, without touching the ranking, the
+    /// selection or the scroll.
+    pub fn set_control(&mut self, id: &str, control: Option<Control>) {
+        if let Some(row) = self.rows.iter_mut().find(|r| r.id == id) {
+            row.control = control;
         }
-        self.slider_stamp.set_scaled_value(v);
+        self.sync_color_selectors();
     }
 
-    fn sync_slider_stamp(&mut self) {
-        if let Some(v) = self.slider_row().and_then(|i| self.rows[i].slider) {
-            self.slider_stamp.set_scaled_value(v);
+    /// Move a slider row to a value, clamped and snapped as the row says.
+    pub fn set_slider_value(&mut self, i: usize, v: f32) {
+        if let Some(c) = self.rows.get_mut(i).and_then(|r| r.control.as_mut()) {
+            let q = c.quantize(v);
+            if let Control::Slider { value, .. } = c {
+                *value = q;
+            }
         }
     }
 
-    pub fn take_slider_change(&mut self) -> Option<f32> {
+    pub fn take_slider_change(&mut self) -> Option<(String, f32)> {
         self.slider_change.take()
     }
 
-    /// Whether a press has taken hold of the slider — the app arms its
+    /// Whether a press has taken hold of a slider — the app arms its
     /// widget drag on this.
     pub fn slider_dragging(&self) -> bool {
-        self.slider_drag
+        self.slider_drag.is_some()
+    }
+
+    /// The colour selector behind a colour row, if that row has one.
+    pub fn color_selector(&self, id: &str) -> Option<&Adapted<ColorSelector>> {
+        self.colors.iter().find(|(k, _)| k == id).map(|(_, s)| s)
+    }
+
+    /// The colour selector whose hex well is being typed into, if any — the
+    /// app hands it the keyboard ahead of the filter.
+    pub fn editing_color(&mut self) -> Option<&mut Adapted<ColorSelector>> {
+        self.colors.iter_mut().find(|(_, s)| s.inner().editing).map(|(_, s)| s)
+    }
+
+    pub fn take_color_changes(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.color_changes)
+    }
+
+    /// Give every colour row a selector, and set each from its row — unless
+    /// the selector is mid-edit, when the buffer is the user's and the row's
+    /// value is what it was opened on. A value the APP put in is not a
+    /// change to report back, so the flag it raises is dropped here.
+    fn sync_color_selectors(&mut self) {
+        for row in &self.rows {
+            let Some(Control::Color { hex, alpha }) = &row.control else { continue };
+            let k = match self.colors.iter().position(|(k, _)| *k == row.id) {
+                Some(k) => k,
+                None => {
+                    let sel = if *alpha { ColorSelector::new_rgba([0, 0, 0, 255]) } else { ColorSelector::new([0; 3]) };
+                    self.colors.push((row.id.clone(), sel));
+                    self.colors.len() - 1
+                }
+            };
+            let sel = &mut self.colors[k].1;
+            if !sel.inner().editing {
+                sel.set_value_string(hex);
+                let _ = sel.take_change();
+            }
+        }
+    }
+
+    /// Collect what the selectors changed — a picker line, a hex committed
+    /// by Enter — as `(row id, hex)`, and move the rows to match.
+    fn drain_color_selectors(&mut self) -> bool {
+        let mut changed = false;
+        for (id, sel) in &mut self.colors {
+            if !sel.take_change() {
+                continue;
+            }
+            let Some(hex) = sel.get_value_string() else { continue };
+            if let Some(Control::Color { hex: h, .. }) =
+                self.rows.iter_mut().find(|r| r.id == *id).and_then(|r| r.control.as_mut())
+            {
+                *h = hex.clone();
+            }
+            self.color_changes.push((id.clone(), hex));
+            changed = true;
+        }
+        changed
     }
 
     /// The switch column's width: reserved on EVERY row as soon as any row
     /// has a toggle, so the chord column keeps a straight edge.
     fn toggle_col(&self) -> f32 {
-        if self.rows.iter().any(|r| r.toggle.is_some()) { TOGGLE_W + 12.0 } else { 0.0 }
+        if self.rows.iter().any(|r| r.toggle().is_some()) { TOGGLE_W + 12.0 } else { 0.0 }
     }
 
-    /// The band a slider row draws — the stamp is painted over exactly this,
-    /// so the pointer maps to the value where the band is drawn. It ends at
-    /// the chord column's right edge, not the row's, which is why it needs
-    /// the roster rather than the rect alone.
+    /// The band a slider or colour row draws its control over — so the
+    /// pointer maps to the value where the band is drawn. It ends at the
+    /// chord column's right edge, not the row's, which is why it needs the
+    /// roster rather than the rect alone.
     fn slider_band_rect(&self, r: Rect) -> Rect {
         let x = r.x + r.width - 8.0 - SLIDER_W;
         let right = r.x + r.width - 8.0 - self.toggle_col();
         Rect { x, y: r.y + 2.0, width: (right - x).max(10.0), height: ROW_H - 4.0 }
     }
 
-    /// The whole control: the band plus the readout lane ahead of it. This is
-    /// what the pointer tests against, so the wheel turns the slider over the
-    /// readout too.
+    /// The whole slider control: the band plus the readout lane ahead of it.
+    /// This is what the pointer tests against, so the wheel turns the slider
+    /// over the readout too.
     fn slider_rect(&self, r: Rect) -> Rect {
         let b = self.slider_band_rect(r);
         Rect { x: b.x - READOUT_W - READOUT_GAP, width: b.width + READOUT_W + READOUT_GAP, ..b }
@@ -552,54 +610,73 @@ impl Dialog {
         (b.x, b.width)
     }
 
-    /// Step the slider by wheel notches: 2% of the range each, the toolkit
+    /// Step a slider row by wheel notches: 2% of the range each, the toolkit
     /// slider's own rate, up meaning more — the sign the viewport's zoom
-    /// wheel has, since this IS a zoom.
-    fn scroll_slider(&mut self, notches: f32) -> bool {
-        let (min, max) = self.slider_stamp.range();
-        let Some(cur) = self.slider_row().and_then(|i| self.rows[i].slider) else { return false };
-        let v = (cur + notches * 0.02 * (max - min)).clamp(min.min(max), max.max(min));
-        if (v - cur).abs() < 1e-6 {
+    /// wheel has.
+    fn scroll_slider(&mut self, i: usize, notches: f32) -> bool {
+        let Some(Control::Slider { value, min, max, .. }) = self.rows.get(i).and_then(|r| r.control.as_ref()) else {
+            return false;
+        };
+        let (cur, min, max) = (*value, *min, *max);
+        let v = cur + notches * 0.02 * (max - min);
+        self.set_slider_value(i, v);
+        let Some(now) = self.rows[i].slider_value() else { return false };
+        if (now - cur).abs() < 1e-6 {
             return false;
         }
-        self.set_slider_value(v);
-        self.slider_change = Some(v);
+        self.slider_change = Some((self.rows[i].id.clone(), now));
         true
     }
 
-    /// Put the slider where the pointer is along the captured band. Jumps,
-    /// rather than dragging relative to a grab: the band has no thumb to
-    /// grab, and a click on a zoom scale should mean "this much".
+    /// Put the dragged slider where the pointer is along the captured band.
+    /// Jumps, rather than dragging relative to a grab: the band has no thumb
+    /// to grab, and a click on a scale should mean "this much".
     fn slide_to(&mut self, px: f32) -> bool {
+        let Some(i) = self.slider_drag else { return false };
+        let Some(Control::Slider { value, min, max, .. }) = self.rows.get(i).and_then(|r| r.control.as_ref()) else {
+            return false;
+        };
+        let (old, min, max) = (*value, *min, *max);
         let (tx, tw) = self.slider_track;
         let t = ((px - tx) / tw).clamp(0.0, 1.0);
-        let (min, max) = self.slider_stamp.range();
-        let v = min + t * (max - min);
-        let old = self.slider_row().and_then(|i| self.rows[i].slider);
-        self.set_slider_value(v);
-        self.slider_change = Some(v);
-        old != Some(v)
+        self.set_slider_value(i, min + t * (max - min));
+        let Some(now) = self.rows[i].slider_value() else { return false };
+        self.slider_change = Some((self.rows[i].id.clone(), now));
+        now != old
     }
 
     /// Swap in a freshly ranked row list, keeping the selection in range.
     ///
     /// The selection goes back to the top rather than trying to follow the
-    /// command it was on: the rows are re-ranked by the query, so "the same
-    /// row" after a keystroke is a different command, and the best match
-    /// being preselected is the whole point of ranking them.
+    /// row it was on: the rows are re-ranked by the query, so "the same row"
+    /// after a keystroke is a different one, and the best match being
+    /// preselected is the whole point of ranking them.
     pub fn set_rows(&mut self, rows: Vec<Row>) {
         self.rows = rows;
         self.selected = 0;
         self.set_scroll_px(0.0);
-        self.sync_slider_stamp();
+        self.sync_color_selectors();
+    }
+
+    /// Hand a press or wheel on a colour row's band to its selector: the well
+    /// begins a hex edit, the swatch opens the picker. The selector's rect is
+    /// the band, set here because the band moves with the scroll.
+    fn color_event(&mut self, i: usize, band: Rect, event: &Event, ectx: &mut EventCtx) -> bool {
+        let id = self.rows[i].id.clone();
+        let Some(k) = self.colors.iter().position(|(k, _)| *k == id) else { return false };
+        let Some(ui) = ectx.ui.as_deref_mut() else { return false };
+        let sel = &mut self.colors[k].1;
+        WidgetHost::set_rect(sel, band.x, band.y, band.width, band.height);
+        let taken = sel.handle_event(event, ui);
+        self.drain_color_selectors();
+        taken
     }
 }
 
 impl Layout for Dialog {
     /// Above every pane, and above the second network editor's plates: the
     /// dialog is modal in practice — a press inside it never reaches what it
-    /// covers — so it has to be drawn that way too. The dialog's params body
-    /// sits one above this (see `DIALOG_PARAMS_IDX`).
+    /// covers — so it has to be drawn that way too.
     fn z_order(&self) -> i32 {
         900
     }
@@ -640,17 +717,18 @@ impl Paint for Dialog {
     /// readouts stop bleeding through the plate.
     ///
     /// The clamp exempts text whose OWN bounds coincide with the occluder, so
-    /// everything drawn inside the dialog — this widget's labels and, via
-    /// `append_dialog`, the settings body's — carries these exact bounds and
-    /// does its own truncating.
+    /// everything drawn inside the dialog carries these exact bounds and does
+    /// its own truncating — the hosted colour selectors' text included, which
+    /// is re-emitted retagged (see `paint`).
+    ///
     /// **`occluding` exists because one claim serves two mechanisms that want
     /// opposite answers.** `UiContext::is_coordinate_covered` reads the same
     /// `popover_rect` — off every REGISTERED widget, not only the ones in
     /// `active_popovers` — to decide that a press has landed under something
     /// else. With the claim standing, every control inside the dialog is
-    /// covered by the plate it is drawn on and nothing in the Settings half
-    /// can be clicked. `State::dispatch_uncovered` lowers the flag for the
-    /// length of a dispatch into the dialog and puts it straight back.
+    /// covered by the plate it is drawn on and nothing can be clicked.
+    /// `State::dispatch_uncovered` lowers the flag for the length of a
+    /// dispatch into the dialog and puts it straight back.
     fn popover(&self, rect: Rect) -> Option<(f32, f32, f32, f32)> {
         self.occluding.then_some((rect.x, rect.y, rect.width, rect.height))
     }
@@ -688,58 +766,11 @@ impl Paint for Dialog {
             display::truncate_head(text, cols_for(width))
         };
 
-        // --- The header. In AddNode there are no halves to move between, so
-        // the strip's band carries a title instead: the same plate, saying
-        // what this opening of it is for.
-        if self.mode == Mode::AddNode {
-            let strip = tab_strip(rect);
-            let title = "Add Node";
-            let tw = display::measure_text_width(title, &family, font_size);
-            let tx = strip.x + (strip.width - tw) * 0.5;
-            let ty = cce_ui::layout::align_text_y(strip.y, strip.height, font_size, 0.0);
-            ctx.text_with(title, tx, ty, font_size, [0xf0, 0xf0, 0xf6], Some(family.clone()), own);
-        }
-        // --- The tab strip: one segmented control, so the seam between the
-        // two halves reads as a seam and not as a gap.
-        for tab in Tab::ALL {
-            if self.mode != Mode::Tabbed {
-                break;
-            }
-            let r = tab_rect(rect, tab);
-            let active = tab == self.tab;
-            // Active wears the focus language the rest of the app uses for
-            // "this is the live one": the tinted bevel, a glint on the
-            // control's own silhouette.
-            if active {
-                ctx.bevel_tinted(r, radii, &cce_ui::scene::Material::from_fill(colors::param_plate_fill()), depth, tint);
-            } else if self.hover_tab == Some(tab) {
-                ctx.rounded_rect(r, ctrl_r, (true, true, true, true), [1.0, 1.0, 1.0, 0.05]);
-            }
-            let label = tab.label();
-            let tw = display::measure_text_width(label, &family, font_size);
-            let tx = r.x + (r.width - tw) * 0.5;
-            let ty = cce_ui::layout::align_text_y(r.y, r.height, font_size, 0.0);
-            let color = if active { [0xf0, 0xf0, 0xf6] } else { [0x9a, 0x9a, 0xa6] };
-            ctx.text_with(
-                label,
-                tx,
-                ty,
-                font_size,
-                color,
-                Some(family.clone()),
-                own,
-            );
-        }
-
-        // The Settings half's body is a separate roster slot, painted by the
-        // designer's own walk — nothing more to draw here.
-        if self.mode == Mode::Tabbed && self.tab == Tab::Settings {
-            return;
-        }
-
         // --- The query line: a well, like the text rows in the params pane.
         // The caret is a plain rule and does not blink: the dialog owns the
         // keyboard outright while it is open, so there is no focus to signal.
+        // In AddNode the hint says what this opening of the plate is for;
+        // there is no title band, so the two openings are the same height.
         let q = query_rect(rect);
         ctx.rounded_rect(q, ctrl_r, (true, true, true, true), [0.0, 0.0, 0.0, 0.22]);
         let qty = cce_ui::layout::align_text_y(q.y, q.height, font_size, 0.0);
@@ -748,8 +779,8 @@ impl Paint for Dialog {
         if self.query.is_empty() {
             let hint = fit(
                 match self.mode {
-                    Mode::Tabbed => "Type to filter commands",
-                    Mode::AddNode => "Type to filter nodes",
+                    Mode::Commands => "Type to filter commands and settings",
+                    Mode::AddNode => "Add Node: type to filter nodes",
                 },
                 q_w,
             );
@@ -782,7 +813,7 @@ impl Paint for Dialog {
         if self.rows.is_empty() {
             let ty = cce_ui::layout::align_text_y(list.y, ROW_H, font_size, 0.0);
             let empty = match self.mode {
-                Mode::Tabbed => "No matching command",
+                Mode::Commands => "No matching command or setting",
                 Mode::AddNode => "No matching node",
             };
             ctx.text_with(empty, list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
@@ -798,10 +829,12 @@ impl Paint for Dialog {
             // tinted bevel it vanished outright: the selected row, the one
             // row whose state Enter is about to flip, was the one row whose
             // state could not be read. On the plate it reads like the rest.
-            // A slider row's control is wider than the toggle column and
-            // takes the chord column's place on that one row.
-            let ctl_col = if row.slider.is_some() {
+            // A slider or colour row's control is wider than the toggle
+            // column and takes the chord column's place on that one row.
+            let ctl_col = if row.is_slider() {
                 (r.x + r.width) - self.slider_rect(r).x + 4.0
+            } else if row.is_color() {
+                (r.x + r.width) - self.slider_band_rect(r).x + 4.0
             } else {
                 toggle_col
             };
@@ -813,28 +846,26 @@ impl Paint for Dialog {
                 ctx.rounded_rect(hl, ctrl_r, (true, true, true, true), [1.0, 1.0, 1.0, 0.05]);
             }
             let ty = cce_ui::layout::align_text_y(r.y, r.height, font_size, 0.0);
-            let chord_w = if row.chord.is_empty() {
+            let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
+            // What the chord column shows: the chord, or a choice row's
+            // current option between its two arrows — a value, so it wears
+            // the label's colour rather than the chord's grey.
+            let (right_text, right_color) = match &row.control {
+                Some(Control::Choice { options, index }) => {
+                    (format!("\u{25c2} {} \u{25b8}", options.get(*index).map(String::as_str).unwrap_or("")), label_color)
+                }
+                _ => (row.chord.clone(), [0x85, 0x85, 0x92]),
+            };
+            let right_w = if right_text.is_empty() {
                 0.0
             } else {
-                display::measure_text_width(&row.chord, &family, font_size)
+                display::measure_text_width(&right_text, &family, font_size)
             };
             // The label's clip stops short of the chord column so a long
             // label is cut by it rather than running under it.
             let chord_right = r.x + r.width - 8.0 - ctl_col;
-            let label_right = chord_right - if chord_w > 0.0 { chord_w + 12.0 } else { 0.0 };
-            let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
-            // The swatch: a small rounded tile ahead of the label, ringed
-            // faintly so a colour near the plate's own does not vanish into
-            // it. The label steps right by the tile.
-            let mut label_x = r.x + 8.0;
-            if let Some(sw) = row.swatch {
-                let side = SWATCH_SIDE;
-                let tile = Rect { x: label_x, y: r.y + (r.height - side) * 0.5, width: side, height: side };
-                let ring = Rect { x: tile.x - 1.0, y: tile.y - 1.0, width: side + 2.0, height: side + 2.0 };
-                ctx.rounded_rect(ring, 4.0, (true, true, true, true), [1.0, 1.0, 1.0, 0.22]);
-                ctx.rounded_rect(tile, 3.0, (true, true, true, true), sw);
-                label_x += side + 8.0;
-            }
+            let label_right = chord_right - if right_w > 0.0 { right_w + 12.0 } else { 0.0 };
+            let label_x = r.x + 8.0;
             ctx.text_with(
                 if row.truncate_head {
                     fit_head(&row.label, label_right - label_x)
@@ -848,42 +879,72 @@ impl Paint for Dialog {
                 Some(family.clone()),
                 own,
             );
-            if chord_w > 0.0 {
+            if right_w > 0.0 {
                 ctx.text_with(
-                    row.chord.clone(),
-                    chord_right - chord_w,
+                    right_text,
+                    chord_right - right_w,
                     ty,
                     font_size,
-                    [0x85, 0x85, 0x92],
+                    right_color,
                     Some(family.clone()),
                     own,
                 );
             }
-            if let Some(on) = row.toggle {
-                let tr = Rect {
-                    x: r.x + r.width - 8.0 - TOGGLE_W,
-                    y: r.y + (r.height - TOGGLE_H) * 0.5,
-                    width: TOGGLE_W,
-                    height: TOGGLE_H,
-                };
-                Paint::paint(&*self.toggle_stamps[on as usize], tr, ctx);
-            }
-            if let Some(v) = row.slider {
-                let band = self.slider_band_rect(r);
-                Paint::paint(&*self.slider_stamp, band, ctx);
-                // The readout, right-aligned in its lane ahead of the band —
-                // the dialog's own text, so it clears the occlusion clamp.
-                let readout = format!("{}%", v.round() as i64);
-                let rw = display::measure_text_width(&readout, &family, font_size);
-                ctx.text_with(
-                    readout,
-                    band.x - READOUT_GAP - rw,
-                    ty,
-                    font_size,
-                    label_color,
-                    Some(family.clone()),
-                    own,
-                );
+            match &row.control {
+                Some(Control::Toggle(on)) => {
+                    let tr = Rect {
+                        x: r.x + r.width - 8.0 - TOGGLE_W,
+                        y: r.y + (r.height - TOGGLE_H) * 0.5,
+                        width: TOGGLE_W,
+                        height: TOGGLE_H,
+                    };
+                    Paint::paint(&*self.toggle_stamps[*on as usize], tr, ctx);
+                }
+                Some(Control::Slider { value, min, max, dec, suffix, .. }) => {
+                    let band = self.slider_band_rect(r);
+                    {
+                        let mut stamp = self.slider_stamp.borrow_mut();
+                        stamp.set_range(*min, *max);
+                        stamp.set_scaled_value(*value);
+                        Paint::paint(&**stamp, band, ctx);
+                    }
+                    // The readout, right-aligned in its lane ahead of the
+                    // band — the dialog's own text, so it clears the
+                    // occlusion clamp.
+                    let readout = format!("{:.*}{}", *dec, value, suffix);
+                    let rw = display::measure_text_width(&readout, &family, font_size);
+                    ctx.text_with(
+                        readout,
+                        band.x - READOUT_GAP - rw,
+                        ty,
+                        font_size,
+                        label_color,
+                        Some(family.clone()),
+                        own,
+                    );
+                }
+                Some(Control::Color { .. }) => {
+                    if let Some(sel) = self.color_selector(&row.id) {
+                        let band = self.slider_band_rect(r);
+                        // Painted twice, on purpose. The selector's hex text
+                        // has to carry the DIALOG's bounds or the occluder
+                        // the dialog registers clamps it away, and a
+                        // `PaintCtx` cannot be handed a prim back: the first
+                        // pass lays down the well and the swatch (its text
+                        // lands inside the occluder and is clamped to
+                        // nothing), the second is a scratch pass whose text
+                        // alone is re-emitted retagged.
+                        Paint::paint(&**sel, band, ctx);
+                        let mut scratch = PaintCtx::new();
+                        Paint::paint(&**sel, band, &mut scratch);
+                        for item in scratch.finish().items {
+                            if let Prim::Text { text, x, y, font_size, color, font, .. } = item.prim {
+                                ctx.text_with(text, x, y, font_size, color, font, own);
+                            }
+                        }
+                    }
+                }
+                Some(Control::Choice { .. }) | None => {}
             }
         }
         });
@@ -920,11 +981,10 @@ impl Paint for Dialog {
 }
 
 impl Input for Dialog {
-    /// Advance the list's glide / coast (see `scroll_px`).
+    /// Advance the list's glide / coast (see `scroll_px`), and poll the
+    /// colour selectors — a picker streams its values through a reader
+    /// thread that only a tick can see.
     fn tick(&mut self, dt: f32, rect: Rect) -> bool {
-        if !self.shows_list() {
-            return false;
-        }
         let max = self.max_scroll_px();
         self.scroll_motion.reconcile(0.0, self.scroll_px);
         let moved = self.scroll_motion.tick(dt, cce_ui::widget::Bounds::max(0.0), cce_ui::widget::Bounds::max(max));
@@ -938,7 +998,12 @@ impl Input for Dialog {
         let flipped = self.sb_activity.tick(dt, visible, self.sb_dragging);
         let fade = self.sb_activity.fade();
         let fading = if self.sb_activity.raised() { fade < 1.0 } else { fade > 0.0 };
-        moved || self.scroll_motion.is_animating() || flipped || self.sb_activity.holding() || fading
+        let mut picking = false;
+        for (_, sel) in &mut self.colors {
+            picking |= Input::tick(sel.inner_mut(), dt, rect);
+        }
+        let colored = self.drain_color_selectors();
+        moved || self.scroll_motion.is_animating() || flipped || self.sb_activity.holding() || fading || picking || colored
     }
 
     /// The whole rect, always — this is what makes the dialog modal over what
@@ -952,47 +1017,52 @@ impl Input for Dialog {
         let rect = ectx.rect;
         match event {
             Event::MouseButton { button: MouseButton::Left, state: ElementState::Pressed, x, y, .. } => {
-                if self.mode == Mode::Tabbed {
-                    if let Some(tab) = self.tab_at(rect, *x, *y) {
-                        self.tab_click = Some(tab);
-                        return true;
-                    }
+                // The raised bar is in front of the rows; sunk, it is not
+                // there and the press reaches the row.
+                if self.sb_press(rect, *x, *y) {
+                    return true;
                 }
-                if self.shows_list() {
-                    // The raised bar is in front of the rows; sunk, it is
-                    // not there and the press reaches the row.
-                    if self.sb_press(rect, *x, *y) {
-                        return true;
-                    }
-                    if let Some(i) = self.row_at(rect, *x, *y) {
-                        self.selected = i;
-                        if self.rows[i].slider.is_some() {
-                            // On the band: take hold and jump there. On the
-                            // rest of the row — the readout lane included:
-                            // selected, and nothing to run. A press tests the
-                            // BAND rather than the whole control, or a click
-                            // on the readout would jump the value to the end
-                            // of the range nearest it.
-                            if let Some(r) = self.row_rect(rect, i) {
-                                let s = self.slider_band_rect(r);
-                                if *x >= s.x && *x < s.x + s.width {
-                                    self.slider_track = self.slider_track_of(r);
-                                    self.slider_drag = true;
-                                    self.slide_to(*x);
-                                }
+                if let Some(i) = self.row_at(rect, *x, *y) {
+                    self.selected = i;
+                    let r = self.row_rect(rect, i);
+                    if self.rows[i].is_slider() {
+                        // On the band: take hold and jump there. On the
+                        // rest of the row — the readout lane included:
+                        // selected, and nothing to run. A press tests the
+                        // BAND rather than the whole control, or a click
+                        // on the readout would jump the value to the end
+                        // of the range nearest it.
+                        if let Some(r) = r {
+                            let s = self.slider_band_rect(r);
+                            if *x >= s.x && *x < s.x + s.width {
+                                self.slider_track = self.slider_track_of(r);
+                                self.slider_drag = Some(i);
+                                self.slide_to(*x);
                             }
-                            return true;
                         }
-                        self.activated = self.rows.get(i).map(|r| r.id.clone());
                         return true;
                     }
+                    if self.rows[i].is_color() {
+                        // On the band: the selector's — a hex edit or the
+                        // picker. Elsewhere on the row: selected, nothing
+                        // to run.
+                        if let Some(r) = r {
+                            let s = self.slider_band_rect(r);
+                            if *x >= s.x && *x < s.x + s.width {
+                                self.color_event(i, s, event, ectx);
+                            }
+                        }
+                        return true;
+                    }
+                    self.activated = self.rows.get(i).map(|r| r.id.clone());
+                    return true;
                 }
                 // Inside the plate but on no control: consumed anyway, so the
                 // press cannot reach the pane the dialog is covering.
                 true
             }
             Event::MouseButton { button: MouseButton::Left, state: ElementState::Released, .. } => {
-                if std::mem::take(&mut self.slider_drag) {
+                if self.slider_drag.take().is_some() {
                     return true;
                 }
                 if std::mem::take(&mut self.sb_dragging) {
@@ -1003,32 +1073,30 @@ impl Input for Dialog {
                 false
             }
             Event::PointerMove { x, y, .. } => {
-                if self.slider_drag {
+                if self.slider_drag.is_some() {
                     return self.slide_to(*x);
                 }
                 if self.sb_dragging {
                     return self.sb_drag_to(rect, *y);
                 }
                 self.sb_activity.set_hover(self.over_scrollbar(rect, *x, *y));
-                let row = self.shows_list().then(|| self.row_at(rect, *x, *y)).flatten();
-                let tab = (self.mode == Mode::Tabbed).then(|| self.tab_at(rect, *x, *y)).flatten();
-                let changed = row != self.hover_row || tab != self.hover_tab;
+                let row = self.row_at(rect, *x, *y);
+                let changed = row != self.hover_row;
                 self.hover_row = row;
-                self.hover_tab = tab;
                 changed
             }
             Event::MouseWheel { delta, x, y, .. } => {
-                if !self.shows_list() || self.rows.is_empty() {
+                if self.rows.is_empty() {
                     return false;
                 }
-                // Over the slider row's control the wheel turns the slider,
+                // Over a slider row's control the wheel turns the slider,
                 // not the list — the rest of the row still scrolls.
                 if let Some(i) = self.row_at(rect, *x, *y) {
-                    if self.rows[i].slider.is_some() {
+                    if self.rows[i].is_slider() {
                         if let Some(r) = self.row_rect(rect, i) {
                             let s = self.slider_rect(r);
                             if *x >= s.x && *x < s.x + s.width {
-                                return self.scroll_slider(delta.notches_y());
+                                return self.scroll_slider(i, delta.notches_y());
                             }
                         }
                     }
@@ -1052,15 +1120,15 @@ impl Input for Dialog {
         }
     }
 
-    // The slider drag rides the app's widget-drag protocol (armed by
-    // `State::dialog_mouse_input` once a press has taken the band), so the
+    // A slider drag rides the app's widget-drag protocol (armed by
+    // `State::dialog_mouse_input` once a press has taken a band), so the
     // pointer keeps moving the value after it leaves the plate, as a params
     // pane slider's does.
     fn draggable(&self, _rect: Rect) -> bool {
-        self.slider_drag
+        self.slider_drag.is_some()
     }
     fn is_dragging(&self) -> bool {
-        self.slider_drag
+        self.slider_drag.is_some()
     }
     fn drag_begin(&mut self, px: f32, _py: f32, _rect: Rect) {
         self.slide_to(px);
@@ -1069,7 +1137,7 @@ impl Input for Dialog {
         self.slide_to(px)
     }
     fn drag_end(&mut self) {
-        self.slider_drag = false;
+        self.slider_drag = None;
     }
 }
 
@@ -1077,22 +1145,23 @@ impl Input for Dialog {
 // The designer's half: what the dialog shows, and what choosing a row does.
 // ---------------------------------------------------------------------------
 
-use crate::app::{param_display, ParamDef, State};
-use crate::slots::{DIALOG_IDX, DIALOG_PARAMS_IDX};
+use crate::app::State;
+use crate::command::Context;
+use crate::slots::DIALOG_IDX;
 
-/// The Commands list's zoom row: not a registry command but a control — a
-/// slider over the network zoom, present only while the network pane is
-/// focused, since zoom is that pane's and a slider for a pane you are not
-/// looking at would be a strange thing to offer. Picking it runs nothing;
-/// dragging it, or the arrow keys while it is selected, zoom in place with
-/// the dialog up, the way the toggle rows stay up.
+/// The list's zoom row: not a registry command but a control — a slider
+/// over the network zoom, present only while the network pane is focused,
+/// since zoom is that pane's and a slider for a pane you are not looking at
+/// would be a strange thing to offer. Picking it runs nothing; dragging it,
+/// or the arrow keys while it is selected, zoom in place with the dialog
+/// up, the way the toggle rows stay up.
 pub const ZOOM_ROW_ID: &str = "zoom_level";
 
-/// The Commands list's other non-command row: the open project's PATH, with
-/// its file name in the chord column the way a command's chord sits there —
-/// the palette's readout of what is being edited. Picking it copies the path
-/// to the clipboard, which is the one thing anyone wants a path on screen
-/// for. It heads the list, where it reads as the document the rest of the
+/// The list's other non-command row: the open project's PATH, with its file
+/// name in the chord column the way a command's chord sits there — the
+/// palette's readout of what is being edited. Picking it copies the path to
+/// the clipboard, which is the one thing anyone wants a path on screen for.
+/// It heads the list, where it reads as the document the rest of the
 /// commands act on.
 pub const PATH_ROW_ID: &str = "project_path";
 
@@ -1110,48 +1179,49 @@ pub const RECENT_ROW_PREFIX: &str = "recent:";
 /// manager, and a query narrows the rest.
 pub const RECENT_ROW_LIMIT: usize = 5;
 
-/// Where a Settings row's value lives.
+/// Prefix of a setting row's id; the rest is the [`Setting`]'s label, which
+/// is unique across the table (`dialog_settings_labels_are_unique`).
+pub const SETTING_ROW_PREFIX: &str = "setting:";
+
+pub fn setting_row_id(label: &str) -> String {
+    format!("{SETTING_ROW_PREFIX}{label}")
+}
+
+/// The setting a row id names, if it is a setting row.
+pub fn setting_of_row(id: &str) -> Option<&'static Setting> {
+    let label = id.strip_prefix(SETTING_ROW_PREFIX)?;
+    SETTINGS.iter().find(|s| s.label == label)
+}
+
+/// Where a setting row's value lives.
 ///
 /// It used to be neither the live `State` fields nor `DesignSettings`: both
 /// were DOWNSTREAM of the root meta node, whose utility subnets were copied
 /// over live state on every param change, so a write straight to
 /// `State::grid_thickness` survived exactly until the next one. With that
-/// node retired the live field IS the value; this enum says which of the
-/// three remaining kinds of owner each row has.
+/// node retired the live field IS the value; this enum says which of the two
+/// remaining kinds of owner each row has. (A third kind — a toggle the
+/// command registry owns — went when the settings joined the commands list:
+/// those toggles ARE command rows there, and a second row for each would
+/// have listed every switch twice.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
     /// A display setting the app owns outright: a live field on `State`,
     /// persisted by `DesignSettings` into `state.kdl`. Named by the key
-    /// `settings_field_read` / `settings_field_write` dispatch on.
-    ///
-    /// These were `Subnet(node, param)` — a param on a utility node under the
-    /// root meta node — until 2026-09-23. That node tree WAS the store of
-    /// record: `apply_settings_from_menubar_subnets` copied it onto the live
-    /// state after every edit, so writing a live field directly survived
-    /// until the next unrelated change and no longer. With the meta node
-    /// retired the live field is simply the value, and the row writes it.
+    /// `settings_field_*` dispatch on.
     Field(&'static str),
-    /// A toggle the command registry already owns end to end: the command does
-    /// the live flip, the menu checkmark AND any writeback in one place.
-    /// Square Aspect and Show Camera Pivot are per-CAMERA settings with no
-    /// node at all behind the Default Camera, and their commands are the only
-    /// code that gets both cases right — so the row dispatches instead of
-    /// writing, and reads its displayed value off `command_toggle_state`, the
-    /// same table the palette's own switches read.
-    Command(&'static str),
     /// A param on the ACTIVE camera node, with the live field as the
     /// fallback: the Default Camera has no node, so there is nothing to write
     /// but the field.
     ActiveCamera(&'static str),
 }
 
-/// The control a [`Setting`] row draws, for the rows that have no param
-/// elsewhere to borrow a shape from.
+/// The control a [`Setting`] row draws.
 ///
-/// `Owner::Field` rows need this because their value is a bare Rust field —
-/// there is no `ParamDef` behind them carrying a type and a range the way a
-/// subnet param did. Spelling it here keeps the table the single description
-/// of the Settings half.
+/// A bare Rust field carries no type and no range the way a param did, so
+/// the table spells it; the row's [`Control`] is built from it and the live
+/// value. The value strings are the params pane's encodings, so a setting
+/// reads and writes the way a node parameter of the same shape does.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Ctl {
     Toggle,
@@ -1159,9 +1229,9 @@ pub enum Ctl {
     Color,
     /// `#rrggbbaa` — the wire colour, whose alpha is its own opacity.
     Rgba,
-    /// An integer spinbox over `min..=max`. The stored float is scaled by
-    /// `unit` (thousandths for Grid Thickness, tenths for Origin Size), which
-    /// is the convention those params already used.
+    /// A whole number over `min..=max`. The stored float is scaled by
+    /// `unit` (thousandths for Grid Thickness, tenths for Origin Size),
+    /// which is the convention those params already used.
     Spin { min: f32, max: f32, unit: f32 },
     /// A float slider, `min..=max`, shown to `dec` decimals.
     Slider { min: f32, max: f32, dec: usize },
@@ -1169,164 +1239,89 @@ pub enum Ctl {
     Choice(&'static [&'static str]),
 }
 
-/// One row of the Settings half.
+/// One setting row of the list.
 pub struct Setting {
-    /// What the dialog calls it — and, because `param_display` keys a row by
-    /// its label, the identity the writeback resolves back to this row.
-    /// Unique across the table, section titles included.
+    /// What the dialog calls it — and the row's identity: the row id is
+    /// the label under [`SETTING_ROW_PREFIX`], and the writeback resolves
+    /// it back to this row. Unique across the table.
     pub label: &'static str,
-    pub owner: Option<Owner>,
-    /// The control, for `Owner::Field` rows. `Command` rows are always
-    /// switches and `ActiveCamera` rows borrow the camera param's shape.
-    pub ctl: Option<Ctl>,
+    pub owner: Owner,
+    pub ctl: Ctl,
 }
 
 impl Setting {
-    const fn section(label: &'static str) -> Self {
-        Setting { label, owner: None, ctl: None }
-    }
-
-    /// A row whose value the command registry owns.
-    const fn cmd(label: &'static str, id: &'static str) -> Self {
-        Setting { label, owner: Some(Owner::Command(id)), ctl: Some(Ctl::Toggle) }
-    }
-
     /// A row over a live field.
     const fn field(label: &'static str, key: &'static str, ctl: Ctl) -> Self {
-        Setting { label, owner: Some(Owner::Field(key)), ctl: Some(ctl) }
+        Setting { label, owner: Owner::Field(key), ctl }
     }
 
+    /// A row over the active camera's param of that name, a whole number
+    /// in tenths as the camera template's own spinbox is.
     const fn camera(label: &'static str, name: &'static str) -> Self {
-        Setting { label, owner: Some(Owner::ActiveCamera(name)), ctl: None }
+        Setting { label, owner: Owner::ActiveCamera(name), ctl: Ctl::Spin { min: 1.0, max: 50.0, unit: 10.0 } }
     }
 }
 
-/// The Settings half, in order.
+/// The setting rows, in the order an empty query lists them.
 ///
 /// Scope is exactly what `DesignSettings` persists: the DISPLAY state, which
 /// is the part of the app's configuration that is a preference rather than
-/// part of a project. That is now the whole of it — the four utility subnets
-/// under the root meta node (`main`, `view`, `guides`, `render`) held these
-/// values until 2026-09-23, and every one of them that was reachable only by
-/// selecting one of those nodes is a row here. Anything left out would not
-/// be "hidden in the node tree", it would be gone.
+/// part of a project. The four utility subnets under the root meta node
+/// (`main`, `view`, `guides`, `render`) held these values until 2026-09-23,
+/// and every one of them that was reachable only by selecting one of those
+/// nodes is a row here or a command in the registry. Anything left out would
+/// not be "hidden in the node tree", it would be gone —
+/// `every_retired_subnet_setting_is_reachable` is the backstop.
 ///
-/// Still deliberately NOT here: the pane-visibility toggles (the View menu
-/// and the plate corners own those, and a settings dialog is a strange place
-/// to hide a pane from), the active camera (the viewport menubar's own menu,
-/// whose entries are the camera NODES and so cannot be a fixed table), and
-/// keybindings, which this DE edits as `input.kdl` on purpose.
+/// The TOGGLES those subnets held (Show Grid, Show Wireframe, Square Aspect
+/// …) are not here: each is a registry command with a switch on its own
+/// row, and this table lists what is not a command. Still deliberately NOT
+/// here either: the pane-visibility toggles (commands too), the active
+/// camera (the viewport menubar's own menu, whose entries are the camera
+/// NODES and so cannot be a fixed table), and keybindings, which this DE
+/// edits as `input.kdl` on purpose.
 pub const SETTINGS: &[Setting] = &[
-    Setting::section("Viewport"),
     Setting::field("Background Color", "bg_color", Ctl::Color),
-    Setting::cmd("Square Aspect", "toggle_square_viewport"),
-    Setting::cmd("Ray Traced Preview", "toggle_ray_traced_preview"),
     Setting::field("World Unit", "world_unit", Ctl::Choice(&["mm", "cm", "m", "in"])),
-    Setting::section("Geometry"),
-    Setting::field("Opacity", "geo_opacity", Ctl::Slider { min: 0.0, max: 1.0, dec: 2 }),
-    Setting::section("Wireframe"),
-    Setting::cmd("Show Wireframe", "toggle_wireframe"),
-    Setting::field("Wireframe Color", "wire_color", Ctl::Rgba),
+    Setting::field("Geometry Opacity", "geo_opacity", Ctl::Slider { min: 0.0, max: 1.0, dec: 2 }),
     // The colour applies only in single-colour mode (off, the wires carry
     // the geometry's vertex colours and the colour row sets their alpha
-    // alone) — so the switch sits beside the colour, or a colour set here
+    // alone) — so a colour edit turns that mode on, or a colour set here
     // looks ignored.
-    Setting::cmd("Wireframe Single Color", "toggle_wire_single_color"),
+    Setting::field("Wireframe Color", "wire_color", Ctl::Rgba),
     Setting::field("Wire Thickness", "wire_width", Ctl::Slider { min: 1.0, max: 8.0, dec: 1 }),
-    Setting::section("Points"),
-    Setting::cmd("Show Points", "toggle_render_points"),
     Setting::field("Point Size", "point_size", Ctl::Slider { min: 0.0, max: 0.1, dec: 3 }),
     Setting::field("Point Color", "point_color", Ctl::Color),
-    Setting::cmd("Show Point Markers", "toggle_point_markers"),
+    // The Selected-Group markers, as a multiple of Point Size: they draw
+    // beside the Render points on the same vertices, so what matters is
+    // how much larger they are — 1.25 was the hard-coded ratio until
+    // 2026-09-24.
+    Setting::field("Group Marker Scale", "group_marker_scale", Ctl::Slider { min: 0.5, max: 4.0, dec: 2 }),
     Setting::field("Point Marker Size", "point_marker_size", Ctl::Spin { min: 5.0, max: 100.0, unit: 1000.0 }),
     Setting::field("Point Marker Color", "point_marker_color", Ctl::Color),
-    Setting::cmd("Show Point Numbers", "toggle_point_numbers"),
-    Setting::cmd("Show Point Normals", "toggle_point_normals"),
-    Setting::section("Grid"),
-    Setting::cmd("Show Grid", "toggle_grid"),
     Setting::field("Grid Color", "grid_color", Ctl::Color),
     Setting::field("Grid Thickness", "grid_thickness", Ctl::Spin { min: 2.0, max: 200.0, unit: 1000.0 }),
-    Setting::section("Guides"),
-    Setting::cmd("Show Origin Axes", "toggle_origin"),
     Setting::field("Origin Size", "origin_size", Ctl::Spin { min: 1.0, max: 50.0, unit: 10.0 }),
-    Setting::cmd("Show Reference Cube", "toggle_cube"),
-    Setting::section("Camera"),
-    Setting::cmd("Show Camera Pivot", "toggle_camera_pivot"),
     Setting::camera("Camera Pivot Size", "Camera Pivot Size"),
-    Setting::section("Network"),
-    Setting::cmd("Show Network Plate", "toggle_network_plate"),
-    Setting::cmd("Circular Pane", "toggle_circular_pane"),
 ];
-
-#[cfg(test)]
-fn field_key(s: &Setting) -> &'static str {
-    match s.owner {
-        Some(Owner::Field(key)) => key,
-        _ => panic!("'{}' is not a Field row", s.label),
-    }
-}
-
-fn setting_by_label(label: &str) -> Option<&'static Setting> {
-    SETTINGS.iter().find(|s| s.label == label)
-}
-
-/// A synthetic `ParamDef` carrying `label` and the shape of `src`, so the row
-/// renders as whatever control its owner already uses.
-fn relabel(src: &ParamDef, label: &'static str) -> ParamDef {
-    ParamDef { label: label.to_string(), ..src.clone() }
-}
-
-fn bool_param(label: &'static str, on: bool) -> ParamDef {
-    shaped(label, "toggle", if on { "true" } else { "false" }.to_string(), None, None, None, &[])
-}
-
-/// A synthetic `ParamDef` for a row with no param of its own behind it: the
-/// label is both its name and its display key, which is how the writeback
-/// resolves a control back to its `Setting`.
-fn shaped(
-    label: &str,
-    param_type: &str,
-    default: String,
-    min: Option<f32>,
-    max: Option<f32>,
-    step: Option<f32>,
-    options: &[&str],
-) -> ParamDef {
-    ParamDef {
-        name: label.to_string(),
-        label: label.to_string(),
-        param_type: param_type.to_string(),
-        default,
-        options: options.iter().map(|s| s.to_string()).collect(),
-        min,
-        max,
-        step,
-        show_when: String::new(), expr: false,
-    }
-}
 
 impl State {
     pub fn dialog_visible(&self) -> bool {
         self.slots.dialog.visible()
     }
 
-    /// The dialog's tab, or `Commands` when it is closed.
-    pub fn dialog_tab(&self) -> Tab {
-        self.slots.dialog.tab
-    }
-
     pub fn toggle_dialog(&mut self) {
-        if self.dialog_visible() && self.slots.dialog.mode == Mode::Tabbed {
+        if self.dialog_visible() && self.slots.dialog.mode == Mode::Commands {
             self.close_dialog();
         } else {
             self.open_dialog();
         }
     }
 
-    /// Open the tabbed dialog on Commands — `Alt+D`, and what `Ctrl+P` now
-    /// reaches instead of spawning a popup process.
+    /// Open the dialog on its commands-and-settings list — `Alt+D`, and what
+    /// `Ctrl+P` reaches instead of spawning a popup process.
     pub fn open_dialog(&mut self) {
-        self.open_dialog_in(Mode::Tabbed);
+        self.open_dialog_in(Mode::Commands);
     }
 
     /// The add-node palette: the same plate, one list, and a pick that
@@ -1346,63 +1341,28 @@ impl State {
     }
 
     fn open_dialog_in(&mut self, mode: Mode) {
-        // Always with an empty query, and the tabbed mode always on Commands:
-        // a dialog that reopens holding the last search has to be cleared
-        // before it can be used, which is a step every single time to save
-        // one occasionally.
+        // Always with an empty query: a dialog that reopens holding the last
+        // search has to be cleared before it can be used, which is a step
+        // every single time to save one occasionally.
         self.slots.dialog.mode = mode;
-        self.slots.dialog.tab = Tab::Commands;
         self.slots.dialog.query.clear();
         self.slots.dialog.set_visible(true);
         self.refresh_dialog_rows();
-        if mode == Mode::Tabbed {
-            self.refresh_dialog_settings();
-        }
         self.rebuild_positions();
         self.apply_layout();
         self.update_status_text(match mode {
-            Mode::Tabbed => "Dialog: type to filter, Tab switches halves, Escape closes.",
+            Mode::Commands => "Dialog: type to filter commands and settings, Escape closes.",
             Mode::AddNode => "Add Node: type to filter, Enter adds at the cursor, Escape closes.",
         });
-    }
-
-    /// Open the tabbed dialog on its Settings half — what the Wireframe
-    /// Color command does, so a palette pick lands on the row that edits
-    /// the value rather than on the list it was picked from.
-    pub fn open_dialog_on_settings(&mut self) {
-        if !self.dialog_visible() || self.slots.dialog.mode != Mode::Tabbed {
-            self.open_dialog_in(Mode::Tabbed);
-        }
-        self.set_dialog_tab(Tab::Settings);
     }
 
     pub fn close_dialog(&mut self) {
         if !self.dialog_visible() {
             return;
         }
-        // The settings body keeps whatever a half-finished text edit left in
-        // it; drop that focus so the next open starts clean.
-        self.slots.dialog_params.unfocus();
         self.slots.dialog.set_visible(false);
-        self.slots.dialog_params.set_visible(false);
-        if self.focused_widget == Some(DIALOG_IDX) || self.focused_widget == Some(DIALOG_PARAMS_IDX) {
+        if self.focused_widget == Some(DIALOG_IDX) {
             self.focused_widget = None;
-        }
-        self.rebuild_positions();
-        self.apply_layout();
-    }
-
-    pub fn set_dialog_tab(&mut self, tab: Tab) {
-        if self.slots.dialog.mode != Mode::Tabbed || self.slots.dialog.tab == tab {
-            return;
-        }
-        self.slots.dialog.tab = tab;
-        if tab == Tab::Settings {
-            // Re-read on every entry: a chord or a menu may have changed one
-            // of these while the Commands half was up.
-            self.refresh_dialog_settings();
-        } else {
-            self.refresh_dialog_rows();
         }
         self.rebuild_positions();
         self.apply_layout();
@@ -1411,35 +1371,47 @@ impl State {
     /// Re-rank the row list against the current query, for whichever mode is
     /// up.
     ///
-    /// Commands rank through [`crate::command::palette_entries`] — the fuzzy
-    /// rank plus the focused-pane-first partition. Node templates rank
-    /// through the same [`crate::command::fuzzy_rank`], so typing means the
-    /// same thing in both lists; they carry no chord, so the column is simply
+    /// Commands and settings rank together through the one
+    /// [`crate::command::fuzzy_rank`], with the focused pane's commands
+    /// partitioned to the front as [`crate::command::palette_entries`] does
+    /// (a setting belongs to no pane, so it ranks among the rest). Node
+    /// templates rank through the same function, so typing means the same
+    /// thing in every list; they carry no chord, so the column is simply
     /// empty for them.
     pub fn refresh_dialog_rows(&mut self) {
         let query = self.slots.dialog.query.clone();
         let rows: Vec<Row> = match self.slots.dialog.mode {
-            Mode::Tabbed => {
-                let mut rows: Vec<Row> = crate::command::palette_entries(&query, self.focused_context())
-                .iter()
-                .map(|c| Row {
-                    id: c.id.to_string(),
-                    label: c.label.to_string(),
-                    chord: self
-                        .shortcut_manager
-                        .chord_for(c.id)
-                        .map(|s| s.describe())
-                        .unwrap_or_default(),
-                    // The wire colour is kept sRGB-encoded (it round-trips
-                    // through the Render node's hex); the swatch is a fill.
-                    swatch: (c.id == "wireframe_color").then(|| {
-                        cce_ui::color::to_linear([self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0])
-                    }),
-                    toggle: self.command_toggle_state(c.id),
-                    slider: None,
-                    truncate_head: false,
-                })
-                .collect();
+            Mode::Commands => {
+                let cmds = crate::command::COMMANDS;
+                let mut labels: Vec<&str> = cmds.iter().map(|c| c.label).collect();
+                labels.extend(SETTINGS.iter().map(|s| s.label));
+                let contexts: Vec<Context> = cmds
+                    .iter()
+                    .map(|c| c.context)
+                    .chain(SETTINGS.iter().map(|_| Context::Always))
+                    .collect();
+                let ranked = crate::command::rank_with_focus(&query, &labels, &contexts, self.focused_context());
+                let mut rows: Vec<Row> = ranked
+                    .into_iter()
+                    .map(|i| {
+                        if i < cmds.len() {
+                            let c = &cmds[i];
+                            Row {
+                                id: c.id.to_string(),
+                                label: c.label.to_string(),
+                                chord: self
+                                    .shortcut_manager
+                                    .chord_for(c.id)
+                                    .map(|s| s.describe())
+                                    .unwrap_or_default(),
+                                control: self.command_toggle_state(c.id).map(Control::Toggle),
+                                truncate_head: false,
+                            }
+                        } else {
+                            self.setting_row(&SETTINGS[i - cmds.len()])
+                        }
+                    })
+                    .collect();
                 // The open project's path heads the list — ranked against
                 // the path text, so typing any part of it (the project's
                 // name included, that being the tail) finds or drops the row
@@ -1451,15 +1423,7 @@ impl State {
                     if !crate::command::fuzzy_rank(&query, &[path.as_str()]).is_empty() {
                         rows.insert(
                             0,
-                            Row {
-                                id: PATH_ROW_ID.to_string(),
-                                label: path,
-                                chord: name,
-                                swatch: None,
-                                toggle: None,
-                                slider: None,
-                                truncate_head: true,
-                            },
+                            Row { id: PATH_ROW_ID.to_string(), label: path, chord: name, control: None, truncate_head: true },
                         );
                     }
                 }
@@ -1489,9 +1453,7 @@ impl State {
                             id: format!("{RECENT_ROW_PREFIX}{text}"),
                             label: text,
                             chord: name,
-                            swatch: None,
-                            toggle: None,
-                            slider: None,
+                            control: None,
                             // Same reason as the path row: the tail of a
                             // path is what identifies it.
                             truncate_head: true,
@@ -1500,21 +1462,16 @@ impl State {
                 }
                 // The zoom slider heads the network pane's list, ranked like
                 // a row labelled "Zoom" so a query still finds (or drops) it.
-                if self.focused_context() == crate::command::Context::Network
+                if self.focused_context() == Context::Network
                     && !crate::command::fuzzy_rank(&query, &["Zoom"]).is_empty()
                 {
-                    let cfg = crate::app::configured_grid_geometry();
-                    let pct = |pitch: f32| pitch / cfg.pitch_x.max(1e-3) * 100.0;
-                    self.slots.dialog.set_slider_range(pct(crate::app::MIN_PITCH_X), pct(crate::app::MAX_PITCH_X));
                     rows.insert(
                         0,
                         Row {
                             id: ZOOM_ROW_ID.to_string(),
                             label: "Zoom".to_string(),
                             chord: String::new(),
-                            swatch: None,
-                            toggle: None,
-                            slider: Some(self.zoom_percent()),
+                            control: Some(self.zoom_control()),
                             truncate_head: false,
                         },
                     );
@@ -1529,15 +1486,7 @@ impl State {
                     self.node_templates.iter().map(|t| t.label.as_str()).collect();
                 crate::command::fuzzy_rank(&query, &offered)
                     .into_iter()
-                    .map(|i| Row {
-                        id: offered[i].to_string(),
-                        label: offered[i].to_string(),
-                        chord: String::new(),
-                        swatch: None,
-                        toggle: None,
-                        slider: None,
-                        truncate_head: false,
-                    })
+                    .map(|i| Row::plain(offered[i], offered[i], ""))
                     .collect()
             }
         };
@@ -1586,6 +1535,21 @@ impl State {
         }
     }
 
+    /// The zoom row's control: the live percentage over the pitch limits,
+    /// nudged ten points at a time.
+    fn zoom_control(&self) -> Control {
+        let cfg = crate::app::configured_grid_geometry();
+        let pct = |pitch: f32| pitch / cfg.pitch_x.max(1e-3) * 100.0;
+        Control::Slider {
+            value: self.zoom_percent(),
+            min: pct(crate::app::MIN_PITCH_X),
+            max: pct(crate::app::MAX_PITCH_X),
+            dec: 0,
+            step: 10.0,
+            suffix: "%",
+        }
+    }
+
     /// Zoom the network to a percentage of the configured grid, about the
     /// cursor cell — what the slider row's drag lands on. `zoom` clamps, so
     /// the row is re-read afterwards rather than trusted.
@@ -1600,10 +1564,12 @@ impl State {
         self.refresh_dialog_zoom();
     }
 
-    /// Re-read the slider row from the live zoom, in place.
+    /// Re-read the zoom row from the live zoom, in place.
     fn refresh_dialog_zoom(&mut self) {
-        let pct = self.zoom_percent();
-        self.slots.dialog.set_slider_value(pct);
+        let c = self.zoom_control();
+        if self.slots.dialog.rows.iter().any(|r| r.id == ZOOM_ROW_ID) {
+            self.slots.dialog.set_control(ZOOM_ROW_ID, Some(c));
+        }
     }
 
     /// What a toggle command's switch currently shows, or `None` for a
@@ -1644,123 +1610,132 @@ impl State {
         })
     }
 
-    /// Re-read every row's switch from the live state, touching nothing
+    /// Re-read every row's control from the live state, touching nothing
     /// else — not the ranking, not the selection, not the scroll. This is
-    /// what a toggle pick runs instead of `refresh_dialog_rows`: the rows are
-    /// the same rows, only a switch has moved, and re-ranking would throw the
-    /// selection back to the top of a list the user is still working down.
-    fn refresh_dialog_toggles(&mut self) {
-        if self.slots.dialog.mode != Mode::Tabbed {
+    /// what a toggle pick or a setting edit runs instead of
+    /// `refresh_dialog_rows`: the rows are the same rows, only a control has
+    /// moved, and re-ranking would throw the selection back to the top of a
+    /// list the user is still working down.
+    pub(crate) fn refresh_dialog_controls(&mut self) {
+        if self.slots.dialog.mode != Mode::Commands {
             return;
         }
-        let states: Vec<Option<bool>> =
-            self.slots.dialog.rows.iter().map(|r| self.command_toggle_state(&r.id)).collect();
-        for (row, state) in self.slots.dialog.rows.iter_mut().zip(states) {
-            row.toggle = state;
+        let ids: Vec<String> = self.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        for id in ids {
+            let control = if let Some(s) = setting_of_row(&id) {
+                Some(self.setting_control(s))
+            } else if id == ZOOM_ROW_ID {
+                Some(self.zoom_control())
+            } else if let Some(on) = self.command_toggle_state(&id) {
+                Some(Control::Toggle(on))
+            } else {
+                continue;
+            };
+            self.slots.dialog.set_control(&id, control);
         }
-        self.refresh_dialog_zoom();
     }
 
-    /// The Settings half's rows, each read from whatever owns its value.
-    ///
-    /// Returns `ParamDef`s rather than display triples so the encoding
-    /// (`spinbox:min:max:step`, `choice:a,b`) stays in `param_display` — one
-    /// place, shared with the params pane, instead of a second copy here that
-    /// could disagree about what a spinbox is.
-    fn dialog_settings_params(&self) -> Vec<ParamDef> {
-        let camera_param = |name: &str| -> Option<&ParamDef> {
-            if self.active_camera == "Default Camera" {
-                return None;
-            }
-            self.current_dir()
-                .children
-                .iter()
-                .find(|c| c.node_type == "camera" && c.name == self.active_camera)?
-                .params
-                .iter()
-                .find(|p| p.name == name)
-        };
-
-        let mut out = Vec::with_capacity(SETTINGS.len());
-        for s in SETTINGS {
-            match s.owner {
-                None => out.push(shaped(s.label, "section", String::new(), None, None, None, &[])),
-                Some(Owner::Field(key)) => {
-                    let ctl = s.ctl.expect("a Field row declares its control");
-                    out.push(self.settings_field_param(s.label, key, ctl));
-                }
-                Some(Owner::Command(id)) => {
-                    // The same table the palette's own switches read, so a
-                    // row here and a row there cannot disagree about which
-                    // way a toggle is set.
-                    out.push(bool_param(s.label, self.command_toggle_state(id).unwrap_or(false)));
-                }
-                Some(Owner::ActiveCamera(name)) => match camera_param(name) {
-                    Some(p) => out.push(relabel(p, s.label)),
-                    // No camera node behind the Default Camera: the live
-                    // field is the value, in the same tenths the camera param
-                    // uses.
-                    None => out.push(shaped(
-                        s.label,
-                        "spinbox",
-                        ((self.camera_pivot_size * 10.0).round() as i32).to_string(),
-                        Some(1.0),
-                        Some(50.0),
-                        Some(1.0),
-                        &[],
-                    )),
-                },
-            }
+    /// A setting's row: its label, no chord, and the control its `Ctl`
+    /// names over the live value.
+    fn setting_row(&self, s: &Setting) -> Row {
+        Row {
+            id: setting_row_id(s.label),
+            label: s.label.to_string(),
+            chord: String::new(),
+            control: Some(self.setting_control(s)),
+            truncate_head: false,
         }
-        // A section with nothing under it is a header for an empty list.
-        let mut trimmed: Vec<ParamDef> = Vec::with_capacity(out.len());
-        for (i, p) in out.iter().enumerate() {
-            let empty_section = p.param_type == "section"
-                && out.get(i + 1).is_none_or(|n| n.param_type == "section");
-            if !empty_section {
-                trimmed.push(p.clone());
-            }
-        }
-        trimmed
     }
 
-    /// One `Owner::Field` row: the live value, in the shape its `Ctl` names.
-    fn settings_field_param(&self, label: &'static str, key: &str, ctl: Ctl) -> ParamDef {
-        match ctl {
-            Ctl::Toggle => bool_param(label, self.settings_field_bool(key)),
-            Ctl::Color => {
-                let c = self.settings_field_color(key);
-                shaped(label, "color", crate::project::color_to_hex(c), None, None, None, &[])
-            }
-            Ctl::Rgba => {
-                let c = match key {
-                    "wire_color" => self.wire_color,
-                    _ => [0.0, 0.0, 0.0, 1.0],
-                };
-                shaped(label, "rgba", crate::project::color_to_hex8(c), None, None, None, &[])
-            }
-            Ctl::Spin { min, max, unit } => shaped(
-                label,
-                "spinbox",
-                ((self.settings_field_f32(key) * unit).round() as i32).to_string(),
-                Some(min),
-                Some(max),
-                Some(1.0),
-                &[],
-            ),
-            Ctl::Slider { min, max, dec } => shaped(
-                label,
-                &format!("slider:{min:.*}:{max:.*}:{dec}", dec, dec),
-                format!("{:.*}", dec, self.settings_field_f32(key)),
-                Some(min),
-                Some(max),
-                None,
-                &[],
-            ),
-            Ctl::Choice(options) => {
-                shaped(label, "choice", self.settings_field_text(key), None, None, None, options)
+    /// The control a setting draws, built from its `Ctl` and the value as
+    /// [`State::setting_value`] reads it — so the control and the string the
+    /// writer takes cannot disagree about what the value is.
+    fn setting_control(&self, s: &Setting) -> Control {
+        let value = self.setting_value(s);
+        match s.ctl {
+            Ctl::Toggle => Control::Toggle(value == "true"),
+            Ctl::Color => Control::Color { hex: value, alpha: false },
+            Ctl::Rgba => Control::Color { hex: value, alpha: true },
+            Ctl::Spin { min, max, .. } => Control::Slider {
+                value: value.parse().unwrap_or(min),
+                min,
+                max,
+                dec: 0,
+                step: 1.0,
+                suffix: "",
+            },
+            Ctl::Slider { min, max, dec } => Control::Slider {
+                value: value.parse().unwrap_or(min),
+                min,
+                max,
+                dec,
+                // Twenty nudges across the range: fine enough to land on a
+                // value, coarse enough that holding the arrow gets somewhere.
+                step: (max - min) / 20.0,
+                suffix: "",
+            },
+            Ctl::Choice(options) => Control::Choice {
+                options: options.iter().map(|o| o.to_string()).collect(),
+                index: options.iter().position(|o| o.eq_ignore_ascii_case(&value)).unwrap_or(0),
+            },
+        }
+    }
+
+    /// One setting's value as its row shows it — the params pane's
+    /// encodings: a hex colour, a whole number in the spin's unit, a float
+    /// to the slider's decimals, an option's text.
+    pub(crate) fn setting_value(&self, s: &Setting) -> String {
+        match s.owner {
+            Owner::Field(key) => match s.ctl {
+                Ctl::Toggle => if self.settings_field_bool(key) { "true" } else { "false" }.to_string(),
+                Ctl::Color => crate::project::color_to_hex(self.settings_field_color(key)),
+                Ctl::Rgba => {
+                    let c = match key {
+                        "wire_color" => self.wire_color,
+                        _ => [0.0, 0.0, 0.0, 1.0],
+                    };
+                    crate::project::color_to_hex8(c)
+                }
+                Ctl::Spin { unit, .. } => ((self.settings_field_f32(key) * unit).round() as i32).to_string(),
+                Ctl::Slider { dec, .. } => format!("{:.*}", dec, self.settings_field_f32(key)),
+                Ctl::Choice(_) => self.settings_field_text(key),
+            },
+            Owner::ActiveCamera(name) => {
+                let node_value = (self.active_camera != "Default Camera")
+                    .then(|| {
+                        self.current_dir()
+                            .children
+                            .iter()
+                            .find(|c| c.node_type == "camera" && c.name == self.active_camera)?
+                            .params
+                            .iter()
+                            .find(|p| p.name == name)
+                            .map(|p| p.default.clone())
+                    })
+                    .flatten();
+                // No camera node behind the Default Camera: the live field
+                // is the value, in the same tenths the camera param uses.
+                node_value.unwrap_or_else(|| ((self.camera_pivot_size * 10.0).round() as i32).to_string())
             }
         }
+    }
+
+    /// The value one setting row reads, by label. Test-facing:
+    /// `dialog_settings_rows_name_owners_that_exist` round-trips every
+    /// `Owner::Field` row through this and [`State::settings_write_row`],
+    /// which is the only way to catch a key that no dispatch arm names.
+    #[cfg(test)]
+    pub(crate) fn settings_row_value(&self, label: &str) -> String {
+        let s = SETTINGS.iter().find(|s| s.label == label).expect("no such Settings row");
+        self.setting_value(s)
+    }
+
+    /// Write one setting row by label, as the writeback does — the value
+    /// only, none of the apply pass.
+    #[cfg(test)]
+    pub(crate) fn settings_write_row(&mut self, label: &str, value: &str) {
+        let s = SETTINGS.iter().find(|s| s.label == label).expect("no such Settings row");
+        self.setting_write(s, value);
     }
 
     fn settings_field_bool(&self, key: &str) -> bool {
@@ -1789,6 +1764,7 @@ impl State {
             "wire_width" => self.wire_width,
             "geo_opacity" => self.geo_opacity,
             "point_size" => self.point_size,
+            "group_marker_scale" => self.group_marker_scale,
             _ => 0.0,
         }
     }
@@ -1802,9 +1778,10 @@ impl State {
 
     /// Write one `Owner::Field` row's new value onto the live state.
     ///
-    /// `settings_field_keys_are_all_handled` walks the table against these
-    /// four readers and this writer, because a key that no arm names reads
-    /// as a default and writes nowhere — a row that looks live and is inert.
+    /// `dialog_settings_rows_name_owners_that_exist` walks the table against
+    /// the four readers and this writer, because a key that no arm names
+    /// reads as a default and writes nowhere — a row that looks live and is
+    /// inert.
     fn settings_field_write(&mut self, key: &str, ctl: Ctl, value: &str) {
         match ctl {
             Ctl::Toggle => {
@@ -1856,6 +1833,7 @@ impl State {
                     "wire_width" => self.wire_width = v,
                     "geo_opacity" => self.geo_opacity = v,
                     "point_size" => self.point_size = v,
+                    "group_marker_scale" => self.group_marker_scale = v,
                     _ => {}
                 }
             }
@@ -1870,102 +1848,47 @@ impl State {
         }
     }
 
-    /// One Settings row's value as the dialog would show it. Test-facing:
-    /// `dialog_settings_rows_name_owners_that_exist` round-trips every
-    /// `Owner::Field` row through this and [`State::settings_write_row`],
-    /// which is the only way to catch a key that no dispatch arm names.
-    #[cfg(test)]
-    pub(crate) fn settings_row_value(&self, label: &str) -> String {
-        let s = SETTINGS.iter().find(|s| s.label == label).expect("no such Settings row");
-        let ctl = s.ctl.expect("that row declares no control");
-        self.settings_field_param(s.label, field_key(s), ctl).default
-    }
-
-    /// Write one Settings row, as the writeback does.
-    #[cfg(test)]
-    pub(crate) fn settings_write_row(&mut self, label: &str, value: &str) {
-        let s = SETTINGS.iter().find(|s| s.label == label).expect("no such Settings row");
-        let ctl = s.ctl.expect("that row declares no control");
-        self.settings_field_write(field_key(s), ctl, value);
-    }
-
-    /// Push the Settings rows into the dialog's params body, and remember them
-    /// as the baseline the writeback diffs against.
-    pub fn refresh_dialog_settings(&mut self) {
-        let rows = param_display(&self.dialog_settings_params());
-        self.slots.dialog_params_mut().set_display_params(&rows);
-        self.dialog_settings_shown = rows;
-    }
-
-    /// Apply whatever the Settings half's controls changed.
-    ///
-    /// The params pane's writeback (`sync_parameters_to_project`), pointed at
-    /// [`SETTINGS`] instead of the selected node: read the controls, diff
-    /// against what was put into them, write each changed row to its owner,
-    /// and then run the one apply-and-persist pass. Polled rather than pushed
-    /// for the same reason the params pane is — a `ParametersBg` reports its
-    /// values, it does not emit events.
-    pub fn sync_dialog_settings_to_project(&mut self) {
-        if !self.dialog_visible() || self.slots.dialog.shows_list() {
-            return;
-        }
-        let updated = self.slots.dialog_params().node_params();
-        let mut commands: Vec<&'static str> = Vec::new();
-        let mut changed = false;
-        for (key, value, _) in &updated {
-            let was = self.dialog_settings_shown.iter().find(|(k, _, _)| k == key);
-            if was.is_none_or(|(_, v, _)| v == value) {
-                continue;
-            }
-            let Some(setting) = setting_by_label(key) else { continue };
-            let Some(owner) = setting.owner else { continue };
-            changed = true;
-            match owner {
-                Owner::Field(key) => {
-                    let ctl = setting.ctl.expect("a Field row declares its control");
-                    self.settings_field_write(key, ctl, value);
-                }
-                Owner::Command(id) => commands.push(id),
-                Owner::ActiveCamera(name) => {
-                    let active = self.active_camera.clone();
-                    let wrote = {
-                        let dir = self.current_dir_mut();
-                        match dir
-                            .children
-                            .iter_mut()
-                            .find(|c| c.node_type == "camera" && c.name == active)
-                            .and_then(|c| c.params.iter_mut().find(|p| p.name == name))
-                        {
-                            Some(p) => {
-                                p.default = value.clone();
-                                true
-                            }
-                            None => false,
+    /// Write one setting's value to whatever owns it.
+    fn setting_write(&mut self, s: &Setting, value: &str) {
+        match s.owner {
+            Owner::Field(key) => self.settings_field_write(key, s.ctl, value),
+            Owner::ActiveCamera(name) => {
+                let active = self.active_camera.clone();
+                let wrote = {
+                    let dir = self.current_dir_mut();
+                    match dir
+                        .children
+                        .iter_mut()
+                        .find(|c| c.node_type == "camera" && c.name == active)
+                        .and_then(|c| c.params.iter_mut().find(|p| p.name == name))
+                    {
+                        Some(p) => {
+                            p.default = value.to_string();
+                            true
                         }
-                    };
-                    if !wrote {
-                        if let Ok(v) = value.parse::<f32>() {
-                            self.camera_pivot_size = v / 10.0;
-                        }
+                        None => false,
+                    }
+                };
+                if !wrote {
+                    if let Ok(v) = value.parse::<f32>() {
+                        self.camera_pivot_size = v / 10.0;
                     }
                 }
             }
         }
-        if !changed {
-            return;
-        }
+    }
 
-        // The commands run FIRST and on their own: each is a toggle whose
-        // whole job is to flip live state, mark the menus and persist, and
-        // running them after the apply below would have them flip against
-        // values the apply had just settled.
-        for id in commands {
-            self.run_command(id);
-        }
-
-        // The viewport meshes bake their sizes and colors in, so a changed
-        // thickness/size/tint is a re-generate, not a re-draw. This is the
-        // same set the settings-file reload in `tick_frame` regenerates.
+    /// Apply a setting row's new value: write it to its owner, then run the
+    /// one apply-and-persist pass and re-read the row.
+    ///
+    /// The viewport meshes bake their sizes and colours in, so a changed
+    /// thickness/size/tint is a re-generate, not a re-draw. This is the same
+    /// set the settings-file reload in `tick_frame` regenerates. Re-read
+    /// rather than trusting the control: an apply can normalize a value (a
+    /// clamp), and the row has to show what the state now holds.
+    pub(crate) fn apply_setting(&mut self, label: &str, value: &str) {
+        let Some(s) = SETTINGS.iter().find(|s| s.label == label) else { return };
+        self.setting_write(s, value);
         self.update_grid_geometry();
         self.update_origin_geometry();
         self.update_pivot_geometry();
@@ -1976,33 +1899,22 @@ impl State {
         self.save_settings();
         // The params pane may be showing one of these very nodes.
         self.sync_parameters_pane();
-        // Re-read rather than patching the baseline: an apply can normalize a
-        // value (a spinbox clamp), and the baseline has to be what the
-        // controls now hold or the next poll reports a phantom change.
-        self.refresh_dialog_settings();
+        self.refresh_dialog_controls();
     }
 
-    /// Lay the dialog and its settings body out over the window.
+    /// Lay the dialog out over the window.
     ///
     /// Called at the end of `rebuild_positions`, after every layout branch has
     /// run — like the 2D page pane, the rect it wants never depends on which
     /// branch produced the panes underneath it.
     pub(crate) fn layout_dialog(&mut self) {
-        let open = self.dialog_visible();
-        if !open {
+        if !self.dialog_visible() {
             self.positions[DIALOG_IDX] = (0.0, 0.0, 0.0, 0.0);
-            self.positions[DIALOG_PARAMS_IDX] = (0.0, 0.0, 0.0, 0.0);
-            self.slots.dialog_params.set_visible(false);
             return;
         }
         let (x, y, w, h) = layout_in(self.width, self.height);
         self.positions[DIALOG_IDX] = (x, y, w, h);
         self.slots.dialog.set_page(visible_rows(x, y, w, h));
-
-        let settings = self.slots.dialog.tab == Tab::Settings;
-        self.positions[DIALOG_PARAMS_IDX] =
-            if settings { settings_rect(x, y, w, h) } else { (0.0, 0.0, 0.0, 0.0) };
-        self.slots.dialog_params.set_visible(settings);
     }
 
     /// Every key, while the dialog is open.
@@ -2014,6 +1926,17 @@ impl State {
     /// way past, since the network pane's bare-letter family is ungated.
     pub(crate) fn dialog_key_input(&mut self, event: &KeyEvent) -> bool {
         if event.state != ElementState::Pressed {
+            return true;
+        }
+        // A colour row's hex well, while it is being typed into, has the
+        // keyboard ahead of everything — Escape and Enter included, which
+        // end the edit rather than the dialog.
+        if let Some(sel) = self.slots.dialog.editing_color() {
+            let ptr = sel as *mut cce_ui::widget::Adapted<ColorSelector>;
+            unsafe {
+                (*ptr).keyboard_input(event, &mut self.ui_context);
+            }
+            self.drain_dialog_clicks();
             return true;
         }
         // The dialog's own chord closes it, wherever the user has bound it —
@@ -2031,39 +1954,14 @@ impl State {
                 return true;
             }
             Key::Named(NamedKey::Tab) => {
-                // One key for two halves, in both directions: there are only
-                // two, so Tab and Shift+Tab are the same move. In AddNode
-                // there are no halves — and Tab is what OPENED it, so the
-                // same key closes it again.
+                // Tab is what opened the add-node palette, so the same key
+                // closes it again. In the commands list it means nothing.
                 if self.slots.dialog.mode == Mode::AddNode {
                     self.close_dialog();
-                } else {
-                    let next = if self.slots.dialog.tab == Tab::Commands {
-                        Tab::Settings
-                    } else {
-                        Tab::Commands
-                    };
-                    self.set_dialog_tab(next);
                 }
                 return true;
             }
             _ => {}
-        }
-
-        if !self.slots.dialog.shows_list() {
-            // The settings body is a real `ParametersBg` with real text
-            // fields; hand it the key and poll what it did, exactly as the
-            // params pane's own key path does.
-            let taken = {
-                let ptr = &mut self.slots.dialog_params as *mut cce_ui::widget::Adapted<ParametersBg>;
-                unsafe { (*ptr).keyboard_input(event, &mut self.ui_context) }
-            };
-            if taken {
-                self.sync_dialog_settings_to_project();
-            }
-            // Consumed either way: an unhandled key inside a modal does
-            // nothing, it does not fall through to the network pane.
-            return true;
         }
 
         match &event.logical_key {
@@ -2091,14 +1989,12 @@ impl State {
                     self.take_dialog_pick(id);
                 }
             }
-            // The arrows nudge the selected slider row by a Zoom In / Zoom
-            // Out step; on any other row they mean nothing here.
+            // The arrows work the selected row's control in place: a
+            // slider by its step, a choice to the next or previous option.
+            // On any other row they mean nothing here.
             Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
-                if self.slots.dialog.selected_id() == Some(ZOOM_ROW_ID) {
-                    let f = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { 1.15 } else { 1.0 / 1.15 };
-                    self.zoom(f, None);
-                    self.refresh_dialog_zoom();
-                }
+                let dir: i32 = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { 1 } else { -1 };
+                self.nudge_dialog_selection(dir);
             }
             Key::Named(NamedKey::Backspace) => {
                 if self.slots.dialog.query.pop().is_some() {
@@ -2125,38 +2021,91 @@ impl State {
         true
     }
 
+    /// Step the selected row's control by `dir` (-1 or 1) and land the
+    /// value: a slider by its step, a choice to its neighbouring option.
+    fn nudge_dialog_selection(&mut self, dir: i32) {
+        let Some(id) = self.slots.dialog.selected_id().map(str::to_string) else { return };
+        let Some(control) = self.slots.dialog.selected_control().cloned() else { return };
+        match control {
+            Control::Slider { value, step, .. } => {
+                let i = self.slots.dialog.selected;
+                self.slots.dialog.set_slider_value(i, value + dir as f32 * step);
+                let Some(v) = self.slots.dialog.rows[i].slider_value() else { return };
+                self.land_dialog_slider(&id, v);
+            }
+            Control::Choice { options, index } => {
+                if options.is_empty() {
+                    return;
+                }
+                let n = options.len() as i32;
+                let next = (index as i32 + dir).rem_euclid(n) as usize;
+                if let Some(label) = id.strip_prefix(SETTING_ROW_PREFIX) {
+                    let label = label.to_string();
+                    self.apply_setting(&label, &options[next]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A slider row's value arriving from a drag, a wheel or an arrow: the
+    /// zoom row zooms, a setting row writes its setting.
+    fn land_dialog_slider(&mut self, id: &str, v: f32) {
+        if id == ZOOM_ROW_ID {
+            self.set_zoom_percent(v);
+        } else if let Some(s) = setting_of_row(id) {
+            let value = match s.ctl {
+                Ctl::Slider { dec, .. } => format!("{:.*}", dec, v),
+                _ => (v.round() as i64).to_string(),
+            };
+            self.apply_setting(s.label, &value);
+        }
+    }
+
     /// Run a command the dialog chose, and close.
     ///
-    /// Closing FIRST, so a command that opens something of its own (the
-    /// `cce-cloud` palette, a file chooser) does not come up behind the
-    /// dialog. The dialog's own row is the exception: toggling it here would
-    /// reopen what was just closed.
+    /// Closing FIRST, so a command that opens something of its own (a file
+    /// chooser) does not come up behind the dialog. The dialog's own row is
+    /// the exception: toggling it here would reopen what was just closed.
     ///
-    /// A TOGGLE row does not close at all. It is a switch, and a switch you
-    /// can only flip once before the panel it is on vanishes is a button
-    /// with extra steps: Show Grid, Show Cube and Square Aspect are the
-    /// kind of thing you set together, looking at the viewport, and the
-    /// dialog staying up is what lets you. The command runs, the switches
-    /// re-read, and the selection stays where it was — by Enter or by a
-    /// click, since both arrive here.
+    /// A CONTROL row does not close at all. A switch you can only flip once
+    /// before the panel it is on vanishes is a button with extra steps: Show
+    /// Grid, Show Cube and Square Aspect are the kind of thing you set
+    /// together, looking at the viewport, and the dialog staying up is what
+    /// lets you. A toggle flips, a choice steps to its next option, a slider
+    /// or a colour is worked by the pointer or the arrows and Enter on it
+    /// does nothing; the controls re-read, and the selection stays where it
+    /// was — by Enter or by a click, since both arrive here.
     pub(crate) fn take_dialog_pick(&mut self, id: String) {
         let mode = self.slots.dialog.mode;
-        // The zoom row is a control, not a command: Enter on it does nothing
-        // and the dialog stays up for the arrows and the pointer.
-        if mode == Mode::Tabbed && id == ZOOM_ROW_ID {
+        if mode == Mode::Commands && id == ZOOM_ROW_ID {
             return;
+        }
+        if mode == Mode::Commands {
+            if let Some(s) = setting_of_row(&id) {
+                let control = self.slots.dialog.rows.iter().find(|r| r.id == id).and_then(|r| r.control.clone());
+                match control {
+                    Some(Control::Toggle(on)) => {
+                        let v = if on { "false" } else { "true" };
+                        self.apply_setting(s.label, v);
+                    }
+                    Some(Control::Choice { .. }) => self.nudge_dialog_selection(1),
+                    _ => {}
+                }
+                return;
+            }
         }
         // The path row: copy, say so, and close. A copy is done the moment it
         // happens — unlike a toggle, there is nothing to sit and adjust — so
         // it leaves the way a command does.
-        if mode == Mode::Tabbed && id == PATH_ROW_ID {
+        if mode == Mode::Commands && id == PATH_ROW_ID {
             self.close_dialog();
             self.copy_project_path();
             return;
         }
         // A recent project: open it, and say so if it will not open — a
         // path in this list can have been moved or deleted since.
-        if mode == Mode::Tabbed {
+        if mode == Mode::Commands {
             if let Some(path) = id.strip_prefix(RECENT_ROW_PREFIX) {
                 let path = std::path::PathBuf::from(path);
                 self.close_dialog();
@@ -2166,9 +2115,9 @@ impl State {
                 return;
             }
         }
-        if mode == Mode::Tabbed && self.command_toggle_state(&id).is_some() {
+        if mode == Mode::Commands && self.command_toggle_state(&id).is_some() {
             self.run_command(&id);
-            self.refresh_dialog_toggles();
+            self.refresh_dialog_controls();
             return;
         }
         let (gx, gy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
@@ -2177,7 +2126,7 @@ impl State {
             // Not `toggle_dialog`: toggling here would reopen what was just
             // closed. Picking the dialog's own row is a no-op, which is the
             // least surprising thing it could be.
-            Mode::Tabbed => {
+            Mode::Commands => {
                 if id != "toggle_dialog" {
                     self.run_command(&id);
                 }
@@ -2204,21 +2153,23 @@ impl State {
         }
     }
 
-    /// Drain what the pointer did inside the dialog, after an event reached
-    /// one of its two slots. Returns whether anything changed.
+    /// Drain what the pointer (or a picker, or a hex edit) did inside the
+    /// dialog. Returns whether anything changed.
     pub(crate) fn drain_dialog_clicks(&mut self) -> bool {
         let mut changed = false;
-        if let Some(tab) = self.slots.dialog.take_tab_click() {
-            self.set_dialog_tab(tab);
-            changed = true;
-        }
         if let Some(id) = self.slots.dialog.take_activated() {
             self.take_dialog_pick(id);
             changed = true;
         }
-        if let Some(pct) = self.slots.dialog.take_slider_change() {
-            self.set_zoom_percent(pct);
+        if let Some((id, v)) = self.slots.dialog.take_slider_change() {
+            self.land_dialog_slider(&id, v);
             changed = true;
+        }
+        for (id, hex) in self.slots.dialog.take_color_changes() {
+            if let Some(s) = setting_of_row(&id) {
+                self.apply_setting(s.label, &hex);
+                changed = true;
+            }
         }
         changed
     }
@@ -2240,8 +2191,7 @@ impl State {
     ) -> Option<bool> {
         let (x, y) = (self.cursor_x, self.cursor_y);
         if button == MouseButton::Right {
-            let inside = self.in_dialog_slot(DIALOG_IDX, x, y) || self.in_dialog_slot(DIALOG_PARAMS_IDX, x, y);
-            if !inside && state == ElementState::Pressed {
+            if !self.in_dialog_slot(DIALOG_IDX, x, y) && state == ElementState::Pressed {
                 self.close_dialog();
             }
             return Some(true);
@@ -2250,27 +2200,10 @@ impl State {
             return None;
         }
 
-        // A slider drag started in the settings body ends wherever the pointer
-        // happens to be — including outside the plate. Ending it has to come
-        // before the dismiss test below, or dragging a value past the dialog's
-        // edge and letting go would close the dialog instead of committing.
-        if state == ElementState::Released && self.drag_widget == Some(DIALOG_PARAMS_IDX) {
-            let ptr = &mut self.slots.dialog_params as *mut cce_ui::widget::Adapted<ParametersBg>;
-            unsafe {
-                (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context);
-                (*ptr).handle_event(
-                    &cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y },
-                    &mut self.ui_context,
-                );
-            }
-            self.drag_widget = None;
-            self.drag_press_cursor = None;
-            self.sync_dialog_settings_to_project();
-            return Some(true);
-        }
-
-        // The same for the Commands list's slider row, whose drag the
-        // dialog slot itself drives.
+        // A slider drag ends wherever the pointer happens to be — including
+        // outside the plate. Ending it has to come before the dismiss test
+        // below, or dragging a value past the dialog's edge and letting go
+        // would close the dialog instead of committing.
         if state == ElementState::Released && self.drag_widget == Some(DIALOG_IDX) {
             let ptr = &mut self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
             unsafe {
@@ -2286,10 +2219,7 @@ impl State {
             return Some(true);
         }
 
-        let hits_dialog = self.in_dialog_slot(DIALOG_IDX, x, y);
-        let hits_settings = self.in_dialog_slot(DIALOG_PARAMS_IDX, x, y);
-
-        if !hits_dialog && !hits_settings {
+        if !self.in_dialog_slot(DIALOG_IDX, x, y) {
             // Outside: a press dismisses, a release is the tail of that press
             // and is simply eaten.
             if state == ElementState::Pressed {
@@ -2298,33 +2228,10 @@ impl State {
             return Some(true);
         }
 
-        // The settings body first — it sits INSIDE the dialog's rect, so the
-        // dialog's own (deliberately total) hit test would otherwise claim
-        // every press meant for a control.
-        if hits_settings {
-            let ev = cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y };
-            let taken = self.dispatch_uncovered(DIALOG_PARAMS_IDX, &ev);
-            if taken {
-                self.sync_dialog_settings_to_project();
-            }
-            // Sliders and ramps drag; arm the same drag the params pane arms.
-            if state == ElementState::Pressed && self.slots.draggable(DIALOG_PARAMS_IDX) {
-                let ev = cce_ui::widget::Event::DragStart { start_x: x, start_y: y };
-                let ptr = &mut self.slots.dialog_params
-                    as *mut cce_ui::widget::Adapted<ParametersBg>;
-                unsafe {
-                    (*ptr).handle_event(&ev, &mut self.ui_context);
-                }
-                self.drag_widget = Some(DIALOG_PARAMS_IDX);
-                self.drag_press_cursor = Some((x, y));
-            }
-            return Some(true);
-        }
-
         let ev = cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y };
         self.dispatch_uncovered(DIALOG_IDX, &ev);
-        // A press that took the slider's band arms the same widget drag the
-        // settings body's sliders arm, so the value follows the pointer
+        // A press that took a slider's band arms the same widget drag the
+        // params pane's sliders arm, so the value follows the pointer
         // wherever it goes until the release.
         if state == ElementState::Pressed && self.slots.dialog.slider_dragging() {
             let ev = cce_ui::widget::Event::DragStart { start_x: x, start_y: y };
@@ -2339,18 +2246,14 @@ impl State {
         Some(true)
     }
 
-    /// The wheel, while the dialog is open: to whichever half is showing, and
-    /// no further. Both halves scroll their own list, so there is nothing to
-    /// fall through to.
+    /// The wheel, while the dialog is open: the dialog's, and no further —
+    /// it scrolls its own list, so there is nothing to fall through to.
     pub(crate) fn dialog_mouse_wheel(&mut self, delta: MouseScrollDelta) -> bool {
         let (x, y) = (self.cursor_x, self.cursor_y);
         let ev = cce_ui::widget::Event::MouseWheel { delta, x, y, local_x: x, local_y: y };
-        if self.in_dialog_slot(DIALOG_PARAMS_IDX, x, y) {
-            return self.dispatch_uncovered(DIALOG_PARAMS_IDX, &ev);
-        }
         if self.in_dialog_slot(DIALOG_IDX, x, y) {
             let taken = self.dispatch_uncovered(DIALOG_IDX, &ev);
-            // A wheel over the zoom slider row moved it: land the value.
+            // A wheel over a slider row moved it: land the value.
             self.drain_dialog_clicks();
             return taken;
         }
@@ -2378,10 +2281,10 @@ impl State {
     /// `is_coordinate_covered`, which asks every REGISTERED widget for its
     /// `popover_rect` — including the dialog's, which covers the whole plate
     /// (see [`Dialog::popover`]). So while the claim stands, every press
-    /// aimed at a settings control is rejected as covered by the surface the
-    /// control is drawn on, and the Settings half is inert. The dialog's own
-    /// routing has already decided who gets this event, so the claim comes
-    /// down for the dispatch and goes straight back up.
+    /// aimed at a control inside the plate is rejected as covered by the
+    /// surface the control is drawn on. The dialog's own routing has already
+    /// decided who gets this event, so the claim comes down for the dispatch
+    /// and goes straight back up.
     pub(crate) fn dispatch_uncovered(&mut self, idx: usize, ev: &cce_ui::widget::Event) -> bool {
         self.slots.dialog.set_occluding(false);
         // The coverage answer is memoized per point, so lowering the claim is
