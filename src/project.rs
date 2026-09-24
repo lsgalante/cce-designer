@@ -398,7 +398,7 @@ impl State {
             self.last_applied_wire_color = None;
             self.migrate_meta_settings_node();
             self.apply_pane_state_from_project(&proj.view_state);
-            self.active_camera = proj.view_state.active_camera;
+            self.set_active_camera(proj.view_state.active_camera);
             self.pan_x = proj.view_state.pan.0;
             self.pan_y = proj.view_state.pan.1;
             self.pan_velocity_x = 0.0;
@@ -454,7 +454,7 @@ impl State {
         self.last_applied_wire_color = None;
         self.migrate_meta_settings_node();
         self.apply_pane_state_from_project(&proj.view_state);
-        self.active_camera = proj.view_state.active_camera;
+        self.set_active_camera(proj.view_state.active_camera);
         self.pan_x = proj.view_state.pan.0;
         self.pan_y = proj.view_state.pan.1;
         self.pan_velocity_x = 0.0;
@@ -551,7 +551,7 @@ impl State {
             outputs: 0,
         };
         self.migrate_meta_settings_node();
-        self.active_camera = "Default Camera".to_string();
+        self.set_active_camera("Default Camera");
         self.pan_x = 0.0;
         self.pan_y = 0.0;
         self.pan_velocity_x = 0.0;

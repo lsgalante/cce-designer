@@ -1175,6 +1175,20 @@ hit tests, so a press on a node still moves the node. "Empty" means the scene
 really is what is under the cursor — which, with the network overlaying the
 window, is exactly what `in_network_pane`'s node test decides.
 
+**The active camera's name lives in two places, and `State::set_active_camera`
+is the only writer of either.** The viewport widget keeps its own copy because
+its wheel handler routes by it — the Default Camera's orbit lands on the
+widget's `rotation_x`/`rotation_y`, a camera node's accumulates into
+`pending_yaw`/`pending_pitch` for `tick_frame` to write onto the node — and
+until 2026-09-24 that copy was written once, at construction, from whichever
+project `State::new` loaded. Open a project whose active camera differed (the
+startup default-project pointer, Open, New, the viewport menu) and the two
+disagreed: the widget parked every wheel into the pending pair, the drain saw
+the Default Camera active and discarded it, and trackpad scrolling in the
+viewport did nothing while a drag — which reads `State`'s copy — still orbited.
+`a_wheel_orbits_the_camera_that_is_active_after_a_change` covers the three
+paths.
+
 ### Commands, chords and the palette
 
 `src/command.rs` is one list of everything the app can be asked to do. Each row

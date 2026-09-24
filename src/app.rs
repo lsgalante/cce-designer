@@ -2285,6 +2285,26 @@ impl State {
 
     /// Whether the cursor sits over the 3D viewport pane — the wheel arm's
     /// routing test, shared with `handle_pinch`.
+    /// Make `name` the active camera — on the app AND on the viewport
+    /// widget, which keeps a copy of the name because its wheel handler
+    /// routes by it: the Default Camera's orbit lands on the widget's own
+    /// `rotation_x`/`rotation_y`, a camera NODE's accumulates into
+    /// `pending_yaw`/`pending_pitch` for `tick_frame` to write onto the
+    /// node. Until 2026-09-24 the widget's copy was written once, at
+    /// construction, from whichever project `State::new` loaded — so after
+    /// opening a project whose active camera differed (the startup default
+    /// project pointer, Open, New, the viewport menu), the two disagreed:
+    /// the widget parked every wheel into the pending pair, the drain saw
+    /// the Default Camera active and threw it away, and trackpad scrolling
+    /// in the viewport did nothing while a drag (which reads `State`'s
+    /// copy) still orbited. Every site that changes the camera goes
+    /// through here; nothing else writes either field.
+    pub fn set_active_camera(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        self.viewport_mut().active_camera = name.clone();
+        self.active_camera = name;
+    }
+
     pub fn cursor_in_viewport(&self) -> bool {
         if self.network_overlay() {
             // The complement of the overlay: everything in the body the
@@ -4321,7 +4341,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let mut items = vec!["Default Camera".to_string()];
         items.extend(camera_nodes);
         if !items.contains(&self.active_camera) {
-            self.active_camera = "Default Camera".to_string();
+            self.set_active_camera("Default Camera");
         }
         self.menu_mut(RIGHT_MENUBAR_IDX).set_menu_items(0, &items);
         for (i, item) in items.iter().enumerate() {

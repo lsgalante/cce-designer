@@ -385,7 +385,7 @@ impl State {
                     let mut items = vec!["Default Camera".to_string()];
                     items.extend(camera_nodes);
                     if item_idx < items.len() {
-                        state.active_camera = items[item_idx].clone();
+                        state.set_active_camera(items[item_idx].clone());
                         let active_cam = state.active_camera.clone();
                         for (i, item) in items.iter().enumerate() {
                             state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(0, i, item == &active_cam);

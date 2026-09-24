@@ -1432,6 +1432,69 @@ mod tests {
         assert_eq!(proj.root.children[1].position, (4.0, 2.0));
     }
 
+    /// A wheel over the viewport orbits whichever camera is active AFTER the
+    /// active camera has changed. The viewport widget routes its wheel by a
+    /// copy of the camera name, and that copy used to be written once, at
+    /// construction, from the bundled project (camera1) — so opening a
+    /// project whose active camera was the Default Camera left the widget
+    /// parking every wheel into the camera-node pending pair, which the
+    /// drain discarded because the app said no node was active. Scrolling
+    /// in the viewport did nothing, while a drag (which reads the app's
+    /// copy) still orbited. Every path that changes the camera is covered:
+    /// New, a saved project, and the viewport menu's own choice.
+    #[test]
+    fn a_wheel_orbits_the_camera_that_is_active_after_a_change() {
+        use crate::slots::VIEWPORT_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{MouseScrollDelta, Position};
+        let dir = std::env::temp_dir().join(format!("cce-designer-active-camera-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        assert_eq!(state.active_camera, "camera1", "the bundled project starts on its camera node");
+        assert_eq!(state.viewport().active_camera, state.active_camera);
+
+        // A project saved with the Default Camera active, opened over it.
+        state.set_active_camera("Default Camera");
+        state.save_to_file(&dir).expect("save");
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.load_from_file(&dir).expect("load");
+        assert_eq!(state.active_camera, "Default Camera");
+        assert_eq!(state.viewport().active_camera, "Default Camera", "the widget's copy follows a load");
+
+        let (vx, vy, vw, vh) = state.positions[VIEWPORT_IDX];
+        let (cx, cy) = (vx + vw * 0.5, vy + vh * 0.5);
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: cx as f64, y: cy as f64 } });
+        assert!(state.cursor_in_viewport());
+        let before = (state.viewport().rotation_x, state.viewport().rotation_y);
+        // A trackpad's pixel delta, then a mouse notch: both routes.
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 1.0) });
+        let after = (state.viewport().rotation_x, state.viewport().rotation_y);
+        assert_ne!(before, after, "the wheel orbits the Default Camera once it is the active one");
+        assert_eq!(state.viewport().pending_yaw, 0.0, "nothing was parked for a camera node");
+        assert_eq!(state.viewport().pending_pitch, 0.0);
+
+        // New: back to the Default Camera from a node, on both copies.
+        let mut state = State::new(false);
+        state.new_project();
+        assert_eq!(state.viewport().active_camera, "Default Camera");
+
+        // The viewport menu's choice: a node, then the default again.
+        let mut state = State::new(false);
+        state.set_active_camera("Default Camera");
+        state.set_active_camera("camera1");
+        assert_eq!(state.viewport().active_camera, "camera1");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_default_camera_orbit_moves_camera_not_geometry() {
         use cce_ui::widget::WidgetHost;
@@ -10056,3 +10119,4 @@ mod tests {
         assert!(label_right(&state, long) <= px + pw - padding + 0.5);
     }
 }
+
