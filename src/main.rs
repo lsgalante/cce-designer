@@ -1384,6 +1384,43 @@ mod tests {
         assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowDown)), Some("play_pause_reverse"));
     }
 
+    /// Ctrl+Up rewinds: a moving timeline stops and the playhead lands on
+    /// the start frame, from wherever it was and in either direction; from a
+    /// stop it is simply a jump to the start.
+    #[test]
+    fn ctrl_up_rewinds_to_the_start_frame_and_pauses() {
+        use crate::command::by_id;
+        let cmd = by_id("frame_start").expect("no frame_start command");
+        assert_eq!(cmd.default_chord, Some("Ctrl+Up"));
+        assert_eq!(cmd.context, crate::command::Context::Playbar);
+
+        let mut state = State::new(false);
+        {
+            let pb = state.slots.playbar.inner_mut();
+            pb.start_frame = 1.0;
+            pb.end_frame = 48.0;
+            pb.current_frame = 17.5;
+            pb.playing = true;
+            pb.reversed = true;
+        }
+        assert!(state.run_command("frame_start"));
+        {
+            let pb = state.slots.playbar.inner();
+            assert!(!pb.playing, "a moving timeline stops");
+            assert_eq!(pb.current_frame, 1.0, "and lands on the start frame");
+        }
+        // Stopped, mid-timeline: a plain jump.
+        state.slots.playbar.inner_mut().current_frame = 30.0;
+        state.run_command("frame_start");
+        assert_eq!(state.slots.playbar.inner().current_frame, 1.0);
+        assert!(!state.slots.playbar.inner().playing);
+        // Whatever the start frame is.
+        state.slots.playbar.inner_mut().start_frame = 5.0;
+        state.slots.playbar.inner_mut().current_frame = 30.0;
+        state.run_command("frame_start");
+        assert_eq!(state.slots.playbar.inner().current_frame, 5.0);
+    }
+
     /// Either play toggle pauses a moving timeline; direction only chooses
     /// what starts from a stop — and the reverse tick runs the frame counter
     /// down, wrapping start→end.

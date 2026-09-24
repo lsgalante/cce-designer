@@ -36,6 +36,7 @@ pub enum Action {
     PlayPauseReverse,
     FrameNext,
     FramePrev,
+    FrameStart,
     Undo,
     Redo,
     /// Open the command palette — a command like any other, so it is

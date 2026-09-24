@@ -208,6 +208,10 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "play_pause_reverse", label: "Play / Pause Reverse", context: Context::Playbar, run: Run::Key(Action::PlayPauseReverse), default_chord: Some("Down") },
     Command { id: "frame_next", label: "Next Frame", context: Context::Playbar, run: Run::Key(Action::FrameNext), default_chord: Some("Right") },
     Command { id: "frame_prev", label: "Previous Frame", context: Context::Playbar, run: Run::Key(Action::FramePrev), default_chord: Some("Left") },
+    // Ctrl+Up rewinds: stops a moving timeline and lands on the start frame,
+    // the way a transport's stop-to-start does — one press whatever the
+    // timeline is doing.
+    Command { id: "frame_start", label: "Go To Start Frame", context: Context::Playbar, run: Run::Key(Action::FrameStart), default_chord: Some("Ctrl+Up") },
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Command> {

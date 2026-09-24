@@ -6953,6 +6953,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let pb = self.slots.playbar.inner_mut();
                 pb.current_frame = (pb.current_frame.round() + step).clamp(pb.start_frame, pb.end_frame);
             }
+            // Rewind: pause whatever is playing and land on the start frame.
+            // The scene rebuild follows from tick_frame's last_sim_frame
+            // diff, as for the steps above.
+            Action::FrameStart => {
+                let pb = self.slots.playbar.inner_mut();
+                pb.playing = false;
+                pb.current_frame = pb.start_frame;
+            }
         }
         if settings_changed {
             self.save_settings();
