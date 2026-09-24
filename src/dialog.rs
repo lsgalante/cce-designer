@@ -188,6 +188,25 @@ const READOUT_GAP: f32 = 8.0;
 /// Gap between the query line and the list.
 const GAP: f32 = 8.0;
 
+/// The dialog plate's backdrop compression when `style.surface.dialog.
+/// compression` is unset — above a menu's 0.6, since a modal is read over
+/// the whole busy window rather than beside the one control that opened it.
+/// Compression pulls what shows through the frost toward the tint's key, so
+/// the rows read against an even ground whatever is behind them.
+pub const DIALOG_COMPRESSION: f32 = 0.8;
+
+/// The dialog plate's material: the param plate's fill, frosted as the
+/// plates are, with the compression raised to `compression`. An opaque
+/// plate (blur off in the config) has no backdrop to compress and is
+/// returned as it is.
+pub fn plate_material(compression: f32) -> cce_ui::scene::Material {
+    let mut m = cce_ui::scene::Material::from_fill(colors::param_plate_fill());
+    if let cce_ui::scene::Frost::Frosted { compression: c, .. } = &mut m.frost {
+        *c = compression.clamp(0.0, 1.0);
+    }
+    m
+}
+
 /// The dialog's rect inside a `width` x `height` window: centered
 /// horizontally, and a little above centre vertically so the list grows into
 /// the window's roomier half rather than down over the status bar.

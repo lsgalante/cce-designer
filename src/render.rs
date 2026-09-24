@@ -280,10 +280,30 @@ impl State {
             // Modern-paint surface, the playbar's contract: the designer
             // authors the plate (the dialog floats, so the pane radii and the
             // focus tint do not apply — it is never a pane and never the
-            // focused one), then Dialog::paint emits the tab strip, the query
-            // line and the rows. A subtree painter, so append_frame_text skips
-            // the slot and the chord column keeps its own font and bounds.
-            append_widget_plate(w, pc);
+            // focused one), then Dialog::paint emits the query line and the
+            // rows. A subtree painter, so append_frame_text skips the slot and
+            // the chord column keeps its own font and bounds.
+            //
+            // The plate is `append_widget_plate`'s, drawn here rather than by
+            // it because that helper builds its material from the fill alone
+            // and the dialog wants its own backdrop compression
+            // (`State::dialog_compression`) — the node bodies' override, for
+            // the same reason: the one knob that differs from the panes.
+            let (x, y, ww, h) = w.rect();
+            let r = rect(x, y, ww, h);
+            let cr = w.corner_radii();
+            let radii = (cr.top_left, cr.top_right, cr.bottom_right, cr.bottom_left);
+            let mat = crate::dialog::plate_material(self.dialog_compression);
+            match w.solid_border() {
+                Some(_) if cce_ui::layout::control_relief() => {
+                    pc.bevel(r, radii, &mat, cce_ui::colors::plate_bevel_width());
+                }
+                Some((border, thickness)) => {
+                    pc.fill_material(r, radii, &mat);
+                    pc.border(r, radii, [0.0; 4], border, thickness);
+                }
+                None => pc.fill_material(r, radii, &mat),
+            }
             w.paint_self(&self.ui_context, pc);
         } else if idx == PLAYBAR_IDX {
             // Modern-paint pane: the plate from the legacy views like the other

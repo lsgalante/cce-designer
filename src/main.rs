@@ -1384,6 +1384,25 @@ mod tests {
         assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowDown)), Some("play_pause_reverse"));
     }
 
+    /// The dialog plate carries its own backdrop compression, above a
+    /// menu's: whatever the plates' own is (0 in a config that keeps the
+    /// panes clear), the modal pulls its backdrop toward the tint, and a
+    /// value out of range is clamped rather than overshooting.
+    #[test]
+    fn the_dialog_plate_compresses_its_backdrop_harder_than_a_menu() {
+        use cce_ui::scene::Frost;
+        assert!(crate::dialog::DIALOG_COMPRESSION > cce_ui::color::menu_compression().min(0.6));
+        for (asked, want) in [(0.8, 0.8), (1.7, 1.0), (-0.2, 0.0)] {
+            match crate::dialog::plate_material(asked).frost {
+                Frost::Frosted { compression, .. } => assert!((compression - want).abs() < 1e-6, "{asked} -> {compression}"),
+                // Blur off: nothing behind the plate to compress.
+                Frost::Opaque => {}
+            }
+        }
+        let state = State::new(false);
+        assert!((0.0..=1.0).contains(&state.dialog_compression));
+    }
+
     /// Ctrl+Up rewinds: a moving timeline stops and the playhead lands on
     /// the start frame, from wherever it was and in either direction; from a
     /// stop it is simply a jump to the start.

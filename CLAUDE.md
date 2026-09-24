@@ -1592,6 +1592,16 @@ sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
 launcher), and Super held is the DE's window-adjust modifier besides. Alt is the
 app's own — the `move_*` family already lives there.
 
+**The dialog plate compresses its backdrop harder than anything else**
+(`State::dialog_compression`, `style.surface.dialog.compression` in
+config.kdl, default `DIALOG_COMPRESSION` 0.8 against a menu's 0.6). The
+plate's own compression can be 0 — a config that keeps the panes clear —
+and at that value the rows sat on the full-contrast scene and network. The
+render arm paints the plate itself with `dialog::plate_material` rather
+than through `append_widget_plate`, whose material comes from the fill alone,
+exactly as the node bodies do for `node_compression`. Opaque plates (blur
+off) have no backdrop and ignore it.
+
 **The dialog is painted after the overlay passes, not in the widget walk.** A
 high `z_order` is not enough: `append_frame_text`, `append_scale_readout` and the
 point-number overlay all run AFTER the whole walk, so the graph's node labels drew

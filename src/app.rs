@@ -1910,6 +1910,13 @@ pub struct State {
     /// pull the view toward the tint's key and read as solid. None = the
     /// pane's.
     pub node_compression: Option<f32>,
+    /// The Alt+D dialog's backdrop compression (`style.surface.dialog.
+    /// compression`, 0..1; [`crate::dialog::DIALOG_COMPRESSION`] when
+    /// unset). The dialog is a modal read over whatever the scene and the
+    /// network are doing, so it pulls its backdrop toward the tint harder
+    /// than a pane or even a menu does — at the plate's own compression the
+    /// rows sat on a busy, full-contrast picture.
+    pub dialog_compression: f32,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     pub floating_network_layout: (f32, f32, f32, f32),
@@ -5107,6 +5114,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             network_opacity: 0.95,
             node_opacity: 1.0,
             node_compression: None,
+            dialog_compression: crate::dialog::DIALOG_COMPRESSION,
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -5505,10 +5513,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             .and_then(|v| v.as_f64())
             .map(|k| (k as f32).clamp(0.0, 1.0));
 
+        let dialog_compression = cce_ui::config::cached_config()
+            .pointer("/style/surface/dialog/compression")
+            .and_then(|v| v.as_f64())
+            .map(|k| (k as f32).clamp(0.0, 1.0))
+            .unwrap_or(crate::dialog::DIALOG_COMPRESSION);
+
         let mut changed = false;
 
         if self.node_compression != node_compression {
             self.node_compression = node_compression;
+            changed = true;
+        }
+        if self.dialog_compression != dialog_compression {
+            self.dialog_compression = dialog_compression;
             changed = true;
         }
         
