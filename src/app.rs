@@ -764,8 +764,17 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         }
     }
     fn merge_params(node: &mut FsNode, template: &FsNode) {
+        // A missing parameter goes where the TEMPLATE puts it — after the
+        // last template parameter the instance already has — not at the
+        // end. The pane's order is the template's statement of what matters
+        // first (the Sphere's Method sits above the Radius it governs), and
+        // an old save that appended every later control below Color was
+        // showing a different node from a fresh one.
+        let mut cursor = 0;
         for tp in &template.params {
-            if let Some(ip) = node.params.iter_mut().find(|p| p.name == tp.name) {
+            if let Some(i) = node.params.iter().position(|p| p.name == tp.name) {
+                cursor = i + 1;
+                let ip = &mut node.params[i];
                 ip.param_type = tp.param_type.clone();
                 ip.label = tp.label.clone();
                 ip.options = tp.options.clone();
@@ -779,7 +788,8 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                 // irrelevant rows would not hide them there.
                 ip.show_when = tp.show_when.clone();
             } else {
-                node.params.push(tp.clone());
+                node.params.insert(cursor, tp.clone());
+                cursor += 1;
             }
         }
     }

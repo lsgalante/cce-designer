@@ -2875,13 +2875,13 @@ mod tests {
         };
         crate::app::merge_template_defs(&mut root, &templates);
 
-        // Sphere: new params inserted where the template puts them (Method
-        // ahead of the rows it governs, Frequency and Resolution after
-        // them) with template defaults, value kept, kernel refreshed.
+        // Sphere: new params inserted where the template puts them — Method
+        // ABOVE the Radius the instance already had, the rest after it —
+        // with template defaults, value kept, kernel refreshed.
         let s = &root.children[0];
         let names: Vec<&str> = s.params.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["Radius", "Method", "Rows", "Columns", "Frequency", "Resolution", "Center X", "Center Y", "Center Z", "Color"]);
-        assert_eq!(s.params[0].default, "0.70", "instance value survives");
+        assert_eq!(names, ["Method", "Radius", "Rows", "Columns", "Frequency", "Resolution", "Center X", "Center Y", "Center Z", "Color"]);
+        assert_eq!(s.params.iter().find(|p| p.name == "Radius").unwrap().default, "0.70", "instance value survives");
         let code = &s.children.iter().find(|c| c.name == "opencl1").unwrap()
             .params.iter().find(|p| p.name == "Code").unwrap().default;
         assert!(code.contains("chi(\"Rows\""), "kernel refreshed from template");
@@ -3003,6 +3003,13 @@ mod tests {
         let method = sphere_t.params.iter().find(|p| p.name == "Method").expect("a Method dropdown");
         assert_eq!(method.param_type, "choice:UV,Icosphere,Cube");
         assert_eq!(method.default, "UV", "the default stays the sphere every saved project was built with");
+        assert_eq!(sphere_t.params[0].name, "Method", "the method heads the pane, above the radius it governs");
+        // And it heads the pane of a sphere SAVED before it existed too: the
+        // bundled project's sphere1 gains it through the loader's merge, at
+        // the template's position rather than below Color.
+        let state = State::new(false);
+        let saved = state.current_dir().children.iter().find(|c| c.name == "sphere1").expect("the bundled sphere1");
+        assert_eq!(saved.params[0].name, "Method", "merged order: {:?}", saved.params.iter().map(|p| &p.name).collect::<Vec<_>>());
         let build = |params: &[(&str, &str)]| {
             let mut inst = sphere_t.clone();
             inst.id = "s".to_string();

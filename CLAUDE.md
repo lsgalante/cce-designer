@@ -1416,8 +1416,11 @@ Missing referenced templates panic at load.
 
 Saved instances are self-contained copies, but the loader merges template
 evolution into them (`merge_template_defs` in `src/app.rs`, run on every
-project deserialization including thumbnails): missing params are appended,
-existing ones keep their value but take the template's UI metadata, and subnet
+project deserialization including thumbnails): missing params are inserted
+where the template puts them (after the last template param the instance
+already has — so the Sphere's Method lands above Radius in an old save, not
+below Color), existing ones keep their value but take the template's UI
+metadata, and subnet
 templates (Sphere/Plane/Extrude) refresh their children's `Code` outright —
 **the template owns the surface and implementation, the instance owns its
 values.** A kernel hand-edited inside a template instance reverts on load;
