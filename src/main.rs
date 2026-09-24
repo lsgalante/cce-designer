@@ -11,6 +11,7 @@ pub mod remesh;
 pub mod spatial;
 pub mod volume;
 pub mod wrangle;
+pub mod shapes;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
@@ -282,10 +283,10 @@ mod tests {
         let mut redraw = false;
         state
             .apply_action(
-                McpAction::AddNode { template_name: "Sphere".to_string(), name: None, x: 5.0, y: 5.0 },
+                McpAction::AddNode { template_name: "Embryo".to_string(), name: None, x: 5.0, y: 5.0 },
                 &mut redraw,
             )
-            .expect("add sphere node");
+            .expect("add embryo node");
         let added = state.current_dir().children.last().unwrap();
         assert!(!added.geometry_visible, "added node must start hidden");
         assert!(
@@ -575,8 +576,8 @@ mod tests {
         assert_eq!(by_name("my_region").params[0].default, "sphere1_2", "the wire followed the rename");
         assert_eq!(by_name("sphere1").params[0].default, "camera1");
         assert_eq!(proj.view_state.active_camera, "camera1");
-        // The template children inside the sphere were never spaced and are untouched.
-        assert!(by_name("sphere1_2").children.iter().any(|c| c.name == "opencl1"));
+        // The sphere is the native node the bundled file now holds.
+        assert_eq!(by_name("sphere1_2").node_type, "sphere");
 
         // A clean file is left exactly alone.
         let before = serde_json::to_string(&proj).unwrap();
@@ -1569,33 +1570,38 @@ mod tests {
         }
     }
 
+    /// A subnet template's children resolve against their own templates: a
+    /// child names a base by type, takes its params, and lays its overrides
+    /// on top. The Embryo is the shipped example (the four kernel subnets it
+    /// used to share this test with are native nodes since 2026-09-24).
     #[test]
     fn test_subnet_template_child_resolution() {
         let templates_root = crate::app::load_fs_tree();
-        let box_template = templates_root
+        let embryo = templates_root
             .children
             .iter()
-            .find(|t| t.name == "Box")
-            .expect("Box template should be loaded");
-        
-        assert_eq!(box_template.children.len(), 3);
-        
-        let input1 = box_template.children.iter().find(|c| c.name == "input1").unwrap();
+            .find(|t| t.name == "Embryo")
+            .expect("Embryo template should be loaded");
+        assert_eq!(embryo.node_type, "node");
+        assert_eq!(embryo.children.len(), 10);
+
+        let input1 = embryo.children.iter().find(|c| c.name == "input1").unwrap();
         assert_eq!(input1.node_type, "input");
-        
-        let opencl1 = box_template.children.iter().find(|c| c.name == "opencl1").unwrap();
-        assert_eq!(opencl1.node_type, "opencl");
-        
-        let input_param = opencl1.params.iter().find(|p| p.name == "Input").unwrap();
-        assert_eq!(input_param.default, "input1");
-        
-        let update_param = opencl1.params.iter().find(|p| p.name == "Update Parameters").unwrap();
-        assert_eq!(update_param.param_type, "button");
-        
-        let output1 = box_template.children.iter().find(|c| c.name == "output1").unwrap();
+
+        // The nested sphere is the native Sphere with the template's whole
+        // surface, the Embryo's overrides on top of it.
+        let sphere1 = embryo.children.iter().find(|c| c.name == "sphere1").unwrap();
+        assert_eq!(sphere1.node_type, "sphere");
+        assert!(sphere1.children.is_empty(), "a native node has no children");
+        assert!(sphere1.params.iter().any(|p| p.name == "Method"), "the base template's params arrive");
+        let radius = sphere1.params.iter().find(|p| p.name == "Radius").unwrap();
+        assert!(radius.expr && radius.default.contains("Radius"), "the override is the reference: {} (expr {})", radius.default, radius.expr);
+        assert_eq!(sphere1.params.iter().find(|p| p.name == "Center Y").unwrap().default, "0.0");
+
+        let output1 = embryo.children.iter().find(|c| c.name == "output1").unwrap();
         assert_eq!(output1.node_type, "output");
         let output_input = output1.params.iter().find(|p| p.name == "Input").unwrap();
-        assert_eq!(output_input.default, "opencl1");
+        assert_eq!(output_input.default, "normal1");
     }
 
     /// The raster pipeline culls back faces with CCW fronts (the wgpu
@@ -1785,29 +1791,20 @@ mod tests {
         assert_color_toggle_switches_between_gradient_and_default("Plane");
     }
 
+    /// The Sphere is a native node: no children, welded points, closed.
     #[test]
-    fn test_sphere_subnet_geometry_generation() {
+    fn test_sphere_node_geometry_generation() {
         let templates_root = crate::app::load_fs_tree();
         let sphere_template = templates_root
             .children
             .iter()
             .find(|t| t.name == "Sphere")
             .expect("Sphere template should be loaded");
-        
-        assert_eq!(sphere_template.children.len(), 2);
-        
-        let opencl1 = sphere_template.children.iter().find(|c| c.name == "opencl1").unwrap();
-        assert_eq!(opencl1.node_type, "opencl");
-        
-        let output1 = sphere_template.children.iter().find(|c| c.name == "output1").unwrap();
-        assert_eq!(output1.node_type, "output");
-        
+        assert_eq!(sphere_template.node_type, "sphere");
+        assert!(sphere_template.children.is_empty());
+
         let mut sphere_instance = sphere_template.clone();
         sphere_instance.id = "sphere_inst".to_string();
-        for child in &mut sphere_instance.children {
-            child.id = format!("{}_{}", sphere_instance.id, child.name);
-        }
-        
         let root = FsNode {
             id: "root".to_string(),
             name: "root".to_string(),
@@ -1819,77 +1816,25 @@ mod tests {
             inputs: 0,
             outputs: 0,
         };
-        
         let mut visited = Vec::new();
-        let mut ocl_err = None;
+        let mut err = None;
         let geom = crate::geometry::generate_single_node_geometry_with_errors(
             &root,
             &root.children[0],
             &mut visited,
-            &mut ocl_err,
+            &mut err,
             &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
-        ).expect("Geometry generation failed");
-        
-        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
+        )
+        .expect("sphere generation failed");
+        assert!(err.is_none(), "{err:?}");
         assert_eq!(geom.num_points(), crate::geometry::sphere_point_len(16, 24));
-        
-        let mut max_dist: f32 = 0.0;
+        assert_eq!(geom.num_prims(), 24 * 2 + 24 * 14, "two pole fans and fourteen bands of quads");
+        assert!(geom.is_closed());
         for pos in geom.positions() {
-            let dx = pos[0] - 0.0;
-            let dy = pos[1] - 0.55;
-            let dz = pos[2] - 0.0;
-            let dist = (dx*dx + dy*dy + dz*dz).sqrt();
-            if dist > max_dist {
-                max_dist = dist;
-            }
+            let r = (pos[0].powi(2) + (pos[1] - 0.55).powi(2) + pos[2].powi(2)).sqrt();
+            assert!((r - 0.5).abs() < 1e-4, "point {pos:?} is {r} from the centre");
         }
-        assert!((max_dist - 0.5).abs() < 0.01, "Expected radius around 0.5, got {}", max_dist);
-        
-        let mut sphere_instance_2 = sphere_template.clone();
-        sphere_instance_2.id = "sphere_inst_2".to_string();
-        for child in &mut sphere_instance_2.children {
-            child.id = format!("{}_{}", sphere_instance_2.id, child.name);
-        }
-        if let Some(radius_param) = sphere_instance_2.params.iter_mut().find(|p| p.name == "Radius") {
-            radius_param.default = "1.0".to_string();
-        }
-        
-        let root_2 = FsNode {
-            id: "root".to_string(),
-            name: "root".to_string(),
-            node_type: "node".to_string(),
-            children: vec![sphere_instance_2],
-            params: vec![],
-            geometry_visible: true,
-            position: (0.0, 0.0),
-            inputs: 0,
-            outputs: 0,
-        };
-        
-        let mut visited_2 = Vec::new();
-        let mut ocl_err_2 = None;
-        let geom_2 = crate::geometry::generate_single_node_geometry_with_errors(
-            &root_2,
-            &root_2.children[0],
-            &mut visited_2,
-            &mut ocl_err_2,
-            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
-        ).expect("Geometry generation failed");
-        
-        assert!(ocl_err_2.is_none(), "OpenCL compilation error: {:?}", ocl_err_2);
-        assert_eq!(geom_2.num_points(), crate::geometry::sphere_point_len(16, 24));
-        
-        let mut max_dist_2: f32 = 0.0;
-        for pos in geom_2.positions() {
-            let dx = pos[0] - 0.0;
-            let dy = pos[1] - 0.55;
-            let dz = pos[2] - 0.0;
-            let dist = (dx*dx + dy*dy + dz*dz).sqrt();
-            if dist > max_dist_2 {
-                max_dist_2 = dist;
-            }
-        }
-        assert!((max_dist_2 - 1.0).abs() < 0.01, "Expected radius around 1.0, got {}", max_dist_2);
+        assert!(geom.points().has("Norm") && geom.points().has("UV") && geom.points().has("Cd"));
     }
 
     /// The native curve node: a Catmull-Rom strip through the "Points"
@@ -2252,99 +2197,66 @@ mod tests {
         assert!(!state.viewer_tool_undo());
     }
 
-    /// The Extrude template: a subnet (input -> opencl -> output) whose kernel
-    /// offsets each input triangle along its face normal and stitches side
-    /// walls. Per input triangle it emits top (3) + walls (18) + base (3) =
-    /// 24 vertices, or 21 with Keep Base off.
+    /// The Extrude node extrudes the input AS A WHOLE: points move along
+    /// their normals, boundary edges grow walls, and Keep Base closes the
+    /// bottom. A 2 x 2 plane becomes a closed slab of 18 points and 16
+    /// primitives; without the base it is open and 4 primitives lighter. A
+    /// closed sphere grows no walls at all — it becomes a two-skinned shell.
     #[test]
-    fn test_extrude_subnet_geometry_generation() {
+    fn test_extrude_node_geometry_generation() {
         let templates_root = crate::app::load_fs_tree();
-        let sphere_template = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
         let extrude_template = templates_root
             .children
             .iter()
             .find(|t| t.name == "Extrude")
             .expect("Extrude template should be loaded");
-        assert_eq!(extrude_template.children.len(), 3);
+        assert_eq!(extrude_template.node_type, "extrude");
+        assert!(extrude_template.children.is_empty());
         assert_eq!(extrude_template.inputs, 1);
 
-        let mut sphere_instance = sphere_template.clone();
-        sphere_instance.id = "sphere_inst".to_string();
-        sphere_instance.name = "Sphere 1".to_string();
-        for child in &mut sphere_instance.children {
-            child.id = format!("{}_{}", sphere_instance.id, child.name);
-        }
-
-        let mut extrude_instance = extrude_template.clone();
-        extrude_instance.id = "extrude_inst".to_string();
-        extrude_instance.name = "Extrude 1".to_string();
-        for child in &mut extrude_instance.children {
-            child.id = format!("{}_{}", extrude_instance.id, child.name);
-        }
-        extrude_instance.params.iter_mut().find(|p| p.name == "Input").unwrap().default =
-            "Sphere 1".to_string();
-
-        let root = FsNode {
-            id: "root".to_string(),
-            name: "root".to_string(),
-            node_type: "node".to_string(),
-            children: vec![sphere_instance, extrude_instance],
-            params: vec![],
-            geometry_visible: true,
-            position: (0.0, 0.0),
-            inputs: 0,
-            outputs: 0,
+        let plane = ref_node("p", "plane1", "plane", vec![("Rows", "spinbox", "2"), ("Columns", "spinbox", "2"), ("Width", "slider", "1"), ("Length", "slider", "1")], vec![]);
+        let extrude = |keep: &str| {
+            ref_node("e", "extrude1", "extrude", vec![("Input", "text", "plane1"), ("Distance", "slider", "0.2"), ("Keep Base", "toggle", keep)], vec![])
         };
-
-        let mut visited = Vec::new();
-        let mut ocl_err = None;
-        let geom = crate::geometry::generate_single_node_geometry_with_errors(
-            &root,
-            &root.children[1],
-            &mut visited,
-            &mut ocl_err,
-            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
-        ).expect("Extrude geometry generation failed");
-        assert!(ocl_err.is_none(), "OpenCL compilation error: {:?}", ocl_err);
-        // The extrude kernel builds a wall per input triangle, so its output
-        // is a soup of loose shells; welding it is what 1850 counts.
-        assert_eq!(geom.num_points(), 1850);
-
-        // Extruding a radius-0.5 sphere outward by the default 0.2 pushes the
-        // farthest vertices to ~0.7 from its center.
-        let mut max_dist: f32 = 0.0;
-        for pos in geom.positions() {
-            let dx = pos[0];
-            let dy = pos[1] - 0.55;
-            let dz = pos[2];
-            max_dist = max_dist.max((dx * dx + dy * dy + dz * dz).sqrt());
+        let root = ref_node("root", "root", "node", vec![], vec![plane.clone(), extrude("true")]);
+        let (g, err) = eval(&root, &root.children[1]);
+        assert!(err.is_none(), "{err:?}");
+        let g = g.unwrap();
+        assert_eq!(g.num_points(), 18, "every point once, and once lifted");
+        assert_eq!(g.num_prims(), 4 + 8 + 4, "top, eight boundary walls, base");
+        assert!(g.is_closed(), "with the base kept the slab is watertight");
+        for p in 0..9 {
+            assert!((g.pos(p + 9).y - g.pos(p).y - 0.2).abs() < 1e-5, "top point {p} sits Distance above its base");
         }
-        assert!((max_dist - 0.7).abs() < 0.02, "Expected max extent ~0.7, got {}", max_dist);
+        // Outward: every face normal points away from the slab's centre.
+        let centre = (0..18).map(|p| g.pos(p)).sum::<Vec3>() / 18.0;
+        for pr in 0..g.num_prims() {
+            let pts = g.prim_points(pr);
+            let (a, b, c) = (g.pos(pts[0] as usize), g.pos(pts[1] as usize), g.pos(pts[2] as usize));
+            let n = (b - a).cross(c - a);
+            let mid = pts.iter().map(|&q| g.pos(q as usize)).sum::<Vec3>() / pts.len() as f32;
+            assert!(n.dot(mid - centre) > 0.0, "primitive {pr} faces inward");
+        }
+        assert!(g.points().has("Cd") && g.points().has("UV"), "point attributes ride to the top");
 
-        // Keep Base off drops the 3 base vertices per triangle: 768 * 21.
-        let mut root2 = root.clone();
-        root2.children[1].params.iter_mut().find(|p| p.name == "Keep Base").unwrap().default =
-            "false".to_string();
-        let mut visited2 = Vec::new();
-        let mut ocl_err2 = None;
-        let geom2 = crate::geometry::generate_single_node_geometry_with_errors(
-            &root2,
-            &root2.children[1],
-            &mut visited2,
-            &mut ocl_err2,
-            &mut crate::geometry::EvalSim::new(0, 0, &mut crate::geometry::SimCache::default()),
-        ).expect("Extrude geometry generation failed (no base)");
-        assert!(ocl_err2.is_none(), "OpenCL compilation error: {:?}", ocl_err2);
-        // Same POINTS as the based variant: the base cap's corners are the
-        // wall corners, so dropping the cap removes primitives, not places.
-        // The primitive count is where the two variants actually differ.
-        assert_eq!(geom2.num_points(), geom.num_points());
-        assert!(
-            geom2.num_prims() < geom.num_prims(),
-            "no-base extrude should have fewer prims: {} vs {}",
-            geom2.num_prims(),
-            geom.num_prims()
-        );
+        let root2 = ref_node("root", "root", "node", vec![], vec![plane, extrude("false")]);
+        let g2 = eval(&root2, &root2.children[1]).0.unwrap();
+        assert_eq!(g2.num_points(), 18, "the base's corners are the walls' corners: same places, fewer faces");
+        assert_eq!(g2.num_prims(), 4 + 8);
+        assert!(!g2.is_closed(), "no base, open bottom");
+
+        // A closed input: no boundary, so no walls — an outer and an inner
+        // skin, the farthest points Distance beyond the sphere.
+        let sphere = ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "0.5"), ("Center X", "slider", "0"), ("Center Y", "slider", "0.55"), ("Center Z", "slider", "0")], vec![]);
+        let ext = ref_node("e", "extrude1", "extrude", vec![("Input", "text", "sphere1"), ("Distance", "slider", "0.2"), ("Keep Base", "toggle", "true")], vec![]);
+        let root3 = ref_node("root", "root", "node", vec![], vec![sphere, ext]);
+        let g3 = eval(&root3, &root3.children[1]).0.unwrap();
+        let base = crate::geometry::sphere_point_len(16, 24);
+        assert_eq!(g3.num_points(), 2 * base);
+        assert_eq!(g3.num_prims(), 2 * (24 * 2 + 24 * 14), "no walls on a closed surface");
+        assert!(g3.is_closed());
+        let max_dist = g3.positions().iter().map(|p| (p[0].powi(2) + (p[1] - 0.55).powi(2) + p[2].powi(2)).sqrt()).fold(0.0f32, f32::max);
+        assert!((max_dist - 0.7).abs() < 1e-3, "expected max extent ~0.7, got {max_dist}");
     }
 
     /// Group membership → viewport markers: the `group:<name>` tags a Group
@@ -2719,11 +2631,25 @@ mod tests {
             inputs: 0,
             outputs: 0,
         };
-        // A tree as an older save carries it: a meta child on the sphere and
-        // on its internal stages, plus the ROOT meta node beside them.
+        // A tree as an older save carries it: a meta child on the sphere, one
+        // on a node INSIDE a subnet, plus the ROOT meta node beside them.
         sphere.children.push(meta_child("s_meta"));
-        let opencl_idx = sphere.children.iter().position(|c| c.name == "opencl1").unwrap();
-        sphere.children[opencl_idx].children.push(meta_child("s_ocl_meta"));
+        let mut inner = camera_t.clone();
+        inner.id = "inner".to_string();
+        inner.name = "inner1".to_string();
+        inner.children.push(meta_child("inner_meta"));
+        let mut sub = FsNode {
+            id: "sub".to_string(),
+            name: "sub1".to_string(),
+            node_type: "node".to_string(),
+            children: vec![inner],
+            params: vec![],
+            geometry_visible: false,
+            position: (2.0, 0.0),
+            inputs: 0,
+            outputs: 0,
+        };
+        sub.children[0].children.push(meta_child("inner_meta2"));
         let mut session = meta_child("root_meta");
         session.geometry_visible = true;
 
@@ -2731,7 +2657,7 @@ mod tests {
             id: "root".to_string(),
             name: "root".to_string(),
             node_type: "node".to_string(),
-            children: vec![sphere, camera, session],
+            children: vec![sphere, camera, session, sub],
             params: vec![],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -2743,8 +2669,8 @@ mod tests {
 
         // Gone from the placed nodes, at every depth…
         assert!(!root.children[0].children.iter().any(|c| c.node_type == "meta"));
-        let opencl = root.children[0].children.iter().find(|c| c.name == "opencl1").unwrap();
-        assert!(!opencl.children.iter().any(|c| c.node_type == "meta"));
+        let inner = root.children[3].children.iter().find(|c| c.name == "inner1").unwrap();
+        assert!(!inner.children.iter().any(|c| c.node_type == "meta"));
         // …and the root meta node, which is the SESSION container and not a
         // per-node child at all, is still standing.
         assert!(
@@ -2886,28 +2812,42 @@ mod tests {
 
     /// The loader's template merge: saved instances gain params their
     /// template grew after the save (values they already hold are kept), a
-    /// subnet instance's kernel refreshes to the template's (so the new
-    /// params actually work), and non-template lookalikes are left alone.
+    /// KERNEL SUBNET saved while Sphere was one becomes the native node with
+    /// its values intact and its children gone, and non-template lookalikes
+    /// are left alone.
     #[test]
     fn test_loader_merges_new_template_params() {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
-        let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
         let group_t = templates_root.children.iter().find(|t| t.name == "Group").unwrap();
+        let opencl_t = templates_root.children.iter().find(|t| t.node_type == "opencl").unwrap();
+        let output_t = templates_root.children.iter().find(|t| t.node_type == "output").unwrap();
 
         // An "old save": a Sphere instance from before the construction
-        // controls — only Radius (with a user value), and a stale kernel.
-        let mut old_sphere = sphere_t.clone();
-        old_sphere.id = "s".to_string();
-        old_sphere.name = "Sphere 3".to_string();
-        for child in &mut old_sphere.children {
-            child.id = format!("{}_{}", old_sphere.id, child.name);
-        }
-        old_sphere.params.retain(|p| p.name == "Radius");
-        old_sphere.params[0].default = "0.70".to_string();
-        let opencl = old_sphere.children.iter_mut().find(|c| c.name == "opencl1").unwrap();
-        opencl.params.iter_mut().find(|p| p.name == "Code").unwrap().default =
-            "OLD KERNEL".to_string();
+        // controls AND from before the port — a subnet of opencl1 → output1
+        // holding only Radius, with a user value, and a stale kernel.
+        let mut opencl1 = opencl_t.clone();
+        opencl1.id = "s_opencl1".to_string();
+        opencl1.name = "opencl1".to_string();
+        opencl1.params.iter_mut().find(|p| p.name == "Code").unwrap().default = "OLD KERNEL".to_string();
+        let mut output1 = output_t.clone();
+        output1.id = "s_output1".to_string();
+        output1.name = "output1".to_string();
+        output1.params.iter_mut().find(|p| p.name == "Input").unwrap().default = "opencl1".to_string();
+        let old_sphere = FsNode {
+            id: "s".to_string(),
+            name: "Sphere 3".to_string(),
+            node_type: "node".to_string(),
+            children: vec![opencl1, output1],
+            params: vec![crate::app::ParamDef {
+                name: "Radius".into(), label: String::new(), param_type: "slider".into(), default: "0.70".into(),
+                options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
+            }],
+            geometry_visible: true,
+            position: (3.0, 1.0),
+            inputs: 0,
+            outputs: 1,
+        };
 
         // An old Group missing a later-added param, with a kept value.
         let mut old_group = group_t.clone();
@@ -2943,16 +2883,16 @@ mod tests {
         };
         crate::app::merge_template_defs(&mut root, &templates);
 
-        // Sphere: new params inserted where the template puts them — Method
-        // ABOVE the Radius the instance already had, the rest after it —
-        // with template defaults, value kept, kernel refreshed.
+        // Sphere: the kernel subnet is the native node now — same id, name
+        // and position, no children — and new params are inserted where the
+        // template puts them: Method ABOVE the Radius the instance already
+        // had, the rest after it, with template defaults and the value kept.
         let s = &root.children[0];
+        assert_eq!((s.node_type.as_str(), s.id.as_str(), s.name.as_str(), s.position), ("sphere", "s", "Sphere 3", (3.0, 1.0)));
+        assert!(s.children.is_empty(), "the opencl and output children go");
         let names: Vec<&str> = s.params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Method", "Radius", "Rows", "Columns", "Frequency", "Resolution", "Center X", "Center Y", "Center Z", "Color"]);
         assert_eq!(s.params.iter().find(|p| p.name == "Radius").unwrap().default, "0.70", "instance value survives");
-        let code = &s.children.iter().find(|c| c.name == "opencl1").unwrap()
-            .params.iter().find(|p| p.name == "Code").unwrap().default;
-        assert!(code.contains("chi(\"Rows\""), "kernel refreshed from template");
 
         // And the merged instance evaluates with the new controls live.
         let mut merged_sphere_root = root.clone();
@@ -3061,9 +3001,8 @@ mod tests {
     /// onto the sphere). The welded point counts are the closed forms —
     /// 10f^2 + 2 and 6r^2 + 2 — which hold only if every corner two faces
     /// share lands on the same point, and closedness says the winding came
-    /// out consistent after the outward turn. Method reaches the kernel as
-    /// an option INDEX: the choice's text used to parse as 0, so a kernel
-    /// could not read a dropdown at all.
+    /// out consistent after the outward turn. Native since 2026-09-24
+    /// (`src/shapes.rs`); it was a kernel reading Method as an option index.
     #[test]
     fn sphere_method_builds_a_uv_ico_or_cube_sphere() {
         let templates_root = crate::app::load_fs_tree();
@@ -3133,7 +3072,7 @@ mod tests {
         for (res, expect) in [("1", 8), ("3", 56), ("8", 386)] {
             let cube = build(&[("Method", "Cube"), ("Resolution", res), ("Radius", "0.8")]);
             assert_eq!(cube.num_points(), expect, "cube sphere at resolution {res}");
-            assert_eq!(cube.num_prims(), 6 * res.parse::<usize>().unwrap().pow(2) * 2);
+            assert_eq!(cube.num_prims(), 6 * res.parse::<usize>().unwrap().pow(2), "one quad per cell — the kernel fanned them");
             assert!(cube.is_closed(), "cube sphere at resolution {res} is not closed");
             on_sphere(&cube, 0.8);
         }
@@ -3234,23 +3173,18 @@ mod tests {
         assert!(chained.points().has("mass"));
     }
 
-    /// The Plane template mirrors the Sphere subnet (an opencl node feeding an
-    /// output node); its kernel generates a divs x divs grid on XZ at y = 0,
-    /// with the Size param as the side length.
+    /// The Plane node: a Columns x Rows sheet of quads on XZ at y = 0, Width
+    /// and Length its sides. Native since 2026-09-24; it was a kernel subnet.
     #[test]
-    fn test_plane_subnet_geometry_generation() {
+    fn test_plane_node_geometry_generation() {
         let templates_root = crate::app::load_fs_tree();
         let plane_template = templates_root
             .children
             .iter()
             .find(|t| t.name == "Plane")
             .expect("Plane template should be loaded");
-
-        assert_eq!(plane_template.children.len(), 2);
-        let opencl1 = plane_template.children.iter().find(|c| c.name == "opencl1").unwrap();
-        assert_eq!(opencl1.node_type, "opencl");
-        let output1 = plane_template.children.iter().find(|c| c.name == "output1").unwrap();
-        assert_eq!(output1.node_type, "output");
+        assert_eq!(plane_template.node_type, "plane");
+        assert!(plane_template.children.is_empty());
 
         let generate = |overrides: &[(&str, &str)], id: &str| {
             let mut inst = plane_template.clone();
@@ -6602,9 +6536,9 @@ mod tests {
         // Nested template resolution: the sphere inside carries its own
         // resolved children, kernel node params included.
         let sphere1 = t.children.iter().find(|c| c.name == "sphere1").unwrap();
-        let opencl1 = sphere1.children.iter().find(|c| c.name == "opencl1").expect("the nested sphere's kernel node");
-        assert!(opencl1.params.iter().any(|p| p.name == "Input"), "the nested kernel node has its template's params");
-        assert!(opencl1.params.iter().find(|p| p.name == "Code").unwrap().default.contains("chf(\"Radius\""));
+        assert_eq!(sphere1.node_type, "sphere", "the nested sphere is the native Sphere");
+        assert!(sphere1.params.iter().any(|p| p.name == "Method"), "with its template's whole surface");
+        assert!(sphere1.params.iter().find(|p| p.name == "Radius").unwrap().expr, "and the Embryo's reference on its Radius");
 
         let instance = |overrides: &[(&str, &str)], extra: Vec<FsNode>| {
             let mut inst = t.clone();

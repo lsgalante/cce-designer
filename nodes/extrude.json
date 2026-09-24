@@ -1,69 +1,26 @@
 {
- "name": "Extrude",
- "type": "node",
- "inputs": 1,
- "outputs": 1,
- "params": [
-  {
-   "name": "Input",
-   "default": "",
-   "type": "text"
-  },
-  {
-   "name": "Distance",
-   "default": "0.2",
-   "type": "slider",
-   "min": -1.0,
-   "max": 1.0,
-   "step": 0.01
-  },
-  {
-   "name": "Keep Base",
-   "default": "true",
-   "type": "toggle"
-  }
- ],
- "children": [
-  {
-   "name": "input1",
-   "type": "input",
-   "params": [],
-   "position": [
-    4.0,
-    1.0
-   ]
-  },
-  {
-   "name": "opencl1",
-   "type": "opencl",
-   "params": [
+  "name": "Extrude",
+  "type": "extrude",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
     {
-     "name": "Input",
-     "default": "input1"
+      "name": "Input",
+      "default": "",
+      "type": "text"
     },
     {
-     "name": "Code",
-     "default": "__kernel void process(__global const float* in_pos, __global const float* in_col, int in_count, __global float* out_pos, __global float* out_col, __global int* out_count, int max_vertices) {\n    int id = get_global_id(0);\n    if (id == 0) {\n        float dist = chf(\"Distance\", 0.2f);\n        int keep_base = chb(\"Keep Base\", true) > 0.5f ? 1 : 0;\n        int tri_count = in_count / 3;\n        int count = 0;\n        for (int t = 0; t < tri_count; t++) {\n            int i0 = (t * 3 + 0) * 3;\n            int i1 = (t * 3 + 1) * 3;\n            int i2 = (t * 3 + 2) * 3;\n            float px[3] = {in_pos[i0], in_pos[i1], in_pos[i2]};\n            float py[3] = {in_pos[i0 + 1], in_pos[i1 + 1], in_pos[i2 + 1]};\n            float pz[3] = {in_pos[i0 + 2], in_pos[i1 + 2], in_pos[i2 + 2]};\n            float cr[3] = {in_col[i0], in_col[i1], in_col[i2]};\n            float cg[3] = {in_col[i0 + 1], in_col[i1 + 1], in_col[i2 + 1]};\n            float cb[3] = {in_col[i0 + 2], in_col[i1 + 2], in_col[i2 + 2]};\n            // Face normal from the winding (CCW front): extrusion direction.\n            float ux = px[1] - px[0], uy = py[1] - py[0], uz = pz[1] - pz[0];\n            float vx = px[2] - px[0], vy = py[2] - py[0], vz = pz[2] - pz[0];\n            // Plain cross(B-A, C-A): template meshes wind CCW seen from\n            // outside (the raster culling convention), so this points\n            // outward. (Historically the sphere wound CW and this cross was\n            // negated to compensate \u2014 both fixed together.)\n            float nx = uy * vz - uz * vy;\n            float ny = uz * vx - ux * vz;\n            float nz = ux * vy - uy * vx;\n            float len = sqrt(nx * nx + ny * ny + nz * nz);\n            if (len > 1e-8f) { nx /= len; ny /= len; nz /= len; }\n            float ox = nx * dist, oy = ny * dist, oz = nz * dist;\n            // Top face: the input triangle offset along its normal, same winding.\n            for (int v = 0; v < 3; v++) {\n                int idx = count++;\n                if (idx < max_vertices) {\n                    out_pos[idx * 3 + 0] = px[v] + ox;\n                    out_pos[idx * 3 + 1] = py[v] + oy;\n                    out_pos[idx * 3 + 2] = pz[v] + oz;\n                    out_col[idx * 3 + 0] = cr[v];\n                    out_col[idx * 3 + 1] = cg[v];\n                    out_col[idx * 3 + 2] = cb[v];\n                }\n            }\n            // Side walls: one quad per edge, wound so the outside faces out\n            // (CCW front) for a CCW input triangle and positive distance.\n            for (int e = 0; e < 3; e++) {\n                int s0 = e;\n                int s1 = (e + 1) % 3;\n                float wx[6] = {px[s0], px[s1], px[s1] + ox, px[s0], px[s1] + ox, px[s0] + ox};\n                float wy[6] = {py[s0], py[s1], py[s1] + oy, py[s0], py[s1] + oy, py[s0] + oy};\n                float wz[6] = {pz[s0], pz[s1], pz[s1] + oz, pz[s0], pz[s1] + oz, pz[s0] + oz};\n                int wc[6] = {s0, s1, s1, s0, s1, s0};\n                for (int v = 0; v < 6; v++) {\n                    int idx = count++;\n                    if (idx < max_vertices) {\n                        out_pos[idx * 3 + 0] = wx[v];\n                        out_pos[idx * 3 + 1] = wy[v];\n                        out_pos[idx * 3 + 2] = wz[v];\n                        out_col[idx * 3 + 0] = cr[wc[v]] * 0.85f;\n                        out_col[idx * 3 + 1] = cg[wc[v]] * 0.85f;\n                        out_col[idx * 3 + 2] = cb[wc[v]] * 0.85f;\n                    }\n                }\n            }\n            // Base: the original triangle, winding reversed so it faces away\n            // from the extrusion.\n            if (keep_base) {\n                int ord[3] = {0, 2, 1};\n                for (int v = 0; v < 3; v++) {\n                    int s = ord[v];\n                    int idx = count++;\n                    if (idx < max_vertices) {\n                        out_pos[idx * 3 + 0] = px[s];\n                        out_pos[idx * 3 + 1] = py[s];\n                        out_pos[idx * 3 + 2] = pz[s];\n                        out_col[idx * 3 + 0] = cr[s];\n                        out_col[idx * 3 + 1] = cg[s];\n                        out_col[idx * 3 + 2] = cb[s];\n                    }\n                }\n            }\n        }\n        *out_count = count > max_vertices ? max_vertices : count;\n    }\n}"
-    }
-   ],
-   "position": [
-    4.0,
-    2.0
-   ]
-  },
-  {
-   "name": "output1",
-   "type": "output",
-   "params": [
+      "name": "Distance",
+      "default": "0.2",
+      "type": "slider",
+      "min": -1.0,
+      "max": 1.0,
+      "step": 0.01
+    },
     {
-     "name": "Input",
-     "default": "opencl1"
+      "name": "Keep Base",
+      "default": "true",
+      "type": "toggle"
     }
-   ],
-   "position": [
-    4.0,
-    3.0
-   ]
-  }
- ]
+  ]
 }

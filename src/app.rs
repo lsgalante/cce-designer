@@ -835,6 +835,40 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     }
     recompose_native_embryo(root, templates);
 
+    // A KERNEL SUBNET — a Sphere, Box, Plane or Extrude instance saved while
+    // those templates were `input → opencl → output` subnets (until
+    // 2026-09-24) — becomes the native node of that type: id, name,
+    // position, flag and parameter values stay, the children go, and a
+    // parameter the native template does not have (the Box's unused Input)
+    // goes with them. Matched by the same base-name rule `template_for`
+    // used to match them to their templates, and only when an `opencl`
+    // child is actually there, so a subnet someone built by hand and
+    // happened to call "sphere2" keeps whatever is inside it.
+    fn nativize_kernel_subnets(node: &mut FsNode, templates: &[NodeTemplate]) {
+        for c in &mut node.children {
+            if c.node_type.eq_ignore_ascii_case("node")
+                && c.children.iter().any(|k| k.node_type.eq_ignore_ascii_case("opencl"))
+            {
+                let base = c
+                    .name
+                    .trim_end_matches(|ch: char| ch.is_ascii_digit())
+                    .trim_end_matches(|ch: char| ch == '_' || ch.is_whitespace())
+                    .to_lowercase();
+                if ["sphere", "box", "plane", "extrude"].contains(&base.as_str()) {
+                    c.node_type = base.clone();
+                    c.children.clear();
+                    if let Some(t) = templates.iter().find(|t| t.node.node_type.eq_ignore_ascii_case(&base)) {
+                        c.params.retain(|p| t.node.params.iter().any(|tp| tp.name == p.name));
+                        c.inputs = t.node.inputs;
+                        c.outputs = t.node.outputs;
+                    }
+                }
+            }
+            nativize_kernel_subnets(c, templates);
+        }
+    }
+    nativize_kernel_subnets(root, templates);
+
     fn template_for<'a>(node: &FsNode, templates: &'a [NodeTemplate]) -> Option<&'a FsNode> {
         if node.node_type.eq_ignore_ascii_case("node") {
             let base = node

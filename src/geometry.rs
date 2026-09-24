@@ -1105,9 +1105,20 @@ pub fn generate_single_node_geometry_with_errors(
     let target = resolved.as_ref().unwrap_or(target);
 
     let res = if target.node_type.eq_ignore_ascii_case("sphere") {
-        let idx = find_sphere_index(root, target)?;
-        let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-        Some(sphere_detail(center, node_param_f32(target, "Radius", 0.5).max(0.05), 16, 24))
+        // A sphere with no Center parameters is a bare hand-built node,
+        // placed by index as Line and Points still are.
+        let legacy = if crate::shapes::sphere_has_center(target) {
+            None
+        } else {
+            Some(index_center(find_sphere_index(root, target)?))
+        };
+        Some(crate::shapes::sphere_node_detail(target, legacy))
+    } else if target.node_type.eq_ignore_ascii_case("box") {
+        Some(crate::shapes::box_node_detail(target))
+    } else if target.node_type.eq_ignore_ascii_case("plane") {
+        Some(crate::shapes::plane_node_detail(target))
+    } else if target.node_type.eq_ignore_ascii_case("extrude") {
+        resolve_extrude_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("line") {
         let idx = find_sphere_index(root, target)?;
         let start = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
@@ -2298,6 +2309,22 @@ pub fn resolve_wrangle_geometry_with_errors(
     }
 }
 
+/// The Extrude node: the input extruded as a whole along its point normals
+/// (`crate::shapes::extrude_detail`).
+pub fn resolve_extrude_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    let distance = node_param_f32(target, "Distance", 0.2);
+    let keep_base = node_param_str(target, "Keep Base", "true") != "false";
+    Some(crate::shapes::extrude_detail(&input, distance, keep_base))
+}
+
 /// The Switch node: one of up to four inputs, chosen by Index.
 ///
 /// What a composed subnet puts behind a choice: the Embryo's Source is a
@@ -2357,11 +2384,10 @@ pub fn export_settings(target: &FsNode) -> (crate::export::Format, f32) {
 
 /// The Grid node: a flat sheet of quads in the XZ plane.
 ///
-/// Native, where Plane is an OpenCL subnet. Both make a grid; this one costs
-/// no kernel compile, produces welded points rather than a corner list that
-/// has to be welded on the way back, and can therefore be the input to a
-/// remesh or a diffusion without a round trip. Plane stays because a kernel
-/// generator is a useful thing to have an example of.
+/// Native from the start, where Plane was an OpenCL subnet until 2026-09-24
+/// (it is native too now, in `crate::shapes`). Both make a sheet of quads;
+/// Plane keeps its three Center sliders and its colour gradient, this one a
+/// float3 Center and no colour. Two nodes for history's sake.
 ///
 /// Placed at Center rather than by its position in the graph. The older
 /// generators offset themselves by an index so several of them do not stack,
@@ -5557,14 +5583,14 @@ pub fn run_kernel_on_detail(
 /// The NATIVE geometry types — the ones
 /// [`generate_single_node_geometry_with_errors`] dispatches on directly.
 ///
-/// Subnet templates (Box, Sphere, Plane, Extrude) are NOT here: they
-/// instantiate as type `node` and resolve through their `output` child, so
-/// their type never reaches this list. `"box"` sat here from 2026-06-13 to
-/// 2026-09-19 for that reason — `nodes/box.json` has always been a subnet,
-/// no node ever carried the type, and no resolver ever matched it.
-/// `test_every_listed_geometry_type_has_a_resolver` now keeps that from
-/// recurring: an entry here with no dispatch arm is a node type that would
-/// resolve to nothing, silently.
+/// Subnet templates (the Embryo) are NOT here: they instantiate as type
+/// `node` and resolve through their `output` child, so their type never
+/// reaches this list. `"box"` sat here from 2026-06-13 to 2026-09-19 while
+/// `nodes/box.json` was a kernel subnet no node ever carried the type of —
+/// it is a native type now (2026-09-24, with sphere, plane and extrude), and
+/// `test_every_listed_geometry_type_has_a_resolver` keeps an entry with no
+/// dispatch arm from recurring: that is a node type that would resolve to
+/// nothing, silently.
 pub fn is_geometry_node_type(node_type: &str) -> bool {
     let nt = node_type.to_lowercase();
     nt == "sphere"
@@ -5595,6 +5621,9 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "mold_shell"
         || nt == "hull"
         || nt == "wrangle"
+        || nt == "box"
+        || nt == "plane"
+        || nt == "extrude"
         || nt == "switch"
         || nt == "volume"
         || nt == "deform"
@@ -5698,8 +5727,29 @@ pub fn network_sphere_vertices_with_errors(
             let idx = *count;
             *count += 1;
             if is_visible {
-                let center = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                out.merge(&sphere_detail(center, node_param_f32(node, "Radius", 0.5).max(0.05), 16, 24));
+                let legacy = (!crate::shapes::sphere_has_center(node)).then(|| index_center(idx));
+                out.merge(&crate::shapes::sphere_node_detail(node, legacy));
+            }
+        } else if node.node_type.eq_ignore_ascii_case("box") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                out.merge(&crate::shapes::box_node_detail(node));
+            }
+        } else if node.node_type.eq_ignore_ascii_case("plane") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                out.merge(&crate::shapes::plane_node_detail(node));
+            }
+        } else if node.node_type.eq_ignore_ascii_case("extrude") {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = resolve_extrude_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
             }
         } else if node.node_type.eq_ignore_ascii_case("line") {
             let idx = *count;
@@ -6130,6 +6180,12 @@ pub fn points_detail(node: &FsNode, center: Vec3) -> Detail {
         }
     }
     d
+}
+
+/// Where the index-placed generators (a bare sphere, Line, Points) stand:
+/// a 4-wide row of cells 1.25 apart, so several of them do not stack.
+pub fn index_center(idx: usize) -> Vec3 {
+    Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25)
 }
 
 pub fn find_sphere_index(root: &FsNode, target: &FsNode) -> Option<usize> {

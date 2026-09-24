@@ -1675,29 +1675,48 @@ mod template_tests {
     use super::*;
     use crate::geometry::{parse_dynamic_params, preprocess_opencl_code, run_opencl_kernel_with_params};
 
-    /// A template's kernel Code + the default param values, exactly as the
-    /// resolve path would flatten them.
-    fn template_kernel(template_name: &str) -> (String, Vec<f32>) {
-        let root = crate::app::load_fs_tree();
-        let tpl = root
-            .children
-            .iter()
-            .find(|t| t.name == template_name)
-            .unwrap_or_else(|| panic!("{template_name} template"));
-        let opencl = tpl
-            .children
-            .iter()
-            .find(|c| c.node_type == "opencl")
-            .expect("template has an opencl child");
-        let code = opencl
-            .params
-            .iter()
-            .find(|p| p.name == "Code")
-            .expect("Code param")
-            .default
-            .clone();
+    /// A small generator in the kernel language: `Count` triangles of
+    /// `Size`, one per unit along x. The four template kernels this suite
+    /// used to run are native nodes now (2026-09-24), so the launcher
+    /// contract is exercised on this and on the OpenCL node's own default.
+    const GENERATOR: &str = r#"
+__kernel void process(__global const float* in_pos, __global const float* in_col, int in_count, __global float* out_pos, __global float* out_col, __global int* out_count, int max_vertices) {
+    int id = get_global_id(0);
+    if (id == 0) {
+        float s = chf("Size", 0.5f);
+        int n = chi("Count", 3);
+        int count = 0;
+        for (int t = 0; t < n; t++) {
+            float px[3] = {0.0f, s, 0.0f};
+            float py[3] = {0.0f, 0.0f, s};
+            for (int v = 0; v < 3; v++) {
+                int idx = count++;
+                if (idx < max_vertices) {
+                    out_pos[idx * 3 + 0] = px[v] + (float)t;
+                    out_pos[idx * 3 + 1] = py[v];
+                    out_pos[idx * 3 + 2] = 0.0f;
+                    out_col[idx * 3 + 0] = 0.5f + 0.5f * px[v];
+                    out_col[idx * 3 + 1] = 0.2f;
+                    out_col[idx * 3 + 2] = (float)t / (float)n;
+                }
+            }
+        }
+        *out_count = count;
+    }
+}"#;
+
+    /// The OpenCL node's shipped default: the one kernel still in a template.
+    fn opencl_node_default() -> String {
+        let templates = crate::app::load_fs_tree();
+        let node = templates.children.iter().find(|t| t.node_type == "opencl").expect("the OpenCL node template");
+        node.params.iter().find(|p| p.name == "Code").expect("Code param").default.clone()
+    }
+
+    /// A kernel prepared as the launcher prepares it: preprocessed, with its
+    /// parameters flattened in declaration order at their defaults.
+    fn prepared(code: &str) -> (String, Vec<f32>) {
         let mut flat = Vec::new();
-        for p in parse_dynamic_params(&code) {
+        for p in parse_dynamic_params(code) {
             if p.param_type == "float3" {
                 let parts: Vec<f32> = p.default.split(':').filter_map(|s| s.parse().ok()).collect();
                 flat.extend_from_slice(&[
@@ -1713,7 +1732,7 @@ mod template_tests {
                 flat.push(p.default.parse().unwrap_or(0.0));
             }
         }
-        (preprocess_opencl_code(&code), flat)
+        (preprocess_opencl_code(code), flat)
     }
 
     fn triangle() -> Geometry {
@@ -1725,39 +1744,25 @@ mod template_tests {
     }
 
     #[test]
-    fn cpu_runs_the_sphere_template() {
-        let (code, params) = template_kernel("Sphere");
+    fn cpu_runs_a_generator_kernel() {
+        let (code, params) = prepared(GENERATOR);
+        assert_eq!(params, vec![0.5, 3.0], "Size then Count, in declaration order");
         let mut g = Geometry::new();
-        run_kernel_cpu(&code, &mut g, &params).expect("sphere kernel");
-        // Same asserts as the OpenCL-side test: 16*24*6 vertices on a 0.5
-        // sphere centred at (0, 0.55, 0).
-        assert_eq!(g.vertices.len(), 2304);
-        let max_dist = g
-            .vertices
-            .iter()
-            .map(|v| {
-                let (dx, dy, dz) = (v.pos[0], v.pos[1] - 0.55, v.pos[2]);
-                (dx * dx + dy * dy + dz * dz).sqrt()
-            })
-            .fold(0.0f32, f32::max);
-        assert!((max_dist - 0.5).abs() < 0.01, "radius {max_dist}");
+        run_kernel_cpu(&code, &mut g, &params).expect("generator kernel");
+        assert_eq!(g.vertices.len(), 9, "three triangles of three corners");
+        assert_eq!(g.vertices[3].pos, [1.0, 0.0, 0.0], "the second triangle starts one unit along");
+        assert!((g.vertices[4].col[0] - 0.75).abs() < 1e-6);
     }
 
     #[test]
-    fn cpu_runs_the_plane_box_and_extrude_templates() {
-        for (name, input, expect_nonempty) in [
-            ("Plane", Geometry::new(), true),
-            ("Box", Geometry::new(), true),
-            ("Extrude", triangle(), true),
-        ] {
-            let (code, params) = template_kernel(name);
-            let mut g = input;
-            run_kernel_cpu(&code, &mut g, &params).unwrap_or_else(|e| panic!("{name} kernel: {e}"));
-            assert_eq!(!g.vertices.is_empty(), expect_nonempty, "{name} produced no geometry");
-            for v in &g.vertices {
-                assert!(v.pos.iter().all(|c| c.is_finite()), "{name} produced non-finite positions");
-            }
-        }
+    fn cpu_runs_the_opencl_nodes_default_deformer() {
+        let (code, params) = prepared(&opencl_node_default());
+        let mut g = triangle();
+        run_kernel_cpu(&code, &mut g, &params).expect("default deformer");
+        assert_eq!(g.vertices.len(), 3, "a deformer keeps its vertex count");
+        // y += sin(x * 4) * 0.15 at x = 1: the second corner rises.
+        assert!((g.vertices[1].pos[1] - (4.0f32).sin() * 0.15).abs() < 1e-5, "{:?}", g.vertices[1].pos);
+        assert_eq!(g.vertices[0].pos[1], 0.0, "and x = 0 does not move");
     }
 
     /// The reference test proper: byte-level agreement with OpenCL on every
@@ -1765,13 +1770,12 @@ mod template_tests {
     /// tests above still cover the CPU side there.
     #[test]
     fn cpu_matches_opencl_on_every_shipped_kernel() {
-        for (name, input) in [
-            ("Sphere", Geometry::new()),
-            ("Plane", Geometry::new()),
-            ("Box", Geometry::new()),
-            ("Extrude", triangle()),
+        let default = opencl_node_default();
+        for (name, source, input) in [
+            ("generator", GENERATOR.to_string(), Geometry::new()),
+            ("opencl default", default, triangle()),
         ] {
-            let (code, params) = template_kernel(name);
+            let (code, params) = prepared(&source);
 
             let mut gpu = input.clone();
             match run_opencl_kernel_with_params(&code, &mut gpu, &params) {

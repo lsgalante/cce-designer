@@ -630,29 +630,67 @@ way — both in `src/geometry.rs`:
   clamped; an empty slot passes nothing. Only `Input` draws a wire, the
   limit every second operand has (Boolean's With, Copy's target).
 
-### The Sphere's construction methods
+### Sphere, Box, Plane and Extrude are native (2026-09-24)
 
-`nodes/sphere.json` carries a **Method** dropdown — `UV`, `Icosphere`,
-`Cube` — and one kernel that builds all three: a single loop over triangle
-INDICES, each decoded by method into three corners on the unit sphere, then
-one shared block that turns it outward, places it, shades it and writes it.
-UV is Rows x Columns, the sphere this node always built, corner for corner
-(its rows skip the outward turn so the pole slivers keep their order).
-Icosphere splits each of the icosahedron's 20 faces into Frequency^2
-triangles by integer barycentric weights summed in ONE fixed expression, so
-a corner on an edge two faces share lands on the same bits from either side
-and the 1e-4 weld joins them — the welded count is `10f^2 + 2`, which
-`sphere_method_builds_a_uv_ico_or_cube_sphere` asserts along with
-closedness. Cube lays a Resolution x Resolution grid on each face and pushes
-it out through the spherified-cube map rather than a bare normalize, which
-crowds the corners; `6r^2 + 2` points. Rows/Columns, Frequency and
-Resolution each show only under their method (`show_when`).
+`src/shapes.rs` holds the four shapes that were kernel subnets — Phase 7
+step 3 of `shapeshifter.md`. Each was `input → opencl → output` with a
+kernel that ran under `if (id == 0)`: one work item doing loops, then a
+weld by position on the way back that threw away every shared point the
+loop had known. Native, each builds welded points and real primitives —
+a quad stays a quad — costs no JIT compile and needs no OpenCL at all.
+The parameter surfaces are the templates' own, so a saved instance keeps
+its values. The templates are plain native nodes now (`"type": "sphere"`
+and so on, no children); the Embryo is the one subnet template left, and
+its `sphere1` child resolves to the native Sphere with the template's
+whole surface under the Embryo's overrides.
 
-**A choice reaches a kernel as its option INDEX** (`geometry::param_number`,
-the one conversion behind both `chi("Method")` in a kernel and a
-`chi("Method")` parameter reference). The kernel path used to parse the
-option's TEXT, so every dropdown read as 0 from inside a kernel — a
-dropdown on a kernel node was simply not possible before this.
+**The Sphere's Method** — `UV`, `Icosphere`, `Cube` — survives as it was:
+UV is Rows x Columns through `sphere_detail`; Icosphere splits each of the
+icosahedron's 20 faces into Frequency^2 triangles by integer barycentric
+weights; Cube lays a Resolution x Resolution grid on each face and pushes
+it out through the spherified-cube map, and builds QUADS where the kernel
+fanned them. Welded counts are `2 + (rows - 1) * cols`, `10 f^2 + 2` and
+`6 r^2 + 2`, which `sphere_method_builds_a_uv_ico_or_cube_sphere` asserts
+along with closedness. Welding is by a QUANTIZED position key (1e-5)
+rather than by trusting bit-identical arithmetic across faces: the kernel
+summed weights in one fixed expression so shared corners landed on the
+same bits, then welded at 1e-4 anyway; a quantized key is the same
+guarantee stated once. Colour is the kernel's — the SIGNED normal folded
+into 0..1, world-anchored — with Color on, `DEFAULT_COLOR` off.
+
+**A bare `sphere` node with no Center parameters is placed by index**
+(`index_center`), the way Line and Points still are: that is the tests'
+hand-built `ref_node("sphere", [Radius])`, and every node that came through
+a template or a load carries Center X/Y/Z and sits where they say.
+
+**Box** is eight corners and six quads about a float3 Center (new; the
+kernel hard-coded (0, 0.55, 0)), normals on the VERTICES like `box_detail`;
+Wireframe draws the twelve edges as bars and the corners as small cubes,
+as the kernel did. Its unused `Input` is gone. **Plane** is the kernel's
+sheet with its colour gradient; Grid is the same sheet with a float3 Center
+and no gradient, two nodes for history's sake.
+
+**Extrude extrudes AS A WHOLE**, which is the one semantic change: every
+point moves along its point normal, the input's primitives become the
+top, one quad wall rises from each BOUNDARY edge, and Keep Base keeps the
+originals wound the other way — a sheet becomes a closed slab, a closed
+surface a two-skinned shell. The kernel extruded every triangle on its
+own and welded the prisms back together, which put a wall along every
+interior edge. Point attributes and groups ride to the top copies; the
+kernel's 15% darker walls were a per-corner colour a soup could hold and
+shared points cannot, and are gone.
+
+**Saved kernel subnets migrate on load.** `nativize_kernel_subnets` in
+`merge_template_defs` turns a `node` whose children include an `opencl`
+child and whose base name is one of the four into the native node: id,
+name, position, flag and values stay, the children go, and a parameter the
+native template lacks goes with them. Only when the `opencl` child is
+actually there, so a subnet someone built by hand and called "sphere2"
+keeps what is inside it. The bundled `default_project.json` and
+`project.json` were converted in place. The `opencl` node itself still
+ships and still runs; retiring it and both kernel backends is the rest of
+step 3, and `test_loader_merges_new_template_params` is the migration's
+test.
 
 ### The Embryo node is a template of nodes
 
@@ -693,8 +731,8 @@ unmoved), where the HDA runs Catmull-Clark — same parameter, one operation
 rather than two under one name. **The second input is the first**: the HDA
 read its Source from input 2, and this app's nodes name one Input.
 
-**Exactly one child of the template draws, `normal1`**, the last real node
-— as the Sphere's kernel node is its one drawing child. A subnet viewed from
+**Exactly one child of the template draws, `normal1`**, the last real
+node. A subnet viewed from
 OUTSIDE shows its internals by their own flags (output children draw only
 at the displayed level), so with every chain node visible the hull drew
 five times over, each draw re-evaluating the pipeline: 2.4 s per edit on a
@@ -1540,11 +1578,12 @@ project deserialization including thumbnails): missing params are inserted
 where the template puts them (after the last template param the instance
 already has — so the Sphere's Method lands above Radius in an old save, not
 below Color), existing ones keep their value but take the template's UI
-metadata, and subnet
-templates (Sphere/Plane/Extrude) refresh their children's `Code` outright —
-**the template owns the surface and implementation, the instance owns its
-values.** A kernel hand-edited inside a template instance reverts on load;
-custom kernels belong in bare OpenCL nodes, which the merge never touches.
+metadata, and a subnet template (the Embryo, since the four kernel subnets
+went native) refreshes its children's params and any kernel child's `Code`
+outright — **the template owns the surface and implementation, the
+instance owns its values.** A kernel hand-edited inside a template
+instance reverts on load; custom kernels belong in bare OpenCL nodes,
+which the merge never touches.
 Native nodes match their template by type, subnet instances by name
 ("sphere3" → "Sphere", case-insensitively) plus a full child name/type match; the merge never
 injects or deletes children and never rewrites files on disk.

@@ -1,104 +1,74 @@
 {
- "name": "Sphere",
- "type": "node",
- "inputs": 0,
- "outputs": 1,
- "params": [
-  {
-   "name": "Method",
-   "default": "UV",
-   "type": "choice:UV,Icosphere,Cube"
-  },
-  {
-   "name": "Radius",
-   "default": "0.5",
-   "type": "slider"
-  },
-  {
-   "name": "Rows",
-   "default": "16",
-   "type": "spinbox",
-   "min": 2,
-   "max": 128,
-   "step": 1,
-   "show_when": "Method == UV"
-  },
-  {
-   "name": "Columns",
-   "default": "24",
-   "type": "spinbox",
-   "min": 3,
-   "max": 128,
-   "step": 1,
-   "show_when": "Method == UV"
-  },
-  {
-   "name": "Frequency",
-   "default": "4",
-   "type": "spinbox",
-   "min": 1,
-   "max": 16,
-   "step": 1,
-   "show_when": "Method == Icosphere"
-  },
-  {
-   "name": "Resolution",
-   "default": "8",
-   "type": "spinbox",
-   "min": 1,
-   "max": 64,
-   "step": 1,
-   "show_when": "Method == Cube"
-  },
-  {
-   "name": "Center X",
-   "default": "0.0",
-   "type": "slider:-2:2"
-  },
-  {
-   "name": "Center Y",
-   "default": "0.55",
-   "type": "slider:-2:2"
-  },
-  {
-   "name": "Center Z",
-   "default": "0.0",
-   "type": "slider:-2:2"
-  },
-  {
-   "name": "Color",
-   "default": "true",
-   "type": "toggle"
-  }
- ],
- "children": [
-  {
-   "name": "opencl1",
-   "type": "opencl",
-   "params": [
+  "name": "Sphere",
+  "type": "sphere",
+  "inputs": 0,
+  "outputs": 1,
+  "params": [
     {
-     "name": "Code",
-     "default": "__kernel void process(__global const float* in_pos, __global const float* in_col, int in_count, __global float* out_pos, __global float* out_col, __global int* out_count, int max_vertices) {\n    int id = get_global_id(0);\n    if (id == 0) {\n        int method = chi(\"Method\", 0);\n        float radius = chf(\"Radius\", 0.5f);\n        float center_x = chf(\"Center X\", 0.0f);\n        float center_y = chf(\"Center Y\", 0.55f);\n        float center_z = chf(\"Center Z\", 0.0f);\n        int lat_steps = chi(\"Rows\", 16);\n        if (lat_steps < 2) { lat_steps = 2; }\n        if (lat_steps > 128) { lat_steps = 128; }\n        int lon_steps = chi(\"Columns\", 24);\n        if (lon_steps < 3) { lon_steps = 3; }\n        if (lon_steps > 128) { lon_steps = 128; }\n        int freq = chi(\"Frequency\", 4);\n        if (freq < 1) { freq = 1; }\n        if (freq > 16) { freq = 16; }\n        int res = chi(\"Resolution\", 8);\n        if (res < 1) { res = 1; }\n        if (res > 64) { res = 64; }\n        int colored = chb(\"Color\", true) > 0.5f ? 1 : 0;\n        /* The icosahedron the icosphere subdivides: 12 corners on three\n           orthogonal golden rectangles, 20 faces. Orientation does not\n           matter here; every triangle is turned outward below. */\n        float t = 1.6180340f;\n        float ivx[12] = {-1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, t, t, -t, -t};\n        float ivy[12] = {t, t, -t, -t, -1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};\n        float ivz[12] = {0.0f, 0.0f, 0.0f, 0.0f, t, t, -t, -t, -1.0f, 1.0f, -1.0f, 1.0f};\n        int ifa[20] = {0, 0, 0, 0, 0, 1, 5, 11, 10, 7, 3, 3, 3, 3, 3, 4, 2, 6, 8, 9};\n        int ifb[20] = {11, 5, 1, 7, 10, 5, 11, 10, 7, 1, 9, 4, 2, 6, 8, 9, 4, 2, 6, 8};\n        int ifc[20] = {5, 1, 7, 10, 11, 9, 4, 2, 6, 8, 4, 2, 6, 8, 9, 5, 11, 10, 7, 1};\n        /* One loop over triangles, whatever builds them: triangle t is\n           decoded by method into three corners on the unit sphere, and one\n           block below places, orients, shades and writes it. */\n        int total = lat_steps * lon_steps * 2;\n        if (method == 1) { total = 20 * freq * freq; }\n        if (method == 2) { total = 6 * res * res * 2; }\n        int count = 0;\n        for (int tri = 0; tri < total; tri++) {\n            float tx[3] = {0.0f, 0.0f, 0.0f};\n            float ty[3] = {0.0f, 0.0f, 0.0f};\n            float tz[3] = {0.0f, 0.0f, 0.0f};\n            if (method == 1) {\n                /* Icosphere: each face split into freq*freq triangles by\n                   barycentric weights, the corners pushed onto the sphere.\n                   Row i of a face holds freq-i upright triangles and\n                   freq-i-1 inverted ones, interleaved. The weights are\n                   integers summed in one fixed expression, so a corner on\n                   an edge two faces share lands on the same bits from\n                   either side and the weld joins them. */\n                int face = tri / (freq * freq);\n                int k = tri - face * freq * freq;\n                int i = 0;\n                int row_len = 2 * freq - 1;\n                while (k >= row_len) {\n                    k -= row_len;\n                    i++;\n                    row_len = 2 * (freq - i) - 1;\n                }\n                int j = k / 2;\n                int upright = (k - j * 2) == 0 ? 1 : 0;\n                int wa[3];\n                int wb[3];\n                int wc[3];\n                if (upright) {\n                    wb[0] = i;     wc[0] = j;\n                    wb[1] = i + 1; wc[1] = j;\n                    wb[2] = i;     wc[2] = j + 1;\n                } else {\n                    wb[0] = i + 1; wc[0] = j;\n                    wb[1] = i + 1; wc[1] = j + 1;\n                    wb[2] = i;     wc[2] = j + 1;\n                }\n                int a = ifa[face];\n                int b = ifb[face];\n                int c = ifc[face];\n                for (int v = 0; v < 3; v++) {\n                    wa[v] = freq - wb[v] - wc[v];\n                    float x = ((float)wa[v] * ivx[a] + (float)wb[v] * ivx[b] + (float)wc[v] * ivx[c]) / (float)freq;\n                    float y = ((float)wa[v] * ivy[a] + (float)wb[v] * ivy[b] + (float)wc[v] * ivy[c]) / (float)freq;\n                    float z = ((float)wa[v] * ivz[a] + (float)wb[v] * ivz[b] + (float)wc[v] * ivz[c]) / (float)freq;\n                    float len = sqrt(x * x + y * y + z * z);\n                    tx[v] = x / len;\n                    ty[v] = y / len;\n                    tz[v] = z / len;\n                }\n            } else if (method == 2) {\n                /* Cube sphere: a res*res grid on each face of the cube\n                   spanning -1..1, every point pushed onto the sphere by the\n                   spherified-cube map (not a bare normalize, which crowds\n                   the corners and stretches the face centres). */\n                int per_face = res * res * 2;\n                int face = tri / per_face;\n                int q = (tri - face * per_face) / 2;\n                int side = tri - face * per_face - q * 2;\n                int i = q / res;\n                int j = q - i * res;\n                float u0 = -1.0f + 2.0f * (float)i / (float)res;\n                float u1 = -1.0f + 2.0f * (float)(i + 1) / (float)res;\n                float v0 = -1.0f + 2.0f * (float)j / (float)res;\n                float v1 = -1.0f + 2.0f * (float)(j + 1) / (float)res;\n                float qu[4] = {u0, u1, u1, u0};\n                float qv[4] = {v0, v0, v1, v1};\n                for (int v = 0; v < 3; v++) {\n                    int corner = side == 0 ? v : (v == 0 ? 0 : v + 1);\n                    float u = qu[corner];\n                    float w = qv[corner];\n                    float x = 0.0f;\n                    float y = 0.0f;\n                    float z = 0.0f;\n                    int axis = face / 2;\n                    float sign = (face - axis * 2) == 0 ? 1.0f : -1.0f;\n                    if (axis == 0) { x = sign; y = u; z = w; }\n                    if (axis == 1) { y = sign; z = u; x = w; }\n                    if (axis == 2) { z = sign; x = u; y = w; }\n                    float x2 = x * x;\n                    float y2 = y * y;\n                    float z2 = z * z;\n                    tx[v] = x * sqrt(1.0f - y2 * 0.5f - z2 * 0.5f + y2 * z2 / 3.0f);\n                    ty[v] = y * sqrt(1.0f - z2 * 0.5f - x2 * 0.5f + z2 * x2 / 3.0f);\n                    tz[v] = z * sqrt(1.0f - x2 * 0.5f - y2 * 0.5f + x2 * y2 / 3.0f);\n                }\n            } else {\n                /* UV: rows of latitude, columns of longitude, two triangles\n                   a cell \u2014 the sphere this node has always built, corner\n                   for corner. */\n                int cell = tri / 2;\n                int side = tri - cell * 2;\n                int lat = cell / lon_steps;\n                int lon = cell - lat * lon_steps;\n                float theta0 = 3.14159265f * (float)lat / (float)lat_steps;\n                float theta1 = 3.14159265f * (float)(lat + 1) / (float)lat_steps;\n                float phi0 = 6.2831853f * (float)lon / (float)lon_steps;\n                float phi1 = 6.2831853f * (float)(lon + 1) / (float)lon_steps;\n                float x00 = sin(theta0) * cos(phi0);\n                float y00 = cos(theta0);\n                float z00 = sin(theta0) * sin(phi0);\n                float x10 = sin(theta1) * cos(phi0);\n                float y10 = cos(theta1);\n                float z10 = sin(theta1) * sin(phi0);\n                float x11 = sin(theta1) * cos(phi1);\n                float y11 = cos(theta1);\n                float z11 = sin(theta1) * sin(phi1);\n                float x01 = sin(theta0) * cos(phi1);\n                float y01 = cos(theta0);\n                float z01 = sin(theta0) * sin(phi1);\n                if (side == 0) {\n                    tx[0] = x00; ty[0] = y00; tz[0] = z00;\n                    tx[1] = x11; ty[1] = y11; tz[1] = z11;\n                    tx[2] = x10; ty[2] = y10; tz[2] = z10;\n                } else {\n                    tx[0] = x00; ty[0] = y00; tz[0] = z00;\n                    tx[1] = x01; ty[1] = y01; tz[1] = z01;\n                    tx[2] = x11; ty[2] = y11; tz[2] = z11;\n                }\n            }\n            /* Turn the triangle outward: the sphere is convex about the\n               origin, so a face normal pointing away from its own centroid\n               is inside out, whatever table it came from. The UV rows are\n               already outward and skip this, so their pole slivers (whose\n               normal is rounding noise) keep the order they always had. */\n            if (method != 0) {\n                float ex = tx[1] - tx[0];\n                float ey = ty[1] - ty[0];\n                float ez = tz[1] - tz[0];\n                float fx = tx[2] - tx[0];\n                float fy = ty[2] - ty[0];\n                float fz = tz[2] - tz[0];\n                float nx = ey * fz - ez * fy;\n                float ny = ez * fx - ex * fz;\n                float nz = ex * fy - ey * fx;\n                float d = nx * (tx[0] + tx[1] + tx[2]) + ny * (ty[0] + ty[1] + ty[2]) + nz * (tz[0] + tz[1] + tz[2]);\n                if (d < 0.0f) {\n                    float sx = tx[1]; tx[1] = tx[2]; tx[2] = sx;\n                    float sy = ty[1]; ty[1] = ty[2]; ty[2] = sy;\n                    float sz = tz[1]; tz[1] = tz[2]; tz[2] = sz;\n                }\n            }\n            for (int v = 0; v < 3; v++) {\n                int idx = count++;\n                if (idx < max_vertices) {\n                    out_pos[idx * 3 + 0] = center_x + radius * tx[v];\n                    out_pos[idx * 3 + 1] = center_y + radius * ty[v];\n                    out_pos[idx * 3 + 2] = center_z + radius * tz[v];\n                    float nx = tx[v];\n                    float ny = ty[v];\n                    float nz = tz[v];\n                    float len = sqrt(nx*nx + ny*ny + nz*nz);\n                    if (len > 0.0f) {\n                        nx /= len;\n                        ny /= len;\n                        nz /= len;\n                    }\n                    if (colored) {\n                        out_col[idx * 3 + 0] = 0.5f + nx * 0.5f;\n                        out_col[idx * 3 + 1] = 0.5f + ny * 0.5f;\n                        out_col[idx * 3 + 2] = 0.5f + nz * 0.5f;\n                    } else {\n                        out_col[idx * 3 + 0] = 0.8f;\n                        out_col[idx * 3 + 1] = 0.8f;\n                        out_col[idx * 3 + 2] = 0.8f;\n                    }\n                }\n            }\n        }\n        *out_count = count;\n    }\n}"
-    }
-   ],
-   "position": [
-    4.0,
-    2.0
-   ]
-  },
-  {
-   "name": "output1",
-   "type": "output",
-   "params": [
+      "name": "Method",
+      "default": "UV",
+      "type": "choice:UV,Icosphere,Cube"
+    },
     {
-     "name": "Input",
-     "default": "opencl1"
+      "name": "Radius",
+      "default": "0.5",
+      "type": "slider"
+    },
+    {
+      "name": "Rows",
+      "default": "16",
+      "type": "spinbox",
+      "min": 2,
+      "max": 128,
+      "step": 1,
+      "show_when": "Method == UV"
+    },
+    {
+      "name": "Columns",
+      "default": "24",
+      "type": "spinbox",
+      "min": 3,
+      "max": 128,
+      "step": 1,
+      "show_when": "Method == UV"
+    },
+    {
+      "name": "Frequency",
+      "default": "4",
+      "type": "spinbox",
+      "min": 1,
+      "max": 16,
+      "step": 1,
+      "show_when": "Method == Icosphere"
+    },
+    {
+      "name": "Resolution",
+      "default": "8",
+      "type": "spinbox",
+      "min": 1,
+      "max": 64,
+      "step": 1,
+      "show_when": "Method == Cube"
+    },
+    {
+      "name": "Center X",
+      "default": "0.0",
+      "type": "slider:-2:2"
+    },
+    {
+      "name": "Center Y",
+      "default": "0.55",
+      "type": "slider:-2:2"
+    },
+    {
+      "name": "Center Z",
+      "default": "0.0",
+      "type": "slider:-2:2"
+    },
+    {
+      "name": "Color",
+      "default": "true",
+      "type": "toggle"
     }
-   ],
-   "position": [
-    4.0,
-    3.0
-   ]
-  }
- ]
+  ]
 }
