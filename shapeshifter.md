@@ -703,8 +703,16 @@ Nothing else in the workspace loads OpenCL, so the ICD bug leaves with it.
 > read the read-write ones back; host-visible mapped buffers, pipelines
 > cached by source, every failure an `Err` with naga's diagnostic. Four
 > tests run on the machine's Vulkan (Intel Iris Xe here) and skip where
-> there is none. Not yet: a first WGSL operator in this crate held to its
-> CPU twin, and a device kept per evaluation thread.
+> there is none. In this crate: `src/gpu.rs` keeps a device per
+> evaluation thread under `CCE_COMPUTE` (auto / cpu / gpu), and
+> `src/springs.rs` is the first operator — Relax's Springs mode as one
+> Jacobi solve on both backends, held together by `springs_gpu_matches_cpu`.
+> The API grew `run_passes` for it — a whole iterative solve in one
+> submission, ping-ponging on the device — because a pass submitted on its
+> own lost to the CPU at every size; with it the GPU wins from the tens of
+> thousands of points up (135k: 14 ms against 25 ms) and the auto
+> threshold sits at 32k. Next: the rest of the per-point set (Repel,
+> Diffuse, the collision response), which share the pattern.
 
 **Step 4 — GPU compute, through the renderer.** Scripts do not run on the
 GPU: no embedded language compiles to GPU code, and none should. Parallel work

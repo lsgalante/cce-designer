@@ -1642,8 +1642,10 @@ pub fn resolve_collision_geometry_with_errors(
 /// sim state). Vertices carrying `group:<Pin Group>` are pinned: they keep
 /// their input position and push everyone else instead — chain a
 /// displacement over that group first and this node spreads it through the
-/// surface with a stiffness-shaped falloff. Iterations Gauss–Seidel passes
-/// over the unique edges; Stiffness scales each correction. With no Rest,
+/// surface with a stiffness-shaped falloff. Iterations JACOBI passes over
+/// the rest topology (`crate::springs` — one algorithm on the CPU and the
+/// GPU, the first operator of Phase 7 step 4); Stiffness scales each
+/// correction. With no Rest,
 /// an unresolvable Rest, or a Rest whose vertex count differs from the
 /// input's, the geometry passes through unchanged — there is nothing
 /// coherent to restore toward.
@@ -1718,33 +1720,15 @@ pub fn resolve_relax_geometry_with_errors(
             .collect()
     };
 
-    let edges: Vec<(usize, usize, f32)> = rest
-        .edges()
-        .iter()
-        .map(|e| {
-            let (a, b) = (e[0] as usize, e[1] as usize);
-            (a, b, (rest.pos(b) - rest.pos(a)).length())
-        })
-        .collect();
-
-    for _ in 0..iterations {
-        for &(a, b, rest_len) in &edges {
-            let d = pos[b] - pos[a];
-            let len = d.length();
-            if len < 1e-6 {
-                continue;
-            }
-            let corr = d * ((len - rest_len) / len * 0.5 * stiffness);
-            match (pinned[a], pinned[b]) {
-                (false, false) => {
-                    pos[a] += corr;
-                    pos[b] -= corr;
-                }
-                (true, false) => pos[b] -= corr * 2.0,
-                (false, true) => pos[a] += corr * 2.0,
-                (true, true) => {}
-            }
+    let sys = crate::springs::SpringSystem::build(&rest, &pinned);
+    let mut flat: Vec<f32> = pos.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+    if let Err(e) = crate::springs::solve(&sys, stiffness, iterations, &mut flat) {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!("{}: {e}", target.name));
         }
+    }
+    for (p, v) in pos.iter_mut().enumerate() {
+        *v = Vec3::new(flat[p * 3], flat[p * 3 + 1], flat[p * 3 + 2]);
     }
 
     for (p, v) in pos.iter().enumerate() {

@@ -771,6 +771,58 @@ below native Rust, which is fine for tens of thousands of elements per edit
 and wrong for a solver at a million per frame. That is Phase 7's step 4
 (WGSL compute through the renderer), not a reason to grow this.
 
+### GPU compute: the springs solve is the first operator (Phase 7 step 4)
+
+`src/gpu.rs` keeps one `cce_ui::vk::ComputeDevice` per thread, opened on
+first use and kept, so the pipeline cache and the buffers survive from one
+edit to the next; a device costs tens of milliseconds to open and a kernel
+a few to compile, and an operator that paid both per evaluation would lose
+to the CPU every time. `CCE_COMPUTE` decides: unset or `auto` takes the GPU
+when there is one and the operator judges the input big enough; `cpu`
+never opens a device; `gpu` insists, and an operator that cannot get one
+says so through the node-error slot rather than silently taking the CPU
+path. **Under `cfg(test)` auto means CPU**, so the suite is the same on
+every machine and the GPU is exercised only by the tests that ask for it
+by name — the cross-checks. The suite never SETS the variable: libtest
+runs tests in parallel and one that did would race every other test
+reading it (`gpu::parse` is the pure function the choice test covers).
+
+`src/springs.rs` is the pattern every later operator follows: one
+algorithm, one data layout, two backends held to each other by a
+cross-check (`springs_gpu_matches_cpu`, agreement to 1e-4 over 1.5k
+points; it skips with a note where there is no Vulkan). The layout is the
+GPU's — positions as a flat `xyz` array because a `vec3<f32>` in a WGSL
+storage array pads to 16 bytes, the rest topology as CSR with the rest
+length on each incident entry, pins as one `u32` per point — and the CPU
+walks the same arrays in the same order. `solve` chooses the backend; a
+GPU failure in auto mode falls back to the CPU with one stderr note.
+
+**Relax's Springs mode is a JACOBI solve now.** Until 2026-09-24 it was
+Gauss–Seidel over the edge list in sequence, every correction visible to
+the next edge, which no per-point kernel can reproduce; rather than let a
+GPU Jacobi and a CPU Gauss–Seidel drift apart, both run Jacobi: each point
+gathers the corrections of its incident edges from the pass's starting
+positions — half the error toward a free neighbour, all of it toward a
+pinned one — averages them, and moves once. It converges roughly half as
+fast per iteration, which Iterations already controls; the pinned-pull
+test that defines the node's behaviour passes unchanged.
+
+**The whole solve is ONE submission** (`run_passes_over` with a ping-pong
+pair): the topology goes up once, the passes are chained by memory
+barriers with the positions alternating between two device buffers, and
+the result comes back once. The first cut submitted a pass at a time and
+LOST to the CPU at every size measured, 134k points included — a
+submission's round trip is about half a millisecond on an integrated GPU
+whatever the dispatch inside it, and sixteen of them buried a solve that
+takes microseconds. `springs_timing` (ignored; run in release with
+`--ignored --nocapture`) is the measurement, on an Intel Iris Xe, sixteen
+passes: 1.5k points cpu 0.25 ms / gpu 1.5 ms; 15k cpu 2.6 ms / gpu 3.7 ms;
+135k cpu 25 ms / gpu 14 ms, plus ~15 ms of pipeline compile on a device's
+first run. `GPU_MIN_POINTS` (32k) is the auto threshold that follows: the
+GPU is a win for large meshes and a loss for the ones most projects have,
+which is the honest state of step 4 and the reason auto does not simply
+mean GPU.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,
