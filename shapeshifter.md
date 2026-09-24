@@ -552,6 +552,160 @@ and what the Developer set does not care about.
 
 Touches: a new `volume.rs`, a new `export.rs`, a 2D page context.
 
+### Phase 7 — The scripting layer, and compute through the renderer
+
+*Medium for the first three steps, large for the fourth. Needs Phase 0
+(landed). Independent of Phases 5 and 6. Supersedes the outstanding half of
+Phase 1 — the generator ABI — which is dropped rather than finished.*
+
+**What the audit found (2026-09-24).** The app has one scripting surface, the
+`opencl` node, and it is the wrong tool held the wrong way round:
+
+- The language is a subset of OpenCL C, reached through a text preprocessor
+  that rewrites `chf`/`chi`/`chb`/`chv` and `attrf`/`setattrf` into positional
+  buffer arguments. Two ABIs: a GENERATOR takes and returns a triangle-corner
+  soup — position and colour only, 200k vertices at most — and is welded back
+  by position, which discards topology, groups, integer attributes and the
+  stable point ids Phase 0 exists to provide. A DEFORMER runs per point and
+  binds float attributes, and can reach nothing else: no neighbours, no
+  primitives, no groups, no non-float attribute.
+- **Every shipped kernel is serial.** Sphere, Box, Plane and Extrude all run
+  under `if (id == 0)` — one work item doing loops. The GPU is a slow C
+  interpreter with a JIT compile and a synchronous buffer round trip on every
+  evaluation, and the parallel deformer ABI has no shipped template at all.
+- Every ABI change lands twice: the OpenCL launcher (~930 lines of
+  `geometry.rs`) and the hand-written C-subset tree-walker in `kernel_cpu.rs`
+  (1,805 lines), held to each other by a cross-backend test. Decision 1 below
+  already leaned "stop growing the kernel language".
+- The ICD is a liability. Rusticl closes file descriptors it does not own, so
+  the suite is reliable only under `CCE_KERNEL_CPU=1`, and nothing else in the
+  workspace loads OpenCL for anything.
+- There is no expression language. A parameter is a literal or a whole-value
+  `ch("Name")`; the Attribute node's Value takes numeric literals only. The
+  question "half of what a neighbour has" cannot be asked from a parameter.
+- The direction is already set: the 41 native evaluators of Phases 3 and 4
+  are Rust, and Grid was made native precisely because Plane's kernel costs a
+  compile and loses its welds. The plugin itself barely used wrangles (three
+  mentions in `otls-audit.md`; the HDAs are SOP networks), so VEX
+  compatibility constrains nothing.
+
+The conclusion is not "a better GPU language". It is that the app has been
+maintaining an interpreter for a language it should not be scripting in, and
+that the parallelism a GPU offers belongs somewhere other than the user's
+generator code. Four steps, in dependency order; the first three do not have
+to be undone to reach the fourth.
+
+**Step 1 — a `wrangle` node on an embedded engine.** Houdini's attribwrangle,
+the thing users actually reach for, on a scripting engine someone else
+maintains. Rhai is the pick: pure Rust with no C toolchain, which every client
+in this workspace already requires; sandboxed with an operation limit, which
+is the step budget `kernel_cpu` reimplements by hand; scripts compile to an AST
+once and cache by source, exactly as `OPENCL_CACHE` keys kernels; `Vec3`
+registers from glam. Lua via mlua is faster but brings a C dependency and a
+garbage collector; Koto and Rune are less settled.
+
+The node: Input, Class (Points / Primitives / Detail), Group, Code. The script
+runs once per element of the class, over the Group if one is named. The
+binding is where the effort goes, and it is the Detail's own surface:
+
+- `@P`, `@N`, `@Cd`, `@id`, `@ptnum` and `@name` for any attribute of any
+  type — float, int, vector — rewritten by the same sugar pass the kernel
+  preprocessor does for `attrf`, so `@mass += 2.0` reads as it does in VEX.
+  Naming an attribute creates it, as the deformer ABI already does.
+- `ch("Name")` reads the node's own parameter and climbs with `../`, through
+  `resolve_param_refs` — the one resolver, so a wrangle inside a composed
+  subnet reaches the outer control like every other child.
+- `neighbours(pt)`, `prims(pt)`, `points(prim)` off the Detail's derived
+  topology — what decision 1 kept out of the kernel language because the
+  interpreter could not carry it. `nearest(pos, r)` off the spatial index.
+- `detail("name")` for detail attributes, `ingroup`/`setgroup` for groups,
+  `@Frame` and `@Time` from the `EvalSim`.
+- `addpoint`, `addprim`, `removepoint` — deferred and applied after the run,
+  so a script iterating points sees a stable element count.
+
+CPU only, deliberately. An interpreter is an order of magnitude or more below
+native Rust; that is fine for a wrangle over tens of thousands of elements per
+edit and wrong for a solver at a million per frame, which is step 4's job. A
+script that fails reports through the node-error slot, as a kernel does, and
+leaves the input passing through.
+
+**Step 2 — parameter expressions, through the same engine.** A value that
+begins with `=` evaluates as a Rhai expression with `ch()`, `@Frame`, the
+math library and the detail attributes of the node's INPUT in scope — so a
+Transform's Translate can be `= detail("bbox_max") * 0.5` and a Scatter's
+Count `= ch("../Density") * detail("area")`. The prefix is what makes it
+unambiguous: `1:2:3` is a float3 literal and stays one, and a bare `ch("X")`
+keeps working as the trivial expression it already is. The params pane shows
+an expression as text, as it shows a reference. One engine closes both gaps;
+a second mini-language for expressions would be the mistake the kernel
+preprocessor already is.
+
+**Step 3 — port the four kernel templates native, then retire OpenCL.**
+Sphere, Box, Plane and Extrude are the only kernels that ship. A native
+`sphere_detail` and `grid_detail` already exist (Plane IS the Grid); Box is
+trivial; Extrude wants topology anyway, since the kernel version fans
+everything to triangles where a native one keeps a quad a quad. Each becomes a
+plain native node type and the subnet-template shape goes: a subnet exists to
+be dived into, and there is nothing inside these to read once the kernel is
+gone. Saved instances migrate on load the way `recompose_native_embryo`
+already does in the other direction — id, name, position, flag and values
+carry over, the kernel child is dropped.
+
+With those four native the `opencl` node is the last consumer, and it is
+retired with the runtime. An `opencl` node in an older save loads as a
+pass-through that reports "OpenCL nodes are retired; rewrite as a wrangle"
+through the error slot — visible, not silently dropped. What goes:
+
+| Retired | Size |
+|---|---|
+| `kernel_cpu.rs` | 1,805 lines |
+| launcher + preprocessor in `geometry.rs` | ~930 lines |
+| the four template kernels | ~21k chars of C |
+| `opencl3`, `CCE_KERNEL_CPU`, the ICD hazard and its documentation | — |
+
+Nothing else in the workspace loads OpenCL, so the ICD bug leaves with it.
+
+**Step 4 — GPU compute, through the renderer.** Scripts do not run on the
+GPU: no embedded language compiles to GPU code, and none should. Parallel work
+needs a GPU language, and the right one here is WGSL, because the toolkit
+already speaks it. cce-ui's Vulkan path compiles WGSL to SPIR-V at runtime
+through naga, builds compute pipelines, binds storage buffers and dispatches
+workgroups — that is the path tracer — and runs headless, since `--thumbnail`
+already drives an offscreen device with no window. What is missing is a
+generic COMPUTE-JOB API on cce-ui: upload N storage buffers, dispatch a
+kernel, read the buffers back. Today the compute pipeline is internal to the
+RT pass and reads back only an image. That is a shared-crate change and
+falls under the concurrent-sessions rules.
+
+Where the parallelism goes is the point of the step. Not into user-written
+generators — every shipped one was serial, and emitting a mesh is not a
+parallel problem. The work that is parallel is per-point math over large
+counts inside a simulation step: `relax`, `neighbour`'s Diffuse and
+Concentrate, `collision`, `soft_transform`, the mold's curvature. Those are
+native nodes, written once, in WGSL, over the columnar attribute arrays Phase
+0 laid out for exactly this ("the layout a GPU buffer already wants"), with
+the user never touching GPU code. A user-authored GPU wrangle is one more
+node with a WGSL Code parameter on the same API, and the `@name` rewrite from
+step 1 carries over; it is optional and comes last.
+
+Two tiers, then: the Rhai wrangle and parameter expressions for prototyping,
+one-off attribute logic and anything under a hundred thousand elements per
+edit; WGSL compute for the fixed set of operators that runs every frame of a
+solve.
+
+The one cost that does not go away: a GPU operator needs a CPU twin, or the
+suite and a machine without Vulkan cannot run it. But the twin is the plain
+Rust evaluator the node already has — the WGSL version is an accelerator over
+it, held to it by the same cross-backend test the kernels use today — not a
+hand-rolled interpreter for a second language. And Mesa's lavapipe runs real
+Vulkan compute on the CPU with no code change, which is a headless story
+OpenCL never had.
+
+Touches: a new `wrangle.rs` and the Rhai dependency (steps 1–2);
+`geometry.rs`, `kernel_cpu.rs`, `nodes/{sphere,box,plane,extrude,opencl}.json`
+and `Cargo.toml` (step 3, all deletions); `cce-ui/src/vk` for the compute-job
+API and a `compute/` directory of WGSL operators here (step 4).
+
 ## Fifty operators, ten nodes
 
 The HDA count is an artifact of Houdini's economics — a variant is cheaper as a
@@ -589,6 +743,13 @@ will strain it.
 neighbourhood operators as native Rust evaluators and reserve kernels for
 per-point math.
 
+> **Settled (2026-09-24), by Phase 7: keep neither.** The audit found every
+> shipped kernel serial and the interpreter carrying a language the app should
+> not be scripting in. Per-point math moves to a Rhai wrangle on the CPU, the
+> four kernel templates go native, and OpenCL is retired with both backends.
+> GPU parallelism returns later as WGSL compute through the renderer, on the
+> native solver operators rather than on user code.
+
 **2. Native nodes or editable templates?** Sphere, Plane and Extrude are subnet
 templates whose kernel code the loader owns — a hand-edit inside an instance
 reverts on load. Native nodes are Rust and not user-editable at all. The
@@ -596,6 +757,12 @@ Developer set could go either way, and which one decides whether a new operator
 can be prototyped without a rebuild.
 *Leaning:* native for anything touching topology; templates for the per-point
 ops, so the experimentation surface stays open where it is cheap.
+
+> **Revised by Phase 7.** Native for every operator; the experimentation
+> surface is the wrangle node, not an editable kernel. Templates survive as
+> COMPOSITION — the Embryo, a subnet of ordinary nodes — which is the shape a
+> user can learn from, where an editable kernel was only a shape they could
+> break.
 
 **3. How far does the attribute type system go?** Today: `Float` through
 `Float4`. The Developer set needs integers (counters, ids, Vitality's ages) and
@@ -641,3 +808,9 @@ should not influence any decision made now.
 For a smaller first cut: Phase 0 plus the `neighbour` node alone is enough to
 run a diffusion on a sphere and see it — which is the point at which the rest of
 this becomes worth arguing about.
+
+Phase 7 is the one phase that removes more than it adds. Its first three steps
+replace a hand-maintained C interpreter and a GPU runtime nothing else uses
+with one embedded engine that serves both the wrangle and parameter
+expressions; the fourth puts GPU parallelism where it pays, under the solver
+operators, through the renderer the app already has.
