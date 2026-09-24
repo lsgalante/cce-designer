@@ -14,6 +14,7 @@ pub mod wrangle;
 pub mod shapes;
 pub mod gpu;
 pub mod springs;
+pub mod collide;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
@@ -10737,6 +10738,115 @@ mod tests {
             let ran = crate::gpu::with_any_device(|dev| crate::springs::solve_gpu(dev, &sys, 0.7, 16, &mut gpu));
             let gpu_ms = t.elapsed().as_secs_f64() * 1e3;
             println!("{:>7} points, 16 passes: cpu {cpu_ms:8.2} ms   gpu {gpu_ms:8.2} ms   ({:?})", sys.n, ran.map(|r| r.is_ok()));
+        }
+    }
+
+    // ---- the collision test (src/collide.rs): CPU and GPU, one algorithm ----
+
+    /// A collider and a cloud of queries around and through it.
+    fn collision_fixture(rows: usize, cols: usize, queries: usize) -> (Vec<Vec3>, Vec<[Vec3; 3]>) {
+        let collider = crate::geometry::sphere_detail(Vec3::new(0.1, 0.55, -0.05), 0.7, rows, cols);
+        let tris: Vec<[Vec3; 3]> = collider
+            .triangulate(|pos, _| Vec3::from(pos))
+            .chunks_exact(3)
+            .map(|t| [t[0], t[1], t[2]])
+            .collect();
+        let pts: Vec<Vec3> = (0..queries)
+            .map(|i| {
+                let f = i as f32;
+                Vec3::new((f * 0.371).sin() * 1.1 + 0.1, (f * 0.173).cos() * 1.1 + 0.55, (f * 0.529).sin() * 1.1 - 0.05)
+            })
+            .collect();
+        (pts, tris)
+    }
+
+    /// The CPU test is the node's original loop, step for step: inside is
+    /// containment, proximity is a band, both against a sphere whose
+    /// geometry is known.
+    #[test]
+    fn collision_cpu_tests_containment_and_a_surface_band() {
+        use crate::collide::{hits_cpu, Test};
+        let (pts, tris) = collision_fixture(16, 24, 2000);
+        let centre = Vec3::new(0.1, 0.55, -0.05);
+        let inside = hits_cpu(&pts, &tris, Test::Inside);
+        let band = hits_cpu(&pts, &tris, Test::Proximity(0.05));
+        let (mut n_in, mut n_band) = (0, 0);
+        for (i, p) in pts.iter().enumerate() {
+            let r = (*p - centre).length();
+            if r < 0.7 - 0.02 {
+                assert_eq!(inside[i], 1, "point {i} at r={r} is enclosed");
+            } else if r > 0.7 + 0.02 {
+                assert_eq!(inside[i], 0, "point {i} at r={r} is outside");
+            }
+            if (r - 0.7).abs() < 0.05 - 0.02 {
+                assert_eq!(band[i], 1, "point {i} at r={r} is within the band");
+            } else if (r - 0.7).abs() > 0.05 + 0.02 {
+                assert_eq!(band[i], 0, "point {i} at r={r} is outside the band");
+            }
+            n_in += inside[i];
+            n_band += band[i];
+        }
+        assert!(n_in > 0 && n_in < pts.len() as u32 && n_band > 0, "the fixture straddles the collider: {n_in} in, {n_band} in band");
+    }
+
+    /// The cross-check: the GPU's flags are the CPU's, for both tests. A
+    /// query on a knife edge of the threshold may round either way, so a
+    /// disagreement is tolerated only there. Skips where there is no Vulkan.
+    #[test]
+    fn collision_gpu_matches_cpu() {
+        use crate::collide::{hits_cpu, hits_gpu, Test};
+        let (pts, tris) = collision_fixture(24, 36, 6000);
+        for test in [Test::Inside, Test::Proximity(0.05)] {
+            let cpu = hits_cpu(&pts, &tris, test);
+            let gpu = match crate::gpu::with_any_device(|dev| hits_gpu(dev, &pts, &tris, test)) {
+                Err(e) => {
+                    println!("skipping collision_gpu_matches_cpu: {e}");
+                    return;
+                }
+                Ok(r) => r.expect("the collision kernel runs"),
+            };
+            assert_eq!(cpu.len(), gpu.len());
+            let mut disagreements = 0;
+            for i in 0..cpu.len() {
+                if cpu[i] != gpu[i] {
+                    let d = tris
+                        .iter()
+                        .map(|t| crate::geometry::point_triangle_distance_sq(pts[i], t[0], t[1], t[2]).sqrt())
+                        .fold(f32::INFINITY, f32::min);
+                    let margin = match test {
+                        Test::Proximity(r) => (d - r).abs(),
+                        Test::Inside => d,
+                    };
+                    assert!(margin < 1e-4, "{test:?}: query {i} differs (cpu {} gpu {}) with margin {margin}", cpu[i], gpu[i]);
+                    disagreements += 1;
+                }
+            }
+            println!("collision {test:?}: {} queries x {} triangles, {disagreements} knife-edge disagreements", pts.len(), tris.len());
+            assert!(cpu.iter().any(|&h| h == 1) && cpu.iter().any(|&h| h == 0));
+        }
+    }
+
+    /// Where the auto threshold sits: the test timed over sizes. Ignored,
+    /// a measurement: `cargo test --release -p cce-designer collision_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn collision_timing() {
+        use crate::collide::{hits_cpu, hits_gpu, Test};
+        for (rows, cols, queries) in [(16, 24, 500), (16, 24, 5000), (32, 48, 5000), (64, 96, 20000)] {
+            let (pts, tris) = collision_fixture(rows, cols, queries);
+            let t = std::time::Instant::now();
+            let cpu = hits_cpu(&pts, &tris, Test::Proximity(0.05));
+            let cpu_ms = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let gpu = crate::gpu::with_any_device(|dev| hits_gpu(dev, &pts, &tris, Test::Proximity(0.05)));
+            let gpu_ms = t.elapsed().as_secs_f64() * 1e3;
+            let same = gpu.as_ref().map(|g| g.as_ref().map(|g| *g == cpu).unwrap_or(false)).unwrap_or(false);
+            println!(
+                "{:>6} queries x {:>6} tris = {:>10} pairs: cpu {cpu_ms:9.2} ms   gpu {gpu_ms:8.2} ms   same={same}",
+                pts.len(),
+                tris.len(),
+                pts.len() * tris.len()
+            );
         }
     }
 }

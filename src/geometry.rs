@@ -1499,7 +1499,7 @@ fn apply_group(
 
 /// Squared distance from `p` to triangle `(a, b, c)` — closest point via the
 /// Voronoi-region walk (Ericson, Real-Time Collision Detection §5.1.5).
-fn point_triangle_distance_sq(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f32 {
+pub(crate) fn point_triangle_distance_sq(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f32 {
     let ab = b - a;
     let ac = c - a;
     let ap = p - a;
@@ -1598,29 +1598,74 @@ pub fn resolve_collision_geometry_with_errors(
 
     let method = node_param_str(target, "Method", "Inside").to_lowercase();
     let distance = node_param_f32(target, "Distance", 0.05).max(0.0);
-    // Fixed irrational-ish direction, NOT axis-aligned: the template meshes
-    // tessellate on the axes, and a ray along one skims edge-on through
-    // whole fans of triangles, double-counting crossings.
-    let ray_dir = Vec3::new(0.9174771, 0.3369154, 0.2095338).normalize();
-    let hit = |pt: Vec3| -> bool {
-        if method == "proximity" {
-            let d2 = distance * distance;
-            tris.iter().any(|t| point_triangle_distance_sq(pt, t[0], t[1], t[2]) <= d2)
-        } else {
-            let crossings = tris
-                .iter()
-                .filter(|t| crate::spatial::ray_triangle(pt, ray_dir, t[0], t[1], t[2]).is_some())
-                .count();
-            crossings % 2 == 1
-        }
-    };
+    let test = if method == "proximity" { crate::collide::Test::Proximity(distance) } else { crate::collide::Test::Inside };
 
-    // Collision has no Mode parameter, so `select_elements` takes its Box
-    // branch and applies `hit` per element — which is the whole difference
-    // between this node and Group.
+    // The test runs as ONE batch over every element the type asks about —
+    // points, or primitive centroids — so it can go to the GPU whole
+    // (`crate::collide`, the second Phase 7 step 4 operator); the
+    // per-element closure `select_elements` takes would have asked one
+    // point at a time. Edges test both endpoints, as before.
     let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
     let invert = node_param_str(target, "Invert", "false") == "true";
-    let (member, prim_member) = select_elements(&geom, &etype, target, hit, invert);
+    let queries: Vec<Vec3> = if etype == "primitives" {
+        (0..geom.num_prims())
+            .map(|prim| {
+                let pts = geom.prim_points(prim);
+                if pts.is_empty() {
+                    Vec3::ZERO
+                } else {
+                    pts.iter().map(|&p| geom.pos(p as usize)).sum::<Vec3>() / pts.len() as f32
+                }
+            })
+            .collect()
+    } else {
+        (0..geom.num_points()).map(|p| geom.pos(p)).collect()
+    };
+    let flags = match crate::collide::hits(&queries, &tris, test) {
+        Ok(f) => f,
+        Err(e) => {
+            if ocl_error.is_none() {
+                *ocl_error = Some(format!("{}: {e}", target.name));
+            }
+            crate::collide::hits_cpu(&queries, &tris, test)
+        }
+    };
+    let mut member = vec![false; geom.num_points()];
+    let mut prim_member = vec![false; geom.num_prims()];
+    match etype.as_str() {
+        "primitives" => {
+            for prim in 0..geom.num_prims() {
+                if flags[prim] != 0 {
+                    prim_member[prim] = true;
+                    for &p in geom.prim_points(prim) {
+                        member[p as usize] = true;
+                    }
+                }
+            }
+        }
+        "edges" => {
+            for e in geom.edges() {
+                let (a, b) = (e[0] as usize, e[1] as usize);
+                if flags[a] != 0 && flags[b] != 0 {
+                    member[a] = true;
+                    member[b] = true;
+                }
+            }
+        }
+        _ => {
+            for p in 0..geom.num_points() {
+                member[p] = flags[p] != 0;
+            }
+        }
+    }
+    if invert {
+        for m in member.iter_mut() {
+            *m = !*m;
+        }
+        for m in prim_member.iter_mut() {
+            *m = !*m;
+        }
+    }
 
     let group_name = node_param_str(target, "Group Name", "collisions").trim().to_string();
     let highlight = node_param_str(target, "Highlight", "true") == "true";

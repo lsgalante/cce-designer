@@ -711,8 +711,14 @@ Nothing else in the workspace loads OpenCL, so the ICD bug leaves with it.
 > submission, ping-ponging on the device — because a pass submitted on its
 > own lost to the CPU at every size; with it the GPU wins from the tens of
 > thousands of points up (135k: 14 ms against 25 ms) and the auto
-> threshold sits at 32k. Next: the rest of the per-point set (Repel,
-> Diffuse, the collision response), which share the pattern.
+> threshold sits at 32k. Collision followed (`src/collide.rs`): the
+> node's brute-force queries x triangles test as one dispatch, zero
+> disagreements against the CPU, 9x faster at 3.6M pairs and 22x at 242M.
+> Diffuse and Repel stay on the CPU on purpose — a single gather per
+> evaluation cannot amortise a submission, and Repel's per-pass spatial
+> grid does not chain — so step 4's shape is settled: the GPU takes the
+> operators whose work is large per submission, and the measurements
+> in CLAUDE.md say which those are.
 
 **Step 4 — GPU compute, through the renderer.** Scripts do not run on the
 GPU: no embedded language compiles to GPU code, and none should. Parallel work

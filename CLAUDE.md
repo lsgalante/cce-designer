@@ -823,6 +823,33 @@ GPU is a win for large meshes and a loss for the ones most projects have,
 which is the honest state of step 4 and the reason auto does not simply
 mean GPU.
 
+**Collision is the second operator (`src/collide.rs`), and the one the
+GPU is made for.** The node's test has always been a brute-force loop —
+every query against every collider triangle, the Voronoi-region distance
+for Proximity and a Möller–Trumbore parity cast for Inside — so the work
+is queries x triangles, per-point, one dispatch, no passes to chain. The
+resolver now runs the test as ONE batch over every element the type asks
+about (points, or primitive centroids), where it used to hand
+`select_elements` a closure that asked one point at a time; that batch is
+what can go to the GPU whole. Same algorithm step for step on both sides,
+held by `collision_gpu_matches_cpu` (zero disagreements over 6k queries x
+1.7k triangles in both modes; a knife-edge query at the threshold may
+round either way and is tolerated only there). `collision_timing` in
+release, Proximity: 3.6M pairs cpu 20 ms / gpu 2.2 ms; 15M pairs cpu 76
+ms / gpu 6.6 ms; 242M pairs cpu 1150 ms / gpu 52 ms. `GPU_MIN_WORK`
+(250k pairs) is the auto threshold.
+
+**Two per-point operators are deliberately NOT on the GPU, and the
+measurements above say why.** Neighbour's Diffuse and Concentrate are a
+single gather per evaluation — one pass, then the rest of the graph runs
+on the CPU before the next frame's pass — so there is nothing to chain
+into one submission, and a single pass costs ~0.5 ms of round trip against
+a CPU gather that takes less than that on any mesh a project has. Relax's
+Repel rebuilds a spatial grid every pass, which is the part that does not
+fit a chained submission; a GPU-side grid is a project of its own, and a
+brute-force O(n^2) pass that the CPU twin would then have to match is a
+regression for every CPU user. Both stay native until a workload asks.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,
