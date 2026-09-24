@@ -771,6 +771,18 @@ below native Rust, which is fine for tens of thousands of elements per edit
 and wrong for a solver at a million per frame. That is Phase 7's step 4
 (WGSL compute through the renderer), not a reason to grow this.
 
+**The Code row applies on ctrl+enter, Escape or leaving the row — never per
+keystroke.** cce-ui's `ParametersBg` code editor (line numbers, selection,
+clipboard, tab indenting, auto-indent, undo) keeps edits in its buffer
+until one of those, because this node evaluates on every value change and
+a half-typed line would fail on every keystroke — the border is amber
+while edits are pending. **A script error's line is flagged in the row**:
+`code_error_line_for_pane` in `render.rs` reads the `(line N` out of the
+evaluation error when the node it names is the one the pane shows, and
+hands it to `set_code_error_line`; Rhai's line numbers survive `desugar`
+because the `@` rewrite never adds or removes a line. Cleared on the next
+evaluation that says nothing about that node.
+
 ### GPU compute: the springs solve is the first operator (Phase 7 step 4)
 
 `src/gpu.rs` keeps one `cce_ui::vk::ComputeDevice` per thread, opened on

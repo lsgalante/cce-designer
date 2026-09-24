@@ -326,7 +326,9 @@ impl Application for State {
     /// The toolkit's undo/redo routing lands here once no focused text box
     /// wanted the chord. Only the curve viewer state has a history today.
     fn undo(&mut self, needs_rebuild: &mut bool) -> bool {
-        let taken = self.viewer_tool_undo();
+        // A code row being edited owns the chord: its typing is the thing to
+        // undo, ahead of a viewer tool that may also be active.
+        let taken = self.code_editor_action(cce_ui::widget::ContextAction::Undo) || self.viewer_tool_undo();
         if taken {
             *needs_rebuild = true;
         }
@@ -334,7 +336,7 @@ impl Application for State {
     }
 
     fn redo(&mut self, needs_rebuild: &mut bool) -> bool {
-        let taken = self.viewer_tool_redo();
+        let taken = self.code_editor_action(cce_ui::widget::ContextAction::Redo) || self.viewer_tool_redo();
         if taken {
             *needs_rebuild = true;
         }

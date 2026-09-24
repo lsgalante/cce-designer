@@ -600,9 +600,11 @@ to be undone to reach the fourth.
 > Group, the `@name` sugar with typed attribute creation, `ch` / `chs` / `chv`
 > / `chi` resolved through `TreeScope` before the run, topology and nearest,
 > deferred `addpoint` / `addprim` / `removepoint`, both budgets. Nine tests
-> in `main.rs`. Not yet: a code editor worth the name in the params pane
-> (the `code` row is a single-line text box), `@N` write-back feeding the
-> normal overlay, and a vertex class.
+> in `main.rs`. The params pane's code row is an editor since the same
+> day: gutter, selection, clipboard, indenting, undo, apply on ctrl+enter
+> rather than per keystroke, and the failing line flagged from the
+> evaluation error. Not yet: `@N` write-back feeding the normal overlay,
+> and a vertex class.
 
 **Step 1 — a `wrangle` node on an embedded engine.** Houdini's attribwrangle,
 the thing users actually reach for, on a scripting engine someone else

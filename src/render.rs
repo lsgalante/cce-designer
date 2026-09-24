@@ -1192,6 +1192,11 @@ impl State {
         };
         self.sim_cache = sim_cache;
 
+        // A script error names its line; if the node it names is the one the
+        // params pane shows, the pane flags that line in its code row. Cleared
+        // whenever the evaluation says nothing about that node.
+        let flagged = ocl_error.as_deref().and_then(|e| self.code_error_line_for_pane(e));
+        self.slots.param_bg_mut().set_code_error_line(flagged);
         if let Some(e) = ocl_error {
             self.update_status_text(&format!("Node error: {}", e));
         } else {
@@ -1254,6 +1259,32 @@ impl State {
             verts.extend(crate::geometry::cube_vertices());
         }
         crate::geometry::rt_scene_from_verts(&verts)
+    }
+
+    /// The 0-based line a node error points at in the params pane's selected
+    /// node, when the error names that node and carries a `(line N` — the
+    /// shape Rhai's diagnostics take (`wrangle1: point 4: ... (line 3,
+    /// position 5)`). Anything else is None.
+    pub(crate) fn code_error_line_for_pane(&self, error: &str) -> Option<usize> {
+        let slot = self.param_editor_selected()?;
+        let node_name = &self.param_editor_dir().children.get(slot)?.name;
+        let rest = error.strip_prefix(node_name.as_str())?.strip_prefix(':')?;
+        Self::error_line_number(rest)
+    }
+
+    /// A clipboard, selection or history action for the params pane's code
+    /// editor, when one is open. False otherwise, so the caller's own
+    /// handling runs.
+    pub(crate) fn code_editor_action(&mut self, action: cce_ui::widget::ContextAction) -> bool {
+        let pane = self.slots.param_bg_mut();
+        pane.code_editing() && pane.code_action(action)
+    }
+
+    /// `(line N` anywhere in a diagnostic, 1-based in the text, 0-based out.
+    pub(crate) fn error_line_number(text: &str) -> Option<usize> {
+        let at = text.find("(line ")?;
+        let digits: String = text[at + 6..].chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse::<usize>().ok().filter(|n| *n >= 1).map(|n| n - 1)
     }
 
     pub(crate) fn update_status_text(&mut self, text: &str) {

@@ -10849,4 +10849,25 @@ mod tests {
             );
         }
     }
+
+    /// A wrangle's error names its node and its line; the params pane is
+    /// told the line only when that node is the one it shows.
+    #[test]
+    fn a_script_error_line_reaches_the_params_pane_for_the_shown_node() {
+        use crate::app::State;
+        assert_eq!(State::error_line_number("syntax: Syntax error: Expecting ';' (line 3, position 5)"), Some(2));
+        assert_eq!(State::error_line_number("point 4: index out of range (line 1, position 9)"), Some(0));
+        assert_eq!(State::error_line_number("OpenCL nodes are retired"), None);
+        assert_eq!(State::error_line_number("(line 0, position 1)"), None, "a zero line is not a line");
+
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state.apply_action(crate::app::McpAction::AddNode { template_name: "Wrangle".into(), name: Some("w".into()), x: 3.0, y: 9.0 }, &mut redraw).unwrap();
+        let slot = state.current_dir().children.iter().position(|c| c.name == "w").unwrap();
+        state.apply_action(crate::app::McpAction::Select { slot }, &mut redraw).unwrap();
+        assert_eq!(state.param_editor_selected(), Some(slot));
+        assert_eq!(state.code_error_line_for_pane("w: syntax: Syntax error (line 2, position 1)"), Some(1));
+        assert_eq!(state.code_error_line_for_pane("sphere1: something (line 2, position 1)"), None, "another node's error is not this pane's");
+        assert_eq!(state.code_error_line_for_pane("w: OpenCL nodes are retired"), None, "no line, no flag");
+    }
 }

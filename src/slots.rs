@@ -185,6 +185,12 @@ impl WidgetSlots {
         self.param.as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
+    /// The pane as its concrete type, for what `ParamController` does not
+    /// carry — the code row's error line.
+    pub fn param_bg_mut(&mut self) -> &mut ParametersBg {
+        self.param.as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
+    }
+
     pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController {
         self.spreadsheet.as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
     }
