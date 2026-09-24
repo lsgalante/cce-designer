@@ -696,6 +696,16 @@ through the error slot — visible, not silently dropped. What goes:
 
 Nothing else in the workspace loads OpenCL, so the ICD bug leaves with it.
 
+> **Started (2026-09-24): the compute-job API is in cce-ui.**
+> `cce_ui::vk::{ComputeDevice, Kernel, Binding}` — `run` / `run_over`
+> upload a list of bindings (read-write storage, read-only storage,
+> uniform), dispatch a WGSL entry point on a headless device, wait, and
+> read the read-write ones back; host-visible mapped buffers, pipelines
+> cached by source, every failure an `Err` with naga's diagnostic. Four
+> tests run on the machine's Vulkan (Intel Iris Xe here) and skip where
+> there is none. Not yet: a first WGSL operator in this crate held to its
+> CPU twin, and a device kept per evaluation thread.
+
 **Step 4 — GPU compute, through the renderer.** Scripts do not run on the
 GPU: no embedded language compiles to GPU code, and none should. Parallel work
 needs a GPU language, and the right one here is WGSL, because the toolkit
