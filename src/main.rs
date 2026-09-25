@@ -1658,13 +1658,36 @@ mod tests {
             .collect();
         assert_eq!(groups[0], vec![A::FrameAll, A::OneToOne]);
         assert_eq!(groups[1], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
-        assert_eq!(groups[2], vec![A::PointSizeSlider, A::PointMarkerSizeSlider, A::GroupMarkerScaleSlider]);
+        assert_eq!(
+            groups[2],
+            vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::PointMarkerSizeSlider, A::GroupMarkerScaleSlider]
+        );
         assert_eq!(
             groups[3],
             vec![A::Shading(false), A::Shading(true), A::OpacitySlider, A::Command("toggle_show_occluded")]
         );
         assert_eq!(options.len(), actions.len());
         assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+    }
+
+    /// Show Points heads the Points group as a switch over the Render
+    /// points, marked from the live flag, and the row runs its command.
+    #[test]
+    fn the_viewport_menu_toggles_show_points() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.render_points = false;
+        let row = |state: &State| {
+            let (options, actions) = state.viewport_menu_rows();
+            let i = actions.iter().position(|a| *a == A::Command("toggle_render_points")).expect("a Show Points row");
+            options[i].clone()
+        };
+        assert_eq!(row(&state), "○ Show Points");
+        state.run_viewport_menu_action(A::Command("toggle_render_points"));
+        assert!(state.render_points);
+        assert_eq!(row(&state), "● Show Points");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(crate::app::DesignSettings::from_kdl_str(&kdl).render.render_points, "persisted");
     }
 
     /// Wire Thickness is a slider row right under Show Wireframe, over the
