@@ -446,16 +446,15 @@ pub enum ViewportMenuAction {
     /// pick differs, so picking the mode already on is a no-op rather than
     /// a flip.
     Shading(bool),
-    /// Set the polygon (geometry fill) opacity to one of `VIEWPORT_OPACITIES`
-    /// — a menu cannot hold a slider, and the palette's Geometry Opacity row
-    /// is the fine control.
-    Opacity(f32),
+    /// The polygon (geometry fill) opacity, as a SLIDER row (cce-ui's
+    /// `context_menu::MenuSlider`): the wheel steps it by 5%, a press on its
+    /// band drags it, and the menu stays open. Picking the row runs nothing
+    /// — the slider's changes arrive through `drain_viewport_menu_slider`.
+    OpacitySlider,
     /// A "-" row: engraved, inert.
     Separator,
 }
 
-/// The polygon opacities the viewport menu offers, highest first.
-pub const VIEWPORT_OPACITIES: [f32; 4] = [1.0, 0.75, 0.5, 0.25];
 
 /// The network editor's right-click context menu (on empty space — a press on
 /// a node still opens that node's menu). Every row but the separator names a
@@ -4307,12 +4306,51 @@ impl State {
     }
 
     /// Open the viewport right-click context menu at the cursor.
-    fn open_viewport_context_menu(&mut self) {
+    pub(crate) fn open_viewport_context_menu(&mut self) {
         let (options, actions) = self.viewport_menu_rows();
         let target = self.slots.viewport.id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        if let Some(i) = actions.iter().position(|a| *a == ViewportMenuAction::OpacitySlider) {
+            cce_ui::widget::context_menu::set_row_slider(i, self.opacity_menu_slider());
+        }
         self.viewport_menu_active = true;
         self.viewport_menu_actions = actions;
+    }
+
+    /// The viewport menu's opacity slider: the live fill opacity in percent,
+    /// stepped by 5 — the palette's Geometry Opacity row is the fine control.
+    fn opacity_menu_slider(&self) -> cce_ui::widget::context_menu::MenuSlider {
+        cce_ui::widget::context_menu::MenuSlider {
+            value: (self.geo_opacity.clamp(0.0, 1.0) * 100.0).round(),
+            min: 0.0,
+            max: 100.0,
+            step: 5.0,
+            decimals: 0,
+            suffix: "%",
+        }
+    }
+
+    /// Land what the viewport menu's slider did. During a drag this is
+    /// called on every motion, so it only sets the value and asks for a
+    /// redraw — opacity is a draw-time uniform, and `apply_setting`'s full
+    /// regenerate-and-rebuild pass would re-evaluate the graph per pixel of
+    /// drag. `persist` saves state.kdl, which the wheel does per step and a
+    /// drag does once, on the release.
+    pub(crate) fn drain_viewport_menu_slider(&mut self, persist: bool) -> bool {
+        let Some((idx, v)) = cce_ui::widget::context_menu::take_slider_change() else {
+            if persist {
+                self.save_settings();
+            }
+            return false;
+        };
+        if self.viewport_menu_actions.get(idx) == Some(&ViewportMenuAction::OpacitySlider) {
+            self.geo_opacity = (v / 100.0).clamp(0.0, 1.0);
+            self.viewport_dirty = true;
+            if persist {
+                self.save_settings();
+            }
+        }
+        true
     }
 
     /// The viewport menu's rows and what each does: framing, then the
@@ -4340,11 +4378,8 @@ impl State {
 
         options.push("-".to_string());
         actions.push(ViewportMenuAction::Separator);
-        for o in VIEWPORT_OPACITIES {
-            let on = (self.geo_opacity - o).abs() < 0.005;
-            options.push(format!("{} Opacity {}%", mark(on), (o * 100.0).round() as i32));
-            actions.push(ViewportMenuAction::Opacity(o));
-        }
+        options.push("Opacity".to_string());
+        actions.push(ViewportMenuAction::OpacitySlider);
         let occluded_label = crate::command::by_id("toggle_show_occluded").map(|c| c.label).unwrap_or("Show Occluded");
         options.push(format!("{} {occluded_label}", mark(self.show_occluded)));
         actions.push(ViewportMenuAction::Command("toggle_show_occluded"));
@@ -4397,11 +4432,8 @@ impl State {
                     self.run_command("toggle_smooth_shading");
                 }
             }
-            ViewportMenuAction::Opacity(o) => {
-                // The palette's Geometry Opacity row, so the write, the
-                // persist and the dialog's re-read are the one path.
-                self.apply_setting("Geometry Opacity", &format!("{o:.2}"));
-            }
+            // The slider row is worked, not picked.
+            ViewportMenuAction::OpacitySlider => {}
             ViewportMenuAction::Separator => {}
         }
     }
@@ -4421,6 +4453,12 @@ impl State {
     fn handle_viewport_menu_click(&mut self) -> bool {
         if !self.viewport_menu_open() {
             return false;
+        }
+        // A press on a slider row is the slider's: it jumps (on the band)
+        // and keeps the menu open, where every other row fires and closes.
+        if cce_ui::widget::context_menu::slider_press(self.cursor_x, self.cursor_y) {
+            self.drain_viewport_menu_slider(false);
+            return true;
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
@@ -7362,6 +7400,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if self.dialog_visible() {
                     return self.dialog_mouse_wheel(*delta);
                 }
+                // Over an open viewport menu the wheel is the menu's: a
+                // slider row steps, and nothing scrolls or orbits beneath.
+                if self.viewport_menu_open()
+                    && cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y)
+                {
+                    if cce_ui::widget::context_menu::mouse_wheel(delta, self.cursor_x, self.cursor_y) {
+                        self.drain_viewport_menu_slider(true);
+                    }
+                    return true;
+                }
                 let in_network_pane = self.in_network_pane();
                 // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
@@ -7542,6 +7590,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     && cce_ui::widget::context_menu::cursor_moved(self.cursor_x, self.cursor_y)
                 {
                     changed = true;
+                }
+                // A held menu slider follows the pointer (cursor_moved moved
+                // it); land the value, and let nothing else read this motion
+                // as a drag of its own.
+                if self.viewport_menu_open() && cce_ui::widget::context_menu::slider_dragging() {
+                    self.drain_viewport_menu_slider(false);
+                    return true;
                 }
 
                 // An in-flight curve-tool grab eats motion ahead of every
@@ -7760,6 +7815,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // `drag_widget` only ever names a widget drag driven through the slot's Input
             // drag hooks. Exactly one of the two is armed per press.
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
+                // The release that ends a menu slider drag — wherever the
+                // pointer is — commits it and is nobody else's.
+                if *btn_state == ElementState::Released
+                    && *button == MouseButton::Left
+                    && cce_ui::widget::context_menu::slider_release()
+                {
+                    self.drain_viewport_menu_slider(true);
+                    return true;
+                }
                 if *btn_state == ElementState::Pressed {
                     self.pan_velocity_x = 0.0;
                     self.pan_velocity_y = 0.0;

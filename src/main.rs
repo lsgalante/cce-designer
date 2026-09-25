@@ -1540,16 +1540,16 @@ mod tests {
         assert!(!state.see_through_active(), "nothing to see through at 100%");
         assert!(state.last_status_text.contains("below 100%"), "{}", state.last_status_text);
 
-        state.run_viewport_menu_action(A::Opacity(0.5));
+        state.apply_setting("Geometry Opacity", "0.50");
         assert!(state.see_through_active());
         state.run_command("toggle_show_occluded");
         assert!(!state.see_through_active());
     }
 
     /// The viewport's right-click menu sets the display mode: the wireframe
-    /// switch, flat or smooth shading as a radio pair, and the polygon
-    /// opacity as presets — each mark reading the live state, each row
-    /// landing on it.
+    /// switch and flat or smooth shading as a radio pair — each mark reading
+    /// the live state, each row landing on it — and the polygon opacity as a
+    /// slider row (below).
     #[test]
     fn the_viewport_menu_sets_the_display_mode() {
         use crate::app::ViewportMenuAction as A;
@@ -1565,8 +1565,7 @@ mod tests {
         assert!(row(&state, A::Command("toggle_wireframe")).starts_with('○'));
         assert!(row(&state, A::Shading(false)).starts_with('●'));
         assert!(row(&state, A::Shading(true)).starts_with('○'));
-        assert!(row(&state, A::Opacity(1.0)).starts_with('●'));
-        assert_eq!(row(&state, A::Opacity(0.5)), "○ Opacity 50%");
+        assert_eq!(row(&state, A::OpacitySlider), "Opacity");
 
         state.run_viewport_menu_action(A::Command("toggle_wireframe"));
         assert!(state.wireframe);
@@ -1587,14 +1586,62 @@ mod tests {
         assert!(!state.smooth_shading);
         assert!(state.scene_smooth_verts.is_empty(), "flat keeps no lit copy");
 
-        state.run_viewport_menu_action(A::Opacity(0.5));
-        assert!((state.geo_opacity - 0.5).abs() < 1e-6);
-        assert!(row(&state, A::Opacity(0.5)).starts_with('●'));
-        assert!(row(&state, A::Opacity(1.0)).starts_with('○'));
-        // An opacity off the presets marks none of them.
-        state.apply_setting("Geometry Opacity", "0.33");
-        let (options, _) = state.viewport_menu_rows();
-        assert!(options.iter().filter(|o| o.contains("Opacity")).all(|o| o.starts_with('○')));
+    }
+
+    /// The viewport menu's Opacity row is a cce-ui menu SLIDER: opened, it
+    /// reads the live opacity in percent; the wheel over it steps 5% and
+    /// saves, the menu staying open; a press on its band jumps and drags,
+    /// landing the value live, and the release commits it. The wheel over
+    /// an action row is still swallowed by the open menu rather than
+    /// orbiting the scene beneath it.
+    #[test]
+    fn the_viewport_menus_opacity_row_is_a_wheel_slider() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.geo_opacity = 0.5;
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        assert!(state.viewport_menu_open());
+        let i = state.viewport_menu_actions.iter().position(|a| *a == A::OpacitySlider).expect("an Opacity row");
+        let s = context_menu::slider(i).expect("the row is a slider");
+        assert_eq!((s.value, s.min, s.max, s.step), (50.0, 0.0, 100.0, 5.0));
+
+        // Wheel over the row: one notch up is 5% more, saved, menu still up.
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::x() + 20.0;
+        let wheel = |state: &mut State, notches: f32| {
+            state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, notches) })
+        };
+        assert!(wheel(&mut state, 1.0));
+        assert!((state.geo_opacity - 0.55).abs() < 1e-6, "{}", state.geo_opacity);
+        assert!(state.viewport_menu_open(), "the menu stays open");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(kdl.contains("0.55"), "the wheel step persisted: {kdl}");
+        wheel(&mut state, -3.0);
+        assert!((state.geo_opacity - 0.40).abs() < 1e-6);
+
+        // Press on the band's right end: 100%, live; drag back; release.
+        let band = context_menu::CONTEXT_MENU.with(|m| m.borrow().slider_band(i));
+        state.cursor_x = band.x + band.width - 1.0;
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!((state.geo_opacity - 1.0).abs() < 1e-6, "{}", state.geo_opacity);
+        assert!(state.viewport_menu_open());
+        state.handle_event(&WindowEvent::CursorMoved { position: crate::window::LocalPosition { x: (band.x + band.width * 0.25) as f64, y: 900.0 } });
+        assert!((state.geo_opacity - 0.25).abs() < 1e-6, "the drag follows off the plate: {}", state.geo_opacity);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert!(!context_menu::slider_dragging());
+        assert!(state.viewport_menu_open(), "the release does not close it");
+
+        // The wheel over an action row changes nothing and orbits nothing.
+        let before = (state.geo_opacity, state.viewport().rotation_y);
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(0) + context_menu::ROW_H * 0.5;
+        assert!(wheel(&mut state, 1.0));
+        assert_eq!((state.geo_opacity, state.viewport().rotation_y), before);
+        context_menu::hide();
     }
 
     /// The dialog plate carries its own backdrop compression, above a

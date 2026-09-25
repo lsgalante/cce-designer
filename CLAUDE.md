@@ -1379,12 +1379,21 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 The viewport's right-click menu carries the DISPLAY MODE under Frame All
 and View 1:1: the Show Wireframe switch (its registry command), **Flat
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
-and the polygon **Opacity** as presets (`VIEWPORT_OPACITIES`, landing
-through `apply_setting("Geometry Opacity", …)` so the palette's row, the
-persist and the menu are one path — a menu cannot hold a slider, and an
-opacity set off the presets marks none of them). `viewport_menu_rows` and
-`run_viewport_menu_action` are split from the open and the click so a test
-reads and runs the rows.
+and the polygon **Opacity** as a SLIDER row — cce-ui's
+`context_menu::MenuSlider` (2026-09-25), set on the shown menu by
+`open_viewport_context_menu`. The wheel over it steps 5% and saves; a press
+on its band jumps and drags (a slider row never closes the menu), landing
+the value live and committing on the release. The designer dispatches the
+menu itself, so four hooks carry it: `slider_press` ahead of the row action
+in `handle_viewport_menu_click`, `slider_dragging` in CursorMoved (after
+`cursor_moved`, which moves the held value), `slider_release` at the top of
+MouseInput, and `mouse_wheel` at the top of MouseWheel — where a wheel
+anywhere over the open menu is swallowed rather than orbiting the scene.
+`drain_viewport_menu_slider` lands a change by setting `geo_opacity`
+directly: opacity is a draw-time uniform, and `apply_setting`'s regenerate
+pass would re-evaluate the graph per pixel of drag. `viewport_menu_rows`
+and `run_viewport_menu_action` are split from the open and the click so a
+test reads and runs the rows.
 
 **Smooth shading is baked, not shaded.** The raster pass flat-shades every
 fill in `scene3d.wgsl` from screen-space derivative normals, and cce-ui's
