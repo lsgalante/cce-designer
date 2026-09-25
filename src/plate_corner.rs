@@ -161,7 +161,7 @@ impl State {
         // convention): window actions | layout spans | tab switching | tab
         // management. Pushed lazily so a group that contributes nothing
         // leaves no orphaned line.
-        let mut separate = |options: &mut Vec<String>, actions: &mut Vec<PlateMenuAction>| {
+        let separate = |options: &mut Vec<String>, actions: &mut Vec<PlateMenuAction>| {
             if !options.is_empty() && options.last().map(String::as_str) != Some("-") {
                 options.push("-".to_string());
                 actions.push(PlateMenuAction::Separator);
