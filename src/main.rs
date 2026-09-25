@@ -1893,6 +1893,48 @@ mod tests {
         context_menu::hide();
     }
 
+    /// A viewport menu the compositor cut short (the popup's configure lands
+    /// it through `context_menu::place`) scrolls under the designer's own
+    /// wheel hook, and a press afterwards runs the row DRAWN under the
+    /// pointer — the scrolled one, not the one at that offset unscrolled.
+    #[test]
+    fn a_shortened_viewport_menu_scrolls_and_picks_the_scrolled_row() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let full = context_menu::CONTEXT_MENU.with(|m| m.borrow().content_h);
+        context_menu::place(300.0, 0.0, full * 0.5);
+
+        // Over the first row, which is Frame All — an action, not a slider.
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(0) + context_menu::ROW_H * 0.5;
+        assert_eq!(state.viewport_menu_actions[0], A::FrameAll);
+        state.handle_event(&WindowEvent::CursorMoved {
+            position: LocalPosition { x: state.cursor_x as f64, y: state.cursor_y as f64 },
+        });
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -3.0) });
+        let scroll = context_menu::CONTEXT_MENU.with(|m| m.borrow().scroll);
+        assert_eq!(scroll, 3.0 * context_menu::ROW_H, "three notches down, three rows");
+        assert!(state.viewport_menu_open(), "scrolling keeps the menu up");
+
+        // The row now under the pointer is row 3; pressing it runs row 3's
+        // action. Pick a row whose effect is visible: a toggle.
+        let row = context_menu::row_at(state.cursor_x, state.cursor_y).expect("a row under the pointer");
+        assert_eq!(row, 3);
+        let A::Command(id) = state.viewport_menu_actions[row] else {
+            panic!("row 3 should be a toggle command, is {:?}", state.viewport_menu_actions[row]);
+        };
+        let before = state.command_toggle_state(id);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert_ne!(state.command_toggle_state(id), before, "the scrolled row ran");
+        context_menu::hide();
+    }
+
     /// Point Size is a viewport-menu slider over the palette row's 0–0.1,
     /// and it re-sizes what it feeds without re-evaluating anything: the
     /// Selected-Group markers are rebuilt from their KEPT members at Point
