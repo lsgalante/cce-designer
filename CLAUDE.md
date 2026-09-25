@@ -225,9 +225,11 @@ is the introspection surface.
 ### There are no meta nodes (retired 2026-09-23)
 
 Two different things were called `meta`, and both are gone. What replaced
-them is the one rule worth remembering: **a display setting belongs to the
-view, so it is a live field on `State`, persisted to `state.kdl`, and
-reached from the command palette.** Never a node.
+them is the one rule worth remembering: **a display setting is a live
+field on `State`, persisted to `state.kdl`, and reached from the command
+palette.** Never a node. (Since 2026-09-24 a project ALSO carries the
+display settings it was saved with — see "Display settings ride the
+project file" below; that is a snapshot in the view state, not a node.)
 
 **The root `meta` node (nee Session)** was a permanent, undeletable root
 subnet holding four utility subnets — `main`, `view`, `guides`, `render` —
@@ -342,6 +344,25 @@ cce-ui auto-merges (see `../cce-compositor/WORKSPACE.md`). Legacy `design.kdl` /
 files migrate on load. Scroll behavior (`scroll_speed`, `inertial_scroll`,
 `scroll_friction`) is intentionally absent: it is config-owned
 (`input.inertial` in config.kdl) and must not be shadowed by app state.
+
+**Display settings ride the project file too (since 2026-09-24).** Every
+save writes `ProjectViewState::display` — a `DisplaySettings`, the viewport
+and render blocks of `DesignSettings` without the startup pointer, taken by
+`State::display_settings` (which `save_settings` builds from as well) — and
+both `load_from_file` paths apply it through `apply_display_settings`, before
+the Default Camera view so a camera node's own Square Aspect and pivot
+still win. The apply sets every field, regenerates the baked meshes, relays
+the two pane-shaped ones (network plate, circular pane), re-checks the
+menubar marks, and saves state.kdl, so state.kdl holds the LAST-USED look:
+what New and an older save (no block, which changes nothing) open with.
+Main window only, as the pane state is: a detached window has no viewport
+and reloads the sync channel on every write. A display change dirties the
+project (`pane_layout_json` includes the block). `State::new` seeds only
+the tree, camera, pan and path from the bundled file, as before, so the
+suite does not read the block out of the versioned `default_project.json`.
+This reverses the 2026-09-23 position that a display preference should
+survive opening someone else's scene — the user's call;
+`a_project_keeps_its_display_settings` is the test.
 
 **The path honors `$XDG_CONFIG_HOME`**, resolved through
 `cce_ui::config::cce_config_dir()` like every other app in the workspace —

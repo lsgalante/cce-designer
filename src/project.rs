@@ -181,6 +181,7 @@ impl State {
                 zoom: self.viewport().zoom,
                 pivot: self.viewport().pivot.to_array(),
             }),
+            display: Some(self.display_settings()),
         }
     }
 
@@ -400,6 +401,11 @@ impl State {
             // quiet while the migration reads it.
             self.last_applied_wire_color = None;
             self.migrate_meta_settings_node();
+            // Before the default view, whose camera-node rule has the last
+            // word on the square aspect and the pivot marker.
+            if let Some(d) = &proj.view_state.display {
+                self.apply_display_settings(d);
+            }
             self.apply_pane_state_from_project(&proj.view_state);
             self.set_active_camera(proj.view_state.active_camera);
             self.pan_x = proj.view_state.pan.0;
@@ -457,6 +463,10 @@ impl State {
         // As in the default-project branch.
         self.last_applied_wire_color = None;
         self.migrate_meta_settings_node();
+        // As in the default-project branch.
+        if let Some(d) = &proj.view_state.display {
+            self.apply_display_settings(d);
+        }
         self.apply_pane_state_from_project(&proj.view_state);
         self.set_active_camera(proj.view_state.active_camera);
         self.pan_x = proj.view_state.pan.0;

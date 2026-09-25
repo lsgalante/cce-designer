@@ -1384,6 +1384,66 @@ mod tests {
         assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowDown)), Some("play_pause_reverse"));
     }
 
+    /// A project carries its display settings: saved with the grid off,
+    /// smooth shading, half opacity and a centimetre world unit, it opens
+    /// that way whatever the session had since — and a save from before the
+    /// block existed leaves the live settings alone. Changing one dirties
+    /// the project, since the file now holds it.
+    #[test]
+    fn a_project_keeps_its_display_settings() {
+        let dir = std::env::temp_dir()
+            .join(format!("cce-designer-display-{}", std::process::id()))
+            .join("look");
+        let _ = fs::remove_dir_all(&dir);
+        let mut state = State::new(false);
+        state.viewport_mut().show_grid = false;
+        state.viewport_mut().show_cube = true;
+        state.smooth_shading = true;
+        state.wireframe = true;
+        state.geo_opacity = 0.5;
+        state.grid_thickness = 0.07;
+        state.world_unit = cce_ui::units::Unit::Cm;
+        state.point_color = [0.1, 0.9, 0.2];
+        state.save_to_file(&dir).expect("save");
+        assert!(!state.has_unsaved_changes());
+
+        // The session moves on.
+        state.run_command("toggle_grid");
+        assert!(state.viewport().show_grid);
+        assert!(state.has_unsaved_changes(), "a display change is an edit to the file");
+        state.run_command("toggle_cube");
+        state.smooth_shading = false;
+        state.wireframe = false;
+        state.geo_opacity = 1.0;
+        state.grid_thickness = 0.03;
+        state.world_unit = cce_ui::units::Unit::Mm;
+        state.point_color = [1.0, 1.0, 1.0];
+
+        state.load_from_file(&dir).expect("load");
+        assert!(!state.viewport().show_grid, "the grid comes back off");
+        assert!(state.viewport().show_cube);
+        assert!(state.smooth_shading && state.wireframe);
+        assert!((state.geo_opacity - 0.5).abs() < 1e-6);
+        assert!((state.grid_thickness - 0.07).abs() < 1e-6);
+        assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
+        assert_eq!(state.point_color, [0.1, 0.9, 0.2]);
+        assert!(!state.scene_smooth_verts.is_empty(), "the scene was rebuilt smooth");
+        assert!(!state.has_unsaved_changes(), "a fresh load is clean");
+        assert_eq!(state.command_toggle_state("toggle_grid"), Some(false), "the palette's switch agrees");
+
+        // An older save has no display block: the live settings stand.
+        let state_json = dir.join("state.json");
+        let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_json).unwrap()).unwrap();
+        v["view_state"].as_object_mut().unwrap().remove("display");
+        fs::write(&state_json, serde_json::to_string(&v).unwrap()).unwrap();
+        state.run_command("toggle_grid");
+        assert!(state.viewport().show_grid);
+        state.load_from_file(&dir).expect("load an older save");
+        assert!(state.viewport().show_grid, "no block, no change");
+
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
     /// Smooth shading bakes the raster pass's own light, so on a PLANE —
     /// where every point normal is the face normal — it gives exactly the
     /// flat shader's factor at every corner: switching modes changes how
@@ -4727,16 +4787,15 @@ mod tests {
         assert!(state.viewport().zoom < 1.0, "a 0.25 sphere frames closer than the stock view: zoom {}", state.viewport().zoom);
     }
 
-    /// What the scene file carries, and what it no longer does.
+    /// The scene file carries the Default Camera VIEW (square aspect, pivot
+    /// marker, orbit/zoom/pivot) — where you were standing in this scene —
+    /// and, since 2026-09-24, the display settings with it.
     ///
-    /// It used to carry the viewport DISPLAY settings — the Render node's
-    /// wireframe state and colour, the Guides node's grid and origin, Main's
-    /// background — because the nodes holding them rode `fs_root` into the
-    /// file. That made a preference part of the project: opening someone
-    /// else's scene reset how you looked at geometry. Those settings persist
-    /// to `state.kdl` now, and the scene file keeps what is genuinely the
-    /// project's: the Default Camera VIEW (square aspect, pivot marker,
-    /// orbit/zoom/pivot), which is where you were standing in this scene.
+    /// From 2026-09-23 to 24 the display settings were app-wide only, on the
+    /// argument that opening someone else's scene should not reset how you
+    /// look at geometry; this test asserted the wireframe did NOT travel.
+    /// The user chose the other way: a project opens looking the way it was
+    /// left. `a_project_keeps_its_display_settings` covers the whole block.
     #[test]
     fn viewport_settings_round_trip_through_the_scene_file() {
         let dir = std::env::temp_dir().join(format!("cce-designer-vp-settings-{}", std::process::id()));
@@ -4751,7 +4810,7 @@ mod tests {
         a.viewport_mut().rotation_y = 0.7;
         a.viewport_mut().zoom = 0.4;
         a.viewport_mut().pivot = Vec3::new(3.0, 0.5, -2.0);
-        // A display setting, deliberately NOT expected to travel.
+        // A display setting, which travels with the project now.
         a.wireframe = true;
         a.save_to_file(&dir).expect("save");
 
@@ -4763,7 +4822,7 @@ mod tests {
         assert!((b.viewport().rotation_y - 0.7).abs() < 1e-4);
         assert!((b.viewport().zoom - 0.4).abs() < 1e-4);
         assert_eq!(b.viewport().pivot, Vec3::new(3.0, 0.5, -2.0));
-        assert!(!b.wireframe, "a display preference rode the project file");
+        assert!(b.wireframe, "the wireframe travels with the project");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

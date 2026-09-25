@@ -322,6 +322,28 @@ pub struct ProjectViewState {
     /// directory.
     #[serde(default)]
     pub default_view: Option<DefaultCameraView>,
+    /// The display settings the project was saved with — the grid and the
+    /// other guides, the wireframe, shading, opacity, points and colours:
+    /// everything `DesignSettings` persists but the startup pointer. A load
+    /// applies them over the live state (`State::apply_display_settings`),
+    /// so a project opens looking the way it was left. Absent in saves from
+    /// before 2026-09-24 keeps the live settings, as every block here does.
+    ///
+    /// These were deliberately app-wide from 2026-09-23 — "a display
+    /// setting belongs to the view" — and came back into the file by the
+    /// user's choice the next day. state.kdl still holds them too, as the
+    /// last-used look: what a new project and an older save open with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<DisplaySettings>,
+}
+
+/// The display half of `DesignSettings` — see [`ProjectViewState::display`].
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DisplaySettings {
+    #[serde(default)]
+    pub viewport: ViewportSettings,
+    #[serde(default)]
+    pub render: RenderSettings,
 }
 
 /// See [`ProjectViewState::default_view`].
@@ -2186,6 +2208,9 @@ impl State {
             self.floating_spreadsheet_inset_left.round(),
             self.floating_spreadsheet_inset_right.round(),
         );
+        // The display settings ride the file now, so changing one is an
+        // edit the title's asterisk should show.
+        let display = serde_json::to_string(&vs.display).unwrap_or_default();
         serde_json::to_string(&(
             vs.collapsed_panes,
             splitters,
@@ -2194,6 +2219,7 @@ impl State {
             vs.params_pin,
             vs.spreadsheet_pin,
             plates,
+            display,
         ))
         .unwrap_or_default()
     }
@@ -2210,8 +2236,10 @@ impl State {
 
 
 
-    pub fn save_settings(&mut self) {
-        let settings = DesignSettings {
+    /// The live display settings — what state.kdl and a project's
+    /// `display` block both carry.
+    pub fn display_settings(&self) -> DisplaySettings {
+        DisplaySettings {
             viewport: ViewportSettings {
                 bg_color: self.viewport().bg_color,
                 square: self.square_viewport,
@@ -2245,6 +2273,14 @@ impl State {
                 group_marker_scale: self.group_marker_scale,
                 smooth_shading: self.smooth_shading,
             },
+        }
+    }
+
+    pub fn save_settings(&mut self) {
+        let display = self.display_settings();
+        let settings = DesignSettings {
+            viewport: display.viewport,
+            render: display.render,
             default_project: self.default_project_setting.clone(),
         };
         settings.save();
@@ -2255,6 +2291,79 @@ impl State {
     }
 
 
+
+    /// Put a project's display settings onto the live state: every field
+    /// `display_settings` reads, then the regeneration the dialog's apply
+    /// runs (the viewport meshes bake sizes and colours in), the layout for
+    /// the two pane-shaped ones, the menus' checkmarks, and state.kdl — so
+    /// the last-used look follows the project that was opened.
+    ///
+    /// Main window only, like the pane state: a detached window has no
+    /// viewport, and it reloads the sync channel on every write, so letting
+    /// it apply and persist would race the main window's own state.kdl.
+    pub(crate) fn apply_display_settings(&mut self, d: &DisplaySettings) {
+        if self.is_detached_network || self.detached_pane.is_some() {
+            return;
+        }
+        let (v, r) = (&d.viewport, &d.render);
+        {
+            let vp = self.viewport_mut();
+            vp.bg_color = v.bg_color;
+            vp.show_grid = v.show_grid_enabled;
+            vp.show_cube = v.show_cube_enabled;
+            vp.show_origin = v.show_origin_enabled;
+            vp.show_camera_pivot = v.show_camera_pivot_enabled;
+            vp.grid_color = v.grid_color;
+            vp.rt_mode = v.rt_mode;
+        }
+        self.grid_color = v.grid_color;
+        self.square_viewport = v.square;
+        self.camera_pivot_size = v.camera_pivot_size;
+        self.origin_size = v.origin_size;
+        self.grid_thickness = v.grid_thickness;
+        self.network_plate = v.network_plate;
+        self.circular_network_pane = self.is_detached_network || v.circular_pane;
+        self.show_point_markers = v.show_point_markers;
+        self.show_point_numbers = v.show_point_numbers;
+        self.show_point_normals = v.show_point_normals;
+        self.point_marker_size = v.point_marker_size;
+        self.point_marker_color = v.point_marker_color;
+        if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
+            self.world_unit = u;
+        }
+        self.wireframe = r.wireframe;
+        self.wire_single_color = r.wire_single_color;
+        self.wire_color = r.wire_color;
+        self.wire_width = r.wire_width;
+        self.geo_opacity = r.geo_opacity;
+        self.render_points = r.render_points;
+        self.point_size = r.point_size;
+        self.point_color = r.point_color;
+        self.group_marker_scale = r.group_marker_scale;
+        self.smooth_shading = r.smooth_shading;
+
+        // The checkmarks the guide and pane toggles keep in step by hand.
+        let (sg, sc, so, cp) = {
+            let vp = self.viewport();
+            (vp.show_grid, vp.show_cube, vp.show_origin, vp.show_camera_pivot)
+        };
+        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, sg);
+        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 1, sc);
+        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 2, so);
+        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 3, cp);
+        let cnp = self.circular_network_pane;
+        self.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, cnp);
+
+        self.update_grid_geometry();
+        self.update_origin_geometry();
+        self.update_pivot_geometry();
+        self.update_viewport_bg_geometry();
+        self.sync_grid_settings();
+        self.rebuild_positions();
+        self.apply_layout();
+        self.viewport_dirty = true;
+        self.save_settings();
+    }
 
     // The engine owns the renderer, so geometry changes stage CPU-side here
     // and flush to the GPU meshes in `stage_renderer`.
