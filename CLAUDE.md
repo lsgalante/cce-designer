@@ -1450,9 +1450,22 @@ ordinary fill is exact and cheaper, and the toggle says so on the status
 line rather than doing nothing silently. The fill then draws through cce-ui's
 `SceneDraw::see_through` pipeline (2026-09-25): no face culling, so a closed
 mesh shows its far wall, and no depth WRITES, so its near layers hide
-neither its far ones nor the wires — the wire pass needs no change, since
-nothing it tests against was written. The depth TEST stays on, so what is
-drawn before the fill (grid, points, markers) still occludes it.
+neither its far ones. The depth TEST stays on, so what is drawn before the
+fill (grid, points, markers) still occludes it.
+
+**The wires go BEFORE a see-through fill, and write depth.** Until
+2026-09-25 they drew after it as usual, reasoning that with nothing written
+nothing could hide them — which is exactly the bug: every far-side wire
+passed and painted OVER the near faces at full strength, so a translucent
+sphere read as if its back lattice sat in front of the camera-facing prims.
+The wire draw now carries `see_through` too, which selects cce-ui's
+depth-writing wire pipeline, and is submitted first; each fill layer then
+lands only where it is nearer than the wire under it. A far wire is dimmed
+by exactly the layers in front of it, a near wire by none (the fill's
+`wire_base_width` offset puts it ahead of its own face), for any mesh
+shape, convex or not. The one cost is with a translucent WIRE colour: the
+fill layers behind a wire are not drawn under it, so the wire blends over
+what is behind the whole mesh rather than over the far fill.
 Blending without depth writes is in submission order, so the stage pass
 re-sorts the fill's triangles FARTHEST FIRST from the eye
 (`geometry::sort_triangles_back_to_front`, centroid distance — painter's

@@ -9752,7 +9752,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         // With wires coming, the fill is pushed back by its
                         // slope-scaled offset so the lattice reads solid.
                         let base = if self.wireframe { self.wire_width } else { 0.0 };
-                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading, see_through });
+                        let mut fill = Some(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading, see_through });
+                        // A see-through fill writes no depth, so wires drawn
+                        // AFTER it pass everywhere and the far side's paint
+                        // over the near faces. Seen through, the wires go
+                        // FIRST and write depth instead: each fill layer then
+                        // lands only where it is nearer than the wire under
+                        // it, so a far wire is dimmed by the layers in front
+                        // of it and a near wire by none (the offset above
+                        // puts it ahead of its own face).
+                        if !see_through {
+                            draws.extend(fill.take());
+                        }
                         if self.wireframe {
                             // The wire pass rides ON TOP of the fill (never
                             // replaces it). Single-color mode replaces the
@@ -9771,8 +9782,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 [0.0, 0.0, 0.0, 0.0]
                             };
                             let wire_alpha = self.wire_color[3].clamp(0.0, 1.0);
-                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through: false });
+                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through });
                         }
+                        draws.extend(fill);
                         // Show Point Normals: thin cyan whiskers,
                         // width deliberately fixed (a chunky Wire Width is a
                         // wireframe styling choice, not a normals one).
