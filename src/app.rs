@@ -4464,7 +4464,8 @@ impl State {
     /// The viewport menu's rows and what each does, in groups a separator
     /// apart: framing; the WIREFRAME (its switch and thickness); the POINTS
     /// (the Show Points switch and point size, the Show Point Markers switch
-    /// and its size, the Show Point Numbers switch, group marker scale —
+    /// and its size, the Show Point Numbers and Show Point Normals
+    /// switches, group marker scale —
     /// each switch over its own size, where it has one);
     /// the SURFACE
     /// (flat or smooth shading as a radio pair, the polygon opacity, Show
@@ -4494,6 +4495,7 @@ impl State {
         row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_markers), label("toggle_point_markers", "Show Point Markers")), ViewportMenuAction::Command("toggle_point_markers"));
         row(&mut options, &mut actions, "Point Marker Size".into(), ViewportMenuAction::PointMarkerSizeSlider);
         row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_numbers), label("toggle_point_numbers", "Show Point Numbers")), ViewportMenuAction::Command("toggle_point_numbers"));
+        row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_normals), label("toggle_point_normals", "Show Point Normals")), ViewportMenuAction::Command("toggle_point_normals"));
         row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
 
         // Surface.

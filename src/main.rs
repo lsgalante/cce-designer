@@ -1666,6 +1666,7 @@ mod tests {
                 A::Command("toggle_point_markers"),
                 A::PointMarkerSizeSlider,
                 A::Command("toggle_point_numbers"),
+                A::Command("toggle_point_normals"),
                 A::GroupMarkerScaleSlider,
             ]
         );
@@ -1675,6 +1676,31 @@ mod tests {
         );
         assert_eq!(options.len(), actions.len());
         assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+    }
+
+    /// Show Point Normals is a switch in the Points group after the
+    /// numbers, marked from the live flag; the row runs the command, which
+    /// collects the whiskers with the scene.
+    #[test]
+    fn the_viewport_menu_toggles_show_point_normals() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.show_point_normals = false;
+        state.rebuild_scene_geometry();
+        let whiskers = state.overlay_normal_verts.len();
+        let row = |state: &State| {
+            let (options, actions) = state.viewport_menu_rows();
+            let i = actions.iter().position(|a| *a == A::Command("toggle_point_normals")).expect("a Show Point Normals row");
+            options[i].clone()
+        };
+        let label = crate::command::by_id("toggle_point_normals").unwrap().label;
+        assert_eq!(row(&state), format!("○ {label}"));
+        state.run_viewport_menu_action(A::Command("toggle_point_normals"));
+        assert!(state.show_point_normals);
+        assert_eq!(row(&state), format!("● {label}"));
+        assert!(state.overlay_normal_verts.len() > whiskers, "the whiskers were collected");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_normals, "persisted");
     }
 
     /// Show Point Numbers is a switch in the Points group after the
@@ -1905,7 +1931,7 @@ mod tests {
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::GroupMarkerScaleSlider).expect("a Group Marker Scale row");
-        assert_eq!(state.viewport_menu_actions[i - 1], A::Command("toggle_point_numbers"));
+        assert_eq!(state.viewport_menu_actions[i - 1], A::Command("toggle_point_normals"));
         let sl = context_menu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.5, 4.0, 0.05, "x"));
         assert_eq!(sl.readout(), "1.25x");
