@@ -4461,42 +4461,41 @@ impl State {
         true
     }
 
-    /// The viewport menu's rows and what each does: framing, then the
-    /// DISPLAY MODE — the wireframe switch and its thickness slider, the
-    /// point size, point marker size and group marker scale sliders, flat or
-    /// smooth shading as a radio pair, the polygon opacity slider and Show
-    /// Occluded — then the editor pin. Split from the open so a test can
-    /// read it. Marks are the ●/○ the pin rows and the network menu use.
+    /// The viewport menu's rows and what each does, in groups a separator
+    /// apart: framing; the WIREFRAME (its switch and thickness); the POINTS
+    /// (point size, point marker size, group marker scale); the SURFACE
+    /// (flat or smooth shading as a radio pair, the polygon opacity, Show
+    /// Occluded — the three that decide how the fill itself reads); then
+    /// the editor pin. Split from the open so a test can read it. Marks are
+    /// the ●/○ the pin rows and the network menu use.
     pub(crate) fn viewport_menu_rows(&self) -> (Vec<String>, Vec<ViewportMenuAction>) {
         let mut options = vec!["Frame All".to_string(), "View 1:1".to_string()];
         let mut actions = vec![ViewportMenuAction::FrameAll, ViewportMenuAction::OneToOne];
         let mark = |on: bool| if on { "●" } else { "○" };
+        let label = |id: &str, fallback: &'static str| crate::command::by_id(id).map(|c| c.label).unwrap_or(fallback);
+        let row = |options: &mut Vec<String>, actions: &mut Vec<ViewportMenuAction>, text: String, a: ViewportMenuAction| {
+            options.push(text);
+            actions.push(a);
+        };
+        let sep = ViewportMenuAction::Separator;
 
-        options.push("-".to_string());
-        actions.push(ViewportMenuAction::Separator);
-        let wire_label = crate::command::by_id("toggle_wireframe").map(|c| c.label).unwrap_or("Show Wireframe");
-        options.push(format!("{} {wire_label}", mark(self.wireframe)));
-        actions.push(ViewportMenuAction::Command("toggle_wireframe"));
-        options.push("Wire Thickness".to_string());
-        actions.push(ViewportMenuAction::WireThicknessSlider);
-        options.push("Point Size".to_string());
-        actions.push(ViewportMenuAction::PointSizeSlider);
-        options.push("Point Marker Size".to_string());
-        actions.push(ViewportMenuAction::PointMarkerSizeSlider);
-        options.push("Group Marker Scale".to_string());
-        actions.push(ViewportMenuAction::GroupMarkerScaleSlider);
-        options.push(format!("{} Flat Shading", mark(!self.smooth_shading)));
-        actions.push(ViewportMenuAction::Shading(false));
-        options.push(format!("{} Smooth Shading", mark(self.smooth_shading)));
-        actions.push(ViewportMenuAction::Shading(true));
+        // Wireframe.
+        row(&mut options, &mut actions, "-".into(), sep);
+        row(&mut options, &mut actions, format!("{} {}", mark(self.wireframe), label("toggle_wireframe", "Show Wireframe")), ViewportMenuAction::Command("toggle_wireframe"));
+        row(&mut options, &mut actions, "Wire Thickness".into(), ViewportMenuAction::WireThicknessSlider);
 
-        options.push("-".to_string());
-        actions.push(ViewportMenuAction::Separator);
-        options.push("Opacity".to_string());
-        actions.push(ViewportMenuAction::OpacitySlider);
-        let occluded_label = crate::command::by_id("toggle_show_occluded").map(|c| c.label).unwrap_or("Show Occluded");
-        options.push(format!("{} {occluded_label}", mark(self.show_occluded)));
-        actions.push(ViewportMenuAction::Command("toggle_show_occluded"));
+        // Points.
+        row(&mut options, &mut actions, "-".into(), sep);
+        row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
+        row(&mut options, &mut actions, "Point Marker Size".into(), ViewportMenuAction::PointMarkerSizeSlider);
+        row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
+
+        // Surface.
+        row(&mut options, &mut actions, "-".into(), sep);
+        row(&mut options, &mut actions, format!("{} Flat Shading", mark(!self.smooth_shading)), ViewportMenuAction::Shading(false));
+        row(&mut options, &mut actions, format!("{} Smooth Shading", mark(self.smooth_shading)), ViewportMenuAction::Shading(true));
+        row(&mut options, &mut actions, "Opacity".into(), ViewportMenuAction::OpacitySlider);
+        row(&mut options, &mut actions, format!("{} {}", mark(self.show_occluded), label("toggle_show_occluded", "Show Occluded")), ViewportMenuAction::Command("toggle_show_occluded"));
 
         // The viewport's editor binding, as a radio group: follow the active
         // editor, or pin to one. Pin rows appear only while a second editor

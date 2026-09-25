@@ -1644,6 +1644,29 @@ mod tests {
         context_menu::hide();
     }
 
+    /// The viewport menu reads in groups a separator apart: framing, then
+    /// the wireframe, the points, and the surface (shading, opacity, Show
+    /// Occluded) — every display row in exactly one group.
+    #[test]
+    fn the_viewport_menu_groups_its_display_rows() {
+        use crate::app::ViewportMenuAction as A;
+        let state = State::new(false);
+        let (options, actions) = state.viewport_menu_rows();
+        let groups: Vec<Vec<A>> = actions
+            .split(|a| *a == A::Separator)
+            .map(|g| g.to_vec())
+            .collect();
+        assert_eq!(groups[0], vec![A::FrameAll, A::OneToOne]);
+        assert_eq!(groups[1], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
+        assert_eq!(groups[2], vec![A::PointSizeSlider, A::PointMarkerSizeSlider, A::GroupMarkerScaleSlider]);
+        assert_eq!(
+            groups[3],
+            vec![A::Shading(false), A::Shading(true), A::OpacitySlider, A::Command("toggle_show_occluded")]
+        );
+        assert_eq!(options.len(), actions.len());
+        assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+    }
+
     /// Wire Thickness is a slider row right under Show Wireframe, over the
     /// palette row's 1–8 px: the wheel steps half a pixel and saves, a press
     /// on the band jumps, and the value is the live `wire_width` the wire
