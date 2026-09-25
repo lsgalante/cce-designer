@@ -1684,6 +1684,55 @@ mod tests {
         context_menu::hide();
     }
 
+    /// Point Size is a viewport-menu slider over the palette row's 0–0.1,
+    /// and it re-sizes what it feeds without re-evaluating anything: the
+    /// Selected-Group markers are rebuilt from their KEPT members at Point
+    /// Size x Group Marker Scale on every step.
+    #[test]
+    fn the_viewport_menu_sets_the_point_size_and_resizes_the_group_markers() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.point_size = 0.02;
+        state.group_marker_scale = 2.0;
+        let centre = [0.3f32, 0.4, 0.5];
+        state.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
+        state.rebuild_group_marker_verts();
+        let radius = |state: &State| {
+            state.group_point_verts.iter().map(|v| {
+                let d = [v.position[0] - centre[0], v.position[1] - centre[1], v.position[2] - centre[2]];
+                (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+            }).fold(0.0f32, f32::max)
+        };
+        assert!((radius(&state) - 0.04).abs() < 1e-4, "{}", radius(&state));
+
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let i = state.viewport_menu_actions.iter().position(|a| *a == A::PointSizeSlider).expect("a Point Size row");
+        let sl = context_menu::slider(i).expect("a slider");
+        assert_eq!((sl.min, sl.max, sl.step, sl.decimals), (0.0, 0.1, 0.005, 3));
+        assert!((sl.value - 0.02).abs() < 1e-6);
+
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
+        assert!((state.point_size - 0.03).abs() < 1e-5, "{}", state.point_size);
+        assert!((radius(&state) - 0.06).abs() < 1e-4, "the markers re-sized: {}", radius(&state));
+        assert!(state.group_points_dirty, "and will re-upload");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        let saved = crate::app::DesignSettings::from_kdl_str(&kdl).render.point_size;
+        assert!((saved - 0.03).abs() < 1e-6, "persisted: {saved}");
+
+        // A size change arriving another way (the palette's Group Marker
+        // Scale) re-sizes too, through sync_nodes' size check.
+        context_menu::hide();
+        state.group_marker_scale = 1.0;
+        state.sync_nodes();
+        assert!((radius(&state) - 0.03).abs() < 1e-4, "{}", radius(&state));
+    }
+
     /// The dialog plate carries its own backdrop compression, above a
     /// menu's: whatever the plates' own is (0 in a config that keeps the
     /// panes clear), the modal pulls its backdrop toward the tint, and a

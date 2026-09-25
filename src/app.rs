@@ -454,6 +454,9 @@ pub enum ViewportMenuAction {
     /// The wire pass's thickness in px, a slider row under Show Wireframe:
     /// 1–8 like the palette's Wire Thickness row, half a pixel a notch.
     WireThicknessSlider,
+    /// Point Size in world units, the Render points' radius and (times
+    /// Group Marker Scale) the group markers': 0–0.1 like the palette's row.
+    PointSizeSlider,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -2075,12 +2078,19 @@ pub struct State {
     /// Selected-Group membership markers: marker vertices staged CPU-side by
     /// `sync_nodes` whenever the selection is a Group node (empty otherwise),
     /// flushed to `meshes.group_points`; `group_point_vertex_count` gates the
-    /// draw. The key — (node id, params, geometry version, quantized point
-    /// size) — spares the re-evaluation on unrelated `sync_nodes` runs.
+    /// draw. The key — (node id, params, geometry version) — spares the
+    /// re-evaluation on unrelated `sync_nodes` runs.
     pub group_point_verts: Vec<Vertex3D>,
     pub group_points_dirty: bool,
     pub group_point_vertex_count: u32,
-    pub last_group_points_key: Option<(String, Vec<(String, String)>, u64, i32)>,
+    pub last_group_points_key: Option<(String, Vec<(String, String)>, u64)>,
+    /// The selected Group's member positions, kept from the evaluation so
+    /// the markers can be re-SIZED without re-evaluating the node — a point
+    /// size or marker scale change (the viewport menu's slider, per motion
+    /// of a drag) only rebuilds the spheres (`rebuild_group_marker_verts`).
+    pub group_members: Vec<Vertex3D>,
+    /// The marker radius `group_point_verts` was built at.
+    pub last_group_marker_size: f32,
     /// The point overlays on the visible scene, rebuilt with it: marker
     /// geometry for Show Point Markers, and (position, vertex index) labels
     /// for Show Point Numbers — the labels project through `last_scene_mvp`
@@ -4350,17 +4360,35 @@ impl State {
                 decimals: 1,
                 suffix: " px",
             },
+            // World units, so no suffix — the World Unit declaration is what
+            // names them, and a readout saying "mm" under a cm declaration
+            // would be wrong.
+            ViewportMenuAction::PointSizeSlider => MenuSlider {
+                value: self.point_size.clamp(0.0, 0.1),
+                min: 0.0,
+                max: 0.1,
+                step: 0.005,
+                decimals: 3,
+                suffix: "",
+            },
             _ => return None,
         })
     }
 
-    /// Write a slider row's value onto the live field. Both are draw-time
-    /// values — a uniform, a line width and the fill's matching depth bias —
-    /// so a redraw is all either needs.
+    /// Write a slider row's value onto the live field, and redo only what
+    /// that value feeds. Opacity and wire thickness are draw-time values (a
+    /// uniform, a line width and the fill's matching depth bias). Point
+    /// size is baked into two meshes: the Render points re-bake in the stage
+    /// pass off their own size key, and the group markers are re-sized here
+    /// from their kept members — neither re-evaluates the graph.
     fn land_viewport_menu_slider(&mut self, action: ViewportMenuAction, v: f32) {
         match action {
             ViewportMenuAction::OpacitySlider => self.geo_opacity = (v / 100.0).clamp(0.0, 1.0),
             ViewportMenuAction::WireThicknessSlider => self.wire_width = v.clamp(1.0, 8.0),
+            ViewportMenuAction::PointSizeSlider => {
+                self.point_size = v.clamp(0.0, 0.1);
+                self.rebuild_group_marker_verts();
+            }
             _ => return,
         }
         self.viewport_dirty = true;
@@ -4391,7 +4419,8 @@ impl State {
     }
 
     /// The viewport menu's rows and what each does: framing, then the
-    /// DISPLAY MODE — the wireframe switch and its thickness slider, flat or
+    /// DISPLAY MODE — the wireframe switch and its thickness slider, the
+    /// point size slider, flat or
     /// smooth shading as a radio pair, the polygon opacity slider and Show
     /// Occluded — then the editor pin. Split from the open so a test can
     /// read it. Marks are the ●/○ the pin rows and the network menu use.
@@ -4407,6 +4436,8 @@ impl State {
         actions.push(ViewportMenuAction::Command("toggle_wireframe"));
         options.push("Wire Thickness".to_string());
         actions.push(ViewportMenuAction::WireThicknessSlider);
+        options.push("Point Size".to_string());
+        actions.push(ViewportMenuAction::PointSizeSlider);
         options.push(format!("{} Flat Shading", mark(!self.smooth_shading)));
         actions.push(ViewportMenuAction::Shading(false));
         options.push(format!("{} Smooth Shading", mark(self.smooth_shading)));
@@ -4469,7 +4500,9 @@ impl State {
                 }
             }
             // The slider row is worked, not picked.
-            ViewportMenuAction::OpacitySlider | ViewportMenuAction::WireThicknessSlider => {}
+            ViewportMenuAction::OpacitySlider
+            | ViewportMenuAction::WireThicknessSlider
+            | ViewportMenuAction::PointSizeSlider => {}
             ViewportMenuAction::Separator => {}
         }
     }
@@ -5035,12 +5068,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 n.id.clone(),
                 n.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>(),
                 self.rt_geometry_version,
-                (self.point_size * self.group_marker_scale * 1000.0).round() as i32,
             )
         });
         let mut group_update = None;
         if group_key != self.last_group_points_key {
-            let mut marker_verts = Vec::new();
+            let mut member_verts = Vec::new();
             if let Some(node) = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")) {
                 let group_name = node_param_str(node, "Group Name", "group1");
                 let mut visited = Vec::new();
@@ -5049,19 +5081,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let mut sim_cache = crate::geometry::SimCache::default();
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
                 if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
-                    let members = crate::geometry::group_member_positions(&geom, &group_name);
-                    // The Highlight bake's warm accent, so the markers and the
-                    // tint read as one feature. Larger than the Render node's
-                    // points by Group Marker Scale so both stay legible
-                    // together.
-                    marker_verts = crate::geometry::points_vertices(
-                        &members,
-                        self.point_size * self.group_marker_scale,
-                        cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]),
-                    );
+                    member_verts = crate::geometry::group_member_positions(&geom, &group_name);
                 }
             }
-            group_update = Some(marker_verts);
+            group_update = Some(member_verts);
         }
 
         if let Some((headers, rows)) = spreadsheet_update {
@@ -5069,11 +5092,37 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.last_spreadsheet_node_name = current_name;
             self.last_spreadsheet_node_params = current_params;
         }
-        if let Some(marker_verts) = group_update {
-            self.group_point_verts = marker_verts;
-            self.group_points_dirty = true;
+        if let Some(members) = group_update {
+            self.group_members = members;
             self.last_group_points_key = group_key;
+            self.rebuild_group_marker_verts();
+        } else if (self.group_marker_size() - self.last_group_marker_size).abs() > f32::EPSILON {
+            // Same members, new size (the palette's Point Size or Group
+            // Marker Scale): re-size without re-evaluating.
+            self.rebuild_group_marker_verts();
         }
+    }
+
+    /// The Selected-Group markers' radius: Point Size times Group Marker
+    /// Scale, larger than the Render node's points so both stay legible
+    /// together.
+    pub fn group_marker_size(&self) -> f32 {
+        self.point_size * self.group_marker_scale
+    }
+
+    /// Build the Selected-Group marker spheres from the kept members at the
+    /// current size — the cheap half of the markers, with no evaluation, so
+    /// a size change can run it on every motion of a drag. The Highlight
+    /// bake's warm accent, so the markers and the tint read as one feature.
+    pub(crate) fn rebuild_group_marker_verts(&mut self) {
+        let size = self.group_marker_size();
+        self.group_point_verts = crate::geometry::points_vertices(
+            &self.group_members,
+            size,
+            cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]),
+        );
+        self.group_points_dirty = true;
+        self.last_group_marker_size = size;
     }
 
 
@@ -5487,6 +5536,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             group_points_dirty: false,
             group_point_vertex_count: 0,
             last_group_points_key: None,
+            group_members: Vec::new(),
+            last_group_marker_size: 0.0,
             overlay_marker_verts: Vec::new(),
             overlay_dirty: false,
             overlay_point_count: 0,

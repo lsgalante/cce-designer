@@ -1380,7 +1380,9 @@ The viewport's right-click menu carries the DISPLAY MODE under Frame All
 and View 1:1: the Show Wireframe switch (its registry command), **Flat
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
 a **Wire Thickness** slider under the wireframe switch (1–8 px by
-half a pixel, the palette row's range), and the polygon **Opacity** as a
+half a pixel, the palette row's range), a **Point Size** slider (0–0.1
+world units by 0.005, no suffix since the World Unit names them), and the
+polygon **Opacity** as a
 SLIDER row — cce-ui's `context_menu::MenuSlider` (2026-09-25), set on the
 shown menu by `open_viewport_context_menu`. `viewport_menu_slider` is the
 one table of the menu's sliders (read from the live value) and
@@ -1393,9 +1395,16 @@ in `handle_viewport_menu_click`, `slider_dragging` in CursorMoved (after
 `cursor_moved`, which moves the held value), `slider_release` at the top of
 MouseInput, and `mouse_wheel` at the top of MouseWheel — where a wheel
 anywhere over the open menu is swallowed rather than orbiting the scene.
-`drain_viewport_menu_slider` lands a change by setting `geo_opacity`
-directly: opacity is a draw-time uniform, and `apply_setting`'s regenerate
-pass would re-evaluate the graph per pixel of drag. `viewport_menu_rows`
+`drain_viewport_menu_slider` lands a change through
+`land_viewport_menu_slider`, which sets the live field and redoes only what
+it feeds: opacity and wire thickness are draw-time, and point size re-bakes
+the Render points (the stage pass's size key) and the Selected-Group
+markers — re-sized from `State::group_members`, the positions `sync_nodes`
+keeps from its evaluation, by `rebuild_group_marker_verts`. None of it
+re-evaluates the graph, which `apply_setting`'s regenerate pass would do per
+pixel of drag. `sync_nodes` also re-sizes the markers when only the size
+moved (`last_group_marker_size`), so the palette's Point Size and Group
+Marker Scale rows reach them the same way. `viewport_menu_rows`
 and `run_viewport_menu_action` are split from the open and the click so a
 test reads and runs the rows.
 
