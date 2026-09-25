@@ -339,8 +339,15 @@ fn main() {
     let pw = (app.logical_size.0 as f64 * app.scale) as u32;
     let ph = (app.logical_size.1 as f64 * app.scale) as u32;
     let radius = cce_ui::color::root_plate_corner_radius() * app.scale as f32;
-    app.renderer =
-        Some(unsafe { VkRenderer::new(display_ptr, surface_ptr, pw, ph, radius) });
+    // A lost surface is the compositor going away under the test, not a
+    // renderer fault: say so and fail, rather than panic.
+    match unsafe { VkRenderer::try_new(display_ptr, surface_ptr, pw, ph, radius) } {
+        Ok(r) => app.renderer = Some(r),
+        Err(lost) => {
+            log::error!("vk-smoke: {lost}");
+            std::process::exit(1);
+        }
+    }
     log::info!("vk-smoke: renderer up at {pw}x{ph} (scale {})", app.scale);
 
     // 3D meshes for the viewport scene.
