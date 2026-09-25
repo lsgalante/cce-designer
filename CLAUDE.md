@@ -1384,7 +1384,7 @@ menubar addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto
 another's action, while old files carrying `show_cube_enabled` still load),
 the
 scene furniture that is not the geometry); wireframe (switch,
-thickness); points (Show Points, Point Size, and Group Marker Scale, which
+thickness, opacity); points (Show Points, Point Size, and Group Marker Scale, which
 multiplies it); overlays (Show Point Markers and its size, Show Point
 Numbers, Show Point Normals — the annotations over the scene's points);
 surface (shading, opacity, Show Occluded).
@@ -1392,7 +1392,11 @@ surface (shading, opacity, Show Occluded).
 order. The rows: the Show Wireframe switch (its registry command), **Flat
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
 a **Wire Thickness** slider under the wireframe switch (1–8 px by
-half a pixel, the palette row's range), a **Point Size** slider (0–0.1
+half a pixel, the palette row's range), a **Wire Opacity** slider under
+that (percent by 5, `State::wire_opacity` — the wires' own, apart from the
+polygons' Opacity; until 2026-09-25 it was the Wire Color's ALPHA, and
+`StoredRenderSettings` moves an old alpha, from state.kdl's `#rrggbbaa` or
+a project's four-component array, into it on load), a **Point Size** slider (0–0.1
 world units by 0.005, no suffix since the World Unit names them), a
 **Point Marker Size** slider (the palette row's 0.005–0.1), a **Group
 Marker Scale** slider (0.5–4 by 0.05, read "1.25x"), and the
@@ -1650,7 +1654,7 @@ selection stays where it was:
 - `Choice` — a fixed set (World Unit). The current option reads in the
   chord column between two arrows; Enter or a click steps to the next,
   Left/Right either way.
-- `Color` — a hex colour, with or without alpha. Behind each colour row the
+- `Color` — a hex colour. Behind each colour row the
   dialog keeps one toolkit `ColorSelector` (`Dialog::colors`, by row id,
   kept across re-rankings so a query that drops the row does not kill its
   picker): a real widget, not a stamp, because it carries state — a hex

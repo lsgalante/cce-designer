@@ -463,6 +463,10 @@ pub enum ViewportMenuAction {
     /// The wire pass's thickness in px, a slider row under Show Wireframe:
     /// 1–8 like the palette's Wire Thickness row, half a pixel a notch.
     WireThicknessSlider,
+    /// The wire pass's own opacity, in percent like the polygon Opacity row
+    /// and stepped the same 5%: the two are independent, so a translucent
+    /// fill can carry a solid lattice and the other way round.
+    WireOpacitySlider,
     /// Point Size in world units, the Render points' radius and (times
     /// Group Marker Scale) the group markers': 0–0.1 like the palette's row.
     PointSizeSlider,
@@ -1192,49 +1196,102 @@ fn default_world_unit() -> String {
 /// guides, so they persist here, and the dialog's Settings half is where
 /// they are edited.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(from = "StoredRenderSettings")]
 pub struct RenderSettings {
-    #[serde(default)]
     pub wireframe: bool,
-    #[serde(default)]
     pub wire_single_color: bool,
-    /// RGBA: the alpha is the wireframe's OWN opacity, in both colour modes
-    /// (the geometry Opacity below is polygons-only).
-    #[serde(default = "default_wire_color")]
-    pub wire_color: [f32; 4],
-    #[serde(default = "default_wire_width")]
+    /// RGB; used in single-colour mode only.
+    pub wire_color: [f32; 3],
+    /// The wire pass's own opacity, in both colour modes — `geo_opacity` is
+    /// the polygons'. Until 2026-09-25 it was the wire colour's ALPHA, which
+    /// made it a setting reachable only through a colour picker's alpha
+    /// channel; [`StoredRenderSettings`] moves an old alpha here.
+    pub wire_opacity: f32,
     pub wire_width: f32,
-    #[serde(default = "default_geo_opacity")]
     pub geo_opacity: f32,
-    #[serde(default)]
     pub render_points: bool,
-    #[serde(default = "default_point_size")]
     pub point_size: f32,
-    #[serde(default = "default_point_color")]
     pub point_color: [f32; 3],
     /// The Selected-Group markers' radius as a multiple of `point_size` —
     /// they draw on the same vertices as the Render points, so the ratio is
     /// what keeps both legible. Hard-coded at 1.25 until 2026-09-24.
-    #[serde(default = "default_group_marker_scale")]
     pub group_marker_scale: f32,
     /// Smooth (vertex-normal) shading of the scene fill, where off is the
     /// faceted look the raster pass has always had. Absent in older files:
     /// flat.
-    #[serde(default)]
     pub smooth_shading: bool,
     /// See-through fill: below full opacity the fill draws with no culling
     /// and no depth writes, triangles sorted back to front for the eye, so
     /// what it occludes — its own far side, the wires, the scene behind —
     /// shows through. Absent in older files: off.
-    #[serde(default)]
     pub show_occluded: bool,
+}
+
+/// [`RenderSettings`] as READ, from state.kdl and from a project's display
+/// block alike: every field optional in the file, and the wire colour taken
+/// with three components or four. A fourth is the wire opacity as it was
+/// stored before `wire_opacity` existed, and becomes it when the file names
+/// no `wire_opacity` of its own — dropping it would make every translucent
+/// wireframe opaque on the first load.
+#[derive(Deserialize)]
+struct StoredRenderSettings {
+    #[serde(default)]
+    wireframe: bool,
+    #[serde(default)]
+    wire_single_color: bool,
+    #[serde(default)]
+    wire_color: Option<Vec<f32>>,
+    #[serde(default)]
+    wire_opacity: Option<f32>,
+    #[serde(default = "default_wire_width")]
+    wire_width: f32,
+    #[serde(default = "default_geo_opacity")]
+    geo_opacity: f32,
+    #[serde(default)]
+    render_points: bool,
+    #[serde(default = "default_point_size")]
+    point_size: f32,
+    #[serde(default = "default_point_color")]
+    point_color: [f32; 3],
+    #[serde(default = "default_group_marker_scale")]
+    group_marker_scale: f32,
+    #[serde(default)]
+    smooth_shading: bool,
+    #[serde(default)]
+    show_occluded: bool,
+}
+
+impl From<StoredRenderSettings> for RenderSettings {
+    fn from(s: StoredRenderSettings) -> Self {
+        let c = s.wire_color.unwrap_or_default();
+        let (wire_color, old_alpha) = match c[..] {
+            [r, g, b] => ([r, g, b], None),
+            [r, g, b, a, ..] => ([r, g, b], Some(a)),
+            _ => (default_wire_color(), None),
+        };
+        Self {
+            wireframe: s.wireframe,
+            wire_single_color: s.wire_single_color,
+            wire_color,
+            wire_opacity: s.wire_opacity.or(old_alpha).unwrap_or(1.0).clamp(0.0, 1.0),
+            wire_width: s.wire_width,
+            geo_opacity: s.geo_opacity,
+            render_points: s.render_points,
+            point_size: s.point_size,
+            point_color: s.point_color,
+            group_marker_scale: s.group_marker_scale,
+            smooth_shading: s.smooth_shading,
+            show_occluded: s.show_occluded,
+        }
+    }
 }
 
 fn default_group_marker_scale() -> f32 {
     1.25
 }
 
-fn default_wire_color() -> [f32; 4] {
-    [0.0, 0.0, 0.0, 1.0]
+fn default_wire_color() -> [f32; 3] {
+    [0.0, 0.0, 0.0]
 }
 
 fn default_wire_width() -> f32 {
@@ -1259,6 +1316,7 @@ impl Default for RenderSettings {
             wireframe: false,
             wire_single_color: false,
             wire_color: default_wire_color(),
+            wire_opacity: 1.0,
             wire_width: default_wire_width(),
             geo_opacity: default_geo_opacity(),
             render_points: false,
@@ -1392,11 +1450,6 @@ fn hex_to_float_array(hex: &str) -> Option<[f32; 3]> {
     cce_ui::color::parse_hex_rgb(hex)
 }
 
-fn float_array_to_hex4(rgba: &[f32; 4]) -> String {
-    let c = |v: f32| (v * 255.0).clamp(0.0, 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}{:02x}", c(rgba[0]), c(rgba[1]), c(rgba[2]), c(rgba[3]))
-}
-
 fn hex_to_float_array4(hex: &str) -> Option<[f32; 4]> {
     let h = hex.trim_start_matches('#');
     if h.len() == 8 {
@@ -1481,11 +1534,16 @@ impl DesignSettings {
         Some(Self::from_kdl_str(&content))
     }
 
-    /// Every colour field, as `(block, field, components)`. KDL carries them
-    /// as hex strings — `#rrggbb`, or `#rrggbbaa` for the four-component wire
-    /// colour — so both directions walk this one table. It was a hand-written
-    /// pair of `if let`s per colour, which is why only two of the five were
-    /// ever converted once the render block arrived.
+    /// Every colour field, as `(block, field, components read)`. KDL carries
+    /// them as `#rrggbb` hex strings, so both directions walk this one table.
+    /// It was a hand-written pair of `if let`s per colour, which is why only
+    /// two of the five were ever converted once the render block arrived.
+    ///
+    /// Every colour is WRITTEN as three components. The wire colour is READ
+    /// as four, because until 2026-09-25 it was `#rrggbbaa` with the alpha
+    /// as the wire opacity; `StoredRenderSettings` moves that alpha into
+    /// `wire_opacity`, which a six-digit hex (alpha 1) never overrides since
+    /// the file then names `wire_opacity` itself.
     const COLOR_FIELDS: &'static [(&'static str, &'static str, usize)] = &[
         ("viewport", "bg_color", 3),
         ("viewport", "grid_color", 3),
@@ -1551,15 +1609,10 @@ impl DesignSettings {
     pub(crate) fn to_kdl_str(&self) -> Option<String> {
         if let Ok(mut json_val) = serde_json::to_value(self) {
             if let Some(obj) = json_val.as_object_mut() {
-                for &(block, field, n) in Self::COLOR_FIELDS {
+                for &(block, field, _) in Self::COLOR_FIELDS {
                     let Some(b) = obj.get_mut(block).and_then(|v| v.as_object_mut()) else { continue };
                     let Some(val) = b.get(field).cloned() else { continue };
-                    let hex = if n == 4 {
-                        serde_json::from_value::<[f32; 4]>(val).ok().map(|a| float_array_to_hex4(&a))
-                    } else {
-                        serde_json::from_value::<[f32; 3]>(val).ok().map(|a| float_array_to_hex(&a))
-                    };
-                    if let Some(hex) = hex {
+                    if let Some(hex) = serde_json::from_value::<[f32; 3]>(val).ok().map(|a| float_array_to_hex(&a)) {
                         b.insert(field.to_string(), serde_json::Value::String(hex));
                     }
                 }
@@ -2040,16 +2093,16 @@ pub struct State {
     /// they carry the geometry's vertex colors unlit — brighter than the lit
     /// fill beneath, which is what separates them.
     pub wire_single_color: bool,
-    /// RGBA: the alpha channel is the wireframe's OWN opacity in both color
-    /// modes — the geometry Opacity slider affects only the polygons.
-    pub wire_color: [f32; 4],
+    /// RGB, used in single-colour mode only.
+    pub wire_color: [f32; 3],
+    /// The wire pass's opacity ("Wire Opacity"), in both colour modes — the
+    /// geometry Opacity slider affects only the polygons.
+    pub wire_opacity: f32,
     /// Wire line width in framebuffer pixels ("Wire Thickness" slider).
     pub wire_width: f32,
     pub last_viewport_wire_single_color: bool,
-    pub last_viewport_wire_color: [f32; 4],
-    /// The wire colour as last read off the Render node — so a CHANGE to
-    /// it can be told from a load. `None` until the first read.
-    pub last_applied_wire_color: Option<[f32; 4]>,
+    pub last_viewport_wire_color: [f32; 3],
+    pub last_viewport_wire_opacity: f32,
     pub last_viewport_wire_width: f32,
     /// Opacity of the rendered node geometry (the Render node's "Opacity"
     /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
@@ -2321,6 +2374,7 @@ impl State {
                 wireframe: self.wireframe,
                 wire_single_color: self.wire_single_color,
                 wire_color: self.wire_color,
+                wire_opacity: self.wire_opacity,
                 wire_width: self.wire_width,
                 geo_opacity: self.geo_opacity,
                 render_points: self.render_points,
@@ -2390,6 +2444,7 @@ impl State {
         self.wireframe = r.wireframe;
         self.wire_single_color = r.wire_single_color;
         self.wire_color = r.wire_color;
+        self.wire_opacity = r.wire_opacity;
         self.wire_width = r.wire_width;
         self.geo_opacity = r.geo_opacity;
         self.render_points = r.render_points;
@@ -4365,7 +4420,7 @@ impl State {
     /// `land_viewport_menu_slider` writes each back, so a slider row is
     /// added in those two matches and the row list.
     ///
-    /// Opacity reads in percent, stepped by 5; Wire Thickness in px over the
+    /// Both opacities read in percent, stepped by 5; Wire Thickness in px over the
     /// palette row's own 1–8, by half a pixel. The palette rows are the fine
     /// controls.
     pub(crate) fn viewport_menu_slider(&self, action: ViewportMenuAction) -> Option<cce_ui::widget::context_menu::MenuSlider> {
@@ -4373,6 +4428,14 @@ impl State {
         Some(match action {
             ViewportMenuAction::OpacitySlider => MenuSlider {
                 value: (self.geo_opacity.clamp(0.0, 1.0) * 100.0).round(),
+                min: 0.0,
+                max: 100.0,
+                step: 5.0,
+                decimals: 0,
+                suffix: "%",
+            },
+            ViewportMenuAction::WireOpacitySlider => MenuSlider {
+                value: (self.wire_opacity.clamp(0.0, 1.0) * 100.0).round(),
                 min: 0.0,
                 max: 100.0,
                 step: 5.0,
@@ -4424,7 +4487,7 @@ impl State {
     }
 
     /// Write a slider row's value onto the live field, and redo only what
-    /// that value feeds. Opacity and wire thickness are draw-time values (a
+    /// that value feeds. The opacities and wire thickness are draw-time values (a
     /// uniform, a line width and the fill's matching depth bias). Point
     /// size is baked into two meshes: the Render points re-bake in the stage
     /// pass off their own size key, and the group markers are re-sized here
@@ -4435,6 +4498,7 @@ impl State {
         match action {
             ViewportMenuAction::OpacitySlider => self.geo_opacity = (v / 100.0).clamp(0.0, 1.0),
             ViewportMenuAction::WireThicknessSlider => self.wire_width = v.clamp(1.0, 8.0),
+            ViewportMenuAction::WireOpacitySlider => self.wire_opacity = (v / 100.0).clamp(0.0, 1.0),
             ViewportMenuAction::PointSizeSlider => {
                 self.point_size = v.clamp(0.0, 0.1);
                 self.rebuild_group_marker_verts();
@@ -4478,7 +4542,8 @@ impl State {
 
     /// The viewport menu's rows and what each does, in groups a separator
     /// apart: framing; the GUIDES (Show Grid, Show Origin — the scene
-    /// furniture that is not the geometry); the WIREFRAME (its switch and thickness); the
+    /// furniture that is not the geometry); the WIREFRAME (its switch,
+    /// thickness and opacity); the
     /// POINTS
     /// (the Show Points switch, point size, and the group marker scale that
     /// multiplies it); the OVERLAYS (Show Point Markers and its size, Show
@@ -4508,6 +4573,7 @@ impl State {
         row(&mut options, &mut actions, "-".into(), sep);
         row(&mut options, &mut actions, format!("{} {}", mark(self.wireframe), label("toggle_wireframe", "Show Wireframe")), ViewportMenuAction::Command("toggle_wireframe"));
         row(&mut options, &mut actions, "Wire Thickness".into(), ViewportMenuAction::WireThicknessSlider);
+        row(&mut options, &mut actions, "Wire Opacity".into(), ViewportMenuAction::WireOpacitySlider);
 
         // Points: the Render points, and the group markers sized off them.
         row(&mut options, &mut actions, "-".into(), sep);
@@ -4580,6 +4646,7 @@ impl State {
             // The slider row is worked, not picked.
             ViewportMenuAction::OpacitySlider
             | ViewportMenuAction::WireThicknessSlider
+            | ViewportMenuAction::WireOpacitySlider
             | ViewportMenuAction::PointSizeSlider
             | ViewportMenuAction::PointMarkerSizeSlider
             | ViewportMenuAction::GroupMarkerScaleSlider => {}
@@ -5603,10 +5670,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             last_viewport_wireframe: false,
             wire_single_color: settings.render.wire_single_color,
             wire_color: settings.render.wire_color,
+            wire_opacity: settings.render.wire_opacity,
             wire_width: settings.render.wire_width,
             last_viewport_wire_single_color: false,
-            last_viewport_wire_color: [1.0, 1.0, 1.0, 1.0],
-            last_applied_wire_color: None,
+            last_viewport_wire_color: [1.0, 1.0, 1.0],
+            last_viewport_wire_opacity: 1.0,
             last_viewport_wire_width: 1.0,
             geo_opacity: settings.render.geo_opacity,
             last_viewport_geo_opacity: 1.0,
@@ -9681,6 +9749,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     || self.last_viewport_geo_opacity != self.geo_opacity
                     || self.last_viewport_wire_single_color != self.wire_single_color
                     || self.last_viewport_wire_color != self.wire_color
+                    || self.last_viewport_wire_opacity != self.wire_opacity
                     || self.last_viewport_wire_width != self.wire_width
                     || self.last_viewport_render_points != self.render_points
                     || self.last_viewport_point_size != self.point_size
@@ -9782,15 +9851,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             // fill beneath. Far-side wires that clear the
                             // depth test near the limb show as their own
                             // (complementary) colors — a soft x-ray read.
-                            // The wires' opacity is the Wire Color ALPHA in
-                            // both modes; the geometry Opacity slider is
+                            // The wires' opacity is Wire Opacity in both
+                            // modes; the geometry Opacity slider is
                             // polygons-only.
                             let tint = if self.wire_single_color {
                                 [self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0]
                             } else {
                                 [0.0, 0.0, 0.0, 0.0]
                             };
-                            let wire_alpha = self.wire_color[3].clamp(0.0, 1.0);
+                            let wire_alpha = self.wire_opacity.clamp(0.0, 1.0);
                             draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through });
                         }
                         draws.extend(fill);
@@ -9825,6 +9894,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     self.last_viewport_geo_opacity = self.geo_opacity;
                     self.last_viewport_wire_single_color = self.wire_single_color;
                     self.last_viewport_wire_color = self.wire_color;
+                    self.last_viewport_wire_opacity = self.wire_opacity;
                     self.last_viewport_wire_width = self.wire_width;
                     self.last_viewport_render_points = self.render_points;
                     self.last_viewport_point_size = self.point_size;

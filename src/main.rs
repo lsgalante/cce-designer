@@ -1676,6 +1676,83 @@ mod tests {
         context_menu::hide();
     }
 
+    /// The wires' opacity is a setting of its own, apart from the polygons':
+    /// the viewport menu's Wire Opacity slider moves `wire_opacity` and
+    /// leaves `geo_opacity` alone (and the other way round), the dialog has
+    /// a row for it, and it persists. The wire pass reads it in both colour
+    /// modes, so it is not tied to single-colour mode the way the colour is.
+    #[test]
+    fn wire_opacity_is_separate_from_polygon_opacity() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.geo_opacity = 0.5;
+        state.wire_opacity = 0.5;
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let acts = state.viewport_menu_actions.clone();
+        let i = acts.iter().position(|a| *a == A::WireOpacitySlider).expect("a Wire Opacity row");
+        let sl = context_menu::slider(i).expect("the row is a slider");
+        assert_eq!((sl.value, sl.min, sl.max, sl.step), (50.0, 0.0, 100.0, 5.0));
+
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -2.0) });
+        assert!((state.wire_opacity - 0.40).abs() < 1e-6, "{}", state.wire_opacity);
+        assert!((state.geo_opacity - 0.5).abs() < 1e-6, "the polygon opacity moved with the wires'");
+
+        let j = acts.iter().position(|a| *a == A::OpacitySlider).expect("an Opacity row");
+        state.cursor_y = context_menu::row_y(j) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
+        assert!((state.geo_opacity - 0.60).abs() < 1e-6, "{}", state.geo_opacity);
+        assert!((state.wire_opacity - 0.40).abs() < 1e-6, "the wires' opacity moved with the polygons'");
+        context_menu::hide();
+
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        let back = crate::app::DesignSettings::from_kdl_str(&kdl);
+        assert!((back.render.wire_opacity - 0.40).abs() < 0.01, "persisted: {kdl}");
+
+        // The dialog row edits the same field.
+        state.apply_setting("Wire Opacity", "0.25");
+        assert!((state.wire_opacity - 0.25).abs() < 1e-6);
+        assert!((state.geo_opacity - 0.60).abs() < 1e-6);
+    }
+
+    /// Until 2026-09-25 the wire opacity was the wire colour's alpha:
+    /// `#rrggbbaa` in state.kdl and a four-component array in a project's
+    /// display block. Both load with the alpha as `wire_opacity`, or every
+    /// translucent wireframe would come back opaque; and a file that names
+    /// `wire_opacity` itself keeps it.
+    #[test]
+    fn an_old_wire_colour_alpha_becomes_the_wire_opacity() {
+        let old = "render {\n    wireframe (bool)true\n    wire_color (rgba)\"#33669980\"\n}\n";
+        let back = crate::app::DesignSettings::from_kdl_str(old);
+        assert!(back.render.wireframe, "the rest of the block reads: {old}");
+        let rgb = back.render.wire_color;
+        assert!((rgb[0] - 0.2).abs() < 0.01 && (rgb[1] - 0.4).abs() < 0.01 && (rgb[2] - 0.6).abs() < 0.01, "{rgb:?}");
+        assert!((back.render.wire_opacity - 128.0 / 255.0).abs() < 0.01, "{}", back.render.wire_opacity);
+
+        // Written back, the colour is six digits and the opacity its own key.
+        let written = back.to_kdl_str().expect("kdl");
+        assert!(written.contains("#336699\""), "{written}");
+        let again = crate::app::DesignSettings::from_kdl_str(&written);
+        assert!((again.render.wire_opacity - back.render.wire_opacity).abs() < 1e-6);
+
+        // A project's display block, likewise.
+        let json = serde_json::json!({ "render": { "wire_color": [0.2, 0.4, 0.6, 0.3] } });
+        let d: crate::app::DisplaySettings = serde_json::from_value(json).expect("an old display block loads");
+        assert!((d.render.wire_opacity - 0.3).abs() < 1e-6);
+        assert_eq!(d.render.wire_color, [0.2, 0.4, 0.6]);
+        let json = serde_json::json!({ "render": { "wire_color": [0.2, 0.4, 0.6], "wire_opacity": 0.7 } });
+        let d: crate::app::DisplaySettings = serde_json::from_value(json).unwrap();
+        assert!((d.render.wire_opacity - 0.7).abs() < 1e-6);
+        // Absent altogether: opaque.
+        let d: crate::app::DisplaySettings = serde_json::from_value(serde_json::json!({ "render": {} })).unwrap();
+        assert_eq!((d.render.wire_color, d.render.wire_opacity), ([0.0; 3], 1.0));
+    }
+
     /// The viewport menu reads in groups a separator apart: framing, then
     /// the guides, the wireframe, the points, the point overlays, and the surface
     /// (shading, opacity, Show Occluded) — every display row in exactly one
@@ -1691,7 +1768,7 @@ mod tests {
             .collect();
         assert_eq!(groups[0], vec![A::FrameAll, A::OneToOne]);
         assert_eq!(groups[1], vec![A::Command("toggle_grid"), A::Command("toggle_origin")]);
-        assert_eq!(groups[2], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
+        assert_eq!(groups[2], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider, A::WireOpacitySlider]);
         assert_eq!(
             groups[3],
             vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider]
@@ -5278,7 +5355,7 @@ mod tests {
         assert!(crate::command::by_id("wireframe_color").is_none(), "the command went with the Settings half");
 
         let mut state = State::new(false);
-        state.wire_color = [0.2, 0.6, 0.9, 0.5];
+        state.wire_color = [0.2, 0.6, 0.9];
         state.run_command("command_palette");
         let id = setting_row_id("Wireframe Color");
         let row = state
@@ -5290,25 +5367,26 @@ mod tests {
             .expect("the palette lists Wireframe Color");
         assert_eq!(row.label, "Wireframe Color");
         assert!(row.chord.is_empty(), "a setting has no chord");
-        // The control carries the live colour with its alpha, and a
-        // toolkit colour selector stands behind it at the same value.
-        assert_eq!(row.control, Some(Control::Color { hex: crate::project::color_to_hex8([0.2, 0.6, 0.9, 0.5]), alpha: true }));
+        // The control carries the live colour, and a toolkit colour
+        // selector stands behind it at the same value.
+        let hex = crate::project::color_to_hex([0.2, 0.6, 0.9]);
+        assert_eq!(row.control, Some(Control::Color { hex: hex.clone() }));
         let sel = state.slots.dialog.color_selector(&id).expect("a colour selector behind the row");
-        assert_eq!(sel.get_value_string().as_deref(), Some(crate::project::color_to_hex8([0.2, 0.6, 0.9, 0.5]).as_str()));
+        assert_eq!(sel.get_value_string().as_deref(), Some(hex.as_str()));
         let s = SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
         assert_eq!(s.owner, Owner::Field("wire_color"));
 
         // Editing the row reaches the live state: the colour AND the switch
         // that makes the wire pass use it (off, the wires carry the
-        // geometry's colours and the colour row is their alpha alone). The
-        // dialog stays up, and the row re-reads the value.
+        // geometry's colours). The dialog stays up, and the row re-reads the
+        // value.
         state.wire_single_color = false;
-        state.apply_setting("Wireframe Color", "#000000ff");
-        assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0], "the colour row writes the live wire colour");
+        state.apply_setting("Wireframe Color", "#000000");
+        assert_eq!(state.wire_color, [0.0, 0.0, 0.0], "the colour row writes the live wire colour");
         assert!(state.wire_single_color, "a colour edit turns single-colour mode on");
         assert!(state.dialog_visible());
         let row = state.slots.dialog.rows.iter().find(|r| r.id == id).unwrap();
-        assert_eq!(row.control, Some(Control::Color { hex: "#000000ff".into(), alpha: true }));
+        assert_eq!(row.control, Some(Control::Color { hex: "#000000".into() }));
 
         // And the switch is a command row of its own, flipped in place.
         state.take_dialog_pick("toggle_wire_single_color".to_string());
@@ -5417,7 +5495,8 @@ mod tests {
         a.world_unit = cce_ui::units::Unit::Cm;
         a.wireframe = true;
         a.wire_single_color = true;
-        a.wire_color = [0.2, 0.4, 0.6, 0.5];
+        a.wire_color = [0.2, 0.4, 0.6];
+        a.wire_opacity = 0.5;
         a.wire_width = 3.0;
         a.geo_opacity = 0.75;
         a.render_points = true;
@@ -5452,12 +5531,10 @@ mod tests {
             }
         }
         assert!(back.render.wireframe && back.render.wire_single_color);
-        // The wire colour is the four-component one: its ALPHA is the wire's
-        // own opacity, and dropping it would silently make every wireframe
-        // fully opaque.
-        for k in 0..4 {
-            assert!(close(back.render.wire_color[k], [0.2, 0.4, 0.6, 0.5][k]), "{:?}", back.render.wire_color);
+        for k in 0..3 {
+            assert!(close(back.render.wire_color[k], [0.2, 0.4, 0.6][k]), "{:?}", back.render.wire_color);
         }
+        assert!(close(back.render.wire_opacity, 0.5));
         assert!(close(back.render.wire_width, 3.0));
         assert!(close(back.render.geo_opacity, 0.75));
         assert!(back.render.render_points);
@@ -5475,19 +5552,19 @@ mod tests {
     fn changing_the_wire_colour_turns_single_colour_mode_on() {
         let mut state = State::new(false);
         state.wire_single_color = false;
-        state.wire_color = [1.0, 1.0, 1.0, 1.0];
+        state.wire_color = [1.0, 1.0, 1.0];
 
         // An edit through the dialog's colour row, which is the only way
         // in now that the Render node is gone.
         state.open_dialog();
-        state.apply_setting("Wireframe Color", "#000000ff");
-        assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0]);
+        state.apply_setting("Wireframe Color", "#000000");
+        assert_eq!(state.wire_color, [0.0, 0.0, 0.0]);
         assert!(state.wire_single_color, "a colour change switches single-colour mode on");
 
         // Off again by hand stays off while the colour is unchanged: the
         // auto-enable fires on a CHANGE, not on every settings pass.
         state.wire_single_color = false;
-        state.apply_setting("Wireframe Color", "#000000ff");
+        state.apply_setting("Wireframe Color", "#000000");
         assert!(!state.wire_single_color, "an unrelated pass flipped it back on");
 
         // A load carries the project's geometry and leaves the wire
@@ -5496,7 +5573,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         state.save_to_file(&dir).expect("save");
         state.load_from_file(&dir).expect("load");
-        assert_eq!(state.wire_color, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(state.wire_color, [0.0, 0.0, 0.0]);
         assert!(!state.wire_single_color, "a load never flips the switch");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -9739,11 +9816,6 @@ mod tests {
                             assert_eq!(state.settings_row_value(s.label), "#123456",
                                 "row '{}' (key '{key}') did not take a write", s.label);
                         }
-                        Ctl::Rgba => {
-                            state.settings_write_row(s.label, "#12345678");
-                            assert_eq!(state.settings_row_value(s.label), "#12345678",
-                                "row '{}' (key '{key}') did not take a write", s.label);
-                        }
                         Ctl::Spin { min, max, .. } => {
                             let v = ((min + max) / 2.0).round() as i32;
                             state.settings_write_row(s.label, &v.to_string());
@@ -10156,7 +10228,7 @@ mod tests {
         let control = |label: &str| {
             state.slots.dialog.rows.iter().find(|r| r.id == setting_row_id(label)).and_then(|r| r.control.clone())
         };
-        assert!(matches!(control("Grid Color"), Some(Control::Color { alpha: false, .. })));
+        assert!(matches!(control("Grid Color"), Some(Control::Color { .. })));
         assert!(matches!(control("Grid Thickness"), Some(Control::Slider { dec: 0, .. })), "a spin is a whole-number slider");
         assert!(matches!(control("Geometry Opacity"), Some(Control::Slider { dec: 2, .. })));
         assert!(matches!(control("World Unit"), Some(Control::Choice { .. })));
@@ -10297,7 +10369,7 @@ mod tests {
             "Grid Color", "Grid Thickness", "Origin Size", "Point Marker Size",
             "Point Marker Color", "World Unit",
             // render
-            "Wireframe Color", "Wire Thickness", "Geometry Opacity", "Point Size", "Point Color",
+            "Wireframe Color", "Wire Opacity", "Wire Thickness", "Geometry Opacity", "Point Size", "Point Color",
             // main
             "Background Color",
             // camera

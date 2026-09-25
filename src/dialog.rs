@@ -63,10 +63,9 @@ pub enum Control {
     /// One of a fixed set: picking the row steps to the next option, the
     /// arrows step either way.
     Choice { options: Vec<String>, index: usize },
-    /// A colour, `#rrggbb` (or `#rrggbbaa` with `alpha`), drawn as the
-    /// toolkit's colour selector: a hex well and a swatch that opens the
-    /// picker.
-    Color { hex: String, alpha: bool },
+    /// A colour, `#rrggbb`, drawn as the toolkit's colour selector: a hex
+    /// well and a swatch that opens the picker.
+    Color { hex: String },
 }
 
 impl Control {
@@ -562,12 +561,11 @@ impl Dialog {
     /// change to report back, so the flag it raises is dropped here.
     fn sync_color_selectors(&mut self) {
         for row in &self.rows {
-            let Some(Control::Color { hex, alpha }) = &row.control else { continue };
+            let Some(Control::Color { hex }) = &row.control else { continue };
             let k = match self.colors.iter().position(|(k, _)| *k == row.id) {
                 Some(k) => k,
                 None => {
-                    let sel = if *alpha { ColorSelector::new_rgba([0, 0, 0, 255]) } else { ColorSelector::new([0; 3]) };
-                    self.colors.push((row.id.clone(), sel));
+                    self.colors.push((row.id.clone(), ColorSelector::new([0; 3])));
                     self.colors.len() - 1
                 }
             };
@@ -1246,8 +1244,6 @@ pub enum Ctl {
     Toggle,
     /// `#rrggbb`.
     Color,
-    /// `#rrggbbaa` — the wire colour, whose alpha is its own opacity.
-    Rgba,
     /// A whole number over `min..=max`. The stored float is scaled by
     /// `unit` (thousandths for Grid Thickness, tenths for Origin Size),
     /// which is the convention those params already used.
@@ -1304,10 +1300,12 @@ pub const SETTINGS: &[Setting] = &[
     Setting::field("World Unit", "world_unit", Ctl::Choice(&["mm", "cm", "m", "in"])),
     Setting::field("Geometry Opacity", "geo_opacity", Ctl::Slider { min: 0.0, max: 1.0, dec: 2 }),
     // The colour applies only in single-colour mode (off, the wires carry
-    // the geometry's vertex colours and the colour row sets their alpha
-    // alone) — so a colour edit turns that mode on, or a colour set here
-    // looks ignored.
-    Setting::field("Wireframe Color", "wire_color", Ctl::Rgba),
+    // the geometry's vertex colours) — so a colour edit turns that mode on,
+    // or a colour set here looks ignored.
+    Setting::field("Wireframe Color", "wire_color", Ctl::Color),
+    // The wires' own opacity, in both colour modes; Geometry Opacity is the
+    // polygons'. It was the wire colour's alpha until 2026-09-25.
+    Setting::field("Wire Opacity", "wire_opacity", Ctl::Slider { min: 0.0, max: 1.0, dec: 2 }),
     Setting::field("Wire Thickness", "wire_width", Ctl::Slider { min: 1.0, max: 8.0, dec: 1 }),
     Setting::field("Point Size", "point_size", Ctl::Slider { min: 0.0, max: 0.1, dec: 3 }),
     Setting::field("Point Color", "point_color", Ctl::Color),
@@ -1674,8 +1672,7 @@ impl State {
         let value = self.setting_value(s);
         match s.ctl {
             Ctl::Toggle => Control::Toggle(value == "true"),
-            Ctl::Color => Control::Color { hex: value, alpha: false },
-            Ctl::Rgba => Control::Color { hex: value, alpha: true },
+            Ctl::Color => Control::Color { hex: value },
             Ctl::Spin { min, max, .. } => Control::Slider {
                 value: value.parse().unwrap_or(min),
                 min,
@@ -1709,13 +1706,6 @@ impl State {
             Owner::Field(key) => match s.ctl {
                 Ctl::Toggle => if self.settings_field_bool(key) { "true" } else { "false" }.to_string(),
                 Ctl::Color => crate::project::color_to_hex(self.settings_field_color(key)),
-                Ctl::Rgba => {
-                    let c = match key {
-                        "wire_color" => self.wire_color,
-                        _ => [0.0, 0.0, 0.0, 1.0],
-                    };
-                    crate::project::color_to_hex8(c)
-                }
                 Ctl::Spin { unit, .. } => ((self.settings_field_f32(key) * unit).round() as i32).to_string(),
                 Ctl::Slider { dec, .. } => format!("{:.*}", dec, self.settings_field_f32(key)),
                 Ctl::Choice(_) => self.settings_field_text(key),
@@ -1772,6 +1762,7 @@ impl State {
             "grid_color" => self.viewport().grid_color,
             "point_color" => self.point_color,
             "point_marker_color" => self.point_marker_color,
+            "wire_color" => self.wire_color,
             _ => [0.0; 3],
         }
     }
@@ -1783,6 +1774,7 @@ impl State {
             "point_marker_size" => self.point_marker_size,
             "wire_width" => self.wire_width,
             "geo_opacity" => self.geo_opacity,
+            "wire_opacity" => self.wire_opacity,
             "point_size" => self.point_size,
             "group_marker_scale" => self.group_marker_scale,
             _ => 0.0,
@@ -1819,21 +1811,18 @@ impl State {
                     "grid_color" => self.viewport_mut().grid_color = c,
                     "point_color" => self.point_color = c,
                     "point_marker_color" => self.point_marker_color = c,
-                    _ => {}
-                }
-            }
-            Ctl::Rgba => {
-                let Some(c) = crate::project::hex_to_rgba(value) else { return };
-                if key == "wire_color" {
-                    // Setting a wire colour means wanting to see it: the
-                    // colour applies in single-colour mode only, so a colour
-                    // edit turns that mode on if it was off. Twice read as
-                    // "the colour did not take" (2026-09-21).
-                    let changed = c != self.wire_color;
-                    self.wire_color = c;
-                    if changed && !self.wire_single_color {
-                        self.wire_single_color = true;
+                    "wire_color" => {
+                        // Setting a wire colour means wanting to see it: the
+                        // colour applies in single-colour mode only, so a
+                        // colour edit turns that mode on if it was off. Twice
+                        // read as "the colour did not take" (2026-09-21).
+                        let changed = c != self.wire_color;
+                        self.wire_color = c;
+                        if changed && !self.wire_single_color {
+                            self.wire_single_color = true;
+                        }
                     }
+                    _ => {}
                 }
             }
             Ctl::Spin { unit, .. } => {
@@ -1852,6 +1841,7 @@ impl State {
                 match key {
                     "wire_width" => self.wire_width = v,
                     "geo_opacity" => self.geo_opacity = v,
+                    "wire_opacity" => self.wire_opacity = v,
                     "point_size" => self.point_size = v,
                     "group_marker_scale" => self.group_marker_scale = v,
                     _ => {}

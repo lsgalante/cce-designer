@@ -16,15 +16,6 @@ pub(crate) fn hex_to_color(hex: &str) -> Option<[f32; 3]> {
     cce_ui::color::parse_hex_rgb(hex)
 }
 
-pub(crate) fn color_to_hex8(rgba: [f32; 4]) -> String {
-    format!("#{:02x}{:02x}{:02x}{:02x}",
-        (rgba[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-        (rgba[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-        (rgba[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-        (rgba[3] * 255.0).round().clamp(0.0, 255.0) as u8
-    )
-}
-
 /// 6- or 8-digit hex → RGBA (alpha 1.0 when absent).
 pub(crate) fn hex_to_rgba(hex: &str) -> Option<[f32; 4]> {
     cce_ui::color::parse_hex_rgba(hex)
@@ -396,10 +387,6 @@ impl State {
             proj.migrate_param_refs();
             crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
             self.fs_root = proj.root;
-            // A load is not a colour change: an older save's wire colour is
-            // the baseline, so the auto-enable of single-colour mode stays
-            // quiet while the migration reads it.
-            self.last_applied_wire_color = None;
             self.migrate_meta_settings_node();
             // Before the default view, whose camera-node rule has the last
             // word on the square aspect and the pivot marker.
@@ -460,8 +447,6 @@ impl State {
         proj.migrate_param_refs();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         self.fs_root = proj.root;
-        // As in the default-project branch.
-        self.last_applied_wire_color = None;
         self.migrate_meta_settings_node();
         // As in the default-project branch.
         if let Some(d) = &proj.view_state.display {
@@ -697,7 +682,11 @@ impl State {
             match p.name.as_str() {
                 "Show Wireframe" => if let Some(v) = as_bool(&p) { self.wireframe = v; },
                 "Wire Single Color" => if let Some(v) = as_bool(&p) { self.wire_single_color = v; },
-                "Wire Color" => if let Some(c) = hex_to_rgba(&p.default) { self.wire_color = c; },
+                // Its alpha was the wire opacity until that was a setting.
+                "Wire Color" => if let Some([r, g, b, a]) = hex_to_rgba(&p.default) {
+                    self.wire_color = [r, g, b];
+                    self.wire_opacity = a;
+                },
                 "Wire Thickness" => if let Some(v) = as_f32(&p) { self.wire_width = v.clamp(1.0, 8.0); },
                 "Opacity" => if let Some(v) = as_f32(&p) { self.geo_opacity = v.clamp(0.0, 1.0); },
                 "Render Points" => if let Some(v) = as_bool(&p) { self.render_points = v; },
