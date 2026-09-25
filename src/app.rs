@@ -252,6 +252,19 @@ pub(crate) fn regenerate_node_ids(n: &mut FsNode) {
     }
 }
 
+/// Which node the params pane is showing: the editor feeding it, that
+/// editor's level, the slot there, and the node's id. All four, because no
+/// one of them is an identity alone — an id is empty on nodes a bundled file
+/// was saved without, a slot is only meaningful at a level, and a level is
+/// only meaningful per editor.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) struct ParamPaneTarget {
+    editor: usize,
+    path: Vec<usize>,
+    slot: usize,
+    id: String,
+}
+
 fn default_node_type() -> String { "node".to_string() }
 fn default_node_geometry_visible() -> bool { true }
 fn default_node_position() -> (f32, f32) { (0.0, 0.0) }
@@ -1852,6 +1865,11 @@ pub struct State {
     /// writeback): CONTENT_IDX or CONTENT2_IDX — whichever took the last
     /// node click. Selection itself stays per-editor.
     pub param_editor: usize,
+    /// The node the params pane's rows were loaded FROM — set by
+    /// `sync_parameters_pane`, checked by `sync_parameters_to_project`, which
+    /// writes nothing when the selection has moved on since. See
+    /// [`State::param_pane_target`].
+    pub(crate) param_pane_source: Option<ParamPaneTarget>,
     /// The viewport's pin: None follows `param_editor`; Some(CONTENT_IDX /
     /// CONTENT2_IDX) locks the scene to that editor's level regardless of
     /// where clicks land. Set from the viewport's right-click menu.
@@ -3259,9 +3277,31 @@ impl State {
         }
     }
 
+    /// The node a params-pane load would show right now — see
+    /// [`ParamPaneTarget`]. None when nothing is selected.
+    pub(crate) fn param_pane_target(&self) -> Option<ParamPaneTarget> {
+        let editor = self.params_editor();
+        let slot = self.param_editor_selected()?;
+        let node = self.param_editor_dir().children.get(slot)?;
+        let path = if editor == crate::slots::CONTENT2_IDX { &self.current_path2 } else { &self.current_path };
+        Some(ParamPaneTarget { editor, path: path.clone(), slot, id: node.id.clone() })
+    }
+
+    /// Write the params pane's rows back into the node they were loaded from.
+    ///
+    /// Rows are matched to params by NAME, so rows from one node written into
+    /// another land wherever the two share a name — and every node has an
+    /// `Input`. The pane is not reloaded the instant the selection moves:
+    /// `sync_layout` reaches here through `sync_pane_focus` before the
+    /// post-event pass gets to `sync_parameters_pane`, so a cursor step from
+    /// output1 onto detangle1 wrote output1's `Input` into detangle1, and the
+    /// next step carried detangle1's `Input` and `Iterations` into relax1
+    /// (2026-09-25, a simnet rewired by pressing k twice). Hence the guard:
+    /// rows that were not loaded from the selected node are stale, and
+    /// writing nothing is the only right thing to do with them.
     pub fn sync_parameters_to_project(&mut self) {
         let mut file_to_open = None;
-        if !self.is_detached_network {
+        if !self.is_detached_network && self.param_pane_source == self.param_pane_target() {
             if let Some(slot_idx) = self.param_editor_selected() {
                 let updated_params = self.param().node_params();
                 // Live pane state, so a pane toggle only fires the visibility
@@ -3750,6 +3790,7 @@ impl State {
         };
         let params = self.add_pick_lists(params);
         self.param_mut().set_display_params(&params);
+        self.param_pane_source = if self.is_detached_network { None } else { self.param_pane_target() };
     }
 
     /// Upgrade a selected group/attribute node's group- and attribute-name
@@ -5564,6 +5605,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             current_path,
             current_path2: Vec::new(),
             param_editor: CONTENT_IDX,
+            param_pane_source: None,
             viewport_pin: None,
             params_pin: None,
             spreadsheet_pin: None,

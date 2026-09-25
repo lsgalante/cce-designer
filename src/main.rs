@@ -5970,6 +5970,82 @@ mod tests {
     /// gated on the network pane having focus — the bare family used to be the
     /// one that was not, so the cursor drifted invisibly while you looked at
     /// the viewport.
+    /// Stepping the grid cursor from node to node must not carry one node's
+    /// parameters into the next.
+    ///
+    /// The pane's rows are written back by NAME, and until 2026-09-25 they
+    /// were written into whatever was selected — `sync_layout` flushed them
+    /// through `sync_pane_focus` after a cursor step had moved the selection
+    /// but before the post-event pass reloaded the pane. Every node has an
+    /// `Input`, so pressing k twice from the bottom of a chain pointed each
+    /// node it landed on at the chain's end, and carried Iterations from one
+    /// node into the next on the way. Real key events through
+    /// `process_window_event`, because the bug lived in that pass's order and
+    /// `run_command` alone skips it.
+    #[test]
+    fn stepping_the_cursor_does_not_rewire_the_nodes_it_lands_on() {
+        use crate::window::WindowEvent;
+        fn key(state: cce_ui::widget::ElementState) -> cce_ui::widget::KeyEvent {
+            cce_ui::widget::KeyEvent {
+                state,
+                logical_key: Key::Character("k".into()),
+                text: Some("k".into()),
+                repeat: false,
+                ctrl: false,
+                shift: false,
+                alt: false,
+            }
+        }
+        fn params(s: &State) -> Vec<(String, Vec<(String, String)>)> {
+            s.current_dir()
+                .children
+                .iter()
+                .map(|c| (c.name.clone(), c.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect()))
+                .collect()
+        }
+        let mut s = State::new(false);
+        let mut r = false;
+        let base = s.current_dir().children.len();
+        // A column of its own, clear of the bundled project's nodes: the
+        // chain's shape from the report, Output at the bottom.
+        for (t, y) in [("Attribute", 3.0), ("Relax", 5.0), ("Detangle", 6.0), ("Output", 7.0)] {
+            s.apply_action(McpAction::AddNode { template_name: t.into(), name: None, x: 13.0, y }, &mut r).unwrap();
+        }
+        let names: Vec<String> = s.current_dir().children[base..].iter().map(|c| c.name.clone()).collect();
+        for i in 1..4 {
+            s.apply_action(McpAction::SetParam { slot: base + i, name: "Input".into(), value: names[i - 1].clone() }, &mut r)
+                .unwrap();
+        }
+        s.focused_pane = LEFT_MENUBAR_IDX;
+        s.param_editor = crate::slots::CONTENT_IDX;
+        s.grid_cursor_col = 13;
+        s.grid_cursor_row = 7;
+        s.sync_cursor_and_selection();
+        s.sync_parameters_pane();
+        let before = params(&s);
+
+        for row in [6, 5] {
+            s.process_window_event(WindowEvent::KeyboardInput { event: key(cce_ui::widget::ElementState::Pressed) });
+            s.process_window_event(WindowEvent::KeyboardInput { event: key(cce_ui::widget::ElementState::Released) });
+            assert_eq!(s.grid_cursor_row, row, "the step has to have happened, or the check is vacuous");
+        }
+        assert_eq!(s.graph().selected_node(), Some(base + 1), "the cursor landed on the relax");
+        assert_eq!(params(&s), before, "no node's parameters may change from walking over it");
+
+        // And the guard does not stand in the way of the pane it protects:
+        // an edit to the node it now shows still lands.
+        let rows: Vec<(String, String, String)> = s
+            .param()
+            .node_params()
+            .into_iter()
+            .map(|(n, v, t)| if n == "Iterations" { (n, "12".into(), t) } else { (n, v, t) })
+            .collect();
+        s.param_mut().set_display_params(&rows);
+        s.sync_parameters_to_project();
+        let relax = &s.current_dir().children[base + 1];
+        assert_eq!(crate::geometry::node_param_str(relax, "Iterations", ""), "12");
+    }
+
     #[test]
     fn test_the_network_navigation_families() {
         use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX};
