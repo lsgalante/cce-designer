@@ -1367,6 +1367,35 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A window briefly narrower than its plates squeezes them for as long as
+    /// it lasts and no longer: the layout used to store the clamped size, so
+    /// one transient shrink (a re-tile, a configure at startup) left every
+    /// plate that small for good.
+    #[test]
+    fn a_shrunk_window_does_not_shrink_the_plates_for_good() {
+        let mut s = State::new(false);
+        s.resize(1600.0, 900.0, 1.0);
+        s.execute_menu_action("Show Spreadsheet Pane");
+        s.floating_network_layout.2 = 700.0;
+        s.floating_param_width = 650.0;
+        s.floating_spreadsheet_height = 600.0;
+        s.rebuild_positions();
+
+        s.resize(400.0, 300.0, 1.0);
+        s.rebuild_positions();
+        assert!(
+            s.positions[crate::slots::PARAM_IDX].2 <= 400.0 - 2.0 * 18.0 + 0.5,
+            "the plate still fits the small window: {:?}", s.positions[crate::slots::PARAM_IDX]
+        );
+
+        s.resize(1600.0, 900.0, 1.0);
+        s.rebuild_positions();
+        assert!((s.left_dock_width() - 700.0).abs() < 0.5, "network width: {}", s.left_dock_width());
+        assert!((s.right_dock_width() - 650.0).abs() < 0.5, "param width: {}", s.right_dock_width());
+        assert!((s.floating_spreadsheet_rect().3 - 600.0).abs() < 0.5, "spreadsheet height: {:?}", s.floating_spreadsheet_rect());
+        assert!((s.positions[crate::slots::PARAM_IDX].2 - 650.0).abs() < 0.5, "drawn param width: {:?}", s.positions[crate::slots::PARAM_IDX]);
+    }
+
     /// A dragged plate edge is an unsaved change — the save file carries the
     /// plate geometry, so the title's asterisk must follow it, and clear on
     /// save. A window resize alone must NOT dirty it.

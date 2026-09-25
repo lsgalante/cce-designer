@@ -2840,7 +2840,8 @@ impl State {
         if self.circular_network_pane || !self.show_network {
             return None;
         }
-        let (fx, fy, fw, fh) = self.floating_network_layout;
+        let (fx, fy, _, fh) = self.floating_network_layout;
+        let fw = self.left_dock_width();
         let margin = 8.0_f32;
         let on_right = cx >= fx + fw - margin && cx <= fx + fw + margin && cy >= fy - margin && cy <= fy + fh + margin;
         if on_right {
@@ -2856,7 +2857,7 @@ impl State {
             return false;
         }
         let gap = 18.0_f32;
-        let param_w = self.floating_param_width;
+        let param_w = self.right_dock_width();
         let param_x = self.width - gap - param_w;
         let param_y = HEADER_H + gap;
         let param_h = (self.height - HEADER_H - STATUS_H - 2.0 * gap).max(100.0);
@@ -2916,11 +2917,11 @@ impl State {
         let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
         match dock {
             Dock::Left => {
-                let (fx, fy, fw, fh) = self.floating_network_layout;
-                (fx.max(gap), fy.max(gap), fw, fh)
+                let (fx, fy, _, fh) = self.floating_network_layout;
+                (fx.max(gap), fy.max(gap), self.left_dock_width(), fh)
             }
             Dock::Right => {
-                let param_w = self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
+                let param_w = self.right_dock_width();
                 let h = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
                 (self.width - gap - param_w, gap, param_w, h)
             }
@@ -3038,9 +3039,8 @@ impl State {
     pub fn floating_spreadsheet_rect(&self) -> (f32, f32, f32, f32) {
         let gap = 18.0_f32;
         let fx = gap;
-        let (_, _, mut fw, _) = self.floating_network_layout;
-        fw = fw.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
-        let param_w = self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0));
+        let fw = self.left_dock_width();
+        let param_w = self.right_dock_width();
         let param_x = self.width - gap - param_w;
         let flush_left = if self.dock_shown(Dock::Left) { fx + fw + gap } else { gap };
         let flush_right = if self.dock_shown(Dock::Right) { param_x - gap } else { self.width - gap };
@@ -3057,6 +3057,21 @@ impl State {
         let ss_h = self.floating_spreadsheet_height.clamp(100.0, max_h.max(100.0));
         let ss_y = ss_y_end - ss_h;
         (ss_x, ss_y, ss_w, ss_h)
+    }
+
+    /// The left dock's width as drawn: `floating_network_layout.2` (the
+    /// width asked for) fitted to this window. Read this, not the field,
+    /// wherever the plate's ON-SCREEN width matters.
+    pub fn left_dock_width(&self) -> f32 {
+        let gap = 18.0_f32;
+        self.floating_network_layout.2.clamp(150.0, (self.width - 2.0 * gap).max(150.0))
+    }
+
+    /// The right dock's width as drawn — `floating_param_width` fitted to
+    /// this window, as [`Self::left_dock_width`] is for the left.
+    pub fn right_dock_width(&self) -> f32 {
+        let gap = 18.0_f32;
+        self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0))
     }
 
     /// Whether the spreadsheet is tucked under the network / parameter pane
@@ -6525,15 +6540,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             } else {
                 let gap = 18.0_f32;
                 let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
-                let (mut _fx, mut _fy, mut fw, mut _fh) = self.floating_network_layout;
-                fw = fw.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
+                // The stored widths and height are what the user ASKED for;
+                // the clamps below fit them to this window for drawing and are
+                // never written back. Storing the clamp made every transient
+                // shrink permanent — a window briefly narrower than a plate
+                // left it that narrow when the window grew again.
+                let fw = self.left_dock_width();
                 let fx = paginator_w + gap;
                 let fy = gap;
                 let mut fh = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
-                self.floating_network_layout = (fx, fy, fw, fh);
+                self.floating_network_layout.0 = fx;
+                self.floating_network_layout.1 = fy;
+                self.floating_network_layout.3 = fh;
 
-                let param_w = self.floating_param_width.clamp(150.0, (self.width - paginator_w - 2.0 * gap).max(150.0));
-                self.floating_param_width = param_w;
+                let param_w = self.right_dock_width();
                 let param_x = self.width - gap - param_w;
                 let param_y = gap;
                 let mut param_h = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
@@ -6543,7 +6563,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // tucks the spreadsheet UNDER that neighbor: the neighbor's bottom
                 // rises to the spreadsheet's top edge to make room.
                 let (ss_x, ss_y, ss_w, ss_h) = self.floating_spreadsheet_rect();
-                self.floating_spreadsheet_height = ss_h;
                 if self.spreadsheet_tucks_left() {
                     fh = (ss_y - gap - fy).max(100.0);
                     self.floating_network_layout.3 = fh;
@@ -8033,6 +8052,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 }
 
                                 self.floating_network_layout = (fx, fy, fw, fh);
+                                // A drag commits the width it SHOWS: storing an
+                                // overshoot past the window's limit would leave
+                                // the edge dead on the way back until the pointer
+                                // had unwound it.
+                                self.floating_network_layout.2 = self.left_dock_width();
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 self.sync_grid_settings();
@@ -8042,6 +8066,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 let dx = self.cursor_x - start_mouse_x;
                                 let new_w = (start_w - dx).max(150.0);
                                 self.floating_param_width = new_w;
+                                self.floating_param_width = self.right_dock_width();
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 changed = true;
@@ -8050,6 +8075,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 let dy = self.cursor_y - start_mouse_y;
                                 let new_h = (start_h - dy).max(100.0);
                                 self.floating_spreadsheet_height = new_h;
+                                self.floating_spreadsheet_height = self.floating_spreadsheet_rect().3;
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 changed = true;
@@ -8060,8 +8086,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 // pane's bottom to make room); back to flush un-tucks it.
                                 let dx = self.cursor_x - start_mouse_x;
                                 let gap = 18.0_f32;
-                                let (fx, _, fw, _) = self.floating_network_layout;
-                                let flush_left = fx + fw + gap;
+                                let fx = self.floating_network_layout.0;
+                                let flush_left = fx + self.left_dock_width() + gap;
                                 let max_inset = (flush_left - gap).max(0.0);
                                 self.floating_spreadsheet_inset_left =
                                     (start_inset - dx).clamp(0.0, max_inset);
@@ -8085,7 +8111,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 // The right edge tucks under the parameter pane, symmetrically.
                                 let dx = self.cursor_x - start_mouse_x;
                                 let gap = 18.0_f32;
-                                let param_x = self.width - gap - self.floating_param_width;
+                                let param_x = self.width - gap - self.right_dock_width();
                                 let flush_right = param_x - gap;
                                 let max_inset = (self.width - gap - flush_right).max(0.0);
                                 self.floating_spreadsheet_inset_right =
@@ -8372,14 +8398,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         }
 
                         if *button == MouseButton::Left && !self.circular_network_pane && self.show_network {
-                            let (fx, fy, fw, _fh) = self.floating_network_layout;
+                            let (fx, fy, _, _fh) = self.floating_network_layout;
+                            let fw = self.left_dock_width();
                             let cx = self.cursor_x;
                             let cy = self.cursor_y;
 
                             if let Some(dir) = self.network_resize_edge_at(cx, cy) {
                                 self.app_drag = Some(AppDrag::NetworkResize {
                                     dir,
-                                    start_rect: self.floating_network_layout,
+                                    start_rect: (fx, fy, fw, self.floating_network_layout.3),
                                     start_mouse: (cx, cy),
                                 });
                                 self.focused_pane = LEFT_MENUBAR_IDX;
@@ -8414,7 +8441,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                             if self.on_param_resize_edge(cx, cy) {
                                 self.app_drag = Some(AppDrag::ParamResize {
-                                    start_w: self.floating_param_width,
+                                    start_w: self.right_dock_width(),
                                     start_mouse_x: cx,
                                 });
                                 self.focused_pane = PARAM_MENUBAR_IDX;

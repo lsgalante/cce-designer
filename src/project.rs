@@ -133,11 +133,14 @@ impl State {
                 names
             })
             .collect();
+        // A plate's stored size is what was asked for and may exceed a window
+        // that has since shrunk; the loader refuses a fraction past 1 (and
+        // with it the whole block), so a save caps each at the full window.
         let plates = if self.width > 1.0 && self.height > 1.0 {
             Some(PlateGeometry {
-                network_width: self.floating_network_layout.2 / self.width,
-                params_width: self.floating_param_width / self.width,
-                spreadsheet_height: self.floating_spreadsheet_height / self.height,
+                network_width: (self.floating_network_layout.2 / self.width).min(1.0),
+                params_width: (self.floating_param_width / self.width).min(1.0),
+                spreadsheet_height: (self.floating_spreadsheet_height / self.height).min(1.0),
                 spreadsheet_inset_left: self.floating_spreadsheet_inset_left / self.width,
                 spreadsheet_inset_right: self.floating_spreadsheet_inset_right / self.width,
             })
