@@ -1777,6 +1777,45 @@ mod tests {
         assert!(state.overlay_marker_points.is_empty());
     }
 
+    /// Group Marker Scale is a viewport-menu slider over the palette row's
+    /// 0.5–4, re-sizing the Selected-Group markers from their kept members
+    /// at Point Size x the scale — no re-evaluation of the Group node.
+    #[test]
+    fn the_viewport_menu_sets_the_group_marker_scale() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.point_size = 0.02;
+        state.group_marker_scale = 1.25;
+        let centre = [0.0f32, 1.0, 0.0];
+        state.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
+        state.rebuild_group_marker_verts();
+        let radius = |state: &State| {
+            state.group_point_verts.iter().map(|v| (v.position[1] - centre[1]).abs()).fold(0.0f32, f32::max)
+        };
+        assert!((radius(&state) - 0.025).abs() < 1e-5);
+
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let i = state.viewport_menu_actions.iter().position(|a| *a == A::GroupMarkerScaleSlider).expect("a Group Marker Scale row");
+        assert_eq!(state.viewport_menu_actions[i - 1], A::PointMarkerSizeSlider);
+        let sl = context_menu::slider(i).expect("a slider");
+        assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.5, 4.0, 0.05, "x"));
+        assert_eq!(sl.readout(), "1.25x");
+
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 15.0) });
+        assert!((state.group_marker_scale - 2.0).abs() < 1e-5, "{}", state.group_marker_scale);
+        assert!((radius(&state) - 0.04).abs() < 1e-5, "the markers re-sized: {}", radius(&state));
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        let saved = crate::app::DesignSettings::from_kdl_str(&kdl).render.group_marker_scale;
+        assert!((saved - 2.0).abs() < 1e-5, "persisted: {saved}");
+        context_menu::hide();
+    }
+
     /// The dialog plate carries its own backdrop compression, above a
     /// menu's: whatever the plates' own is (0 in a config that keeps the
     /// panes clear), the modal pulls its backdrop toward the tint, and a

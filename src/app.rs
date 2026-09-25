@@ -460,6 +460,9 @@ pub enum ViewportMenuAction {
     /// Point Marker Size in world units, the Show Point Markers overlay's
     /// radius: the palette row's 0.005–0.1.
     PointMarkerSizeSlider,
+    /// Group Marker Scale, the Selected-Group markers' radius as a multiple
+    /// of Point Size: the palette row's 0.5–4.
+    GroupMarkerScaleSlider,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -4390,6 +4393,17 @@ impl State {
                 decimals: 3,
                 suffix: "",
             },
+            // A multiple of Point Size, read as one ("1.25x"): a plain x
+            // rather than a multiplication sign, which the menu face may not
+            // carry and which a fallback glyph would then under-measure.
+            ViewportMenuAction::GroupMarkerScaleSlider => MenuSlider {
+                value: self.group_marker_scale.clamp(0.5, 4.0),
+                min: 0.5,
+                max: 4.0,
+                step: 0.05,
+                decimals: 2,
+                suffix: "x",
+            },
             _ => return None,
         })
     }
@@ -4413,6 +4427,10 @@ impl State {
             ViewportMenuAction::PointMarkerSizeSlider => {
                 self.point_marker_size = v.clamp(0.005, 0.1);
                 self.rebuild_overlay_marker_verts();
+            }
+            ViewportMenuAction::GroupMarkerScaleSlider => {
+                self.group_marker_scale = v.clamp(0.5, 4.0);
+                self.rebuild_group_marker_verts();
             }
             _ => return,
         }
@@ -4445,7 +4463,7 @@ impl State {
 
     /// The viewport menu's rows and what each does: framing, then the
     /// DISPLAY MODE — the wireframe switch and its thickness slider, the
-    /// point size and point marker size sliders, flat or
+    /// point size, point marker size and group marker scale sliders, flat or
     /// smooth shading as a radio pair, the polygon opacity slider and Show
     /// Occluded — then the editor pin. Split from the open so a test can
     /// read it. Marks are the ●/○ the pin rows and the network menu use.
@@ -4465,6 +4483,8 @@ impl State {
         actions.push(ViewportMenuAction::PointSizeSlider);
         options.push("Point Marker Size".to_string());
         actions.push(ViewportMenuAction::PointMarkerSizeSlider);
+        options.push("Group Marker Scale".to_string());
+        actions.push(ViewportMenuAction::GroupMarkerScaleSlider);
         options.push(format!("{} Flat Shading", mark(!self.smooth_shading)));
         actions.push(ViewportMenuAction::Shading(false));
         options.push(format!("{} Smooth Shading", mark(self.smooth_shading)));
@@ -4530,7 +4550,8 @@ impl State {
             ViewportMenuAction::OpacitySlider
             | ViewportMenuAction::WireThicknessSlider
             | ViewportMenuAction::PointSizeSlider
-            | ViewportMenuAction::PointMarkerSizeSlider => {}
+            | ViewportMenuAction::PointMarkerSizeSlider
+            | ViewportMenuAction::GroupMarkerScaleSlider => {}
             ViewportMenuAction::Separator => {}
         }
     }

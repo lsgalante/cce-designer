@@ -1382,7 +1382,8 @@ Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
 a **Wire Thickness** slider under the wireframe switch (1–8 px by
 half a pixel, the palette row's range), a **Point Size** slider (0–0.1
 world units by 0.005, no suffix since the World Unit names them), a
-**Point Marker Size** slider (the palette row's 0.005–0.1), and the
+**Point Marker Size** slider (the palette row's 0.005–0.1), a **Group
+Marker Scale** slider (0.5–4 by 0.05, read "1.25x"), and the
 polygon **Opacity** as a
 SLIDER row — cce-ui's `context_menu::MenuSlider` (2026-09-25), set on the
 shown menu by `open_viewport_context_menu`. `viewport_menu_slider` is the
