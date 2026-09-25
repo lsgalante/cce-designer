@@ -1298,6 +1298,9 @@ impl Setting {
 pub const SETTINGS: &[Setting] = &[
     Setting::field("Background Color", "bg_color", Ctl::Color),
     Setting::field("World Unit", "world_unit", Ctl::Choice(&["mm", "cm", "m", "in"])),
+    // Takes effect at the next launch — the renderer's device is chosen
+    // once, when it is created (`app::apply_gpu_preference`).
+    Setting::field("GPU", "gpu", Ctl::Choice(crate::app::GPU_CHOICES)),
     Setting::field("Geometry Opacity", "geo_opacity", Ctl::Slider { min: 0.0, max: 1.0, dec: 2 }),
     // The colour applies only in single-colour mode (off, the wires carry
     // the geometry's vertex colours) — so a colour edit turns that mode on,
@@ -1784,6 +1787,7 @@ impl State {
     fn settings_field_text(&self, key: &str) -> String {
         match key {
             "world_unit" => self.world_unit.suffix().to_string(),
+            "gpu" => self.gpu_preference.clone(),
             _ => String::new(),
         }
     }
@@ -1847,14 +1851,19 @@ impl State {
                     _ => {}
                 }
             }
-            Ctl::Choice(_) => {
-                if key == "world_unit" {
+            Ctl::Choice(options) => match key {
+                "world_unit" => {
                     if let Some(u) = cce_ui::units::Unit::parse(value) {
                         self.world_unit = u;
                         self.viewport_dirty = true;
                     }
                 }
-            }
+                "gpu" => {
+                    let Some(v) = options.iter().find(|o| o.eq_ignore_ascii_case(value)) else { return };
+                    self.gpu_preference = v.to_string();
+                }
+                _ => {}
+            },
         }
     }
 
@@ -1910,6 +1919,23 @@ impl State {
         // The params pane may be showing one of these very nodes.
         self.sync_parameters_pane();
         self.refresh_dialog_controls();
+        // After the pass above, whose own status line would bury it.
+        if s.owner == Owner::Field("gpu") {
+            self.announce_gpu_setting();
+        }
+    }
+
+    /// The renderer's device is fixed for the life of the process, so the
+    /// GPU row says plainly whether this one is on it — a row that changed
+    /// and a picture that did not would read as a setting that does nothing.
+    fn announce_gpu_setting(&mut self) {
+        let (want, have) = (&self.gpu_preference, &self.gpu_at_launch);
+        let note = if want == have {
+            format!("GPU: {want} — in use now.")
+        } else {
+            format!("GPU: {want} — takes effect when cce-designer restarts (running on {have}).")
+        };
+        self.update_status_text(&note);
     }
 
     /// Lay the dialog out over the window.

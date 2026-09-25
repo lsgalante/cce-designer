@@ -117,6 +117,11 @@ fn main() {
         }
     }
 
+    // The GPU setting, as CCE_VK_DEVICE for the renderer the engine is about
+    // to create. Only here: the thumbnail and export modes above exit first,
+    // so cce-files' preview cache never wakes a discrete GPU.
+    app::apply_gpu_preference();
+
     // Everything windowed runs on the cce-ui engine (application.rs holds the
     // Application impl; --detached-network is read there).
     cce_ui::engine::run::<app::State>();
@@ -1674,6 +1679,40 @@ mod tests {
         assert!(wheel(&mut state, 1.0));
         assert_eq!((state.geo_opacity, state.viewport().rotation_y), before);
         context_menu::hide();
+    }
+
+    /// The GPU setting: a choice row of the dialog, persisted in state.kdl
+    /// (absent = integrated), NOT carried by a project's display block, and
+    /// turned into `CCE_VK_DEVICE` at launch only when it asks for the
+    /// discrete card and the environment has not already said.
+    #[test]
+    fn the_gpu_setting_picks_the_renderers_device_at_launch() {
+        use crate::app::gpu_env_for;
+        let mut state = State::new(false);
+        state.gpu_preference = "integrated".into();
+        state.gpu_at_launch = "integrated".into();
+        assert_eq!(state.settings_row_value("GPU"), "integrated");
+        state.apply_setting("GPU", "discrete");
+        assert_eq!(state.gpu_preference, "discrete");
+        assert!(state.last_status_text.contains("restart"), "{}", state.last_status_text);
+        let kdl = fs::read_to_string(DesignSettings::file_path()).expect("saved");
+        assert_eq!(DesignSettings::from_kdl_str(&kdl).gpu, "discrete", "{kdl}");
+        state.apply_setting("GPU", "Integrated");
+        assert_eq!(state.gpu_preference, "integrated");
+        assert!(state.last_status_text.contains("in use"), "{}", state.last_status_text);
+        state.apply_setting("GPU", "quantum");
+        assert_eq!(state.gpu_preference, "integrated", "an unknown option is refused");
+
+        // A file from before the setting existed: integrated.
+        assert_eq!(DesignSettings::from_kdl_str("viewport {\n}\n").gpu, "integrated");
+        // A project does not carry it.
+        let json = serde_json::to_value(state.display_settings()).unwrap();
+        assert!(!json.to_string().contains("\"gpu\""), "{json}");
+
+        assert_eq!(gpu_env_for("discrete", None), Some("discrete"));
+        assert_eq!(gpu_env_for("discrete", Some("")), Some("discrete"));
+        assert_eq!(gpu_env_for("integrated", None), None, "integrated sets nothing, keeping any ICD pin");
+        assert_eq!(gpu_env_for("discrete", Some("intel")), None, "an explicit CCE_VK_DEVICE wins");
     }
 
     /// The wires' opacity is a setting of its own, apart from the polygons':

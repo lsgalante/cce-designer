@@ -337,6 +337,23 @@ autostart that beat the network — so the one launch that raced the filesystem
 took the setting with it, silently. (Found exactly that way: a default under
 `~/Dropbox` that stopped opening, with the key simply gone from state.kdl.)
 
+**`gpu`** in state.kdl (`integrated` | `discrete`, the dialog's **GPU**
+row) picks the device the window's renderer asks Vulkan for. It is read ONCE,
+by `app::apply_gpu_preference` in `main` just before `engine::run`, and set
+as `CCE_VK_DEVICE` — the variable cce-ui's device selection already reads,
+which also steers `gpu.rs`'s compute device — so a change takes effect on the
+next launch, and the row's status line says whether the running process is
+on it (`gpu_at_launch`). Three rules, all in `gpu_env_for`: an explicit
+`CCE_VK_DEVICE` in the environment wins (a per-run override); `integrated`
+sets NOTHING, because cce-ui treats any explicit request as licence to lift
+the session's `VK_DRIVER_FILES` pin to the Intel ICD, which loads the NVIDIA
+driver and wakes the dGPU just to enumerate it; and the thumbnail and export
+modes exit before the call, so cce-files' preview cache never wakes it
+either. Top-level in `DesignSettings`, beside `default_project`, not in the
+render block — that block rides the project file, and which GPU a machine
+has is not a property of a scene. Verified under the session's pin: unset
+opens the Iris Xe, `discrete` the RTX 4080.
+
 `DesignSettings` (viewport/graph display state the app rewrites itself:
 colors, grid sizes, show flags) persists to `state.kdl` — deliberately NOT
 `config.kdl`, which is the user-authored toolkit-config override slot that

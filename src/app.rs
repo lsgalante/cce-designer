@@ -1423,7 +1423,7 @@ pub const MAX_PITCH_X: f32 = 625.0;
 pub const MIN_PITCH_Y: f32 = 22.5;
 pub const MAX_PITCH_Y: f32 = 375.0;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DesignSettings {
     #[serde(default)]
     pub viewport: ViewportSettings,
@@ -1437,6 +1437,63 @@ pub struct DesignSettings {
     /// "make this the default" must not rewrite it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_project: Option<String>,
+    /// Which GPU the window's renderer asks Vulkan for: one of
+    /// [`GPU_CHOICES`]. Read ONCE, at launch, by [`apply_gpu_preference`],
+    /// because the device is chosen when the renderer is created and a
+    /// renderer is not rebuilt on a whim — so a change takes effect on the
+    /// next start. Here rather than in the render block because that block
+    /// rides the project file, and which GPU a machine has is not a property
+    /// of a scene.
+    #[serde(default = "default_gpu")]
+    pub gpu: String,
+}
+
+impl Default for DesignSettings {
+    fn default() -> Self {
+        Self {
+            viewport: ViewportSettings::default(),
+            render: RenderSettings::default(),
+            default_project: None,
+            gpu: default_gpu(),
+        }
+    }
+}
+
+/// The GPU setting's options. "integrated" is cce-ui's own default
+/// (`CCE_VK_DEVICE` unset); "discrete" asks for the dedicated card.
+pub const GPU_CHOICES: &[&str] = &["integrated", "discrete"];
+
+fn default_gpu() -> String {
+    GPU_CHOICES[0].to_string()
+}
+
+/// What `CCE_VK_DEVICE` should be set to for a saved GPU preference, given
+/// what the environment already says — `None` to leave it alone.
+///
+/// An explicit `CCE_VK_DEVICE` at launch wins: it is a per-run override,
+/// and a setting that silently undid it would make it useless for trying
+/// the other card once. "integrated" sets NOTHING rather than
+/// "integrated": cce-ui treats any explicit request as licence to lift a
+/// session-wide ICD pin (`VK_DRIVER_FILES`), which loads every vendor's
+/// driver and can wake a sleeping discrete GPU just to enumerate it — the
+/// opposite of what asking for the integrated one means.
+pub(crate) fn gpu_env_for(pref: &str, existing: Option<&str>) -> Option<&'static str> {
+    if existing.is_some_and(|v| !v.is_empty()) {
+        return None;
+    }
+    (pref == "discrete").then_some("discrete")
+}
+
+/// Put the saved GPU preference into the environment, where cce-ui's
+/// renderer — and the compute device `gpu.rs` opens — read it. Called from
+/// `main` before the engine starts, while the process has one thread; the
+/// detached windows inherit it, since the main window spawns them.
+pub(crate) fn apply_gpu_preference() {
+    let pref = DesignSettings::load().gpu;
+    let existing = std::env::var("CCE_VK_DEVICE").ok();
+    if let Some(v) = gpu_env_for(&pref, existing.as_deref()) {
+        std::env::set_var("CCE_VK_DEVICE", v);
+    }
 }
 
 fn float_array_to_hex(rgb: &[f32; 3]) -> String {
@@ -2059,6 +2116,13 @@ pub struct State {
     /// mirrored live so "Set As Default" can rewrite it and `save_settings` —
     /// which reconstructs DesignSettings from live state — can carry it.
     pub default_project_setting: Option<String>,
+    /// The GPU setting (`DesignSettings::gpu`), mirrored live like the
+    /// startup project so `save_settings` carries it. Takes effect at the
+    /// next launch; `gpu_at_launch` is what this process is running on.
+    pub gpu_preference: String,
+    /// `CCE_VK_DEVICE` as the renderer read it — "integrated" when unset —
+    /// so the setting row can say whether a change is still pending.
+    pub gpu_at_launch: String,
     pub last_saved_root_json: String,
     /// The pane layout as of the last save — [`State::pane_layout_json`] —
     /// so a dragged plate edge, a collapse or a re-dock dirties the title
@@ -2393,6 +2457,7 @@ impl State {
             viewport: display.viewport,
             render: display.render,
             default_project: self.default_project_setting.clone(),
+            gpu: self.gpu_preference.clone(),
         };
         settings.save();
         self.last_design_mod_time = {
@@ -5645,6 +5710,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             floating_spreadsheet_inset_right: 0.0,
             loaded_project_path: None,
             default_project_setting: settings.default_project.clone(),
+            gpu_preference: settings.gpu.clone(),
+            gpu_at_launch: std::env::var("CCE_VK_DEVICE")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_lowercase())
+                .unwrap_or_else(default_gpu),
             last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
             last_saved_layout_json: String::new(),
             recent_files,
@@ -9312,6 +9383,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         self.last_design_mod_time = Some(mod_time);
                          let settings = DesignSettings::load();
                          self.default_project_setting = settings.default_project.clone();
+                         self.gpu_preference = settings.gpu.clone();
                          self.square_viewport = settings.viewport.square;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;
