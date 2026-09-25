@@ -1609,6 +1609,7 @@ impl State {
             "toggle_origin" => self.viewport().show_origin,
             "toggle_camera_pivot" => self.viewport().show_camera_pivot,
             "toggle_wireframe" => self.wireframe,
+            "toggle_smooth_shading" => self.smooth_shading,
             "toggle_point_markers" => self.show_point_markers,
             "toggle_point_numbers" => self.show_point_numbers,
             "toggle_point_normals" => self.show_point_normals,

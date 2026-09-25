@@ -1145,6 +1145,12 @@ impl State {
 
         let verts = crate::geometry::detail_vertices(&geom);
         self.vertex_count_spheres = verts.len() as u32;
+        // Smooth shading bakes the light into a raster copy of the fill;
+        // `verts` stays unlit for the path tracer, whose materials are
+        // these colours. Same triangles in the same order, so the count
+        // above serves both.
+        self.scene_smooth_verts =
+            if self.smooth_shading { crate::geometry::smooth_lit_vertices(&geom) } else { Vec::new() };
         // Cache for the path tracer, so RT mode never re-runs the node
         // graph; the version bump invalidates its scene.
         // The raster mesh uploads from this same cache on the next

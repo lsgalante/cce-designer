@@ -11,6 +11,8 @@ pub enum Action {
     ToggleOrigin,
     ToggleCameraPivot,
     ToggleWireframe,
+    /// Flat (faceted) or smooth shading of the scene fill.
+    ToggleSmoothShading,
     /// The three point overlays on the visible scene — markers, index
     /// numbers, normal whiskers. Global display settings reached from the
     /// command palette; they were per-node `meta` child preferences until

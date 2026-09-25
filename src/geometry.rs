@@ -124,6 +124,58 @@ pub fn detail_vertices(d: &Detail) -> Vec<Vertex3D> {
     d.triangulate(|position, color| Vertex3D { position, color })
 }
 
+/// The raster pass's light, in WORLD space — `scene3d.wgsl`'s `l`, which the
+/// smooth bake below has to match or switching shading modes would move
+/// the lit side of the model.
+pub const SCENE_LIGHT: [f32; 3] = [-0.55, 0.45, 0.7];
+
+/// The raster pass's shading factor for a surface whose OUTWARD normal is
+/// `n` — the multiplier `scene3d.wgsl` applies to a fragment's colour.
+///
+/// The shader's normal is `cross(dpdx(world), dpdy(world))`: screen right
+/// crossed with framebuffer DOWN, which for any visible surface points away
+/// from the viewer — into the surface. So the shader's `dot(n, l)` is this
+/// function's `dot(-n, l)`, and the wrap term and the 0.55 floor are its
+/// own. A zero normal (a point on no primitive) takes the midpoint.
+pub fn shade_factor(n: Vec3) -> f32 {
+    let l = Vec3::from_array(SCENE_LIGHT).normalize();
+    let d = if n.length_squared() > 0.0 { ((-n).dot(l) * 0.5 + 0.5).clamp(0.0, 1.0) } else { 0.5 };
+    0.55 + 0.45 * d
+}
+
+/// The scene's fill mesh with SMOOTH shading baked into its colours: each
+/// corner lit by its point's smooth normal (`point_normals`) under the
+/// raster pass's own world-fixed light, then drawn `prelit` so the shader
+/// adds nothing. Because the light never moves with the camera, lighting
+/// per vertex and interpolating is exact — Gouraud shading with no normal
+/// in the vertex format.
+///
+/// Smoothing follows the TOPOLOGY: points shared between primitives average
+/// their faces, so a welded mesh rounds off, while a soup of unshared
+/// triangles or a cut along a seam stays faceted there — as it would in
+/// any smooth-shaded viewport. Colours here only; the path tracer keeps
+/// reading the unlit ones.
+pub fn smooth_lit_vertices(d: &Detail) -> Vec<Vertex3D> {
+    let normals = point_normals(d);
+    let lit: Vec<f32> = normals.iter().map(|n| shade_factor(*n)).collect();
+    let mut out = Vec::new();
+    for prim in 0..d.num_prims() {
+        let pts = d.prim_points(prim);
+        if pts.len() < 3 {
+            continue;
+        }
+        for i in 1..pts.len() - 1 {
+            for &p in &[pts[0], pts[i], pts[i + 1]] {
+                let p = p as usize;
+                let k = lit.get(p).copied().unwrap_or(1.0);
+                let c = d.color(p);
+                out.push(Vertex3D { position: d.pos(p).to_array(), color: [c[0] * k, c[1] * k, c[2] * k] });
+            }
+        }
+    }
+    out
+}
+
 /// Fan-triangulate a [`Detail`] back into the triangle soup the evaluation
 /// pipeline still speaks, carrying attributes onto every corner.
 ///

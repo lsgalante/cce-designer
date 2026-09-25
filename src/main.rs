@@ -1384,6 +1384,106 @@ mod tests {
         assert_eq!(m.match_command(&plain, &Key::Named(NamedKey::ArrowDown)), Some("play_pause_reverse"));
     }
 
+    /// Smooth shading bakes the raster pass's own light, so on a PLANE —
+    /// where every point normal is the face normal — it gives exactly the
+    /// flat shader's factor at every corner: switching modes changes how
+    /// curved surfaces read, not the brightness of flat ones. On a closed
+    /// sphere the corners of one face differ, which is what smooth means.
+    #[test]
+    fn smooth_shading_bakes_the_flat_shaders_light_per_vertex() {
+        use crate::geometry::{shade_factor, smooth_lit_vertices, sphere_detail, detail_vertices};
+        use glam::Vec3;
+        // The shader's normal faces away from the viewer, so a face turned
+        // TOWARD the light (outward normal along l) is its darkest, and one
+        // turned away its brightest — the bake keeps that convention.
+        let l = Vec3::from_array(crate::geometry::SCENE_LIGHT).normalize();
+        assert!((shade_factor(l) - 0.55).abs() < 1e-5);
+        assert!((shade_factor(-l) - 1.0).abs() < 1e-5);
+        assert!((shade_factor(Vec3::ZERO) - (0.55 + 0.45 * 0.5)).abs() < 1e-5);
+
+        // A single quad in the XZ plane, wound to face +y.
+        let mut quad = crate::detail::Detail::new();
+        let a = quad.add_point(Vec3::new(0.0, 0.0, 0.0));
+        let b = quad.add_point(Vec3::new(0.0, 0.0, 1.0));
+        let c = quad.add_point(Vec3::new(1.0, 0.0, 1.0));
+        let d = quad.add_point(Vec3::new(1.0, 0.0, 0.0));
+        quad.add_prim(&[a, b, c, d]);
+        let n = crate::geometry::point_normals(&quad)[0];
+        assert!((n - Vec3::Y).length() < 1e-5, "the quad faces +y: {n}");
+        let lit = smooth_lit_vertices(&quad);
+        let flat = detail_vertices(&quad);
+        assert_eq!(lit.len(), flat.len(), "same triangles as the unlit fill");
+        let k = shade_factor(Vec3::Y);
+        for (l, f) in lit.iter().zip(&flat) {
+            assert_eq!(l.position, f.position);
+            for ch in 0..3 {
+                assert!((l.color[ch] - f.color[ch] * k).abs() < 1e-5);
+            }
+        }
+
+        // A closed UV sphere: same triangle list, and corners of one face
+        // no longer share one brightness.
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+        let lit = smooth_lit_vertices(&sphere);
+        assert_eq!(lit.len(), detail_vertices(&sphere).len());
+        let varied = lit.chunks(3).filter(|t| {
+            let b = |v: &crate::geometry::Vertex3D| v.color[0] + v.color[1] + v.color[2];
+            (b(&t[0]) - b(&t[1])).abs() > 1e-4 || (b(&t[0]) - b(&t[2])).abs() > 1e-4
+        }).count();
+        assert!(varied > lit.len() / 6, "smooth shading varies across faces: {varied}");
+    }
+
+    /// The viewport's right-click menu sets the display mode: the wireframe
+    /// switch, flat or smooth shading as a radio pair, and the polygon
+    /// opacity as presets — each mark reading the live state, each row
+    /// landing on it.
+    #[test]
+    fn the_viewport_menu_sets_the_display_mode() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.wireframe = false;
+        state.smooth_shading = false;
+        state.geo_opacity = 1.0;
+        let row = |state: &State, a: A| {
+            let (options, actions) = state.viewport_menu_rows();
+            let i = actions.iter().position(|x| *x == a).unwrap_or_else(|| panic!("no {a:?} row"));
+            options[i].clone()
+        };
+        assert!(row(&state, A::Command("toggle_wireframe")).starts_with('○'));
+        assert!(row(&state, A::Shading(false)).starts_with('●'));
+        assert!(row(&state, A::Shading(true)).starts_with('○'));
+        assert!(row(&state, A::Opacity(1.0)).starts_with('●'));
+        assert_eq!(row(&state, A::Opacity(0.5)), "○ Opacity 50%");
+
+        state.run_viewport_menu_action(A::Command("toggle_wireframe"));
+        assert!(state.wireframe);
+        assert!(row(&state, A::Command("toggle_wireframe")).starts_with('●'));
+
+        // Smooth: the flag, and a lit raster fill beside the unlit one the
+        // path tracer reads, triangle for triangle.
+        state.run_viewport_menu_action(A::Shading(true));
+        assert!(state.smooth_shading);
+        assert_eq!(state.scene_smooth_verts.len(), state.rt_sphere_verts.len());
+        assert!(!state.scene_smooth_verts.is_empty(), "the bundled scene draws something");
+        // Picking the mode already on is not a flip.
+        state.run_viewport_menu_action(A::Shading(true));
+        assert!(state.smooth_shading);
+        assert!(row(&state, A::Shading(true)).starts_with('●'));
+        assert_eq!(state.command_toggle_state("toggle_smooth_shading"), Some(true));
+        state.run_viewport_menu_action(A::Shading(false));
+        assert!(!state.smooth_shading);
+        assert!(state.scene_smooth_verts.is_empty(), "flat keeps no lit copy");
+
+        state.run_viewport_menu_action(A::Opacity(0.5));
+        assert!((state.geo_opacity - 0.5).abs() < 1e-6);
+        assert!(row(&state, A::Opacity(0.5)).starts_with('●'));
+        assert!(row(&state, A::Opacity(1.0)).starts_with('○'));
+        // An opacity off the presets marks none of them.
+        state.apply_setting("Geometry Opacity", "0.33");
+        let (options, _) = state.viewport_menu_rows();
+        assert!(options.iter().filter(|o| o.contains("Opacity")).all(|o| o.starts_with('○')));
+    }
+
     /// The dialog plate carries its own backdrop compression, above a
     /// menu's: whatever the plates' own is (0 in a config that keeps the
     /// panes clear), the modal pulls its backdrop toward the tint, and a
@@ -4697,6 +4797,7 @@ mod tests {
         a.point_size = 0.05;
         a.point_color = [0.0, 1.0, 0.0];
         a.group_marker_scale = 2.5;
+        a.smooth_shading = true;
         a.save_settings();
 
         let kdl = std::fs::read_to_string(DesignSettings::file_path()).expect("state.kdl was written");
@@ -4734,6 +4835,7 @@ mod tests {
         assert!(back.render.render_points);
         assert!(close(back.render.point_size, 0.05));
         assert!(close(back.render.group_marker_scale, 2.5));
+        assert!(back.render.smooth_shading);
     }
 
     /// Changing the wire colour turns single-colour mode on, so the colour

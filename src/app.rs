@@ -405,7 +405,7 @@ pub enum ParamMenuAction {
     Separator,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewportMenuAction {
     /// Move the active camera so the visible node geometry fills the view.
     FrameAll,
@@ -416,9 +416,24 @@ pub enum ViewportMenuAction {
     PinFollow,
     /// Lock the viewport to one editor's level (CONTENT_IDX / CONTENT2_IDX).
     PinTo(usize),
+    /// Run a registry command — the display toggles, so the menu's rows are
+    /// the palette's and a row is exactly as scriptable as its command.
+    Command(&'static str),
+    /// Set the shading mode: smooth (true) or flat. A radio pair over the
+    /// one `toggle_smooth_shading` flag, running the toggle only when the
+    /// pick differs, so picking the mode already on is a no-op rather than
+    /// a flip.
+    Shading(bool),
+    /// Set the polygon (geometry fill) opacity to one of `VIEWPORT_OPACITIES`
+    /// — a menu cannot hold a slider, and the palette's Geometry Opacity row
+    /// is the fine control.
+    Opacity(f32),
     /// A "-" row: engraved, inert.
     Separator,
 }
+
+/// The polygon opacities the viewport menu offers, highest first.
+pub const VIEWPORT_OPACITIES: [f32; 4] = [1.0, 0.75, 0.5, 0.25];
 
 /// The network editor's right-click context menu (on empty space — a press on
 /// a node still opens that node's menu). Every row but the separator names a
@@ -1157,6 +1172,11 @@ pub struct RenderSettings {
     /// what keeps both legible. Hard-coded at 1.25 until 2026-09-24.
     #[serde(default = "default_group_marker_scale")]
     pub group_marker_scale: f32,
+    /// Smooth (vertex-normal) shading of the scene fill, where off is the
+    /// faceted look the raster pass has always had. Absent in older files:
+    /// flat.
+    #[serde(default)]
+    pub smooth_shading: bool,
 }
 
 fn default_group_marker_scale() -> f32 {
@@ -1195,6 +1215,7 @@ impl Default for RenderSettings {
             point_size: default_point_size(),
             point_color: default_point_color(),
             group_marker_scale: default_group_marker_scale(),
+            smooth_shading: false,
         }
     }
 }
@@ -1994,6 +2015,15 @@ pub struct State {
     /// Selected-Group marker radius as a multiple of `point_size` (a
     /// setting row of the dialog; persisted in the render block).
     pub group_marker_scale: f32,
+    /// Smooth shading of the scene fill (`toggle_smooth_shading`). While on,
+    /// `scene_smooth_verts` holds the lit fill and the draw is `prelit`.
+    pub smooth_shading: bool,
+    /// The scene fill with smooth shading baked into its colours
+    /// (`geometry::smooth_lit_vertices`), built by `rebuild_scene_geometry`
+    /// while `smooth_shading` is on and empty otherwise. The raster pass
+    /// uploads this in place of `rt_sphere_verts`, which the path tracer
+    /// keeps reading unlit.
+    pub scene_smooth_verts: Vec<Vertex3D>,
     /// (geometry version, quantized size, color) the points mesh was last
     /// built from; `point_vertex_count` gates the draw.
     pub last_points_key: Option<(u64, i32, [u8; 3])>,
@@ -2213,6 +2243,7 @@ impl State {
                 point_size: self.point_size,
                 point_color: self.point_color,
                 group_marker_scale: self.group_marker_scale,
+                smooth_shading: self.smooth_shading,
             },
             default_project: self.default_project_setting.clone(),
         };
@@ -4142,8 +4173,44 @@ impl State {
 
     /// Open the viewport right-click context menu at the cursor.
     fn open_viewport_context_menu(&mut self) {
+        let (options, actions) = self.viewport_menu_rows();
+        let target = self.slots.viewport.id();
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        self.viewport_menu_active = true;
+        self.viewport_menu_actions = actions;
+    }
+
+    /// The viewport menu's rows and what each does: framing, then the
+    /// DISPLAY MODE — the wireframe switch, flat or smooth shading as a
+    /// radio pair, and the polygon opacity as a radio group of presets —
+    /// then the editor pin. Split from the open so a test can read it.
+    ///
+    /// Marks are the ●/○ the pin rows and the network menu use. An opacity
+    /// set to anything off the presets (the palette's slider) marks none of
+    /// them, which says so honestly rather than rounding to the nearest.
+    pub(crate) fn viewport_menu_rows(&self) -> (Vec<String>, Vec<ViewportMenuAction>) {
         let mut options = vec!["Frame All".to_string(), "View 1:1".to_string()];
         let mut actions = vec![ViewportMenuAction::FrameAll, ViewportMenuAction::OneToOne];
+        let mark = |on: bool| if on { "●" } else { "○" };
+
+        options.push("-".to_string());
+        actions.push(ViewportMenuAction::Separator);
+        let wire_label = crate::command::by_id("toggle_wireframe").map(|c| c.label).unwrap_or("Show Wireframe");
+        options.push(format!("{} {wire_label}", mark(self.wireframe)));
+        actions.push(ViewportMenuAction::Command("toggle_wireframe"));
+        options.push(format!("{} Flat Shading", mark(!self.smooth_shading)));
+        actions.push(ViewportMenuAction::Shading(false));
+        options.push(format!("{} Smooth Shading", mark(self.smooth_shading)));
+        actions.push(ViewportMenuAction::Shading(true));
+
+        options.push("-".to_string());
+        actions.push(ViewportMenuAction::Separator);
+        for o in VIEWPORT_OPACITIES {
+            let on = (self.geo_opacity - o).abs() < 0.005;
+            options.push(format!("{} Opacity {}%", mark(on), (o * 100.0).round() as i32));
+            actions.push(ViewportMenuAction::Opacity(o));
+        }
+
         // The viewport's editor binding, as a radio group: follow the active
         // editor, or pin to one. Pin rows appear only while a second editor
         // exists — with one editor, following IS pinned.
@@ -4164,10 +4231,41 @@ impl State {
             ));
             actions.push(ViewportMenuAction::PinTo(crate::slots::CONTENT2_IDX));
         }
-        let target = self.slots.viewport.id();
-        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
-        self.viewport_menu_active = true;
-        self.viewport_menu_actions = actions;
+        (options, actions)
+    }
+
+    /// Run one viewport menu row — the click path, and the tests'.
+    pub(crate) fn run_viewport_menu_action(&mut self, action: ViewportMenuAction) {
+        match action {
+            ViewportMenuAction::FrameAll => {
+                self.frame_all();
+            }
+            ViewportMenuAction::OneToOne => {
+                self.view_one_to_one();
+            }
+            ViewportMenuAction::PinFollow => {
+                self.viewport_pin = None;
+                self.rebuild_scene_geometry();
+            }
+            ViewportMenuAction::PinTo(e) => {
+                self.viewport_pin = Some(e);
+                self.rebuild_scene_geometry();
+            }
+            ViewportMenuAction::Command(id) => {
+                self.run_command(id);
+            }
+            ViewportMenuAction::Shading(smooth) => {
+                if self.smooth_shading != smooth {
+                    self.run_command("toggle_smooth_shading");
+                }
+            }
+            ViewportMenuAction::Opacity(o) => {
+                // The palette's Geometry Opacity row, so the write, the
+                // persist and the dialog's re-read are the one path.
+                self.apply_setting("Geometry Opacity", &format!("{o:.2}"));
+            }
+            ViewportMenuAction::Separator => {}
+        }
     }
 
     pub fn viewport_menu_open(&self) -> bool {
@@ -4191,23 +4289,7 @@ impl State {
             let picked = idx.and_then(|i| self.viewport_menu_actions.get(i).copied());
             self.close_viewport_menu();
             if let Some(action) = picked {
-                match action {
-                    ViewportMenuAction::FrameAll => {
-                        self.frame_all();
-                    }
-                    ViewportMenuAction::OneToOne => {
-                        self.view_one_to_one();
-                    }
-                    ViewportMenuAction::PinFollow => {
-                        self.viewport_pin = None;
-                        self.rebuild_scene_geometry();
-                    }
-                    ViewportMenuAction::PinTo(e) => {
-                        self.viewport_pin = Some(e);
-                        self.rebuild_scene_geometry();
-                    }
-                    ViewportMenuAction::Separator => {}
-                }
+                self.run_viewport_menu_action(action);
             }
             return true;
         }
@@ -5180,6 +5262,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             point_size: settings.render.point_size,
             point_color: settings.render.point_color,
             group_marker_scale: settings.render.group_marker_scale,
+            smooth_shading: settings.render.smooth_shading,
+            scene_smooth_verts: Vec::new(),
             last_points_key: None,
             point_vertex_count: 0,
             last_viewport_render_points: false,
@@ -6804,6 +6888,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // while the wireframe is off, so switching it on has to
                 // rebuild — there is nothing staged to draw otherwise.
                 self.rebuild_scene_geometry();
+            }
+            // The smooth-lit fill is baked with the scene and dropped while
+            // flat, so the flip rebuilds, as the wireframe's does.
+            Action::ToggleSmoothShading => {
+                self.smooth_shading = !self.smooth_shading;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
             }
             // The three point overlays. Each is collected in
             // `rebuild_scene_geometry` off the scene's own Detail, so the
@@ -8985,7 +9076,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
         if self.spheres_dirty {
             self.spheres_dirty = false;
-            renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&self.rt_sphere_verts));
+            let fill = if self.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
+            renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(fill));
             // Edge mesh for the wire pass, collected with the scene.
             renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&self.scene_edge_verts));
         }
@@ -9240,36 +9332,36 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     // furniture stays opaque.
                     const NO_TINT: [f32; 4] = [0.0; 4];
                     let geo_opacity = self.geo_opacity.clamp(0.0, 1.0);
-                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 }];
+                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false }];
                     if self.viewport().show_grid {
-                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                     }
                     if self.viewport().show_origin {
-                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                     }
                     if self.viewport().show_camera_pivot {
-                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                     }
                     if self.viewport().show_cube {
-                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                     }
                     if self.render_points && self.point_vertex_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0 });
+                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                     }
                     // Selected-Group markers: full-opacity selection feedback,
                     // deliberately outside the Render node's Opacity.
                     if self.group_point_vertex_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                        draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                     }
                     // Per-node meta "Point Markers", same full-opacity tier.
                     if self.overlay_point_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.overlay_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                        draws.push(SceneDraw { mesh: meshes.overlay_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                     }
                     if self.vertex_count_spheres > 0 {
                         // With wires coming, the fill is pushed back by its
                         // slope-scaled offset so the lattice reads solid.
                         let base = if self.wireframe { self.wire_width } else { 0.0 };
-                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base });
+                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading });
                         if self.wireframe {
                             // The wire pass rides ON TOP of the fill (never
                             // replaces it). Single-color mode replaces the
@@ -9288,13 +9380,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 [0.0, 0.0, 0.0, 0.0]
                             };
                             let wire_alpha = self.wire_color[3].clamp(0.0, 1.0);
-                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0 });
+                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false });
                         }
                         // Show Point Normals: thin cyan whiskers,
                         // width deliberately fixed (a chunky Wire Width is a
                         // wireframe styling choice, not a normals one).
                         if self.overlay_normal_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0 });
+                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);

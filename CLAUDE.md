@@ -1353,6 +1353,36 @@ Houdini uses: bare hjkl is the cursor, and shift+hjkl is reserved for the
 select family this app cannot implement until the Graph widget has
 multi-selection, so taking `Shift+L` now would have to be given back later.
 
+### Display mode: the viewport menu, and smooth shading
+
+The viewport's right-click menu carries the DISPLAY MODE under Frame All
+and View 1:1: the Show Wireframe switch (its registry command), **Flat
+Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
+and the polygon **Opacity** as presets (`VIEWPORT_OPACITIES`, landing
+through `apply_setting("Geometry Opacity", …)` so the palette's row, the
+persist and the menu are one path — a menu cannot hold a slider, and an
+opacity set off the presets marks none of them). `viewport_menu_rows` and
+`run_viewport_menu_action` are split from the open and the click so a test
+reads and runs the rows.
+
+**Smooth shading is baked, not shaded.** The raster pass flat-shades every
+fill in `scene3d.wgsl` from screen-space derivative normals, and cce-ui's
+`Vertex3D` carries no normal. The light is fixed in WORLD space, though, so
+lighting each vertex from its smooth point normal and interpolating is
+exact: `geometry::smooth_lit_vertices` multiplies each corner's colour by
+`shade_factor(point_normals[p])`, and the fill draws with
+`SceneDraw::prelit` (cce-ui, 2026-09-24) so the shader does not shade it
+twice. `shade_factor` has to agree with the shader about which side is
+lit: the shader's normal is screen-right × framebuffer-DOWN, which for any
+visible surface points AWAY from the viewer — into the surface — so the
+bake uses `dot(-n_outward, l)`; on a plane the two modes give identical
+brightness (`smooth_shading_bakes_the_flat_shaders_light_per_vertex`). The
+lit copy is `State::scene_smooth_verts`, kept only while smooth is on; the
+path tracer keeps reading the unlit `rt_sphere_verts`, whose colours are
+its materials. Smoothing follows topology, so a welded mesh rounds off and
+a soup of unshared triangles stays faceted. Persisted as
+`render.smooth_shading` in state.kdl.
+
 ### Dragging the scene orbits the camera
 
 `State::orbit_camera_by` turns the camera by a drag delta, armed by a left

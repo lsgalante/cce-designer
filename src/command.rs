@@ -189,6 +189,7 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "toggle_origin", label: "Show Origin", context: Context::Viewport, run: Run::Key(Action::ToggleOrigin), default_chord: None },
     Command { id: "toggle_camera_pivot", label: "Show Camera Pivot", context: Context::Viewport, run: Run::Key(Action::ToggleCameraPivot), default_chord: None },
     Command { id: "toggle_wireframe", label: "Show Wireframe", context: Context::Viewport, run: Run::Key(Action::ToggleWireframe), default_chord: None },
+    Command { id: "toggle_smooth_shading", label: "Smooth Shading", context: Context::Viewport, run: Run::Key(Action::ToggleSmoothShading), default_chord: None },
     // The point overlays on the visible scene. Per-node `meta` child
     // preferences until 2026-09-23; global display settings now, reached
     // here like every other viewport toggle.
