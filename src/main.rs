@@ -1435,6 +1435,50 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A detached window writes its tree and navigation into the sync channel
+    /// and leaves the layout there as the main window last wrote it — it used
+    /// to write its own defaults, so a full load of the file restored the
+    /// wrong plates.
+    #[test]
+    fn a_detached_window_leaves_the_channels_layout_alone() {
+        let dir = std::env::temp_dir().join(format!("cce-designer-sync-write-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let channel = dir.join("default_project.json");
+
+        let mut main = State::new(false);
+        main.resize(1600.0, 900.0, 1.0);
+        main.floating_param_width = 650.0;
+        main.viewport_mut().rotation_x = 0.7;
+        main.rebuild_positions();
+        main.save_to_file(&channel).expect("main writes the channel");
+
+        let mut child = State::new(false);
+        child.detached_pane = Some(crate::slots::PARAM_IDX);
+        child.resize(400.0, 300.0, 1.0);
+        child.rebuild_positions();
+        child.fs_root.children[0].name = "synced_edit".to_string();
+        child.graph_mut().set_selected_node(Some(0));
+        child.save_to_file(&channel).expect("child writes the channel");
+
+        let proj: crate::app::Project = serde_json::from_str(&fs::read_to_string(&channel).unwrap()).unwrap();
+        assert!(proj.root.children.iter().any(|c| c.name == "synced_edit"), "the tree is the child's");
+        assert_eq!(proj.view_state.selected_node, Some(0), "so is the navigation");
+        let plates = proj.view_state.plates.expect("the main window's plates stay in the file");
+        assert!((plates.params_width - 650.0 / 1600.0).abs() < 1e-4, "params width: {}", plates.params_width);
+        let view = proj.view_state.default_view.expect("the main window's camera stays in the file");
+        assert!((view.rotation.0 - 0.7).abs() < 1e-6, "camera: {:?}", view.rotation);
+
+        // No file to keep a layout from: the layout blocks go absent, which
+        // a full load reads as "keep the live layout".
+        let _ = fs::remove_file(&channel);
+        child.save_to_file(&channel).expect("child writes a fresh channel");
+        let proj: crate::app::Project = serde_json::from_str(&fs::read_to_string(&channel).unwrap()).unwrap();
+        assert!(proj.view_state.plates.is_none() && proj.view_state.visible_panes.is_none(), "no layout of the child's");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// A dragged plate edge is an unsaved change — the save file carries the
     /// plate geometry, so the title's asterisk must follow it, and clear on
     /// save. A window resize alone must NOT dirty it.

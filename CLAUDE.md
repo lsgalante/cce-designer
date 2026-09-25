@@ -65,6 +65,9 @@ gone.)
   (`load_sync_channel(path, keep_own_view: true)`), never the view state a
   detached window wrote — that is the detached window's defaults, and applying
   it reset the main window's plate sizes, panes and camera on every autosave.
+  The write side matches: a detached window's save keeps the view state
+  already in the file and replaces only the navigation (`detached_view_state`),
+  so the file always carries the main window's layout.
   Note that detaching REWRITES `default_project.json` in the source tree, since that
   file is the sync channel; it is versioned, so check `git status` after testing.
 

@@ -224,6 +224,34 @@ impl State {
         }
     }
 
+    /// The view state a DETACHED window writes into the sync channel: the
+    /// file's own (the main window's layout, display settings and camera,
+    /// as it last wrote them) with only the navigation replaced — the path,
+    /// selection, pan and active camera, which are the parts the main
+    /// window's reload takes. A detached window has no layout worth saving;
+    /// it used to write its defaults here, leaving a file that restored the
+    /// wrong plates and panes whenever it was loaded in full. With no
+    /// readable file the layout blocks go absent, which a full load reads
+    /// as "keep the live layout".
+    fn detached_view_state(&self, path: &Path) -> ProjectViewState {
+        #[derive(serde::Deserialize)]
+        struct ViewOnly {
+            #[serde(default)]
+            view_state: ProjectViewState,
+        }
+        let mut vs = fs::read_to_string(path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<ViewOnly>(&c).ok())
+            .map(|v| v.view_state)
+            .unwrap_or_default();
+        let own = self.project_view_state();
+        vs.active_camera = own.active_camera;
+        vs.pan = own.pan;
+        vs.current_path = own.current_path;
+        vs.selected_node = own.selected_node;
+        vs
+    }
+
     pub(crate) fn save_to_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         // The View subnet params mirror the live pane flags, but nothing
         // refreshes them on a pane toggle — sync the mirror now so the saved
@@ -235,11 +263,16 @@ impl State {
             self.migrate_meta_settings_node();
         }
         if path.file_name().map_or(false, |n| n == "default_project.json") {
+            let view_state = if self.is_detached_network || self.detached_pane.is_some() {
+                self.detached_view_state(path)
+            } else {
+                self.project_view_state()
+            };
             let proj = Project {
                 name: "Default Project".to_string(),
                 root: self.fs_root.clone(),
                 format: crate::app::PROJECT_FORMAT,
-                view_state: self.project_view_state(),
+                view_state,
             };
             let content = serde_json::to_string_pretty(&proj)?;
             fs::write(path, content)?;
