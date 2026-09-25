@@ -61,6 +61,10 @@ gone.)
   control is the only way to Reattach — and reaps its children with `try_wait` from
   the frame tick, so a window the user closes hands its pane back. NOT `kill(pid, 0)`:
   an unreaped exited child is a zombie, which that probe calls alive forever.
+  The main window's reload of that channel takes the TREE and navigation only
+  (`load_sync_channel(path, keep_own_view: true)`), never the view state a
+  detached window wrote — that is the detached window's defaults, and applying
+  it reset the main window's plate sizes, panes and camera on every autosave.
   Note that detaching REWRITES `default_project.json` in the source tree, since that
   file is the sync channel; it is versioned, so check `git status` after testing.
 

@@ -382,56 +382,77 @@ impl State {
         }
     }
 
-    pub(crate) fn load_from_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        if path.file_name().map_or(false, |n| n == "default_project.json") {
-            let content = fs::read_to_string(path)?;
-            let mut proj: Project = serde_json::from_str(&content)?;
-            proj.sanitize_node_names();
-            proj.migrate_param_refs();
-            crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
-            self.fs_root = proj.root;
-            self.migrate_meta_settings_node();
+    /// Load the bundled `default_project.json`, which is also the detached
+    /// windows' sync channel. `keep_own_view` is the main window reloading
+    /// what a DETACHED window wrote: it takes the tree and where the user is
+    /// in it (path, selection, pan, active camera) and keeps its own layout,
+    /// display settings and camera view. A detached window has no plates,
+    /// docks or viewport of its own worth the name, so the view state it
+    /// writes is its defaults — and applying that on every one of its
+    /// autosaves reset the main window's plate sizes, pane visibility,
+    /// collapses and camera, and cancelled any pane-edge drag in progress.
+    pub(crate) fn load_sync_channel(&mut self, path: &Path, keep_own_view: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut proj: Project = serde_json::from_str(&content)?;
+        proj.sanitize_node_names();
+        proj.migrate_param_refs();
+        crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
+        self.fs_root = proj.root;
+        self.migrate_meta_settings_node();
+        if !keep_own_view {
             // Before the default view, whose camera-node rule has the last
             // word on the square aspect and the pivot marker.
             if let Some(d) = &proj.view_state.display {
                 self.apply_display_settings(d);
             }
             self.apply_pane_state_from_project(&proj.view_state);
-            self.set_active_camera(proj.view_state.active_camera);
-            self.pan_x = proj.view_state.pan.0;
-            self.pan_y = proj.view_state.pan.1;
-            self.pan_velocity_x = 0.0;
-            self.pan_velocity_y = 0.0;
-            self.last_frame_pan_x = self.pan_x;
-            self.last_frame_pan_y = self.pan_y;
-            self.current_path = proj.view_state.current_path;
+        }
+        self.set_active_camera(proj.view_state.active_camera);
+        self.pan_x = proj.view_state.pan.0;
+        self.pan_y = proj.view_state.pan.1;
+        self.pan_velocity_x = 0.0;
+        self.pan_velocity_y = 0.0;
+        self.last_frame_pan_x = self.pan_x;
+        self.last_frame_pan_y = self.pan_y;
+        self.current_path = proj.view_state.current_path;
+        if !keep_own_view {
             self.apply_default_view_from_project(proj.view_state.default_view);
+        }
 
-            let sel = proj.view_state.selected_node;
-            self.graph_mut().set_selected_node(sel);
-            if sel.is_some() {
-                self.focused_widget = Some(CONTENT_IDX);
-            } else {
-                self.focused_widget = None;
-            }
-            self.drag_widget = None;
+        let sel = proj.view_state.selected_node;
+        self.graph_mut().set_selected_node(sel);
+        if sel.is_some() {
+            self.focused_widget = Some(CONTENT_IDX);
+        } else {
+            self.focused_widget = None;
+        }
+        self.drag_widget = None;
+        if !keep_own_view {
+            // A pane-edge or dock drag is layout, which a sync reload no
+            // longer touches — the drag in hand stays in hand.
             self.app_drag = None;
-            self.last_click = None;
+        }
+        self.last_click = None;
 
-            self.sync_grid_settings();
-            self.sync_nodes();
-            self.sync_cursor_and_selection_from_loaded();
-            self.sync_cursor_and_selection();
-            self.sync_parameters_pane();
+        self.sync_grid_settings();
+        self.sync_nodes();
+        self.sync_cursor_and_selection_from_loaded();
+        self.sync_cursor_and_selection();
+        self.sync_parameters_pane();
 
-            self.rebuild_scene_geometry();
-            self.rebuild_positions();
-            self.apply_layout();
-            self.update_panel_bounds();
-            self.loaded_project_path = None;
-            self.mark_saved();
-            self.update_window_title();
-            return Ok(());
+        self.rebuild_scene_geometry();
+        self.rebuild_positions();
+        self.apply_layout();
+        self.update_panel_bounds();
+        self.loaded_project_path = None;
+        self.mark_saved();
+        self.update_window_title();
+        Ok(())
+    }
+
+    pub(crate) fn load_from_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        if path.file_name().map_or(false, |n| n == "default_project.json") {
+            return self.load_sync_channel(path, false);
         }
 
         let (state_file_path, project_dir) = if path.is_dir() {

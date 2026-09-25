@@ -1396,6 +1396,45 @@ mod tests {
         assert!((s.positions[crate::slots::PARAM_IDX].2 - 650.0).abs() < 0.5, "drawn param width: {:?}", s.positions[crate::slots::PARAM_IDX]);
     }
 
+    /// The main window's sync reload takes a detached window's TREE edit and
+    /// keeps its own view. It used to apply the whole view state the detached
+    /// window wrote — that window's default plates, panes and camera — so
+    /// every autosave from it reset the main window's layout.
+    #[test]
+    fn a_detached_windows_save_does_not_reset_the_main_layout() {
+        let dir = std::env::temp_dir().join(format!("cce-designer-sync-view-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let channel = dir.join("default_project.json");
+
+        let mut main = State::new(false);
+        main.resize(1600.0, 900.0, 1.0);
+        main.floating_network_layout.2 = 700.0;
+        main.floating_param_width = 650.0;
+        main.floating_spreadsheet_height = 420.0;
+        main.viewport_mut().rotation_x = 0.7;
+        main.rebuild_positions();
+
+        let mut child = State::new(false);
+        child.detached_pane = Some(crate::slots::PARAM_IDX);
+        child.resize(400.0, 300.0, 1.0);
+        child.rebuild_positions();
+        child.fs_root.children[0].name = "synced_edit".to_string();
+        child.save_to_file(&channel).expect("child writes the channel");
+
+        main.app_drag = Some(crate::app::AppDrag::ParamResize { start_w: 650.0, start_mouse_x: 0.0 });
+        main.load_sync_channel(&channel, true).expect("main reloads");
+
+        assert!(main.fs_root.children.iter().any(|c| c.name == "synced_edit"), "the tree edit must sync");
+        assert!((main.floating_network_layout.2 - 700.0).abs() < 0.5, "network width: {}", main.floating_network_layout.2);
+        assert!((main.floating_param_width - 650.0).abs() < 0.5, "param width: {}", main.floating_param_width);
+        assert!((main.floating_spreadsheet_height - 420.0).abs() < 0.5, "spreadsheet height: {}", main.floating_spreadsheet_height);
+        assert!((main.viewport().rotation_x - 0.7).abs() < 1e-6, "camera: {}", main.viewport().rotation_x);
+        assert!(main.app_drag.is_some(), "a plate drag in progress survives the reload");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// A dragged plate edge is an unsaved change — the save file carries the
     /// plate geometry, so the title's asterisk must follow it, and clear on
     /// save. A window resize alone must NOT dirty it.

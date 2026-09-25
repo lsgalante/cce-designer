@@ -123,7 +123,10 @@ impl State {
                 if let Ok(mod_time) = m.modified() {
                     if Some(mod_time) != self.last_project_mod_time {
                         self.last_project_mod_time = Some(mod_time);
-                        if let Err(e) = self.load_from_file(&path) {
+                        // The main window keeps its own view: what changed
+                        // on disk was a detached window's edit to the tree.
+                        let keep_own_view = !self.is_detached_network && self.detached_pane.is_none();
+                        if let Err(e) = self.load_sync_channel(&path, keep_own_view) {
                             eprintln!("Failed to auto-reload project: {:?}", e);
                         } else {
                             redraw = true;
