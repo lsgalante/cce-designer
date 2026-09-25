@@ -451,6 +451,9 @@ pub enum ViewportMenuAction {
     /// band drags it, and the menu stays open. Picking the row runs nothing
     /// — the slider's changes arrive through `drain_viewport_menu_slider`.
     OpacitySlider,
+    /// The wire pass's thickness in px, a slider row under Show Wireframe:
+    /// 1–8 like the palette's Wire Thickness row, half a pixel a notch.
+    WireThicknessSlider,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -4310,29 +4313,62 @@ impl State {
         let (options, actions) = self.viewport_menu_rows();
         let target = self.slots.viewport.id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
-        if let Some(i) = actions.iter().position(|a| *a == ViewportMenuAction::OpacitySlider) {
-            cce_ui::widget::context_menu::set_row_slider(i, self.opacity_menu_slider());
+        for (i, a) in actions.iter().enumerate() {
+            if let Some(slider) = self.viewport_menu_slider(*a) {
+                cce_ui::widget::context_menu::set_row_slider(i, slider);
+            }
         }
         self.viewport_menu_active = true;
         self.viewport_menu_actions = actions;
     }
 
-    /// The viewport menu's opacity slider: the live fill opacity in percent,
-    /// stepped by 5 — the palette's Geometry Opacity row is the fine control.
-    fn opacity_menu_slider(&self) -> cce_ui::widget::context_menu::MenuSlider {
-        cce_ui::widget::context_menu::MenuSlider {
-            value: (self.geo_opacity.clamp(0.0, 1.0) * 100.0).round(),
-            min: 0.0,
-            max: 100.0,
-            step: 5.0,
-            decimals: 0,
-            suffix: "%",
-        }
+    /// The slider a viewport menu row carries, read from the live value —
+    /// `None` for an action row. The one table of the menu's sliders:
+    /// `open_viewport_context_menu` sets each from here and
+    /// `land_viewport_menu_slider` writes each back, so a slider row is
+    /// added in those two matches and the row list.
+    ///
+    /// Opacity reads in percent, stepped by 5; Wire Thickness in px over the
+    /// palette row's own 1–8, by half a pixel. The palette rows are the fine
+    /// controls.
+    pub(crate) fn viewport_menu_slider(&self, action: ViewportMenuAction) -> Option<cce_ui::widget::context_menu::MenuSlider> {
+        use cce_ui::widget::context_menu::MenuSlider;
+        Some(match action {
+            ViewportMenuAction::OpacitySlider => MenuSlider {
+                value: (self.geo_opacity.clamp(0.0, 1.0) * 100.0).round(),
+                min: 0.0,
+                max: 100.0,
+                step: 5.0,
+                decimals: 0,
+                suffix: "%",
+            },
+            ViewportMenuAction::WireThicknessSlider => MenuSlider {
+                value: self.wire_width.clamp(1.0, 8.0),
+                min: 1.0,
+                max: 8.0,
+                step: 0.5,
+                decimals: 1,
+                suffix: " px",
+            },
+            _ => return None,
+        })
     }
 
-    /// Land what the viewport menu's slider did. During a drag this is
-    /// called on every motion, so it only sets the value and asks for a
-    /// redraw — opacity is a draw-time uniform, and `apply_setting`'s full
+    /// Write a slider row's value onto the live field. Both are draw-time
+    /// values — a uniform, a line width and the fill's matching depth bias —
+    /// so a redraw is all either needs.
+    fn land_viewport_menu_slider(&mut self, action: ViewportMenuAction, v: f32) {
+        match action {
+            ViewportMenuAction::OpacitySlider => self.geo_opacity = (v / 100.0).clamp(0.0, 1.0),
+            ViewportMenuAction::WireThicknessSlider => self.wire_width = v.clamp(1.0, 8.0),
+            _ => return,
+        }
+        self.viewport_dirty = true;
+    }
+
+    /// Land what a viewport menu slider did. During a drag this is called
+    /// on every motion, so it only sets the value and asks for a redraw —
+    /// every menu slider is a draw-time value, and `apply_setting`'s full
     /// regenerate-and-rebuild pass would re-evaluate the graph per pixel of
     /// drag. `persist` saves state.kdl, which the wheel does per step and a
     /// drag does once, on the release.
@@ -4343,24 +4379,22 @@ impl State {
             }
             return false;
         };
-        if self.viewport_menu_actions.get(idx) == Some(&ViewportMenuAction::OpacitySlider) {
-            self.geo_opacity = (v / 100.0).clamp(0.0, 1.0);
-            self.viewport_dirty = true;
-            if persist {
-                self.save_settings();
+        if let Some(action) = self.viewport_menu_actions.get(idx).copied() {
+            if self.viewport_menu_slider(action).is_some() {
+                self.land_viewport_menu_slider(action, v);
+                if persist {
+                    self.save_settings();
+                }
             }
         }
         true
     }
 
     /// The viewport menu's rows and what each does: framing, then the
-    /// DISPLAY MODE — the wireframe switch, flat or smooth shading as a
-    /// radio pair, and the polygon opacity as a radio group of presets —
-    /// then the editor pin. Split from the open so a test can read it.
-    ///
-    /// Marks are the ●/○ the pin rows and the network menu use. An opacity
-    /// set to anything off the presets (the palette's slider) marks none of
-    /// them, which says so honestly rather than rounding to the nearest.
+    /// DISPLAY MODE — the wireframe switch and its thickness slider, flat or
+    /// smooth shading as a radio pair, the polygon opacity slider and Show
+    /// Occluded — then the editor pin. Split from the open so a test can
+    /// read it. Marks are the ●/○ the pin rows and the network menu use.
     pub(crate) fn viewport_menu_rows(&self) -> (Vec<String>, Vec<ViewportMenuAction>) {
         let mut options = vec!["Frame All".to_string(), "View 1:1".to_string()];
         let mut actions = vec![ViewportMenuAction::FrameAll, ViewportMenuAction::OneToOne];
@@ -4371,6 +4405,8 @@ impl State {
         let wire_label = crate::command::by_id("toggle_wireframe").map(|c| c.label).unwrap_or("Show Wireframe");
         options.push(format!("{} {wire_label}", mark(self.wireframe)));
         actions.push(ViewportMenuAction::Command("toggle_wireframe"));
+        options.push("Wire Thickness".to_string());
+        actions.push(ViewportMenuAction::WireThicknessSlider);
         options.push(format!("{} Flat Shading", mark(!self.smooth_shading)));
         actions.push(ViewportMenuAction::Shading(false));
         options.push(format!("{} Smooth Shading", mark(self.smooth_shading)));
@@ -4433,7 +4469,7 @@ impl State {
                 }
             }
             // The slider row is worked, not picked.
-            ViewportMenuAction::OpacitySlider => {}
+            ViewportMenuAction::OpacitySlider | ViewportMenuAction::WireThicknessSlider => {}
             ViewportMenuAction::Separator => {}
         }
     }

@@ -1644,6 +1644,46 @@ mod tests {
         context_menu::hide();
     }
 
+    /// Wire Thickness is a slider row right under Show Wireframe, over the
+    /// palette row's 1–8 px: the wheel steps half a pixel and saves, a press
+    /// on the band jumps, and the value is the live `wire_width` the wire
+    /// pass draws with.
+    #[test]
+    fn the_viewport_menu_sets_the_wire_thickness_by_wheel() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.wire_width = 2.0;
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let acts = state.viewport_menu_actions.clone();
+        let i = acts.iter().position(|a| *a == A::WireThicknessSlider).expect("a Wire Thickness row");
+        assert_eq!(acts[i - 1], A::Command("toggle_wireframe"), "it sits under Show Wireframe");
+        let sl = context_menu::slider(i).expect("the row is a slider");
+        assert_eq!((sl.value, sl.min, sl.max, sl.step), (2.0, 1.0, 8.0, 0.5));
+        // Every other slider the menu carries answers the same table.
+        for (k, a) in acts.iter().enumerate() {
+            assert_eq!(context_menu::slider(k).is_some(), state.viewport_menu_slider(*a).is_some(), "row {k} {a:?}");
+        }
+
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
+        assert!((state.wire_width - 3.0).abs() < 1e-6, "{}", state.wire_width);
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(kdl.contains("wire_width (f64)3") || kdl.contains("wire_width 3"), "persisted: {kdl}");
+        assert!(state.viewport_menu_open());
+
+        let band = context_menu::CONTEXT_MENU.with(|m| m.borrow().slider_band(i));
+        state.cursor_x = band.x + 1.0;
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert!((state.wire_width - 1.0).abs() < 1e-6, "the band's left end is 1 px: {}", state.wire_width);
+        context_menu::hide();
+    }
+
     /// The dialog plate carries its own backdrop compression, above a
     /// menu's: whatever the plates' own is (0 in a config that keeps the
     /// panes clear), the modal pulls its backdrop toward the tint, and a

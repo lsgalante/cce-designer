@@ -1379,9 +1379,13 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 The viewport's right-click menu carries the DISPLAY MODE under Frame All
 and View 1:1: the Show Wireframe switch (its registry command), **Flat
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
-and the polygon **Opacity** as a SLIDER row — cce-ui's
-`context_menu::MenuSlider` (2026-09-25), set on the shown menu by
-`open_viewport_context_menu`. The wheel over it steps 5% and saves; a press
+a **Wire Thickness** slider under the wireframe switch (1–8 px by
+half a pixel, the palette row's range), and the polygon **Opacity** as a
+SLIDER row — cce-ui's `context_menu::MenuSlider` (2026-09-25), set on the
+shown menu by `open_viewport_context_menu`. `viewport_menu_slider` is the
+one table of the menu's sliders (read from the live value) and
+`land_viewport_menu_slider` writes each back, so another slider row is a
+row in `viewport_menu_rows` plus an arm in each. The wheel over Opacity steps 5% and saves; a press
 on its band jumps and drags (a slider row never closes the menu), landing
 the value live and committing on the release. The designer dispatches the
 menu itself, so four hooks carry it: `slider_press` ahead of the row action
