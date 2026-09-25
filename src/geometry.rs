@@ -124,6 +124,33 @@ pub fn detail_vertices(d: &Detail) -> Vec<Vertex3D> {
     d.triangulate(|position, color| Vertex3D { position, color })
 }
 
+/// The fill's triangles reordered FARTHEST FIRST from `eye` (mesh space),
+/// by the squared distance to each centroid — what a see-through fill
+/// needs, since with no depth writes the pass blends in submission order and
+/// a near layer drawn before a far one would sit under it. Painter's order
+/// by centroid is exact for non-intersecting triangles of similar size and
+/// close enough for the rest, which is the trade every sorted-transparency
+/// viewport makes. `verts` is a triangle list; a trailing partial triangle
+/// is dropped.
+pub fn sort_triangles_back_to_front(verts: &[Vertex3D], eye: Vec3) -> Vec<Vertex3D> {
+    let tris = verts.len() / 3;
+    let mut keyed: Vec<(f32, usize)> = (0..tris)
+        .map(|t| {
+            let c = (Vec3::from_array(verts[3 * t].position)
+                + Vec3::from_array(verts[3 * t + 1].position)
+                + Vec3::from_array(verts[3 * t + 2].position))
+                / 3.0;
+            ((c - eye).length_squared(), t)
+        })
+        .collect();
+    keyed.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+    let mut out = Vec::with_capacity(tris * 3);
+    for (_, t) in keyed {
+        out.extend_from_slice(&verts[3 * t..3 * t + 3]);
+    }
+    out
+}
+
 /// The raster pass's light, in WORLD space — `scene3d.wgsl`'s `l`, which the
 /// smooth bake below has to match or switching shading modes would move
 /// the lit side of the model.

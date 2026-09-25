@@ -474,9 +474,9 @@ fn main() {
                 renderer.stage_scene(
                     pane,
                     vec![
-                        SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d(), wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false },
-                        SceneDraw { mesh: grid_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false },
-                        SceneDraw { mesh: cube_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false },
+                        SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d(), wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false },
+                        SceneDraw { mesh: grid_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false },
+                        SceneDraw { mesh: cube_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false },
                     ],
                 );
             }

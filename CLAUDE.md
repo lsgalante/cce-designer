@@ -1404,6 +1404,26 @@ its materials. Smoothing follows topology, so a welded mesh rounds off and
 a soup of unshared triangles stays faceted. Persisted as
 `render.smooth_shading` in state.kdl.
 
+**Show Occluded draws a translucent fill see-through** (`toggle_show_occluded`,
+a viewport-menu row under the opacity presets; `render.show_occluded`). In
+effect only below full opacity (`State::see_through_active`) — at 100% the
+ordinary fill is exact and cheaper, and the toggle says so on the status
+line rather than doing nothing silently. The fill then draws through cce-ui's
+`SceneDraw::see_through` pipeline (2026-09-25): no face culling, so a closed
+mesh shows its far wall, and no depth WRITES, so its near layers hide
+neither its far ones nor the wires — the wire pass needs no change, since
+nothing it tests against was written. The depth TEST stays on, so what is
+drawn before the fill (grid, cube, points, markers) still occludes it.
+Blending without depth writes is in submission order, so the stage pass
+re-sorts the fill's triangles FARTHEST FIRST from the eye
+(`geometry::sort_triangles_back_to_front`, centroid distance — painter's
+order, exact for non-intersecting triangles and close for the rest) and
+re-uploads them whenever the geometry version, the shading or the eye moves
+(`State::sorted_fill_key`), which during an orbit is every frame. The eye
+is taken in MESH space, the inverse of view × model. Leaving see-through
+clears the key and re-uploads nothing: sorted order is still a valid
+opaque mesh.
+
 ### Dragging the scene orbits the camera
 
 `State::orbit_camera_by` turns the camera by a drag delta, armed by a left

@@ -1199,6 +1199,12 @@ pub struct RenderSettings {
     /// flat.
     #[serde(default)]
     pub smooth_shading: bool,
+    /// See-through fill: below full opacity the fill draws with no culling
+    /// and no depth writes, triangles sorted back to front for the eye, so
+    /// what it occludes — its own far side, the wires, the scene behind —
+    /// shows through. Absent in older files: off.
+    #[serde(default)]
+    pub show_occluded: bool,
 }
 
 fn default_group_marker_scale() -> f32 {
@@ -1238,6 +1244,7 @@ impl Default for RenderSettings {
             point_color: default_point_color(),
             group_marker_scale: default_group_marker_scale(),
             smooth_shading: false,
+            show_occluded: false,
         }
     }
 }
@@ -2046,6 +2053,16 @@ pub struct State {
     /// uploads this in place of `rt_sphere_verts`, which the path tracer
     /// keeps reading unlit.
     pub scene_smooth_verts: Vec<Vertex3D>,
+    /// See-through fill (`toggle_show_occluded`), in effect only below full
+    /// opacity — at 100% there is nothing to see through, and the ordinary
+    /// depth-writing fill is exact.
+    pub show_occluded: bool,
+    /// What the fill mesh was last SORTED for: (geometry version, smooth,
+    /// eye in mesh space). The stage pass re-sorts and re-uploads when any
+    /// of the three moves while see-through is in effect — which during an
+    /// orbit is every frame — and clears it when see-through ends, so the
+    /// next entry sorts afresh.
+    pub sorted_fill_key: Option<(u64, bool, [f32; 3])>,
     /// (geometry version, quantized size, color) the points mesh was last
     /// built from; `point_vertex_count` gates the draw.
     pub last_points_key: Option<(u64, i32, [u8; 3])>,
@@ -2236,6 +2253,13 @@ impl State {
 
 
 
+    /// Whether the fill draws see-through this frame: Show Occluded is on
+    /// and the fill is translucent. At full opacity the ordinary fill is
+    /// exact and cheaper — no sort, no re-upload.
+    pub fn see_through_active(&self) -> bool {
+        self.show_occluded && self.geo_opacity < 0.999
+    }
+
     /// The live display settings — what state.kdl and a project's
     /// `display` block both carry.
     pub fn display_settings(&self) -> DisplaySettings {
@@ -2272,6 +2296,7 @@ impl State {
                 point_color: self.point_color,
                 group_marker_scale: self.group_marker_scale,
                 smooth_shading: self.smooth_shading,
+                show_occluded: self.show_occluded,
             },
         }
     }
@@ -2341,6 +2366,7 @@ impl State {
         self.point_color = r.point_color;
         self.group_marker_scale = r.group_marker_scale;
         self.smooth_shading = r.smooth_shading;
+        self.show_occluded = r.show_occluded;
 
         // The checkmarks the guide and pane toggles keep in step by hand.
         let (sg, sc, so, cp) = {
@@ -4319,6 +4345,9 @@ impl State {
             options.push(format!("{} Opacity {}%", mark(on), (o * 100.0).round() as i32));
             actions.push(ViewportMenuAction::Opacity(o));
         }
+        let occluded_label = crate::command::by_id("toggle_show_occluded").map(|c| c.label).unwrap_or("Show Occluded");
+        options.push(format!("{} {occluded_label}", mark(self.show_occluded)));
+        actions.push(ViewportMenuAction::Command("toggle_show_occluded"));
 
         // The viewport's editor binding, as a radio group: follow the active
         // editor, or pin to one. Pin rows appear only while a second editor
@@ -5372,6 +5401,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             point_color: settings.render.point_color,
             group_marker_scale: settings.render.group_marker_scale,
             smooth_shading: settings.render.smooth_shading,
+            show_occluded: settings.render.show_occluded,
+            sorted_fill_key: None,
             scene_smooth_verts: Vec::new(),
             last_points_key: None,
             point_vertex_count: 0,
@@ -7004,6 +7035,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.smooth_shading = !self.smooth_shading;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
+            }
+            // A draw-time switch: the stage pass sorts and picks the
+            // see-through pipeline; nothing to rebuild. Said out loud at full
+            // opacity, where it has nothing to show and would look broken.
+            Action::ToggleShowOccluded => {
+                self.show_occluded = !self.show_occluded;
+                self.viewport_dirty = true;
+                settings_changed = true;
+                if self.show_occluded && self.geo_opacity >= 0.999 {
+                    self.update_status_text("Show Occluded takes effect below 100% opacity.");
+                }
             }
             // The three point overlays. Each is collected in
             // `rebuild_scene_geometry` off the scene's own Detail, so the
@@ -9441,36 +9483,57 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     // furniture stays opaque.
                     const NO_TINT: [f32; 4] = [0.0; 4];
                     let geo_opacity = self.geo_opacity.clamp(0.0, 1.0);
-                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false }];
+
+                    // See-through fill: re-sort the triangles back to front
+                    // for THIS eye and upload them over the flush's order,
+                    // whenever the geometry, the shading or the eye moved.
+                    // The eye is taken in mesh space (the inverse of view *
+                    // model), the space the triangles are in.
+                    let see_through = self.see_through_active();
+                    if see_through && self.vertex_count_spheres > 0 {
+                        let eye = (view_mat * model).inverse().transform_point3(Vec3::ZERO);
+                        let key = (self.rt_geometry_version, self.smooth_shading, eye.to_array());
+                        if self.sorted_fill_key != Some(key) {
+                            let src = if self.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
+                            let sorted = crate::geometry::sort_triangles_back_to_front(src, eye);
+                            renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&sorted));
+                            self.sorted_fill_key = Some(key);
+                        }
+                    } else {
+                        // The sorted order is still a valid opaque mesh, so
+                        // nothing re-uploads; the next entry just sorts anew.
+                        self.sorted_fill_key = None;
+                    }
+                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false }];
                     if self.viewport().show_grid {
-                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     if self.viewport().show_origin {
-                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     if self.viewport().show_camera_pivot {
-                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     if self.viewport().show_cube {
-                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     if self.render_points && self.point_vertex_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     // Selected-Group markers: full-opacity selection feedback,
                     // deliberately outside the Render node's Opacity.
                     if self.group_point_vertex_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                        draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     // Per-node meta "Point Markers", same full-opacity tier.
                     if self.overlay_point_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.overlay_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                        draws.push(SceneDraw { mesh: meshes.overlay_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     if self.vertex_count_spheres > 0 {
                         // With wires coming, the fill is pushed back by its
                         // slope-scaled offset so the lattice reads solid.
                         let base = if self.wireframe { self.wire_width } else { 0.0 };
-                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading });
+                        draws.push(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading, see_through });
                         if self.wireframe {
                             // The wire pass rides ON TOP of the fill (never
                             // replaces it). Single-color mode replaces the
@@ -9489,13 +9552,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 [0.0, 0.0, 0.0, 0.0]
                             };
                             let wire_alpha = self.wire_color[3].clamp(0.0, 1.0);
-                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false });
+                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through: false });
                         }
                         // Show Point Normals: thin cyan whiskers,
                         // width deliberately fixed (a chunky Wire Width is a
                         // wireframe styling choice, not a normals one).
                         if self.overlay_normal_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false });
+                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);

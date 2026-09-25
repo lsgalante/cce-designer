@@ -1493,6 +1493,59 @@ mod tests {
         assert!(varied > lit.len() / 6, "smooth shading varies across faces: {varied}");
     }
 
+    /// The see-through fill's order: farthest triangle first from the eye,
+    /// every triangle kept whole and exactly once — a sort that split or
+    /// dropped one would draw a torn mesh while looking like a blend bug.
+    #[test]
+    fn a_see_through_fill_sorts_its_triangles_back_to_front() {
+        use crate::geometry::{detail_vertices, sort_triangles_back_to_front, sphere_detail, Vertex3D};
+        use glam::Vec3;
+        let verts = detail_vertices(&sphere_detail(Vec3::ZERO, 1.0, 10, 14));
+        let eye = Vec3::new(3.0, 1.5, -2.0);
+        let sorted = sort_triangles_back_to_front(&verts, eye);
+        assert_eq!(sorted.len(), verts.len());
+        let dist = |t: &[Vertex3D]| {
+            let c = t.iter().fold(Vec3::ZERO, |a, v| a + Vec3::from_array(v.position)) / 3.0;
+            (c - eye).length_squared()
+        };
+        let d: Vec<f32> = sorted.chunks(3).map(dist).collect();
+        assert!(d.windows(2).all(|w| w[0] >= w[1]), "not farthest-first");
+        let key = |t: &[Vertex3D]| format!("{:?}", t.iter().map(|v| v.position).collect::<Vec<_>>());
+        let mut a: Vec<String> = verts.chunks(3).map(key).collect();
+        let mut b: Vec<String> = sorted.chunks(3).map(key).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "the same triangles, each whole, each once");
+        // From the opposite side the order reverses its ends.
+        let back = sort_triangles_back_to_front(&verts, -eye);
+        assert_eq!(key(&back[..3]), key(&sorted[sorted.len() - 3..]));
+    }
+
+    /// Show Occluded is a toggle with a viewport-menu row, and it takes
+    /// effect only below full opacity — at 100% it says so rather than
+    /// quietly doing nothing.
+    #[test]
+    fn show_occluded_sees_through_a_translucent_fill_only() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.show_occluded = false;
+        state.geo_opacity = 1.0;
+        let (options, actions) = state.viewport_menu_rows();
+        let i = actions.iter().position(|a| *a == A::Command("toggle_show_occluded")).expect("a Show Occluded row");
+        assert_eq!(options[i], "○ Show Occluded");
+
+        state.run_viewport_menu_action(A::Command("toggle_show_occluded"));
+        assert!(state.show_occluded);
+        assert_eq!(state.command_toggle_state("toggle_show_occluded"), Some(true));
+        assert!(!state.see_through_active(), "nothing to see through at 100%");
+        assert!(state.last_status_text.contains("below 100%"), "{}", state.last_status_text);
+
+        state.run_viewport_menu_action(A::Opacity(0.5));
+        assert!(state.see_through_active());
+        state.run_command("toggle_show_occluded");
+        assert!(!state.see_through_active());
+    }
+
     /// The viewport's right-click menu sets the display mode: the wireframe
     /// switch, flat or smooth shading as a radio pair, and the polygon
     /// opacity as presets — each mark reading the live state, each row
@@ -4857,6 +4910,7 @@ mod tests {
         a.point_color = [0.0, 1.0, 0.0];
         a.group_marker_scale = 2.5;
         a.smooth_shading = true;
+        a.show_occluded = true;
         a.save_settings();
 
         let kdl = std::fs::read_to_string(DesignSettings::file_path()).expect("state.kdl was written");
@@ -4895,6 +4949,7 @@ mod tests {
         assert!(close(back.render.point_size, 0.05));
         assert!(close(back.render.group_marker_scale, 2.5));
         assert!(back.render.smooth_shading);
+        assert!(back.render.show_occluded);
     }
 
     /// Changing the wire colour turns single-colour mode on, so the colour
