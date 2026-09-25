@@ -97,7 +97,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~8.9k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~9.8k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
@@ -1381,7 +1381,8 @@ and View 1:1: the Show Wireframe switch (its registry command), **Flat
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
 a **Wire Thickness** slider under the wireframe switch (1–8 px by
 half a pixel, the palette row's range), a **Point Size** slider (0–0.1
-world units by 0.005, no suffix since the World Unit names them), and the
+world units by 0.005, no suffix since the World Unit names them), a
+**Point Marker Size** slider (the palette row's 0.005–0.1), and the
 polygon **Opacity** as a
 SLIDER row — cce-ui's `context_menu::MenuSlider` (2026-09-25), set on the
 shown menu by `open_viewport_context_menu`. `viewport_menu_slider` is the
@@ -1400,7 +1401,10 @@ anywhere over the open menu is swallowed rather than orbiting the scene.
 it feeds: opacity and wire thickness are draw-time, and point size re-bakes
 the Render points (the stage pass's size key) and the Selected-Group
 markers — re-sized from `State::group_members`, the positions `sync_nodes`
-keeps from its evaluation, by `rebuild_group_marker_verts`. None of it
+keeps from its evaluation, by `rebuild_group_marker_verts`; point marker
+size re-sizes the Show Point Markers overlay from the scene positions
+`rebuild_scene_geometry` keeps while it is on (`overlay_marker_points`,
+`rebuild_overlay_marker_verts`). None of it
 re-evaluates the graph, which `apply_setting`'s regenerate pass would do per
 pixel of drag. `sync_nodes` also re-sizes the markers when only the size
 moved (`last_group_marker_size`), so the palette's Point Size and Group

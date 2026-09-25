@@ -457,6 +457,9 @@ pub enum ViewportMenuAction {
     /// Point Size in world units, the Render points' radius and (times
     /// Group Marker Scale) the group markers': 0–0.1 like the palette's row.
     PointSizeSlider,
+    /// Point Marker Size in world units, the Show Point Markers overlay's
+    /// radius: the palette row's 0.005–0.1.
+    PointMarkerSizeSlider,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -2103,6 +2106,12 @@ pub struct State {
     /// the palette (`toggle_point_markers` / `_numbers` / `_normals`) over
     /// the flags below, persisted in `ViewportSettings` beside Show Grid.
     pub overlay_marker_verts: Vec<Vertex3D>,
+    /// The scene's point positions, kept by `rebuild_scene_geometry` while
+    /// Show Point Markers is on (empty otherwise), so the markers can be
+    /// re-SIZED without re-evaluating the graph — the viewport menu's Point
+    /// Marker Size slider does that on every motion of a drag
+    /// (`rebuild_overlay_marker_verts`).
+    pub overlay_marker_points: Vec<Vertex3D>,
     pub overlay_dirty: bool,
     pub overlay_point_count: u32,
     pub overlay_number_labels: Vec<([f32; 3], u32)>,
@@ -4371,6 +4380,16 @@ impl State {
                 decimals: 3,
                 suffix: "",
             },
+            // The palette row's spin is 5–100 thousandths; the same range in
+            // world units here, where the readout has room for the decimals.
+            ViewportMenuAction::PointMarkerSizeSlider => MenuSlider {
+                value: self.point_marker_size.clamp(0.005, 0.1),
+                min: 0.005,
+                max: 0.1,
+                step: 0.005,
+                decimals: 3,
+                suffix: "",
+            },
             _ => return None,
         })
     }
@@ -4380,7 +4399,9 @@ impl State {
     /// uniform, a line width and the fill's matching depth bias). Point
     /// size is baked into two meshes: the Render points re-bake in the stage
     /// pass off their own size key, and the group markers are re-sized here
-    /// from their kept members — neither re-evaluates the graph.
+    /// from their kept members. Point Marker Size re-sizes the overlay from
+    /// the scene positions its rebuild kept. None of it re-evaluates the
+    /// graph.
     fn land_viewport_menu_slider(&mut self, action: ViewportMenuAction, v: f32) {
         match action {
             ViewportMenuAction::OpacitySlider => self.geo_opacity = (v / 100.0).clamp(0.0, 1.0),
@@ -4388,6 +4409,10 @@ impl State {
             ViewportMenuAction::PointSizeSlider => {
                 self.point_size = v.clamp(0.0, 0.1);
                 self.rebuild_group_marker_verts();
+            }
+            ViewportMenuAction::PointMarkerSizeSlider => {
+                self.point_marker_size = v.clamp(0.005, 0.1);
+                self.rebuild_overlay_marker_verts();
             }
             _ => return,
         }
@@ -4420,7 +4445,7 @@ impl State {
 
     /// The viewport menu's rows and what each does: framing, then the
     /// DISPLAY MODE — the wireframe switch and its thickness slider, the
-    /// point size slider, flat or
+    /// point size and point marker size sliders, flat or
     /// smooth shading as a radio pair, the polygon opacity slider and Show
     /// Occluded — then the editor pin. Split from the open so a test can
     /// read it. Marks are the ●/○ the pin rows and the network menu use.
@@ -4438,6 +4463,8 @@ impl State {
         actions.push(ViewportMenuAction::WireThicknessSlider);
         options.push("Point Size".to_string());
         actions.push(ViewportMenuAction::PointSizeSlider);
+        options.push("Point Marker Size".to_string());
+        actions.push(ViewportMenuAction::PointMarkerSizeSlider);
         options.push(format!("{} Flat Shading", mark(!self.smooth_shading)));
         actions.push(ViewportMenuAction::Shading(false));
         options.push(format!("{} Smooth Shading", mark(self.smooth_shading)));
@@ -4502,7 +4529,8 @@ impl State {
             // The slider row is worked, not picked.
             ViewportMenuAction::OpacitySlider
             | ViewportMenuAction::WireThicknessSlider
-            | ViewportMenuAction::PointSizeSlider => {}
+            | ViewportMenuAction::PointSizeSlider
+            | ViewportMenuAction::PointMarkerSizeSlider => {}
             ViewportMenuAction::Separator => {}
         }
     }
@@ -5114,6 +5142,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// current size — the cheap half of the markers, with no evaluation, so
     /// a size change can run it on every motion of a drag. The Highlight
     /// bake's warm accent, so the markers and the tint read as one feature.
+    /// Build the Show Point Markers overlay's spheres from the kept scene
+    /// positions at the current Point Marker Size — the same call
+    /// `render::scene_point_overlays` makes, without the evaluation that
+    /// produced the positions.
+    pub(crate) fn rebuild_overlay_marker_verts(&mut self) {
+        self.overlay_marker_verts = crate::geometry::points_vertices(
+            &self.overlay_marker_points,
+            self.point_marker_size,
+            cce_ui::colors::to_linear_rgb(self.point_marker_color),
+        );
+        self.overlay_dirty = true;
+    }
+
     pub(crate) fn rebuild_group_marker_verts(&mut self) {
         let size = self.group_marker_size();
         self.group_point_verts = crate::geometry::points_vertices(
@@ -5539,6 +5580,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             group_members: Vec::new(),
             last_group_marker_size: 0.0,
             overlay_marker_verts: Vec::new(),
+            overlay_marker_points: Vec::new(),
             overlay_dirty: false,
             overlay_point_count: 0,
             overlay_number_labels: Vec::new(),

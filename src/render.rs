@@ -1172,6 +1172,16 @@ impl State {
             self.point_marker_color,
         );
         self.overlay_marker_verts = markers;
+        // Kept for re-sizing the markers without this evaluation — see
+        // `State::rebuild_overlay_marker_verts`.
+        self.overlay_marker_points = if self.show_point_markers {
+            geom.positions()
+                .iter()
+                .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.overlay_number_labels = labels;
         self.overlay_normal_verts = normals;
         // The wire pass's edges, likewise — topological, and only while the

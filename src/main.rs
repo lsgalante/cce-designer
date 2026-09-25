@@ -1733,6 +1733,50 @@ mod tests {
         assert!((radius(&state) - 0.03).abs() < 1e-4, "{}", radius(&state));
     }
 
+    /// Point Marker Size is a viewport-menu slider over the palette row's
+    /// 0.005–0.1, and it re-sizes the Show Point Markers overlay from the
+    /// scene positions the last rebuild kept — landing on exactly what a full
+    /// rebuild at that size would draw, without re-evaluating the graph.
+    #[test]
+    fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.show_point_markers = true;
+        state.point_marker_size = 0.02;
+        state.rebuild_scene_geometry();
+        assert!(!state.overlay_marker_points.is_empty(), "the bundled scene has points");
+        let version = state.rt_geometry_version;
+
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let i = state.viewport_menu_actions.iter().position(|a| *a == A::PointMarkerSizeSlider).expect("a Point Marker Size row");
+        assert_eq!(state.viewport_menu_actions[i - 1], A::PointSizeSlider, "it sits under Point Size");
+        let sl = context_menu::slider(i).expect("a slider");
+        assert_eq!((sl.min, sl.max, sl.step), (0.005, 0.1, 0.005));
+        assert!((sl.value - 0.02).abs() < 1e-6);
+
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 4.0) });
+        assert!((state.point_marker_size - 0.04).abs() < 1e-5, "{}", state.point_marker_size);
+        assert_eq!(state.rt_geometry_version, version, "no rebuild ran");
+        assert!(state.overlay_dirty);
+        let resized: Vec<[f32; 3]> = state.overlay_marker_verts.iter().map(|v| v.position).collect();
+        context_menu::hide();
+
+        // The full path at the same size draws the same spheres.
+        state.rebuild_scene_geometry();
+        let rebuilt: Vec<[f32; 3]> = state.overlay_marker_verts.iter().map(|v| v.position).collect();
+        assert_eq!(resized, rebuilt);
+
+        // Off, nothing is kept to re-size.
+        state.run_command("toggle_point_markers");
+        assert!(state.overlay_marker_points.is_empty());
+    }
+
     /// The dialog plate carries its own backdrop compression, above a
     /// menu's: whatever the plates' own is (0 in a config that keeps the
     /// panes clear), the modal pulls its backdrop toward the tint, and a
