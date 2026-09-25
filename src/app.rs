@@ -4463,8 +4463,9 @@ impl State {
 
     /// The viewport menu's rows and what each does, in groups a separator
     /// apart: framing; the WIREFRAME (its switch and thickness); the POINTS
-    /// (the Show Points switch, point size, point marker size, group marker
-    /// scale); the SURFACE
+    /// (the Show Points switch and point size, the Show Point Markers switch
+    /// and its size, group marker scale — each switch over its own size);
+    /// the SURFACE
     /// (flat or smooth shading as a radio pair, the polygon opacity, Show
     /// Occluded — the three that decide how the fill itself reads); then
     /// the editor pin. Split from the open so a test can read it. Marks are
@@ -4489,6 +4490,7 @@ impl State {
         row(&mut options, &mut actions, "-".into(), sep);
         row(&mut options, &mut actions, format!("{} {}", mark(self.render_points), label("toggle_render_points", "Show Points")), ViewportMenuAction::Command("toggle_render_points"));
         row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
+        row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_markers), label("toggle_point_markers", "Show Point Markers")), ViewportMenuAction::Command("toggle_point_markers"));
         row(&mut options, &mut actions, "Point Marker Size".into(), ViewportMenuAction::PointMarkerSizeSlider);
         row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
 

@@ -1660,7 +1660,13 @@ mod tests {
         assert_eq!(groups[1], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
         assert_eq!(
             groups[2],
-            vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::PointMarkerSizeSlider, A::GroupMarkerScaleSlider]
+            vec![
+                A::Command("toggle_render_points"),
+                A::PointSizeSlider,
+                A::Command("toggle_point_markers"),
+                A::PointMarkerSizeSlider,
+                A::GroupMarkerScaleSlider,
+            ]
         );
         assert_eq!(
             groups[3],
@@ -1668,6 +1674,33 @@ mod tests {
         );
         assert_eq!(options.len(), actions.len());
         assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+    }
+
+    /// Show Point Markers is a switch in the Points group, over its own
+    /// size slider, marked from the live flag; the row runs the command,
+    /// which rebuilds the overlay (and keeps the positions the size slider
+    /// re-sizes from).
+    #[test]
+    fn the_viewport_menu_toggles_show_point_markers() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.show_point_markers = false;
+        state.rebuild_scene_geometry();
+        let row = |state: &State| {
+            let (options, actions) = state.viewport_menu_rows();
+            let i = actions.iter().position(|a| *a == A::Command("toggle_point_markers")).expect("a Show Point Markers row");
+            options[i].clone()
+        };
+        let label = crate::command::by_id("toggle_point_markers").unwrap().label;
+        assert_eq!(row(&state), format!("○ {label}"));
+        assert!(state.overlay_marker_verts.is_empty());
+        state.run_viewport_menu_action(A::Command("toggle_point_markers"));
+        assert!(state.show_point_markers);
+        assert_eq!(row(&state), format!("● {label}"));
+        assert!(!state.overlay_marker_verts.is_empty(), "the overlay was built");
+        assert!(!state.overlay_marker_points.is_empty(), "and its positions kept for re-sizing");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_markers, "persisted");
     }
 
     /// Show Points heads the Points group as a switch over the Render
@@ -1799,7 +1832,7 @@ mod tests {
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::PointMarkerSizeSlider).expect("a Point Marker Size row");
-        assert_eq!(state.viewport_menu_actions[i - 1], A::PointSizeSlider, "it sits under Point Size");
+        assert_eq!(state.viewport_menu_actions[i - 1], A::Command("toggle_point_markers"), "it sits under its switch");
         let sl = context_menu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step), (0.005, 0.1, 0.005));
         assert!((sl.value - 0.02).abs() < 1e-6);
