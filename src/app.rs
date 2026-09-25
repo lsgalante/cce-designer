@@ -4462,8 +4462,8 @@ impl State {
     }
 
     /// The viewport menu's rows and what each does, in groups a separator
-    /// apart: framing; the GUIDES (Show Origin — the scene furniture that
-    /// is not the geometry); the WIREFRAME (its switch and thickness); the
+    /// apart: framing; the GUIDES (Show Grid, Show Origin — the scene
+    /// furniture that is not the geometry); the WIREFRAME (its switch and thickness); the
     /// POINTS
     /// (the Show Points switch, point size, and the group marker scale that
     /// multiplies it); the OVERLAYS (Show Point Markers and its size, Show
@@ -4486,6 +4486,7 @@ impl State {
 
         // Guides: the scene furniture that is not the geometry.
         row(&mut options, &mut actions, "-".into(), sep);
+        row(&mut options, &mut actions, format!("{} {}", mark(self.viewport().show_grid), label("toggle_grid", "Show Grid")), ViewportMenuAction::Command("toggle_grid"));
         row(&mut options, &mut actions, format!("{} {}", mark(self.viewport().show_origin), label("toggle_origin", "Show Origin")), ViewportMenuAction::Command("toggle_origin"));
 
         // Wireframe.

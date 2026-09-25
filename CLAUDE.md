@@ -1377,7 +1377,8 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 ### Display mode: the viewport menu, and smooth shading
 
 The viewport's right-click menu carries the DISPLAY MODE under Frame All
-and View 1:1, in five groups a separator apart — guides (Show Origin, the
+and View 1:1, in five groups a separator apart — guides (Show Grid, Show
+Origin, the
 scene furniture that is not the geometry); wireframe (switch,
 thickness); points (Show Points, Point Size, and Group Marker Scale, which
 multiplies it); overlays (Show Point Markers and its size, Show Point

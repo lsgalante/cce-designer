@@ -1658,7 +1658,7 @@ mod tests {
             .map(|g| g.to_vec())
             .collect();
         assert_eq!(groups[0], vec![A::FrameAll, A::OneToOne]);
-        assert_eq!(groups[1], vec![A::Command("toggle_origin")]);
+        assert_eq!(groups[1], vec![A::Command("toggle_grid"), A::Command("toggle_origin")]);
         assert_eq!(groups[2], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
         assert_eq!(
             groups[3],
@@ -1679,6 +1679,27 @@ mod tests {
         );
         assert_eq!(options.len(), actions.len());
         assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+    }
+
+    /// Show Grid heads the Guides group, marked from the live flag; the row
+    /// runs the command.
+    #[test]
+    fn the_viewport_menu_toggles_show_grid() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.viewport_mut().show_grid = true;
+        let row = |state: &State| {
+            let (options, actions) = state.viewport_menu_rows();
+            let i = actions.iter().position(|a| *a == A::Command("toggle_grid")).expect("a Show Grid row");
+            options[i].clone()
+        };
+        let label = crate::command::by_id("toggle_grid").unwrap().label;
+        assert_eq!(row(&state), format!("● {label}"));
+        state.run_viewport_menu_action(A::Command("toggle_grid"));
+        assert!(!state.viewport().show_grid);
+        assert_eq!(row(&state), format!("○ {label}"));
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(!crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_grid_enabled, "persisted");
     }
 
     /// Show Origin is a switch in the Guides group, marked from the live
