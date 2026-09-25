@@ -185,7 +185,6 @@ pub const COMMANDS: &[Command] = &[
 
     // --- Viewport ---
     Command { id: "toggle_grid", label: "Show Grid", context: Context::Viewport, run: Run::Key(Action::ToggleGrid), default_chord: Some("Ctrl+g") },
-    Command { id: "toggle_cube", label: "Show Cube", context: Context::Viewport, run: Run::Key(Action::ToggleCube), default_chord: Some("Ctrl+e") },
     Command { id: "toggle_origin", label: "Show Origin", context: Context::Viewport, run: Run::Key(Action::ToggleOrigin), default_chord: None },
     Command { id: "toggle_camera_pivot", label: "Show Camera Pivot", context: Context::Viewport, run: Run::Key(Action::ToggleCameraPivot), default_chord: None },
     Command { id: "toggle_wireframe", label: "Show Wireframe", context: Context::Viewport, run: Run::Key(Action::ToggleWireframe), default_chord: None },

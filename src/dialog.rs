@@ -1605,7 +1605,6 @@ impl State {
     pub fn command_toggle_state(&self, id: &str) -> Option<bool> {
         Some(match id {
             "toggle_grid" => self.viewport().show_grid,
-            "toggle_cube" => self.viewport().show_cube,
             "toggle_origin" => self.viewport().show_origin,
             "toggle_camera_pivot" => self.viewport().show_camera_pivot,
             "toggle_wireframe" => self.wireframe,
@@ -2091,7 +2090,7 @@ impl State {
     ///
     /// A CONTROL row does not close at all. A switch you can only flip once
     /// before the panel it is on vanishes is a button with extra steps: Show
-    /// Grid, Show Cube and Square Aspect are the kind of thing you set
+    /// Grid, Show Origin and Square Aspect are the kind of thing you set
     /// together, looking at the viewport, and the dialog staying up is what
     /// lets you. A toggle flips, a choice steps to its next option, a slider
     /// or a colour is worked by the pointer or the arrows and Enter on it

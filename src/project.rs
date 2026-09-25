@@ -674,9 +674,9 @@ impl State {
                 "Show Grid Guide" | "Show Grid" => {
                     if let Some(v) = as_bool(p) { self.viewport_mut().show_grid = v; }
                 }
-                "Show Reference Cube" | "Cube" => {
-                    if let Some(v) = as_bool(p) { self.viewport_mut().show_cube = v; }
-                }
+                // The reference cube guide was removed on 2026-09-25; an old
+                // save's value for it has nowhere to go and is dropped.
+                "Show Reference Cube" | "Cube" => {}
                 "Show Origin Axes" | "Origin" => {
                     if let Some(v) = as_bool(p) { self.viewport_mut().show_origin = v; }
                 }

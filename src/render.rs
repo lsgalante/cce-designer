@@ -1203,18 +1203,13 @@ impl State {
         self.rebuild_page();
     }
 
-    /// The path tracer's scene: the sphere geometry (and the reference cube if
-    /// shown) as triangles, with one Lambertian material per distinct vertex
-    /// color. Same mesh space as the raster pass, so the raster mvp's inverse
-    /// drives the camera.
+    /// The path tracer's scene: the scene geometry as triangles, with one
+    /// Lambertian material per distinct vertex color. Same mesh space as the
+    /// raster pass, so the raster mvp's inverse drives the camera.
     pub(crate) fn collect_rt_scene(
         &self,
     ) -> (Vec<cce_ui::vk::RtTriangle>, Vec<cce_ui::vk::RtMaterial>) {
-        let mut verts = self.rt_sphere_verts.clone();
-        if self.viewport().show_cube {
-            verts.extend(crate::geometry::cube_vertices());
-        }
-        crate::geometry::rt_scene_from_verts(&verts)
+        crate::geometry::rt_scene_from_verts(&self.rt_sphere_verts)
     }
 
     /// The 0-based line a node error points at in the params pane's selected

@@ -22,7 +22,6 @@ pub struct Viewport3D {
     pub bg_color: [f32; 3],
     pub grid_color: [f32; 3],
     pub show_grid: bool,
-    pub show_cube: bool,
     pub show_origin: bool,
     pub show_camera_pivot: bool,
     /// Path-traced preview: the pane renders through `cce_ui::vk`'s compute
@@ -84,7 +83,6 @@ impl Viewport3D {
             bg_color: [0.10, 0.10, 0.13],
             grid_color: [0.18, 0.18, 0.22],
             show_grid: true,
-            show_cube: true,
             show_origin: true,
             show_camera_pivot: true,
             rt_mode: false,

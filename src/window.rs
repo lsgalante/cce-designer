@@ -417,12 +417,11 @@ impl State {
                 } else {
                     let action = if menu_idx == 1 {
                         Some(Action::ToggleSquareViewport)
-                    } else if menu_idx == 2 {
+                    } else if menu_idx == crate::app::GUIDES_MENU {
                         match item_idx {
-                            0 => Some(Action::ToggleGrid),
-                            1 => Some(Action::ToggleCube),
-                            2 => Some(Action::ToggleOrigin),
-                            3 => Some(Action::ToggleCameraPivot),
+                            crate::app::GUIDE_GRID => Some(Action::ToggleGrid),
+                            crate::app::GUIDE_ORIGIN => Some(Action::ToggleOrigin),
+                            crate::app::GUIDE_CAMERA_PIVOT => Some(Action::ToggleCameraPivot),
                             _ => None,
                         }
                     } else { None };

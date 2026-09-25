@@ -427,6 +427,15 @@ pub enum ParamMenuAction {
     Separator,
 }
 
+/// The viewport menubar's Guides menu and its items, by position — the one
+/// place the order `with_item("Guides", …)` builds is spelled out, for the
+/// checkmark writes and the click dispatch in `window.rs`. The Cube item
+/// sat second until the guide was removed (2026-09-25).
+pub const GUIDES_MENU: usize = 2;
+pub const GUIDE_GRID: usize = 0;
+pub const GUIDE_ORIGIN: usize = 1;
+pub const GUIDE_CAMERA_PIVOT: usize = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewportMenuAction {
     /// Move the active camera so the visible node geometry fills the view.
@@ -1120,7 +1129,9 @@ pub struct ViewportSettings {
     pub show_camera_pivot_enabled: bool,
     pub camera_pivot_size: f32,
     pub show_grid_enabled: bool,
-    pub show_cube_enabled: bool,
+    // `show_cube_enabled` was the reference cube guide, removed 2026-09-25.
+    // Older state.kdl files and project display blocks still carry the key;
+    // serde ignores it, so they load unchanged.
     pub show_origin_enabled: bool,
     pub origin_size: f32,
     #[serde(default = "default_grid_thickness")]
@@ -1272,7 +1283,6 @@ impl Default for ViewportSettings {
             show_camera_pivot_enabled: false,
             camera_pivot_size: 1.0,
             show_grid_enabled: true,
-            show_cube_enabled: false,
             show_origin_enabled: true,
             network_plate: true,
             show_point_markers: false,
@@ -1452,6 +1462,7 @@ impl DesignSettings {
     /// Any test that then reached `save_settings` — `toggle_network_plate`,
     /// the dialog's toggle rows — wrote the bundled project's
     /// show_grid / show_cube / show_origin over the user's own state.kdl.
+    /// (The cube guide has since been removed.)
     /// `cargo test` reset three of the user's toggles on every run, and
     /// nothing about the run looked wrong afterwards.
     ///
@@ -1656,7 +1667,6 @@ pub struct ViewportUniforms {
 /// engine's renderer exists.
 #[derive(Clone, Copy)]
 pub struct SceneMeshes {
-    pub cube: cce_ui::vk::MeshId,
     pub viewport_bg: cce_ui::vk::MeshId,
     pub spheres: cce_ui::vk::MeshId,
     /// LINE_LIST edge expansion of `spheres` (vertex pairs per triangle
@@ -2015,7 +2025,6 @@ pub struct State {
     pub last_viewport_rotation_y: f32,
     pub last_viewport_bg_color: [f32; 3],
     pub last_viewport_show_grid: bool,
-    pub last_viewport_show_cube: bool,
     pub last_viewport_show_origin: bool,
     pub last_viewport_show_camera_pivot: bool,
     pub last_viewport_width: u32,
@@ -2160,8 +2169,8 @@ pub struct State {
     pub rt_sphere_verts: Vec<Vertex3D>,
     /// Bumped by `rebuild_scene_geometry`; part of the RT-scene cache key.
     pub rt_geometry_version: u64,
-    /// (show_cube, rt_geometry_version) the RT scene was last built from.
-    pub last_rt_scene_key: Option<(bool, u64)>,
+    /// The `rt_geometry_version` the RT scene was last built from.
+    pub last_rt_scene_key: Option<u64>,
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -2294,7 +2303,6 @@ impl State {
                 show_camera_pivot_enabled: self.viewport().show_camera_pivot,
                 camera_pivot_size: self.camera_pivot_size,
                 show_grid_enabled: self.viewport().show_grid,
-                show_cube_enabled: self.viewport().show_cube,
                 show_origin_enabled: self.viewport().show_origin,
                 origin_size: self.origin_size,
                 grid_thickness: self.grid_thickness,
@@ -2359,7 +2367,6 @@ impl State {
             let vp = self.viewport_mut();
             vp.bg_color = v.bg_color;
             vp.show_grid = v.show_grid_enabled;
-            vp.show_cube = v.show_cube_enabled;
             vp.show_origin = v.show_origin_enabled;
             vp.show_camera_pivot = v.show_camera_pivot_enabled;
             vp.grid_color = v.grid_color;
@@ -2393,14 +2400,13 @@ impl State {
         self.show_occluded = r.show_occluded;
 
         // The checkmarks the guide and pane toggles keep in step by hand.
-        let (sg, sc, so, cp) = {
+        let (sg, so, cp) = {
             let vp = self.viewport();
-            (vp.show_grid, vp.show_cube, vp.show_origin, vp.show_camera_pivot)
+            (vp.show_grid, vp.show_origin, vp.show_camera_pivot)
         };
-        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, sg);
-        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 1, sc);
-        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 2, so);
-        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 3, cp);
+        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_GRID, sg);
+        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_ORIGIN, so);
+        self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_CAMERA_PIVOT, cp);
         let cnp = self.circular_network_pane;
         self.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, cnp);
 
@@ -5296,7 +5302,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             param: ParametersBg::new(),
             canvas: Canvas::new(),
             left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Network Plate", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
-            right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Cube", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
+            right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
             param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
             status: StatusBar::new().with_text("Ready"),
             breadcrumb: {
@@ -5342,7 +5348,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
             viewport.show_grid = settings.viewport.show_grid_enabled;
-            viewport.show_cube = settings.viewport.show_cube_enabled;
             viewport.show_origin = settings.viewport.show_origin_enabled;
             viewport.show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
             viewport.bg_color = settings.viewport.bg_color;
@@ -5579,7 +5584,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             last_viewport_rotation_y: 0.0,
             last_viewport_bg_color: [0.0; 3],
             last_viewport_show_grid: false,
-            last_viewport_show_cube: false,
             last_viewport_show_origin: false,
             last_viewport_show_camera_pivot: false,
             last_viewport_width: 0,
@@ -5651,7 +5655,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         state.rebuild_scene_geometry();
         state.sync_grid_settings();
         let sg = state.viewport().show_grid;
-        let sc = state.viewport().show_cube;
         let so = state.viewport().show_origin;
         let cp = state.viewport().show_camera_pivot;
         let cnp = state.circular_network_pane;
@@ -5661,10 +5664,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let sp = state.show_parameters;
         let ss = state.show_spreadsheet;
 
-        state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, sg);
-        state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 1, sc);
-        state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 2, so);
-        state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 3, cp);
+        state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_GRID, sg);
+        state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_ORIGIN, so);
+        state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_CAMERA_PIVOT, cp);
         state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, cnp);
         state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 3, dcn);
         state.menu_mut(HEADER_IDX).set_item_checked(2, 3, dcn);
@@ -7203,26 +7205,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleGrid => {
                 let val = !self.viewport().show_grid;
                 self.viewport_mut().show_grid = val;
-                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 0, val);
-                settings_changed = true;
-            }
-            Action::ToggleCube => {
-                let val = !self.viewport().show_cube;
-                self.viewport_mut().show_cube = val;
-                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 1, val);
+                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_GRID, val);
                 settings_changed = true;
             }
             Action::ToggleOrigin => {
                 let val = !self.viewport().show_origin;
                 self.viewport_mut().show_origin = val;
-                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 2, val);
+                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_ORIGIN, val);
                 settings_changed = true;
             }
             Action::ToggleCameraPivot => {
                 let val = !self.viewport().show_camera_pivot;
                 self.viewport_mut().show_camera_pivot = val;
                 self.write_active_camera_toggle("Show Camera Pivot", val);
-                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(2, 3, val);
+                self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_CAMERA_PIVOT, val);
                 settings_changed = true;
             }
             Action::ToggleWireframe => {
@@ -9242,7 +9238,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                          self.square_viewport = settings.viewport.square;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;
-                         self.viewport_mut().show_cube = settings.viewport.show_cube_enabled;
                          self.viewport_mut().show_origin = settings.viewport.show_origin_enabled;
                          self.viewport_mut().show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
                          self.viewport_mut().bg_color = settings.viewport.bg_color;
@@ -9543,7 +9538,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     }
 
     pub fn init_renderer(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
-        let cube_verts = cube_vertices();
         let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
         let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
         let origin_verts = origin_vectors_vertices(self.origin_size);
@@ -9551,7 +9545,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let bg_verts =
             Self::viewport_bg_vertices(cce_ui::colors::to_linear_rgb(self.viewport().bg_color));
         self.meshes = Some(SceneMeshes {
-            cube: renderer.create_mesh(bytemuck::cast_slice(&cube_verts)),
             viewport_bg: renderer.create_mesh(bytemuck::cast_slice(&bg_verts)),
             spheres: renderer.create_mesh(&[]),
             sphere_edges: renderer.create_mesh(&[]),
@@ -9669,7 +9662,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     || self.last_viewport_rotation_y != self.viewport().rotation_y
                     || self.last_viewport_bg_color != self.viewport().bg_color
                     || self.last_viewport_show_grid != self.viewport().show_grid
-                    || self.last_viewport_show_cube != self.viewport().show_cube
                     || self.last_viewport_show_origin != self.viewport().show_origin
                     || self.last_viewport_show_camera_pivot != self.viewport().show_camera_pivot
                     || self.last_viewport_width != cw
@@ -9708,7 +9700,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     let mvp_pivot = (proj * view_mat * model_pivot).to_cols_array_2d();
 
                     // Same draw order as the wgpu pass: bg quad, grid, origin,
-                    // pivot, cube, spheres. The node geometry (points +
+                    // pivot, spheres. The node geometry (points +
                     // spheres) carries the Render node's Opacity; scene
                     // furniture stays opaque.
                     const NO_TINT: [f32; 4] = [0.0; 4];
@@ -9743,9 +9735,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     }
                     if self.viewport().show_camera_pivot {
                         draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
-                    }
-                    if self.viewport().show_cube {
-                        draws.push(SceneDraw { mesh: meshes.cube, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     if self.render_points && self.point_vertex_count > 0 {
                         draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
@@ -9805,7 +9794,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     self.last_viewport_rotation_y = self.viewport().rotation_y;
                     self.last_viewport_bg_color = self.viewport().bg_color;
                     self.last_viewport_show_grid = self.viewport().show_grid;
-                    self.last_viewport_show_cube = self.viewport().show_cube;
                     self.last_viewport_show_origin = self.viewport().show_origin;
                     self.last_viewport_show_camera_pivot = self.viewport().show_camera_pivot;
                     self.last_viewport_width = cw;
@@ -9829,7 +9817,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // the camera/pane changes, so camera drags stay interactive
                 // (1-spp noise) and stillness converges.
                 if rt_mode {
-                    let key = (self.viewport().show_cube, self.rt_geometry_version);
+                    let key = self.rt_geometry_version;
                     if self.last_rt_scene_key != Some(key) {
                         let (rt_tris, rt_mats) = self.collect_rt_scene();
                         renderer.set_rt_scene(&rt_tris, &rt_mats);

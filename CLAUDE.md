@@ -1378,7 +1378,11 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 
 The viewport's right-click menu carries the DISPLAY MODE under Frame All
 and View 1:1, in five groups a separator apart — guides (Show Grid, Show
-Origin, the
+Origin; the reference CUBE guide was removed on 2026-09-25 — its command,
+mesh, RT-scene copy, settings field and menubar item, with the Guides
+menubar addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto
+another's action, while old files carrying `show_cube_enabled` still load),
+the
 scene furniture that is not the geometry); wireframe (switch,
 thickness); points (Show Points, Point Size, and Group Marker Scale, which
 multiplies it); overlays (Show Point Markers and its size, Show Point
@@ -1448,7 +1452,7 @@ line rather than doing nothing silently. The fill then draws through cce-ui's
 mesh shows its far wall, and no depth WRITES, so its near layers hide
 neither its far ones nor the wires — the wire pass needs no change, since
 nothing it tests against was written. The depth TEST stays on, so what is
-drawn before the fill (grid, cube, points, markers) still occludes it.
+drawn before the fill (grid, points, markers) still occludes it.
 Blending without depth writes is in submission order, so the stage pass
 re-sorts the fill's triangles FARTHEST FIRST from the eye
 (`geometry::sort_triangles_back_to_front`, centroid distance — painter's

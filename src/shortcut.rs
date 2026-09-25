@@ -4,7 +4,6 @@ use crate::ModifiersState;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
     ToggleGrid,
-    ToggleCube,
     ToggleSquareViewport,
     ToggleConfigure,
     ToggleSpreadsheet,

@@ -951,7 +951,6 @@ mod tests {
         assert!((state.point_marker_color[1] - 0.5).abs() < 0.01);
         assert!((state.point_marker_color[2] - 0.0).abs() < 0.01);
         assert!((state.grid_thickness - 0.04).abs() < 1e-6);
-        assert!(state.viewport().show_cube);
         assert!(state.wireframe);
         assert!((state.wire_width - 4.0).abs() < 1e-6);
         assert_eq!(state.point_color[1], 1.0);
@@ -1397,7 +1396,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let mut state = State::new(false);
         state.viewport_mut().show_grid = false;
-        state.viewport_mut().show_cube = true;
+        state.viewport_mut().show_origin = false;
         state.smooth_shading = true;
         state.wireframe = true;
         state.geo_opacity = 0.5;
@@ -1411,7 +1410,7 @@ mod tests {
         state.run_command("toggle_grid");
         assert!(state.viewport().show_grid);
         assert!(state.has_unsaved_changes(), "a display change is an edit to the file");
-        state.run_command("toggle_cube");
+        state.run_command("toggle_origin");
         state.smooth_shading = false;
         state.wireframe = false;
         state.geo_opacity = 1.0;
@@ -1421,7 +1420,7 @@ mod tests {
 
         state.load_from_file(&dir).expect("load");
         assert!(!state.viewport().show_grid, "the grid comes back off");
-        assert!(state.viewport().show_cube);
+        assert!(!state.viewport().show_origin);
         assert!(state.smooth_shading && state.wireframe);
         assert!((state.geo_opacity - 0.5).abs() < 1e-6);
         assert!((state.grid_thickness - 0.07).abs() < 1e-6);
@@ -4089,6 +4088,51 @@ mod tests {
         }
     }
 
+    /// The reference cube guide is gone, and nothing that used to carry it
+    /// breaks: an older state.kdl or project display block with
+    /// `show_cube_enabled` still loads (serde ignores the key), there is no
+    /// Show Cube command or chord, and the viewport menubar's Guides menu
+    /// is Grid, Origin, Camera Pivot — its checkmarks and clicks addressed
+    /// through the `GUIDE_*` positions, so the removal shifted no item onto
+    /// another's action.
+    #[test]
+    fn the_cube_guide_is_gone_and_old_files_still_load() {
+        use crate::app::{DesignSettings, GUIDES_MENU, GUIDE_CAMERA_PIVOT, GUIDE_GRID, GUIDE_ORIGIN};
+        // A complete state.kdl as this build writes it, with the old key
+        // put back into its viewport block.
+        let mut state = State::new(false);
+        state.viewport_mut().show_grid = false;
+        state.save_settings();
+        let written = fs::read_to_string(DesignSettings::file_path()).expect("state.kdl");
+        assert!(!written.contains("show_cube"), "the key is no longer written");
+        let old = written.replacen("viewport {", "viewport {\n    show_cube_enabled (bool)true", 1);
+        assert!(old.contains("show_cube_enabled"), "the fixture carries the old key");
+        let back = DesignSettings::from_kdl_str(&old);
+        assert!(!back.viewport.show_grid_enabled, "the rest of the block still reads");
+
+        // A project's display block, likewise.
+        let mut json = serde_json::to_value(crate::app::DisplaySettings {
+            viewport: back.viewport.clone(),
+            render: back.render.clone(),
+        })
+        .unwrap();
+        json["viewport"]["show_cube_enabled"] = serde_json::json!(true);
+        json["viewport"]["show_origin_enabled"] = serde_json::json!(false);
+        let d: crate::app::DisplaySettings = serde_json::from_value(json).expect("an old display block loads");
+        assert!(!d.viewport.show_origin_enabled);
+
+        assert!(crate::command::by_id("toggle_cube").is_none());
+        assert!(!crate::command::COMMANDS.iter().any(|c| c.label.to_lowercase().contains("cube")));
+
+        let items = state.menu(crate::slots::RIGHT_MENUBAR_IDX).menu_items_list()[GUIDES_MENU].clone();
+        assert_eq!(items, vec!["Show Grid".to_string(), "Origin".to_string(), "Camera Pivot".to_string()]);
+        assert_eq!((GUIDE_GRID, GUIDE_ORIGIN, GUIDE_CAMERA_PIVOT), (0, 1, 2));
+        // The Origin item flips the origin, not whatever sits where it was.
+        let before = state.viewport().show_origin;
+        state.execute_action(crate::shortcut::Action::ToggleOrigin);
+        assert_eq!(state.viewport().show_origin, !before);
+    }
+
     #[test]
     fn test_design_settings_serialization_roundtrip() {
         let json_without_pivot = r#"
@@ -5285,7 +5329,7 @@ mod tests {
         use crate::app::DesignSettings;
         let mut a = State::new(false);
         a.viewport_mut().show_grid = false;
-        a.viewport_mut().show_cube = true;
+        a.viewport_mut().show_origin = false;
         a.viewport_mut().bg_color = [0.1, 0.2, 0.3];
         a.viewport_mut().grid_color = [0.4, 0.5, 0.6];
         a.viewport_mut().rt_mode = true;
@@ -5314,7 +5358,7 @@ mod tests {
         let close = |x: f32, y: f32| (x - y).abs() < 0.01;
 
         assert!(!back.viewport.show_grid_enabled);
-        assert!(back.viewport.show_cube_enabled);
+        assert!(!back.viewport.show_origin_enabled);
         assert!(back.viewport.rt_mode);
         assert!(close(back.viewport.grid_thickness, 0.04));
         assert!(close(back.viewport.origin_size, 2.5));
@@ -6181,7 +6225,8 @@ mod tests {
     /// `apply_settings_from_menubar_subnets` used to copy the Guides utility
     /// node onto the live flags on EVERY parameter change, so a command that
     /// flipped only the flag was undone by the next edit anywhere — Show
-    /// Cube hid the cube, and editing any node's parameter brought it back.
+    /// Cube (a guide since removed) hid the cube, and editing any node's
+    /// parameter brought it back.
     /// The fix was to write the node as well; the node is gone now and the
     /// flag is simply the value, which is the same guarantee with nothing
     /// left to fall out of step. Still asserted, because the failure it
@@ -6190,9 +6235,8 @@ mod tests {
     #[test]
     fn guide_toggles_survive_the_settings_apply_pass() {
         let mut state = State::new(false);
-        for command in ["toggle_cube", "toggle_grid", "toggle_origin", "toggle_point_markers"] {
+        for command in ["toggle_grid", "toggle_origin", "toggle_point_markers"] {
             let flag = |state: &State| match command {
-                "toggle_cube" => state.viewport().show_cube,
                 "toggle_grid" => state.viewport().show_grid,
                 "toggle_origin" => state.viewport().show_origin,
                 _ => state.show_point_markers,
@@ -10188,7 +10232,7 @@ mod tests {
         }
         let mut state = State::new(false);
         for id in [
-            "toggle_grid", "toggle_origin", "toggle_cube", "toggle_wireframe",
+            "toggle_grid", "toggle_origin", "toggle_wireframe",
             "toggle_wire_single_color", "toggle_render_points", "toggle_ray_traced_preview",
             "toggle_circular_pane", "toggle_camera_pivot", "toggle_square_viewport",
             "toggle_network_plate",
