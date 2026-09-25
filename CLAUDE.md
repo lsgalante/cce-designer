@@ -1377,13 +1377,12 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 ### Display mode: the viewport menu, and smooth shading
 
 The viewport's right-click menu carries the DISPLAY MODE under Frame All
-and View 1:1, in three groups a separator apart — wireframe (switch,
-thickness), points (Show Points and Point Size, Show Point Markers and
-its size, Show Point Numbers, Show Point Normals, Group Marker Scale —
-each switch over its
-own size where it has one), surface
-(shading, opacity,
-Show Occluded); `the_viewport_menu_groups_its_display_rows` holds the
+and View 1:1, in four groups a separator apart — wireframe (switch,
+thickness); points (Show Points, Point Size, and Group Marker Scale, which
+multiplies it); overlays (Show Point Markers and its size, Show Point
+Numbers, Show Point Normals — the annotations over the scene's points);
+surface (shading, opacity, Show Occluded).
+`the_viewport_menu_groups_its_display_rows` holds the
 order. The rows: the Show Wireframe switch (its registry command), **Flat
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
 a **Wire Thickness** slider under the wireframe switch (1–8 px by

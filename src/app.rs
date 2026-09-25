@@ -4463,15 +4463,14 @@ impl State {
 
     /// The viewport menu's rows and what each does, in groups a separator
     /// apart: framing; the WIREFRAME (its switch and thickness); the POINTS
-    /// (the Show Points switch and point size, the Show Point Markers switch
-    /// and its size, the Show Point Numbers and Show Point Normals
-    /// switches, group marker scale —
-    /// each switch over its own size, where it has one);
-    /// the SURFACE
-    /// (flat or smooth shading as a radio pair, the polygon opacity, Show
-    /// Occluded — the three that decide how the fill itself reads); then
-    /// the editor pin. Split from the open so a test can read it. Marks are
-    /// the ●/○ the pin rows and the network menu use.
+    /// (the Show Points switch, point size, and the group marker scale that
+    /// multiplies it); the OVERLAYS (Show Point Markers and its size, Show
+    /// Point Numbers, Show Point Normals — the annotations drawn over the
+    /// scene's points); the SURFACE (flat or smooth shading as a radio pair,
+    /// the polygon opacity, Show Occluded — the three that decide how the
+    /// fill itself reads); then the editor pin. Split from the open so a
+    /// test can read it. Marks are the ●/○ the pin rows and the network menu
+    /// use.
     pub(crate) fn viewport_menu_rows(&self) -> (Vec<String>, Vec<ViewportMenuAction>) {
         let mut options = vec!["Frame All".to_string(), "View 1:1".to_string()];
         let mut actions = vec![ViewportMenuAction::FrameAll, ViewportMenuAction::OneToOne];
@@ -4488,15 +4487,18 @@ impl State {
         row(&mut options, &mut actions, format!("{} {}", mark(self.wireframe), label("toggle_wireframe", "Show Wireframe")), ViewportMenuAction::Command("toggle_wireframe"));
         row(&mut options, &mut actions, "Wire Thickness".into(), ViewportMenuAction::WireThicknessSlider);
 
-        // Points.
+        // Points: the Render points, and the group markers sized off them.
         row(&mut options, &mut actions, "-".into(), sep);
         row(&mut options, &mut actions, format!("{} {}", mark(self.render_points), label("toggle_render_points", "Show Points")), ViewportMenuAction::Command("toggle_render_points"));
         row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
+        row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
+
+        // Overlays: the three annotations over the scene's points.
+        row(&mut options, &mut actions, "-".into(), sep);
         row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_markers), label("toggle_point_markers", "Show Point Markers")), ViewportMenuAction::Command("toggle_point_markers"));
         row(&mut options, &mut actions, "Point Marker Size".into(), ViewportMenuAction::PointMarkerSizeSlider);
         row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_numbers), label("toggle_point_numbers", "Show Point Numbers")), ViewportMenuAction::Command("toggle_point_numbers"));
         row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_normals), label("toggle_point_normals", "Show Point Normals")), ViewportMenuAction::Command("toggle_point_normals"));
-        row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
 
         // Surface.
         row(&mut options, &mut actions, "-".into(), sep);

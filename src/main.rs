@@ -1645,8 +1645,9 @@ mod tests {
     }
 
     /// The viewport menu reads in groups a separator apart: framing, then
-    /// the wireframe, the points, and the surface (shading, opacity, Show
-    /// Occluded) — every display row in exactly one group.
+    /// the wireframe, the points, the point overlays, and the surface
+    /// (shading, opacity, Show Occluded) — every display row in exactly one
+    /// group.
     #[test]
     fn the_viewport_menu_groups_its_display_rows() {
         use crate::app::ViewportMenuAction as A;
@@ -1660,18 +1661,19 @@ mod tests {
         assert_eq!(groups[1], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
         assert_eq!(
             groups[2],
+            vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider]
+        );
+        assert_eq!(
+            groups[3],
             vec![
-                A::Command("toggle_render_points"),
-                A::PointSizeSlider,
                 A::Command("toggle_point_markers"),
                 A::PointMarkerSizeSlider,
                 A::Command("toggle_point_numbers"),
                 A::Command("toggle_point_normals"),
-                A::GroupMarkerScaleSlider,
             ]
         );
         assert_eq!(
-            groups[3],
+            groups[4],
             vec![A::Shading(false), A::Shading(true), A::OpacitySlider, A::Command("toggle_show_occluded")]
         );
         assert_eq!(options.len(), actions.len());
@@ -1931,7 +1933,7 @@ mod tests {
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::GroupMarkerScaleSlider).expect("a Group Marker Scale row");
-        assert_eq!(state.viewport_menu_actions[i - 1], A::Command("toggle_point_normals"));
+        assert_eq!(state.viewport_menu_actions[i - 1], A::PointSizeSlider, "it sits under the size it multiplies");
         let sl = context_menu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.5, 4.0, 0.05, "x"));
         assert_eq!(sl.readout(), "1.25x");
