@@ -1645,7 +1645,7 @@ mod tests {
     }
 
     /// The viewport menu reads in groups a separator apart: framing, then
-    /// the wireframe, the points, the point overlays, and the surface
+    /// the guides, the wireframe, the points, the point overlays, and the surface
     /// (shading, opacity, Show Occluded) — every display row in exactly one
     /// group.
     #[test]
@@ -1658,13 +1658,14 @@ mod tests {
             .map(|g| g.to_vec())
             .collect();
         assert_eq!(groups[0], vec![A::FrameAll, A::OneToOne]);
-        assert_eq!(groups[1], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
+        assert_eq!(groups[1], vec![A::Command("toggle_origin")]);
+        assert_eq!(groups[2], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider]);
         assert_eq!(
-            groups[2],
+            groups[3],
             vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider]
         );
         assert_eq!(
-            groups[3],
+            groups[4],
             vec![
                 A::Command("toggle_point_markers"),
                 A::PointMarkerSizeSlider,
@@ -1673,11 +1674,33 @@ mod tests {
             ]
         );
         assert_eq!(
-            groups[4],
+            groups[5],
             vec![A::Shading(false), A::Shading(true), A::OpacitySlider, A::Command("toggle_show_occluded")]
         );
         assert_eq!(options.len(), actions.len());
         assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+    }
+
+    /// Show Origin is a switch in the Guides group, marked from the live
+    /// flag; the row runs the command, which also keeps the viewport
+    /// menubar's Guides checkmark in step.
+    #[test]
+    fn the_viewport_menu_toggles_show_origin() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.viewport_mut().show_origin = true;
+        let row = |state: &State| {
+            let (options, actions) = state.viewport_menu_rows();
+            let i = actions.iter().position(|a| *a == A::Command("toggle_origin")).expect("a Show Origin row");
+            options[i].clone()
+        };
+        let label = crate::command::by_id("toggle_origin").unwrap().label;
+        assert_eq!(row(&state), format!("● {label}"));
+        state.run_viewport_menu_action(A::Command("toggle_origin"));
+        assert!(!state.viewport().show_origin);
+        assert_eq!(row(&state), format!("○ {label}"));
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(!crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_origin_enabled, "persisted");
     }
 
     /// Show Point Normals is a switch in the Points group after the
