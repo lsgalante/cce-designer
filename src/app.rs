@@ -2675,12 +2675,21 @@ impl State {
         // asked, and the spreadsheet's own header-click sort never fired.
         // Same for the right-click menu and the pinch zoom, which gate on
         // this test as well.
-        let node_area_y = self.positions[CONTENT_IDX].1;
-        !self.over_floating_pane()
-            && self.cursor_x >= self.content_right_x()
-            && self.cursor_x < self.splitter_layout.splitter2_x
-            && self.cursor_y >= node_area_y
-            && self.cursor_y < self.height - STATUS_H
+        //
+        // Bounded by the viewport's OWN rect, minus the network plates by
+        // their laid-out rects. Until 2026-09-25 this carved out the old
+        // column layout instead — left of `splitter1_x + SPLITTER_W`, above
+        // the network content's top — which the floating plates stopped
+        // following long ago, so a band right of the network plate and a
+        // strip along the top were neither the network's nor the scene's,
+        // and a right-click there opened nothing. The circular pane is
+        // excluded by its callers (`in_circle_network_pane`): its rect is
+        // the circle's bounding box, whose corners are scene.
+        let (px, py) = (self.cursor_x, self.cursor_y);
+        let inside = |(x, y, w, h): (f32, f32, f32, f32)| w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h;
+        let over_network = !self.circular_network_pane
+            && [NETWORK_PANEL_IDX, crate::slots::NETWORK_PANEL2_IDX].iter().any(|&idx| inside(self.positions[idx]));
+        inside(self.positions[VIEWPORT_IDX]) && !over_network && !self.over_floating_pane()
     }
 
     // --- Pane edge-resize hotspots. Each is the single source of truth for its zone:

@@ -471,6 +471,39 @@ mod tests {
     /// before any widget is asked. So the toolkit's header-click sort
     /// (tested in cce-ui) never fired in this app: clicking a header
     /// hovered it, tinted it, and did nothing.
+    /// The scene is everything in the viewport's rect that no plate covers
+    /// — right up to the network plate's edge. The test used to carve out
+    /// the old COLUMN layout, so the band between the floating plate's right
+    /// edge and `splitter1_x + SPLITTER_W`, and the strip above the network
+    /// content, were nobody's: a right-click there opened no menu.
+    #[test]
+    fn the_scene_starts_at_the_network_plates_edge() {
+        use crate::slots::{NETWORK_PANEL_IDX, VIEWPORT_IDX};
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.network_plate = true;
+        state.splitter_layout.splitter1_x = 700.0;
+        state.rebuild_positions();
+        state.apply_layout();
+        let (nx, ny, nw, nh) = state.positions[NETWORK_PANEL_IDX];
+        assert!(nw > 0.0 && nx + nw < 690.0, "the plate ends short of the old column split");
+        let at = |state: &mut State, x: f32, y: f32| {
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+            state.cursor_in_viewport()
+        };
+        assert!(!at(&mut state, nx + nw - 4.0, ny + nh * 0.5), "the plate is the network's");
+        assert!(at(&mut state, nx + nw + 4.0, ny + nh * 0.5), "just right of the plate is scene");
+        let (vx, vy, vw, _) = state.positions[VIEWPORT_IDX];
+        assert!(at(&mut state, vx + vw * 0.5, vy + 4.0), "the strip along the top is scene");
+
+        // And the right press there opens the viewport's menu.
+        at(&mut state, nx + nw + 4.0, ny + nh * 0.5);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
+        assert!(state.viewport_menu_open(), "a right-click beside the plate opens the viewport menu");
+    }
+
     #[test]
     fn spreadsheet_header_press_reaches_the_widget_not_the_camera() {
         use crate::slots::{SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, VIEWPORT_IDX};
