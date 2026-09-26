@@ -1408,8 +1408,8 @@ menubar addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto
 another's action, while old files carrying `show_cube_enabled` still load),
 the
 scene furniture that is not the geometry); wireframe (switch,
-thickness, opacity); points (Show Points, Point Size, and Group Marker Scale, which
-multiplies it); overlays (Show Point Markers and its size, Show Point
+thickness, opacity); points (Show Points, Point Size, Group Marker Scale, which
+multiplies it, and Pull Arrow Scale); overlays (Show Point Markers and its size, Show Point
 Numbers, Show Point Normals — the annotations over the scene's points);
 surface (shading, opacity, Show Occluded).
 `the_viewport_menu_groups_its_display_rows` holds the
@@ -1512,7 +1512,12 @@ amber arrows from where points were to where the node puts them. They are
 MEASURED, output `P` minus input `P` (`point_displacements`), not read off
 Value, so Set, Multiply and an expression all show what actually happened,
 and the arrowed points are exactly the ones that moved. An arrow's full length,
-head included, is the true displacement.
+head included, is the displacement times **Pull Arrow Scale**
+(`State::pull_arrow_scale`, default 1 — the true vector; a dialog row and a
+viewport-menu slider, 0.25–10x, persisted in the render block beside Group
+Marker Scale). The scale is display only: the sampled pairs are kept
+unscaled on `pull_arrow_pairs`, and `rebuild_pull_arrow_verts` stretches
+each arrow from its fixed base, so a slider drag re-evaluates nothing.
 
 At most `State::PULL_ARROWS_MAX` (12) points get one, picked by farthest-point
 sampling (`spread_sample`) so they cover the region the pull covers rather

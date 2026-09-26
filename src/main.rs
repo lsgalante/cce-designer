@@ -2000,7 +2000,7 @@ mod tests {
         assert_eq!(groups[2], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider, A::WireOpacitySlider]);
         assert_eq!(
             groups[3],
-            vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider]
+            vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider, A::PullArrowScaleSlider]
         );
         assert_eq!(
             groups[4],
@@ -2332,6 +2332,46 @@ mod tests {
         // Off, nothing is kept to re-size.
         state.run_command("toggle_point_markers");
         assert!(state.overlay_marker_points.is_empty());
+    }
+
+    /// Pull Arrow Scale stretches the pull arrows along the pull from their
+    /// kept pairs, base fixed — 1 by default, the true vector — and is a
+    /// viewport-menu slider under Group Marker Scale.
+    #[test]
+    fn pull_arrow_scale_stretches_the_arrows_from_their_base() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, MouseScrollDelta};
+        assert_eq!(crate::app::DesignSettings::default().render.pull_arrow_scale, 1.0);
+        assert_eq!(crate::app::DesignSettings::from_kdl_str("").render.pull_arrow_scale, 1.0, "absent means 1");
+
+        let mut state = State::new(false);
+        state.pull_arrow_scale = 1.0;
+        let (a, b) = (glam::Vec3::new(0.0, 1.0, 0.0), glam::Vec3::new(0.0, 1.06, 0.0));
+        state.pull_arrow_pairs = vec![(a, b)];
+        state.rebuild_pull_arrow_verts();
+        // The shaft is the first stroke: from the base to the tip.
+        let shaft = |state: &State| (state.pull_arrow_verts[0].position, state.pull_arrow_verts[1].position);
+        assert_eq!(shaft(&state).0, a.to_array(), "the base stays on the point");
+        assert!((shaft(&state).1[1] - 1.06).abs() < 1e-6, "scale 1 is the true vector");
+
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let i = state.viewport_menu_actions.iter().position(|a| *a == A::PullArrowScaleSlider).expect("a Pull Arrow Scale row");
+        let sl = context_menu::slider(i).expect("a slider");
+        assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.25, 10.0, 0.25, "x"));
+        assert_eq!(sl.readout(), "1.00x");
+
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 15.0) });
+        let k = state.pull_arrow_scale;
+        assert!(k > 1.0, "the wheel raised the scale: {k}");
+        assert_eq!(shaft(&state).0, a.to_array());
+        assert!((shaft(&state).1[1] - (1.0 + 0.06 * k)).abs() < 1e-5, "the tip stretched to {:?} at {k}x", shaft(&state).1);
+        assert_eq!(state.pull_arrow_pairs, vec![(a, b)], "the kept pairs are the measurement, never scaled");
+        context_menu::hide();
     }
 
     /// Group Marker Scale is a viewport-menu slider over the palette row's
@@ -5732,6 +5772,7 @@ mod tests {
         a.point_size = 0.05;
         a.point_color = [0.0, 1.0, 0.0];
         a.group_marker_scale = 2.5;
+        a.pull_arrow_scale = 4.0;
         a.smooth_shading = true;
         a.show_occluded = true;
         a.save_settings();
@@ -5769,6 +5810,7 @@ mod tests {
         assert!(back.render.render_points);
         assert!(close(back.render.point_size, 0.05));
         assert!(close(back.render.group_marker_scale, 2.5));
+        assert!(close(back.render.pull_arrow_scale, 4.0));
         assert!(back.render.smooth_shading);
         assert!(back.render.show_occluded);
     }

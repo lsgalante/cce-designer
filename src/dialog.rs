@@ -1317,6 +1317,9 @@ pub const SETTINGS: &[Setting] = &[
     // how much larger they are — 1.25 was the hard-coded ratio until
     // 2026-09-24.
     Setting::field("Group Marker Scale", "group_marker_scale", Ctl::Slider { min: 0.5, max: 4.0, dec: 2 }),
+    // The pull arrows' length over the true displacement; 1 is the vector
+    // as it is.
+    Setting::field("Pull Arrow Scale", "pull_arrow_scale", Ctl::Slider { min: 0.25, max: 10.0, dec: 2 }),
     Setting::field("Point Marker Size", "point_marker_size", Ctl::Spin { min: 5.0, max: 100.0, unit: 1000.0 }),
     Setting::field("Point Marker Color", "point_marker_color", Ctl::Color),
     Setting::field("Grid Color", "grid_color", Ctl::Color),
@@ -1780,6 +1783,7 @@ impl State {
             "wire_opacity" => self.wire_opacity,
             "point_size" => self.point_size,
             "group_marker_scale" => self.group_marker_scale,
+            "pull_arrow_scale" => self.pull_arrow_scale,
             _ => 0.0,
         }
     }
@@ -1848,6 +1852,10 @@ impl State {
                     "wire_opacity" => self.wire_opacity = v,
                     "point_size" => self.point_size = v,
                     "group_marker_scale" => self.group_marker_scale = v,
+                    "pull_arrow_scale" => {
+                        self.pull_arrow_scale = v;
+                        self.rebuild_pull_arrow_verts();
+                    }
                     _ => {}
                 }
             }

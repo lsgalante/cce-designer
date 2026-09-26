@@ -489,6 +489,9 @@ pub enum ViewportMenuAction {
     /// Group Marker Scale, the Selected-Group markers' radius as a multiple
     /// of Point Size: the palette row's 0.5–4.
     GroupMarkerScaleSlider,
+    /// Pull Arrow Scale, the pull arrows' length as a multiple of the true
+    /// displacement: the palette row's 0.25–10.
+    PullArrowScaleSlider,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -1229,6 +1232,10 @@ pub struct RenderSettings {
     /// they draw on the same vertices as the Render points, so the ratio is
     /// what keeps both legible. Hard-coded at 1.25 until 2026-09-24.
     pub group_marker_scale: f32,
+    /// The pull arrows' length as a multiple of the displacement they show.
+    /// 1 draws the true vector; a longer arrow is legible when the pull is
+    /// small beside the model. Display only — the pull itself is untouched.
+    pub pull_arrow_scale: f32,
     /// Smooth (vertex-normal) shading of the scene fill, where off is the
     /// faceted look the raster pass has always had. Absent in older files:
     /// flat.
@@ -1268,6 +1275,8 @@ struct StoredRenderSettings {
     point_color: [f32; 3],
     #[serde(default = "default_group_marker_scale")]
     group_marker_scale: f32,
+    #[serde(default = "default_pull_arrow_scale")]
+    pull_arrow_scale: f32,
     #[serde(default)]
     smooth_shading: bool,
     #[serde(default)]
@@ -1293,6 +1302,7 @@ impl From<StoredRenderSettings> for RenderSettings {
             point_size: s.point_size,
             point_color: s.point_color,
             group_marker_scale: s.group_marker_scale,
+            pull_arrow_scale: s.pull_arrow_scale,
             smooth_shading: s.smooth_shading,
             show_occluded: s.show_occluded,
         }
@@ -1301,6 +1311,10 @@ impl From<StoredRenderSettings> for RenderSettings {
 
 fn default_group_marker_scale() -> f32 {
     1.25
+}
+
+fn default_pull_arrow_scale() -> f32 {
+    1.0
 }
 
 fn default_wire_color() -> [f32; 3] {
@@ -1336,6 +1350,7 @@ impl Default for RenderSettings {
             point_size: default_point_size(),
             point_color: default_point_color(),
             group_marker_scale: default_group_marker_scale(),
+            pull_arrow_scale: default_pull_arrow_scale(),
             smooth_shading: false,
             show_occluded: false,
         }
@@ -2212,6 +2227,10 @@ pub struct State {
     /// Selected-Group marker radius as a multiple of `point_size` (a
     /// setting row of the dialog; persisted in the render block).
     pub group_marker_scale: f32,
+    /// Pull arrow length as a multiple of the true displacement (a setting
+    /// row of the dialog and a viewport-menu slider; persisted in the render
+    /// block).
+    pub pull_arrow_scale: f32,
     /// Smooth shading of the scene fill (`toggle_smooth_shading`). While on,
     /// `scene_smooth_verts` holds the lit fill and the draw is `prelit`.
     pub smooth_shading: bool,
@@ -2253,6 +2272,10 @@ pub struct State {
     /// `sync_pull_arrows`, flushed to `meshes.pull_arrows`. Keyed like the
     /// group markers, by (node id, params, geometry version).
     pub pull_arrow_verts: Vec<Vertex3D>,
+    /// The sampled `(before, after)` pairs the arrows were built from, kept
+    /// so Pull Arrow Scale can re-draw them without re-evaluating the node
+    /// (`rebuild_pull_arrow_verts`).
+    pub pull_arrow_pairs: Vec<(glam::Vec3, glam::Vec3)>,
     pub pull_arrows_dirty: bool,
     pub pull_arrow_count: u32,
     pub last_pull_arrows_key: Option<(String, Vec<(String, String)>, u64)>,
@@ -2485,6 +2508,7 @@ impl State {
                 point_size: self.point_size,
                 point_color: self.point_color,
                 group_marker_scale: self.group_marker_scale,
+                pull_arrow_scale: self.pull_arrow_scale,
                 smooth_shading: self.smooth_shading,
                 show_occluded: self.show_occluded,
             },
@@ -2556,6 +2580,8 @@ impl State {
         self.point_size = r.point_size;
         self.point_color = r.point_color;
         self.group_marker_scale = r.group_marker_scale;
+        self.pull_arrow_scale = r.pull_arrow_scale;
+        self.rebuild_pull_arrow_verts();
         self.smooth_shading = r.smooth_shading;
         self.show_occluded = r.show_occluded;
 
@@ -4629,6 +4655,16 @@ impl State {
                 decimals: 2,
                 suffix: "x",
             },
+            // A multiple of the true displacement, read as the group
+            // markers' scale is.
+            ViewportMenuAction::PullArrowScaleSlider => MenuSlider {
+                value: self.pull_arrow_scale.clamp(0.25, 10.0),
+                min: 0.25,
+                max: 10.0,
+                step: 0.25,
+                decimals: 2,
+                suffix: "x",
+            },
             _ => return None,
         })
     }
@@ -4657,6 +4693,10 @@ impl State {
             ViewportMenuAction::GroupMarkerScaleSlider => {
                 self.group_marker_scale = v.clamp(0.5, 4.0);
                 self.rebuild_group_marker_verts();
+            }
+            ViewportMenuAction::PullArrowScaleSlider => {
+                self.pull_arrow_scale = v.clamp(0.25, 10.0);
+                self.rebuild_pull_arrow_verts();
             }
             _ => return,
         }
@@ -4722,11 +4762,13 @@ impl State {
         row(&mut options, &mut actions, "Wire Thickness".into(), ViewportMenuAction::WireThicknessSlider);
         row(&mut options, &mut actions, "Wire Opacity".into(), ViewportMenuAction::WireOpacitySlider);
 
-        // Points: the Render points, and the group markers sized off them.
+        // Points: the Render points, the group markers sized off them, and
+        // the pull arrows' length, the other selection feedback beside them.
         row(&mut options, &mut actions, "-".into(), sep);
         row(&mut options, &mut actions, format!("{} {}", mark(self.render_points), label("toggle_render_points", "Show Points")), ViewportMenuAction::Command("toggle_render_points"));
         row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
         row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
+        row(&mut options, &mut actions, "Pull Arrow Scale".into(), ViewportMenuAction::PullArrowScaleSlider);
 
         // Overlays: the three annotations over the scene's points.
         row(&mut options, &mut actions, "-".into(), sep);
@@ -4796,7 +4838,8 @@ impl State {
             | ViewportMenuAction::WireOpacitySlider
             | ViewportMenuAction::PointSizeSlider
             | ViewportMenuAction::PointMarkerSizeSlider
-            | ViewportMenuAction::GroupMarkerScaleSlider => {}
+            | ViewportMenuAction::GroupMarkerScaleSlider
+            | ViewportMenuAction::PullArrowScaleSlider => {}
             ViewportMenuAction::Separator => {}
         }
     }
@@ -5433,7 +5476,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             return;
         }
         self.last_pull_arrows_key = key;
-        self.pull_arrow_verts = match node {
+        self.pull_arrow_pairs = match node {
             None => Vec::new(),
             Some(node) => {
                 let (frame, start) = (self.sim_frame(), self.sim_start_frame());
@@ -5444,15 +5487,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 };
                 self.sim_cache = cache;
                 let bases: Vec<glam::Vec3> = moved.iter().map(|(a, _)| *a).collect();
-                let shown: Vec<(glam::Vec3, glam::Vec3)> = crate::geometry::spread_sample(&bases, Self::PULL_ARROWS_MAX)
+                crate::geometry::spread_sample(&bases, Self::PULL_ARROWS_MAX)
                     .into_iter()
                     .map(|i| moved[i])
-                    .collect();
-                // The group markers' warm accent: both are "what the
-                // selected node does", and they read as one feature.
-                crate::geometry::arrow_vertices(&shown, cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]))
+                    .collect()
             }
         };
+        self.rebuild_pull_arrow_verts();
+    }
+
+    /// Build the pull arrows from the kept pairs at the current Pull Arrow
+    /// Scale — the cheap half, with no evaluation, so the menu slider can run
+    /// it on every motion of a drag. Each arrow keeps its base on the point's
+    /// position before the pull and stretches along the pull by the scale.
+    pub(crate) fn rebuild_pull_arrow_verts(&mut self) {
+        let scale = self.pull_arrow_scale;
+        let shown: Vec<(glam::Vec3, glam::Vec3)> =
+            self.pull_arrow_pairs.iter().map(|&(a, b)| (a, a + (b - a) * scale)).collect();
+        // The group markers' warm accent: both are "what the selected node
+        // does", and they read as one feature.
+        self.pull_arrow_verts =
+            crate::geometry::arrow_vertices(&shown, cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]));
         self.pull_arrows_dirty = true;
     }
 
@@ -5897,6 +5952,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             point_size: settings.render.point_size,
             point_color: settings.render.point_color,
             group_marker_scale: settings.render.group_marker_scale,
+            pull_arrow_scale: settings.render.pull_arrow_scale,
+            pull_arrow_pairs: Vec::new(),
             smooth_shading: settings.render.smooth_shading,
             show_occluded: settings.render.show_occluded,
             sorted_fill_key: None,
