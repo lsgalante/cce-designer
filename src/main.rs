@@ -1407,6 +1407,44 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The startup project loads before the compositor's first configure, so
+    /// its plate fractions land on `State::new`'s 1280x800 placeholder; the
+    /// first real size must apply them again. Before, the plates kept the
+    /// placeholder's pixels, opening every launch scaled by 1280/width (and
+    /// 800/height), and a save then stored the shrunken fractions.
+    #[test]
+    fn plates_loaded_before_the_first_configure_fit_the_real_window() {
+        let dir = std::env::temp_dir().join(format!("cce_designer_prefconfigure_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut a = State::new(false);
+        a.resize(1400.0, 1080.0, 1.0);
+        a.execute_menu_action("Show Spreadsheet Pane");
+        a.floating_network_layout.2 = 350.0;
+        a.floating_param_width = 310.0;
+        a.floating_spreadsheet_height = 100.0;
+        a.rebuild_positions();
+        a.save_to_file(&dir).expect("save");
+
+        // No resize before the load: this is the startup order.
+        let mut b = State::new(false);
+        assert!(!b.window_configured);
+        b.load_from_file(&dir).expect("load");
+        b.resize(1400.0, 1080.0, 1.0);
+        assert!((b.left_dock_width() - 350.0).abs() < 0.5, "network width: {}", b.left_dock_width());
+        assert!((b.right_dock_width() - 310.0).abs() < 0.5, "param width: {}", b.right_dock_width());
+        assert!((b.floating_spreadsheet_height - 100.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
+        let pg = b.project_view_state().plates.expect("plates");
+        assert!((pg.network_width - 350.0 / 1400.0).abs() < 1e-4, "a save writes back what was loaded: {:?}", pg);
+
+        // Only the FIRST configure: a later window resize keeps the plates'
+        // pixels, as it always has.
+        b.resize(1000.0, 1080.0, 1.0);
+        assert!((b.left_dock_width() - 350.0).abs() < 0.5, "a later resize rescaled the plate: {}", b.left_dock_width());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// A window briefly narrower than its plates squeezes them for as long as
     /// it lasts and no longer: the layout used to store the clamped size, so
     /// one transient shrink (a re-tile, a configure at startup) left every

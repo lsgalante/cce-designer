@@ -2129,6 +2129,16 @@ pub struct State {
     /// raises the neighbor's bottom edge to the spreadsheet's top.
     pub floating_spreadsheet_inset_left: f32,
     pub floating_spreadsheet_inset_right: f32,
+    /// Whether the compositor has told us the window's size yet. Until it
+    /// has, `width`/`height` are `State::new`'s 1280x800 placeholder.
+    pub window_configured: bool,
+    /// Plate fractions a load applied against that placeholder, held so the
+    /// first real `resize` can apply them again at the real size. The
+    /// startup project loads before the first configure, and `resize`
+    /// keeps plates at their pixel size, so without this every launch in a
+    /// window other than 1280x800 opened with the plates scaled by
+    /// 1280/width — and a save then stored the scaled fractions.
+    pub pending_plates: Option<PlateGeometry>,
     pub loaded_project_path: Option<std::path::PathBuf>,
     /// The configured startup project (`DesignSettings::default_project`),
     /// mirrored live so "Set As Default" can rewrite it and `save_settings` —
@@ -5769,6 +5779,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             floating_spreadsheet_height: 250.0,
             floating_spreadsheet_inset_left: 0.0,
             floating_spreadsheet_inset_right: 0.0,
+            window_configured: false,
+            pending_plates: None,
             loaded_project_path: None,
             default_project_setting: settings.default_project.clone(),
             gpu_preference: settings.gpu.clone(),
@@ -7757,6 +7769,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let body_h = self.body_h();
                 self.slots.splitter1.set_rect(self.splitter_layout.splitter1_x, HEADER_H, SPLITTER_W, body_h);
                 self.slots.splitter2.set_rect(self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
+            }
+
+            self.window_configured = true;
+            if let Some(pg) = self.pending_plates.take() {
+                self.apply_plate_geometry(pg);
             }
 
             self.sync_layout();

@@ -396,22 +396,30 @@ impl State {
                 self.apply_layout();
             }
         }
-        // Plate geometry: the fractions scale back onto this window, and
-        // the layout pass clamps them exactly as a drag would (minimum
-        // widths, the spreadsheet's tuck limits). A save with a nonsense
-        // value keeps the live geometry rather than loading half of one.
+        // Plate geometry: fractions of the window, see `apply_plate_geometry`.
         if let Some(pg) = vs.plates {
-            let sane = |f: f32| f.is_finite() && (0.0..=1.0).contains(&f);
-            let all = [pg.network_width, pg.params_width, pg.spreadsheet_height, pg.spreadsheet_inset_left, pg.spreadsheet_inset_right];
-            if self.width > 1.0 && self.height > 1.0 && all.iter().all(|&f| sane(f)) {
-                self.floating_network_layout.2 = pg.network_width * self.width;
-                self.floating_param_width = pg.params_width * self.width;
-                self.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
-                self.floating_spreadsheet_inset_left = pg.spreadsheet_inset_left * self.width;
-                self.floating_spreadsheet_inset_right = pg.spreadsheet_inset_right * self.width;
-                self.rebuild_positions();
-                self.apply_layout();
-            }
+            self.apply_plate_geometry(pg);
+        }
+        // Before the first configure the fractions just landed on the
+        // placeholder size; the first real resize applies them again.
+        self.pending_plates = if self.window_configured { None } else { vs.plates };
+    }
+
+    /// Scale saved plate fractions onto this window. The layout pass clamps
+    /// them exactly as a drag would (minimum widths, the spreadsheet's tuck
+    /// limits). A save with a nonsense value keeps the live geometry rather
+    /// than loading half of one.
+    pub(crate) fn apply_plate_geometry(&mut self, pg: crate::app::PlateGeometry) {
+        let sane = |f: f32| f.is_finite() && (0.0..=1.0).contains(&f);
+        let all = [pg.network_width, pg.params_width, pg.spreadsheet_height, pg.spreadsheet_inset_left, pg.spreadsheet_inset_right];
+        if self.width > 1.0 && self.height > 1.0 && all.iter().all(|&f| sane(f)) {
+            self.floating_network_layout.2 = pg.network_width * self.width;
+            self.floating_param_width = pg.params_width * self.width;
+            self.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
+            self.floating_spreadsheet_inset_left = pg.spreadsheet_inset_left * self.width;
+            self.floating_spreadsheet_inset_right = pg.spreadsheet_inset_right * self.width;
+            self.rebuild_positions();
+            self.apply_layout();
         }
     }
 
