@@ -3357,6 +3357,123 @@ pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 
     out
 }
 
+/// Whether `node` is an Attribute node that moves points — one writing the
+/// built-in `Pos`. Those are the nodes whose effect the viewport draws as
+/// pull arrows while one is selected.
+pub fn moves_points(node: &FsNode) -> bool {
+    node.node_type.eq_ignore_ascii_case("attribute")
+        && node_param_str(node, "Attribute Name", "").trim().eq_ignore_ascii_case("Pos")
+}
+
+/// Where `target` moves each point it moves, as `(before, after)` positions:
+/// its input's `P` against its own. Measured rather than read off Value, so
+/// Set and Multiply — whose vector differs point to point — and an
+/// expression-driven Value all come out as what actually happened, and the
+/// affected points are exactly the ones that moved.
+///
+/// A node inside a simnet is evaluated as the current frame's step saw it,
+/// with the feedback stack holding the state that step consumed — the same
+/// rule the dived-in scene walk draws by — so the arrows start where the
+/// points were this frame, not at the seed. Point counts that differ (the
+/// node was rewired onto something that adds or removes points) give nothing,
+/// since the indices no longer pair up.
+pub fn point_displacements(root: &FsNode, target: &FsNode, sim: &mut EvalSim) -> Vec<(Vec3, Vec3)> {
+    let input_name = node_param_str(target, "Input", "");
+    if input_name.trim().is_empty() {
+        return Vec::new();
+    }
+    let Some(input_node) = find_input_node(root, target, &input_name) else {
+        return Vec::new();
+    };
+    let mut ocl_error = None;
+    let simnet = find_parent_node(root, &target.id).filter(|p| p.node_type.eq_ignore_ascii_case("simnet"));
+    let mut pushed = false;
+    if let Some(simnet) = simnet {
+        let mut visited = Vec::new();
+        match simnet_step_feedback(root, simnet, &mut visited, &mut ocl_error, sim) {
+            Some(fed) => {
+                sim.feedback.push((simnet.id.clone(), fed));
+                pushed = true;
+            }
+            None => return Vec::new(),
+        }
+    }
+    let before = generate_single_node_geometry_with_errors(root, input_node, &mut Vec::new(), &mut ocl_error, sim);
+    let after = generate_single_node_geometry_with_errors(root, target, &mut Vec::new(), &mut ocl_error, sim);
+    if pushed {
+        sim.feedback.pop();
+    }
+    let (Some(before), Some(after)) = (before, after) else { return Vec::new() };
+    if before.num_points() != after.num_points() {
+        return Vec::new();
+    }
+    (0..after.num_points())
+        .map(|p| (before.pos(p), after.pos(p)))
+        .filter(|(a, b)| (*b - *a).length_squared() > 1e-12)
+        .collect()
+}
+
+/// Up to `k` of `points`, spread out: farthest-point sampling, starting from
+/// the first point and repeatedly taking the one farthest from everything
+/// taken so far. A pull on a thousand points reads from a dozen arrows as
+/// well as from a thousand, and a thousand are a hedgehog that hides the
+/// mesh; sampling by index instead would bunch wherever the numbering runs
+/// locally, which on a scattered or remeshed surface is anywhere. Returned in
+/// ascending index order; all of them when there are no more than `k`.
+pub fn spread_sample(points: &[Vec3], k: usize) -> Vec<usize> {
+    if points.len() <= k {
+        return (0..points.len()).collect();
+    }
+    let mut chosen = Vec::with_capacity(k);
+    let mut dist = vec![f32::INFINITY; points.len()];
+    let mut next = 0;
+    while chosen.len() < k {
+        chosen.push(next);
+        let at = points[next];
+        let mut far = (0, -1.0_f32);
+        for (i, d) in dist.iter_mut().enumerate() {
+            *d = d.min(points[i].distance_squared(at));
+            if *d > far.1 {
+                far = (i, *d);
+            }
+        }
+        if far.1 <= 0.0 {
+            break; // every remaining point coincides with a chosen one
+        }
+        next = far.0;
+    }
+    chosen.sort_unstable();
+    chosen
+}
+
+/// Arrows as LINE_LIST pairs: a shaft from each `from` to its `to`, and a
+/// head of four strokes flaring back from the tip. The head is a fixed
+/// fraction of the shaft, so an arrow's whole length is the true
+/// displacement — the one number it exists to show.
+pub fn arrow_vertices(pairs: &[(Vec3, Vec3)], color: [f32; 3]) -> Vec<Vertex3D> {
+    let mut out = Vec::with_capacity(pairs.len() * 10);
+    for &(from, to) in pairs {
+        let d = to - from;
+        let len = d.length();
+        if len < 1e-6 {
+            continue;
+        }
+        let dir = d / len;
+        let (u, v) = dir.any_orthonormal_pair();
+        let head = len * 0.25;
+        let back = to - dir * head;
+        let mut seg = |a: Vec3, b: Vec3| {
+            out.push(Vertex3D { position: a.to_array(), color });
+            out.push(Vertex3D { position: b.to_array(), color });
+        };
+        seg(from, to);
+        for side in [u, -u, v, -v] {
+            seg(to, back + side * head * 0.4);
+        }
+    }
+    out
+}
+
 /// The Visualize node: make a simulation's state visible.
 ///
 /// Two readings, chosen by Mode. **Ramp** maps a scalar attribute through a
@@ -8481,5 +8598,126 @@ mod simnet_tests {
         }
         assert!(max_response > 0.01,
             "no neighbor responded to the pull (relax did nothing), max {max_response}");
+    }
+
+    /// The pull arrows measure what the selected node DID: one pair per
+    /// point it moved, from its input position to its output one, and none
+    /// for the points it left alone.
+    #[test]
+    fn pull_arrows_measure_what_the_node_moves() {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let group = node(
+            "id-group",
+            "Group 1",
+            "group",
+            vec![
+                param("Input", "Sphere 1"),
+                param("Group Name", "pull"),
+                param("Mode", "Random"),
+                param("Count", "30"),
+                param("Seed", "3"),
+                param("Highlight", "false"),
+            ],
+            vec![],
+        );
+        let pull = node(
+            "id-pull",
+            "Pull 1",
+            "attribute",
+            vec![
+                param("Input", "Group 1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "Pos"),
+                param("Value", "0.00:0.06:0.00"),
+                param("Combine", "Add"),
+                param("Group", "pull"),
+            ],
+            vec![],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere, group, pull]);
+        let pull = &root.children[2];
+        assert!(moves_points(pull));
+        assert!(!moves_points(&root.children[1]), "a Group node moves nothing");
+
+        let base = eval(&root, "Group 1");
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(1, 1, &mut cache);
+        let moved = point_displacements(&root, pull, &mut sim);
+        assert_eq!(moved.len(), base.points().group_members("pull").len(), "one pair per pulled point");
+        for (a, b) in &moved {
+            assert!((*b - *a - Vec3::new(0.0, 0.06, 0.0)).length() < 1e-5, "vector {:?}", *b - *a);
+            assert!(
+                base.points().group_members("pull").iter().any(|&p| base.pos(p as usize).distance(*a) < 1e-6),
+                "an arrow starts at a point outside the group: {a:?}"
+            );
+        }
+
+        // Twelve of the thirty, distinct.
+        let bases: Vec<Vec3> = moved.iter().map(|(a, _)| *a).collect();
+        let picked = spread_sample(&bases, 12);
+        assert_eq!(picked.len(), 12);
+        assert!(picked.windows(2).all(|w| w[0] < w[1]), "ascending and distinct: {picked:?}");
+        // Five strokes per arrow: the shaft and a four-stroke head.
+        let shown: Vec<(Vec3, Vec3)> = picked.iter().map(|&i| moved[i]).collect();
+        assert_eq!(arrow_vertices(&shown, [1.0; 3]).len(), 12 * 10);
+    }
+
+    /// Farthest-point sampling takes the extremes before anything between
+    /// them, and hands every point back when there are no more than asked.
+    #[test]
+    fn spread_sample_spreads_out() {
+        let line: Vec<Vec3> = (0..=100).map(|i| Vec3::new(i as f32, 0.0, 0.0)).collect();
+        let picked = spread_sample(&line, 3);
+        assert_eq!(picked, vec![0, 50, 100], "the two ends, then the middle");
+        assert_eq!(spread_sample(&line[..5], 12), vec![0, 1, 2, 3, 4]);
+        // Coincident points: no more picks than distinct positions.
+        let same = vec![Vec3::ONE; 20];
+        assert_eq!(spread_sample(&same, 12), vec![0]);
+    }
+
+    /// Inside a simnet the arrows start where the points were THIS frame —
+    /// the state the frame's step consumed, which is the previous frame's
+    /// solve — not at the seed, which is what evaluating the node on its own
+    /// would give (the `input` node reads the seed with no feedback pushed).
+    #[test]
+    fn pull_arrows_inside_a_simnet_start_from_this_frames_state() {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let pull = node(
+            "id-pull",
+            "pull1",
+            "attribute",
+            vec![
+                param("Input", "input1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "Pos"),
+                param("Value", "1.00:0.00:0.00"),
+                param("Combine", "Add"),
+                param("Group", ""),
+            ],
+            vec![],
+        );
+        let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+        let sim_node = node(
+            "id-sim",
+            "Simnet 1",
+            "simnet",
+            vec![param("Input", "Sphere 1")],
+            vec![inner_input, pull, inner_output],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere, sim_node]);
+        let pull = &root.children[1].children[1];
+
+        let prev = solve_at(&root, 3);
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(4, 1, &mut cache);
+        let moved = point_displacements(&root, pull, &mut sim);
+        assert_eq!(moved.len(), prev.num_points());
+        let lo = moved.iter().map(|(a, _)| a.x).fold(f32::INFINITY, f32::min);
+        assert!((lo - min_x(&prev)).abs() < 1e-4, "arrows start at {lo}, frame 3 solved to {}", min_x(&prev));
+        assert!(min_x(&prev) > min_x(&solve_at(&root, 1)) + 1.0, "the fixture must have stepped, or this proves nothing");
+        for (a, b) in &moved {
+            assert!((*b - *a - Vec3::X).length() < 1e-5);
+        }
     }
 }

@@ -1504,6 +1504,27 @@ is taken in MESH space, the inverse of view × model. Leaving see-through
 clears the key and re-uploads nothing: sorted order is still a valid
 opaque mesh.
 
+### Pull arrows
+
+While the params pane shows an Attribute node that writes `Pos`
+(`geometry::moves_points` — the simnet's `pull1` is one), the viewport draws
+amber arrows from where points were to where the node puts them. They are
+MEASURED, output `P` minus input `P` (`point_displacements`), not read off
+Value, so Set, Multiply and an expression all show what actually happened,
+and the arrowed points are exactly the ones that moved. An arrow's full length,
+head included, is the true displacement.
+
+At most `State::PULL_ARROWS_MAX` (12) points get one, picked by farthest-point
+sampling (`spread_sample`) so they cover the region the pull covers rather
+than bunching wherever the point numbering runs locally. A node inside a
+simnet is measured as this frame's step saw it, with the step's feedback
+pushed, the same rule the dived-in scene walk draws by. Without it the
+`input` node reads the seed, and the arrows would sit where the points
+started, not where they are. `sync_pull_arrows` borrows the shared sim cache for
+this, so during playback the feedback is a cache hit rather than a re-solve
+from the seed every frame; it runs from both `sync_nodes` and the end of
+`rebuild_scene_geometry`, keyed by (node id, params, geometry version).
+
 ### Dragging the scene orbits the camera
 
 `State::orbit_camera_by` turns the camera by a drag delta, armed by a left

@@ -1808,6 +1808,9 @@ pub struct SceneMeshes {
     pub overlay_points: cce_ui::vk::MeshId,
     /// The Show Point Normals overlay (LINE_LIST whiskers).
     pub overlay_normals: cce_ui::vk::MeshId,
+    /// Pull arrows (LINE_LIST): while a point-moving Attribute node is
+    /// selected, how far and which way it moves a spread of the points.
+    pub pull_arrows: cce_ui::vk::MeshId,
 }
 
 /// A left-press on the detached circular window's chrome that becomes an
@@ -2244,6 +2247,15 @@ pub struct State {
     pub group_points_dirty: bool,
     pub group_point_vertex_count: u32,
     pub last_group_points_key: Option<(String, Vec<(String, String)>, u64)>,
+    /// Pull arrows: while the params pane shows an Attribute node that moves
+    /// points (`geometry::moves_points`), an arrow from where each of a
+    /// spread of its points was to where the node puts it — staged by
+    /// `sync_pull_arrows`, flushed to `meshes.pull_arrows`. Keyed like the
+    /// group markers, by (node id, params, geometry version).
+    pub pull_arrow_verts: Vec<Vertex3D>,
+    pub pull_arrows_dirty: bool,
+    pub pull_arrow_count: u32,
+    pub last_pull_arrows_key: Option<(String, Vec<(String, String)>, u64)>,
     /// The selected Group's member positions, kept from the evaluation so
     /// the markers can be re-SIZED without re-evaluating the node — a point
     /// size or marker scale change (the viewport menu's slider, per motion
@@ -5383,6 +5395,65 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // Marker Scale): re-size without re-evaluating.
             self.rebuild_group_marker_verts();
         }
+        self.sync_pull_arrows();
+    }
+
+    /// How many points of a pull get an arrow. A dozen show the direction
+    /// and the reach of the pull across the region it covers; one per point
+    /// buries the mesh under them.
+    pub const PULL_ARROWS_MAX: usize = 12;
+
+    /// Stage the pull arrows for the node the params pane shows, when it is
+    /// an Attribute node that moves points; clear them otherwise. Evaluates
+    /// only when the key moves — a different node, an edited parameter, or
+    /// a new geometry version (which every scene rebuild, and so every frame
+    /// of a playing simnet, bumps).
+    ///
+    /// The shared sim cache is borrowed for the evaluation rather than a
+    /// throwaway one: the scene rebuild has just solved this frame, so the
+    /// step feedback a node inside a simnet needs is a cache hit instead of
+    /// a solve from the seed on every frame of playback.
+    pub(crate) fn sync_pull_arrows(&mut self) {
+        let node = if self.is_detached_network {
+            None
+        } else {
+            self.param_editor_selected()
+                .and_then(|slot| self.param_editor_dir().children.get(slot))
+                .filter(|n| crate::geometry::moves_points(n))
+                .cloned()
+        };
+        let key = node.as_ref().map(|n| {
+            (
+                n.id.clone(),
+                n.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>(),
+                self.rt_geometry_version,
+            )
+        });
+        if key == self.last_pull_arrows_key {
+            return;
+        }
+        self.last_pull_arrows_key = key;
+        self.pull_arrow_verts = match node {
+            None => Vec::new(),
+            Some(node) => {
+                let (frame, start) = (self.sim_frame(), self.sim_start_frame());
+                let mut cache = std::mem::take(&mut self.sim_cache);
+                let moved = {
+                    let mut sim = crate::geometry::EvalSim::new(frame, start, &mut cache);
+                    crate::geometry::point_displacements(&self.fs_root, &node, &mut sim)
+                };
+                self.sim_cache = cache;
+                let bases: Vec<glam::Vec3> = moved.iter().map(|(a, _)| *a).collect();
+                let shown: Vec<(glam::Vec3, glam::Vec3)> = crate::geometry::spread_sample(&bases, Self::PULL_ARROWS_MAX)
+                    .into_iter()
+                    .map(|i| moved[i])
+                    .collect();
+                // The group markers' warm accent: both are "what the
+                // selected node does", and they read as one feature.
+                crate::geometry::arrow_vertices(&shown, cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]))
+            }
+        };
+        self.pull_arrows_dirty = true;
     }
 
     /// The Selected-Group markers' radius: Point Size times Group Marker
@@ -5839,6 +5910,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             group_points_dirty: false,
             group_point_vertex_count: 0,
             last_group_points_key: None,
+            pull_arrow_verts: Vec::new(),
+            pull_arrows_dirty: false,
+            pull_arrow_count: 0,
+            last_pull_arrows_key: None,
             group_members: Vec::new(),
             last_group_marker_size: 0.0,
             overlay_marker_verts: Vec::new(),
@@ -9740,6 +9815,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.overlay_normal_count = self.overlay_normal_verts.len() as u32;
             self.viewport_dirty = true;
         }
+
+        // Pull arrows, staged by sync_pull_arrows.
+        if self.pull_arrows_dirty {
+            self.pull_arrows_dirty = false;
+            renderer.update_mesh(meshes.pull_arrows, bytemuck::cast_slice(&self.pull_arrow_verts));
+            self.pull_arrow_count = self.pull_arrow_verts.len() as u32;
+            self.viewport_dirty = true;
+        }
     }
 
     /// One-time renderer setup (engine `renderer_init` hook): the persistent
@@ -9794,7 +9877,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             group_points: renderer.create_mesh(&[]),
             overlay_points: renderer.create_mesh(&[]),
             overlay_normals: renderer.create_mesh(&[]),
+            // Seeded with what is staged: a replacement renderer gets the
+            // arrows back without waiting for the selection to change.
+            pull_arrows: renderer.create_mesh(bytemuck::cast_slice(&self.pull_arrow_verts)),
         });
+        self.pull_arrow_count = self.pull_arrow_verts.len() as u32;
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush.
         self.spheres_dirty = !self.rt_sphere_verts.is_empty();
@@ -10030,6 +10117,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         // wireframe styling choice, not a normals one).
                         if self.overlay_normal_count > 0 {
                             draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
+                        }
+                        // Pull arrows: selection feedback, like the group
+                        // markers — full opacity, a little heavier than the
+                        // whiskers so they read over a wireframe.
+                        if self.pull_arrow_count > 0 {
+                            draws.push(SceneDraw { mesh: meshes.pull_arrows, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 2.0, wire_base_width: 0.0, prelit: false, see_through: false });
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);

@@ -1196,6 +1196,9 @@ impl State {
             cce_ui::colors::to_linear_rgb,
         ));
         self.overlay_dirty = true;
+        // The pull arrows measure the selected node against this new
+        // geometry version; a playing simnet reaches here every frame.
+        self.sync_pull_arrows();
 
         // Last, not first: the page's status line would otherwise be
         // overwritten by the geometry pass's own, and a level showing a page
