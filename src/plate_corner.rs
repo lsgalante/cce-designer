@@ -235,7 +235,9 @@ impl State {
                 options.push("Add Tab".to_string());
                 actions.push(PlateMenuAction::AddTabMenu);
             }
-            if self.dock_tabs[d as usize].len() > 1 {
+            // Only while a dock is free to take it: with none, the split
+            // has nowhere to go and the row would do nothing.
+            if self.dock_tabs[d as usize].len() > 1 && self.first_empty_dock().is_some() {
                 manage_row(&mut options, &mut actions);
                 options.push("Move To Own Plate".to_string());
                 actions.push(PlateMenuAction::SplitTab);

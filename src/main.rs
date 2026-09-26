@@ -1161,6 +1161,46 @@ mod tests {
         assert_eq!(state.pane_in_dock(Dock::Right), SPREADSHEET_IDX);
     }
 
+    /// Move To Own Plate is offered only while a dock is free to take the
+    /// pane. Four tab candidates share three docks, so a dock can hold two
+    /// with none empty — and there the row used to show and do nothing.
+    #[test]
+    fn move_to_own_plate_needs_an_empty_dock() {
+        use crate::app::Dock;
+        use crate::plate_corner::PlateMenuAction;
+        use crate::slots::{NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+
+        // The second editor tabs in beside the first: left holds two, and
+        // params and spreadsheet keep the other two docks, so none is free.
+        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
+        state.show_dock_tab(Dock::Left, NETWORK_PANEL_IDX);
+        assert_eq!(state.first_empty_dock(), None);
+        state.open_plate_menu(NETWORK_PANEL_IDX);
+        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::SplitTab),
+            "no dock is free, so the row is left out");
+        assert!(state.plate_menu_actions.contains(&PlateMenuAction::ShowTab(NETWORK_PANEL2_IDX)),
+            "the tab list itself still shows");
+        state.close_plate_menu();
+
+        // Pulling the spreadsheet in beside the params frees the bottom dock,
+        // and the row comes back — on both shared docks.
+        state.add_dock_tab(Dock::Right, SPREADSHEET_IDX);
+        state.show_dock_tab(Dock::Right, PARAM_IDX);
+        assert_eq!(state.first_empty_dock(), Some(Dock::Bottom));
+        for idx in [NETWORK_PANEL_IDX, PARAM_IDX] {
+            state.open_plate_menu(idx);
+            assert!(state.plate_menu_actions.contains(&PlateMenuAction::SplitTab),
+                "a shared dock with a free one offers the split");
+            state.close_plate_menu();
+        }
+
+        // And the split lands there.
+        state.split_dock_tab(PARAM_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Bottom), PARAM_IDX);
+    }
+
     /// The second network editor: joins a dock from nowhere through the tab
     /// machinery, dives on its OWN path while the primary stays put, clamps
     /// a stale path instead of panicking, and Close removes it entirely.

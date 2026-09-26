@@ -3020,19 +3020,23 @@ impl State {
         self.after_dock_change();
     }
 
-    /// Move the active tab of `slot`'s dock out to the first EMPTY dock —
-    /// the corner menu's inverse of Add Tab. No empty dock, no move (with
-    /// three panes on three docks, one is empty whenever any dock holds two).
+    /// The dock a split would move a tab to: the first EMPTY one, Left,
+    /// Right, Bottom. There are four tab candidates for three docks, so two
+    /// docks can each hold two with none left free — the corner menu reads
+    /// this to leave Move To Own Plate out rather than offer a dead row.
+    pub fn first_empty_dock(&self) -> Option<Dock> {
+        [Dock::Left, Dock::Right, Dock::Bottom]
+            .into_iter()
+            .find(|&d| self.dock_tabs[d as usize].is_empty())
+    }
+
+    /// Move `slot` out of its shared dock to the first EMPTY dock — the
+    /// corner menu's inverse of Add Tab. No empty dock, no move.
     pub fn split_dock_tab(&mut self, slot: usize) {
         if self.tab_dock_of_pane(slot).is_none() {
             return;
         }
-        let Some(empty) = [Dock::Left, Dock::Right, Dock::Bottom]
-            .into_iter()
-            .find(|&d| self.dock_tabs[d as usize].is_empty())
-        else {
-            return;
-        };
+        let Some(empty) = self.first_empty_dock() else { return };
         self.add_dock_tab(empty, slot);
     }
 
