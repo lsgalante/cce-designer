@@ -217,6 +217,9 @@ gone from cce-ui with the wgpu path).
   its top edge, so a mode line there lands under the collapsed stubs. It exists
   because a viewer state changes what every click does and snapping silently
   changes what a drag does.
+- `src/param.rs` — node parameters: `ParamDef` (text and parsed value kept
+  together, both private), `ParamKind`, `ParamValue`, `ParamSlot`. See
+  "Parameter kinds and typed values".
 - `src/project.rs` — save/load. A project is a **directory containing `state.json`**
   (`Project { name, root: FsNode, view_state }`); `default_project.json` in the crate
   root is special-cased as a single file and doubles as the detached-window sync channel.
@@ -475,16 +478,50 @@ diagnosis is in the git history of this section (commit `8fd0c29`) if the
 pattern ever recurs with another driver: a `read` returning EBADF on a file
 nothing is wrong with, in a process that has loaded a vendor ICD.
 
-### Parameter kinds
+### Parameter kinds and typed values
 
-A `ParamDef`'s `type` string names a `ParamKind` (`app.rs`) —
+`src/param.rs` owns `ParamDef`, `ParamKind`, `ParamValue` and `ParamSlot`
+(re-exported from `app`). A `type` string names a `ParamKind` —
 `ParamKind::parse` reads the head before the first `:` (`slider:-2:2` is a
 Slider, `choice:A,B` a Choice; `string`, what an absent type deserializes to,
-is Text). `ParamDef::kind()` is the one place the string is interpreted;
-`param_display`, `format_for_param`, `param_number`, the float3 expression
-split, Paste Reference's `ch`/`chs` choice and the pane write-back all
-dispatch on it. The VALUE is still the `default` string — kinds are phases
-0–2 of the typed-value migration, and storage (phase 3) has not moved.
+is Text) — and `ParamDef::kind()` is the one place the string is interpreted.
+
+**A parameter keeps its TEXT and what that text parses to, together.** Both
+fields are private; `text()` is the value as written (`"0.50"` stays
+`"0.50"`), `slot()` is `Value(ParamValue)`, `Expr` or `Invalid(why)`, and
+every setter re-parses, so the two cannot disagree. `set_text` is the one
+way a value changes (it keeps the expression flag), `set_value` writes a
+typed value, `bake` writes a value and clears the flag (an evaluated
+expression, Delete Expression), `set_expr` flips the flag, `set_type` /
+`adopt_ui_from` change the kind and re-parse — the template merge goes
+through `adopt_ui_from`, so an old save's text wire is a node wire and an
+old text Center a float3 from the load on. Tests build parameters with
+`ParamDef::new(name, type, text)` and the `with_*` builders.
+
+- **The file format did not move.** Serde goes through `ParamDefRepr`, the
+  old struct field for field and in order, so a re-save is byte-identical
+  and `sim_solve_key` — a hash of the simnet's JSON — does not restart
+  cached simulations. `params_serialize_as_they_always_did` walks every
+  template and both bundled projects; the user's own project was checked
+  the same way when this landed (128 parameters, identical).
+- **A text that does not fit is kept, never coerced.** It loads as
+  `Invalid`, readers fall back exactly as they did when every read parsed
+  the string (`node_param_f32` on `4.5` in a spinbox is still 4.5), and a
+  load says so on the status line (`report_invalid_params`, only over the
+  plain success message). What REFUSES one is the two places a person types:
+  the params pane (`sync_parameters_to_project`: nothing written, the row
+  shows the kept text again, "Not applied — Threshold: 'abc' is not a
+  number") and MCP's `set_param` / `add_param`. A value that reads as an
+  expression goes through as one and is checked when it evaluates.
+- **Readers take the parsed value** (`node_param_f32` / `_vec3` / `_bool`,
+  `param_number`) and fall back to the text for a slot that is not the
+  kind they want — so a text row holding `12` still reads 12.
+- **Expressions evaluate to a typed value.** `eval_param_value` returns
+  `Evaluated`: `value_from_expr` converts by the row (a number into a toggle
+  is its truth, into a choice the option at that index, into a spinbox its
+  whole part), and a result that fits nothing is stored as its text and
+  flagged, which is what the old string write-back did.
+  `resolve_param_refs` stores either with `set_value` / `bake`.
 
 - **A type naming no kind is refused**, not read as text: `load_fs_tree`
   drops the template with a message (as it does an unparseable one), MCP's
@@ -513,8 +550,8 @@ dispatch on it. The VALUE is still the `default` string — kinds are phases
 
 Saved projects need no migration for any of this: `merge_template_defs`
 hands every instance its template's type along with the rest of the UI
-metadata, so an old save's `"type": "text"` wire loads as `node`
-(`a_saved_text_wire_loads_as_a_node_wire`).
+metadata (`adopt_ui_from`, which re-parses), so an old save's
+`"type": "text"` wire loads as `node` (`a_saved_text_wire_loads_as_a_node_wire`).
 
 ### Conditional parameter rows
 

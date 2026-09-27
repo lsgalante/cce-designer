@@ -1726,7 +1726,7 @@ impl State {
                             .params
                             .iter()
                             .find(|p| p.name == name)
-                            .map(|p| p.default.clone())
+                            .map(|p| p.text().to_string())
                     })
                     .flatten();
                 // No camera node behind the Default Camera: the live field
@@ -1890,7 +1890,7 @@ impl State {
                         .and_then(|c| c.params.iter_mut().find(|p| p.name == name))
                     {
                         Some(p) => {
-                            p.default = value.to_string();
+                            p.set_text(value.to_string());
                             true
                         }
                         None => false,

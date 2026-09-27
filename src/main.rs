@@ -1,5 +1,6 @@
 
 pub mod app;
+pub mod param;
 pub mod application;
 pub mod curve_tool;
 pub mod soft_transform_tool;
@@ -326,9 +327,9 @@ mod tests {
         assert_eq!(node.node_type, "points");
         assert_eq!(node.name, "Add 3", "instance name is the wire identity — never rewritten");
         let points = node.params.iter().find(|p| p.name == "Points").unwrap();
-        assert_eq!(points.default, "250", "instance owns its values");
+        assert_eq!(points.text(), "250", "instance owns its values");
         let shape = node.params.iter().find(|p| p.name == "Shape").expect("Shape appended");
-        assert_eq!(shape.default, "None");
+        assert_eq!(shape.text(), "None");
     }
 
     /// Set As Default is reachable. It was a button on the Main utility
@@ -580,7 +581,7 @@ mod tests {
     /// the wires, and the active camera in the view state.
     #[test]
     fn loading_a_project_strips_spaces_and_rewires_references() {
-        use crate::app::{ParamDef, Project};
+        use crate::app::Project;
         let content = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/default_project.json")).unwrap();
         let mut proj: Project = serde_json::from_str(&content).unwrap();
         // Age the file: put the spaces back, add a consumer wired to the
@@ -595,11 +596,11 @@ mod tests {
         group.name = "My Region".into();
         group.node_type = "group".into();
         group.children.clear();
-        group.params = vec![ParamDef { name: "Input".into(), label: "Input".into(), param_type: "text".into(), default: "Sphere 1".into(), options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false }];
+        group.params = vec![crate::app::ParamDef::new("Input", "text", "Sphere 1").with_label("Input")];
         let mut clash = group.clone();
         clash.id = "c".into();
         clash.name = "sphere1".into();
-        clash.params[0].default = "Camera 1".into();
+        clash.params[0].set_text("Camera 1");
         proj.root.children.push(group);
         proj.root.children.push(clash);
 
@@ -613,8 +614,8 @@ mod tests {
         assert!(names.contains(&"sphere1"), "the hand-named sibling keeps its name");
         assert!(names.contains(&"sphere1_2"), "the migrated sphere steps aside from it: {names:?}");
         let by_name = |n: &str| proj.root.children.iter().find(|c| c.name == n).unwrap();
-        assert_eq!(by_name("my_region").params[0].default, "sphere1_2", "the wire followed the rename");
-        assert_eq!(by_name("sphere1").params[0].default, "camera1");
+        assert_eq!(by_name("my_region").params[0].text(), "sphere1_2", "the wire followed the rename");
+        assert_eq!(by_name("sphere1").params[0].text(), "camera1");
         assert_eq!(proj.view_state.active_camera, "camera1");
         // The sphere is the native node the bundled file now holds.
         assert_eq!(by_name("sphere1_2").node_type, "sphere");
@@ -805,17 +806,7 @@ mod tests {
         let mut state = State::new(false);
         // A pre-removal save: the four utility subnets flat at the root,
         // Main carrying its retired Style section.
-        let style = |name: &str, ty: &str, val: &str| crate::app::ParamDef {
-            name: name.to_string(),
-            label: String::new(),
-            param_type: ty.to_string(),
-            default: val.to_string(),
-            options: Vec::new(),
-            min: None,
-            max: None,
-            step: None,
-            show_when: String::new(), expr: false,
-        };
+        let style = |name: &str, ty: &str, val: &str| crate::app::ParamDef::new(name.to_string(), ty.to_string(), val.to_string());
         state.fs_root.children.push(crate::app::FsNode {
             id: "legacy-main".to_string(),
             name: "main".to_string(),
@@ -925,17 +916,7 @@ mod tests {
 
         // An old save: a "session"-typed container with the four subnets,
         // carrying values that are not the defaults.
-        let p = |name: &str, ty: &str, val: &str| crate::app::ParamDef {
-            name: name.to_string(),
-            label: String::new(),
-            param_type: ty.to_string(),
-            default: val.to_string(),
-            options: Vec::new(),
-            min: None,
-            max: None,
-            step: None,
-            show_when: String::new(), expr: false,
-        };
+        let p = |name: &str, ty: &str, val: &str| crate::app::ParamDef::new(name.to_string(), ty.to_string(), val.to_string());
         let subnet = |name: &str, params: Vec<crate::app::ParamDef>| crate::app::FsNode {
             id: format!("legacy-{name}"),
             name: name.to_string(),
@@ -1076,17 +1057,7 @@ mod tests {
             name: "guides".to_string(),
             node_type: "utility".to_string(),
             children: vec![],
-            params: vec![crate::app::ParamDef {
-                name: "Show Grid Guide".to_string(),
-                label: String::new(),
-                param_type: "toggle".to_string(),
-                default: "false".to_string(),
-                options: vec![],
-                min: None,
-                max: None,
-                step: None,
-                show_when: String::new(), expr: false,
-            }],
+            params: vec![crate::app::ParamDef::new("Show Grid Guide".to_string(), "toggle".to_string(), "false".to_string())],
             geometry_visible: true,
             position: (0.0, 4.0),
             inputs: 1,
@@ -2682,13 +2653,13 @@ mod tests {
         assert!(sphere1.children.is_empty(), "a native node has no children");
         assert!(sphere1.params.iter().any(|p| p.name == "Method"), "the base template's params arrive");
         let radius = sphere1.params.iter().find(|p| p.name == "Radius").unwrap();
-        assert!(radius.expr && radius.default.contains("Radius"), "the override is the reference: {} (expr {})", radius.default, radius.expr);
-        assert_eq!(sphere1.params.iter().find(|p| p.name == "Center Y").unwrap().default, "0.0");
+        assert!(radius.is_expr() && radius.text().contains("Radius"), "the override is the reference: {} (expr {})", radius.text(), radius.is_expr());
+        assert_eq!(sphere1.params.iter().find(|p| p.name == "Center Y").unwrap().text(), "0.0");
 
         let output1 = embryo.children.iter().find(|c| c.name == "output1").unwrap();
         assert_eq!(output1.node_type, "output");
         let output_input = output1.params.iter().find(|p| p.name == "Input").unwrap();
-        assert_eq!(output_input.default, "normal1");
+        assert_eq!(output_input.text(), "normal1");
     }
 
     /// The raster pipeline culls back faces with CCW fronts (the wgpu
@@ -2818,8 +2789,8 @@ mod tests {
             .find(|t| t.name == template_name)
             .unwrap_or_else(|| panic!("{template_name} template should be loaded"));
         let color = template.params.iter().find(|p| p.name == "Color").expect("a Color param");
-        assert_eq!(color.param_type, "toggle");
-        assert_eq!(color.default, "true", "coloured by default, as it always was");
+        assert_eq!(color.ty(), "toggle");
+        assert_eq!(color.text(), "true", "coloured by default, as it always was");
 
         let generate = |on: &str| {
             let mut inst = template.clone();
@@ -2827,7 +2798,7 @@ mod tests {
             for child in &mut inst.children {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
-            inst.params.iter_mut().find(|p| p.name == "Color").unwrap().default = on.to_string();
+            inst.params.iter_mut().find(|p| p.name == "Color").unwrap().set_text(on.to_string());
             let root = FsNode {
                 id: "root".to_string(),
                 name: "root".to_string(),
@@ -2973,8 +2944,7 @@ mod tests {
 
         // Two points: one span, 8 boxes. The scene walk agrees with the
         // single-node path.
-        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().default =
-            "0 0 0; 1 0 0".to_string();
+        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().set_text("0 0 0; 1 0 0".to_string());
         let root = make_root(instance.clone());
         assert_eq!(eval(&root).num_points(), 8 * 8);
         assert_eq!(
@@ -2984,8 +2954,7 @@ mod tests {
         );
 
         // No parseable points: empty geometry, not a panic.
-        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().default =
-            "not points".to_string();
+        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().set_text("not points".to_string());
         assert_eq!(eval(&make_root(instance)).num_points(), 0);
     }
 
@@ -3375,7 +3344,7 @@ mod tests {
         group_instance.id = "group_inst".to_string();
         group_instance.name = "Group 1".to_string();
         let set = |inst: &mut FsNode, name: &str, val: &str| {
-            inst.params.iter_mut().find(|p| p.name == name).unwrap().default = val.to_string();
+            inst.params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
         };
         set(&mut group_instance, "Input", "Sphere 1");
         set(&mut group_instance, "Center", "0.00:0.80:0.00");
@@ -3491,8 +3460,7 @@ mod tests {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
             for (pname, val) in params {
-                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
-                    val.to_string();
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().set_text(val.to_string());
             }
             inst
         };
@@ -3682,8 +3650,7 @@ mod tests {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
             for (pname, val) in params {
-                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
-                    val.to_string();
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().set_text(val.to_string());
             }
             inst
         };
@@ -3888,8 +3855,7 @@ mod tests {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
             for (pname, val) in params {
-                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
-                    val.to_string();
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().set_text(val.to_string());
             }
             let root = FsNode {
                 id: "root".to_string(),
@@ -3942,6 +3908,209 @@ mod tests {
     /// KERNEL SUBNET saved while Sphere was one becomes the native node with
     /// its values intact and its children gone, and non-template lookalikes
     /// are left alone.
+    /// Phase 3: a parameter's value is parsed by its kind and its TEXT is
+    /// kept verbatim, so `0.50` is the number 0.5 and still reads, saves and
+    /// hashes as `0.50`. A text that does not fit is kept too, flagged, and
+    /// read the way every read used to be — never coerced or dropped.
+    #[test]
+    fn a_value_parses_by_its_kind_and_keeps_its_text() {
+        use crate::app::{ParamDef, ParamSlot, ParamValue as V};
+        let v = |ty: &str, text: &str| ParamDef::new("P", ty, text).slot().clone();
+        assert_eq!(v("slider", "0.50"), ParamSlot::Value(V::Number(0.5)));
+        assert_eq!(ParamDef::new("P", "slider", "0.50").text(), "0.50");
+        assert_eq!(v("float", " -3 "), ParamSlot::Value(V::Number(-3.0)));
+        assert_eq!(v("spinbox", "16"), ParamSlot::Value(V::Int(16)));
+        assert_eq!(v("float3", "0.00:0.20:-1"), ParamSlot::Value(V::Vec3([0.0, 0.2, -1.0])));
+        assert_eq!(v("toggle", "TRUE"), ParamSlot::Value(V::Bool(true)));
+        assert_eq!(v("choice:UV,Icosphere,Cube", "icosphere"), ParamSlot::Value(V::Choice("Icosphere".into())));
+        assert_eq!(v("choice:UV,Icosphere,Cube", ""), ParamSlot::Value(V::Choice("UV".into())), "empty is the first option");
+        assert_eq!(v("node", "sphere1"), ParamSlot::Value(V::Text("sphere1".into())));
+        for (ty, text) in [("slider", "abc"), ("float", ""), ("spinbox", "4.5"), ("float3", "1:2"), ("toggle", "maybe"), ("choice:UV,Cube", "Torus")] {
+            let p = ParamDef::new("P", ty, text);
+            assert!(p.invalid().is_some(), "{ty} {text:?} should not fit");
+            assert_eq!(p.text(), text, "an invalid text is kept verbatim");
+            assert!(p.check(text).is_err());
+        }
+        // An invalid value reads as it always did: `4.5` in a spinbox is still 4.5.
+        let node = FsNode { params: vec![ParamDef::new("Count", "spinbox", "4.5")], ..crate::app::load_fs_tree() };
+        assert_eq!(crate::geometry::node_param_f32(&node, "Count", 0.0), 4.5);
+        // An expression is not parsed as a value, and is not flagged.
+        let e = ParamDef::new("P", "slider", "ch(\"../a/Radius\") * 2").as_expr();
+        assert!(e.is_expr() && e.invalid().is_none());
+    }
+
+    /// The file format did not move: a parameter serializes with the keys
+    /// the old derive wrote, in its order, with its values — which is what
+    /// keeps a re-save byte-identical and `sim_solve_key` (a hash of the
+    /// simnet's JSON) from restarting every cached simulation. Checked over
+    /// every shipped template and both bundled projects.
+    #[test]
+    fn params_serialize_as_they_always_did() {
+        use serde_json::Value;
+        let norm = |p: &Value| {
+            let mut o = p.as_object().unwrap().clone();
+            o.entry("label").or_insert("".into());
+            o.entry("type").or_insert("string".into());
+            o.entry("default").or_insert("".into());
+            o.entry("options").or_insert(serde_json::json!([]));
+            for k in ["min", "max", "step"] {
+                o.entry(k).or_insert(Value::Null);
+            }
+            o.entry("show_when").or_insert("".into());
+            if o.get("expr") == Some(&Value::Bool(false)) {
+                o.remove("expr");
+            }
+            Value::Object(o)
+        };
+        fn walk(v: &Value, f: &mut dyn FnMut(&Value)) {
+            if let Some(ps) = v.get("params").and_then(|p| p.as_array()) {
+                ps.iter().for_each(|p| f(p));
+            }
+            if let Some(cs) = v.get("children").and_then(|c| c.as_array()) {
+                cs.iter().for_each(|c| walk(c, f));
+            }
+            if let Some(r) = v.get("root") {
+                walk(r, f);
+            }
+        }
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files: Vec<_> = fs::read_dir(dir.join("nodes")).unwrap().flatten().map(|e| e.path()).collect();
+        files.push(dir.join("default_project.json"));
+        files.push(dir.join("project.json"));
+        let mut n = 0;
+        for path in files.iter().filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json")) {
+            let v: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+            walk(&v, &mut |p| {
+                let def: crate::app::ParamDef = serde_json::from_value(p.clone()).unwrap();
+                // Through a STRING, as a save writes: `to_value` would widen
+                // the f32 range fields and disagree with the file about 0.05.
+                let back: Value = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
+                // By numeric VALUE: a hand-written template says `128` where
+                // an f32 field writes `128.0`, as the old derive did too.
+                fn num(v: Value) -> Value {
+                    match v {
+                        Value::Number(n) => serde_json::json!(n.as_f64()),
+                        Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, num(v))).collect()),
+                        other => other,
+                    }
+                }
+                assert_eq!(num(back), num(norm(p)), "{}", path.display());
+                n += 1;
+            });
+        }
+        assert!(n > 300, "walked {n} parameters");
+        let written = serde_json::to_string(&crate::app::ParamDef::new("N", "slider", "0.50").as_expr()).unwrap();
+        assert_eq!(
+            written,
+            r#"{"name":"N","label":"","type":"slider","default":"0.50","options":[],"min":null,"max":null,"step":null,"show_when":"","expr":true}"#
+        );
+    }
+
+    /// A template that changes a parameter's kind re-parses the value an old
+    /// save carries: Grid's Center shipped as text and is a float3 now.
+    #[test]
+    fn the_template_kind_reparses_an_old_value() {
+        use crate::app::{ParamDef, ParamValue};
+        let mut old = ParamDef::new("Center", "text", "0.00:1.50:0.00");
+        assert_eq!(old.value(), Some(&ParamValue::Text("0.00:1.50:0.00".into())));
+        old.adopt_ui_from(&ParamDef::new("Center", "float3", "0:0:0"));
+        assert_eq!(old.value(), Some(&ParamValue::Vec3([0.0, 1.5, 0.0])));
+        assert_eq!(old.text(), "0.00:1.50:0.00", "the instance keeps its value");
+    }
+
+    /// Phase 4: an expression's result is converted by the row it lands in —
+    /// a number into a toggle is its truth, into a choice the option at that
+    /// index, into a spinbox its whole part — and a result that fits nothing
+    /// (a string into a slider) is stored as its text and flagged, which is
+    /// what the old string write-back did.
+    #[test]
+    fn an_expression_result_takes_the_rows_kind() {
+        use crate::app::{ParamDef, ParamValue as V};
+        use crate::expr::Value;
+        let p = |ty: &str| ParamDef::new("P", ty, "");
+        assert_eq!(p("toggle").value_from_expr(&Value::Num(2.0)), Some(V::Bool(true)));
+        assert_eq!(p("choice:UV,Icosphere,Cube").value_from_expr(&Value::Num(1.0)), Some(V::Choice("Icosphere".into())));
+        assert_eq!(p("choice:UV,Icosphere,Cube").value_from_expr(&Value::Str("cube".into())), Some(V::Choice("Cube".into())));
+        assert_eq!(p("spinbox").value_from_expr(&Value::Num(3.7)), Some(V::Int(3)));
+        assert_eq!(p("slider").value_from_expr(&Value::Num(0.25)), Some(V::Number(0.25)));
+        assert_eq!(p("text").value_from_expr(&Value::Num(0.5)), Some(V::Text("0.5".into())));
+        assert_eq!(p("slider").value_from_expr(&Value::Str("abc".into())), None);
+
+        // Through the resolver: the clone's parameter holds the typed value.
+        let mut node = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "cull").unwrap();
+        node.params.retain(|q| q.name != "Invert");
+        node.params.push(ParamDef::new("Invert", "toggle", "1 + 1").as_expr());
+        let root = FsNode { children: vec![node.clone()], ..crate::app::load_fs_tree() };
+        let mut err = None;
+        let resolved = crate::geometry::resolve_param_refs(&root, &root.children[0], 1, &mut err).unwrap();
+        let inv = resolved.params.iter().find(|q| q.name == "Invert").unwrap();
+        assert_eq!((inv.value(), inv.text(), inv.is_expr()), (Some(&V::Bool(true)), "true", false));
+        assert!(err.is_none(), "{err:?}");
+    }
+
+    /// Phase 4's entry points refuse a value that does not fit, and write
+    /// nothing: MCP's set_param returns why; the params pane puts the kept
+    /// text back in the row and says why on the status line. A value that
+    /// reads as an expression is let through as one.
+    #[test]
+    fn a_value_that_does_not_fit_is_refused_where_it_is_typed() {
+        let mut s = State::new(false);
+        let mut redraw = false;
+        s.apply_action(crate::app::McpAction::AddNode { template_name: "Cull".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw).unwrap();
+        let slot = s.current_dir().children.iter().position(|c| c.node_type == "cull").unwrap();
+        let threshold = |s: &State| crate::geometry::node_param_str(&s.current_dir().children[slot], "Threshold", "");
+        let before = threshold(&s);
+        let set = |s: &mut State, v: &str| {
+            s.apply_action(crate::app::McpAction::SetParam { slot, name: "Threshold".into(), value: v.into() }, &mut false)
+        };
+        let err = set(&mut s, "abc").unwrap_err();
+        assert!(err.contains("Threshold") && err.contains("not a number"), "{err}");
+        assert_eq!(threshold(&s), before, "nothing was written");
+        set(&mut s, "0.7").unwrap();
+        assert_eq!(threshold(&s), "0.7");
+        set(&mut s, "ch(\"../x/Radius\")").expect("an expression is not checked as a value");
+        assert!(s.current_dir().children[slot].params.iter().find(|p| p.name == "Threshold").unwrap().is_expr());
+        set(&mut s, "0.7").unwrap();
+        s.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Threshold").unwrap().set_expr(false);
+
+        // The pane.
+        s.apply_action(crate::app::McpAction::Select { slot }, &mut redraw).unwrap();
+        let rows: Vec<(String, String, String)> = s
+            .param()
+            .node_params()
+            .into_iter()
+            .map(|(n, v, t)| if n == "Threshold" { (n, "abc".into(), t) } else { (n, v, t) })
+            .collect();
+        s.param_mut().set_display_params(&rows);
+        s.sync_parameters_to_project();
+        assert_eq!(threshold(&s), "0.7", "the pane wrote nothing");
+        let shown = s.param().node_params().into_iter().find(|r| r.0 == "Threshold").unwrap().1;
+        assert_eq!(shown, "0.7", "the row shows the kept value again");
+        assert!(s.last_status_text.contains("Not applied") && s.last_status_text.contains("Threshold"), "{}", s.last_status_text);
+    }
+
+    /// A load says when a project holds a value that does not fit — kept,
+    /// but worth knowing about.
+    #[test]
+    fn a_load_reports_a_value_that_does_not_fit() {
+        let dir = std::env::temp_dir().join(format!("cce_designer_invalid_param_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut a = State::new(false);
+        let mut redraw = false;
+        a.apply_action(crate::app::McpAction::AddNode { template_name: "Cull".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw).unwrap();
+        let slot = a.current_dir().children.iter().position(|c| c.node_type == "cull").unwrap();
+        a.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Threshold").unwrap().set_text("half");
+        a.save_to_file(&dir).expect("save");
+
+        let mut b = State::new(false);
+        b.load_from_file(&dir).expect("load");
+        assert!(b.last_status_text.contains("Threshold") && b.last_status_text.contains("not a number"), "{}", b.last_status_text);
+        let kept = b.current_dir().children.iter().find(|c| c.node_type == "cull").unwrap();
+        assert_eq!(crate::geometry::node_param_str(kept, "Threshold", ""), "half", "kept verbatim");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Phase 0 of typed parameters: a `type` string names a [`ParamKind`],
     /// read by its head, and anything else is refused rather than read as
     /// text and left to look like it worked.
@@ -3965,10 +4134,7 @@ mod tests {
         // Found anywhere in a template's tree, children included.
         let mut t = crate::app::load_fs_tree().children.into_iter().find(|t| t.name == "Embryo").unwrap();
         assert!(crate::app::unknown_param_kinds(&t).is_empty());
-        t.children[0].params.push(crate::app::ParamDef {
-            name: "Count".into(), label: String::new(), param_type: "int".into(), default: "1".into(),
-            options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
-        });
+        t.children[0].params.push(crate::app::ParamDef::new("Count", "int", "1"));
         let bad = crate::app::unknown_param_kinds(&t);
         assert_eq!(bad.len(), 1);
         assert_eq!((bad[0].1.as_str(), bad[0].2.as_str()), ("Count", "int"));
@@ -4044,15 +4210,15 @@ mod tests {
         let templates = crate::app::flatten_node_templates(&templates_root);
         let mut relax = templates_root.children.iter().find(|t| t.node_type == "relax").unwrap().clone();
         for p in relax.params.iter_mut().filter(|p| p.name == "Input" || p.name == "Rest") {
-            p.param_type = "text".into();
-            p.default = "sphere1".into();
+            p.set_type("text");
+            p.set_text("sphere1");
         }
         let mut root = FsNode { children: vec![relax], ..templates_root.clone() };
         crate::app::merge_template_defs(&mut root, &templates);
         for name in ["Input", "Rest"] {
             let p = root.children[0].params.iter().find(|p| p.name == name).unwrap();
             assert_eq!(p.kind(), crate::app::ParamKind::Node, "{name}");
-            assert_eq!(p.default, "sphere1", "the value is the instance's");
+            assert_eq!(p.text(), "sphere1", "the value is the instance's");
         }
     }
 
@@ -4061,11 +4227,7 @@ mod tests {
     /// recognise at all.
     #[test]
     fn node_and_float_rows_show_as_text() {
-        use crate::app::ParamDef;
-        let row = |ty: &str| ParamDef {
-            name: "X".into(), label: String::new(), param_type: ty.into(), default: "1".into(),
-            options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
-        };
+        let row = |ty: &str| crate::app::ParamDef::new("X", ty, "1");
         let shown = crate::app::param_display(&[row("node"), row("float"), row("string"), row("toggle")]);
         let types: Vec<&str> = shown.iter().map(|r| r.2.as_str()).collect();
         assert_eq!(types, vec!["text", "text", "text", "toggle"]);
@@ -4078,10 +4240,7 @@ mod tests {
     fn node_param_bool_reads_a_toggle_and_falls_back_on_anything_else() {
         use crate::geometry::node_param_bool;
         let node = |v: &str| FsNode {
-            params: vec![crate::app::ParamDef {
-                name: "On".into(), label: String::new(), param_type: "toggle".into(), default: v.into(),
-                options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
-            }],
+            params: vec![crate::app::ParamDef::new("On", "toggle", v)],
             ..crate::app::load_fs_tree()
         };
         for v in ["true", "TRUE", " True ", "1", "on"] {
@@ -4127,10 +4286,7 @@ mod tests {
             name: "opencl1".to_string(),
             node_type: "opencl".to_string(),
             children: vec![],
-            params: vec![crate::app::ParamDef {
-                name: "Code".into(), label: String::new(), param_type: "code".into(), default: "OLD KERNEL".into(),
-                options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
-            }],
+            params: vec![crate::app::ParamDef::new("Code", "code", "OLD KERNEL")],
             geometry_visible: true,
             position: (4.0, 2.0),
             inputs: 1,
@@ -4139,16 +4295,13 @@ mod tests {
         let mut output1 = output_t.clone();
         output1.id = "s_output1".to_string();
         output1.name = "output1".to_string();
-        output1.params.iter_mut().find(|p| p.name == "Input").unwrap().default = "opencl1".to_string();
+        output1.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("opencl1".to_string());
         let old_sphere = FsNode {
             id: "s".to_string(),
             name: "Sphere 3".to_string(),
             node_type: "node".to_string(),
             children: vec![opencl1, output1],
-            params: vec![crate::app::ParamDef {
-                name: "Radius".into(), label: String::new(), param_type: "slider".into(), default: "0.70".into(),
-                options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
-            }],
+            params: vec![crate::app::ParamDef::new("Radius", "slider", "0.70")],
             geometry_visible: true,
             position: (3.0, 1.0),
             inputs: 0,
@@ -4160,8 +4313,7 @@ mod tests {
         old_group.id = "g".to_string();
         old_group.name = "My Region".to_string(); // renamed: native nodes match by TYPE
         old_group.params.retain(|p| p.name != "Highlight");
-        old_group.params.iter_mut().find(|p| p.name == "Center").unwrap().default =
-            "0.00:0.80:0.00".to_string();
+        old_group.params.iter_mut().find(|p| p.name == "Center").unwrap().set_text("0.00:0.80:0.00".to_string());
 
         // A hand-built subnet that happens to share the Sphere name.
         let lookalike = FsNode {
@@ -4198,15 +4350,15 @@ mod tests {
         assert!(s.children.is_empty(), "the opencl and output children go");
         let names: Vec<&str> = s.params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Method", "Radius", "Rows", "Columns", "Frequency", "Resolution", "Center X", "Center Y", "Center Z", "Color"]);
-        assert_eq!(s.params.iter().find(|p| p.name == "Radius").unwrap().default, "0.70", "instance value survives");
+        assert_eq!(s.params.iter().find(|p| p.name == "Radius").unwrap().text(), "0.70", "instance value survives");
 
         // And the merged instance evaluates with the new controls live.
         let mut merged_sphere_root = root.clone();
         merged_sphere_root.children.truncate(1);
         merged_sphere_root.children[0].params.iter_mut()
-            .find(|p| p.name == "Rows").unwrap().default = "4".to_string();
+            .find(|p| p.name == "Rows").unwrap().set_text("4".to_string());
         merged_sphere_root.children[0].params.iter_mut()
-            .find(|p| p.name == "Columns").unwrap().default = "6".to_string();
+            .find(|p| p.name == "Columns").unwrap().set_text("6".to_string());
         let mut visited = Vec::new();
         let mut err = None;
         let mut cache = crate::geometry::SimCache::default();
@@ -4222,8 +4374,8 @@ mod tests {
 
         // Group (renamed, matched by type): Highlight restored, value kept.
         let g = &root.children[1];
-        assert!(g.params.iter().any(|p| p.name == "Highlight" && p.default == "true"));
-        assert_eq!(g.params.iter().find(|p| p.name == "Center").unwrap().default, "0.00:0.80:0.00");
+        assert!(g.params.iter().any(|p| p.name == "Highlight" && p.text() == "true"));
+        assert_eq!(g.params.iter().find(|p| p.name == "Center").unwrap().text(), "0.00:0.80:0.00");
 
         // Lookalike: untouched — no params gained, no children injected.
         let l = &root.children[2];
@@ -4247,8 +4399,7 @@ mod tests {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
             for (pname, val) in params {
-                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
-                    val.to_string();
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().set_text(val.to_string());
             }
             let root = FsNode {
                 id: "root".to_string(),
@@ -4314,8 +4465,8 @@ mod tests {
         let templates_root = crate::app::load_fs_tree();
         let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
         let method = sphere_t.params.iter().find(|p| p.name == "Method").expect("a Method dropdown");
-        assert_eq!(method.param_type, "choice:UV,Icosphere,Cube");
-        assert_eq!(method.default, "UV", "the default stays the sphere every saved project was built with");
+        assert_eq!(method.ty(), "choice:UV,Icosphere,Cube");
+        assert_eq!(method.text(), "UV", "the default stays the sphere every saved project was built with");
         assert_eq!(sphere_t.params[0].name, "Method", "the method heads the pane, above the radius it governs");
         // And it heads the pane of a sphere SAVED before it existed too: the
         // bundled project's sphere1 gains it through the loader's merge, at
@@ -4331,7 +4482,7 @@ mod tests {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
             for (pname, val) in params {
-                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default = val.to_string();
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().set_text(val.to_string());
             }
             let root = FsNode {
                 id: "root".to_string(),
@@ -4392,10 +4543,7 @@ mod tests {
     #[test]
     fn a_choice_reads_as_its_option_index_from_a_kernel() {
         use crate::geometry::param_number;
-        let p = |ty: &str, val: &str| crate::app::ParamDef {
-            name: "X".into(), label: String::new(), param_type: ty.into(), default: val.into(),
-            options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
-        };
+        let p = |ty: &str, val: &str| crate::app::ParamDef::new("X", ty, val);
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "Cube")), 2.0);
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "icosphere")), 1.0, "case-insensitive, like the reference path");
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "Nope")), 0.0, "an unknown option is the first");
@@ -4422,8 +4570,7 @@ mod tests {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
             for (pname, val) in params {
-                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().default =
-                    val.to_string();
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().set_text(val.to_string());
             }
             inst
         };
@@ -4499,7 +4646,7 @@ mod tests {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
             for (name, value) in overrides {
-                inst.params.iter_mut().find(|p| p.name == *name).unwrap().default = value.to_string();
+                inst.params.iter_mut().find(|p| p.name == *name).unwrap().set_text(value.to_string());
             }
             let root = FsNode {
                 id: "root".to_string(),
@@ -5348,18 +5495,7 @@ mod tests {
     // ---- The parameter pane's conditional rows ----
 
     fn pd(name: &str, value: &str, show_when: &str) -> crate::app::ParamDef {
-        crate::app::ParamDef {
-            name: name.into(),
-            label: String::new(),
-            param_type: "text".into(),
-            default: value.into(),
-            options: vec![],
-            min: None,
-            max: None,
-            step: None,
-            show_when: show_when.into(),
-            expr: false,
-        }
+        crate::app::ParamDef::new(name, "text", value).with_show_when(show_when)
     }
 
     #[test]
@@ -5380,14 +5516,14 @@ mod tests {
         // for parameter count, and a pane showing twelve irrelevant rows is
         // worse than the twelve nodes it replaced.
         let mut bent = params.clone();
-        bent[0].default = "Bend".into();
+        bent[0].set_text("Bend");
         let shown: Vec<String> = param_display(&bent).into_iter().map(|r| r.0).collect();
         assert_eq!(shown, vec!["Mode", "Bend Axis", "Shared", "Not Bleed"]);
 
         // Bleed matches none of the conditions, so only the driving row is
         // left — which is a node with one relevant control showing one.
         let mut bleeding = params.clone();
-        bleeding[0].default = "Bleed".into();
+        bleeding[0].set_text("Bleed");
         let shown: Vec<String> = param_display(&bleeding).into_iter().map(|r| r.0).collect();
         assert_eq!(shown, vec!["Mode"]);
 
@@ -5480,10 +5616,10 @@ mod tests {
             pd("To Max", "7.5", "Operation == Remap"),
         ];
         assert_eq!(param_display(&params).len(), 2);
-        params[0].default = "Clip".into();
+        params[0].set_text("Clip");
         assert_eq!(param_display(&params).len(), 1, "the row hid");
-        assert_eq!(params[1].default, "7.5", "but the value is untouched");
-        params[0].default = "Remap".into();
+        assert_eq!(params[1].text(), "7.5", "but the value is untouched");
+        params[0].set_text("Remap");
         assert_eq!(param_display(&params)[1].1, "7.5", "and comes back as it was");
     }
 
@@ -5613,17 +5749,7 @@ mod tests {
                 children: vec![],
                 params: params
                     .iter()
-                    .map(|(n, v)| crate::app::ParamDef {
-                        name: n.to_string(),
-                        label: String::new(),
-                        param_type: "text".to_string(),
-                        default: v.to_string(),
-                        options: vec![],
-                        min: None,
-                        max: None,
-                        step: None,
-                        show_when: String::new(), expr: false,
-                    })
+                    .map(|(n, v)| crate::app::ParamDef::new(n.to_string(), "text".to_string(), v.to_string()))
                     .collect(),
                 geometry_visible: true,
                 position: (0.0, 0.0),
@@ -6402,7 +6528,7 @@ mod tests {
             s.current_dir()
                 .children
                 .iter()
-                .map(|c| (c.name.clone(), c.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect()))
+                .map(|c| (c.name.clone(), c.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect()))
                 .collect()
         }
         let mut s = State::new(false);
@@ -6697,7 +6823,7 @@ mod tests {
             if let Some(p) =
                 dir.children[slot].params.iter_mut().find(|p| p.name.eq_ignore_ascii_case("input"))
             {
-                p.default = value.to_string();
+                p.set_text(value.to_string());
             }
         };
         set_input(&mut state, remesh, &names[curve]);
@@ -7156,7 +7282,6 @@ mod tests {
     // ----- Parameter references and the Switch node (src/geometry.rs) -----
 
     fn ref_node(id: &str, name: &str, node_type: &str, params: Vec<(&str, &str, &str)>, children: Vec<FsNode>) -> FsNode {
-        use crate::app::ParamDef;
         FsNode {
             id: id.into(),
             name: name.into(),
@@ -7169,7 +7294,7 @@ mod tests {
                         Some(o) => ("choice".to_string(), o.split(',').map(str::to_string).collect()),
                         None => (t.to_string(), Vec::new()),
                     };
-                    ParamDef { name: n.into(), label: String::new(), param_type: ptype, default: d.into(), options, min: None, max: None, step: None, show_when: String::new(), expr: crate::expr::looks_like_expression(d) }
+                    { let p = crate::app::ParamDef::new(n, ptype, d).with_options(options); if crate::expr::looks_like_expression(d) { p.as_expr() } else { p } }
                 })
                 .collect(),
             geometry_visible: true,
@@ -7318,16 +7443,16 @@ mod tests {
             view_state: Default::default(),
             format: 0,
         };
-        proj.root.children[0].children[0].params[0].expr = false;
+        proj.root.children[0].children[0].params[0].set_expr(false);
         proj.migrate_param_refs();
         let r = &proj.root.children[0].children[0].params[0];
-        assert_eq!(r.default, "chf(\"../Size\")");
-        assert!(r.expr);
+        assert_eq!(r.text(), "chf(\"../Size\")");
+        assert!(r.is_expr());
         assert_eq!(proj.format, crate::app::PROJECT_FORMAT);
         // A NEW file's bare name is the node's own parameter and stays.
-        proj.root.children[0].children[0].params[0].default = "chf(\"Radius\")".into();
+        proj.root.children[0].children[0].params[0].set_text("chf(\"Radius\")");
         proj.migrate_param_refs();
-        assert_eq!(proj.root.children[0].children[0].params[0].default, "chf(\"Radius\")");
+        assert_eq!(proj.root.children[0].children[0].params[0].text(), "chf(\"Radius\")");
     }
 
     #[test]
@@ -7351,7 +7476,7 @@ mod tests {
         let mut err = None;
         let resolved = resolve_param_refs(&root, probe, 0, &mut err).expect("it has references");
         assert!(err.is_none(), "{err:?}");
-        let get = |n: &str| resolved.params.iter().find(|p| p.name == n).unwrap().default.clone();
+        let get = |n: &str| resolved.params.iter().find(|p| p.name == n).unwrap().text().to_string();
         assert_eq!(get("Index"), "1", "chi on a choice is its option index");
         assert_eq!(get("Flag"), "1", "chb into a text row is 1 or 0");
         assert_eq!(get("Name"), "Scatter");
@@ -7375,7 +7500,7 @@ mod tests {
         let root2 = ref_node("root", "root", "node", vec![], vec![holder]);
         let mut err = None;
         let r = resolve_param_refs(&root2, &root2.children[0].children[0], 0, &mut err).unwrap();
-        assert_eq!(r.params[0].default, "ch(\"../Nope\")");
+        assert_eq!(r.params[0].text(), "ch(\"../Nope\")");
         assert!(err.as_deref().unwrap_or("").contains("names no parameter Nope on holder1"), "{err:?}");
         // Too many levels up, likewise.
         let far = ref_node("f", "far1", "sphere", vec![("Radius", "slider", "ch(\"../../../X\")")], vec![]);
@@ -7409,13 +7534,13 @@ mod tests {
         let root = ref_node("root", "root", "node", vec![("Top", "slider", "10")], vec![sub]);
         // The choice's value is an index written as an expression; flag it.
         let mut root = root;
-        root.children[0].children[1].params.iter_mut().find(|p| p.name == "Mode").unwrap().expr = true;
+        root.children[0].children[1].params.iter_mut().find(|p| p.name == "Mode").unwrap().set_expr(true);
 
         let b = &root.children[0].children[1];
         let mut err = None;
         let r = resolve_param_refs(&root, b, 12, &mut err).expect("b1 has expressions");
         assert!(err.is_none(), "{err:?}");
-        let get = |n: &str| r.params.iter().find(|p| p.name == n).unwrap().default.clone();
+        let get = |n: &str| r.params.iter().find(|p| p.name == n).unwrap().text().to_string();
         assert_eq!(get("Radius"), "0.5", "a sibling by path");
         assert_eq!(get("Rows"), "50", "a bare name is the node's OWN parameter, read through its expression");
         assert_eq!(get("Y"), "5", "components, relative and absolute");
@@ -7425,7 +7550,7 @@ mod tests {
         assert_eq!(get("On"), "true", "a number into a toggle is true or false");
         assert_eq!(get("Label"), "0.25 units");
         assert_eq!(get("Center"), "1:0:0.5", "a float3 is three expressions");
-        assert!(r.params.iter().all(|p| !p.expr), "the resolved clone holds values");
+        assert!(r.params.iter().all(|p| !p.is_expr()), "the resolved clone holds values");
 
         // A circle: two parameters reading each other.
         let x = ref_node("x", "x1", "sphere", vec![("Radius", "slider", "ch(\"../y1/Radius\")")], vec![]);
@@ -7434,7 +7559,7 @@ mod tests {
         let mut err = None;
         let r = resolve_param_refs(&ring, &ring.children[0], 0, &mut err).unwrap();
         assert!(err.as_deref().unwrap_or("").contains("circular"), "{err:?}");
-        assert_eq!(r.params[0].default, "ch(\"../y1/Radius\")", "left as written");
+        assert_eq!(r.params[0].text(), "ch(\"../y1/Radius\")", "left as written");
         // A parameter reading itself is the shortest circle.
         let me = ref_node("m", "me", "sphere", vec![("Radius", "slider", "ch(\"Radius\") + 1")], vec![]);
         let solo = ref_node("root", "root", "node", vec![], vec![me]);
@@ -7451,7 +7576,7 @@ mod tests {
         // A syntax error names the parameter.
         let broken = ref_node("k", "broken", "sphere", vec![("Radius", "slider", "1 +")], vec![]);
         let mut broken = broken;
-        broken.params[0].expr = true;
+        broken.params[0].set_expr(true);
         let root5 = ref_node("root", "root", "node", vec![], vec![broken]);
         let mut err = None;
         resolve_param_refs(&root5, &root5.children[0], 0, &mut err);
@@ -7490,7 +7615,7 @@ mod tests {
             for &i in path {
                 node = &node.children[i];
             }
-            node.params.iter().find(|p| p.name == n).unwrap().default.clone()
+            node.params.iter().find(|p| p.name == n).unwrap().text().to_string()
         };
         assert_eq!(root.children[0].children[0].name, "ball");
         assert_eq!(get(&root, &[0, 1], "Radius"), "ch( \"../ball/Radius\" ) * 2", "spacing kept");
@@ -7566,8 +7691,8 @@ mod tests {
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });
         state.run_param_action(&ball_id, "Radius", ParamMenuAction::PasteRelative);
         let radius = |state: &State, slot: usize| state.current_dir().children[slot].params.iter().find(|p| p.name == "Radius").unwrap().clone();
-        assert_eq!(radius(&state, ball).default, "ch(\"../sphere1/Radius\")");
-        assert!(radius(&state, ball).expr);
+        assert_eq!(radius(&state, ball).text(), "ch(\"../sphere1/Radius\")");
+        assert!(radius(&state, ball).is_expr());
         let rows = crate::app::param_display(&state.current_dir().children[ball].params);
         assert_eq!(rows.iter().find(|r| r.0 == "Radius").unwrap().2, "text", "the pane shows an expression as text");
 
@@ -7576,27 +7701,27 @@ mod tests {
         let mut err = None;
         let r = crate::geometry::resolve_param_refs(&state.fs_root, &state.current_dir().children[ball], 0, &mut err).unwrap();
         assert!(err.is_none(), "{err:?}");
-        assert_eq!(r.params.iter().find(|p| p.name == "Radius").unwrap().default, "0.9");
+        assert_eq!(r.params.iter().find(|p| p.name == "Radius").unwrap().text(), "0.9");
 
         // Absolute paste, then Delete Expression bakes the current value.
         state.run_param_action(&ball_id, "Radius", ParamMenuAction::PasteAbsolute);
-        assert_eq!(radius(&state, ball).default, "ch(\"/sphere1/Radius\")");
+        assert_eq!(radius(&state, ball).text(), "ch(\"/sphere1/Radius\")");
         state.run_param_action(&ball_id, "Radius", ParamMenuAction::DeleteExpression);
-        assert_eq!(radius(&state, ball).default, "0.9");
-        assert!(!radius(&state, ball).expr);
+        assert_eq!(radius(&state, ball).text(), "0.9");
+        assert!(!radius(&state, ball).is_expr());
         // Edit Expression flags without changing.
         state.run_param_action(&ball_id, "Radius", ParamMenuAction::EditExpression);
-        assert_eq!(radius(&state, ball).default, "0.9");
-        assert!(radius(&state, ball).expr);
+        assert_eq!(radius(&state, ball).text(), "0.9");
+        assert!(radius(&state, ball).is_expr());
 
         // And a reference typed straight into a row (or scripted) becomes one.
         state.apply_action(McpAction::SetParam { slot: ball, name: "Rows".into(), value: "chi(\"../sphere1/Rows\") * 2".into() }, &mut redraw).unwrap();
         let rows_p = state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap();
-        assert!(rows_p.expr);
+        assert!(rows_p.is_expr());
 
         // A rename carries the paste along.
         state.apply_action(McpAction::RenameNode { slot: sphere, new_name: "orb".into() }, &mut redraw).unwrap();
-        assert_eq!(state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap().default, "chi(\"../orb/Rows\") * 2");
+        assert_eq!(state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap().text(), "chi(\"../orb/Rows\") * 2");
     }
 
     /// A code parameter never becomes an expression, however its text reads:
@@ -7608,11 +7733,11 @@ mod tests {
         use crate::app::{infer_template_exprs, McpAction};
         let mut node = ref_node("w", "w1", "wrangle", vec![("Code", "code", "ch(\"../a/Radius\")"), ("Radius", "slider", "ch(\"../a/Radius\")")], vec![]);
         for p in &mut node.params {
-            p.expr = false;
+            p.set_expr(false);
         }
         infer_template_exprs(&mut node);
-        assert!(!node.params[0].expr, "the code stays a program");
-        assert!(node.params[1].expr, "the slider becomes an expression");
+        assert!(!node.params[0].is_expr(), "the code stays a program");
+        assert!(node.params[1].is_expr(), "the slider becomes an expression");
 
         let mut state = State::new(false);
         let mut redraw = false;
@@ -7620,8 +7745,8 @@ mod tests {
         let k = state.current_dir().children.iter().position(|c| c.name == "k").unwrap();
         state.apply_action(McpAction::SetParam { slot: k, name: "Code".into(), value: "chf(\"../sphere1/Radius\")".into() }, &mut redraw).unwrap();
         let code = state.current_dir().children[k].params.iter().find(|p| p.name == "Code").unwrap();
-        assert!(!code.expr);
-        assert_eq!(code.param_type, "code");
+        assert!(!code.is_expr());
+        assert_eq!(code.ty(), "code");
     }
 
     /// Inside the SECOND instance of a subnet, a child wired to a sibling by
@@ -7720,8 +7845,8 @@ mod tests {
             c.id = format!("sph_{}", c.name);
         }
         let radius = sphere.params.iter_mut().find(|p| p.name == "Radius").unwrap();
-        radius.default = "ch(\"../Radius\")".into();
-        radius.expr = true;
+        radius.set_text("ch(\"../Radius\")");
+        radius.set_expr(true);
         let out = ref_node("o", "output1", "output", vec![("Input", "text", "sphere1")], vec![]);
         let sub = ref_node("sub", "subnet1", "node", vec![("Input", "text", ""), ("Radius", "slider", "0.9")], vec![sphere, out]);
         let root = ref_node("root", "root", "node", vec![], vec![sub]);
@@ -7736,10 +7861,9 @@ mod tests {
     /// The params pane shows a referencing value as the text it is.
     #[test]
     fn param_display_shows_references_as_text() {
-        use crate::app::ParamDef;
         let params = vec![
-            ParamDef { name: "Radius".into(), label: String::new(), param_type: "slider".into(), default: "ch(\"../Radius\")".into(), options: vec![], min: Some(0.0), max: Some(2.0), step: None, show_when: String::new(), expr: true },
-            ParamDef { name: "Rows".into(), label: String::new(), param_type: "spinbox".into(), default: "16".into(), options: vec![], min: Some(2.0), max: Some(128.0), step: Some(1.0), show_when: String::new(), expr: false },
+            crate::app::ParamDef::new("Radius", "slider", "ch(\"../Radius\")").with_range(Some(0.0), Some(2.0)).as_expr(),
+            crate::app::ParamDef::new("Rows", "spinbox", "16").with_range(Some(2.0), Some(128.0)).with_step(Some(1.0)),
         ];
         let rows = crate::app::param_display(&params);
         assert_eq!(rows[0], ("Radius".to_string(), "ch(\"../Radius\")".to_string(), "text".to_string()));
@@ -7903,14 +8027,14 @@ mod tests {
         let sphere1 = t.children.iter().find(|c| c.name == "sphere1").unwrap();
         assert_eq!(sphere1.node_type, "sphere", "the nested sphere is the native Sphere");
         assert!(sphere1.params.iter().any(|p| p.name == "Method"), "with its template's whole surface");
-        assert!(sphere1.params.iter().find(|p| p.name == "Radius").unwrap().expr, "and the Embryo's reference on its Radius");
+        assert!(sphere1.params.iter().find(|p| p.name == "Radius").unwrap().is_expr(), "and the Embryo's reference on its Radius");
 
         let instance = |overrides: &[(&str, &str)], extra: Vec<FsNode>| {
             let mut inst = t.clone();
             crate::app::regenerate_node_ids(&mut inst);
             inst.name = "embryo1".into();
             for (n, v) in overrides {
-                inst.params.iter_mut().find(|p| p.name == *n).unwrap_or_else(|| panic!("param {n}")).default = v.to_string();
+                inst.params.iter_mut().find(|p| p.name == *n).unwrap_or_else(|| panic!("param {n}")).set_text(v.to_string());
             }
             let mut children = extra;
             children.push(inst);
@@ -7959,10 +8083,9 @@ mod tests {
     /// with its values, its identity and its meta child intact.
     #[test]
     fn a_native_embryo_recomposes_on_load() {
-        use crate::app::ParamDef;
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
-        let param = |n: &str, v: &str| ParamDef { name: n.into(), label: String::new(), param_type: "text".into(), default: v.into(), options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false };
+        let param = |n: &str, v: &str| crate::app::ParamDef::new(n, "text", v);
         let meta = ref_node("m", "meta", "meta", vec![("Point Markers", "toggle", "true")], vec![]);
         let mut native = ref_node("old-id", "embryo1", "embryo", vec![], vec![meta]);
         native.params = vec![param("Input", ""), param("Method", "Scatter"), param("Scatter Count", "150"), param("Radius", "0.7"), param("Base Resolution", "16")];
@@ -7973,7 +8096,7 @@ mod tests {
         let e = &root.children[0];
         assert_eq!(e.node_type, "node", "recomposed as a subnet");
         assert_eq!((e.id.as_str(), e.name.as_str(), e.position, e.geometry_visible), ("old-id", "embryo1", (3.0, 4.0), true));
-        let get = |n: &str| e.params.iter().find(|p| p.name == n).unwrap().default.clone();
+        let get = |n: &str| e.params.iter().find(|p| p.name == n).unwrap().text().to_string();
         assert_eq!(get("Method"), "Scatter");
         assert_eq!(get("Scatter Count"), "150");
         assert_eq!(get("Radius"), "0.7");
@@ -8002,17 +8125,7 @@ mod tests {
                 children: vec![],
                 params: params
                     .iter()
-                    .map(|(n, v)| crate::app::ParamDef {
-                        name: n.to_string(),
-                        label: String::new(),
-                        param_type: "text".to_string(),
-                        default: v.to_string(),
-                        options: vec![],
-                        min: None,
-                        max: None,
-                        step: None,
-                        show_when: String::new(), expr: false,
-                    })
+                    .map(|(n, v)| crate::app::ParamDef::new(n.to_string(), "text".to_string(), v.to_string()))
                     .collect(),
                 geometry_visible: true,
                 position: (0.0, 0.0),
@@ -8620,17 +8733,7 @@ mod tests {
         // lays them along X.
         root.children[1]
             .params
-            .push(crate::app::ParamDef {
-                name: "Shape".into(),
-                label: String::new(),
-                param_type: "text".into(),
-                default: "Line".into(),
-                options: vec![],
-                min: None,
-                max: None,
-                step: None,
-                show_when: String::new(), expr: false,
-            });
+            .push(crate::app::ParamDef::new("Shape", "text", "Line"));
 
         let (g, err) = eval_node(&root, "distance 1");
         assert!(err.is_none(), "{err:?}");
@@ -8768,7 +8871,7 @@ mod tests {
             .iter_mut()
             .find(|p| p.name == "Invert")
             .unwrap()
-            .default = "true".into();
+            .set_text("true");
         let (kept, _) = eval_node(&kept_root, "cull 1");
         assert_eq!(kept.num_points(), sphere_detail(Vec3::ZERO, 1.0, 16, 24).num_points());
         assert!(kept.num_prims() > 0, "the surface survived with its primitives");
@@ -8862,7 +8965,7 @@ mod tests {
             .iter_mut()
             .find(|p| p.name == "Maximum Distance")
             .unwrap()
-            .default = "0.01".into();
+            .set_text("0.01");
         let (g, _) = eval_node(&limited, "transfer 1");
         assert!(g.points().has("Norm"), "the column exists even where nothing was near");
         assert!(
@@ -9077,7 +9180,7 @@ mod tests {
             .iter_mut()
             .find(|p| p.name == "Scale")
             .unwrap()
-            .default = "0.50".into();
+            .set_text("0.50");
         let (small, _) = eval_node(&root, "copy 1");
         let small_size = small.bounds().map(|(a, b)| (b - a).length()).unwrap();
         assert!(small_size < plain_size, "{small_size} should be under {plain_size}");
@@ -9249,7 +9352,7 @@ mod tests {
             .iter_mut()
             .find(|p| p.name == "Rings")
             .unwrap()
-            .default = "-1".into();
+            .set_text("-1");
         let (shrunk, _) = eval_node(&shrunk_root, "group 2");
         assert!(shrunk.points().group_members("wider").len() < members.len());
     }
@@ -9454,17 +9557,7 @@ mod tests {
             children: vec![],
             params: [("Attribute", "growth"), ("Scale", "0.50"), ("Direction", "Normal")]
                 .into_iter()
-                .map(|(name, default)| crate::app::ParamDef {
-                    name: name.into(),
-                    label: String::new(),
-                    param_type: "text".into(),
-                    default: default.into(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                })
+                .map(|(name, default)| crate::app::ParamDef::new(name, "text", default))
                 .collect(),
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -9498,17 +9591,7 @@ mod tests {
             children: vec![],
             params: params
                 .iter()
-                .map(|(name, default)| crate::app::ParamDef {
-                    name: (*name).into(),
-                    label: String::new(),
-                    param_type: "text".into(),
-                    default: (*default).into(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                })
+                .map(|(name, default)| crate::app::ParamDef::new(*name, "text", *default))
                 .collect(),
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -11984,8 +12067,8 @@ mod tests {
         let templates = crate::app::load_fs_tree();
         let t = templates.children.iter().find(|n| n.node_type == "wrangle").expect("nodes/wrangle.json loads");
         assert_eq!(t.name, "Wrangle");
-        let code = t.params.iter().find(|p| p.name == "Code").map(|p| p.default.clone()).unwrap();
-        assert!(t.params.iter().all(|p| !p.expr), "no template parameter reads as an expression — least of all the Code");
+        let code = t.params.iter().find(|p| p.name == "Code").map(|p| p.text().to_string()).unwrap();
+        assert!(t.params.iter().all(|p| !p.is_expr()), "no template parameter reads as an expression — least of all the Code");
         let (before, g, err) = wrangle_over_sphere(&code);
         assert!(err.is_none(), "{err:?}");
         let g = g.unwrap();

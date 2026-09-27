@@ -443,18 +443,22 @@ impl State {
                             if item_idx == 0 { // Default
                                 for template_param in &params_to_reset {
                                     if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
-                                        p.default = template_param.default.clone();
+                                        // The template's text AND whether it is an
+                                        // expression: a default that is a reference
+                                        // is one again after a reset.
+                                        p.set_text(template_param.text().to_string());
+                                        p.set_expr(template_param.is_expr());
                                     }
                                 }
                             } else if item_idx == 1 { // Custom
                                 for template_param in &params_to_reset {
                                     if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
-                                        if let Ok(v) = template_param.default.parse::<f32>() {
-                                            p.default = format!("{:.2}", v * 1.5);
-                                        } else if let Ok(v) = template_param.default.parse::<i32>() {
-                                            p.default = format!("{}", v * 2);
-                                        } else if template_param.default.contains(':') {
-                                            let parts: Vec<&str> = template_param.default.split(':').collect();
+                                        if let Ok(v) = template_param.text().parse::<f32>() {
+                                            p.set_text(format!("{:.2}", v * 1.5));
+                                        } else if let Ok(v) = template_param.text().parse::<i32>() {
+                                            p.set_text(format!("{}", v * 2));
+                                        } else if template_param.text().contains(':') {
+                                            let parts: Vec<&str> = template_param.text().split(':').collect();
                                             let custom_parts: Vec<String> = parts.iter().map(|p_str| {
                                                 if let Ok(v) = p_str.parse::<f32>() {
                                                     format!("{:.2}", v * 1.5)
@@ -462,9 +466,9 @@ impl State {
                                                     p_str.to_string()
                                                 }
                                             }).collect();
-                                            p.default = custom_parts.join(":");
+                                            p.set_text(custom_parts.join(":"));
                                         } else {
-                                            p.default = template_param.default.clone();
+                                            p.set_text(template_param.text().to_string());
                                         }
                                     }
                                 }
@@ -484,7 +488,11 @@ impl State {
                             if let Some(params_to_reset) = template_params {
                                 for template_param in &params_to_reset {
                                     if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
-                                        p.default = template_param.default.clone();
+                                        // The template's text AND whether it is an
+                                        // expression: a default that is a reference
+                                        // is one again after a reset.
+                                        p.set_text(template_param.text().to_string());
+                                        p.set_expr(template_param.is_expr());
                                     }
                                 }
                                 state.sync_nodes();
@@ -719,11 +727,19 @@ impl State {
                 let dir = state.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot) {
                     if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
-                        p.default = value;
                         // A value that reads as a reference becomes an
-                        // expression, as one typed into the pane does.
-                        if !p.expr && p.takes_expressions() && crate::expr::looks_like_expression(&p.default) {
-                            p.expr = true;
+                        // expression, as one typed into the pane does; an
+                        // expression is checked when it evaluates. Anything
+                        // else must fit the kind, or nothing is written.
+                        let as_expr = p.is_expr() || (p.takes_expressions() && crate::expr::looks_like_expression(&value));
+                        if !as_expr {
+                            if let Err(why) = p.check(&value) {
+                                return Err(format!("{name}: {why}"));
+                            }
+                        }
+                        p.set_text(value);
+                        if as_expr {
+                            p.set_expr(true);
                         }
                         // Same sequence as the interactive param-pane
                         // path, so settings params (viewport flags,
@@ -884,18 +900,10 @@ impl State {
                         "Unknown param_type '{param_type}'; expected one of: {}",
                         crate::app::ParamKind::NAMES.join(", ")
                     ))
+                } else if let Some(why) = ParamDef::new(name.clone(), param_type.clone(), default.clone()).invalid() {
+                    Err(format!("{name}: {why}"))
                 } else if slot < len {
-                    let param = ParamDef {
-                        name,
-                        label: String::new(),
-                        param_type,
-                        default,
-                        options: vec![],
-                        min: None,
-                        max: None,
-                        step: None,
-                        show_when: String::new(), expr: false,
-                    };
+                    let param = ParamDef::new(name, param_type, default);
                     state.current_dir_mut().children[slot].params.push(param);
                     state.sync_nodes();
                     // Params feed kernel evaluation and the param pane shows
@@ -968,7 +976,7 @@ impl State {
                 let Some(p) = child.params.iter_mut().find(|p| p.name == "Points") else {
                     return Err("Curve node has no Points param".to_string());
                 };
-                p.default = crate::geometry::format_curve_points(&pts);
+                p.set_text(crate::geometry::format_curve_points(&pts));
                 // Same resync sequence as SetParam / the viewer state.
                 state.sync_nodes();
                 state.rebuild_scene_geometry();

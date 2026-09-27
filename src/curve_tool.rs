@@ -50,7 +50,7 @@ impl HandleSource for CurveHandles {
     fn write(&self, node: &mut FsNode, handles: &[Vec3]) {
         let formatted = format_curve_points(handles);
         if let Some(p) = node.params.iter_mut().find(|p| p.name == "Points") {
-            p.default = formatted;
+            p.set_text(formatted);
         }
     }
 

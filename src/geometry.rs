@@ -508,35 +508,46 @@ pub fn curve_geometry(node: &FsNode) -> Geometry {
     detail_to_soup(&curve_detail(node))
 }
 
+fn find_param<'a>(node: &'a FsNode, name: &str) -> Option<&'a ParamDef> {
+    node.params.iter().find(|p| p.name.eq_ignore_ascii_case(name))
+}
+
+/// A number: the parsed value of a number, whole-number or toggle
+/// parameter, else the text as a number (what every read was before the
+/// value was typed — so a text row holding `12` still reads 12), else
+/// `fallback`.
 pub fn node_param_f32(node: &FsNode, name: &str, fallback: f32) -> f32 {
-    node.params.iter()
-        .find(|p| p.name.eq_ignore_ascii_case(name))
-        .and_then(|p| p.default.parse::<f32>().ok())
-        .unwrap_or(fallback)
+    use crate::app::ParamValue;
+    let Some(p) = find_param(node, name) else { return fallback };
+    match p.value() {
+        Some(ParamValue::Number(n)) => *n,
+        Some(ParamValue::Int(i)) => *i as f32,
+        _ => p.text().parse::<f32>().unwrap_or(fallback),
+    }
 }
 
+/// The text as written — for a choice the option as the row shows it, for
+/// an expression the expression.
 pub fn node_param_str(node: &FsNode, name: &str, fallback: &str) -> String {
-    node.params.iter()
-        .find(|p| p.name.eq_ignore_ascii_case(name))
-        .map(|p| p.default.clone())
-        .unwrap_or_else(|| fallback.to_string())
+    find_param(node, name).map(|p| p.text().to_string()).unwrap_or_else(|| fallback.to_string())
 }
 
+/// Three numbers: a float3's parsed value, else `x:y:z` read from the text
+/// (a text row holding a vector, like the Attribute node's Value), else
+/// `fallback`.
 pub fn node_param_vec3(node: &FsNode, name: &str, fallback: Vec3) -> Vec3 {
-    node.params.iter()
-        .find(|p| p.name.eq_ignore_ascii_case(name))
-        .and_then(|p| {
-            let parts: Vec<&str> = p.default.split(':').collect();
-            if parts.len() == 3 {
-                let x = parts[0].parse::<f32>().ok()?;
-                let y = parts[1].parse::<f32>().ok()?;
-                let z = parts[2].parse::<f32>().ok()?;
-                Some(Vec3::new(x, y, z))
-            } else {
-                None
-            }
-        })
-        .unwrap_or(fallback)
+    use crate::app::ParamValue;
+    let Some(p) = find_param(node, name) else { return fallback };
+    if let Some(ParamValue::Vec3(v)) = p.value() {
+        return Vec3::from(*v);
+    }
+    let parts: Vec<&str> = p.text().split(':').collect();
+    if let [x, y, z] = parts[..] {
+        if let (Ok(x), Ok(y), Ok(z)) = (x.parse::<f32>(), y.parse::<f32>(), z.parse::<f32>()) {
+            return Vec3::new(x, y, z);
+        }
+    }
+    fallback
 }
 
 /// A toggle's value. `true` / `false` in any case — and `1` / `0`, `on` /
@@ -545,10 +556,11 @@ pub fn node_param_vec3(node: &FsNode, name: &str, fallback: Vec3) -> Vec3 {
 /// the hand-rolled `== "true"` and `!= "false"` this replaced disagreed about
 /// garbage depending on which way round each site had been written.
 pub fn node_param_bool(node: &FsNode, name: &str, fallback: bool) -> bool {
-    let Some(p) = node.params.iter().find(|p| p.name.eq_ignore_ascii_case(name)) else {
-        return fallback;
-    };
-    match p.default.trim().to_ascii_lowercase().as_str() {
+    let Some(p) = find_param(node, name) else { return fallback };
+    if let Some(crate::app::ParamValue::Bool(b)) = p.value() {
+        return *b;
+    }
+    match p.text().trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "on" => true,
         "false" | "0" | "off" => false,
         _ => fallback,
@@ -631,19 +643,12 @@ pub use crate::expr::{ChKind, Value};
 /// Whether any of `node`'s parameters holds an expression — the cheap test
 /// that lets evaluation skip the clone for the common node.
 pub fn has_param_refs(node: &FsNode) -> bool {
-    node.params.iter().any(|p| p.expr)
+    node.params.iter().any(|p| p.is_expr())
 }
 
 /// A choice's options: the `options` list, else the `choice:A,B` type.
 pub fn choice_options(p: &ParamDef) -> Vec<String> {
-    if !p.options.is_empty() {
-        p.options.clone()
-    } else {
-        p.param_type
-            .strip_prefix("choice:")
-            .map(|o| o.split(',').map(|x| x.trim().to_string()).collect())
-            .unwrap_or_default()
-    }
+    p.choice_options()
 }
 
 /// A parameter's value as a NUMBER — what a kernel's `chf` / `chi` / `chb`
@@ -654,11 +659,17 @@ pub fn choice_options(p: &ParamDef) -> Vec<String> {
 /// text parses as nothing, and until 2026-09-24 the kernel path parsed it
 /// anyway, so every choice read as 0 from inside a kernel.
 pub fn param_number(p: &ParamDef) -> f32 {
-    let raw = p.default.trim();
-    if p.kind() == crate::app::ParamKind::Choice {
-        choice_options(p).iter().position(|o| o.eq_ignore_ascii_case(raw)).map_or(0.0, |i| i as f32)
-    } else {
-        number_of_str(raw)
+    use crate::app::ParamValue;
+    match p.value() {
+        Some(ParamValue::Number(n)) => *n,
+        Some(ParamValue::Int(i)) => *i as f32,
+        Some(ParamValue::Bool(b)) => f32::from(u8::from(*b)),
+        Some(ParamValue::Choice(o)) => choice_options(p).iter().position(|x| x == o).map_or(0.0, |i| i as f32),
+        // Text, a vector, an expression or a value that does not fit: the
+        // text as a number, which is what every read was before the value
+        // was typed.
+        _ if p.kind() == crate::app::ParamKind::Choice => 0.0,
+        _ => number_of_str(p.text().trim()),
     }
 }
 
@@ -785,7 +796,7 @@ impl<'a> crate::expr::Scope for TreeScope<'a> {
         let node = walk_ref_path(self.root, start, &segs).map_err(|e| format!("{}: ch(\"{path}\"): {e}", self.node.name))?;
         let (p, comp) = find_ref_param(node, pname)
             .ok_or_else(|| format!("{}: ch(\"{path}\") names no parameter {pname} on {}", self.node.name, if node.id == self.root.id { "/" } else { &node.name }))?;
-        let raw = if p.expr {
+        let raw = if p.is_expr() {
             let key = (node.id.clone(), p.name.clone());
             if self.stack.contains(&key) {
                 return Err(format!("{}: ch(\"{path}\") is a circular reference", self.node.name));
@@ -798,18 +809,17 @@ impl<'a> crate::expr::Scope for TreeScope<'a> {
             let r = eval_param_value(&mut inner, p);
             self.stack = inner.stack;
             self.stack.pop();
-            r?
+            r?.text()
         } else {
-            p.default.clone()
+            p.text().to_string()
         };
         let value = match comp {
             Some(i) => Value::Num(raw.split(':').nth(i).and_then(|c| c.trim().parse::<f64>().ok()).unwrap_or(0.0)),
             None => {
                 let mut lit = p.clone();
-                lit.default = raw;
-                lit.expr = false;
+                lit.bake(raw);
                 match kind {
-                    ChKind::Str => Value::Str(lit.default.trim().to_string()),
+                    ChKind::Str => Value::Str(lit.text().trim().to_string()),
                     _ => Value::Num(param_number(&lit) as f64),
                 }
             }
@@ -829,60 +839,53 @@ impl<'a> crate::expr::Scope for TreeScope<'a> {
     }
 }
 
-/// An evaluated value written back in the parameter's own vocabulary: a
-/// toggle's `true` / `false`, a choice's option NAME (an index picks one), a
-/// spinbox's integer, anything else the value's text.
-pub fn format_for_param(v: &Value, p: &ParamDef) -> String {
-    use crate::app::ParamKind;
-    let kind = p.kind();
-    if kind == ParamKind::Toggle {
-        return v.truthy().to_string();
-    }
-    if kind == ParamKind::Choice {
-        return match v {
-            Value::Num(n) => {
-                let options = choice_options(p);
-                if options.is_empty() {
-                    crate::expr::fmt_num(*n)
-                } else {
-                    let i = (n.round().max(0.0) as usize).min(options.len() - 1);
-                    options[i].clone()
-                }
-            }
-            Value::Str(s) => s.clone(),
-        };
-    }
-    if kind == ParamKind::Spin {
-        if let Value::Num(n) = v {
-            return crate::expr::fmt_num(n.trunc());
-        }
-    }
-    v.as_str()
+/// What an expression evaluated to, in the parameter's own terms: a value
+/// that fits its kind ([`ParamDef::value_from_expr`] — a toggle's truth, a
+/// choice's option, a spinbox's whole part), or the value's text when it
+/// fits nothing (a string into a slider), which is stored and flagged
+/// exactly as the old write-back stored it and a reader then fell back from.
+#[derive(Debug)]
+pub enum Evaluated {
+    Value(crate::app::ParamValue),
+    Unfit(String),
 }
 
-/// One parameter's expression evaluated to its value string. A float3 is
-/// three expressions separated by `:` — each component its own, as
-/// Houdini's channels are — so `chf("../a/Size.x"):0:0` reads naturally.
-fn eval_param_value(scope: &mut TreeScope, p: &ParamDef) -> Result<String, String> {
-    if p.kind() == crate::app::ParamKind::Float3 {
-        let parts: Vec<&str> = p.default.split(':').collect();
-        if parts.len() == 3 {
-            let mut out = Vec::with_capacity(3);
-            for part in parts {
-                let t = part.trim();
-                if t.parse::<f64>().is_ok() {
-                    out.push(t.to_string());
-                } else {
-                    let e = crate::expr::parse(t).map_err(|e| format!("{}: {} — {e}", scope.node.name, p.name))?;
-                    out.push(crate::expr::fmt_num(e.eval(scope)?.as_num()));
-                }
-            }
-            return Ok(out.join(":"));
+impl Evaluated {
+    pub fn text(&self) -> String {
+        match self {
+            Evaluated::Value(v) => v.to_text(),
+            Evaluated::Unfit(s) => s.clone(),
         }
     }
-    let e = crate::expr::parse(&p.default).map_err(|e| format!("{}: {} — {e}", scope.node.name, p.name))?;
+}
+
+/// One parameter's expression evaluated. A float3 is three expressions
+/// separated by `:` — each component its own, as Houdini's channels are —
+/// so `chf("../a/Size.x"):0:0` reads naturally.
+fn eval_param_value(scope: &mut TreeScope, p: &ParamDef) -> Result<Evaluated, String> {
+    if p.kind() == crate::app::ParamKind::Float3 {
+        let parts: Vec<&str> = p.text().split(':').collect();
+        if parts.len() == 3 {
+            let mut out = [0.0f32; 3];
+            for (c, part) in out.iter_mut().zip(parts) {
+                let t = part.trim();
+                *c = match t.parse::<f32>() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        let e = crate::expr::parse(t).map_err(|e| format!("{}: {} — {e}", scope.node.name, p.name))?;
+                        e.eval(scope)?.as_num() as f32
+                    }
+                };
+            }
+            return Ok(Evaluated::Value(crate::app::ParamValue::Vec3(out)));
+        }
+    }
+    let e = crate::expr::parse(p.text()).map_err(|e| format!("{}: {} — {e}", scope.node.name, p.name))?;
     let v = e.eval(scope)?;
-    Ok(format_for_param(&v, p))
+    Ok(match p.value_from_expr(&v) {
+        Some(value) => Evaluated::Value(value),
+        None => Evaluated::Unfit(v.as_str()),
+    })
 }
 
 /// `target` with every expression replaced by the value it evaluates to at
@@ -898,15 +901,13 @@ pub fn resolve_param_refs(root: &FsNode, target: &FsNode, frame: i32, error: &mu
     }
     let mut out = target.clone();
     for p in &mut out.params {
-        if !p.expr {
+        if !p.is_expr() {
             continue;
         }
         let mut scope = TreeScope { root, node: target, frame, stack: vec![(target.id.clone(), p.name.clone())] };
         match eval_param_value(&mut scope, p) {
-            Ok(v) => {
-                p.default = v;
-                p.expr = false;
-            }
+            Ok(Evaluated::Value(v)) => p.set_value(v),
+            Ok(Evaluated::Unfit(text)) => p.bake(text),
             Err(e) => {
                 if error.is_none() {
                     *error = Some(e);
@@ -954,10 +955,10 @@ pub fn rename_node_in_tree(root: &mut FsNode, id: &str, new_name: &str) -> bool 
     let mut edits: Vec<(String, String, String)> = Vec::new();
     fn collect(root: &FsNode, node: &FsNode, id: &str, new_name: &str, edits: &mut Vec<(String, String, String)>) {
         for p in &node.params {
-            if !p.expr {
+            if !p.is_expr() {
                 continue;
             }
-            let rewritten = crate::expr::rewrite_paths(&p.default, |path| {
+            let rewritten = crate::expr::rewrite_paths(p.text(), |path| {
                 let (absolute, segs, pname) = split_ref_path(path);
                 let mut cur = if absolute { root } else { node };
                 let mut out: Vec<String> = Vec::new();
@@ -988,7 +989,7 @@ pub fn rename_node_in_tree(root: &mut FsNode, id: &str, new_name: &str) -> bool 
                 out.push(pname.to_string());
                 Some(format!("{}{}", if absolute { "/" } else { "" }, out.join("/")))
             });
-            if rewritten != p.default {
+            if rewritten != p.text() {
                 edits.push((node.id.clone(), p.name.clone(), rewritten));
             }
         }
@@ -1002,15 +1003,15 @@ pub fn rename_node_in_tree(root: &mut FsNode, id: &str, new_name: &str) -> bool 
     for (nid, pname, value) in edits {
         if let Some(n) = crate::viewer_state::find_node_by_id_mut(root, &nid) {
             if let Some(p) = n.params.iter_mut().find(|p| p.name == pname) {
-                p.default = value;
+                p.set_text(value);
             }
         }
     }
     if let Some(parent) = crate::viewer_state::find_node_by_id_mut(root, &parent_id) {
         for sibling in &mut parent.children {
             for p in &mut sibling.params {
-                if !p.expr && p.default == old_name {
-                    p.default = new_name.to_string();
+                if !p.is_expr() && p.text() == old_name {
+                    p.set_text(new_name.to_string());
                 }
             }
         }
@@ -5982,17 +5983,7 @@ mod tests {
             children: vec![],
             params: [("Points", "0 0 0; 1 0 0"), ("Segments", "2"), ("Thickness", "0.02")]
                 .into_iter()
-                .map(|(name, default)| ParamDef {
-                    name: name.to_string(),
-                    label: String::new(),
-                    param_type: "text".to_string(),
-                    default: default.to_string(),
-                    options: Vec::new(),
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                })
+                .map(|(name, default)| crate::app::ParamDef::new(name.to_string(), "text".to_string(), default.to_string()))
                 .collect(),
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6024,28 +6015,8 @@ mod tests {
             node_type: "points".to_string(),
             children: vec![],
             params: vec![
-                ParamDef {
-                    name: "Points".to_string(),
-                    label: String::new(),
-                    param_type: "spinbox".to_string(),
-                    default: "5".to_string(),
-                    options: vec![],
-                    min: Some(1.0),
-                    max: Some(10.0),
-                    step: Some(1.0),
-                    show_when: String::new(), expr: false,
-                },
-                ParamDef {
-                    name: "Shape".to_string(),
-                    label: String::new(),
-                    param_type: "choice:None,Spiral,Line,Circle,Grid".to_string(),
-                    default: shape.to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                },
+                crate::app::ParamDef::new("Points".to_string(), "spinbox".to_string(), "5".to_string()).with_range(Some(1.0), Some(10.0)).with_step(Some(1.0)),
+                crate::app::ParamDef::new("Shape".to_string(), "choice:None,Spiral,Line,Circle,Grid".to_string(), shape.to_string()),
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6099,17 +6070,7 @@ mod tests {
             node_type: "sphere".to_string(),
             children: vec![],
             params: vec![
-                ParamDef {
-                    name: "Radius".to_string(),
-                    label: String::new(),
-                    param_type: "slider".to_string(),
-                    default: "0.5".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                }
+                crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.5".to_string())
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6122,28 +6083,8 @@ mod tests {
             node_type: "transform".to_string(),
             children: vec![],
             params: vec![
-                ParamDef {
-                    name: "Input".to_string(),
-                    label: String::new(),
-                    param_type: "text".to_string(),
-                    default: "Sphere 1".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                },
-                ParamDef {
-                    name: "Translation".to_string(),
-                    label: String::new(),
-                    param_type: "float3".to_string(),
-                    default: "1.00:2.00:3.00".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                }
+                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Sphere 1".to_string()),
+                crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "1.00:2.00:3.00".to_string())
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6180,28 +6121,8 @@ mod tests {
             node_type: "transform".to_string(),
             children: vec![],
             params: vec![
-                ParamDef {
-                    name: "Input".to_string(),
-                    label: String::new(),
-                    param_type: "text".to_string(),
-                    default: "Transform 1".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                },
-                ParamDef {
-                    name: "Translation".to_string(),
-                    label: String::new(),
-                    param_type: "float3".to_string(),
-                    default: "-1.00:-1.00:-1.00".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                }
+                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Transform 1".to_string()),
+                crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "-1.00:-1.00:-1.00".to_string())
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6235,28 +6156,8 @@ mod tests {
             node_type: "transform".to_string(),
             children: vec![],
             params: vec![
-                ParamDef {
-                    name: "Input".to_string(),
-                    label: String::new(),
-                    param_type: "text".to_string(),
-                    default: "Transform Loop".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                },
-                ParamDef {
-                    name: "Translation".to_string(),
-                    label: String::new(),
-                    param_type: "float3".to_string(),
-                    default: "1.00:1.00:1.00".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                }
+                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Transform Loop".to_string()),
+                crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "1.00:1.00:1.00".to_string())
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6287,17 +6188,7 @@ mod tests {
             node_type: "sphere".to_string(),
             children: vec![],
             params: vec![
-                ParamDef {
-                    name: "Radius".to_string(),
-                    label: String::new(),
-                    param_type: "slider".to_string(),
-                    default: "0.5".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                }
+                crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.5".to_string())
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6311,39 +6202,9 @@ mod tests {
             node_type: "scatter".to_string(),
             children: vec![],
             params: vec![
-                ParamDef {
-                    name: "Input".to_string(),
-                    label: String::new(),
-                    param_type: "text".to_string(),
-                    default: "Sphere 1".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                },
-                ParamDef {
-                    name: "Points".to_string(),
-                    label: String::new(),
-                    param_type: "spinbox".to_string(),
-                    default: "15".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                },
-                ParamDef {
-                    name: "Radius".to_string(),
-                    label: String::new(),
-                    param_type: "slider".to_string(),
-                    default: "0.02".to_string(),
-                    options: vec![],
-                    min: None,
-                    max: None,
-                    step: None,
-                    show_when: String::new(), expr: false,
-                }
+                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Sphere 1".to_string()),
+                crate::app::ParamDef::new("Points".to_string(), "spinbox".to_string(), "15".to_string()),
+                crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.02".to_string())
             ],
             geometry_visible: true,
             position: (0.0, 0.0),
@@ -6602,17 +6463,7 @@ mod simnet_tests {
     use crate::app::{FsNode, ParamDef};
 
     fn param(name: &str, value: &str) -> ParamDef {
-        ParamDef {
-            name: name.to_string(),
-            label: String::new(),
-            param_type: "text".to_string(),
-            default: value.to_string(),
-            options: vec![],
-            min: None,
-            max: None,
-            step: None,
-            show_when: String::new(), expr: false,
-        }
+        crate::app::ParamDef::new(name.to_string(), "text".to_string(), value.to_string())
     }
 
     fn node(id: &str, name: &str, node_type: &str, params: Vec<ParamDef>, children: Vec<FsNode>) -> FsNode {
@@ -6635,7 +6486,7 @@ mod simnet_tests {
         let mut ps = vec![param("Input", "In"), param("Attribute Name", "mass")];
         for (k, v) in params {
             match ps.iter_mut().find(|p| p.name == *k) {
-                Some(p) => p.default = v.to_string(),
+                Some(p) => p.set_text(v.to_string()),
                 None => ps.push(param(k, v)),
             }
         }
@@ -6914,7 +6765,7 @@ mod simnet_tests {
         let mut ps = vec![param("Input", "In"), param("Attribute", "mass")];
         for (k, v) in params {
             match ps.iter_mut().find(|p| p.name == *k) {
-                Some(p) => p.default = v.to_string(),
+                Some(p) => p.set_text(v.to_string()),
                 None => ps.push(param(k, v)),
             }
         }
@@ -7246,7 +7097,7 @@ mod simnet_tests {
         ];
         for (k, v) in extra {
             match params.iter_mut().find(|p| p.name == *k) {
-                Some(p) => p.default = v.to_string(),
+                Some(p) => p.set_text(v.to_string()),
                 None => params.push(param(k, v)),
             }
         }
@@ -7276,7 +7127,7 @@ mod simnet_tests {
         let mut params_vec = vec![param("Input", "In"), param("Attribute", "mass")];
         for (k, v) in params {
             match params_vec.iter_mut().find(|p| p.name == *k) {
-                Some(p) => p.default = v.to_string(),
+                Some(p) => p.set_text(v.to_string()),
                 None => params_vec.push(param(k, v)),
             }
         }
@@ -8196,8 +8047,7 @@ mod simnet_tests {
         {
             let sim_mut = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
             let step = sim_mut.children.iter_mut().find(|c| c.name == "step1").unwrap();
-            step.params.iter_mut().find(|p| p.name == "Translation").unwrap().default =
-                "2.00:0.00:0.00".to_string();
+            step.params.iter_mut().find(|p| p.name == "Translation").unwrap().set_text("2.00:0.00:0.00".to_string());
         }
         let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap().clone();
         let base = min_x(&solve_at(&root, 1));

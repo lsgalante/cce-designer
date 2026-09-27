@@ -547,6 +547,7 @@ impl State {
         self.sync_parameters_pane();
 
         self.rebuild_scene_geometry();
+        self.report_invalid_params();
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
@@ -554,6 +555,20 @@ impl State {
         self.mark_saved();
         self.update_window_title();
         Ok(())
+    }
+
+    /// Say on the status line when a loaded project holds values that do not
+    /// fit their parameter's kind — kept verbatim, read as they always were,
+    /// but worth knowing about (`ParamSlot::Invalid`). Only over the plain
+    /// success message: a node error is the more urgent line.
+    pub(crate) fn report_invalid_params(&mut self) {
+        let bad = crate::app::invalid_params(&self.fs_root);
+        let Some((at, name, why)) = bad.first() else { return };
+        if !self.last_status_text.starts_with("Geometry updated") {
+            return;
+        }
+        let more = if bad.len() > 1 { format!(" (and {} more)", bad.len() - 1) } else { String::new() };
+        self.update_status_text(&format!("A value does not fit its parameter — {at} {name}: {why}{more}"));
     }
 
     /// The Main node's "Set As Default": remember the currently-loaded project
@@ -716,8 +731,8 @@ impl State {
                 .map(|n| n.params.clone())
                 .unwrap_or_default()
         };
-        let as_bool = |p: &ParamDef| p.default.parse::<bool>().ok();
-        let as_f32 = |p: &ParamDef| p.default.parse::<f32>().ok();
+        let as_bool = |p: &ParamDef| p.text().parse::<bool>().ok();
+        let as_f32 = |p: &ParamDef| p.text().parse::<f32>().ok();
 
         for p in params("guides").iter().chain(params("main").iter()) {
             match p.name.as_str() {
@@ -733,11 +748,11 @@ impl State {
                 "Grid Thickness" => if let Some(v) = as_f32(p) { self.grid_thickness = v / 1000.0; },
                 "Origin Guide Size" => if let Some(v) = as_f32(p) { self.origin_size = v / 10.0; },
                 "Camera Pivot Size" => if let Some(v) = as_f32(p) { self.camera_pivot_size = v / 10.0; },
-                "Grid Color" => if let Some(c) = hex_to_color(&p.default) { self.viewport_mut().grid_color = c; },
-                "Background Color" => if let Some(c) = hex_to_color(&p.default) { self.viewport_mut().bg_color = c; },
+                "Grid Color" => if let Some(c) = hex_to_color(p.text()) { self.viewport_mut().grid_color = c; },
+                "Background Color" => if let Some(c) = hex_to_color(p.text()) { self.viewport_mut().bg_color = c; },
                 "Point Marker Size" => if let Some(v) = as_f32(p) { self.point_marker_size = v / 1000.0; },
-                "Point Marker Color" => if let Some(c) = hex_to_color(&p.default) { self.point_marker_color = c; },
-                "World Unit" => if let Some(u) = cce_ui::units::Unit::parse(&p.default) { self.world_unit = u; },
+                "Point Marker Color" => if let Some(c) = hex_to_color(p.text()) { self.point_marker_color = c; },
+                "World Unit" => if let Some(u) = cce_ui::units::Unit::parse(p.text()) { self.world_unit = u; },
                 "Circular Pane" => if let Some(v) = as_bool(p) { self.circular_network_pane = v; },
                 "Ray Traced Preview" => if let Some(v) = as_bool(p) { self.viewport_mut().rt_mode = v; },
                 _ => {}
@@ -748,7 +763,7 @@ impl State {
                 "Show Wireframe" => if let Some(v) = as_bool(&p) { self.wireframe = v; },
                 "Wire Single Color" => if let Some(v) = as_bool(&p) { self.wire_single_color = v; },
                 // Its alpha was the wire opacity until that was a setting.
-                "Wire Color" => if let Some([r, g, b, a]) = hex_to_rgba(&p.default) {
+                "Wire Color" => if let Some([r, g, b, a]) = hex_to_rgba(p.text()) {
                     self.wire_color = [r, g, b];
                     self.wire_opacity = a;
                 },
@@ -756,7 +771,7 @@ impl State {
                 "Opacity" => if let Some(v) = as_f32(&p) { self.geo_opacity = v.clamp(0.0, 1.0); },
                 "Render Points" => if let Some(v) = as_bool(&p) { self.render_points = v; },
                 "Point Size" => if let Some(v) = as_f32(&p) { self.point_size = v.clamp(0.0, 0.1); },
-                "Point Color" => if let Some(c) = hex_to_color(&p.default) { self.point_color = c; },
+                "Point Color" => if let Some(c) = hex_to_color(p.text()) { self.point_color = c; },
                 _ => {}
             }
         }

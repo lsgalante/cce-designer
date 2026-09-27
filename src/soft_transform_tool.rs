@@ -62,7 +62,7 @@ fn set_triple(node: &mut FsNode, name: &str, v: Vec3) {
     // tool wrote and a value the pane wrote are indistinguishable.
     let formatted = format!("{:.2}:{:.2}:{:.2}", v.x, v.y, v.z);
     if let Some(p) = node.params.iter_mut().find(|p| p.name == name) {
-        p.default = formatted;
+        p.set_text(formatted);
     }
 }
 

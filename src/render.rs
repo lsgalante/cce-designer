@@ -594,7 +594,7 @@ impl State {
                 let is_expr = |key: &str| {
                     child.params.iter().any(|p| {
                         let k = if p.label.is_empty() { &p.name } else { &p.label };
-                        k == key && p.expr
+                        k == key && p.is_expr()
                     })
                 };
                 if rows.iter().any(|r| is_expr(&r.0)) {

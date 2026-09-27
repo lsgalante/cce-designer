@@ -74,150 +74,7 @@ pub const MIN_COLUMN: f32 = 120.0;
 pub const BREADCRUMB_H: f32 = 24.0;
 pub const PLAYBAR_H: f32 = 36.0;
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct ParamDef {
-    pub name: String,
-    #[serde(default)]
-    pub label: String,
-    #[serde(rename = "type")]
-    #[serde(default = "default_param_type")]
-    pub param_type: String,
-    #[serde(default)]
-    pub default: String,
-    #[serde(default)]
-    pub options: Vec<String>,
-    #[serde(default)]
-    pub min: Option<f32>,
-    #[serde(default)]
-    pub max: Option<f32>,
-    #[serde(default)]
-    pub step: Option<f32>,
-    /// When this parameter should be SHOWN, as a condition over its siblings'
-    /// current values. Empty means always.
-    ///
-    /// Grammar, deliberately tiny: `Mode == Twist`, `Mode == Twist|Bend` for
-    /// any-of, `Mode != Bleed` for unless, and ` && ` between clauses. It
-    /// exists because collapsing fifty operators into ten traded node count
-    /// for parameter count — Attribute reached sixteen parameters, of which
-    /// four matter at any moment — and a pane showing twelve irrelevant rows
-    /// is worse than the twelve nodes it replaced.
-    ///
-    /// Houdini calls this `hideWhen`. Phrased the positive way round here
-    /// because a template author is describing when a control APPLIES, and
-    /// stating that directly is easier to get right than stating its negation.
-    #[serde(default)]
-    pub show_when: String,
-    /// Whether `default` is an EXPRESSION to evaluate rather than a value —
-    /// `ch("../sphere1/Radius") * 2`, `$F / 24` (see `expr.rs`). A flag and
-    /// not a guess about the text, because a kernel's Code contains `chf(`,
-    /// a node name is an identifier and `0.5` parses as an expression too;
-    /// Houdini makes the same choice. The instance owns it with the value:
-    /// the template merge never touches it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub expr: bool,
-}
-
-/// What a parameter HOLDS, parsed from its `type` string — the one place
-/// that string is interpreted. The value is still the `default` string;
-/// the kind says how to read it and which control the params pane draws.
-///
-/// The head before the first `:` names the kind; what follows is the
-/// kind's own detail (`slider:-2:2` a range, `choice:UV,Icosphere,Cube`
-/// the options), read by the pane and by `choice_options`. A type naming
-/// no kind is a template bug: `load_fs_tree` drops the template and says
-/// so, and `every_shipped_template_param_has_a_known_kind` walks the
-/// shipped ones.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ParamKind {
-    /// Free text: a name, a path, a group or attribute name. `string` is
-    /// the same kind — it is what an ABSENT type deserializes to.
-    Text,
-    /// A number with no range — a threshold, a scale factor, a manual
-    /// ramp end — shown as a text row, because the pane's slider holds a
-    /// fraction of its range and would clamp anything outside it.
-    Float,
-    /// A number over a range (`min`/`max`, or inline `slider:lo:hi`).
-    Slider,
-    /// An integer, stepped.
-    Spin,
-    /// Three numbers, `x:y:z`.
-    Float3,
-    /// One of a fixed set of options, stored as the option's text.
-    Choice,
-    /// `true` / `false`.
-    Toggle,
-    /// A press, not a value: the pane writes `clicked` and the app clears it.
-    Button,
-    /// A program (a wrangle's script). Never an expression.
-    Code,
-    /// The NAME of another node, resolved sibling-first by
-    /// `geometry::find_input_node` — an `Input` wire, a Boolean's `With`,
-    /// a Relax's `Rest`. Empty means unconnected.
-    Node,
-}
-
-impl ParamKind {
-    /// The type-string heads [`ParamKind::parse`] accepts, for messages.
-    /// `string` is left out: it is an alias, not something to ask for.
-    pub const NAMES: &'static [&'static str] =
-        &["text", "float", "slider", "spinbox", "float3", "choice", "toggle", "button", "code", "node"];
-
-    /// The kind a `type` string names, or `None` when it names none.
-    pub fn parse(ty: &str) -> Option<Self> {
-        let head = ty.split(':').next().unwrap_or("").trim();
-        Some(match head {
-            "text" | "string" => Self::Text,
-            "float" => Self::Float,
-            "slider" => Self::Slider,
-            "spinbox" => Self::Spin,
-            "float3" => Self::Float3,
-            "choice" => Self::Choice,
-            "toggle" => Self::Toggle,
-            "button" => Self::Button,
-            "code" => Self::Code,
-            "node" => Self::Node,
-            _ => return None,
-        })
-    }
-}
-
-impl ParamDef {
-    /// This parameter's kind. A type that names none reads as text — the
-    /// row stays editable and its value survives — but a shipped template
-    /// cannot carry one (see [`ParamKind`]).
-    pub fn kind(&self) -> ParamKind {
-        ParamKind::parse(&self.param_type).unwrap_or(ParamKind::Text)
-    }
-
-    /// Whether a value that READS as a reference should become an
-    /// expression here. Not for a code parameter: a kernel or a wrangle
-    /// script is a program, and one whose whole text happens to be
-    /// `ch("../a/Radius")` is a one-line program, not a channel — flagging
-    /// it would evaluate the script to a number before it ever ran.
-    pub fn takes_expressions(&self) -> bool {
-        !(self.kind() == ParamKind::Code || self.name == "Code")
-    }
-}
-
-/// Every parameter in `node`'s tree whose type names no [`ParamKind`], as
-/// `(path, parameter, type)`. Empty for a well-formed template.
-pub fn unknown_param_kinds(node: &FsNode) -> Vec<(String, String, String)> {
-    fn walk(node: &FsNode, path: &str, out: &mut Vec<(String, String, String)>) {
-        for p in &node.params {
-            if ParamKind::parse(&p.param_type).is_none() {
-                out.push((path.to_string(), p.name.clone(), p.param_type.clone()));
-            }
-        }
-        for c in &node.children {
-            walk(c, &format!("{path}/{}", c.name), out);
-        }
-    }
-    let mut out = Vec::new();
-    walk(node, &node.name, &mut out);
-    out
-}
-
-fn default_param_type() -> String { "string".to_string() }
+pub use crate::param::{invalid_params, unknown_param_kinds, ParamDef, ParamKind, ParamSlot, ParamValue};
 
 /// Expand a leading `~` to the home directory. A path typed into a text field
 /// is typed by a person, and `~/models/thing.stl` is what a person writes.
@@ -259,7 +116,7 @@ pub fn param_visible(params: &[ParamDef], cond: &str) -> bool {
         };
         let matches = wanted
             .split('|')
-            .any(|w| w.trim().eq_ignore_ascii_case(sibling.default.trim()));
+            .any(|w| w.trim().eq_ignore_ascii_case(sibling.text().trim()));
         matches != negated
     })
 }
@@ -702,38 +559,38 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
     params.iter().filter(|p| param_visible(params, &p.show_when)).map(|p| {
         let key = if p.label.is_empty() { &p.name } else { &p.label };
         let kind = p.kind();
-        let value = if p.param_type == "choice" && !p.options.is_empty() && p.default.is_empty() {
-            p.options[0].clone()
+        let value = if p.ty() == "choice" && !p.options().is_empty() && p.text().is_empty() {
+            p.options()[0].clone()
         } else {
-            p.default.clone()
+            p.text().to_string()
         };
         // An expression (`ch("../sphere1/Radius") * 2`) is shown as the text
         // it is: a slider cannot hold it, and a spinbox would show zero and
         // then write zero back over it.
-        let ptype = if p.expr {
+        let ptype = if p.is_expr() {
             "text".to_string()
         } else if matches!(kind, ParamKind::Text | ParamKind::Float | ParamKind::Node) {
             // The pane has no numeric-text or node-picker row; both are a
             // text box there. `string` (an absent type) is one too — the
             // pane does not know that word and would draw nothing.
             "text".to_string()
-        } else if p.param_type == "slider" {
+        } else if p.ty() == "slider" {
             let min = p.min.unwrap_or(0.0);
             let max = p.max.unwrap_or(2.0);
             format!("slider:{}:{}", min, max)
-        } else if p.param_type == "float3" {
+        } else if p.ty() == "float3" {
             let min = p.min.unwrap_or(-10.0);
             let max = p.max.unwrap_or(10.0);
             format!("float3:{}:{}", min, max)
-        } else if p.param_type == "spinbox" {
+        } else if p.ty() == "spinbox" {
             let min = p.min.unwrap_or(1.0) as i32;
             let max = p.max.unwrap_or(10000.0) as i32;
             let step = p.step.unwrap_or(1.0) as i32;
             format!("spinbox:{}:{}:{}", min, max, step)
-        } else if p.param_type == "choice" {
-            format!("choice:{}", p.options.join(","))
+        } else if p.ty() == "choice" {
+            format!("choice:{}", p.options().join(","))
         } else {
-            p.param_type.clone()
+            p.ty().to_string()
         };
         (key.clone(), value, ptype)
     }).collect()
@@ -889,8 +746,8 @@ impl Project {
             if !map.is_empty() {
                 for child in &mut dir.children {
                     for p in &mut child.params {
-                        if let Some((_, new)) = map.iter().find(|(old, _)| *old == p.default) {
-                            p.default = new.clone();
+                        if let Some((_, new)) = map.iter().find(|(old, _)| *old == p.text()) {
+                            p.set_text(new.clone());
                         }
                     }
                 }
@@ -923,10 +780,10 @@ impl Project {
         }
         fn walk(node: &mut FsNode) {
             for p in &mut node.params {
-                if !p.expr {
-                    if let Some(new) = crate::expr::migrate_legacy_ref(&p.default) {
-                        p.default = new;
-                        p.expr = true;
+                if !p.is_expr() {
+                    if let Some(new) = crate::expr::migrate_legacy_ref(p.text()) {
+                        p.set_text(new);
+                        p.set_expr(true);
                     }
                 }
             }
@@ -946,8 +803,8 @@ impl Project {
 /// one a typed or scripted value gets — arithmetic alone is not enough.
 pub fn infer_template_exprs(node: &mut FsNode) {
     for p in &mut node.params {
-        if !p.expr && p.takes_expressions() && crate::expr::looks_like_expression(&p.default) {
-            p.expr = true;
+        if !p.is_expr() && p.takes_expressions() && crate::expr::looks_like_expression(p.text()) {
+            p.set_expr(true);
         }
     }
     for c in &mut node.children {
@@ -996,7 +853,7 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                     fresh.geometry_visible = c.geometry_visible;
                     for p in &c.params {
                         if let Some(fp) = fresh.params.iter_mut().find(|fp| fp.name == p.name) {
-                            fp.default = p.default.clone();
+                            fp.set_text(p.text().to_string());
                         }
                     }
                     *c = fresh;
@@ -1072,19 +929,15 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         for tp in &template.params {
             if let Some(i) = node.params.iter().position(|p| p.name == tp.name) {
                 cursor = i + 1;
-                let ip = &mut node.params[i];
-                ip.param_type = tp.param_type.clone();
-                ip.label = tp.label.clone();
-                ip.options = tp.options.clone();
-                ip.min = tp.min;
-                ip.max = tp.max;
-                ip.step = tp.step;
-                // The condition is UI metadata like the rest: the template
-                // owns when a control applies, the instance owns its value.
-                // Without this a saved project keeps the pane it had on the
-                // day it was made, and a node that later learned to hide its
-                // irrelevant rows would not hide them there.
-                ip.show_when = tp.show_when.clone();
+                // Type, label, options, range, step and the show-when
+                // condition — the condition is UI metadata like the rest:
+                // the template owns when a control applies, the instance
+                // owns its value. Without it a saved project keeps the pane
+                // it had on the day it was made, and a node that later
+                // learned to hide its irrelevant rows would not hide them
+                // there. The value is re-parsed under the template's kind,
+                // so an old save's text wire is a node wire from here on.
+                node.params[i].adopt_ui_from(tp);
             } else {
                 node.params.insert(cursor, tp.clone());
                 cursor += 1;
@@ -1108,7 +961,7 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                             .expect("children_match checked above");
                         if let Some(t_code) = tc.params.iter().find(|p| p.name == "Code") {
                             if let Some(i_code) = ic.params.iter_mut().find(|p| p.name == "Code") {
-                                i_code.default = t_code.default.clone();
+                                i_code.set_text(t_code.text().to_string());
                             }
                         }
                         merge_params(ic, tc);
@@ -1205,11 +1058,11 @@ pub fn load_fs_tree() -> FsNode {
                     // Merge parameters
                     for override_p in &child.params {
                         if let Some(base_p) = resolved_child.params.iter_mut().find(|p| p.name == override_p.name) {
-                            base_p.default = override_p.default.clone();
+                            base_p.set_text(override_p.text().to_string());
                             // The flag travels with the value: an override
                             // that is a reference (the Embryo's sphere1
                             // reading `chf("../Radius")`) stays one.
-                            base_p.expr = override_p.expr;
+                            base_p.set_expr(override_p.is_expr());
                         }
                     }
                     if depth < 8 {
@@ -3489,6 +3342,11 @@ impl State {
                     // action firing (the Open dropdown snapping back to
                     // "- Select -" — its action is file_to_open's, below).
                     let mut display_resets: Vec<String> = Vec::new();
+                    // Rows whose new text does not fit the parameter's kind
+                    // (`abc` typed into a threshold): (display key, the text
+                    // kept, why). Nothing is written; the row shows the kept
+                    // text again and the status line says why.
+                    let mut rejected: Vec<(String, String, String)> = Vec::new();
                     let mut pane_actions = Vec::new();
                     for (u_name, u_val, _) in &updated_params {
                         // The params pane reports its display key (label when
@@ -3498,21 +3356,31 @@ impl State {
                             let key = if p.label.is_empty() { &p.name } else { &p.label };
                             key == u_name
                         }) {
-                            if p.default != *u_val {
-                                p.default = u_val.clone();
-                                param_changed = true;
+                            if p.text() != *u_val {
                                 // A reference typed into a plain row becomes
                                 // an expression — the one way to make one
-                                // without the row menu.
-                                if !p.expr && p.takes_expressions() && crate::expr::looks_like_expression(&p.default) {
-                                    p.expr = true;
+                                // without the row menu — and an expression is
+                                // checked when it evaluates. Anything else
+                                // must fit the kind.
+                                let as_expr = p.is_expr()
+                                    || (p.takes_expressions() && crate::expr::looks_like_expression(u_val));
+                                if !as_expr {
+                                    if let Err(why) = p.check(u_val) {
+                                        rejected.push((u_name.clone(), p.text().to_string(), format!("{}: {why}", p.name)));
+                                        continue;
+                                    }
                                 }
-                                if p.kind() == ParamKind::Button && p.default == "clicked" {
+                                p.set_text(u_val.clone());
+                                param_changed = true;
+                                if as_expr {
+                                    p.set_expr(true);
+                                }
+                                if p.kind() == ParamKind::Button && p.text() == "clicked" {
                                     triggered_buttons.push(p.name.clone());
-                                    p.default = "".to_string();
+                                    p.set_text("".to_string());
                                 }
                                 if p.kind() == ParamKind::Toggle {
-                                    let desired = p.default == "true";
+                                    let desired = p.text() == "true";
                                     let cur = match p.name.as_str() {
                                         "Show Network Pane" => Some(cur_show.0),
                                         "Show Viewport Pane" => Some(cur_show.1),
@@ -3527,9 +3395,9 @@ impl State {
                                         pane_actions.push(p.name.clone());
                                     }
                                 }
-                                if p.name == "Open" && p.default != "- Select -" && !p.default.is_empty() {
-                                    file_to_open = Some(p.default.clone());
-                                    p.default = "- Select -".to_string();
+                                if p.name == "Open" && p.text() != "- Select -" && !p.text().is_empty() {
+                                    file_to_open = Some(p.text().to_string());
+                                    p.set_text("- Select -".to_string());
                                     // Display reset ONLY — never into
                                     // triggered_buttons, whose entries get
                                     // executed as menu actions: "Open" there
@@ -3541,14 +3409,22 @@ impl State {
                         }
                     }
 
-                    if !triggered_buttons.is_empty() || !display_resets.is_empty() {
+                    if !triggered_buttons.is_empty() || !display_resets.is_empty() || !rejected.is_empty() {
                         let mut disp_params = self.param().node_params();
                         for btn_name in triggered_buttons.iter().chain(display_resets.iter()) {
                             if let Some(pos) = disp_params.iter().position(|p| p.0 == *btn_name) {
                                 disp_params[pos].1 = if btn_name == "Open" { "- Select -".to_string() } else { "".to_string() };
                             }
                         }
+                        for (key, kept, _) in &rejected {
+                            if let Some(pos) = disp_params.iter().position(|p| p.0 == *key) {
+                                disp_params[pos].1 = kept.clone();
+                            }
+                        }
                         self.param_mut().set_display_params(&disp_params);
+                    }
+                    if let Some((_, _, why)) = rejected.first() {
+                        self.update_status_text(&format!("Not applied — {why}"));
                     }
 
                     if param_changed {
@@ -3935,7 +3811,7 @@ impl State {
             .find(|c| c.node_type == "camera" && c.name == active)
         {
             if let Some(p) = cam.params.iter_mut().find(|p| p.name == name) {
-                p.default = if val { "true" } else { "false" }.to_string();
+                p.set_value(crate::app::ParamValue::Bool(val));
             }
         }
     }
@@ -4377,10 +4253,10 @@ impl State {
                     None
                 };
                 let pos = node.params.iter().find(|p| p.name == "Position")
-                    .and_then(|p| parse3(&p.default))
+                    .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
                 let piv = node.params.iter().find(|p| p.name == "Pivot")
-                    .and_then(|p| parse3(&p.default))
+                    .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::ZERO);
                 let offset = pos - piv;
                 let dir_unit = if offset.length() > 1e-4 {
@@ -4391,10 +4267,10 @@ impl State {
                 let new_pos = center + dir_unit * dist;
                 let fmt3 = |v: Vec3| format!("{:.2}:{:.2}:{:.2}", v.x, v.y, v.z);
                 if let Some(p) = node.params.iter_mut().find(|p| p.name == "Pivot") {
-                    p.default = fmt3(center);
+                    p.set_text(fmt3(center));
                 }
                 if let Some(p) = node.params.iter_mut().find(|p| p.name == "Position") {
-                    p.default = fmt3(new_pos);
+                    p.set_text(fmt3(new_pos));
                 }
                 self.viewport_mut().zoom = 1.0;
                 self.viewport_mut().reset_velocity();
@@ -4473,16 +4349,16 @@ impl State {
                     None
                 };
                 let pos = node.params.iter().find(|p| p.name == "Position")
-                    .and_then(|p| parse3(&p.default))
+                    .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
                 let piv = node.params.iter().find(|p| p.name == "Pivot")
-                    .and_then(|p| parse3(&p.default))
+                    .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::ZERO);
                 let offset = pos - piv;
                 let dir_unit = if offset.length() > 1e-4 { offset.normalize() } else { Vec3::new(2.5, 1.8, 2.5).normalize() };
                 let new_pos = piv + dir_unit * dist;
                 if let Some(p) = node.params.iter_mut().find(|p| p.name == "Position") {
-                    p.default = format!("{:.3}:{:.3}:{:.3}", new_pos.x, new_pos.y, new_pos.z);
+                    p.set_text(format!("{:.3}:{:.3}:{:.3}", new_pos.x, new_pos.y, new_pos.z));
                 }
                 self.viewport_mut().zoom = 1.0;
                 self.viewport_mut().reset_velocity();
@@ -4538,7 +4414,7 @@ impl State {
     fn open_param_context_menu(&mut self, slot: usize, pname: String) {
         let (node_id, is_expr) = {
             let child = &self.param_editor_dir().children[slot];
-            (child.id.clone(), child.params.iter().find(|p| p.name == pname).is_some_and(|p| p.expr))
+            (child.id.clone(), child.params.iter().find(|p| p.name == pname).is_some_and(|p| p.is_expr()))
         };
         let mut options = vec!["Copy Parameter".to_string()];
         let mut actions = vec![ParamMenuAction::CopyParameter];
@@ -4639,8 +4515,8 @@ impl State {
                 if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
                     .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
                 {
-                    p.default = value.clone();
-                    p.expr = true;
+                    p.set_text(value.clone());
+                    p.set_expr(true);
                 }
                 self.update_status_text(&format!("{pname} = {value}"));
             }
@@ -4648,7 +4524,7 @@ impl State {
                 if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
                     .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
                 {
-                    p.expr = true;
+                    p.set_expr(true);
                 }
                 self.update_status_text(&format!("{pname} is an expression — type ch(\"../node/Param\"), $F, arithmetic."));
             }
@@ -4660,16 +4536,16 @@ impl State {
                 let evaluated = crate::viewer_state::find_node_by_id(&self.fs_root, node_id).and_then(|node| {
                     let mut err = None;
                     let resolved = crate::geometry::resolve_param_refs(&self.fs_root, node, frame, &mut err)?;
-                    resolved.params.into_iter().find(|p| p.name == pname).map(|p| (p.default, err))
+                    resolved.params.into_iter().find(|p| p.name == pname).map(|p| (p.text().to_string(), err))
                 });
                 let mut note = None;
                 if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
                     .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
                 {
-                    p.expr = false;
+                    p.set_expr(false);
                     match evaluated {
                         Some((value, None)) => {
-                            p.default = value.clone();
+                            p.bake(value.clone());
                             note = Some(format!("{pname} = {value}, no longer an expression."));
                         }
                         Some((_, Some(e))) => note = Some(format!("{pname} kept as text — it did not evaluate: {e}")),
@@ -5252,10 +5128,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 None
             };
             let pos = node.params.iter().find(|p| p.name == "Position")
-                .and_then(|p| parse3(&p.default))
+                .and_then(|p| parse3(p.text()))
                 .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
             let piv = node.params.iter().find(|p| p.name == "Pivot")
-                .and_then(|p| parse3(&p.default))
+                .and_then(|p| parse3(p.text()))
                 .unwrap_or(Vec3::ZERO);
             let offset = pos - piv;
             let pitch0_deg = (offset.y / offset.length().max(1e-5)).asin().to_degrees();
@@ -5265,7 +5141,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let mut rx = 0.0f32;
                 let mut ry = 0.0f32;
                 let mut rz = 0.0f32;
-                if let Some(v) = parse3(&p.default) {
+                if let Some(v) = parse3(p.text()) {
                     rx = v.x;
                     ry = v.y;
                     rz = v.z;
@@ -5277,7 +5153,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     .clamp(-max_pitch_deg - pitch0_deg, max_pitch_deg - pitch0_deg);
                 while ry > 180.0 { ry -= 360.0; }
                 while ry < -180.0 { ry += 360.0; }
-                p.default = format!("{:.2}:{:.2}:{:.2}", rx, ry, rz);
+                p.set_text(format!("{:.2}:{:.2}:{:.2}", rx, ry, rz));
 
                 self.sync_nodes();
                 // Through the one pane-sync path, so the pick-list upgrade
@@ -5298,7 +5174,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let dir = self.current_dir_mut();
         if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
             if let Some(p) = node.params.iter_mut().find(|p| p.name == "Rotation") {
-                p.default = "0.00:0.00:0.00".to_string();
+                p.set_text("0.00:0.00:0.00".to_string());
                 self.sync_nodes();
                 // Through the one pane-sync path, so the pick-list upgrade
                 // (textpick rows) survives this rebuild.
@@ -5473,7 +5349,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
         if let Some(node) = selected_node {
             current_name = Some(node.id.clone());
-            current_params = Some(node.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>());
+            current_params = Some(node.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>());
             if self.last_spreadsheet_node_name == current_name && self.last_spreadsheet_node_params == current_params {
                 cache_hit = true;
             }
@@ -5518,7 +5394,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let group_key = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")).map(|n| {
             (
                 n.id.clone(),
-                n.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>(),
+                n.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>(),
                 self.rt_geometry_version,
             )
         });
@@ -5583,7 +5459,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let key = node.as_ref().map(|n| {
             (
                 n.id.clone(),
-                n.params.iter().map(|p| (p.name.clone(), p.default.clone())).collect::<Vec<_>>(),
+                n.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>(),
                 self.rt_geometry_version,
             )
         });
@@ -7155,7 +7031,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     .params
                     .iter()
                     .find(|p| p.name.eq_ignore_ascii_case("input"))
-                    .map(|p| p.default.clone()),
+                    .map(|p| p.text().to_string()),
                 position: c.position,
                 // Utility trees stay where they were put; see the module doc.
                 pinned: false,
@@ -9238,7 +9114,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     let dir = self.current_dir_mut();
                     if let Some(child) = dir.children.iter_mut().find(|c| c.id == input_node_id) {
                         if let Some(p) = child.params.iter_mut().find(|p| p.name == "Input") {
-                            p.default = output_node_name;
+                            p.set_text(output_node_name);
                             self.sync_nodes();
                             self.rebuild_scene_geometry();
                             self.sync_parameters_pane();
@@ -9269,12 +9145,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     if let (Some(mid_name), true) = (mid_name, both_rewirable) {
                         if let Some(mid) = dir.children.iter_mut().find(|c| c.id == mid_id) {
                             if let Some(p) = mid.params.iter_mut().find(|p| p.name == "Input") {
-                                p.default = src_name;
+                                p.set_text(src_name);
                             }
                         }
                         if let Some(dest) = dir.children.iter_mut().find(|c| c.id == dest_id) {
                             if let Some(p) = dest.params.iter_mut().find(|p| p.name == "Input") {
-                                p.default = mid_name;
+                                p.set_text(mid_name);
                             }
                         }
                         self.sync_nodes();
@@ -9307,7 +9183,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         let dir = self.dir_at_mut(&p2);
                         if let Some(child) = dir.children.iter_mut().find(|c| c.id == input_node_id) {
                             if let Some(p) = child.params.iter_mut().find(|p| p.name == "Input") {
-                                p.default = output_node_name;
+                                p.set_text(output_node_name);
                                 self.sync_nodes();
                                 self.rebuild_scene_geometry();
                                 self.sync_parameters_pane();
@@ -9335,12 +9211,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         if let (Some(mid_name), true) = (mid_name, both) {
                             if let Some(mid) = dir.children.iter_mut().find(|c| c.id == mid_id) {
                                 if let Some(p) = mid.params.iter_mut().find(|p| p.name == "Input") {
-                                    p.default = src_name;
+                                    p.set_text(src_name);
                                 }
                             }
                             if let Some(dest) = dir.children.iter_mut().find(|c| c.id == dest_id) {
                                 if let Some(p) = dest.params.iter_mut().find(|p| p.name == "Input") {
-                                    p.default = mid_name;
+                                    p.set_text(mid_name);
                                 }
                             }
                             self.sync_nodes();
@@ -10108,7 +9984,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         let mut cz = 2.5f32;
                         for p in &node.params {
                             if p.name == "Position" {
-                                let parts: Vec<&str> = p.default
+                                let parts: Vec<&str> = p.text()
                                     .split(|c| c == ':' || c == ',' || c == ' ')
                                     .filter(|s| !s.is_empty())
                                     .collect();
@@ -10120,7 +9996,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                     }
                                 }
                             } else if p.name == "Rotation" {
-                                let parts: Vec<&str> = p.default
+                                let parts: Vec<&str> = p.text()
                                     .split(|c| c == ':' || c == ',' || c == ' ')
                                     .filter(|s| !s.is_empty())
                                     .collect();
@@ -10132,7 +10008,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                     }
                                 }
                             } else if p.name == "Pivot" {
-                                let parts: Vec<&str> = p.default
+                                let parts: Vec<&str> = p.text()
                                     .split(|c| c == ':' || c == ',' || c == ' ')
                                     .filter(|s| !s.is_empty())
                                     .collect();
