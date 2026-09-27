@@ -879,7 +879,12 @@ impl State {
             }
             McpAction::AddParam { slot, name, param_type, default } => {
                 let len = state.current_dir().children.len();
-                if slot < len {
+                if crate::app::ParamKind::parse(&param_type).is_none() {
+                    Err(format!(
+                        "Unknown param_type '{param_type}'; expected one of: {}",
+                        crate::app::ParamKind::NAMES.join(", ")
+                    ))
+                } else if slot < len {
                     let param = ParamDef {
                         name,
                         label: String::new(),

@@ -767,7 +767,7 @@ impl State {
             for (name, get, action) in Self::PANE_FLAGS {
                 let Some(p) = view
                     .iter()
-                    .find(|p| p.param_type == "toggle" && p.name == format!("Show {} Pane", capitalize(name)))
+                    .find(|p| p.kind() == crate::app::ParamKind::Toggle && p.name == format!("Show {} Pane", capitalize(name)))
                 else {
                     continue;
                 };

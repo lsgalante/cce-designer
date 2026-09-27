@@ -4,8 +4,8 @@
  "inputs": 2,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "text", "default": "" },
-  { "name": "To", "type": "text", "default": "" },
+  { "name": "Input", "type": "node", "default": "" },
+  { "name": "To", "type": "node", "default": "" },
   { "name": "Attribute", "type": "text", "default": "dist" },
   { "name": "Direction", "type": "text", "default": "" },
   { "name": "Signed", "type": "choice:false,true", "default": "false" },

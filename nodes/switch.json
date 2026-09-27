@@ -4,10 +4,10 @@
  "inputs": 4,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "text", "default": "" },
-  { "name": "Input 2", "type": "text", "default": "" },
-  { "name": "Input 3", "type": "text", "default": "" },
-  { "name": "Input 4", "type": "text", "default": "" },
+  { "name": "Input", "type": "node", "default": "" },
+  { "name": "Input 2", "type": "node", "default": "" },
+  { "name": "Input 3", "type": "node", "default": "" },
+  { "name": "Input 4", "type": "node", "default": "" },
   { "name": "Index", "type": "spinbox", "default": "0", "min": 0, "max": 3, "step": 1 }
  ]
 }

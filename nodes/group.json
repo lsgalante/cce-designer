@@ -6,7 +6,7 @@
   "params": [
     {
       "name": "Input",
-      "type": "text",
+      "type": "node",
       "default": ""
     },
     {
@@ -83,7 +83,7 @@
     },
     {
       "name": "Threshold",
-      "type": "text",
+      "type": "float",
       "default": "0.50",
       "show_when": "Mode == Attribute"
     },

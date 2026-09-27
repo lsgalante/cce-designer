@@ -6,7 +6,7 @@
   "params": [
     {
       "name": "Input",
-      "type": "text",
+      "type": "node",
       "default": ""
     },
     {
@@ -33,13 +33,13 @@
     },
     {
       "name": "From",
-      "type": "text",
+      "type": "float",
       "default": "0.00",
       "show_when": "Mode == Ramp && Range == Manual"
     },
     {
       "name": "To",
-      "type": "text",
+      "type": "float",
       "default": "1.00",
       "show_when": "Mode == Ramp && Range == Manual"
     },

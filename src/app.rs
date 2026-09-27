@@ -117,15 +117,104 @@ pub struct ParamDef {
     pub expr: bool,
 }
 
+/// What a parameter HOLDS, parsed from its `type` string — the one place
+/// that string is interpreted. The value is still the `default` string;
+/// the kind says how to read it and which control the params pane draws.
+///
+/// The head before the first `:` names the kind; what follows is the
+/// kind's own detail (`slider:-2:2` a range, `choice:UV,Icosphere,Cube`
+/// the options), read by the pane and by `choice_options`. A type naming
+/// no kind is a template bug: `load_fs_tree` drops the template and says
+/// so, and `every_shipped_template_param_has_a_known_kind` walks the
+/// shipped ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamKind {
+    /// Free text: a name, a path, a group or attribute name. `string` is
+    /// the same kind — it is what an ABSENT type deserializes to.
+    Text,
+    /// A number with no range — a threshold, a scale factor, a manual
+    /// ramp end — shown as a text row, because the pane's slider holds a
+    /// fraction of its range and would clamp anything outside it.
+    Float,
+    /// A number over a range (`min`/`max`, or inline `slider:lo:hi`).
+    Slider,
+    /// An integer, stepped.
+    Spin,
+    /// Three numbers, `x:y:z`.
+    Float3,
+    /// One of a fixed set of options, stored as the option's text.
+    Choice,
+    /// `true` / `false`.
+    Toggle,
+    /// A press, not a value: the pane writes `clicked` and the app clears it.
+    Button,
+    /// A program (a wrangle's script). Never an expression.
+    Code,
+    /// The NAME of another node, resolved sibling-first by
+    /// `geometry::find_input_node` — an `Input` wire, a Boolean's `With`,
+    /// a Relax's `Rest`. Empty means unconnected.
+    Node,
+}
+
+impl ParamKind {
+    /// The type-string heads [`ParamKind::parse`] accepts, for messages.
+    /// `string` is left out: it is an alias, not something to ask for.
+    pub const NAMES: &'static [&'static str] =
+        &["text", "float", "slider", "spinbox", "float3", "choice", "toggle", "button", "code", "node"];
+
+    /// The kind a `type` string names, or `None` when it names none.
+    pub fn parse(ty: &str) -> Option<Self> {
+        let head = ty.split(':').next().unwrap_or("").trim();
+        Some(match head {
+            "text" | "string" => Self::Text,
+            "float" => Self::Float,
+            "slider" => Self::Slider,
+            "spinbox" => Self::Spin,
+            "float3" => Self::Float3,
+            "choice" => Self::Choice,
+            "toggle" => Self::Toggle,
+            "button" => Self::Button,
+            "code" => Self::Code,
+            "node" => Self::Node,
+            _ => return None,
+        })
+    }
+}
+
 impl ParamDef {
+    /// This parameter's kind. A type that names none reads as text — the
+    /// row stays editable and its value survives — but a shipped template
+    /// cannot carry one (see [`ParamKind`]).
+    pub fn kind(&self) -> ParamKind {
+        ParamKind::parse(&self.param_type).unwrap_or(ParamKind::Text)
+    }
+
     /// Whether a value that READS as a reference should become an
     /// expression here. Not for a code parameter: a kernel or a wrangle
     /// script is a program, and one whose whole text happens to be
     /// `ch("../a/Radius")` is a one-line program, not a channel — flagging
     /// it would evaluate the script to a number before it ever ran.
     pub fn takes_expressions(&self) -> bool {
-        !(self.param_type == "code" || self.name == "Code")
+        !(self.kind() == ParamKind::Code || self.name == "Code")
     }
+}
+
+/// Every parameter in `node`'s tree whose type names no [`ParamKind`], as
+/// `(path, parameter, type)`. Empty for a well-formed template.
+pub fn unknown_param_kinds(node: &FsNode) -> Vec<(String, String, String)> {
+    fn walk(node: &FsNode, path: &str, out: &mut Vec<(String, String, String)>) {
+        for p in &node.params {
+            if ParamKind::parse(&p.param_type).is_none() {
+                out.push((path.to_string(), p.name.clone(), p.param_type.clone()));
+            }
+        }
+        for c in &node.children {
+            walk(c, &format!("{path}/{}", c.name), out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(node, &node.name, &mut out);
+    out
 }
 
 fn default_param_type() -> String { "string".to_string() }
@@ -612,6 +701,7 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
     // simply is not reported and keeps whatever value it had.
     params.iter().filter(|p| param_visible(params, &p.show_when)).map(|p| {
         let key = if p.label.is_empty() { &p.name } else { &p.label };
+        let kind = p.kind();
         let value = if p.param_type == "choice" && !p.options.is_empty() && p.default.is_empty() {
             p.options[0].clone()
         } else {
@@ -621,6 +711,11 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
         // it is: a slider cannot hold it, and a spinbox would show zero and
         // then write zero back over it.
         let ptype = if p.expr {
+            "text".to_string()
+        } else if matches!(kind, ParamKind::Text | ParamKind::Float | ParamKind::Node) {
+            // The pane has no numeric-text or node-picker row; both are a
+            // text box there. `string` (an absent type) is one too — the
+            // pane does not know that word and would draw nothing.
             "text".to_string()
         } else if p.param_type == "slider" {
             let min = p.min.unwrap_or(0.0);
@@ -1053,6 +1148,18 @@ pub fn load_fs_tree() -> FsNode {
         for path in paths {
             match fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<FsNode>(&content) {
+                    // A type that names no kind is dropped like a parse
+                    // error, and for the same reason: loaded, the row would
+                    // read as text and look like it worked.
+                    Ok(node) if !unknown_param_kinds(&node).is_empty() => eprintln!(
+                        "cce-designer: dropping node template {} — unknown parameter type: {}",
+                        path.display(),
+                        unknown_param_kinds(&node)
+                            .iter()
+                            .map(|(at, name, ty)| format!("{at} '{name}' is \"{ty}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                     Ok(mut node) => {
                         infer_template_exprs(&mut node);
                         raw_nodes.push(node);
@@ -3400,11 +3507,11 @@ impl State {
                                 if !p.expr && p.takes_expressions() && crate::expr::looks_like_expression(&p.default) {
                                     p.expr = true;
                                 }
-                                if p.param_type == "button" && p.default == "clicked" {
+                                if p.kind() == ParamKind::Button && p.default == "clicked" {
                                     triggered_buttons.push(p.name.clone());
                                     p.default = "".to_string();
                                 }
-                                if p.param_type == "toggle" {
+                                if p.kind() == ParamKind::Toggle {
                                     let desired = p.default == "true";
                                     let cur = match p.name.as_str() {
                                         "Show Network Pane" => Some(cur_show.0),
@@ -3869,7 +3976,7 @@ impl State {
         &mut self,
         mut params: Vec<(String, String, String)>,
     ) -> Vec<(String, String, String)> {
-        let (node_type, input_name) = {
+        let (node_type, node_id) = {
             if self.is_detached_network {
                 return params;
             }
@@ -3880,12 +3987,9 @@ impl State {
             if nt != "attribute" && nt != "group" && nt != "relax" {
                 return params;
             }
-            (nt, node_param_str(node, "Input", ""))
+            (nt, node.id.clone())
         };
-        if input_name.is_empty() {
-            return params;
-        }
-        let (groups, attrs) = self.input_pick_lists(&input_name);
+        let (groups, attrs) = self.input_pick_lists(&node_id);
         for row in params.iter_mut() {
             let list = match (node_type.as_str(), row.0.as_str()) {
                 ("attribute", "Attribute Name") => &attrs,
@@ -3901,12 +4005,20 @@ impl State {
         params
     }
 
-    /// The (groups, attributes) present on `input_name`'s evaluated geometry,
-    /// cached on (name, geometry version). Attribute names get the Pos/Col
-    /// built-ins appended (the Attribute node can Modify them); names carrying
-    /// a comma are dropped — they cannot ride the type spec-string.
-    fn input_pick_lists(&mut self, input_name: &str) -> (Vec<String>, Vec<String>) {
-        let key = (input_name.to_string(), self.rt_geometry_version);
+    /// The (groups, attributes) present on the evaluated geometry of node
+    /// `node_id`'s Input, cached on (input node id, geometry version) —
+    /// both empty when the Input is unconnected or names nothing. The input
+    /// resolves sibling-first like the wire itself (`geometry::param_node`);
+    /// a whole-tree search by name offered the groups of a same-named node in
+    /// some other subnet. Attribute names get the Pos/Col built-ins appended
+    /// (the Attribute node can Modify them); names carrying a comma are
+    /// dropped — they cannot ride the type spec-string.
+    fn input_pick_lists(&mut self, node_id: &str) -> (Vec<String>, Vec<String>) {
+        let input_id = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+            .and_then(|n| crate::geometry::param_node(&self.fs_root, n, "Input"))
+            .map(|n| n.id.clone());
+        let Some(input_id) = input_id else { return (Vec::new(), Vec::new()) };
+        let key = (input_id.clone(), self.rt_geometry_version);
         if let Some((k, lists)) = &self.pick_cache {
             if *k == key {
                 return lists.clone();
@@ -3918,7 +4030,7 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            if let Some(input_node) = find_node_by_name(&self.fs_root, input_name) {
+            if let Some(input_node) = crate::viewer_state::find_node_by_id(&self.fs_root, &input_id) {
                 let mut visited = Vec::new();
                 let mut err = None;
                 if let Some(geom) = generate_single_node_geometry_with_errors(
@@ -4514,11 +4626,14 @@ impl State {
                 // number — by the TARGET, since that is what the value has
                 // to fit: a choice pasted onto a switch's Index wants the
                 // option's index, pasted onto a text row its name.
-                let target_type = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+                let target_kind = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
                     .and_then(|n| n.params.iter().find(|p| p.name == pname))
-                    .map(|p| p.param_type.clone())
-                    .unwrap_or_default();
-                let func = if target_type == "text" || target_type == "string" || target_type.starts_with("choice") { "chs" } else { "ch" };
+                    .map(|p| p.kind())
+                    .unwrap_or(ParamKind::Text);
+                let func = match target_kind {
+                    ParamKind::Text | ParamKind::Node | ParamKind::Choice | ParamKind::Code => "chs",
+                    _ => "ch",
+                };
                 let full = if path.is_empty() { src_p.clone() } else { format!("{path}/{src_p}") };
                 let value = format!("{func}(\"{full}\")");
                 if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)

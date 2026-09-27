@@ -3942,6 +3942,176 @@ mod tests {
     /// KERNEL SUBNET saved while Sphere was one becomes the native node with
     /// its values intact and its children gone, and non-template lookalikes
     /// are left alone.
+    /// Phase 0 of typed parameters: a `type` string names a [`ParamKind`],
+    /// read by its head, and anything else is refused rather than read as
+    /// text and left to look like it worked.
+    #[test]
+    fn param_kinds_parse_by_their_head() {
+        use crate::app::ParamKind as K;
+        for (ty, kind) in [
+            ("text", K::Text), ("string", K::Text), ("float", K::Float),
+            ("slider", K::Slider), ("slider:-2:2", K::Slider), ("spinbox", K::Spin),
+            ("float3", K::Float3), ("choice:UV,Icosphere,Cube", K::Choice),
+            ("toggle", K::Toggle), ("button", K::Button), ("code", K::Code), ("node", K::Node),
+        ] {
+            assert_eq!(K::parse(ty), Some(kind), "{ty}");
+        }
+        for bad in ["int", "slidr", "textpick:a,b", "", "Text"] {
+            assert_eq!(K::parse(bad), None, "{bad:?} names no kind");
+        }
+        for name in K::NAMES {
+            assert!(K::parse(name).is_some(), "NAMES lists {name}, which does not parse");
+        }
+        // Found anywhere in a template's tree, children included.
+        let mut t = crate::app::load_fs_tree().children.into_iter().find(|t| t.name == "Embryo").unwrap();
+        assert!(crate::app::unknown_param_kinds(&t).is_empty());
+        t.children[0].params.push(crate::app::ParamDef {
+            name: "Count".into(), label: String::new(), param_type: "int".into(), default: "1".into(),
+            options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
+        });
+        let bad = crate::app::unknown_param_kinds(&t);
+        assert_eq!(bad.len(), 1);
+        assert_eq!((bad[0].1.as_str(), bad[0].2.as_str()), ("Count", "int"));
+    }
+
+    /// Every shipped template's every parameter names a kind — walked from
+    /// the RAW files, because the loader drops a template that does not, and
+    /// a dropped template shows up only as a missing palette entry.
+    #[test]
+    fn every_shipped_template_param_has_a_known_kind() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("nodes");
+        let mut files = 0;
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            files += 1;
+            let node: FsNode = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let bad = crate::app::unknown_param_kinds(&node);
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+        assert_eq!(crate::app::load_fs_tree().children.len(), files, "the loader dropped a template");
+    }
+
+    /// Phase 1: every parameter that names another node is a `node`, and
+    /// the numbers and vectors that shipped as `text` are what they hold.
+    /// By TEMPLATE, not by name: Visualize's From and To are numbers where
+    /// Transfer's From and Copy's To are wires.
+    #[test]
+    fn template_params_carry_the_kind_they_hold() {
+        use crate::app::ParamKind as K;
+        let root = crate::app::load_fs_tree();
+        let kind = |ty: &str, name: &str| {
+            root.children.iter().find(|t| t.node_type == ty)
+                .and_then(|t| t.params.iter().find(|p| p.name == name))
+                .unwrap_or_else(|| panic!("{ty} has no {name}"))
+                .kind()
+        };
+        for (ty, name) in [
+            ("switch", "Input 2"), ("switch", "Input 3"), ("switch", "Input 4"),
+            ("boolean", "With"), ("collision", "Collider"), ("relax", "Rest"),
+            ("suture", "Against"), ("copy", "To"), ("distance", "To"), ("transfer", "From"),
+        ] {
+            assert_eq!(kind(ty, name), K::Node, "{ty}'s {name}");
+        }
+        for (ty, name) in [("grid", "Center"), ("polygon", "Center"), ("soft_transform", "Center"), ("soft_transform", "Translation")] {
+            assert_eq!(kind(ty, name), K::Float3, "{ty}'s {name}");
+        }
+        for (ty, name) in [("cull", "Threshold"), ("group", "Threshold"), ("copy", "Scale"), ("visualize", "From"), ("visualize", "To")] {
+            assert_eq!(kind(ty, name), K::Float, "{ty}'s {name}");
+        }
+        // Every template's Input is a wire, top level and composed children alike.
+        fn inputs(n: &FsNode, out: &mut Vec<(String, crate::app::ParamKind)>) {
+            for p in n.params.iter().filter(|p| p.name == "Input") {
+                out.push((n.name.clone(), p.kind()));
+            }
+            n.children.iter().for_each(|c| inputs(c, out));
+        }
+        let mut all = Vec::new();
+        root.children.iter().for_each(|t| inputs(t, &mut all));
+        assert!(all.len() > 40);
+        let not_node: Vec<_> = all.iter().filter(|(_, k)| *k != K::Node).collect();
+        assert!(not_node.is_empty(), "{not_node:?}");
+    }
+
+    /// A save made before phase 1 carries `"type": "text"` on its wires; the
+    /// template merge hands it the template's kind, as it does all UI
+    /// metadata, and leaves the value alone.
+    #[test]
+    fn a_saved_text_wire_loads_as_a_node_wire() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let mut relax = templates_root.children.iter().find(|t| t.node_type == "relax").unwrap().clone();
+        for p in relax.params.iter_mut().filter(|p| p.name == "Input" || p.name == "Rest") {
+            p.param_type = "text".into();
+            p.default = "sphere1".into();
+        }
+        let mut root = FsNode { children: vec![relax], ..templates_root.clone() };
+        crate::app::merge_template_defs(&mut root, &templates);
+        for name in ["Input", "Rest"] {
+            let p = root.children[0].params.iter().find(|p| p.name == name).unwrap();
+            assert_eq!(p.kind(), crate::app::ParamKind::Node, "{name}");
+            assert_eq!(p.default, "sphere1", "the value is the instance's");
+        }
+    }
+
+    /// The pane has no node or numeric-text row: both show as text, and so
+    /// does `string` (an absent type), which the pane would otherwise not
+    /// recognise at all.
+    #[test]
+    fn node_and_float_rows_show_as_text() {
+        use crate::app::ParamDef;
+        let row = |ty: &str| ParamDef {
+            name: "X".into(), label: String::new(), param_type: ty.into(), default: "1".into(),
+            options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
+        };
+        let shown = crate::app::param_display(&[row("node"), row("float"), row("string"), row("toggle")]);
+        let types: Vec<&str> = shown.iter().map(|r| r.2.as_str()).collect();
+        assert_eq!(types, vec!["text", "text", "text", "toggle"]);
+    }
+
+    /// Phase 2's toggle reader: the words a toggle can hold, in any case,
+    /// and the FALLBACK for anything else — where `== "true"` and
+    /// `!= "false"` used to disagree about garbage.
+    #[test]
+    fn node_param_bool_reads_a_toggle_and_falls_back_on_anything_else() {
+        use crate::geometry::node_param_bool;
+        let node = |v: &str| FsNode {
+            params: vec![crate::app::ParamDef {
+                name: "On".into(), label: String::new(), param_type: "toggle".into(), default: v.into(),
+                options: vec![], min: None, max: None, step: None, show_when: String::new(), expr: false,
+            }],
+            ..crate::app::load_fs_tree()
+        };
+        for v in ["true", "TRUE", " True ", "1", "on"] {
+            assert!(node_param_bool(&node(v), "On", false), "{v:?}");
+        }
+        for v in ["false", "False", "0", "off"] {
+            assert!(!node_param_bool(&node(v), "On", true), "{v:?}");
+        }
+        for v in ["", "yes please", "2"] {
+            assert!(node_param_bool(&node(v), "On", true) && !node_param_bool(&node(v), "On", false), "{v:?}");
+        }
+        assert!(node_param_bool(&node("true"), "Missing", true) && !node_param_bool(&node("true"), "Missing", false));
+    }
+
+    /// MCP's add_param refuses a type that names no kind, and says which do.
+    #[test]
+    fn add_param_refuses_an_unknown_type() {
+        let mut state = State::new(false);
+        let mut redraw = false;
+        let before = state.current_dir().children[0].params.len();
+        let err = state
+            .apply_action(crate::app::McpAction::AddParam { slot: 0, name: "N".into(), param_type: "int".into(), default: "1".into() }, &mut redraw)
+            .unwrap_err();
+        assert!(err.contains("int") && err.contains("spinbox"), "{err}");
+        assert_eq!(state.current_dir().children[0].params.len(), before);
+        state
+            .apply_action(crate::app::McpAction::AddParam { slot: 0, name: "N".into(), param_type: "spinbox".into(), default: "1".into() }, &mut redraw)
+            .expect("a known kind is added");
+    }
+
     #[test]
     fn test_loader_merges_new_template_params() {
         let templates_root = crate::app::load_fs_tree();

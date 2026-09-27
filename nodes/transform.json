@@ -4,7 +4,7 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "text" },
+    { "name": "Input", "default": "", "type": "node" },
     { "name": "Translation", "default": "0.00:0.00:0.00", "type": "float3", "min": -10.0, "max": 10.0 }
   ]
 }

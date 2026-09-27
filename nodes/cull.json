@@ -4,11 +4,11 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "text", "default": "" },
+  { "name": "Input", "type": "node", "default": "" },
   { "name": "Group", "type": "text", "default": "" },
   { "name": "Attribute", "type": "text", "default": "" },
   { "name": "Comparison", "type": "choice:Below,Above", "default": "Below" },
-  { "name": "Threshold", "type": "text", "default": "0.50" },
+  { "name": "Threshold", "type": "float", "default": "0.50" },
   { "name": "Invert", "type": "choice:false,true", "default": "false" }
  ]
 }

@@ -4,6 +4,6 @@
   "inputs": 1,
   "outputs": 0,
   "params": [
-    { "name": "Input", "default": "", "type": "text" }
+    { "name": "Input", "default": "", "type": "node" }
   ]
 }

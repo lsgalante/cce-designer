@@ -17,7 +17,7 @@
 
 use crate::app::FsNode;
 use crate::detail::{AttribData, Detail, CD, DEFAULT_COLOR};
-use crate::geometry::{node_param_f32, node_param_str, node_param_vec3, point_normals, sphere_detail};
+use crate::geometry::{node_param_bool, node_param_f32, node_param_str, node_param_vec3, point_normals, sphere_detail};
 use glam::Vec3;
 use std::collections::HashMap;
 
@@ -92,7 +92,7 @@ pub fn sphere_node_detail(target: &FsNode, legacy_center: Option<Vec3>) -> Detai
             node_param_f32(target, "Center Z", 0.0),
         )
     });
-    let colored = node_param_str(target, "Color", "true") != "false";
+    let colored = node_param_bool(target, "Color", true);
     let unit = match method.as_str() {
         "icosphere" => icosphere_unit(node_param_f32(target, "Frequency", 4.0).round().clamp(1.0, 16.0) as usize),
         "cube" => cube_sphere_unit(node_param_f32(target, "Resolution", 8.0).round().clamp(1.0, 64.0) as usize),
@@ -262,7 +262,7 @@ pub fn cuboid_detail(center: Vec3, half: Vec3, color: [f32; 3]) -> Detail {
 /// what the kernel drew and what a reference frame wants.
 pub fn box_node_detail(target: &FsNode) -> Detail {
     let scale = node_param_f32(target, "Scale", 1.0).max(1e-4);
-    let wireframe = node_param_str(target, "Wireframe", "false") != "false";
+    let wireframe = node_param_bool(target, "Wireframe", false);
     let center = node_param_vec3(target, "Center", Vec3::new(0.0, 0.55, 0.0));
     let color = [0.8, 0.2, 0.2];
     let h = 0.5 * scale;
@@ -304,7 +304,7 @@ pub fn plane_node_detail(target: &FsNode) -> Detail {
         node_param_f32(target, "Center Y", 0.0),
         node_param_f32(target, "Center Z", 0.0),
     );
-    let colored = node_param_str(target, "Color", "true") != "false";
+    let colored = node_param_bool(target, "Color", true);
 
     let mut d = Detail::new();
     let mut cds = Vec::with_capacity((rows + 1) * (cols + 1));

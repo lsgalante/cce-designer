@@ -7,7 +7,7 @@
     {
       "name": "Input",
       "default": "",
-      "type": "text"
+      "type": "node"
     },
     {
       "name": "Distance",

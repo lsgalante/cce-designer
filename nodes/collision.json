@@ -4,8 +4,8 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "text" },
-    { "name": "Collider", "default": "", "type": "text" },
+    { "name": "Input", "default": "", "type": "node" },
+    { "name": "Collider", "default": "", "type": "node" },
     {
       "name": "Method",
       "type": "choice:Inside,Proximity",

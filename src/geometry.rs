@@ -539,6 +539,38 @@ pub fn node_param_vec3(node: &FsNode, name: &str, fallback: Vec3) -> Vec3 {
         .unwrap_or(fallback)
 }
 
+/// A toggle's value. `true` / `false` in any case — and `1` / `0`, `on` /
+/// `off`, which a hand-edited file or an expression may leave — else
+/// `fallback`: absent, empty and unparseable all mean "the default", where
+/// the hand-rolled `== "true"` and `!= "false"` this replaced disagreed about
+/// garbage depending on which way round each site had been written.
+pub fn node_param_bool(node: &FsNode, name: &str, fallback: bool) -> bool {
+    let Some(p) = node.params.iter().find(|p| p.name.eq_ignore_ascii_case(name)) else {
+        return fallback;
+    };
+    match p.default.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "on" => true,
+        "false" | "0" | "off" => false,
+        _ => fallback,
+    }
+}
+
+/// The node NAME a reference parameter holds (an `Input` wire, a Boolean's
+/// `With`, a Relax's `Rest`), trimmed — `None` when it is unconnected,
+/// absent or empty alike.
+pub fn node_param_node(node: &FsNode, name: &str) -> Option<String> {
+    let v = node_param_str(node, name, "");
+    let v = v.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// The node `target`'s reference parameter `name` points at, resolved the
+/// way every wire is ([`find_input_node`]: a sibling first, then anywhere).
+/// `None` when the parameter is unconnected or names nothing.
+pub fn param_node<'a>(root: &'a FsNode, target: &FsNode, name: &str) -> Option<&'a FsNode> {
+    find_input_node(root, target, &node_param_node(target, name)?)
+}
+
 pub fn find_node_by_name<'a>(root: &'a FsNode, name: &str) -> Option<&'a FsNode> {
     fn visit<'a>(node: &'a FsNode, name: &str) -> Option<&'a FsNode> {
         if node.name == name {
@@ -623,8 +655,7 @@ pub fn choice_options(p: &ParamDef) -> Vec<String> {
 /// anyway, so every choice read as 0 from inside a kernel.
 pub fn param_number(p: &ParamDef) -> f32 {
     let raw = p.default.trim();
-    let is_choice = p.param_type == "choice" || p.param_type.starts_with("choice:");
-    if is_choice {
+    if p.kind() == crate::app::ParamKind::Choice {
         choice_options(p).iter().position(|o| o.eq_ignore_ascii_case(raw)).map_or(0.0, |i| i as f32)
     } else {
         number_of_str(raw)
@@ -802,11 +833,12 @@ impl<'a> crate::expr::Scope for TreeScope<'a> {
 /// toggle's `true` / `false`, a choice's option NAME (an index picks one), a
 /// spinbox's integer, anything else the value's text.
 pub fn format_for_param(v: &Value, p: &ParamDef) -> String {
-    let ty = p.param_type.as_str();
-    if ty == "toggle" {
+    use crate::app::ParamKind;
+    let kind = p.kind();
+    if kind == ParamKind::Toggle {
         return v.truthy().to_string();
     }
-    if ty == "choice" || ty.starts_with("choice:") {
+    if kind == ParamKind::Choice {
         return match v {
             Value::Num(n) => {
                 let options = choice_options(p);
@@ -820,7 +852,7 @@ pub fn format_for_param(v: &Value, p: &ParamDef) -> String {
             Value::Str(s) => s.clone(),
         };
     }
-    if ty == "spinbox" || ty.starts_with("spinbox:") {
+    if kind == ParamKind::Spin {
         if let Value::Num(n) = v {
             return crate::expr::fmt_num(n.trunc());
         }
@@ -832,8 +864,7 @@ pub fn format_for_param(v: &Value, p: &ParamDef) -> String {
 /// three expressions separated by `:` — each component its own, as
 /// Houdini's channels are — so `chf("../a/Size.x"):0:0` reads naturally.
 fn eval_param_value(scope: &mut TreeScope, p: &ParamDef) -> Result<String, String> {
-    let is_float3 = p.param_type == "float3" || p.param_type.starts_with("float3:");
-    if is_float3 {
+    if p.kind() == crate::app::ParamKind::Float3 {
         let parts: Vec<&str> = p.default.split(':').collect();
         if parts.len() == 3 {
             let mut out = Vec::with_capacity(3);
@@ -1210,23 +1241,10 @@ pub fn generate_single_node_geometry_with_errors(
             None
         }
     } else if target.node_type.eq_ignore_ascii_case("output") {
-        let input_name = node_param_str(target, "Input", "");
-        if input_name.is_empty() {
-            None
-        } else {
-            let parent_node = find_parent_node(root, &target.id);
-            let input_node = if let Some(parent) = parent_node {
-                parent.children.iter().find(|c| c.name == input_name || c.id == input_name)
-            } else {
-                None
-            };
-            let input_node = input_node.or_else(|| find_input_node(root, target, &input_name));
-            if let Some(node) = input_node {
-                generate_single_node_geometry_with_errors(root, node, visited, ocl_error, sim)
-            } else {
-                None
-            }
-        }
+        // Sibling-first, then anywhere — `find_input_node`'s own rule,
+        // which this arm spelled out by hand before that function existed.
+        param_node(root, target, "Input")
+            .and_then(|node| generate_single_node_geometry_with_errors(root, node, visited, ocl_error, sim))
     } else if target.node_type.eq_ignore_ascii_case("input") {
         if let Some(parent) = find_parent_node(root, &target.id) {
             // Inside a simnet that is mid-solve, the input IS the previous
@@ -1241,16 +1259,9 @@ pub fn generate_single_node_geometry_with_errors(
             // Input may itself be a reference.
             let resolved_parent = resolve_param_refs(root, parent, sim.frame, ocl_error);
             let parent = resolved_parent.as_ref().unwrap_or(parent);
-            let input_name = node_param_str(parent, "Input", "");
-            if !input_name.is_empty() {
-                if let Some(input_node) = find_input_node(root, target, &input_name) {
-                    generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            node_param_node(parent, "Input")
+                .and_then(|name| find_input_node(root, target, &name))
+                .and_then(|input_node| generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim))
         } else {
             None
         }
@@ -1276,11 +1287,7 @@ pub fn resolve_transform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let translation = node_param_vec3(target, "Translation", Vec3::ZERO).to_array();
     // Moving points changes no topology, so the cache rides along.
@@ -1339,19 +1346,15 @@ pub fn resolve_group_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let group_name = node_param_str(target, "Group Name", "group1").trim().to_string();
     let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
     let center = node_param_vec3(target, "Center", Vec3::ZERO);
     let half = node_param_vec3(target, "Size", Vec3::ONE) * 0.5;
-    let invert = node_param_str(target, "Invert", "false") == "true";
-    let highlight = node_param_str(target, "Highlight", "true") == "true";
+    let invert = node_param_bool(target, "Invert", false);
+    let highlight = node_param_bool(target, "Highlight", true);
 
     let inside = |p: Vec3| -> bool {
         (p.x - center.x).abs() <= half.x
@@ -1628,19 +1631,13 @@ pub fn resolve_collision_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let collider_name = node_param_str(target, "Collider", "");
-    let collider_name = collider_name.trim();
-    if collider_name.is_empty() {
-        return Some(geom);
-    }
-    let Some(collider_node) = find_node_by_name(root, collider_name) else { return Some(geom) };
+    // Sibling-first like every other wire: this was a whole-tree
+    // `find_node_by_name`, so inside a second copy of a subnet it found the
+    // first copy's collider.
+    let Some(collider_node) = param_node(root, target, "Collider") else { return Some(geom) };
     let Some(collider) = generate_single_node_geometry_with_errors(root, collider_node, visited, ocl_error, sim) else {
         return Some(geom);
     };
@@ -1667,7 +1664,7 @@ pub fn resolve_collision_geometry_with_errors(
     // per-element closure `select_elements` takes would have asked one
     // point at a time. Edges test both endpoints, as before.
     let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
-    let invert = node_param_str(target, "Invert", "false") == "true";
+    let invert = node_param_bool(target, "Invert", false);
     let queries: Vec<Vec3> = if etype == "primitives" {
         (0..geom.num_prims())
             .map(|prim| {
@@ -1729,7 +1726,7 @@ pub fn resolve_collision_geometry_with_errors(
     }
 
     let group_name = node_param_str(target, "Group Name", "collisions").trim().to_string();
-    let highlight = node_param_str(target, "Highlight", "true") == "true";
+    let highlight = node_param_bool(target, "Highlight", true);
     apply_group(
         &mut geom,
         &group_name,
@@ -1767,11 +1764,7 @@ pub fn resolve_relax_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     // Repel mode: the Relax SOP — spheres of Radius pushed apart until they
@@ -1783,7 +1776,7 @@ pub fn resolve_relax_geometry_with_errors(
         if iterations == 0 || radius <= 0.0 || geom.num_points() < 2 {
             return Some(geom);
         }
-        let in_3d = node_param_str(target, "In 3D Space", "false") == "true";
+        let in_3d = node_param_bool(target, "In 3D Space", false);
         let normals = if in_3d { None } else { Some(point_normals(&geom)) };
         let mut pts: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
         crate::scatter::relax_points(&mut pts, normals.as_deref(), radius, iterations);
@@ -1793,12 +1786,9 @@ pub fn resolve_relax_geometry_with_errors(
         return Some(geom);
     }
 
-    let rest_name = node_param_str(target, "Rest", "");
-    let rest_name = rest_name.trim();
-    if rest_name.is_empty() {
-        return Some(geom);
-    }
-    let Some(rest_node) = find_node_by_name(root, rest_name) else { return Some(geom) };
+    // Sibling-first, as the collider is: a simnet's `Rest: input1` has to
+    // be ITS input1, not the first one in the tree.
+    let Some(rest_node) = param_node(root, target, "Rest") else { return Some(geom) };
     let Some(rest) = generate_single_node_geometry_with_errors(root, rest_node, visited, ocl_error, sim) else {
         return Some(geom);
     };
@@ -1868,13 +1858,13 @@ pub fn resolve_normal_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let name = node_param_str(target, "Attribute", "N").trim().to_string();
     if name.is_empty() {
         return Some(geom);
     }
-    let flip = node_param_str(target, "Flip", "false") == "true";
+    let flip = node_param_bool(target, "Flip", false);
     let sign = if flip { -1.0 } else { 1.0 };
     let normals: Vec<[f32; 3]> = point_normals(&geom).iter().map(|n| (*n * sign).to_array()).collect();
     geom.points_mut().create(&name, AttribValue::Float3([0.0; 3]));
@@ -1895,7 +1885,7 @@ pub fn resolve_bounds_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let prefix = node_param_str(target, "Prefix", "bounds").trim().to_string();
@@ -1947,11 +1937,10 @@ pub fn resolve_distance_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let to_name = node_param_str(target, "To", "");
-    let to_name = to_name.trim().to_string();
+    let to_name = node_param_node(target, "To").unwrap_or_default();
     let Some(other) = find_input_node(root, target, &to_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -1964,7 +1953,7 @@ pub fn resolve_distance_geometry_with_errors(
     let name = node_param_str(target, "Attribute", "dist").trim().to_string();
     let dir_name = node_param_str(target, "Direction", "");
     let dir_name = dir_name.trim().to_string();
-    let signed = node_param_str(target, "Signed", "false") == "true";
+    let signed = node_param_bool(target, "Signed", false);
     // Zero means no clamp: a maximum is for keeping a falloff bounded, and a
     // node whose default quietly flattened every measurement to zero would be
     // a trap.
@@ -2028,7 +2017,7 @@ pub fn resolve_connectivity_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_connectivity(&mut geom, target);
     Some(geom)
@@ -2097,7 +2086,7 @@ pub fn resolve_cull_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let group = node_param_str(target, "Group", "");
@@ -2119,7 +2108,7 @@ pub fn resolve_cull_geometry_with_errors(
 
     let below = node_param_str(target, "Comparison", "Below").eq_ignore_ascii_case("below");
     let threshold = node_param_f32(target, "Threshold", 0.5);
-    let invert = node_param_str(target, "Invert", "false") == "true";
+    let invert = node_param_bool(target, "Invert", false);
 
     let selected: Vec<bool> = (0..geom.num_points())
         .map(|p| {
@@ -2157,7 +2146,7 @@ pub fn resolve_volume_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     if geom.num_prims() == 0 {
         return Some(geom);
@@ -2214,11 +2203,10 @@ pub fn resolve_boolean_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let a = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let with_name = node_param_str(target, "With", "");
-    let with_name = with_name.trim().to_string();
+    let with_name = node_param_node(target, "With").unwrap_or_default();
     let Some(b) = find_input_node(root, target, &with_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -2257,7 +2245,7 @@ pub fn resolve_mold_shell_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let shell = crate::mold::mold_shell(
         &input,
@@ -2283,7 +2271,7 @@ pub fn resolve_hull_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let pts: Vec<Vec3> = (0..input.num_points()).map(|i| input.pos(i)).collect();
     Some(crate::hull::convex_hull(&pts).unwrap_or(input))
@@ -2305,8 +2293,7 @@ pub fn resolve_wrangle_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    let input = match find_input_node(root, target, &input_name) {
+    let input = match param_node(root, target, "Input") {
         Some(n) => generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim).unwrap_or_default(),
         None => Detail::new(),
     };
@@ -2346,10 +2333,10 @@ pub fn resolve_extrude_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let distance = node_param_f32(target, "Distance", 0.2);
-    let keep_base = node_param_str(target, "Keep Base", "true") != "false";
+    let keep_base = node_param_bool(target, "Keep Base", true);
     Some(crate::shapes::extrude_detail(&input, distance, keep_base))
 }
 
@@ -2368,7 +2355,7 @@ pub fn retired_opencl_node(
     if ocl_error.is_none() {
         *ocl_error = Some(format!("{}: OpenCL nodes are retired; rewrite the kernel as a wrangle", target.name));
     }
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
 }
 
@@ -2396,8 +2383,7 @@ pub fn resolve_switch_geometry_with_errors(
     sim: &mut EvalSim,
 ) -> Option<Detail> {
     let index = (node_param_f32(target, "Index", 0.0).round().max(0.0) as usize).min(SWITCH_INPUTS - 1);
-    let name = node_param_str(target, &switch_input_param(index), "");
-    let input_node = find_input_node(root, target, &name)?;
+    let input_node = param_node(root, target, &switch_input_param(index))?;
     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
 }
 
@@ -2415,7 +2401,7 @@ pub fn resolve_export_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
 }
 
@@ -2482,7 +2468,7 @@ pub fn polygon_detail(target: &FsNode) -> Detail {
     let sides = node_param_f32(target, "Sides", 4.0).clamp(3.0, 256.0) as usize;
     let radius = node_param_f32(target, "Radius", 0.5).max(1e-4);
     let inner = node_param_f32(target, "Inner Radius", 0.0).max(0.0);
-    let fill = node_param_str(target, "Fill", "true") != "false";
+    let fill = node_param_bool(target, "Fill", true);
     let centre = node_param_vec3(target, "Center", Vec3::ZERO);
 
     let mut d = Detail::new();
@@ -2535,11 +2521,10 @@ pub fn resolve_transfer_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let from_name = node_param_str(target, "From", "");
-    let from_name = from_name.trim().to_string();
+    let from_name = node_param_node(target, "From").unwrap_or_default();
     let Some(source) = find_input_node(root, target, &from_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -2615,7 +2600,7 @@ pub fn resolve_valence_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let name = node_param_str(target, "Attribute", "valence").trim().to_string();
     if name.is_empty() {
@@ -2652,7 +2637,7 @@ pub fn resolve_deform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_deform(&mut geom, target);
     Some(geom)
@@ -2737,11 +2722,10 @@ pub fn resolve_copy_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let source_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let source_node = param_node(root, target, "Input")?;
     let source = generate_single_node_geometry_with_errors(root, source_node, visited, ocl_error, sim)?;
 
-    let to_name = node_param_str(target, "To", "");
-    let to_name = to_name.trim().to_string();
+    let to_name = node_param_node(target, "To").unwrap_or_default();
     let Some(onto) = find_input_node(root, target, &to_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -2825,7 +2809,7 @@ pub fn resolve_soft_transform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = find_input_node(root, target, &node_param_str(target, "Input", ""))?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_soft_transform(&mut geom, target);
     Some(geom)
@@ -2901,11 +2885,7 @@ pub fn resolve_subdivide_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let depth = node_param_f32(target, "Depth", 1.0).clamp(0.0, 6.0) as usize;
     Some(crate::remesh::subdivide(&geom, depth))
@@ -2932,11 +2912,7 @@ pub fn resolve_detangle_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_detangle(&mut geom, target);
     Some(geom)
@@ -3061,21 +3037,11 @@ pub fn resolve_suture_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let against_name = node_param_str(target, "Against", "");
-    let against_name = against_name.trim().to_string();
-    let against = if against_name.is_empty() {
-        None
-    } else {
-        find_input_node(root, target, &against_name)
-            .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
-    };
+    let against = param_node(root, target, "Against")
+        .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim));
     apply_suture(&mut geom, against.as_ref(), target);
     Some(geom)
 }
@@ -3178,11 +3144,7 @@ pub fn resolve_remesh_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     Some(crate::remesh::remesh(&geom, remesh_settings(target)))
 }
@@ -3192,10 +3154,10 @@ pub(crate) fn remesh_settings(target: &FsNode) -> crate::remesh::Settings {
         target: node_param_f32(target, "Target Length", 0.1).max(1e-4),
         iterations: node_param_f32(target, "Iterations", 3.0).clamp(1.0, 20.0) as usize,
         relax: node_param_f32(target, "Relax", 0.5),
-        split: node_param_str(target, "Split", "true") == "true",
-        collapse: node_param_str(target, "Collapse", "true") == "true",
-        flip: node_param_str(target, "Flip", "true") == "true",
-        project: node_param_str(target, "Project", "true") == "true",
+        split: node_param_bool(target, "Split", true),
+        collapse: node_param_bool(target, "Collapse", true),
+        flip: node_param_bool(target, "Flip", true),
+        project: node_param_bool(target, "Project", true),
     }
 }
 
@@ -3222,11 +3184,7 @@ pub fn resolve_develop_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_develop(&mut geom, target, ocl_error);
     Some(geom)
@@ -3378,11 +3336,7 @@ pub fn moves_points(node: &FsNode) -> bool {
 /// node was rewired onto something that adds or removes points) give nothing,
 /// since the indices no longer pair up.
 pub fn point_displacements(root: &FsNode, target: &FsNode, sim: &mut EvalSim) -> Vec<(Vec3, Vec3)> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.trim().is_empty() {
-        return Vec::new();
-    }
-    let Some(input_node) = find_input_node(root, target, &input_name) else {
+    let Some(input_node) = param_node(root, target, "Input") else {
         return Vec::new();
     };
     let mut ocl_error = None;
@@ -3499,11 +3453,7 @@ pub fn resolve_visualize_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_visualize(&mut geom, target, ocl_error);
     Some(geom)
@@ -3623,11 +3573,7 @@ pub fn resolve_analysis_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_analysis(&mut geom, target, ocl_error);
     Some(geom)
@@ -3715,11 +3661,7 @@ pub fn resolve_time_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let frame = sim.frame;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_time(&mut geom, target, frame);
@@ -3741,7 +3683,7 @@ pub(crate) fn apply_time(geom: &mut Detail, target: &FsNode, frame: i32) {
     } else {
         (frame as f32 - start) / span
     };
-    let t = if node_param_str(target, "Clamp", "true") == "true" {
+    let t = if node_param_bool(target, "Clamp", true) {
         t.clamp(0.0, 1.0)
     } else {
         t
@@ -3828,11 +3770,7 @@ pub fn resolve_neighbour_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_neighbour(&mut geom, target, ocl_error);
     Some(geom)
@@ -4298,11 +4236,7 @@ pub fn resolve_attribute_geometry_with_errors(
     // pushes the target's id before dispatching to this resolver, so a local
     // `visited.contains` check would see it and refuse every call (the trap
     // that broke this node's first draft).
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_attribute(&mut geom, target, ocl_error);
     Some(geom)
@@ -4689,18 +4623,14 @@ pub fn resolve_scatter_geometry_with_errors(
     // geometry evaluated to None for the spreadsheet and for any downstream
     // consumer, while the scene walk's direct call (fresh `visited`) kept the
     // node LOOKING healthy. Cycles stay guarded by the dispatch itself.
-    let input_name = node_param_str(target, "Input", "");
-    if input_name.is_empty() {
-        return None;
-    }
-    let input_node = find_input_node(root, target, &input_name)?;
+    let input_node = param_node(root, target, "Input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     let num_points = node_param_f32(target, "Points", 100.0) as usize;
     let radius = node_param_f32(target, "Radius", 0.02);
     // See points_detail: markers are for looking at, bare points are for
     // working with.
-    let markers = node_param_str(target, "Markers", "true") != "false";
+    let markers = node_param_bool(target, "Markers", true);
 
     // Surface mode: points ON the surface, by area, optionally pushed apart
     // across it — the Scatter SOP with Relax Points, which is what a seed
@@ -4709,11 +4639,11 @@ pub fn resolve_scatter_geometry_with_errors(
     if node_param_str(target, "Mode", "Volume").eq_ignore_ascii_case("surface") {
         let seed = node_param_f32(target, "Seed", 1.1);
         let mut pts = crate::scatter::scatter_on_surface(&geom, num_points, seed);
-        let relax = node_param_str(target, "Relax Points", "false") == "true";
+        let relax = node_param_bool(target, "Relax Points", false);
         let iterations = node_param_f32(target, "Relax Iterations", 50.0).max(0.0) as usize;
         if relax && iterations > 0 && !pts.is_empty() {
             let scale = node_param_f32(target, "Scale Radii By", 1.248);
-            let max = (node_param_str(target, "Use Max Relax Radius", "true") == "true")
+            let max = (node_param_bool(target, "Use Max Relax Radius", true))
                 .then(|| node_param_f32(target, "Max Relax Radius", 10.0));
             let r = crate::scatter::relax_radius(&geom, pts.len(), scale, max);
             let grid = crate::spatial::TriGrid::build(&geom);
@@ -5377,7 +5307,7 @@ pub fn points_detail(node: &FsNode, center: Vec3) -> Detail {
     // looking at and wrong for working with: Copy placed one instance per
     // marker vertex rather than one per location, because the markers were the
     // only points there were.
-    let markers = node_param_str(node, "Markers", "true") != "false";
+    let markers = node_param_bool(node, "Markers", true);
     let mut d = Detail::new();
     for i in 0..num_points {
         let t = i as f32 / num_points.max(1) as f32;
@@ -6478,14 +6408,9 @@ pub fn resolve_simnet_geometry_with_errors(
         .clone();
 
     let seed = {
-        let input_name = node_param_str(target, "Input", "");
-        if input_name.is_empty() {
-            Detail::new()
-        } else {
-            find_input_node(root, target, &input_name)
-                .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
-                .unwrap_or_default()
-        }
+        param_node(root, target, "Input")
+            .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+            .unwrap_or_default()
     };
 
     let key = sim_solve_key(target, &seed);
@@ -6502,7 +6427,7 @@ pub fn resolve_simnet_geometry_with_errors(
     let cached = sim.cache.entries.get(&target.id).and_then(|prev| {
         (prev.key == key && prev.frame <= due).then(|| (prev.state.clone(), prev.frame))
     });
-    let caching = node_param_str(target, "Cache", "false") == "true";
+    let caching = node_param_bool(target, "Cache", false);
     // What the last step consumed, carried with the solve so the interior
     // view can be drawn without re-solving: resumed from the cache when the
     // cache is what we resume from, the seed otherwise.
@@ -8719,5 +8644,40 @@ mod simnet_tests {
         for (a, b) in &moved {
             assert!((*b - *a - Vec3::X).length() < 1e-5);
         }
+    }
+
+    /// A Relax's `Rest` wire resolves to its OWN sibling. It was a
+    /// whole-tree search by name, so in the second of two subnets that each
+    /// hold a `shape`, Rest found the first one's — here a sphere of half
+    /// the radius, whose shorter edges the relax then pulled the second
+    /// sphere toward. Rest equal to the input is a relax with nothing to do.
+    #[test]
+    fn a_rest_wire_resolves_to_its_own_sibling() {
+        let small = node("id-a-shape", "shape", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let a = node("id-a", "a", "node", vec![], vec![small]);
+        let big = node("id-b-shape", "shape", "sphere", vec![param("Radius", "1.0")], vec![]);
+        let relax = node(
+            "id-b-relax",
+            "relax1",
+            "relax",
+            vec![
+                param("Input", "shape"),
+                param("Rest", "shape"),
+                param("Stiffness", "1.00"),
+                param("Iterations", "8"),
+            ],
+            vec![],
+        );
+        let b = node("id-b", "b", "node", vec![], vec![big, relax]);
+        let root = node("id-root", "root", "node", vec![], vec![a, b]);
+        let relax = &root.children[1].children[1];
+
+        assert_eq!(param_node(&root, relax, "Rest").map(|n| n.id.as_str()), Some("id-b-shape"));
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(1, 1, &mut cache);
+        let input = generate_single_node_geometry_with_errors(&root, &root.children[1].children[0], &mut Vec::new(), &mut None, &mut sim).unwrap();
+        let out = generate_single_node_geometry_with_errors(&root, relax, &mut Vec::new(), &mut None, &mut sim).unwrap();
+        let moved = (0..out.num_points()).map(|p| out.pos(p).distance(input.pos(p))).fold(0.0f32, f32::max);
+        assert!(moved < 1e-5, "relax against its own input moved a point {moved}");
     }
 }

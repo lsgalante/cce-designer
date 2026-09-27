@@ -6,7 +6,7 @@
   "params": [
     {
       "name": "Input",
-      "type": "text",
+      "type": "node",
       "default": ""
     },
     {

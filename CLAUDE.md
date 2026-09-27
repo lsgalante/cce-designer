@@ -475,6 +475,47 @@ diagnosis is in the git history of this section (commit `8fd0c29`) if the
 pattern ever recurs with another driver: a `read` returning EBADF on a file
 nothing is wrong with, in a process that has loaded a vendor ICD.
 
+### Parameter kinds
+
+A `ParamDef`'s `type` string names a `ParamKind` (`app.rs`) —
+`ParamKind::parse` reads the head before the first `:` (`slider:-2:2` is a
+Slider, `choice:A,B` a Choice; `string`, what an absent type deserializes to,
+is Text). `ParamDef::kind()` is the one place the string is interpreted;
+`param_display`, `format_for_param`, `param_number`, the float3 expression
+split, Paste Reference's `ch`/`chs` choice and the pane write-back all
+dispatch on it. The VALUE is still the `default` string — kinds are phases
+0–2 of the typed-value migration, and storage (phase 3) has not moved.
+
+- **A type naming no kind is refused**, not read as text: `load_fs_tree`
+  drops the template with a message (as it does an unparseable one), MCP's
+  `add_param` returns an error listing `ParamKind::NAMES`, and
+  `every_shipped_template_param_has_a_known_kind` walks the raw files.
+  `kind()` itself still falls back to Text so a hand-edited save stays
+  editable.
+- **`node` is a wire**: every `Input`, Switch's `Input 2`–`4`, Boolean's
+  `With`, Collision's `Collider`, Relax's `Rest`, Suture's `Against`, Copy's
+  and Distance's `To`, Transfer's `From`. Read them with `node_param_node`
+  (trimmed, `None` when unconnected) or resolve them with `param_node`,
+  never by hand. By template, not by name: Visualize's `From`/`To` are
+  numbers.
+- **`float` is a number with no range.** The pane's slider and float3 rows
+  hold a FRACTION of their range and clamp to it, so a threshold, a scale
+  factor or a manual ramp end cannot be a slider without losing values
+  outside it. `param_display` shows `float` and `node` as text rows — cce-ui
+  is shared and has neither, and the conversion stays at this app's edge.
+- **Toggles read through `node_param_bool`**: `true`/`1`/`on` and
+  `false`/`0`/`off` in any case, else the fallback. The sites it replaced
+  mixed `== "true"` and `!= "false"`, which disagreed about garbage.
+- **Choices are still read as option TEXT** (`eq_ignore_ascii_case`), not
+  by index. Matching text survives a template reordering its options; an
+  index would silently change meaning. Expressions, which need a number,
+  already get the index through `param_number`.
+
+Saved projects need no migration for any of this: `merge_template_defs`
+hands every instance its template's type along with the rest of the UI
+metadata, so an old save's `"type": "text"` wire loads as `node`
+(`a_saved_text_wire_loads_as_a_node_wire`).
+
 ### Conditional parameter rows
 
 A `ParamDef` may carry `show_when`, a condition over its SIBLINGS' current
@@ -636,8 +677,13 @@ way — both in `src/geometry.rs`:
   anywhere.** Every resolver used to search the whole tree from the top, so
   inside the second instance of a subnet a child wired to "input1" found the
   first instance's; the opencl and output resolvers had each grown a
-  sibling-first lookup of their own to dodge exactly that. All 39 lookups go
-  through it now.
+  sibling-first lookup of their own to dodge exactly that. Every wire goes
+  through it now, most as `param_node(root, target, "Input")` (see
+  "Parameter kinds"). That was claimed on 2026-09-21 and was not quite
+  true until 2026-09-26: Collision's `Collider`, Relax's `Rest`, the page
+  chain's `Input` and the params pane's group/attribute pickers still
+  searched the whole tree by name, so in a second copy of a subnet they
+  found the first copy's node (`a_rest_wire_resolves_to_its_own_sibling`).
 - **`switch`** passes one of `Input`, `Input 2` … `Input 4` by `Index`,
   clamped; an empty slot passes nothing. Only `Input` draws a wire, the
   limit every second operand has (Boolean's With, Copy's target).

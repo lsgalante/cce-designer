@@ -4,7 +4,7 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "text" },
+    { "name": "Input", "default": "", "type": "node" },
     { "name": "Class", "type": "choice:Points,Primitives,Detail", "default": "Points" },
     { "name": "Group", "default": "", "type": "text" },
     {

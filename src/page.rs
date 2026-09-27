@@ -380,7 +380,7 @@ impl Page {
 // ---------------------------------------------------------------------------
 
 use crate::app::FsNode;
-use crate::geometry::{find_node_by_name, node_param_f32, node_param_str, node_param_vec3};
+use crate::geometry::{node_param_f32, node_param_str, node_param_vec3};
 use glam::Vec3;
 
 /// Whether a node belongs to the page context rather than the geometry graph.
@@ -418,7 +418,7 @@ fn color_of(node: &FsNode, name: &str, fallback: Vec3) -> [f32; 4] {
 }
 
 fn toggle_of(node: &FsNode, name: &str) -> bool {
-    matches!(node_param_str(node, name, "false").trim().to_ascii_lowercase().as_str(), "true" | "1" | "on")
+    crate::geometry::node_param_bool(node, name, false)
 }
 
 /// Compose the page `target` describes, resolving its input chain.
@@ -455,7 +455,9 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
     // the honest answer: a border with no page is not a page with a border —
     // and it is also how an Export node in a GEOMETRY chain falls through to
     // the geometry resolvers rather than being claimed by this one.
-    let input = find_node_by_name(root, node_param_str(target, "Input", "").trim())?;
+    // Sibling-first like every geometry wire; a whole-tree search by name
+    // found the first same-named page node anywhere.
+    let input = crate::geometry::param_node(root, target, "Input")?;
     let mut page = resolve_page(root, input, visited)?;
 
     match kind.as_str() {
