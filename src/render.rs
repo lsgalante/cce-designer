@@ -284,26 +284,17 @@ impl State {
             // rows. A subtree painter, so append_frame_text skips the slot and
             // the chord column keeps its own font and bounds.
             //
-            // The plate is `append_widget_plate`'s, drawn here rather than by
-            // it because that helper builds its material from the fill alone
-            // and the dialog wants its own backdrop compression
-            // (`State::dialog_compression`) — the node bodies' override, for
-            // the same reason: the one knob that differs from the panes.
+            // The plate is THE MENU PLATE — `context_menu::paint_menu_plate`,
+            // the one function the context menus draw theirs with: the
+            // `style.surface.menu` material, radius and roll. Drawn here
+            // rather than through `append_widget_plate` because that helper
+            // builds a pane's material from its fill, and the dialog is not
+            // a pane; it is a menu that happens to have a query line. Not in
+            // a popup surface, so the in-app frost pass compresses its
+            // backdrop as the config says rather than folding that into
+            // opacity as the hosted menus must.
             let (x, y, ww, h) = w.rect();
-            let r = rect(x, y, ww, h);
-            let cr = w.corner_radii();
-            let radii = (cr.top_left, cr.top_right, cr.bottom_right, cr.bottom_left);
-            let mat = crate::dialog::plate_material(self.dialog_compression);
-            match w.solid_border() {
-                Some(_) if cce_ui::layout::control_relief() => {
-                    pc.bevel(r, radii, &mat, cce_ui::colors::plate_bevel_width());
-                }
-                Some((border, thickness)) => {
-                    pc.fill_material(r, radii, &mat);
-                    pc.border(r, radii, [0.0; 4], border, thickness);
-                }
-                None => pc.fill_material(r, radii, &mat),
-            }
+            cce_ui::widget::context_menu::paint_menu_plate(pc, rect(x, y, ww, h), false);
             w.paint_self(&self.ui_context, pc);
         } else if idx == PLAYBAR_IDX {
             // Modern-paint pane: the plate from the legacy views like the other

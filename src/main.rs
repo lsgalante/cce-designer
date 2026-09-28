@@ -2384,23 +2384,27 @@ mod tests {
         context_menu::hide();
     }
 
-    /// The dialog plate carries its own backdrop compression, above a
-    /// menu's: whatever the plates' own is (0 in a config that keeps the
-    /// panes clear), the modal pulls its backdrop toward the tint, and a
-    /// value out of range is clamped rather than overshooting.
+    /// The dialog plate IS the menu plate: its fill is `Material::menu`'s
+    /// and its corners are the menu radius, so the command palette and a
+    /// right-click menu read one config block (`style.surface.menu`) and
+    /// the app carries no compression, colour or radius of its own for it.
+    /// The source scan is the backstop: a `dialog/compression` reader or a
+    /// `DIALOG_COMPRESSION` constant coming back would be an override the
+    /// menus do not share.
     #[test]
-    fn the_dialog_plate_compresses_its_backdrop_harder_than_a_menu() {
-        use cce_ui::scene::Frost;
-        assert!(crate::dialog::DIALOG_COMPRESSION > cce_ui::color::menu_compression().min(0.6));
-        for (asked, want) in [(0.8, 0.8), (1.7, 1.0), (-0.2, 0.0)] {
-            match crate::dialog::plate_material(asked).frost {
-                Frost::Frosted { compression, .. } => assert!((compression - want).abs() < 1e-6, "{asked} -> {compression}"),
-                // Blur off: nothing behind the plate to compress.
-                Frost::Opaque => {}
-            }
+    fn the_dialog_plate_is_the_menu_plate() {
+        use cce_ui::widget::model::Paint;
+        let dialog = crate::dialog::Dialog::new();
+        let menu = cce_ui::scene::Material::menu().fill(cce_ui::scene::PlateRole::Nested);
+        assert_eq!(dialog.color(), menu);
+        assert!(dialog.solid_border().is_none(), "a menu has no border");
+        let r = cce_ui::layout::menu_corner_radius();
+        let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
+        assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
+        for file in ["src/dialog.rs", "src/render.rs", "src/app.rs"] {
+            let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
+            assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
         }
-        let state = State::new(false);
-        assert!((0.0..=1.0).contains(&state.dialog_compression));
     }
 
     /// Ctrl+Up rewinds: a moving timeline stops and the playhead lands on

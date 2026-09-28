@@ -1908,15 +1908,25 @@ sees one (`input.kdl`'s `cce-window-manager` domain has `super+d` on the app
 launcher), and Super held is the DE's window-adjust modifier besides. Alt is the
 app's own — the `move_*` family already lives there.
 
-**The dialog plate compresses its backdrop harder than anything else**
-(`State::dialog_compression`, `style.surface.dialog.compression` in
-config.kdl, default `DIALOG_COMPRESSION` 0.8 against a menu's 0.6). The
-plate's own compression can be 0 — a config that keeps the panes clear —
-and at that value the rows sat on the full-contrast scene and network. The
-render arm paints the plate itself with `dialog::plate_material` rather
-than through `append_widget_plate`, whose material comes from the fill alone,
-exactly as the node bodies do for `node_compression`. Opaque plates (blur
-off) have no backdrop and ignore it.
+**The dialog plate IS the menu plate** (since 2026-09-28). The render arm
+draws it with `cce_ui::widget::context_menu::paint_menu_plate`, the one
+function the context menus draw theirs with: `Material::menu` — the
+`style.surface.menu` block's `color` (a cce-ui key added the same day;
+absent, the root plate colour as menus always wore), `opacity` and
+`compression` — on `menu.corner_radius` with the relief-width roll. So
+the command palette, the Add Node list and every right-click menu are
+configured in ONE block and cannot be configured apart; the designer's
+per-app config.kdl sets that block to the look the dialog had
+(`#101018` at 0.06, compression 0.8, radius 24). Until then the dialog
+was the parameter plate's fill under a compression of its own
+(`DIALOG_COMPRESSION` 0.8, `style.surface.dialog.compression`) — an
+in-app override the menus did not share, and the reason the two plates
+looked nothing alike. `the_dialog_plate_is_the_menu_plate` scans the
+source for that override coming back. The one difference left is
+mechanical: the menus are hosted in the runner's popup surface, where the
+compositor's blur cannot compress and the helper folds `compression` into
+opacity, while the dialog is in-window and the in-app frost pass
+compresses as configured.
 
 **The dialog is painted after the overlay passes, not in the widget walk.** A
 high `z_order` is not enough: `append_frame_text`, `append_scale_readout` and the
