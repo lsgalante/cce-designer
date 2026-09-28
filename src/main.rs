@@ -10964,14 +10964,33 @@ mod tests {
         assert!((state.geo_opacity - 1.0).abs() < 1e-6, "clamped");
         assert_eq!(state.rt_geometry_version, version);
 
-        // Point Size re-sizes the group markers from their kept members,
-        // and a spin row still takes the full regenerate pass.
+        // Point Size re-sizes the group markers from their kept members.
         state.land_dialog_slider(&setting_row_id("Point Size"), 0.05);
         assert!((state.point_size - 0.05).abs() < 1e-6);
         assert!((state.last_group_marker_size - state.group_marker_size()).abs() < 1e-6);
         assert_eq!(state.rt_geometry_version, version);
+
+        // The spin rows land the same way: a whole number over the row's
+        // unit, re-baking only the guide mesh that reads it.
+        state.pending_grid = None;
+        state.pending_origin = None;
+        state.pending_pivot = None;
         state.land_dialog_slider(&setting_row_id("Grid Thickness"), 40.0);
-        assert!(state.rt_geometry_version > version, "a spin row regenerates");
+        assert!((state.grid_thickness - 0.04).abs() < 1e-6, "{}", state.grid_thickness);
+        assert!(state.pending_grid.is_some(), "the grid re-baked");
+        state.land_dialog_slider(&setting_row_id("Origin Size"), 25.0);
+        assert!((state.origin_size - 2.5).abs() < 1e-6, "{}", state.origin_size);
+        assert!(state.pending_origin.is_some(), "the origin re-baked");
+        state.land_dialog_slider(&setting_row_id("Point Marker Size"), 50.0);
+        assert!((state.point_marker_size - 0.05).abs() < 1e-6, "{}", state.point_marker_size);
+        state.land_dialog_slider(&setting_row_id("Camera Pivot Size"), 20.0);
+        assert!((state.camera_pivot_size - 2.0).abs() < 1e-6, "{}", state.camera_pivot_size);
+        assert!(state.pending_pivot.is_some(), "the pivot re-baked");
+        assert_eq!(state.rt_geometry_version, version, "a spin row re-evaluated the graph");
+        assert!((saved(&path) - 1.0).abs() < 1e-3, "the file follows every single landing");
+        let kdl = fs::read_to_string(&path).expect("a settings file");
+        let back = crate::app::DesignSettings::from_kdl_str(&kdl).viewport;
+        assert!((back.grid_thickness - 0.04).abs() < 1e-6 && (back.origin_size - 2.5).abs() < 1e-6, "{kdl}");
     }
 
     /// A right press is the dialog's while it is open: inside the plate it is

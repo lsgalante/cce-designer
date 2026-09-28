@@ -4791,9 +4791,11 @@ impl State {
 
     /// Land a DRAW-TIME display setting by its `DesignSettings` field key —
     /// the one landing behind the viewport menu's sliders AND the dialog's
-    /// (`land_dialog_slider`), so the two cannot disagree about a clamp or
-    /// about which marker mesh a size feeds. Returns false for a key that is
-    /// not one of these, which the dialog takes as "run the full apply".
+    /// slider and spin rows (`land_dialog_slider`), so the two cannot
+    /// disagree about a clamp or about which mesh a size feeds. The three
+    /// guide sizes re-bake their own small mesh (a grid, three axes, a
+    /// pivot) and nothing else. Returns false for a key that is not one of
+    /// these, which the dialog takes as "run the full apply".
     ///
     /// Until 2026-09-28 the dialog's sliders went through `apply_setting` on
     /// every motion of a drag: a whole graph evaluation, a second one for
@@ -4821,6 +4823,16 @@ impl State {
             "pull_arrow_scale" => {
                 self.pull_arrow_scale = v.clamp(0.25, 10.0);
                 self.rebuild_pull_arrow_verts();
+            }
+            // The spin rows' ranges, in world units (the rows read in
+            // thousandths and tenths).
+            "grid_thickness" => {
+                self.grid_thickness = v.clamp(0.002, 0.2);
+                self.update_grid_geometry();
+            }
+            "origin_size" => {
+                self.origin_size = v.clamp(0.1, 5.0);
+                self.update_origin_geometry();
             }
             _ => return false,
         }

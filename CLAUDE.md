@@ -1933,8 +1933,9 @@ selection stays where it was:
   params pane's pickers), a path-tracer restart and a synchronous file
   write, per pointer event, for six values the graph never reads — which
   is what made the dialog's sliders drag behind the pointer while the
-  menu's did not. A row the landing does not know (a spin row) still
-  takes the full apply, whose regenerate it needs;
+  menu's did not. The spin rows (Grid Thickness, Origin Size, Point
+  Marker Size, Camera Pivot Size) land the same way, their whole number
+  over the row's unit, each re-baking only the guide mesh that reads it;
   `a_dialog_slider_drag_lands_without_re_evaluating_the_graph` pins all
   of it. The **zoom row**
   (`ZOOM_ROW_ID`, only while the network pane is focused, since zoom is that

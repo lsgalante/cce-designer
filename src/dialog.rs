@@ -2082,30 +2082,42 @@ impl State {
     /// A slider row's value arriving from a drag, a wheel or an arrow: the
     /// zoom row zooms, a setting row writes its setting.
     ///
-    /// A slider row is a draw-time value, so it lands through the viewport
-    /// menu's own `land_draw_time_setting` — the field, the one mesh it
-    /// feeds, a redraw — and the row re-reads in place. During a drag this
-    /// runs on every motion, so state.kdl is written on the RELEASE
-    /// (`dialog_mouse_input`) rather than here; a wheel notch or an arrow
-    /// key is a single landing and saves at once, as the menu's wheel does.
-    /// A row the landing does not know falls through to `apply_setting`,
-    /// whose full regenerate pass is what a spin row like Grid Thickness
-    /// needs.
+    /// A slider or spin row is a draw-time value, so it lands through the
+    /// viewport menu's own `land_draw_time_setting` — the field, the one
+    /// mesh it feeds, a redraw — and the row re-reads in place. During a
+    /// drag this runs on every motion, so state.kdl is written on the
+    /// RELEASE (`dialog_mouse_input`) rather than here; a wheel notch or an
+    /// arrow key is a single landing and saves at once, as the menu's wheel
+    /// does. A spin row lands its whole number over the row's unit; the
+    /// Camera Pivot Size row, whose owner is the active camera, writes as
+    /// `setting_write` always has and re-bakes the pivot. A row the landing
+    /// does not know falls through to `apply_setting`.
     pub(crate) fn land_dialog_slider(&mut self, id: &str, v: f32) {
         if id == ZOOM_ROW_ID {
             self.set_zoom_percent(v);
         } else if let Some(s) = setting_of_row(id) {
-            if let (Owner::Field(key), Ctl::Slider { dec, .. }) = (s.owner, s.ctl) {
-                // Rounded as the row shows it, so the field holds the value
-                // the readout names rather than the pointer's raw fraction.
-                let shown: f32 = format!("{:.*}", dec, v).parse().unwrap_or(v);
-                if self.land_draw_time_setting(key, shown) {
-                    self.refresh_dialog_controls();
-                    if !self.slots.dialog.slider_dragging() {
-                        self.save_settings();
-                    }
-                    return;
+            let landed = match (s.owner, s.ctl) {
+                (Owner::Field(key), Ctl::Slider { dec, .. }) => {
+                    // Rounded as the row shows it, so the field holds the
+                    // value the readout names rather than the pointer's raw
+                    // fraction.
+                    let shown: f32 = format!("{:.*}", dec, v).parse().unwrap_or(v);
+                    self.land_draw_time_setting(key, shown)
                 }
+                (Owner::Field(key), Ctl::Spin { unit, .. }) => self.land_draw_time_setting(key, v.round() / unit),
+                (Owner::ActiveCamera(_), Ctl::Spin { .. }) => {
+                    self.setting_write(s, &(v.round() as i64).to_string());
+                    self.update_pivot_geometry();
+                    true
+                }
+                _ => false,
+            };
+            if landed {
+                self.refresh_dialog_controls();
+                if !self.slots.dialog.slider_dragging() {
+                    self.save_settings();
+                }
+                return;
             }
             let value = match s.ctl {
                 Ctl::Slider { dec, .. } => format!("{:.*}", dec, v),
