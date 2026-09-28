@@ -12669,4 +12669,45 @@ mod tests {
         assert_eq!(state.code_error_line_for_pane("sphere1: something (line 2, position 1)"), None, "another node's error is not this pane's");
         assert_eq!(state.code_error_line_for_pane("w: OpenCL nodes are retired"), None, "no line, no flag");
     }
+
+    /// A trackpad swipe over a spinbox row of the params pane steps the row
+    /// — 60 px of finger travel per step, the widget's notch — and the
+    /// node's value follows through the wheel's write-back. Until
+    /// 2026-09-28 the pane claimed every finger gesture for its own scroll,
+    /// so on a trackpad the -/+ buttons were the only pointer way to step a
+    /// Rows or Columns value; a mouse notch stepped it all along.
+    #[test]
+    fn a_trackpad_swipe_over_a_spinbox_row_steps_it() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{scroll_motion::set_scroll_phase, MouseScrollDelta, Position, ScrollPhase};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").expect("sphere1");
+        state.graph_mut().set_selected_node(Some(sphere));
+        state.sync_parameters_pane();
+        state.rebuild_positions();
+        state.apply_layout();
+        let rows = crate::app::param_display(&state.current_dir().children[sphere].params);
+        let i = rows.iter().position(|r| r.0 == "Rows").expect("a Rows row");
+        assert!(rows[i].2.starts_with("spinbox"), "{:?}", rows[i]);
+        let (x, y, w, h) = state.param_row_rects()[i];
+        let value = |state: &State| crate::geometry::node_param_f32(&state.current_dir().children[sphere], "Rows", -1.0);
+        let before = value(&state);
+
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (x + w * 0.3) as f64, y: (y + h * 0.5) as f64 } });
+        set_scroll_phase(ScrollPhase::Finger);
+        state.ui_context.scroll_gesture_new = true;
+        state.ui_context.scroll_initiate_widget_id = None;
+        assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 60.0 }) }));
+        set_scroll_phase(ScrollPhase::Wheel);
+        assert_eq!(value(&state), before + 1.0, "one notch of finger travel is one step, written to the node");
+
+        // A mouse notch on the same row, as before.
+        assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -1.0) }));
+        assert_eq!(value(&state), before);
+    }
 }
