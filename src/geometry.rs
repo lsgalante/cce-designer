@@ -1,5 +1,4 @@
 use crate::app::{FsNode, ParamDef};
-use std::collections::HashMap;
 use glam::Vec3;
 use crate::detail::{AttribData, AttribValue, Detail, CD};
 
@@ -23,43 +22,6 @@ impl SimpleRng {
     
     fn next_f32(&mut self) -> f32 {
         (self.next_u32() as f32) / (u32::MAX as f32)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GAttribute {
-    Float(f32),
-    Float2([f32; 2]),
-    Float3([f32; 3]),
-    Float4([f32; 4]),
-}
-
-#[derive(Clone, Debug)]
-pub struct GVertex {
-    pub pos: [f32; 3],
-    pub col: [f32; 3],
-    pub attributes: HashMap<String, GAttribute>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Geometry {
-    pub vertices: Vec<GVertex>,
-}
-
-impl Geometry {
-    pub fn new() -> Self {
-        Geometry { vertices: Vec::new() }
-    }
-
-    pub fn merge(&mut self, other: Geometry) {
-        self.vertices.extend(other.vertices);
-    }
-
-    pub fn to_vertex3d_vec(&self) -> Vec<Vertex3D> {
-        self.vertices.iter().map(|v| Vertex3D {
-            position: v.pos,
-            color: v.col,
-        }).collect()
     }
 }
 
@@ -185,64 +147,6 @@ pub fn smooth_lit_vertices(d: &Detail) -> Vec<Vertex3D> {
     out
 }
 
-/// Fan-triangulate a [`Detail`] back into the triangle soup the evaluation
-/// pipeline still speaks, carrying attributes onto every corner.
-///
-/// **This is the migration bridge, and it is meant to die.** Generators build
-/// real geometry now; the resolvers, the spreadsheet and the kernel launcher
-/// have not been converted yet, so each generator's public entry point still
-/// hands them a soup. When the pipeline's currency becomes `Detail`, this
-/// function and the adapters calling it go with it.
-///
-/// Point and vertex attributes both land on the corner, vertex winning a name
-/// clash — a vertex attribute is by definition the more specific answer for
-/// that corner. `Cd` is dropped from the attribute map because the soup keeps
-/// color in its own field. Integers widen to floats, the soup's `GAttribute`
-/// having no integer case; nothing round-trips back through here, so the
-/// narrowing is one-way and harmless.
-pub fn detail_to_soup(d: &Detail) -> Geometry {
-    let point_attrs: Vec<&str> = d.points().names().into_iter().filter(|n| *n != CD).collect();
-    let vert_attrs = d.verts().names();
-
-    let mut vertices = Vec::new();
-    for prim in 0..d.num_prims() {
-        let verts = d.prim_verts(prim);
-        let pts = d.prim_points(prim);
-        if pts.len() < 3 {
-            continue;
-        }
-        for i in 1..pts.len() - 1 {
-            for corner in [0, i, i + 1] {
-                let p = pts[corner] as usize;
-                let v = verts.start + corner;
-                let mut attributes = HashMap::new();
-                for name in &point_attrs {
-                    if let Some(val) = d.points().value(name, p) {
-                        attributes.insert(name.to_string(), soup_attr(val));
-                    }
-                }
-                for name in &vert_attrs {
-                    if let Some(val) = d.verts().value(name, v) {
-                        attributes.insert(name.to_string(), soup_attr(val));
-                    }
-                }
-                vertices.push(GVertex { pos: d.positions()[p], col: d.color(p), attributes });
-            }
-        }
-    }
-    Geometry { vertices }
-}
-
-fn soup_attr(v: AttribValue) -> GAttribute {
-    match v {
-        AttribValue::Float(x) => GAttribute::Float(x),
-        AttribValue::Float2(x) => GAttribute::Float2(x),
-        AttribValue::Float3(x) => GAttribute::Float3(x),
-        AttribValue::Float4(x) => GAttribute::Float4(x),
-        AttribValue::Int(x) => GAttribute::Float(x as f32),
-    }
-}
-
 /// A UV sphere as shared points and quads.
 ///
 /// The poles are ONE point each, not a ring of coincident copies, and the
@@ -329,14 +233,6 @@ pub fn sphere_detail(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usi
     d
 }
 
-pub fn sphere_vertices_res(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usize) -> Geometry {
-    detail_to_soup(&sphere_detail(center, radius, lat_steps, lon_steps))
-}
-
-pub fn sphere_vertices(center: Vec3, radius: f32) -> Geometry {
-    sphere_vertices_res(center, radius, 16, 24)
-}
-
 fn sphere_point(center: Vec3, radius: f32, theta: f32, phi: f32) -> Vec3 {
     center + Vec3::new(
         radius * theta.sin() * phi.cos(),
@@ -414,10 +310,6 @@ pub fn box_detail(start: Vec3, end: Vec3, thickness: f32) -> Detail {
     d
 }
 
-pub fn line_vertices(start: Vec3, end: Vec3, thickness: f32) -> Geometry {
-    detail_to_soup(&box_detail(start, end, thickness))
-}
-
 /// Parse a curve node's "Points" param: control points as `x y z` triples
 /// separated by `;`. Commas are accepted alongside whitespace inside a
 /// triple; chunks that don't yield exactly three numbers are skipped, so a
@@ -482,7 +374,7 @@ pub fn sample_catmull_rom(pts: &[Vec3], segs: usize) -> Vec<Vec3> {
 }
 
 /// The native `curve` node: a Catmull-Rom strip through the "Points" param,
-/// each sampled span an oriented box via [`line_vertices`]. Points are
+/// each sampled span an oriented box via [`box_detail`]. Points are
 /// absolute world coordinates — deliberately not offset by the grid index
 /// the other primitives use, because the curve viewer state edits them in
 /// world space.
@@ -502,10 +394,6 @@ pub fn curve_detail(node: &FsNode) -> Detail {
         d.merge(&box_detail(w[0], w[1], thickness));
     }
     d
-}
-
-pub fn curve_geometry(node: &FsNode) -> Geometry {
-    detail_to_soup(&curve_detail(node))
 }
 
 fn find_param<'a>(node: &'a FsNode, name: &str) -> Option<&'a ParamDef> {
@@ -5287,14 +5175,6 @@ pub fn network_sphere_vertices_with_errors(
     out
 }
 
-/// The Points node's cloud (type "points", nee "add"): `Points` markers
-/// arranged by the `Shape` param around `center`. One function for both
-/// consumers — the single-node resolver and the scene walk — so the two
-/// renderings can never drift apart.
-pub fn points_node_geometry(node: &FsNode, center: Vec3) -> Geometry {
-    detail_to_soup(&points_detail(node, center))
-}
-
 /// The Points node: a marker sphere at each generated location.
 ///
 /// Every marker stays its own piece — `merge` reallocates identities, so two
@@ -5612,36 +5492,32 @@ pub fn camera_pivot_vertices(scale: f32) -> Vec<Vertex3D> {
 pub fn grid_vertices(thickness: f32, color: [f32; 3]) -> Vec<Vertex3D> {
     let range = 4.0;
     let step = 1.0;
-    let mut geom = Geometry::new();
+    let mut verts = Vec::new();
+
+    let mut bar = |start: Vec3, end: Vec3| {
+        verts.extend(
+            detail_vertices(&box_detail(start, end, thickness))
+                .into_iter()
+                .map(|v| Vertex3D { position: v.position, color }),
+        );
+    };
 
     let mut z = -range;
     while z <= range {
-        let start = Vec3::new(-range, 0.0, z);
-        let end = Vec3::new(range, 0.0, z);
-        let mut line_geom = line_vertices(start, end, thickness);
-        for v in &mut line_geom.vertices {
-            v.col = color;
-        }
-        geom.merge(line_geom);
+        bar(Vec3::new(-range, 0.0, z), Vec3::new(range, 0.0, z));
         z += step;
     }
 
     let mut x = -range;
     while x <= range {
-        let start = Vec3::new(x, 0.0, -range);
-        let end = Vec3::new(x, 0.0, range);
-        let mut line_geom = line_vertices(start, end, thickness);
-        for v in &mut line_geom.vertices {
-            v.col = color;
-        }
-        geom.merge(line_geom);
+        bar(Vec3::new(x, 0.0, -range), Vec3::new(x, 0.0, range));
         x += step;
     }
 
-    geom.to_vertex3d_vec()
+    verts
 }
 
-/// How many soup vertices a welded UV sphere fans out to: two pole bands of
+/// How many triangle corners a welded UV sphere fans out to: two pole bands of
 /// triangles, `lat_steps - 2` bands of quads, three vertices per triangle.
 ///
 /// Spelled out because it is no longer `lat_steps * lon_steps * 6` — the two
@@ -5839,10 +5715,9 @@ mod tests {
     fn test_welded_sphere_reproduces_the_soup_it_replaced() {
         let (center, radius, lat, lon) = (Vec3::new(0.1, 0.2, 0.3), 0.7, 16, 24);
         let before = sphere_soup_before_welding(center, radius, lat, lon);
-        let after: Vec<[f32; 3]> = sphere_vertices_res(center, radius, lat, lon)
-            .vertices
+        let after: Vec<[f32; 3]> = detail_vertices(&sphere_detail(center, radius, lat, lon))
             .iter()
-            .map(|v| v.pos)
+            .map(|v| v.position)
             .collect();
 
         // Drop the triangles the old generator emitted with two corners in the
@@ -5964,14 +5839,8 @@ mod tests {
             "the faces meeting at a corner disagree: {corner_0_normals:?}"
         );
 
-        // The soup adapter still hands every corner both attributes, which is
-        // what the rest of the pipeline still reads.
-        let soup = line_vertices(Vec3::ZERO, Vec3::Y, 0.02);
-        assert_eq!(soup.vertices.len(), 36);
-        assert!(soup
-            .vertices
-            .iter()
-            .all(|v| v.attributes.contains_key("Norm") && v.attributes.contains_key("UV")));
+        // Fanned for the renderer, the six quads are twelve triangles.
+        assert_eq!(detail_vertices(&d).len(), 36);
     }
 
     #[test]
@@ -5996,7 +5865,7 @@ mod tests {
         // node has never made.
         assert_eq!(d.num_prims(), 12, "two boxes of six faces");
         assert_eq!(d.num_points(), 16, "eight corners each, nothing shared");
-        assert_eq!(detail_to_soup(&d).vertices.len(), 72);
+        assert_eq!(detail_vertices(&d).len(), 72);
 
         // Every point still has its own identity across the merge.
         let mut ids = d.ids().to_vec();
@@ -6037,21 +5906,21 @@ mod tests {
 
         // Shape "None": every point sits in the same spot, so all five marker
         // spheres cover an identical (tiny) extent. A spread shape must not.
-        let extent = |g: &Geometry| {
+        let extent = |g: &Detail| {
             let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-            for v in &g.vertices {
-                min = min.min(Vec3::from_array(v.pos));
-                max = max.max(Vec3::from_array(v.pos));
+            for &p in g.positions() {
+                min = min.min(Vec3::from_array(p));
+                max = max.max(Vec3::from_array(p));
             }
             max - min
         };
-        let none = points_node_geometry(&points_node("None"), Vec3::ZERO);
+        let none = points_detail(&points_node("None"), Vec3::ZERO);
         let e = extent(&none);
         assert!(e.length() < 0.1, "None must collapse to one spot, extent {e:?}");
 
         for shape in ["Spiral", "Line", "Circle", "Grid"] {
-            let g = points_node_geometry(&points_node(shape), Vec3::ZERO);
-            assert_eq!(g.vertices.len(), 5 * super::sphere_soup_len(6, 8), "{shape}");
+            let g = points_detail(&points_node(shape), Vec3::ZERO);
+            assert_eq!(g.num_points(), 5 * super::sphere_point_len(6, 8), "{shape}");
             assert!(
                 extent(&g).length() > 0.3,
                 "{shape} must spread its points, extent {:?}",

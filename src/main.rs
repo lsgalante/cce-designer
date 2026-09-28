@@ -134,7 +134,7 @@ mod tests {
     use crate::app::{get_next_visible_pane, DesignSettings, FsNode, Project, ProjectViewState};
     use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX};
     use crate::shortcut::{Shortcut, ShortcutManager, Action};
-    use crate::geometry::line_vertices;
+    use crate::geometry::{box_detail, detail_vertices};
     use crate::detail::{AttribData, AttribKind, AttribType, AttribValue, Class, Detail};
 
     /// The choosers open in the loaded project's parent — the "current view" —
@@ -2673,7 +2673,7 @@ mod tests {
     fn test_template_meshes_wind_ccw_outward() {
         let templates_root = crate::app::load_fs_tree();
         // Winding is a property of triangles, so this one flattens on purpose.
-        let eval_template = |name: &str| -> crate::geometry::Geometry {
+        let eval_template = |name: &str| -> Vec<crate::geometry::Vertex3D> {
             let t = templates_root
                 .children
                 .iter()
@@ -2706,12 +2706,12 @@ mod tests {
             )
             .expect("geometry");
             assert!(err.is_none(), "{name}: {err:?}");
-            crate::geometry::detail_to_soup(&g)
+            crate::geometry::detail_vertices(&g)
         };
-        let tri_cross = |g: &crate::geometry::Geometry, tri: usize| -> [f32; 3] {
-            let a = g.vertices[tri * 3].pos;
-            let b = g.vertices[tri * 3 + 1].pos;
-            let d = g.vertices[tri * 3 + 2].pos;
+        let tri_cross = |g: &[crate::geometry::Vertex3D], tri: usize| -> [f32; 3] {
+            let a = g[tri * 3].position;
+            let b = g[tri * 3 + 1].position;
+            let d = g[tri * 3 + 2].position;
             let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let e2 = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
             [
@@ -2725,19 +2725,19 @@ mod tests {
         // the mesh center) on effectively every non-degenerate triangle.
         for name in ["Sphere", "Box"] {
             let g = eval_template(name);
-            let n = g.vertices.len() as f32;
+            let n = g.len() as f32;
             let mut c = [0.0f32; 3];
-            for v in &g.vertices {
+            for v in &g {
                 for k in 0..3 {
-                    c[k] += v.pos[k] / n;
+                    c[k] += v.position[k] / n;
                 }
             }
             let (mut outward, mut total) = (0usize, 0usize);
-            for tri in 0..g.vertices.len() / 3 {
+            for tri in 0..g.len() / 3 {
                 let nrm = tri_cross(&g, tri);
-                let a = g.vertices[tri * 3].pos;
-                let b = g.vertices[tri * 3 + 1].pos;
-                let d = g.vertices[tri * 3 + 2].pos;
+                let a = g[tri * 3].position;
+                let b = g[tri * 3 + 1].position;
+                let d = g[tri * 3 + 2].position;
                 let cen = [
                     (a[0] + b[0] + d[0]) / 3.0 - c[0],
                     (a[1] + b[1] + d[1]) / 3.0 - c[1],
@@ -2762,7 +2762,7 @@ mod tests {
         // The plane's visible face is UP: the winding cross must point +Y.
         let g = eval_template("Plane");
         let (mut up, mut total) = (0usize, 0usize);
-        for tri in 0..g.vertices.len() / 3 {
+        for tri in 0..g.len() / 3 {
             let nrm = tri_cross(&g, tri);
             if nrm[1].abs() > 1e-12 {
                 total += 1;
@@ -4846,16 +4846,14 @@ mod tests {
     fn test_line_geometry_generation() {
         let start = Vec3::new(0.0, 0.0, 0.0);
         let end = Vec3::new(0.0, 1.0, 0.0);
-        let geom = line_vertices(start, end, 0.02);
-        
-        // A box line is 36 soup vertices: 6 faces * 2 triangles * 3 corners.
-        assert_eq!(geom.vertices.len(), 36);
+        let d = box_detail(start, end, 0.02);
 
-        // Every corner still carries Norm and UV through the soup adapter.
-        for v in &geom.vertices {
-            assert!(v.attributes.contains_key("Norm"));
-            assert!(v.attributes.contains_key("UV"));
-        }
+        // A box line fans to 36 renderer vertices: 6 faces * 2 triangles * 3 corners.
+        assert_eq!(detail_vertices(&d).len(), 36);
+
+        // Norm and UV ride the vertices, one per corner.
+        assert!(d.verts().has("Norm"));
+        assert!(d.verts().has("UV"));
     }
 
     /// The reference cube guide is gone, and nothing that used to carry it

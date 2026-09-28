@@ -95,9 +95,11 @@ touches none of the geometry work and can be picked up in any gap.
 > works on it, and the pipeline's currency IS a `Detail`: the spreadsheet lists
 > points, the overlays read the point and edge lists, and `weld_points` is gone.
 >
-> What remains: kernel GENERATORS still emit a corner list that welds on the
-> way back, so `detail_to_soup` / `soup_to_detail` and `geometry::Geometry`
-> survive to serve them. Deformers no longer go near a soup (see Phase 1).
+> The soup is gone (2026-09-28). It survived the phase to serve the kernel
+> GENERATORS, which emitted a corner list that welded on the way back; with
+> those native (Phase 7) nothing spoke it, and `geometry::Geometry`,
+> `detail_to_soup` and the wrappers over it were deleted. The renderer reads
+> a `Detail` through `detail_vertices` and nothing else.
 
 Replace the vertex list with **points, vertices, primitives and detail**, each
 carrying its own columnar attribute arrays — one `Vec<f32>` per named attribute
@@ -147,7 +149,8 @@ Spreadsheet, the meta overlays, `project.rs`.
 > reading its parameter names suggest — accumulate, and discharge to the
 > neighbours on crossing a threshold. Confirm or redirect it.
 >
-> Outstanding: the generator ABI, still a corner list out.
+> The generator ABI question closed with Phase 7: the generators are native
+> and the corner list is gone (see Phase 0).
 
 Widen the kernel ABI from `(in_pos, in_col, out_pos, out_col, params)` to
 **named attribute buffers bound by the node**, plus the topology arrays as

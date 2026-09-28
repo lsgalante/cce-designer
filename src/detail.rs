@@ -1,7 +1,8 @@
 //! The geometry container: points, vertices, primitives and detail.
 //!
-//! This is the Phase 0 replacement for `geometry::Geometry`, the triangle soup
-//! (`Vec<GVertex>`, attributes stored per triangle corner). See
+//! This is the Phase 0 replacement for the triangle soup the app started on
+//! (a `Vec` of corners, attributes stored per corner), gone since 2026-09-28
+//! with the kernel generators that were its last consumer. See
 //! `shapeshifter.md` for why: every attribute operator worth having is a
 //! statement about a point *and its neighbours*, and a soup has no points, no
 //! edges, and no identity that survives a frame.
