@@ -4466,7 +4466,11 @@ impl State {
     /// expression), left out for a parameter no template names. A control
     /// with a range adds `Range: lo..hi`, with its step when one is set
     /// (`ParamDef::range`, the pane's own numbers); a choice adds
-    /// `Options: a, b, c`. Around those, `Name:` heads the list — the
+    /// `Options: a, b, c`. `Expression:` is the row's expression FLAG,
+    /// `true` or `false` — the thing `ParamDef::expr` stores, which is
+    /// what Edit Expression sets and Delete Expression clears; `Value:`
+    /// already reads `expression` when it is set, and the flag row states
+    /// the bit itself. Around those, `Name:` heads the list — the
     /// parameter's name, which is what a `ch()` path and a wire spell —
     /// with `Label:` after it only when the template gives one (the pane
     /// shows the name otherwise, and a Label row repeating it would say
@@ -4486,6 +4490,7 @@ impl State {
         }
         options.push(format!("Control: {control}"));
         options.push(format!("Value: {value}"));
+        options.push(format!("Expression: {is_expr}"));
         if let Some(d) = self.template_default(dir, child, pname) {
             options.push(format!("Default: {}", d.text()));
         }

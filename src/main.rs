@@ -7756,7 +7756,7 @@ mod tests {
         assert!(!state.viewport_menu_open());
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
+            vec![ParamMenuAction::Info; 6].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
             "nothing copied yet, and the row holds a value"
         );
         // The header rows read the parameter out: its name, its control's
@@ -7767,11 +7767,11 @@ mod tests {
         // row appears.
         let shown = cce_ui::widget::context_menu::options();
         assert_eq!(
-            &shown[..6],
-            &["Name: Radius".to_string(), "Control: slider".to_string(), "Value: float".to_string(), "Default: 0.5".to_string(), "Range: 0..2".to_string(), "-".to_string()]
+            &shown[..7],
+            &["Name: Radius".to_string(), "Control: slider".to_string(), "Value: float".to_string(), "Expression: false".to_string(), "Default: 0.5".to_string(), "Range: 0..2".to_string(), "-".to_string()]
         );
         let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
-        assert_eq!(headers, 5);
+        assert_eq!(headers, 6);
         // The headers are the rows before the separator; each one is
         // looked up by its readout, not its position.
         let headers_of = |state: &State, pname: &str| -> Vec<String> {
@@ -7790,11 +7790,11 @@ mod tests {
         for want in ["Default: UV", "Options: UV, Icosphere, Cube"] {
             assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
         }
-        assert_eq!(headers_of(&state, "Color"), vec!["Name: Color", "Control: toggle", "Value: boolean", "Default: true"], "a toggle has neither a range nor options");
+        assert_eq!(headers_of(&state, "Color"), vec!["Name: Color", "Control: toggle", "Value: boolean", "Expression: false", "Default: true"], "a toggle has neither a range nor options");
         // A parameter no template names has no default row; one with a
         // label shows it under the name.
         state.apply_action(McpAction::AddParam { slot: sphere, name: "Extra".into(), param_type: "float".into(), default: "3".into() }, &mut redraw).unwrap();
-        assert_eq!(headers_of(&state, "Extra"), vec!["Name: Extra", "Control: float", "Value: float"]);
+        assert_eq!(headers_of(&state, "Extra"), vec!["Name: Extra", "Control: float", "Value: float", "Expression: false"]);
         state.current_dir_mut().children[sphere].params.iter_mut().find(|p| p.name == "Extra").unwrap().label = "Extra Size".into();
         assert_eq!(headers_of(&state, "Extra")[..2], ["Name: Extra".to_string(), "Label: Extra Size".to_string()]);
         // Inside a subnet instance the SUBNET template's override is the
@@ -7849,7 +7849,7 @@ mod tests {
         // the value is now an expression. Method is a choice holding an
         // enum, Rows a spinbox holding an integer.
         let (rows, _, _) = state.param_menu_rows(ball, "Radius");
-        assert_eq!(&rows[1..3], &["Control: slider".to_string(), "Value: expression".to_string()]);
+        assert_eq!(&rows[1..4], &["Control: slider".to_string(), "Value: expression".to_string(), "Expression: true".to_string()]);
         let (rows, _, _) = state.param_menu_rows(ball, "Method");
         assert_eq!(&rows[1..3], &["Control: choice".to_string(), "Value: enum".to_string()]);
         let (rows, _, _) = state.param_menu_rows(ball, "Rows");

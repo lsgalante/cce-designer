@@ -724,7 +724,10 @@ kind the template gave it (`ParamKind::name` — slider, float3,
 attribute…) and `Value:` what its text holds right now
 (`ParamDef::value_type` — float, integer, vec3, boolean, enum, string,
 expression, or invalid with the reason; a programmer's terms, by
-request), `Default:` the template's value as written there
+request), `Expression:` the row's expression FLAG as `true` / `false`
+(the bit Edit Expression sets and Delete Expression clears, stated on
+its own even though Value reads `expression` when it is set), `Default:`
+the template's value as written there
 (`State::template_default`, which takes a subnet template's override for
 a child inside an instance — the Embryo's `sphere1` defaults its Radius to
 `chf("../Radius")` — and is absent for a parameter no template names),
