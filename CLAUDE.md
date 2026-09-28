@@ -721,7 +721,11 @@ kind the template gave it (`ParamKind::name` — slider, float3,
 attribute…) and `Value:` what its text holds right now
 (`ParamDef::value_type` — float, integer, vec3, boolean, enum, string,
 expression, or invalid with the reason; a programmer's terms, by
-request), then `Range: lo..hi` with its step for a slider, float3 or
+request), `Default:` the template's value as written there
+(`State::template_default`, which takes a subnet template's override for
+a child inside an instance — the Embryo's `sphere1` defaults its Radius to
+`chf("../Radius")` — and is absent for a parameter no template names),
+then `Range: lo..hi` with its step for a slider, float3 or
 spinbox (`ParamDef::range`, the numbers `param_display` builds the pane's
 row from — an inline `slider:-2:2`, else the template's min/max, else
 the pane's defaults) and `Options: a, b, c` for a choice. Two lines because

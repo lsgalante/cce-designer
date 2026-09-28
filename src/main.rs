@@ -7756,26 +7756,42 @@ mod tests {
         assert!(!state.viewport_menu_open());
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
+            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
             "nothing copied yet, and the row holds a value"
         );
         // The header rows read the parameter out: its control's kind, its
-        // value's type in a programmer's terms, and the control's range.
-        // Radius is a slider holding a float, clamped to the pane's default
-        // 0..2 since the template declares no range.
+        // value's type in a programmer's terms, the template's default and
+        // the control's range. Radius is a slider holding a float, clamped
+        // to the pane's default 0..2 since the template declares no range.
         let shown = cce_ui::widget::context_menu::options();
-        assert_eq!(&shown[..4], &["Control: slider".to_string(), "Value: float".to_string(), "Range: 0..2".to_string(), "-".to_string()]);
+        assert_eq!(
+            &shown[..5],
+            &["Control: slider".to_string(), "Value: float".to_string(), "Default: 0.5".to_string(), "Range: 0..2".to_string(), "-".to_string()]
+        );
         let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
-        assert_eq!(headers, 3);
+        assert_eq!(headers, 4);
         // An inline range, a spinbox's range and step, a choice's options.
         let (rows, _, h) = state.param_menu_rows(sphere, "Center X");
-        assert_eq!((&rows[2], h), (&"Range: -2..2".to_string(), 3));
+        assert_eq!((&rows[3], h), (&"Range: -2..2".to_string(), 4));
         let (rows, _, _) = state.param_menu_rows(sphere, "Rows");
-        assert_eq!(rows[2], "Range: 2..128, step 1");
+        assert_eq!((&rows[2], &rows[3]), (&"Default: 16".to_string(), &"Range: 2..128, step 1".to_string()));
         let (rows, _, h) = state.param_menu_rows(sphere, "Method");
-        assert_eq!((&rows[2], h), (&"Options: UV, Icosphere, Cube".to_string(), 3));
+        assert_eq!((&rows[2], &rows[3], h), (&"Default: UV".to_string(), &"Options: UV, Icosphere, Cube".to_string(), 4));
         let (rows, _, h) = state.param_menu_rows(sphere, "Color");
-        assert_eq!((rows[2].as_str(), h), ("-", 2), "a toggle has neither a range nor options");
+        assert_eq!((rows[2].as_str(), rows[3].as_str(), h), ("Default: true", "-", 3), "a toggle has neither a range nor options");
+        // A parameter no template names has no default row.
+        state.apply_action(McpAction::AddParam { slot: sphere, name: "Extra".into(), param_type: "float".into(), default: "3".into() }, &mut redraw).unwrap();
+        let (rows, _, h) = state.param_menu_rows(sphere, "Extra");
+        assert_eq!((rows[2].as_str(), h), ("-", 2));
+        // Inside a subnet instance the SUBNET template's override is the
+        // default: the Embryo's sphere1 was built with an expression.
+        state.apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: Some("embryo1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
+        let embryo = slot_of(&state, "embryo1");
+        state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
+        let inner = slot_of(&state, "sphere1");
+        let (rows, _, _) = state.param_menu_rows(inner, "Radius");
+        assert_eq!(rows[2], "Default: chf(\"../Radius\")");
+        state.apply_action(McpAction::Up, &mut redraw).unwrap();
         // A click on a header runs nothing.
         state.run_param_action(&state.current_dir().children[sphere].id.clone(), "Radius", ParamMenuAction::Info);
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });

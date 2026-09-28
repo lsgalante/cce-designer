@@ -606,6 +606,32 @@ pub fn flatten_node_templates(root: &FsNode) -> Vec<NodeTemplate> {
     out
 }
 
+/// The template an instance came from: a native node by TYPE, a subnet
+/// instance by NAME with its index stripped ("sphere3" → "Sphere",
+/// case-insensitively). The one rule the template merge, and everything
+/// that asks what a node's template says (the row menu's `Default:`),
+/// resolve by.
+pub fn template_for<'a>(node: &FsNode, templates: &'a [NodeTemplate]) -> Option<&'a FsNode> {
+    if node.node_type.eq_ignore_ascii_case("node") {
+        let base = node
+            .name
+            .trim_end_matches(|c: char| c.is_ascii_digit())
+            .trim_end_matches(|c: char| c == '_' || c.is_whitespace());
+        // Case-insensitively: the template is "Sphere", its instances
+        // are "sphere1".
+        templates.iter().map(|t| &t.node).find(|t| {
+            t.node_type.eq_ignore_ascii_case("node")
+                && (t.name.eq_ignore_ascii_case(&node.name)
+                    || (!base.is_empty() && t.name.eq_ignore_ascii_case(base)))
+        })
+    } else {
+        templates.iter().map(|t| &t.node).find(|t| {
+            !t.node_type.eq_ignore_ascii_case("node")
+                && t.node_type.eq_ignore_ascii_case(&node.node_type)
+        })
+    }
+}
+
 /// Strip the per-node `meta` (preferences) children from a loaded tree.
 ///
 /// Every geometry node used to carry one, holding four display switches —
@@ -900,26 +926,6 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     }
     nativize_kernel_subnets(root, templates);
 
-    fn template_for<'a>(node: &FsNode, templates: &'a [NodeTemplate]) -> Option<&'a FsNode> {
-        if node.node_type.eq_ignore_ascii_case("node") {
-            let base = node
-                .name
-                .trim_end_matches(|c: char| c.is_ascii_digit())
-                .trim_end_matches(|c: char| c == '_' || c.is_whitespace());
-            // Case-insensitively: the template is "Sphere", its instances
-            // are "sphere1".
-            templates.iter().map(|t| &t.node).find(|t| {
-                t.node_type.eq_ignore_ascii_case("node")
-                    && (t.name.eq_ignore_ascii_case(&node.name)
-                        || (!base.is_empty() && t.name.eq_ignore_ascii_case(base)))
-            })
-        } else {
-            templates.iter().map(|t| &t.node).find(|t| {
-                !t.node_type.eq_ignore_ascii_case("node")
-                    && t.node_type.eq_ignore_ascii_case(&node.node_type)
-            })
-        }
-    }
     fn merge_params(node: &mut FsNode, template: &FsNode) {
         // A missing parameter goes where the TEMPLATE puts it — after the
         // last template parameter the instance already has — not at the
@@ -4427,6 +4433,22 @@ impl State {
         self.slots.param.as_any().downcast_ref::<ParametersBg>().map(|pb| pb.get_param_rects()).unwrap_or_default()
     }
 
+    /// What the template says `pname` on `node` defaults to, where `dir` is
+    /// the level `node` sits in. A child of a subnet instance (the Embryo's
+    /// `sphere1`) takes the SUBNET template's word for it — its override
+    /// (`chf("../Radius")`) is the default that instance was built with,
+    /// and the merge refreshes the child from there — and any other node
+    /// its own template's. `None` for a parameter no template names, such
+    /// as one added over MCP.
+    pub fn template_default(&self, dir: &FsNode, node: &FsNode, pname: &str) -> Option<&ParamDef> {
+        let from_subnet = template_for(dir, &self.node_templates)
+            .and_then(|t| t.children.iter().find(|c| c.name.eq_ignore_ascii_case(&node.name)))
+            .and_then(|c| c.params.iter().find(|p| p.name == pname));
+        from_subnet.or_else(|| {
+            template_for(node, &self.node_templates).and_then(|t| t.params.iter().find(|p| p.name == pname))
+        })
+    }
+
     /// The rows of a parameter's right-click menu: labels, the action each
     /// runs, and how many leading rows are HEADERS. Split from the open so
     /// a test reads them.
@@ -4439,17 +4461,24 @@ impl State {
     /// the instance's, and they differ exactly when something is off — a
     /// `Control: slider` over `Value: expression` is a row whose slider
     /// cannot be shown, over `Value: invalid (…)` a load that kept a text
-    /// the kind refuses. A control with a range adds `Range: lo..hi`, with
-    /// its step when one is set (`ParamDef::range`, the pane's own
-    /// numbers); a choice adds `Options: a, b, c`.
+    /// the kind refuses. `Default:` is the template's value for the row
+    /// (`template_default`, as written there — an expression shows as the
+    /// expression), left out for a parameter no template names. A control
+    /// with a range adds `Range: lo..hi`, with its step when one is set
+    /// (`ParamDef::range`, the pane's own numbers); a choice adds
+    /// `Options: a, b, c`.
     pub fn param_menu_rows(&self, slot: usize, pname: &str) -> (Vec<String>, Vec<ParamMenuAction>, usize) {
-        let child = &self.param_editor_dir().children[slot];
+        let dir = self.param_editor_dir();
+        let child = &dir.children[slot];
         let param = child.params.iter().find(|p| p.name == pname);
         let is_expr = param.is_some_and(|p| p.is_expr());
         let (control, value) = param
             .map(|p| (p.kind().name().to_string(), p.value_type()))
             .unwrap_or_else(|| ("?".to_string(), "?".to_string()));
         let mut options = vec![format!("Control: {control}"), format!("Value: {value}")];
+        if let Some(d) = self.template_default(dir, child, pname) {
+            options.push(format!("Default: {}", d.text()));
+        }
         if let Some((lo, hi, step)) = param.and_then(|p| p.range()) {
             let fmt = |v: f32| crate::expr::fmt_num(v as f64);
             let step = step.map(|s| format!(", step {}", fmt(s))).unwrap_or_default();
