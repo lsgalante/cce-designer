@@ -1203,7 +1203,8 @@ style {
             border_thickness (f64)1.0
             root { corner_radius (i64)24 }        // the pane corner radius falls back to this
         }
-        relief light=(f64)0.15 width=(f64)9.3 {  // light: strength, NOT a length; width: the one roll/wall run
+        relief light=(f64)0.15 width=(f64)9.3 shader=(bool)true {  // light: strength, NOT a length; width: the one roll/wall run;
+            // shader: false = the legacy banded edge lighting, an A/B switch (was window_manager.bevel_shader)
             wall height=(mm)0.3 profile="smooth;…"   // a carve's wall: buttons, wells, param rows
             edge height=4.0    profile="smooth;…"   // a plate's perimeter roll: these panes
         }
@@ -1231,7 +1232,9 @@ The rules that took a day to settle, each with the wrong version it replaced:
   spellings (`height` / `profile` for the wall, `edge_height` /
   `edge_profile`) and `depth`, the strength's former name (`light` now),
   are retired: reported at load, not read, rewritten by cce-relief's Save
-  from a one-time seed.
+  from a one-time seed. So is the whole `window_manager.bevel_*` block the
+  relief was born in — `bevel_depth`, `bevel_width`, and `bevel_shader`,
+  which is `relief.shader` now and takes a `(bool)`.
 - **cce-relief's knobs are not a style key.** The Shoulder / Base / Bias
   triples behind each profile (`wall.knobs` / `edge.knobs`, before that
   `profile_knobs` / `edge_knobs`) were editor state beside the values that
