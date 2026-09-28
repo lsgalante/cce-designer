@@ -721,7 +721,9 @@ parameter's name, what a `ch()` path spells, with `Label:` under it only
 when the template gives one (the pane shows the name otherwise, and a
 Label row repeating it would claim there is one); `Control:` is the
 kind the template gave it (`ParamKind::name` — slider, float3,
-attribute…) and `Value:` what its text holds right now
+attribute…), `Type:` the raw type string that kind parsed from
+(`slider:-2:2`, `choice:UV,Icosphere,Cube`, `string` for an absent one)
+exactly as the template or the file wrote it, and `Value:` what its text holds right now
 (`ParamDef::value_type` — float, integer, vec3, boolean, enum, string,
 expression, or invalid with the reason; a programmer's terms, by
 request), `Expression:` the row's expression FLAG as `true` / `false`

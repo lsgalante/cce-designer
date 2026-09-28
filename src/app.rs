@@ -4466,7 +4466,10 @@ impl State {
     /// expression), left out for a parameter no template names. A control
     /// with a range adds `Range: lo..hi`, with its step when one is set
     /// (`ParamDef::range`, the pane's own numbers); a choice adds
-    /// `Options: a, b, c`. Ahead of `Range:`, `Min:` / `Max:` / `Step:`
+    /// `Options: a, b, c`. `Type:` is the raw type STRING under
+    /// `Control:` — `slider:-2:2`, `choice:UV,Icosphere,Cube`, or `string`
+    /// for an absent one — exactly as the template or the file wrote it,
+    /// where Control is the kind that string parses to. Ahead of `Range:`, `Min:` / `Max:` / `Step:`
     /// are what the template DECLARES (`ParamDef::declared_range`, an
     /// inline `slider:-2:2` included), `none` where it declares nothing —
     /// so Range is the clamp the pane applies and the three above it say
@@ -4493,6 +4496,7 @@ impl State {
             options.push(format!("Label: {label}"));
         }
         options.push(format!("Control: {control}"));
+        options.push(format!("Type: {}", param.map(|p| p.ty()).unwrap_or("?")));
         options.push(format!("Value: {value}"));
         options.push(format!("Expression: {is_expr}"));
         if let Some(d) = self.template_default(dir, child, pname) {
