@@ -920,11 +920,15 @@ struct SimSolve {
     /// The frame `state` is the solution FOR.
     frame: i32,
     state: Detail,
-    /// The state the step that produced `state` consumed — the seed until a
-    /// step has run. What a visible child inside the simnet is evaluated
+    /// What the LAST substep that produced `state` consumed — the seed until
+    /// a step has run — derivatives cleared and `dt` set, exactly as the
+    /// chain saw it. What a visible child inside the simnet is evaluated
     /// against when the interior is displayed (see
     /// [`network_sphere_vertices_with_errors`]): `input` yields it, the
-    /// chain shows this frame's pass over it.
+    /// chain shows the pass that landed on the displayed state, so a node
+    /// that is the chain's last mover draws where the output draws. Until
+    /// 2026-09-28 it was the state at the START of the frame, which under
+    /// substeps showed one substep of a frame that took several.
     prev: Detail,
 }
 
@@ -3218,10 +3222,12 @@ pub fn moves_points(node: &FsNode) -> bool {
 /// expression-driven Value all come out as what actually happened, and the
 /// affected points are exactly the ones that moved.
 ///
-/// A node inside a simnet is evaluated as the current frame's step saw it,
-/// with the feedback stack holding the state that step consumed — the same
-/// rule the dived-in scene walk draws by — so the arrows start where the
-/// points were this frame, not at the seed. Point counts that differ (the
+/// A node inside a simnet is evaluated as the current frame's LAST substep
+/// saw it, with the feedback stack holding the state that substep consumed —
+/// the same rule the dived-in scene walk draws by — so the arrows start
+/// where the points were going into the pass that landed on the displayed
+/// state, and end ON the displayed points when the pull is the chain's last
+/// mover; not at the seed. Point counts that differ (the
 /// node was rewired onto something that adds or removes points) give nothing,
 /// since the indices no longer pair up.
 pub fn point_displacements(root: &FsNode, target: &FsNode, sim: &mut EvalSim) -> Vec<(Vec3, Vec3)> {
@@ -6158,7 +6164,7 @@ pub fn resolve_simnet_geometry_with_errors(
         (prev.key == key && prev.frame <= due).then(|| (prev.state.clone(), prev.frame))
     });
     let caching = node_param_bool(target, "Cache", false);
-    // What the last step consumed, carried with the solve so the interior
+    // What the last substep consumed, carried with the solve so the interior
     // view can be drawn without re-solving: resumed from the cache when the
     // cache is what we resume from, the seed otherwise.
     let mut prev_frame = match &cached {
@@ -6191,7 +6197,6 @@ pub fn resolve_simnet_geometry_with_errors(
     let dt = 1.0 / substeps as f32;
 
     while done < due {
-        prev_frame = state.clone();
         for _ in 0..substeps {
             // The step boundary, and the contract that makes a chain
             // composable:
@@ -6222,6 +6227,7 @@ pub fn resolve_simnet_geometry_with_errors(
             // geometry mid-chain — a kernel generator today, a remesh in Phase
             // 3 — no longer silently takes the simulation's memory with it.
             state.restore_live_from(&prev);
+            prev_frame = prev;
         }
         done += 1;
     }
@@ -6236,8 +6242,9 @@ pub fn resolve_simnet_geometry_with_errors(
     Some(state)
 }
 
-/// The state a simnet's current frame was stepped FROM: the seed at the
-/// start frame, the previous frame's solution after that. Solves the simnet
+/// The state the LAST substep of a simnet's current frame was stepped FROM:
+/// the seed at the start frame, the previous frame's solution with one
+/// substep per frame, the last substep's input otherwise. Solves the simnet
 /// (filling the cache) and reads it back, so it costs nothing beyond the
 /// solve the display needs anyway.
 pub fn simnet_step_feedback(
@@ -8319,8 +8326,8 @@ mod simnet_tests {
         assert_eq!(spread_sample(&same, 12), vec![0]);
     }
 
-    /// Inside a simnet the arrows start where the points were THIS frame —
-    /// the state the frame's step consumed, which is the previous frame's
+    /// Inside a simnet the arrows start where the points were going into
+    /// THIS frame's step — with one substep per frame, the previous frame's
     /// solve — not at the seed, which is what evaluating the node on its own
     /// would give (the `input` node reads the seed with no feedback pushed).
     #[test]
@@ -8363,6 +8370,62 @@ mod simnet_tests {
         for (a, b) in &moved {
             assert!((*b - *a - Vec3::X).length() < 1e-5);
         }
+    }
+
+    /// Under substeps the arrows are anchored at the LAST substep: each
+    /// tip lands on the displayed point, since the pull is the chain's only
+    /// mover, and each base is one pull short of it. Until 2026-09-28 the
+    /// feedback was the frame's starting state, so with four substeps the
+    /// arrows sat three pulls behind the geometry they were drawn over — the
+    /// "lagging a frame" look. The dived-in scene walk reads the same
+    /// feedback, so a visible chain node draws where the output does too.
+    #[test]
+    fn pull_arrows_inside_a_simnet_anchor_at_the_last_substep() {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let pull = node(
+            "id-pull",
+            "pull1",
+            "attribute",
+            vec![
+                param("Input", "input1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "Pos"),
+                param("Value", "1.00:0.00:0.00"),
+                param("Combine", "Add"),
+                param("Group", ""),
+            ],
+            vec![],
+        );
+        let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+        let sim_node = node(
+            "id-sim",
+            "Simnet 1",
+            "simnet",
+            vec![param("Input", "Sphere 1"), param("Substeps", "4")],
+            vec![inner_input, pull, inner_output],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere, sim_node]);
+        let pull = &root.children[1].children[1];
+
+        let shown = solve_at(&root, 3);
+        assert!((min_x(&shown) - (min_x(&solve_at(&root, 1)) + 8.0)).abs() < 1e-4, "two frames of four pulls each");
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(3, 1, &mut cache);
+        let moved = point_displacements(&root, pull, &mut sim);
+        assert_eq!(moved.len(), shown.num_points());
+        for (i, (a, b)) in moved.iter().enumerate() {
+            assert!(b.distance(shown.pos(i)) < 1e-4, "arrow {i} ends at {b:?}, the point is drawn at {:?}", shown.pos(i));
+            assert!((*b - *a - Vec3::X).length() < 1e-5);
+        }
+
+        // The interior view agrees: dived in, the pull node draws on the output.
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(3, 1, &mut cache);
+        let mut visited = Vec::new();
+        let mut err = None;
+        let fed = simnet_step_feedback(&root, &root.children[1], &mut visited, &mut err, &mut sim).expect("solved");
+        assert!((min_x(&fed) - (min_x(&shown) - 1.0)).abs() < 1e-4, "the feedback is one pull short of the display");
     }
 
     /// A Relax's `Rest` wire resolves to its OWN sibling. It was a

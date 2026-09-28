@@ -163,11 +163,15 @@ gone from cce-ui with the wgpu path).
   into a simnet's children — that would draw one un-iterated pass of the chain
   on top of the solved result. Dived INTO a simnet, the output child's
   geometry flag draws the solved state, and every OTHER visible child draws
-  itself as the current frame's step saw it, with the feedback stack holding
-  the state that step consumed (`simnet_step_feedback`, read off the
-  `SimSolve` the solve already keeps): `input` shows what the step reads, a
-  chain node shows this frame's pass, and a node not wired into the chain at
-  all simply draws. Until 2026-09-21 only the output flag drew, and a visible
+  itself as the current frame's LAST SUBSTEP saw it, with the feedback stack
+  holding the state that substep consumed (`simnet_step_feedback`, read off
+  the `SimSolve` the solve already keeps): `input` shows what the pass
+  reads, a chain node shows the pass that landed on the displayed state —
+  so the chain's last mover draws where the output draws — and a node not
+  wired into the chain at all simply draws. Until 2026-09-28 the feedback
+  was the frame's STARTING state, so with four substeps a chain node drew
+  three substeps behind the output, which read as the interior lagging a
+  frame. Until 2026-09-21 only the output flag drew, and a visible
   node inside a simnet was a node you could not see. At any
   displayed level `input`/`output` children draw their resolved geometry (top
   level of the walk only, so outer views don't draw subnet chains twice).
@@ -1748,10 +1752,12 @@ each arrow from its fixed base, so a slider drag re-evaluates nothing.
 At most `State::PULL_ARROWS_MAX` (12) points get one, picked by farthest-point
 sampling (`spread_sample`) so they cover the region the pull covers rather
 than bunching wherever the point numbering runs locally. A node inside a
-simnet is measured as this frame's step saw it, with the step's feedback
-pushed, the same rule the dived-in scene walk draws by. Without it the
-`input` node reads the seed, and the arrows would sit where the points
-started, not where they are. `sync_pull_arrows` borrows the shared sim cache for
+simnet is measured as this frame's last substep saw it, with that substep's
+feedback pushed, the same rule the dived-in scene walk draws by: an arrow
+runs from where the point went INTO the pass that produced the displayed
+state, so its tip lands on the displayed point whenever the pull is the
+chain's last mover. Without the feedback the `input` node reads the seed,
+and the arrows would sit where the points started, not where they are. `sync_pull_arrows` borrows the shared sim cache for
 this, so during playback the feedback is a cache hit rather than a re-solve
 from the seed every frame; it runs from both `sync_nodes` and the end of
 `rebuild_scene_geometry`, keyed by (node id, params, geometry version).
