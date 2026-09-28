@@ -581,18 +581,14 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
             // to offer.
             "text".to_string()
         } else if p.ty() == "slider" {
-            let min = p.min.unwrap_or(0.0);
-            let max = p.max.unwrap_or(2.0);
+            let (min, max, _) = p.range().expect("a slider has a range");
             format!("slider:{}:{}", min, max)
         } else if p.ty() == "float3" {
-            let min = p.min.unwrap_or(-10.0);
-            let max = p.max.unwrap_or(10.0);
+            let (min, max, _) = p.range().expect("a float3 has a range");
             format!("float3:{}:{}", min, max)
         } else if p.ty() == "spinbox" {
-            let min = p.min.unwrap_or(1.0) as i32;
-            let max = p.max.unwrap_or(10000.0) as i32;
-            let step = p.step.unwrap_or(1.0) as i32;
-            format!("spinbox:{}:{}:{}", min, max, step)
+            let (min, max, step) = p.range().expect("a spinbox has a range");
+            format!("spinbox:{}:{}:{}", min as i32, max as i32, step.unwrap_or(1.0) as i32)
         } else if p.ty() == "choice" {
             format!("choice:{}", p.options().join(","))
         } else {
@@ -4443,7 +4439,9 @@ impl State {
     /// the instance's, and they differ exactly when something is off — a
     /// `Control: slider` over `Value: expression` is a row whose slider
     /// cannot be shown, over `Value: invalid (…)` a load that kept a text
-    /// the kind refuses.
+    /// the kind refuses. A control with a range adds `Range: lo..hi`, with
+    /// its step when one is set (`ParamDef::range`, the pane's own
+    /// numbers); a choice adds `Options: a, b, c`.
     pub fn param_menu_rows(&self, slot: usize, pname: &str) -> (Vec<String>, Vec<ParamMenuAction>, usize) {
         let child = &self.param_editor_dir().children[slot];
         let param = child.params.iter().find(|p| p.name == pname);
@@ -4451,8 +4449,21 @@ impl State {
         let (control, value) = param
             .map(|p| (p.kind().name().to_string(), p.value_type()))
             .unwrap_or_else(|| ("?".to_string(), "?".to_string()));
-        let mut options = vec![format!("Control: {control}"), format!("Value: {value}"), "-".to_string(), "Copy Parameter".to_string()];
-        let mut actions = vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter];
+        let mut options = vec![format!("Control: {control}"), format!("Value: {value}")];
+        if let Some((lo, hi, step)) = param.and_then(|p| p.range()) {
+            let fmt = |v: f32| crate::expr::fmt_num(v as f64);
+            let step = step.map(|s| format!(", step {}", fmt(s))).unwrap_or_default();
+            options.push(format!("Range: {}..{}{step}", fmt(lo), fmt(hi)));
+        }
+        if let Some(p) = param.filter(|p| p.kind() == ParamKind::Choice) {
+            options.push(format!("Options: {}", p.choice_options().join(", ")));
+        }
+        let headers = options.len();
+        let mut actions = vec![ParamMenuAction::Info; headers];
+        options.push("-".to_string());
+        options.push("Copy Parameter".to_string());
+        actions.push(ParamMenuAction::Separator);
+        actions.push(ParamMenuAction::CopyParameter);
         if self.copied_param.is_some() {
             options.push("Paste Relative Reference".to_string());
             actions.push(ParamMenuAction::PasteRelative);
@@ -4468,7 +4479,7 @@ impl State {
             options.push("Edit Expression".to_string());
             actions.push(ParamMenuAction::EditExpression);
         }
-        (options, actions, 2)
+        (options, actions, headers)
     }
 
     /// Open a parameter row's right-click menu.

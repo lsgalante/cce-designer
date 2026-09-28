@@ -7756,16 +7756,26 @@ mod tests {
         assert!(!state.viewport_menu_open());
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
+            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
             "nothing copied yet, and the row holds a value"
         );
-        // The two header rows read the parameter out: its control's kind
-        // and its value's type, in a programmer's terms. Radius is a slider
-        // holding a float.
+        // The header rows read the parameter out: its control's kind, its
+        // value's type in a programmer's terms, and the control's range.
+        // Radius is a slider holding a float, clamped to the pane's default
+        // 0..2 since the template declares no range.
         let shown = cce_ui::widget::context_menu::options();
-        assert_eq!(&shown[..3], &["Control: slider".to_string(), "Value: float".to_string(), "-".to_string()]);
+        assert_eq!(&shown[..4], &["Control: slider".to_string(), "Value: float".to_string(), "Range: 0..2".to_string(), "-".to_string()]);
         let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
-        assert_eq!(headers, 2);
+        assert_eq!(headers, 3);
+        // An inline range, a spinbox's range and step, a choice's options.
+        let (rows, _, h) = state.param_menu_rows(sphere, "Center X");
+        assert_eq!((&rows[2], h), (&"Range: -2..2".to_string(), 3));
+        let (rows, _, _) = state.param_menu_rows(sphere, "Rows");
+        assert_eq!(rows[2], "Range: 2..128, step 1");
+        let (rows, _, h) = state.param_menu_rows(sphere, "Method");
+        assert_eq!((&rows[2], h), (&"Options: UV, Icosphere, Cube".to_string(), 3));
+        let (rows, _, h) = state.param_menu_rows(sphere, "Color");
+        assert_eq!((rows[2].as_str(), h), ("-", 2), "a toggle has neither a range nor options");
         // A click on a header runs nothing.
         state.run_param_action(&state.current_dir().children[sphere].id.clone(), "Radius", ParamMenuAction::Info);
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });

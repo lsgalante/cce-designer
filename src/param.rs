@@ -445,6 +445,35 @@ impl ParamDef {
         }
     }
 
+    /// The range the pane holds this parameter to, as `(min, max, step)`,
+    /// for the kinds that have one — Slider, Float3 and Spin. An inline
+    /// detail (`slider:-2:2`) wins, then the template's `min` / `max`, then
+    /// the pane's own defaults (0..2, -10..10, 1..10000), which are what a
+    /// row with none declared clamps to. `param_display` builds the pane's
+    /// row from this and the row menu's `Range:` reads it, so the two
+    /// cannot disagree. `None` for a kind with no range.
+    pub fn range(&self) -> Option<(f32, f32, Option<f32>)> {
+        let inline = || {
+            let parts: Vec<&str> = self.param_type.split(':').collect();
+            match parts[..] {
+                [_, lo, hi] => Some((lo.trim().parse::<f32>().ok()?, hi.trim().parse::<f32>().ok()?)),
+                _ => None,
+            }
+        };
+        let (lo, hi) = match self.kind() {
+            ParamKind::Slider => (0.0, 2.0),
+            ParamKind::Float3 => (-10.0, 10.0),
+            ParamKind::Spin => (1.0, 10000.0),
+            _ => return None,
+        };
+        let (lo, hi) = inline().unwrap_or((self.min.unwrap_or(lo), self.max.unwrap_or(hi)));
+        let step = match self.kind() {
+            ParamKind::Spin => Some(self.step.unwrap_or(1.0)),
+            _ => self.step,
+        };
+        Some((lo, hi, step))
+    }
+
     /// Whether a value that READS as a reference should become an
     /// expression here. Not for a code parameter: a kernel or a wrangle
     /// script is a program, and one whose whole text happens to be

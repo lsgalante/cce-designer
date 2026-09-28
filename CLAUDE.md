@@ -721,7 +721,10 @@ kind the template gave it (`ParamKind::name` — slider, float3,
 attribute…) and `Value:` what its text holds right now
 (`ParamDef::value_type` — float, integer, vec3, boolean, enum, string,
 expression, or invalid with the reason; a programmer's terms, by
-request). Two lines because
+request), then `Range: lo..hi` with its step for a slider, float3 or
+spinbox (`ParamDef::range`, the numbers `param_display` builds the pane's
+row from — an inline `slider:-2:2`, else the template's min/max, else
+the pane's defaults) and `Options: a, b, c` for a choice. Two lines because
 they answer different questions, the template's and the instance's, and
 they differ exactly when something is off: a slider over an expression is
 a row whose slider cannot be drawn, a slider over `invalid (…)` a load that
