@@ -32,7 +32,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
     vec![
         tool(
             "get_state",
-            "Get the current project state (node tree with params, cameras, pan, current path, selection) as JSON.",
+            "Get the current project state (node tree with params, cameras, pan, current path, selection) as JSON, plus the playbar, the network grid and the status line's text (`status`).",
             no_args(),
         ),
         tool(

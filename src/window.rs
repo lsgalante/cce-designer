@@ -629,7 +629,7 @@ impl State {
     /// An MCP tool call: `get_state` returns the project snapshot; every
     /// other tool name is an `McpAction` tag — injected into the arguments
     /// and run through the shared action path.
-    fn apply_mcp_call(
+    pub(crate) fn apply_mcp_call(
         &mut self,
         call: &cce_ui::mcp::McpToolCall,
         needs_redraw: &mut bool,
@@ -659,6 +659,10 @@ impl State {
                 "configured_pitch": [cfg.pitch_x, cfg.pitch_y],
                 "configured_node_size": [cfg.node_w, cfg.node_h],
             });
+            // The status line as shown — the load report, a node error, a
+            // refused edit. The window may be anywhere, or off-screen; this
+            // is how to read it from outside.
+            v["status"] = serde_json::Value::String(self.last_status_text.clone());
             return Ok(v);
         }
         let mut req = if call.arguments.is_object() {

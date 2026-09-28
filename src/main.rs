@@ -4089,6 +4089,19 @@ mod tests {
         assert!(s.last_status_text.contains("Not applied") && s.last_status_text.contains("Threshold"), "{}", s.last_status_text);
     }
 
+    /// get_state carries the status line, so it can be read from outside
+    /// whether or not the window is on screen.
+    #[test]
+    fn get_state_reports_the_status_line() {
+        let mut s = State::new(false);
+        s.update_status_text("Not applied — Threshold: 'abc' is not a number");
+        let (reply, _rx) = std::sync::mpsc::channel();
+        let call = cce_ui::mcp::McpToolCall { name: "get_state".into(), arguments: serde_json::json!({}), reply };
+        let v = s.apply_mcp_call(&call, &mut false).expect("get_state");
+        assert_eq!(v["status"], "Not applied — Threshold: 'abc' is not a number");
+        assert!(v.get("root").is_some(), "the project is still there beside it");
+    }
+
     /// A load says when a project holds a value that does not fit — kept,
     /// but worth knowing about.
     #[test]

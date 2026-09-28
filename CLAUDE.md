@@ -79,7 +79,11 @@ The main window runs an embedded MCP server on `127.0.0.1:3001`
 `claude mcp add --transport http cce-designer http://127.0.0.1:3001/mcp`, or
 speak JSON-RPC directly with curl (`initialize` / `tools/list` / `tools/call`).
 There is one tool per `McpAction` variant (tool name = the variant's serde
-tag, dispatched in `apply_mcp_call` in `src/window.rs`) plus `get_state`. The
+tag, dispatched in `apply_mcp_call` in `src/window.rs`) plus `get_state`,
+which returns the project beside three app-state fields that are not part of
+the save: `playbar`, `grid` and `status` — the status line's text as shown,
+which is the way to read a load report, a node error or a refused edit when
+the window is off-screen. The
 tool list lives in `mcp_tools()` in `src/api.rs`; the protocol layer is
 `cce_ui::mcp` (tools-only Streamable HTTP). Keep the enum, the tool list, and
 the schemas in sync — `test_mcp_tools_map_to_actions` enforces the mapping.
