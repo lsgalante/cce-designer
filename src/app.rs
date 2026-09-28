@@ -4466,7 +4466,11 @@ impl State {
     /// expression), left out for a parameter no template names. A control
     /// with a range adds `Range: lo..hi`, with its step when one is set
     /// (`ParamDef::range`, the pane's own numbers); a choice adds
-    /// `Options: a, b, c`. `Expression:` is the row's expression FLAG,
+    /// `Options: a, b, c`. Ahead of `Range:`, `Min:` / `Max:` / `Step:`
+    /// are what the template DECLARES (`ParamDef::declared_range`, an
+    /// inline `slider:-2:2` included), `none` where it declares nothing —
+    /// so Range is the clamp the pane applies and the three above it say
+    /// how much of that the template chose. `Expression:` is the row's expression FLAG,
     /// `true` or `false` — the thing `ParamDef::expr` stores, which is
     /// what Edit Expression sets and Delete Expression clears; `Value:`
     /// already reads `expression` when it is set, and the flag row states
@@ -4496,6 +4500,11 @@ impl State {
         }
         if let Some((lo, hi, step)) = param.and_then(|p| p.range()) {
             let fmt = |v: f32| crate::expr::fmt_num(v as f64);
+            let declared = |v: Option<f32>| v.map(fmt).unwrap_or_else(|| "none".to_string());
+            let (min, max, dstep) = param.map(|p| p.declared_range()).unwrap_or_default();
+            options.push(format!("Min: {}", declared(min)));
+            options.push(format!("Max: {}", declared(max)));
+            options.push(format!("Step: {}", declared(dstep)));
             let step = step.map(|s| format!(", step {}", fmt(s))).unwrap_or_default();
             options.push(format!("Range: {}..{}{step}", fmt(lo), fmt(hi)));
         }

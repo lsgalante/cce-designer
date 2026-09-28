@@ -7756,7 +7756,7 @@ mod tests {
         assert!(!state.viewport_menu_open());
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info; 6].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
+            vec![ParamMenuAction::Info; 9].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
             "nothing copied yet, and the row holds a value"
         );
         // The header rows read the parameter out: its name, its control's
@@ -7767,11 +7767,15 @@ mod tests {
         // row appears.
         let shown = cce_ui::widget::context_menu::options();
         assert_eq!(
-            &shown[..7],
-            &["Name: Radius".to_string(), "Control: slider".to_string(), "Value: float".to_string(), "Expression: false".to_string(), "Default: 0.5".to_string(), "Range: 0..2".to_string(), "-".to_string()]
+            &shown[..10],
+            &[
+                "Name: Radius".to_string(), "Control: slider".to_string(), "Value: float".to_string(), "Expression: false".to_string(),
+                "Default: 0.5".to_string(), "Min: none".to_string(), "Max: none".to_string(), "Step: none".to_string(),
+                "Range: 0..2".to_string(), "-".to_string(),
+            ]
         );
         let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
-        assert_eq!(headers, 6);
+        assert_eq!(headers, 9);
         // The headers are the rows before the separator; each one is
         // looked up by its readout, not its position.
         let headers_of = |state: &State, pname: &str| -> Vec<String> {
@@ -7781,9 +7785,12 @@ mod tests {
         };
         // An inline range, a spinbox's range and step, a choice's options,
         // and a conditional row's condition.
-        assert!(headers_of(&state, "Center X").contains(&"Range: -2..2".to_string()));
+        let rows = headers_of(&state, "Center X");
+        for want in ["Min: -2", "Max: 2", "Step: none", "Range: -2..2"] {
+            assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
+        }
         let rows = headers_of(&state, "Rows");
-        for want in ["Default: 16", "Range: 2..128, step 1", "Shown when: Method == UV"] {
+        for want in ["Default: 16", "Min: 2", "Max: 128", "Step: 1", "Range: 2..128, step 1", "Shown when: Method == UV"] {
             assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
         }
         let rows = headers_of(&state, "Method");

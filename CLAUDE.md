@@ -731,10 +731,12 @@ the template's value as written there
 (`State::template_default`, which takes a subnet template's override for
 a child inside an instance — the Embryo's `sphere1` defaults its Radius to
 `chf("../Radius")` — and is absent for a parameter no template names),
-then `Range: lo..hi` with its step for a slider, float3 or
-spinbox (`ParamDef::range`, the numbers `param_display` builds the pane's
-row from — an inline `slider:-2:2`, else the template's min/max, else
-the pane's defaults), `Options: a, b, c` for a choice, and `Shown when:`
+then for a slider, float3 or spinbox `Min:` / `Max:` / `Step:` as the
+template DECLARES them (`ParamDef::declared_range`, an inline
+`slider:-2:2` included, `none` where it says nothing) followed by
+`Range: lo..hi` with its step as the pane APPLIES it (`ParamDef::range`,
+the numbers `param_display` builds the pane's row from — the declared
+ends, else the pane's defaults), `Options: a, b, c` for a choice, and `Shown when:`
 with the row's `show_when` condition when it has one. Control and Value
 are two lines because
 they answer different questions, the template's and the instance's, and

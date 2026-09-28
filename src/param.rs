@@ -453,25 +453,36 @@ impl ParamDef {
     /// row from this and the row menu's `Range:` reads it, so the two
     /// cannot disagree. `None` for a kind with no range.
     pub fn range(&self) -> Option<(f32, f32, Option<f32>)> {
-        let inline = || {
-            let parts: Vec<&str> = self.param_type.split(':').collect();
-            match parts[..] {
-                [_, lo, hi] => Some((lo.trim().parse::<f32>().ok()?, hi.trim().parse::<f32>().ok()?)),
-                _ => None,
-            }
-        };
         let (lo, hi) = match self.kind() {
             ParamKind::Slider => (0.0, 2.0),
             ParamKind::Float3 => (-10.0, 10.0),
             ParamKind::Spin => (1.0, 10000.0),
             _ => return None,
         };
-        let (lo, hi) = inline().unwrap_or((self.min.unwrap_or(lo), self.max.unwrap_or(hi)));
+        let (min, max, step) = self.declared_range();
         let step = match self.kind() {
-            ParamKind::Spin => Some(self.step.unwrap_or(1.0)),
-            _ => self.step,
+            ParamKind::Spin => Some(step.unwrap_or(1.0)),
+            _ => step,
         };
-        Some((lo, hi, step))
+        Some((min.unwrap_or(lo), max.unwrap_or(hi), step))
+    }
+
+    /// The `(min, max, step)` the template DECLARES for this parameter —
+    /// an inline `slider:-2:2` counts as declaring both ends — each `None`
+    /// where it says nothing and the pane's default stands in
+    /// ([`ParamDef::range`] is the result). What the row menu's `Min:` /
+    /// `Max:` / `Step:` read, so a `none` there means the template left it
+    /// to the pane.
+    pub fn declared_range(&self) -> (Option<f32>, Option<f32>, Option<f32>) {
+        let parts: Vec<&str> = self.param_type.split(':').collect();
+        let inline = match parts[..] {
+            [_, lo, hi] => lo.trim().parse::<f32>().ok().zip(hi.trim().parse::<f32>().ok()),
+            _ => None,
+        };
+        match inline {
+            Some((lo, hi)) => (Some(lo), Some(hi), self.step),
+            None => (self.min, self.max, self.step),
+        }
     }
 
     /// Whether a value that READS as a reference should become an
