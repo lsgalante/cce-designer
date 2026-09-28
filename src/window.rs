@@ -569,11 +569,6 @@ impl State {
 
             }
 
-            state.update_status_text(&format!(
-                "col: {:.0}  vp: {:.0}  params: {:.0}",
-                state.content_left_w(), state.viewport_w(), state.param_w(),
-            ));
-
             if changed {
                 state.update_window_title();
                 if state.is_detached_network || state.detached_circular_network {

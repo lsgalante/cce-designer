@@ -4089,6 +4089,25 @@ mod tests {
         assert!(s.last_status_text.contains("Not applied") && s.last_status_text.contains("Threshold"), "{}", s.last_status_text);
     }
 
+    /// A status message stays until something else has something to say.
+    /// Every window event used to overwrite the line with a leftover debug
+    /// readout of the pane widths (`col: … vp: … params: …`), so a load
+    /// report, a node error or a refused edit vanished the first time the
+    /// pointer moved — the tests that set a status never passed an event
+    /// through afterwards, and missed it.
+    #[test]
+    fn a_status_message_survives_window_events() {
+        use crate::window::{LocalPosition, WindowEvent};
+        let mut s = State::new(false);
+        s.resize(1400.0, 900.0, 1.0);
+        s.update_status_text("Not applied — Threshold: 'abc' is not a number");
+        for (x, y) in [(300.0, 200.0), (700.0, 450.0), (1100.0, 600.0)] {
+            s.process_window_event(WindowEvent::CursorMoved { position: LocalPosition { x, y } });
+        }
+        s.process_window_event(WindowEvent::MouseWheel { delta: cce_ui::widget::MouseScrollDelta::LineDelta(0.0, 1.0) });
+        assert_eq!(s.last_status_text, "Not applied — Threshold: 'abc' is not a number");
+    }
+
     /// get_state carries the status line, so it can be read from outside
     /// whether or not the window is on screen.
     #[test]
