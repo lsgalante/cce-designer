@@ -1912,9 +1912,10 @@ thread and could not touch `State`, and the `libc` dependency, whose only use
 was `kill`ing a stray popup. `active_menu_cloud_pid` / `_idx` and the
 `menu_closed` MCP tool went too — they were already dead, left from a retired
 attempt at menubar dropdowns over `cce-cloud`, and nothing had set them to
-`Some` in a long time. `cce_ui::process::CloudPopup` itself still exists; the
-designer was its only consumer, so it is now unused public API in a shared
-crate, which is a coordination job of its own.
+`Some` in a long time. `cce_ui::process::CloudPopup` outlived that by nine
+days as unused public API in a shared crate — the designer had been its only
+consumer — and went on 2026-09-28 along with the whole `process` module and
+cce-ui's `tokio` dependency, which existed for nothing else.
 
 ### Runtime paths point into the source tree
 
