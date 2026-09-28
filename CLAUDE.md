@@ -1178,6 +1178,89 @@ the sheet survives.
 everything-at-once node, is deliberately not ported: it is these four chained,
 and that collapse is the whole premise of "fifty operators, ten nodes".
 
+### The pane plates: one material, one relief block
+
+Every plate the designer draws — the network panel, params, spreadsheet,
+playbar, page pane, and every collapsed stub — goes through
+`append_widget_plate_radii` in `render.rs`, and every one of those widgets
+answers `color()` with `cce_ui::colors::param_plate_fill`, which is
+`Material::pane()`: the toolkit's PANE rung. So there is ONE material for
+the designer's plates, configured in the `style.surface` block of
+`~/.config/cce/config.kdl` (a `~/.config/cce/cce-designer/config.kdl`
+merges over it key by key, when one exists), and the network plate and the
+params plate cannot be styled apart short of binding a named material
+(`plate material="…"`). The viewport has no plate of its own: its lip is the
+window's root-plate edge. What the block looks like after the 2026-09-28
+consolidation, and what each key is:
+
+```kdl
+style {
+    surface {
+        plate bevel_width=(f64)12.0 {           // bevel_width: a RETIRED override, see below
+            pane color=(rgba)"#6c6c7bf2"         // the tint, alpha = strength (legacy: param.color × plate_opacity)
+            frost radius=(f64)5.5 compression=(f64)0.0 refraction=(f64)0.0   // the one frost spelling
+            border_color (rgba)"#9595a9ff"        // the flat border, relief OFF only
+            border_thickness (f64)1.0
+            root { corner_radius (i64)24 }        // the pane corner radius falls back to this
+        }
+        relief light=(f64)0.15 width=(f64)9.3 {  // light: strength, NOT a length; width: the one roll/wall run
+            wall height=(mm)0.3 profile="smooth;…"   // a carve's wall: buttons, wells, param rows
+            edge height=4.0    profile="smooth;…"   // a plate's perimeter roll: these panes
+        }
+        menu color=(rgba)"#101018ff"             // the dialog and every context menu (below)
+    }
+}
+```
+
+The rules that took a day to settle, each with the wrong version it replaced:
+
+- **One roll width.** `relief.width` is the run of every roll and wall: the
+  root plate, a `PlateSpec` pane plate, these bordered widget plates (through
+  `colors::plate_bevel_width`), every control wall, and the length
+  `edge.height` is a rise against. Until 2026-09-28 the widget-plate path
+  had `style.surface.plate.bevel_width` of its own (default 6 against the
+  relief's 9.3), so the panes here and the window lip rolled over different
+  widths and no single key made them match. The old key survives as an
+  explicit override, reported once at load, unit-blind.
+- **Wall and edge are two shapes, and the config names them.** A wall is
+  shaded as a translucent overlay on what is under it; an edge multiplies
+  the plate's own fill and adds a specular crest. Each node carries
+  `height` (a length — the wall's drop, the roll's rise; unset = follow the
+  width) and `profile` (a ramp spec; absent = the analytic curve). The flat
+  spellings (`height` / `profile` for the wall, `edge_height` /
+  `edge_profile`) are aliases, and the node spelling wins when a file
+  carries both. `light` is the spelling of the strength; `depth` is its
+  alias, losing the same way.
+- **cce-relief's knobs are not a style key.** The Shoulder / Base / Bias
+  triples behind each profile (`wall.knobs` / `edge.knobs`, before that
+  `profile_knobs` / `edge_knobs`) were editor state beside the values that
+  draw; they live in `~/.config/cce/cce-relief/state.kdl`, one node per
+  Save target. A config still carrying one seeds the editor once, and its
+  next Save takes the key off.
+- **Frost is one block, and the flat keys are retired.** `plate.blur`,
+  `.radius`, `.backdrop_compression` and `.refraction` are reported by path
+  at load and not read — `blur=true` alone is a SHARP plate, and the warning
+  is what says why. A named material's `frost` child spells its knob
+  `compression` too.
+- **Focus is the bevel's tint.** With relief on (`window_manager.control_relief`,
+  default on), a plated pane marks focus by tinting its roll with
+  `highlight_primary_color` (`plate_focus_tint`); the flat `border_color`
+  draws only with relief off.
+
+Two keys look like they apply and do not: `style.surface.plate.color`
+feeds `plate_color`, whose one consumer is the info box, and the finish's
+spec / shininess / curvature live as `relief.spec` / `.shininess` /
+`.curvature`, not under `plate`. The network pane is two layers: the
+`PassivePlate` above and the Graph on top with its own `style.surface.graph`
+fill (`cell_color`, `gap_color`, `opacity`, `blur`, `uniform_background`),
+nearly transparent by default so the lattice you see is the pane plate
+showing through — the next section is about dropping that plate entirely.
+The params widget alone also reads `style.surface.param.backdrop_compression`.
+The rules live in cce-ui's CLAUDE.md ("There is one roll width", "The
+relief is two shapes", "Frost is one block"); this is the designer's view of
+them, written because the question "what are the style parameters of the
+plates" took a session to answer from the code.
+
 ### The network plate is optional
 
 The network pane can drop its PLATE — the filled, frosted surface its graph
@@ -1915,9 +1998,11 @@ function the context menus draw theirs with: `Material::menu` — the
 absent, the root plate colour as menus always wore), `opacity` and
 `compression` — on `menu.corner_radius` with the relief-width roll. So
 the command palette, the Add Node list and every right-click menu are
-configured in ONE block and cannot be configured apart; the designer's
-per-app config.kdl sets that block to the look the dialog had
-(`#101018` at 0.06, compression 0.8, radius 24). Until then the dialog
+configured in ONE block and cannot be configured apart; the shared
+config.kdl's `menu color=(rgba)"#101018ff"` sets that block to the look the
+dialog had (there is no per-app `cce-designer/config.kdl` on the machine as
+of 2026-09-28 — only `.bak` copies — so the main file is where it is set).
+Until then the dialog
 was the parameter plate's fill under a compression of its own
 (`DIALOG_COMPRESSION` 0.8, `style.surface.dialog.compression`) — an
 in-app override the menus did not share, and the reason the two plates
