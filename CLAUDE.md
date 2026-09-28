@@ -1196,7 +1196,7 @@ consolidation, and what each key is:
 ```kdl
 style {
     surface {
-        plate bevel_width=(f64)12.0 {           // bevel_width: a RETIRED override, see below
+        plate {
             pane color=(rgba)"#6c6c7bf2"         // the tint, alpha = strength (legacy: param.color × plate_opacity)
             frost radius=(f64)5.5 compression=(f64)0.0 refraction=(f64)0.0   // the one frost spelling
             border_color (rgba)"#9595a9ff"        // the flat border, relief OFF only
@@ -1220,8 +1220,9 @@ The rules that took a day to settle, each with the wrong version it replaced:
   `edge.height` is a rise against. Until 2026-09-28 the widget-plate path
   had `style.surface.plate.bevel_width` of its own (default 6 against the
   relief's 9.3), so the panes here and the window lip rolled over different
-  widths and no single key made them match. The old key survives as an
-  explicit override, reported once at load, unit-blind.
+  widths and no single key made them match. The old key was an override
+  for the rest of that day and is retired: reported by path at load with
+  the other retired surface keys, not read, removed by cce-relief's Save.
 - **Wall and edge are two shapes, and the config names them.** A wall is
   shaded as a translucent overlay on what is under it; an edge multiplies
   the plate's own fill and adds a specular crest. Each node carries

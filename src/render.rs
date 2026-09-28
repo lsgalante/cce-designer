@@ -362,9 +362,9 @@ impl State {
                         // The window-edge roll width (style.surface.relief
                         // width), read directly as the root plates of other
                         // windows read it. The interior pane plates roll over
-                        // the same number through `plate_bevel_width` (one
-                        // roll width since 2026-09-28) unless a config still
-                        // carries the legacy `plate.bevel_width` override.
+                        // the same number through `plate_bevel_width` — one
+                        // roll width since 2026-09-28; the `plate.bevel_width`
+                        // key that once set theirs apart is retired.
                         let depth = cce_ui::layout::bevel_width();
                         pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
                             rect: vp_rect,
