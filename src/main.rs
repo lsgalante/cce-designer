@@ -795,8 +795,8 @@ mod tests {
         state.close_plate_menu();
     }
 
-    /// DE chrome is config-owned (`style.surface.relief.profile` /
-    /// `.edge_profile` / `style.surface.param.color`), and a project file
+    /// DE chrome is config-owned (`style.surface.relief.wall.profile` /
+    /// `.edge.profile` / `style.surface.param.color`), and a project file
     /// must not outrank the user's config.kdl. It did while the Main utility
     /// node carried a Style section; the retirement of that whole node tree
     /// is what closes it for good, so what is asserted now is that a save
