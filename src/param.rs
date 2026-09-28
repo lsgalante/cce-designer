@@ -78,6 +78,25 @@ impl ParamKind {
     pub const NAMES: &'static [&'static str] =
         &["text", "float", "slider", "spinbox", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group"];
 
+    /// The kind's name — the type-string head that names it, and what
+    /// the row menu's `Control:` readout shows.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Float => "float",
+            Self::Slider => "slider",
+            Self::Spin => "spinbox",
+            Self::Float3 => "float3",
+            Self::Choice => "choice",
+            Self::Toggle => "toggle",
+            Self::Button => "button",
+            Self::Code => "code",
+            Self::Node => "node",
+            Self::Attribute => "attribute",
+            Self::Group => "group",
+        }
+    }
+
     /// The kind a `type` string names, or `None` when it names none.
     pub fn parse(ty: &str) -> Option<Self> {
         let head = ty.split(':').next().unwrap_or("").trim();
@@ -377,6 +396,25 @@ impl ParamDef {
 
     pub fn is_expr(&self) -> bool {
         self.slot == ParamSlot::Expr
+    }
+
+    /// What the parameter HOLDS right now, in words — the row menu's
+    /// `Value:` readout: the parsed value's type (`number`, `whole number`,
+    /// `vector`, `true/false`, `option`, `text`), `expression` for one
+    /// still to be evaluated, or `invalid` with the reason. The control's
+    /// kind is [`ParamKind::name`]; the two differ exactly when the text
+    /// is not a value of the kind, which is what the pair is for.
+    pub fn value_type(&self) -> String {
+        match &self.slot {
+            ParamSlot::Value(ParamValue::Number(_)) => "number".to_string(),
+            ParamSlot::Value(ParamValue::Int(_)) => "whole number".to_string(),
+            ParamSlot::Value(ParamValue::Vec3(_)) => "vector".to_string(),
+            ParamSlot::Value(ParamValue::Bool(_)) => "true/false".to_string(),
+            ParamSlot::Value(ParamValue::Choice(_)) => "option".to_string(),
+            ParamSlot::Value(ParamValue::Text(_)) => "text".to_string(),
+            ParamSlot::Expr => "expression".to_string(),
+            ParamSlot::Invalid(why) => format!("invalid ({why})"),
+        }
     }
 
     /// Why the text does not fit the kind, when it does not.

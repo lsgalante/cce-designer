@@ -384,6 +384,9 @@ pub enum ParamMenuAction {
     /// Houdini's Delete Channels: the expression's CURRENT value, as a value.
     DeleteExpression,
     Separator,
+    /// A header row that reads something out — the control's kind, the
+    /// value's type — and runs nothing.
+    Info,
 }
 
 /// The viewport menubar's Guides menu and its items, by position — the one
@@ -4428,14 +4431,28 @@ impl State {
         self.slots.param.as_any().downcast_ref::<ParametersBg>().map(|pb| pb.get_param_rects()).unwrap_or_default()
     }
 
-    /// Open a parameter row's right-click menu.
-    fn open_param_context_menu(&mut self, slot: usize, pname: String) {
-        let (node_id, is_expr) = {
-            let child = &self.param_editor_dir().children[slot];
-            (child.id.clone(), child.params.iter().find(|p| p.name == pname).is_some_and(|p| p.is_expr()))
-        };
-        let mut options = vec!["Copy Parameter".to_string()];
-        let mut actions = vec![ParamMenuAction::CopyParameter];
+    /// The rows of a parameter's right-click menu: labels, the action each
+    /// runs, and how many leading rows are HEADERS. Split from the open so
+    /// a test reads them.
+    ///
+    /// The two headers read the parameter out: `Control:` is its kind
+    /// (`ParamKind::name` — slider, float3, attribute…) and `Value:` what
+    /// its text holds right now (`ParamDef::value_type` — number,
+    /// expression, invalid…). Two lines rather than one because they
+    /// answer different questions: the first is the template's, the second
+    /// the instance's, and they differ exactly when something is off — a
+    /// `Control: slider` over `Value: expression` is a row whose slider
+    /// cannot be shown, over `Value: invalid (…)` a load that kept a text
+    /// the kind refuses.
+    pub fn param_menu_rows(&self, slot: usize, pname: &str) -> (Vec<String>, Vec<ParamMenuAction>, usize) {
+        let child = &self.param_editor_dir().children[slot];
+        let param = child.params.iter().find(|p| p.name == pname);
+        let is_expr = param.is_some_and(|p| p.is_expr());
+        let (control, value) = param
+            .map(|p| (p.kind().name().to_string(), p.value_type()))
+            .unwrap_or_else(|| ("?".to_string(), "?".to_string()));
+        let mut options = vec![format!("Control: {control}"), format!("Value: {value}"), "-".to_string(), "Copy Parameter".to_string()];
+        let mut actions = vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter];
         if self.copied_param.is_some() {
             options.push("Paste Relative Reference".to_string());
             actions.push(ParamMenuAction::PasteRelative);
@@ -4451,8 +4468,15 @@ impl State {
             options.push("Edit Expression".to_string());
             actions.push(ParamMenuAction::EditExpression);
         }
+        (options, actions, 2)
+    }
+
+    /// Open a parameter row's right-click menu.
+    fn open_param_context_menu(&mut self, slot: usize, pname: String) {
+        let node_id = self.param_editor_dir().children[slot].id.clone();
+        let (options, actions, headers) = self.param_menu_rows(slot, &pname);
         let target = self.slots.get_dyn(crate::slots::PARAM_IDX).base().id();
-        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, headers, target);
         self.param_menu_active = true;
         self.param_menu_actions = actions;
         self.param_menu_target = Some((node_id, pname));
@@ -4496,7 +4520,7 @@ impl State {
             .map(|n| format!("/{}", n.join("/")))
             .unwrap_or_else(|| node_id.to_string());
         match action {
-            ParamMenuAction::Separator => return,
+            ParamMenuAction::Separator | ParamMenuAction::Info => return,
             ParamMenuAction::CopyParameter => {
                 self.copied_param = Some((node_id.to_string(), pname.to_string()));
                 self.update_status_text(&format!("Copied {node_label}/{pname} — paste it as a reference on another parameter."));

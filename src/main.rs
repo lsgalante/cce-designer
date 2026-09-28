@@ -7754,7 +7754,19 @@ mod tests {
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
         assert!(state.param_menu_open(), "a right press on a row opens its menu");
         assert!(!state.viewport_menu_open());
-        assert_eq!(state.param_menu_actions, vec![ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression], "nothing copied yet, and the row holds a value");
+        assert_eq!(
+            state.param_menu_actions,
+            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
+            "nothing copied yet, and the row holds a value"
+        );
+        // The two header rows read the parameter out: its control's kind
+        // and its value's type. Radius is a slider holding a number.
+        let shown = cce_ui::widget::context_menu::options();
+        assert_eq!(&shown[..3], &["Control: slider".to_string(), "Value: number".to_string(), "-".to_string()]);
+        let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
+        assert_eq!(headers, 2);
+        // A click on a header runs nothing.
+        state.run_param_action(&state.current_dir().children[sphere].id.clone(), "Radius", ParamMenuAction::Info);
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });
 
         // Copy, then paste onto ball's Radius — a sibling, so `../sphere1`.
@@ -7792,6 +7804,15 @@ mod tests {
         state.run_param_action(&ball_id, "Radius", ParamMenuAction::EditExpression);
         assert_eq!(radius(&state, ball).text(), "0.9");
         assert!(radius(&state, ball).is_expr());
+        // …and the menu's readout says so: the control is still a slider,
+        // the value is now an expression. Method is a choice holding an
+        // option, Rows a spinbox holding a whole number.
+        let (rows, _, _) = state.param_menu_rows(ball, "Radius");
+        assert_eq!(&rows[..2], &["Control: slider".to_string(), "Value: expression".to_string()]);
+        let (rows, _, _) = state.param_menu_rows(ball, "Method");
+        assert_eq!(&rows[..2], &["Control: choice".to_string(), "Value: option".to_string()]);
+        let (rows, _, _) = state.param_menu_rows(ball, "Rows");
+        assert_eq!(&rows[..2], &["Control: spinbox".to_string(), "Value: whole number".to_string()]);
 
         // And a reference typed straight into a row (or scripted) becomes one.
         state.apply_action(McpAction::SetParam { slot: ball, name: "Rows".into(), value: "chi(\"../sphere1/Rows\") * 2".into() }, &mut redraw).unwrap();

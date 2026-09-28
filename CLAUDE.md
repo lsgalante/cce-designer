@@ -715,7 +715,17 @@ Relative Reference** (`relative_ref_path`: `../sphere1`), **Paste Absolute
 Reference** (`/sphere1`), and **Edit Expression** / **Delete Expression** —
 the latter bakes the CURRENT value back as a value, as Delete Channels
 does. `copied_param` holds a node ID, not a path, so a rename between copy
-and paste still pastes the right path. The paste writes `chs()` when the
+and paste still pastes the right path. **Two header rows read the
+parameter out** (since 2026-09-28, `param_menu_rows`): `Control:` is the
+kind the template gave it (`ParamKind::name` — slider, float3,
+attribute…) and `Value:` what its text holds right now
+(`ParamDef::value_type` — number, whole number, vector, true/false,
+option, text, expression, or invalid with the reason). Two lines because
+they answer different questions, the template's and the instance's, and
+they differ exactly when something is off: a slider over an expression is
+a row whose slider cannot be drawn, a slider over `invalid (…)` a load that
+kept a text the kind refuses. They are the context menu's header rows —
+dimmed, never hovered — and `ParamMenuAction::Info` runs nothing. The paste writes `chs()` when the
 target row holds text or a choice and `ch()` otherwise, by the TARGET,
 because that is what the value has to fit. Expression rows draw with a
 green tint (`render.rs`, PARAM_IDX arm) and as text in the pane
