@@ -7756,41 +7756,55 @@ mod tests {
         assert!(!state.viewport_menu_open());
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
+            vec![ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Info, ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression],
             "nothing copied yet, and the row holds a value"
         );
-        // The header rows read the parameter out: its control's kind, its
-        // value's type in a programmer's terms, the template's default and
-        // the control's range. Radius is a slider holding a float, clamped
-        // to the pane's default 0..2 since the template declares no range.
+        // The header rows read the parameter out: its name, its control's
+        // kind, its value's type in a programmer's terms, the template's
+        // default and the control's range. Radius is a slider holding a
+        // float, clamped to the pane's default 0..2 since the template
+        // declares no range; it has no label and no condition, so neither
+        // row appears.
         let shown = cce_ui::widget::context_menu::options();
         assert_eq!(
-            &shown[..5],
-            &["Control: slider".to_string(), "Value: float".to_string(), "Default: 0.5".to_string(), "Range: 0..2".to_string(), "-".to_string()]
+            &shown[..6],
+            &["Name: Radius".to_string(), "Control: slider".to_string(), "Value: float".to_string(), "Default: 0.5".to_string(), "Range: 0..2".to_string(), "-".to_string()]
         );
         let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
-        assert_eq!(headers, 4);
-        // An inline range, a spinbox's range and step, a choice's options.
-        let (rows, _, h) = state.param_menu_rows(sphere, "Center X");
-        assert_eq!((&rows[3], h), (&"Range: -2..2".to_string(), 4));
-        let (rows, _, _) = state.param_menu_rows(sphere, "Rows");
-        assert_eq!((&rows[2], &rows[3]), (&"Default: 16".to_string(), &"Range: 2..128, step 1".to_string()));
-        let (rows, _, h) = state.param_menu_rows(sphere, "Method");
-        assert_eq!((&rows[2], &rows[3], h), (&"Default: UV".to_string(), &"Options: UV, Icosphere, Cube".to_string(), 4));
-        let (rows, _, h) = state.param_menu_rows(sphere, "Color");
-        assert_eq!((rows[2].as_str(), rows[3].as_str(), h), ("Default: true", "-", 3), "a toggle has neither a range nor options");
-        // A parameter no template names has no default row.
+        assert_eq!(headers, 5);
+        // The headers are the rows before the separator; each one is
+        // looked up by its readout, not its position.
+        let headers_of = |state: &State, pname: &str| -> Vec<String> {
+            let (rows, _, h) = state.param_menu_rows(sphere, pname);
+            assert_eq!(rows[h], "-");
+            rows[..h].to_vec()
+        };
+        // An inline range, a spinbox's range and step, a choice's options,
+        // and a conditional row's condition.
+        assert!(headers_of(&state, "Center X").contains(&"Range: -2..2".to_string()));
+        let rows = headers_of(&state, "Rows");
+        for want in ["Default: 16", "Range: 2..128, step 1", "Shown when: Method == UV"] {
+            assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
+        }
+        let rows = headers_of(&state, "Method");
+        for want in ["Default: UV", "Options: UV, Icosphere, Cube"] {
+            assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
+        }
+        assert_eq!(headers_of(&state, "Color"), vec!["Name: Color", "Control: toggle", "Value: boolean", "Default: true"], "a toggle has neither a range nor options");
+        // A parameter no template names has no default row; one with a
+        // label shows it under the name.
         state.apply_action(McpAction::AddParam { slot: sphere, name: "Extra".into(), param_type: "float".into(), default: "3".into() }, &mut redraw).unwrap();
-        let (rows, _, h) = state.param_menu_rows(sphere, "Extra");
-        assert_eq!((rows[2].as_str(), h), ("-", 2));
+        assert_eq!(headers_of(&state, "Extra"), vec!["Name: Extra", "Control: float", "Value: float"]);
+        state.current_dir_mut().children[sphere].params.iter_mut().find(|p| p.name == "Extra").unwrap().label = "Extra Size".into();
+        assert_eq!(headers_of(&state, "Extra")[..2], ["Name: Extra".to_string(), "Label: Extra Size".to_string()]);
         // Inside a subnet instance the SUBNET template's override is the
         // default: the Embryo's sphere1 was built with an expression.
         state.apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: Some("embryo1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
         let embryo = slot_of(&state, "embryo1");
         state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
         let inner = slot_of(&state, "sphere1");
-        let (rows, _, _) = state.param_menu_rows(inner, "Radius");
-        assert_eq!(rows[2], "Default: chf(\"../Radius\")");
+        let (rows, _, h) = state.param_menu_rows(inner, "Radius");
+        assert!(rows[..h].contains(&"Default: chf(\"../Radius\")".to_string()), "{rows:?}");
         state.apply_action(McpAction::Up, &mut redraw).unwrap();
         // A click on a header runs nothing.
         state.run_param_action(&state.current_dir().children[sphere].id.clone(), "Radius", ParamMenuAction::Info);
@@ -7835,11 +7849,11 @@ mod tests {
         // the value is now an expression. Method is a choice holding an
         // enum, Rows a spinbox holding an integer.
         let (rows, _, _) = state.param_menu_rows(ball, "Radius");
-        assert_eq!(&rows[..2], &["Control: slider".to_string(), "Value: expression".to_string()]);
+        assert_eq!(&rows[1..3], &["Control: slider".to_string(), "Value: expression".to_string()]);
         let (rows, _, _) = state.param_menu_rows(ball, "Method");
-        assert_eq!(&rows[..2], &["Control: choice".to_string(), "Value: enum".to_string()]);
+        assert_eq!(&rows[1..3], &["Control: choice".to_string(), "Value: enum".to_string()]);
         let (rows, _, _) = state.param_menu_rows(ball, "Rows");
-        assert_eq!(&rows[..2], &["Control: spinbox".to_string(), "Value: integer".to_string()]);
+        assert_eq!(&rows[1..3], &["Control: spinbox".to_string(), "Value: integer".to_string()]);
 
         // And a reference typed straight into a row (or scripted) becomes one.
         state.apply_action(McpAction::SetParam { slot: ball, name: "Rows".into(), value: "chi(\"../sphere1/Rows\") * 2".into() }, &mut redraw).unwrap();

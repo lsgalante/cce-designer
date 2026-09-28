@@ -4466,7 +4466,12 @@ impl State {
     /// expression), left out for a parameter no template names. A control
     /// with a range adds `Range: lo..hi`, with its step when one is set
     /// (`ParamDef::range`, the pane's own numbers); a choice adds
-    /// `Options: a, b, c`.
+    /// `Options: a, b, c`. Around those, `Name:` heads the list — the
+    /// parameter's name, which is what a `ch()` path and a wire spell —
+    /// with `Label:` after it only when the template gives one (the pane
+    /// shows the name otherwise, and a Label row repeating it would say
+    /// there is one), and `Shown when:` closes it with the row's
+    /// `show_when` condition when it has one.
     pub fn param_menu_rows(&self, slot: usize, pname: &str) -> (Vec<String>, Vec<ParamMenuAction>, usize) {
         let dir = self.param_editor_dir();
         let child = &dir.children[slot];
@@ -4475,7 +4480,12 @@ impl State {
         let (control, value) = param
             .map(|p| (p.kind().name().to_string(), p.value_type()))
             .unwrap_or_else(|| ("?".to_string(), "?".to_string()));
-        let mut options = vec![format!("Control: {control}"), format!("Value: {value}")];
+        let mut options = vec![format!("Name: {pname}")];
+        if let Some(label) = param.map(|p| p.label.as_str()).filter(|l| !l.is_empty()) {
+            options.push(format!("Label: {label}"));
+        }
+        options.push(format!("Control: {control}"));
+        options.push(format!("Value: {value}"));
         if let Some(d) = self.template_default(dir, child, pname) {
             options.push(format!("Default: {}", d.text()));
         }
@@ -4486,6 +4496,9 @@ impl State {
         }
         if let Some(p) = param.filter(|p| p.kind() == ParamKind::Choice) {
             options.push(format!("Options: {}", p.choice_options().join(", ")));
+        }
+        if let Some(cond) = param.map(|p| p.show_when.as_str()).filter(|c| !c.is_empty()) {
+            options.push(format!("Shown when: {cond}"));
         }
         let headers = options.len();
         let mut actions = vec![ParamMenuAction::Info; headers];

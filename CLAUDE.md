@@ -715,8 +715,11 @@ Relative Reference** (`relative_ref_path`: `../sphere1`), **Paste Absolute
 Reference** (`/sphere1`), and **Edit Expression** / **Delete Expression** —
 the latter bakes the CURRENT value back as a value, as Delete Channels
 does. `copied_param` holds a node ID, not a path, so a rename between copy
-and paste still pastes the right path. **Two header rows read the
-parameter out** (since 2026-09-28, `param_menu_rows`): `Control:` is the
+and paste still pastes the right path. **Header rows read the
+parameter out** (since 2026-09-28, `param_menu_rows`): `Name:` is the
+parameter's name, what a `ch()` path spells, with `Label:` under it only
+when the template gives one (the pane shows the name otherwise, and a
+Label row repeating it would claim there is one); `Control:` is the
 kind the template gave it (`ParamKind::name` — slider, float3,
 attribute…) and `Value:` what its text holds right now
 (`ParamDef::value_type` — float, integer, vec3, boolean, enum, string,
@@ -728,7 +731,9 @@ a child inside an instance — the Embryo's `sphere1` defaults its Radius to
 then `Range: lo..hi` with its step for a slider, float3 or
 spinbox (`ParamDef::range`, the numbers `param_display` builds the pane's
 row from — an inline `slider:-2:2`, else the template's min/max, else
-the pane's defaults) and `Options: a, b, c` for a choice. Two lines because
+the pane's defaults), `Options: a, b, c` for a choice, and `Shown when:`
+with the row's `show_when` condition when it has one. Control and Value
+are two lines because
 they answer different questions, the template's and the instance's, and
 they differ exactly when something is off: a slider over an expression is
 a row whose slider cannot be drawn, a slider over `invalid (…)` a load that
