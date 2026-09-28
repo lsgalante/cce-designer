@@ -372,6 +372,13 @@ render block — that block rides the project file, and which GPU a machine
 has is not a property of a scene. Verified under the session's pin: unset
 opens the Iris Xe, `discrete` the RTX 4080.
 
+**`playbar_repeat`** (top-level too, since 2026-09-28) is whether playback
+wraps at the end of the frame range or stops on the last frame — the
+`toggle_playbar_repeat` command, a switch in the palette, unbound. The one
+copy is `Playbar::repeat`; with it off a play press on a timeline stopped
+at its far end restarts from the near one (`Playbar::begin`, which the
+button and the Up/Down chords share).
+
 `DesignSettings` (viewport/graph display state the app rewrites itself:
 colors, grid sizes, show flags) persists to `state.kdl` — deliberately NOT
 `config.kdl`, which is the user-authored toolkit-config override slot that

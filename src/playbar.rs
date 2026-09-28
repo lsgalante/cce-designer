@@ -21,6 +21,12 @@ pub struct Playbar {
     pub start_frame: f32,
     pub end_frame: f32,
     pub fps: f32,
+    /// Whether playback wraps at the range's end (on, the default and the
+    /// only behaviour until 2026-09-28) or stops there. Persisted in
+    /// state.kdl (`playbar_repeat`) and flipped by `toggle_playbar_repeat`;
+    /// this field is the one copy, read by the dialog's switch and
+    /// `save_settings`.
+    pub repeat: bool,
     dragging: bool,
 }
 
@@ -39,8 +45,25 @@ impl Playbar {
             start_frame: 1.0,
             end_frame: 240.0,
             fps: 24.0,
+            repeat: true,
             dragging: false,
         })
+    }
+
+    /// Start playing in a direction. With Repeat off a timeline stopped at
+    /// its far end has nowhere to go, so the press restarts it from the
+    /// near one, the way a transport's play does after a stop-at-end; with
+    /// Repeat on the next tick wraps anyway and the frame is left alone.
+    pub fn begin(&mut self, reversed: bool) {
+        self.playing = true;
+        self.reversed = reversed;
+        if !self.repeat {
+            if !reversed && self.current_frame >= self.end_frame {
+                self.current_frame = self.start_frame;
+            } else if reversed && self.current_frame <= self.start_frame {
+                self.current_frame = self.end_frame;
+            }
+        }
     }
 
     fn button_rect(&self, rect: Rect) -> Rect {
@@ -225,9 +248,10 @@ impl Input for Playbar {
                         // The button is the FORWARD transport: playing (either
                         // direction) pauses; paused starts forward. Reverse is
                         // the Down-arrow chord's domain.
-                        self.playing = !self.playing;
                         if self.playing {
-                            self.reversed = false;
+                            self.playing = false;
+                        } else {
+                            self.begin(false);
                         }
                         return true;
                     }
@@ -263,11 +287,23 @@ impl Input for Playbar {
         self.current_frame += dir * dt * self.fps;
         let range = (self.end_frame - self.start_frame).max(1.0);
         if self.current_frame > self.end_frame {
-            self.current_frame = self.start_frame + (self.current_frame - self.start_frame) % range;
+            if self.repeat {
+                self.current_frame = self.start_frame + (self.current_frame - self.start_frame) % range;
+            } else {
+                // Repeat off: land ON the last frame and stop there, so the
+                // final state of a simulation is what stays on screen.
+                self.current_frame = self.end_frame;
+                self.playing = false;
+            }
         } else if self.current_frame < self.start_frame {
             // The reverse wrap, mirroring the forward one: run off the start,
             // come back in from the end.
-            self.current_frame = self.end_frame - (self.start_frame - self.current_frame) % range;
+            if self.repeat {
+                self.current_frame = self.end_frame - (self.start_frame - self.current_frame) % range;
+            } else {
+                self.current_frame = self.start_frame;
+                self.playing = false;
+            }
         }
         true
     }

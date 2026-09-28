@@ -213,6 +213,10 @@ pub const COMMANDS: &[Command] = &[
     // the way a transport's stop-to-start does — one press whatever the
     // timeline is doing.
     Command { id: "frame_start", label: "Go To Start Frame", context: Context::Playbar, run: Run::Key(Action::FrameStart), default_chord: Some("Ctrl+Up") },
+    // Repeat: wrap at the end of the range (on) or stop on the last frame
+    // (off). A setting rather than a transport key, so it ships unbound and
+    // carries a switch in the palette; persisted in state.kdl.
+    Command { id: "toggle_playbar_repeat", label: "Repeat Playback", context: Context::Playbar, run: Run::Key(Action::TogglePlaybarRepeat), default_chord: None },
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Command> {

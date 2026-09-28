@@ -1442,6 +1442,12 @@ pub struct DesignSettings {
     /// of a scene.
     #[serde(default = "default_gpu")]
     pub gpu: String,
+    /// Whether playback wraps at the end of the frame range (the default)
+    /// or stops on the last frame — `toggle_playbar_repeat`. Top-level like
+    /// `gpu`: how the transport behaves is how you like to work, not a
+    /// property of a scene, so it does not ride the project file.
+    #[serde(default = "default_true")]
+    pub playbar_repeat: bool,
 }
 
 impl Default for DesignSettings {
@@ -1451,8 +1457,13 @@ impl Default for DesignSettings {
             render: RenderSettings::default(),
             default_project: None,
             gpu: default_gpu(),
+            playbar_repeat: true,
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// The GPU setting's options. "integrated" is cce-ui's own default
@@ -2483,6 +2494,7 @@ impl State {
             render: display.render,
             default_project: self.default_project_setting.clone(),
             gpu: self.gpu_preference.clone(),
+            playbar_repeat: self.slots.playbar.inner().repeat,
         };
         settings.save();
         self.last_design_mod_time = {
@@ -5888,6 +5900,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             dialog: crate::dialog::Dialog::new(),
         });
 
+        slots.playbar.inner_mut().repeat = settings.playbar_repeat;
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
             viewport.show_grid = settings.viewport.show_grid_enabled;
             viewport.show_origin = settings.viewport.show_origin_enabled;
@@ -7950,9 +7963,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if pb.playing {
                     pb.playing = false;
                 } else {
-                    pb.playing = true;
-                    pb.reversed = action == Action::PlayPauseReverse;
+                    pb.begin(action == Action::PlayPauseReverse);
                 }
+            }
+            // Repeat is a setting, not a transport press: the timeline keeps
+            // doing whatever it is doing, and the next run-off honours it.
+            Action::TogglePlaybarRepeat => {
+                let pb = self.slots.playbar.inner_mut();
+                pb.repeat = !pb.repeat;
+                settings_changed = true;
             }
             // Whole-frame stepping off the ROUNDED current frame: during
             // playback the playhead sits between frames, and stepping from
@@ -9776,6 +9795,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                          let settings = DesignSettings::load();
                          self.default_project_setting = settings.default_project.clone();
                          self.gpu_preference = settings.gpu.clone();
+                         self.slots.playbar.inner_mut().repeat = settings.playbar_repeat;
                          self.square_viewport = settings.viewport.square;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;

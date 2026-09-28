@@ -1620,6 +1620,7 @@ impl State {
             "show_viewport_pane" => self.show_viewport,
             "show_parameters_pane" => self.show_parameters,
             "show_playbar_pane" => self.show_playbar,
+            "toggle_playbar_repeat" => self.slots.playbar.inner().repeat,
             "toggle_snap" => self.viewer_tool.as_ref()?.snap.is_some(),
             _ => return None,
         })

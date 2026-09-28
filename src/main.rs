@@ -2474,6 +2474,7 @@ mod tests {
             let pb = state.slots.playbar.inner_mut();
             pb.playing = true;
             pb.reversed = true;
+            pb.repeat = true;
             pb.current_frame = 1.5;
         }
         let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 30.0 };
@@ -12735,5 +12736,68 @@ mod tests {
             assert_eq!(state.sim_frame(), start + i, "the playbar advanced a frame");
             assert_eq!(state.last_sim_frame, state.sim_frame(), "and the scene was built for that frame, not the last one");
         }
+    }
+
+    /// Repeat off: playback stops ON the last frame instead of wrapping,
+    /// in either direction, and a play press on a timeline stopped at its
+    /// far end restarts from the near one. The setting is a palette toggle
+    /// persisted top-level in state.kdl, read back by a fresh State.
+    #[test]
+    fn repeat_off_stops_playback_at_the_end_and_persists() {
+        use cce_ui::widget::Input;
+        let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 30.0 };
+        let mut state = State::new(false);
+        assert_eq!(state.command_toggle_state("toggle_playbar_repeat"), Some(true), "repeat is on by default");
+        assert!(state.run_command("toggle_playbar_repeat"));
+        assert_eq!(state.command_toggle_state("toggle_playbar_repeat"), Some(false));
+        // Persisted: the toggle wrote state.kdl, and a fresh State reads it.
+        // Checked at once, since the suite's tests share the (redirected)
+        // file and another's save could follow.
+        let kdl = fs::read_to_string(DesignSettings::file_path()).expect("state.kdl was written");
+        assert!(!DesignSettings::from_kdl_str(&kdl).playbar_repeat, "{kdl}");
+        assert!(!State::new(false).slots.playbar.inner().repeat, "a new State seeds the playbar from the setting");
+
+        // Forward: run off the end, land on it, stop.
+        {
+            let pb = state.slots.playbar.inner_mut();
+            pb.current_frame = pb.end_frame - 0.5;
+            pb.begin(false);
+        }
+        assert!(Input::tick(state.slots.playbar.inner_mut(), 0.1, rect));
+        {
+            let pb = state.slots.playbar.inner();
+            assert_eq!(pb.current_frame, pb.end_frame, "stopped on the last frame");
+            assert!(!pb.playing, "and playback ended");
+        }
+        // Play again from the end: restarts from the start frame.
+        state.execute_action(Action::PlayPause);
+        {
+            let pb = state.slots.playbar.inner();
+            assert!(pb.playing && !pb.reversed);
+            assert_eq!(pb.current_frame, pb.start_frame, "a play press at the far end rewinds");
+        }
+        // Reverse: run off the start, stop there; Down restarts from the end.
+        {
+            let pb = state.slots.playbar.inner_mut();
+            pb.playing = false;
+            pb.current_frame = pb.start_frame + 0.5;
+            pb.begin(true);
+        }
+        assert!(Input::tick(state.slots.playbar.inner_mut(), 0.1, rect));
+        {
+            let pb = state.slots.playbar.inner();
+            assert_eq!(pb.current_frame, pb.start_frame);
+            assert!(!pb.playing);
+        }
+        state.execute_action(Action::PlayPauseReverse);
+        {
+            let pb = state.slots.playbar.inner();
+            assert!(pb.playing && pb.reversed);
+            assert_eq!(pb.current_frame, pb.end_frame);
+        }
+
+        // Back on, and the file follows.
+        assert!(state.run_command("toggle_playbar_repeat"));
+        assert!(DesignSettings::from_kdl_str(&fs::read_to_string(DesignSettings::file_path()).unwrap()).playbar_repeat);
     }
 }
