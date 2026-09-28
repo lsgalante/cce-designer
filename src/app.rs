@@ -4775,29 +4775,57 @@ impl State {
     /// the scene positions its rebuild kept. None of it re-evaluates the
     /// graph.
     fn land_viewport_menu_slider(&mut self, action: ViewportMenuAction, v: f32) {
-        match action {
-            ViewportMenuAction::OpacitySlider => self.geo_opacity = (v / 100.0).clamp(0.0, 1.0),
-            ViewportMenuAction::WireThicknessSlider => self.wire_width = v.clamp(1.0, 8.0),
-            ViewportMenuAction::WireOpacitySlider => self.wire_opacity = (v / 100.0).clamp(0.0, 1.0),
-            ViewportMenuAction::PointSizeSlider => {
+        // The menu's opacity rows are in percent; the field is a fraction.
+        let (key, v) = match action {
+            ViewportMenuAction::OpacitySlider => ("geo_opacity", v / 100.0),
+            ViewportMenuAction::WireThicknessSlider => ("wire_width", v),
+            ViewportMenuAction::WireOpacitySlider => ("wire_opacity", v / 100.0),
+            ViewportMenuAction::PointSizeSlider => ("point_size", v),
+            ViewportMenuAction::PointMarkerSizeSlider => ("point_marker_size", v),
+            ViewportMenuAction::GroupMarkerScaleSlider => ("group_marker_scale", v),
+            ViewportMenuAction::PullArrowScaleSlider => ("pull_arrow_scale", v),
+            _ => return,
+        };
+        self.land_draw_time_setting(key, v);
+    }
+
+    /// Land a DRAW-TIME display setting by its `DesignSettings` field key —
+    /// the one landing behind the viewport menu's sliders AND the dialog's
+    /// (`land_dialog_slider`), so the two cannot disagree about a clamp or
+    /// about which marker mesh a size feeds. Returns false for a key that is
+    /// not one of these, which the dialog takes as "run the full apply".
+    ///
+    /// Until 2026-09-28 the dialog's sliders went through `apply_setting` on
+    /// every motion of a drag: a whole graph evaluation, a second one for
+    /// the group markers and a third for the params pane's pickers (both
+    /// keyed on the geometry version the first had just bumped), a restart
+    /// of the path tracer's refine, and a synchronous state.kdl write — per
+    /// pointer event, for six values none of which the graph reads.
+    pub(crate) fn land_draw_time_setting(&mut self, key: &str, v: f32) -> bool {
+        match key {
+            "geo_opacity" => self.geo_opacity = v.clamp(0.0, 1.0),
+            "wire_width" => self.wire_width = v.clamp(1.0, 8.0),
+            "wire_opacity" => self.wire_opacity = v.clamp(0.0, 1.0),
+            "point_size" => {
                 self.point_size = v.clamp(0.0, 0.1);
                 self.rebuild_group_marker_verts();
             }
-            ViewportMenuAction::PointMarkerSizeSlider => {
+            "point_marker_size" => {
                 self.point_marker_size = v.clamp(0.005, 0.1);
                 self.rebuild_overlay_marker_verts();
             }
-            ViewportMenuAction::GroupMarkerScaleSlider => {
+            "group_marker_scale" => {
                 self.group_marker_scale = v.clamp(0.5, 4.0);
                 self.rebuild_group_marker_verts();
             }
-            ViewportMenuAction::PullArrowScaleSlider => {
+            "pull_arrow_scale" => {
                 self.pull_arrow_scale = v.clamp(0.25, 10.0);
                 self.rebuild_pull_arrow_verts();
             }
-            _ => return,
+            _ => return false,
         }
         self.viewport_dirty = true;
+        true
     }
 
     /// Land what a viewport menu slider did. During a drag this is called

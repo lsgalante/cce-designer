@@ -10892,6 +10892,88 @@ mod tests {
         assert_eq!(d.take_slider_change(), None);
     }
 
+    /// A dialog slider is worked by the pointer, and every motion of a drag
+    /// lands its value. Until 2026-09-28 each landing ran `apply_setting`'s
+    /// whole regenerate pass — a graph evaluation (and two more keyed on the
+    /// version it bumped), a path-tracer restart and a synchronous state.kdl
+    /// write, per pointer event, for a value the graph never reads. A slider
+    /// row lands as the viewport menu's sliders do: the field, a redraw, the
+    /// row re-read in place, and the file written once on the release. A
+    /// single landing (a wheel notch, an arrow key) saves at once, and a
+    /// spin row still takes the full pass, whose regenerate it needs.
+    #[test]
+    fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
+        use crate::dialog::{setting_row_id, Control, ROW_H, SLIDER_W, TOGGLE_W};
+        use crate::slots::DIALOG_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.geo_opacity = 1.0;
+        state.save_settings();
+        let path = crate::app::DesignSettings::file_path();
+        let saved = |path: &std::path::Path| {
+            let kdl = fs::read_to_string(path).expect("a settings file");
+            crate::app::DesignSettings::from_kdl_str(&kdl).render.geo_opacity
+        };
+        assert!((saved(&path) - 1.0).abs() < 1e-3);
+
+        state.open_dialog();
+        state.slots.dialog.query = "geometry opacity".into();
+        state.refresh_dialog_rows();
+        let row = setting_row_id("Geometry Opacity");
+        assert_eq!(state.slots.dialog.rows.first().map(|r| r.id.as_str()), Some(row.as_str()), "the setting row ranks first");
+        let has_toggle = state.slots.dialog.rows.iter().any(|r| matches!(r.control, Some(Control::Toggle(_))));
+        let (x, y, w, _) = state.positions[DIALOG_IDX];
+        let row_y = y + 12.0 + 30.0 + 8.0 + ROW_H * 0.5;
+        let band_right = x + w - 12.0 - 8.0 - if has_toggle { TOGGLE_W + 12.0 } else { 0.0 };
+        let band_x = band_right - SLIDER_W;
+        let at = |state: &mut State, t: f32| {
+            let px = band_x + SLIDER_W * t;
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: px as f64, y: row_y as f64 } });
+        };
+        let version = state.rt_geometry_version;
+
+        // The press takes the band and jumps the value; nothing is evaluated
+        // and nothing is written.
+        at(&mut state, 0.5);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(state.slots.dialog.slider_dragging(), "the press took the band");
+        assert!((state.geo_opacity - 0.5).abs() < 0.02, "{}", state.geo_opacity);
+        assert_eq!(state.rt_geometry_version, version, "a draw-time value re-evaluated the graph");
+        assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
+
+        // A motion lands the value live and re-reads the row in place.
+        at(&mut state, 0.25);
+        assert!((state.geo_opacity - 0.25).abs() < 0.02, "{}", state.geo_opacity);
+        let shown = state.slots.dialog.rows[0].slider_value().expect("a slider row");
+        assert!((shown - state.geo_opacity).abs() < 1e-3, "the row shows {shown}, the field holds {}", state.geo_opacity);
+        assert_eq!(state.rt_geometry_version, version, "a drag motion re-evaluated the graph");
+        assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
+
+        // The release writes the file once.
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert!(!state.slots.dialog.slider_dragging());
+        assert!((saved(&path) - state.geo_opacity).abs() < 1e-3, "the release did not save");
+        assert_eq!(state.rt_geometry_version, version);
+
+        // A single landing saves at once, and clamps as the menu clamps.
+        state.land_dialog_slider(&row, 0.7);
+        assert!((state.geo_opacity - 0.7).abs() < 1e-6);
+        assert!((saved(&path) - 0.7).abs() < 1e-3, "a wheel or arrow landing did not save");
+        state.land_dialog_slider(&row, 7.0);
+        assert!((state.geo_opacity - 1.0).abs() < 1e-6, "clamped");
+        assert_eq!(state.rt_geometry_version, version);
+
+        // Point Size re-sizes the group markers from their kept members,
+        // and a spin row still takes the full regenerate pass.
+        state.land_dialog_slider(&setting_row_id("Point Size"), 0.05);
+        assert!((state.point_size - 0.05).abs() < 1e-6);
+        assert!((state.last_group_marker_size - state.group_marker_size()).abs() < 1e-6);
+        assert_eq!(state.rt_geometry_version, version);
+        state.land_dialog_slider(&setting_row_id("Grid Thickness"), 40.0);
+        assert!(state.rt_geometry_version > version, "a spin row regenerates");
+    }
+
     /// A right press is the dialog's while it is open: inside the plate it is
     /// swallowed — no context menu opens for the pane beneath, which used to
     /// come up over the modal with its labels clipped — and outside it

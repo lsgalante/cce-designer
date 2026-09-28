@@ -1922,7 +1922,21 @@ selection stays where it was:
   (`Dialog::draggable` / `drag_*`), so the value follows the pointer off the
   plate; the wheel over the control turns it (2% of the range a notch) where
   over the rest of the list it scrolls; Left/Right nudge it by the row's
-  `step` while it is selected; Enter on it runs nothing. The **zoom row**
+  `step` while it is selected; Enter on it runs nothing. **A slider row
+  lands through `State::land_draw_time_setting`** — the one landing the
+  viewport menu's sliders use, by `DesignSettings` field key: the field,
+  the one marker mesh it feeds, a redraw, then `refresh_dialog_controls`
+  — NOT `apply_setting`, and state.kdl is written once on the drag's
+  release (`dialog_mouse_input`), or at once for a wheel notch or arrow
+  key. Until 2026-09-28 every motion of a drag ran the full apply: a graph
+  evaluation, two more keyed on the version it bumped (group markers, the
+  params pane's pickers), a path-tracer restart and a synchronous file
+  write, per pointer event, for six values the graph never reads — which
+  is what made the dialog's sliders drag behind the pointer while the
+  menu's did not. A row the landing does not know (a spin row) still
+  takes the full apply, whose regenerate it needs;
+  `a_dialog_slider_drag_lands_without_re_evaluating_the_graph` pins all
+  of it. The **zoom row**
   (`ZOOM_ROW_ID`, only while the network pane is focused, since zoom is that
   pane's) is one of these over `State::zoom_percent` (100 = Reset Zoom,
   range the pitch limits), landing through `set_zoom_percent`, which zooms

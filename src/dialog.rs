@@ -2081,10 +2081,32 @@ impl State {
 
     /// A slider row's value arriving from a drag, a wheel or an arrow: the
     /// zoom row zooms, a setting row writes its setting.
-    fn land_dialog_slider(&mut self, id: &str, v: f32) {
+    ///
+    /// A slider row is a draw-time value, so it lands through the viewport
+    /// menu's own `land_draw_time_setting` — the field, the one mesh it
+    /// feeds, a redraw — and the row re-reads in place. During a drag this
+    /// runs on every motion, so state.kdl is written on the RELEASE
+    /// (`dialog_mouse_input`) rather than here; a wheel notch or an arrow
+    /// key is a single landing and saves at once, as the menu's wheel does.
+    /// A row the landing does not know falls through to `apply_setting`,
+    /// whose full regenerate pass is what a spin row like Grid Thickness
+    /// needs.
+    pub(crate) fn land_dialog_slider(&mut self, id: &str, v: f32) {
         if id == ZOOM_ROW_ID {
             self.set_zoom_percent(v);
         } else if let Some(s) = setting_of_row(id) {
+            if let (Owner::Field(key), Ctl::Slider { dec, .. }) = (s.owner, s.ctl) {
+                // Rounded as the row shows it, so the field holds the value
+                // the readout names rather than the pointer's raw fraction.
+                let shown: f32 = format!("{:.*}", dec, v).parse().unwrap_or(v);
+                if self.land_draw_time_setting(key, shown) {
+                    self.refresh_dialog_controls();
+                    if !self.slots.dialog.slider_dragging() {
+                        self.save_settings();
+                    }
+                    return;
+                }
+            }
             let value = match s.ctl {
                 Ctl::Slider { dec, .. } => format!("{:.*}", dec, v),
                 _ => (v.round() as i64).to_string(),
@@ -2247,6 +2269,8 @@ impl State {
             self.drag_widget = None;
             self.drag_press_cursor = None;
             self.drain_dialog_clicks();
+            // The drag's motions landed without saving; the release does.
+            self.save_settings();
             return Some(true);
         }
 
