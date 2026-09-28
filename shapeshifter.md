@@ -402,10 +402,6 @@ Touches: `geometry.rs`, `nodes/*.json`.
 > into view, which does nothing in the case you actually press it in — it
 > centres now.
 >
-> `shift+hjkl` is deliberately absent. The Graph widget carries a single
-> `selected_node`, and four rows that quietly did what bare hjkl already does
-> would be worse than the gap. It wants multi-selection first.
->
 > The conflict check earned its place: `ctrl+h` was taken by `edit_handles` from
 > the previous round, and the test named the winner and the shadowed command
 > rather than leaving a key that silently stopped working.
@@ -527,11 +523,6 @@ Touches: `shortcut.rs`, `app.rs`, `slots.rs`, `cce-ui`.
 > changed every time you re-tessellated. The map into the range is affine over
 > a fixed -1..1 rather than normalized over the model, so adding a sharp corner
 > somewhere cannot thin the whole shell.
->
-> A rendering check turned up an unrelated hole: the `box` node has a template
-> and is listed as a geometry node type, but no resolver was ever written for
-> it, so it silently produces nothing and any chain reading from it resolves to
-> nothing. Raised separately rather than fixed here.
 >
 > The volume representation, mesh export and the 2D page context — the three
 > things this phase named as prerequisites — all landed earlier. What remains
