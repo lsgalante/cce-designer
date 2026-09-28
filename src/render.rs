@@ -359,10 +359,12 @@ impl State {
                     let vp_rect = rect(px, py, pw, ph);
                     let radii = self.pane_plate_radii(px, py, pw, ph);
                     if cce_ui::layout::control_relief() {
-                        // Window-edge roll width, NOT plate_bevel_width: the lip
-                        // matches the root plates of other windows
-                        // (style.surface.relief width), not the designer's
-                        // interior pane plates.
+                        // The window-edge roll width (style.surface.relief
+                        // width), read directly as the root plates of other
+                        // windows read it. The interior pane plates roll over
+                        // the same number through `plate_bevel_width` (one
+                        // roll width since 2026-09-28) unless a config still
+                        // carries the legacy `plate.bevel_width` override.
                         let depth = cce_ui::layout::bevel_width();
                         pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
                             rect: vp_rect,
