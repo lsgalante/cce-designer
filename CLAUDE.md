@@ -2061,6 +2061,18 @@ dispatch into the dialog and puts it back, invalidating the coverage memo on bot
 edges (the engine queries it on every left press, so lowering the flag alone
 leaves a stale cached answer).
 
+**A captured pointer hovers no pane.** `State::broadcast_pointer` hands
+every slot the pointer's position, or an off-screen one while
+`pointer_captured` says a gesture or the dialog owns it — a widget or app
+drag, an orbit, a pan, a grid expansion, a handle grab, a held menu
+slider. It runs from the cursor arm (ahead of the early returns those
+gestures take, which is where a pane hovered at the press used to stay lit
+for the whole drag), from the release once the captures are down, and
+from the dialog's open and close, since a modal that let the panes beside
+its plate keep hovering was a modal in name.
+`a_captured_pointer_hovers_no_pane_and_the_release_hands_it_back` is the
+test.
+
 Input is intercepted whole, at the top of `handle_event`'s keyboard and mouse
 branches: `dialog_key_input` is TOTAL rather than a layer, because the network
 pane's bare-letter family is ungated and typing "frame" into the filter would

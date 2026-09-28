@@ -10892,6 +10892,56 @@ mod tests {
         assert_eq!(d.take_slider_change(), None);
     }
 
+    /// A captured pointer hovers no pane. A control lit at the press used to
+    /// stay lit for the length of an orbit, a node drag or a pane resize —
+    /// the broadcast ran only while no widget or app drag was live, and the
+    /// cursor arm's early returns skipped it for every other gesture — and
+    /// the dialog, a modal, let the panes beside its plate keep hovering.
+    /// Now a capture clears every pane, the release hands the pointer back
+    /// without a motion, and the dialog's open and close do the same.
+    #[test]
+    fn a_captured_pointer_hovers_no_pane_and_the_release_hands_it_back() {
+        use crate::slots::NETWORK_PANEL_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        let (x, y, w, h) = state.positions[NETWORK_PANEL_IDX];
+        assert!(w > 0.0 && h > 0.0, "the network plate is laid out");
+        let (cx, cy) = (x + w * 0.5, y + h * 0.5);
+        let hovered = |state: &State| state.slots.get_dyn(NETWORK_PANEL_IDX).base().hovered;
+        let moved = |state: &mut State, x: f32, y: f32| {
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        };
+        moved(&mut state, cx, cy);
+        assert!(hovered(&state), "the plate under a free pointer hovers");
+
+        // An orbit captures the pointer: the next motion clears the plate,
+        // and the release hands the pointer back where it stands.
+        state.orbit_drag = Some((cx, cy));
+        moved(&mut state, cx + 1.0, cy);
+        assert!(!hovered(&state), "a captured pointer hovers no pane");
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert!(state.orbit_drag.is_none());
+        assert!(hovered(&state), "the release re-hovers without a motion");
+
+        // An app drag (a pane edge) captures it the same way.
+        state.app_drag = Some(crate::app::AppDrag::ParamResize { start_w: 100.0, start_mouse_x: cx });
+        moved(&mut state, cx + 2.0, cy);
+        assert!(!hovered(&state));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert!(state.app_drag.is_none());
+        assert!(hovered(&state));
+
+        // The dialog is modal: open, the panes lose the pointer, motion does
+        // not give it back, and closing does.
+        state.open_dialog();
+        assert!(!hovered(&state), "a pane beside the dialog does not hover");
+        moved(&mut state, cx + 3.0, cy);
+        assert!(!hovered(&state));
+        state.close_dialog();
+        assert!(hovered(&state), "closing hands the pointer back");
+    }
+
     /// A dialog slider is worked by the pointer, and every motion of a drag
     /// lands its value. Until 2026-09-28 each landing ran `apply_setting`'s
     /// whole regenerate pass — a graph evaluation (and two more keyed on the

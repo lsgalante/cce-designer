@@ -2690,6 +2690,74 @@ impl State {
     /// into `pending_yaw`/`pending_pitch` for the node to pick up. Doing it any
     /// other way would give a dragged camera a different meaning from a
     /// scrolled one.
+    /// Is the pointer CAPTURED — owned by a gesture or a modal rather than
+    /// free to hover whatever it is over? A widget drag, an app drag (pane
+    /// edges, the dock), a camera orbit, a network pan, a grid expansion
+    /// drag, a viewer-tool handle grab, a held viewport-menu slider, or the
+    /// dialog. While it is, no pane hovers (`broadcast_pointer`).
+    pub(crate) fn pointer_captured(&self) -> bool {
+        self.drag_widget.is_some()
+            || self.app_drag.is_some()
+            || self.orbit_drag.is_some()
+            || self.is_panning
+            || self.grid_cursor_drag.is_some()
+            || self.viewer_tool.as_ref().map_or(false, |t| t.drag.is_some())
+            || (self.viewport_menu_open() && cce_ui::widget::context_menu::slider_dragging())
+            || self.dialog_visible()
+    }
+
+    /// Hand every pane the pointer: its real position when the pane is
+    /// under it and the pointer is free, an off-screen one otherwise, so a
+    /// control's hover tracks the pointer exactly while the pointer can
+    /// reach it. Returns whether any pane changed.
+    ///
+    /// Until 2026-09-28 this ran only while no widget or app drag was live,
+    /// and the arm's early returns skipped it for the other gestures — so a
+    /// control hovered at a press stayed lit for the length of an orbit, a
+    /// node drag or a pane resize, and lit again only when the pointer next
+    /// crossed it. A captured pointer now clears every pane, and the
+    /// release re-broadcasts (`MouseInput`) so what is under the pointer
+    /// hovers at once. The slot driving a widget drag is left alone: its
+    /// `DragUpdate` stream is its motion. The dialog is modal, so while it
+    /// is up only its own slot sees the pointer, and `close_dialog` hands
+    /// it back.
+    pub(crate) fn broadcast_pointer(&mut self) -> bool {
+        let captured = self.pointer_captured();
+        let dialog = self.dialog_visible();
+        let mut changed = false;
+        for i in 0..WIDGET_COUNT {
+            if self.drag_widget == Some(i) {
+                continue;
+            }
+            let (cx, cy) = (self.cursor_x, self.cursor_y);
+            let free = if dialog { i == crate::slots::DIALOG_IDX } else { !captured };
+            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
+            let inside = free
+                && if self.circular_network_pane && is_network_part {
+                    if i == CONTENT_IDX {
+                        self.circular_network_layout.hit_test_content(cx, cy, 0.0, BREADCRUMB_H)
+                    } else if i == LEFT_MENUBAR_IDX {
+                        false
+                    } else if i == BREADCRUMB_IDX {
+                        self.circular_network_layout.hit_test_breadcrumb(cx, cy, 0.0, BREADCRUMB_H)
+                    } else if i == NETWORK_PANEL_IDX {
+                        self.slots.network_panel.hit_test(cx, cy, &self.ui_context)
+                    } else {
+                        false
+                    }
+                } else {
+                    self.slots.get_dyn_mut(i).hit_test(cx, cy, &self.ui_context)
+                };
+            let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
+            let mv = cce_ui::widget::Event::PointerMove { x: tx, y: ty, local_x: tx, local_y: ty };
+            let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
+            if unsafe { (*ptr).handle_event(&mv, &mut self.ui_context) } {
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(crate) fn orbit_camera_by(&mut self, dx_px: f32, dy_px: f32) {
         let dx = dx_px * Self::ORBIT_RADIANS_PER_PX;
         let dy = dy_px * Self::ORBIT_RADIANS_PER_PX;
@@ -8233,6 +8301,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.cursor_y = position.y as f32;
                 let mut changed = false;
 
+                // A captured pointer reaches no pane: the returns below
+                // (a menu slider, a handle grab, an orbit, a grid drag) each
+                // leave before the broadcast at the end of this arm, and a
+                // pane hovered at the press stayed lit for the whole gesture.
+                if self.pointer_captured() && self.broadcast_pointer() {
+                    changed = true;
+                }
+
                 // Track hover on the node/viewport/network context menus so
                 // the highlight follows.
                 if (self.node_menu_open() || self.viewport_menu_open() || self.network_menu_open())
@@ -8430,32 +8506,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         }
                     }
 
-                    if self.drag_widget.is_none() && self.app_drag.is_none() {
-                        for i in 0..WIDGET_COUNT {
-                            let (cx, cy) = (self.cursor_x, self.cursor_y);
-                            let is_network_part = i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX || i == NETWORK_PANEL_IDX;
-                            let inside = if self.circular_network_pane && is_network_part {
-                                if i == CONTENT_IDX {
-                                    self.circular_network_layout.hit_test_content(cx, cy, 0.0, BREADCRUMB_H)
-                                } else if i == LEFT_MENUBAR_IDX {
-                                    false
-                                } else if i == BREADCRUMB_IDX {
-                                    self.circular_network_layout.hit_test_breadcrumb(cx, cy, 0.0, BREADCRUMB_H)
-                                } else if i == NETWORK_PANEL_IDX {
-                                    self.slots.network_panel.hit_test(cx, cy, &self.ui_context)
-                                } else {
-                                    false
-                                }
-                            } else {
-                                self.slots.get_dyn_mut(i).hit_test(cx, cy, &self.ui_context)
-                            };
-                            let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
-                            let mv = cce_ui::widget::Event::PointerMove { x: tx, y: ty, local_x: tx, local_y: ty };
-                            let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
-                            if unsafe { (*ptr).handle_event(&mv, &mut self.ui_context) } {
-                                changed = true;
-                            }
-                        }
+                    if self.broadcast_pointer() {
+                        changed = true;
                     }
                 }
                 changed
@@ -9083,6 +9135,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             changed = true;
                         }
                         if self.orbit_drag.take().is_some() {
+                            self.broadcast_pointer();
                             return true;
                         }
                         if self.viewer_tool_release() {
@@ -9210,6 +9263,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             }
                             self.drag_widget = None;
                             self.drag_press_cursor = None;
+                            changed = true;
+                        }
+                        // Every capture the release ends is down by here:
+                        // the pane under the pointer hovers again without
+                        // waiting for it to move.
+                        if self.broadcast_pointer() {
                             changed = true;
                         }
                         let mut sync_params = false;

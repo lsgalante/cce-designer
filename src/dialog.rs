@@ -1360,6 +1360,8 @@ impl State {
         self.refresh_dialog_rows();
         self.rebuild_positions();
         self.apply_layout();
+        // Modal: the panes lose the pointer while it is up.
+        self.broadcast_pointer();
         self.update_status_text(match mode {
             Mode::Commands => "Dialog: type to filter commands and settings, Escape closes.",
             Mode::AddNode => "Add Node: type to filter, Enter adds at the cursor, Escape closes.",
@@ -1376,6 +1378,8 @@ impl State {
         }
         self.rebuild_positions();
         self.apply_layout();
+        // The pane under the pointer hovers again without a motion.
+        self.broadcast_pointer();
     }
 
     /// Re-rank the row list against the current query, for whichever mode is
