@@ -12710,4 +12710,30 @@ mod tests {
         assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -1.0) }));
         assert_eq!(value(&state), before);
     }
+
+    /// During playback the scene is built for the frame the playbar shows,
+    /// within the same tick. The Playbar's tick advances the frame, so the
+    /// frame-change check has to run after the widget ticks; before
+    /// 2026-09-28 it ran first, and every tick rebuilt the scene for the
+    /// previous tick's frame and then advanced the readout.
+    #[test]
+    fn playback_builds_the_scene_for_the_frame_the_playbar_shows() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        assert!(crate::geometry::contains_simnet(&state.fs_root));
+        state.tick_frame(1.0 / 60.0);
+        assert_eq!(state.last_sim_frame, state.sim_frame());
+        state.slots.playbar.inner_mut().playing = true;
+        state.slots.playbar.inner_mut().fps = 60.0;
+        let start = state.sim_frame();
+        for i in 1..=3 {
+            assert!(state.tick_frame(1.0 / 60.0), "a playing tick asks for a redraw");
+            assert_eq!(state.sim_frame(), start + i, "the playbar advanced a frame");
+            assert_eq!(state.last_sim_frame, state.sim_frame(), "and the scene was built for that frame, not the last one");
+        }
+    }
 }
