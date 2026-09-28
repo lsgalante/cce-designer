@@ -12800,4 +12800,72 @@ mod tests {
         assert!(state.run_command("toggle_playbar_repeat"));
         assert!(DesignSettings::from_kdl_str(&fs::read_to_string(DesignSettings::file_path()).unwrap()).playbar_repeat);
     }
+
+    /// The Attribute node's Value stays a text parameter, but the pane
+    /// presents it as a float3 row — over the wide `VALUE_ROW_RANGE` — when
+    /// the target is three wide and the text holds three numbers: Modify on
+    /// Pos (the pull node), on an input Float3 (Norm), or Create with Type
+    /// Float3. Modify on a Float2 (UV), Create of a Float, a broadcast
+    /// single number and an expression all keep the text box.
+    #[test]
+    fn an_attribute_value_row_is_a_float3_when_its_target_is_three_wide() {
+        let templates_root = crate::app::load_fs_tree();
+        let find = |name: &str| templates_root.children.iter().find(|t| t.name == name).unwrap();
+        let instance = |template: &FsNode, id: &str, name: &str, params: &[(&str, &str)]| {
+            let mut inst = template.clone();
+            inst.id = id.to_string();
+            inst.name = name.to_string();
+            for (pname, val) in params {
+                inst.params.iter_mut().find(|p| p.name == *pname).unwrap().set_text(val.to_string());
+            }
+            inst
+        };
+        let mut state = State::new(false);
+        state.fs_root.children = vec![
+            instance(find("Sphere"), "s", "Sphere 1", &[]),
+            instance(find("Attribute"), "a", "pull1", &[
+                ("Input", "Sphere 1"),
+                ("Operation", "Modify"),
+                ("Attribute Name", "Pos"),
+                ("Value", "0.00:0.06:0.00"),
+                ("Combine", "Add"),
+            ]),
+        ];
+        state.sync_nodes();
+        state.graph_mut().set_selected_node(Some(1));
+        let value_row = |state: &mut State| {
+            state.sync_parameters_pane();
+            state.param_mut().node_params().iter().find(|r| r.0 == "Value").expect("a Value row").2.clone()
+        };
+        let wide = format!("float3:{}:{}", crate::app::VALUE_ROW_RANGE.0, crate::app::VALUE_ROW_RANGE.1);
+        assert_eq!(value_row(&mut state), wide, "Modify on Pos");
+        assert!(crate::app::VALUE_ROW_RANGE.0 <= -100.0 && crate::app::VALUE_ROW_RANGE.1 >= 100.0, "a wide range");
+
+        let set = |state: &mut State, name: &str, val: &str| {
+            state.fs_root.children[1].params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
+        };
+        set(&mut state, "Attribute Name", "Norm");
+        assert_eq!(value_row(&mut state), wide, "Modify on an input Float3");
+        set(&mut state, "Attribute Name", "UV");
+        assert_eq!(value_row(&mut state), "text", "Modify on an input Float2 stays text");
+        set(&mut state, "Attribute Name", "nothing_here");
+        assert_eq!(value_row(&mut state), "text", "an attribute the input lacks has no width");
+
+        set(&mut state, "Operation", "Create");
+        set(&mut state, "Attribute Name", "vel");
+        set(&mut state, "Type", "Float3");
+        assert_eq!(value_row(&mut state), wide, "Create of a Float3");
+        set(&mut state, "Type", "Float");
+        assert_eq!(value_row(&mut state), "text", "Create of a Float");
+        set(&mut state, "Type", "Float3");
+        set(&mut state, "Value", "1.00");
+        assert_eq!(value_row(&mut state), "text", "a broadcast single number stays text");
+        set(&mut state, "Value", "1.00:2.00:3.00");
+        assert_eq!(value_row(&mut state), wide);
+        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "Value").unwrap().set_expr(true);
+        assert_eq!(value_row(&mut state), "text", "an expression is shown as its text");
+
+        // The parameter itself never changed kind: it is text in the node.
+        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "Value").unwrap().kind(), crate::param::ParamKind::Text);
+    }
 }

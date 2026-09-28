@@ -568,7 +568,12 @@ old text Center a float3 from the load on. Tests build parameters with
   `Pin Group` — and the other thirty-odd rows that name one were text boxes
   typed into blind; a template declares it now and needs no entry anywhere.
   What is still `text` is text for a reason: Attribute's `Value` is as wide
-  as its `Type` row says (one number or two, three or four), Transfer's
+  as its `Type` row says (one number or two, three or four) — though the
+  pane PRESENTS it as a float3 row, over a deliberately wide
+  `VALUE_ROW_RANGE`, when the target is three wide and the text holds three
+  numbers (`add_pick_lists`, since 2026-09-28: Create with Type Float3, or
+  Modify aimed at Pos, Col or an input Float3; the parameter, the file and
+  MCP see text throughout) — Transfer's
   `Attributes` is a comma LIST of names, Simnet's `Start Frame` is empty for
   "the playbar's", Bounds' `Prefix` is a prefix, Curve's `Points` a list of
   positions, Export's `File` a path. The same day Attribute's `From Min` /

@@ -555,6 +555,30 @@ pub struct NodeTemplate {
     pub node: FsNode,
 }
 
+/// The Attribute node's Value row's range when it is presented as a float3
+/// (`add_pick_lists`): wide, because a float3 row clamps to its range and
+/// Pos is set to whatever the scene needs. A drag is coarse at this width;
+/// the row's readouts take typed values.
+pub const VALUE_ROW_RANGE: (f32, f32) = (-1000.0, 1000.0);
+
+/// What an Attribute node's `Value` is aimed at, as `add_pick_lists` needs
+/// it: a width the node itself decides, or the name of the input attribute
+/// whose width has to be read off the evaluated input.
+enum ValueTarget {
+    Width(usize),
+    Named(String),
+}
+
+/// What the params pane reads off a node's evaluated INPUT to build its
+/// controls: group names, point attribute names (plus the Pos/Col
+/// built-ins), and each attribute's width in components.
+#[derive(Clone, Default)]
+pub struct PickLists {
+    pub groups: Vec<String>,
+    pub attrs: Vec<String>,
+    pub widths: Vec<(String, usize)>,
+}
+
 pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
     // Rows whose condition does not hold are not shown. Write-back resolves a
     // row by its display key rather than by position, so a hidden parameter
@@ -2307,7 +2331,7 @@ pub struct State {
     /// version) → (group names, attribute names) read off that input's
     /// evaluated geometry, feeding the textpick rows on group/attribute
     /// params. One entry: the selected node's input.
-    pub pick_cache: Option<((String, u64), (Vec<String>, Vec<String>))>,
+    pub pick_cache: Option<((String, u64), PickLists)>,
     /// The raster scene's model-view-projection and the viewport pane rect in
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
@@ -3938,6 +3962,21 @@ impl State {
     /// text boxes you typed into blind. The template says what a row names
     /// now (`ParamKind::Attribute` / `Group`), so a row gets the picker by
     /// declaring it, and a new template needs no entry here.
+    ///
+    /// The same pass PRESENTS the Attribute node's `Value` as a float3 row
+    /// when its target is three wide (since 2026-09-28). The parameter
+    /// itself stays `text`, because its width is the target's — the Type
+    /// row under Create, the named attribute under Modify — which no fixed
+    /// kind can say (see "Parameter kinds" in CLAUDE.md); what changes is
+    /// the control, as the pickers change it. Three wide means Create with
+    /// Type Float3, or Modify aimed at Pos, Col or an input attribute the
+    /// evaluated input holds as a Float3. The text must already hold three
+    /// numbers: a single number BROADCASTS to every component, and a row
+    /// that showed it as `(n, 0, 0)` would write that triple back on the
+    /// first drag; an expression is shown as its text like any other. The
+    /// row's range is [`VALUE_ROW_RANGE`], deliberately wide — a float3 row
+    /// holds a fraction of its range and clamps to it, and Pos is set to
+    /// whatever the scene needs; the readouts are typed into for precision.
     fn add_pick_lists(
         &mut self,
         mut params: Vec<(String, String, String)>,
@@ -3945,7 +3984,7 @@ impl State {
         // Rows are keyed as `param_display` keys them — by label when
         // there is one, by name otherwise — so the kind is looked up the
         // same way the pane's write-back resolves a row.
-        let (node_id, kinds) = {
+        let (node_id, kinds, value_row) = {
             if self.is_detached_network {
                 return params;
             }
@@ -3958,23 +3997,79 @@ impl State {
                 .filter(|p| matches!(p.kind(), ParamKind::Attribute | ParamKind::Group))
                 .map(|p| (if p.label.is_empty() { p.name.clone() } else { p.label.clone() }, p.kind()))
                 .collect();
-            if kinds.is_empty() {
+            let value_row = Self::attribute_value_target(node);
+            if kinds.is_empty() && value_row.is_none() {
                 return params;
             }
-            (node.id.clone(), kinds)
+            (node.id.clone(), kinds, value_row)
         };
-        let (groups, attrs) = self.input_pick_lists(&node_id);
+        let lists = self.input_pick_lists(&node_id);
         for row in params.iter_mut() {
             let Some((_, kind)) = kinds.iter().find(|(key, _)| *key == row.0) else { continue };
             let list = match kind {
-                ParamKind::Attribute => &attrs,
-                _ => &groups,
+                ParamKind::Attribute => &lists.attrs,
+                _ => &lists.groups,
             };
             if row.2 == "text" && !list.is_empty() {
                 row.2 = format!("textpick:{}", list.join(","));
             }
         }
+        if let Some((key, target)) = value_row {
+            let width = match target {
+                ValueTarget::Width(w) => w,
+                ValueTarget::Named(name) => lists
+                    .widths
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+                    .map_or(0, |(_, w)| *w),
+            };
+            if width == 3 {
+                if let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") {
+                    row.2 = format!("float3:{}:{}", VALUE_ROW_RANGE.0, VALUE_ROW_RANGE.1);
+                }
+            }
+        }
         params
+    }
+
+    /// What an Attribute node's `Value` is aimed at — its display key and
+    /// the target's width, or the attribute name the width has to be read
+    /// off the input for — when the row is one the float3 presentation can
+    /// take: a plain (non-expression) text holding three numbers. `None`
+    /// for any other node, operation, or text.
+    fn attribute_value_target(node: &FsNode) -> Option<(String, ValueTarget)> {
+        if !node.node_type.eq_ignore_ascii_case("attribute") {
+            return None;
+        }
+        let p = node.params.iter().find(|p| p.name == "Value")?;
+        if p.is_expr() {
+            return None;
+        }
+        let comps = p
+            .text()
+            .split(|c| c == ':' || c == ',' || c == ' ')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse::<f32>().ok())
+            .count();
+        let raw = p.text().split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).count();
+        if comps != 3 || raw != 3 {
+            return None;
+        }
+        let key = if p.label.is_empty() { p.name.clone() } else { p.label.clone() };
+        let name = node_param_str(node, "Attribute Name", "");
+        let name = name.trim().to_string();
+        let target = match node_param_str(node, "Operation", "Create").to_lowercase().as_str() {
+            "create" => ValueTarget::Width(match node_param_str(node, "Type", "Float").to_lowercase().as_str() {
+                "float3" => 3,
+                "float2" => 2,
+                "float4" => 4,
+                _ => 1,
+            }),
+            "modify" if name.eq_ignore_ascii_case("Pos") || name.eq_ignore_ascii_case("Col") => ValueTarget::Width(3),
+            "modify" => ValueTarget::Named(name),
+            _ => return None,
+        };
+        Some((key, target))
     }
 
     /// The (groups, attributes) present on the evaluated geometry of node
@@ -3985,11 +4080,13 @@ impl State {
     /// some other subnet. Attribute names get the Pos/Col built-ins appended
     /// (the Attribute node can Modify them); names carrying a comma are
     /// dropped — they cannot ride the type spec-string.
-    fn input_pick_lists(&mut self, node_id: &str) -> (Vec<String>, Vec<String>) {
+    /// Beside the names, each point attribute's WIDTH in components, which
+    /// is what decides the control the Attribute node's Value row gets.
+    fn input_pick_lists(&mut self, node_id: &str) -> PickLists {
         let input_id = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
             .and_then(|n| crate::geometry::param_node(&self.fs_root, n, "Input"))
             .map(|n| n.id.clone());
-        let Some(input_id) = input_id else { return (Vec::new(), Vec::new()) };
+        let Some(input_id) = input_id else { return PickLists::default() };
         let key = (input_id.clone(), self.rt_geometry_version);
         if let Some((k, lists)) = &self.pick_cache {
             if *k == key {
@@ -3999,6 +4096,7 @@ impl State {
         let (frame, start) = (self.sim_frame(), self.sim_start_frame());
         let mut groups = std::collections::BTreeSet::new();
         let mut attrs = std::collections::BTreeSet::new();
+        let mut widths: Vec<(String, usize)> = Vec::new();
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
@@ -4024,6 +4122,13 @@ impl State {
                         if !a.contains(',') {
                             attrs.insert(a.to_string());
                         }
+                        let width = match geom.points().get(a) {
+                            Some(crate::detail::AttribData::Float2(_)) => 2,
+                            Some(crate::detail::AttribData::Float3(_)) => 3,
+                            Some(crate::detail::AttribData::Float4(_)) => 4,
+                            _ => 1,
+                        };
+                        widths.push((a.to_string(), width));
                     }
                 }
             }
@@ -4032,7 +4137,7 @@ impl State {
         let mut attrs: Vec<String> = attrs.into_iter().collect();
         attrs.push("Pos".to_string());
         attrs.push("Col".to_string());
-        let lists = (groups.into_iter().collect(), attrs);
+        let lists = PickLists { groups: groups.into_iter().collect(), attrs, widths };
         self.pick_cache = Some((key, lists.clone()));
         lists
     }
