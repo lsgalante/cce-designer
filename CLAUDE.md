@@ -1230,8 +1230,9 @@ The rules that took a day to settle, each with the wrong version it replaced:
   width) and `profile` (a ramp spec; absent = the analytic curve). The flat
   spellings (`height` / `profile` for the wall, `edge_height` /
   `edge_profile`) are aliases, and the node spelling wins when a file
-  carries both. `light` is the spelling of the strength; `depth` is its
-  alias, losing the same way.
+  carries both. `light` is the spelling of the strength; `depth`, its
+  former name, is retired — reported at load, not read, rewritten by
+  cce-relief's Save.
 - **cce-relief's knobs are not a style key.** The Shoulder / Base / Bias
   triples behind each profile (`wall.knobs` / `edge.knobs`, before that
   `profile_knobs` / `edge_knobs`) were editor state beside the values that
