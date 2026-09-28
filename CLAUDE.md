@@ -414,7 +414,13 @@ state.kdl. `cargo test` reset three of the user's own toggles on every run,
 and the run was green either way. `Project::load_recent_files` /
 `save_recent_files` are gated the same way, for a variant of the same reason:
 cce-ui derives that path from the EXE's basename, so test binaries had left
-seven real `~/.config/cce/cce_designer-<hash>/` directories behind.
+seven real `~/.config/cce/cce_designer-<hash>/` directories behind. So is the
+simnet disk cache (`geometry::sim_cache_path`, since 2026-09-28): a test that
+solves a Cache-on simnet writes under a process-scoped temp directory, never
+`~/.cache/cce/cce-designer/sim`. That file carries the solve's `prev` beside
+its state, so a resume landing exactly on the asked frame draws the interior
+view from what the last substep consumed rather than the seed; a file in the
+older shape is refused and rewritten.
 
 The redirect is in `DesignSettings::file_path` itself rather than in an
 environment variable the test module sets, because a variable leaves the

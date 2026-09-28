@@ -6167,17 +6167,20 @@ pub fn resolve_simnet_geometry_with_errors(
     // What the last substep consumed, carried with the solve so the interior
     // view can be drawn without re-solving: resumed from the cache when the
     // cache is what we resume from, the seed otherwise.
-    let mut prev_frame = match &cached {
-        Some(_) => sim.cache.entries.get(&target.id).map(|e| e.prev.clone()).unwrap_or_default(),
-        None => seed.clone(),
+    // The disk carries its `prev` too: a resume landing EXACTLY on the frame
+    // asked for runs no step, and until 2026-09-28 left the feedback at the
+    // seed for that frame — the interior view and the pull arrows drawn from
+    // where the sim started, once per app launch with Cache on.
+    let disk = if cached.is_none() && caching { read_sim_cache(&target.id, key, due) } else { None };
+    let mut prev_frame = match (&cached, &disk) {
+        (Some(_), _) => sim.cache.entries.get(&target.id).map(|e| e.prev.clone()).unwrap_or_default(),
+        (None, Some((_, prev, _))) => prev.clone(),
+        (None, None) => seed.clone(),
     };
-    let (mut state, mut done) = match cached {
-        Some(hit) => hit,
-        None if caching => match read_sim_cache(&target.id, key, due) {
-            Some(hit) => hit,
-            None => (seed, 0),
-        },
-        None => (seed, 0),
+    let (mut state, mut done) = match (cached, disk) {
+        (Some(hit), _) => hit,
+        (None, Some((state, _, frame))) => (state, frame),
+        (None, None) => (seed, 0),
     };
 
     // Substeps run the chain more than once per frame. A step's size is what
@@ -6232,13 +6235,13 @@ pub fn resolve_simnet_geometry_with_errors(
         done += 1;
     }
 
+    if caching && due > 0 {
+        write_sim_cache(&target.id, key, due, &state, &prev_frame);
+    }
     sim.cache.entries.insert(
         target.id.clone(),
         SimSolve { key, frame: due, state: state.clone(), prev: prev_frame },
     );
-    if caching && due > 0 {
-        write_sim_cache(&target.id, key, due, &state);
-    }
     Some(state)
 }
 
@@ -6263,7 +6266,16 @@ pub fn simnet_step_feedback(
 /// Under the cache directory, not the project: it is derived data that can be
 /// recomputed, and a project directory that silently grew hundreds of
 /// megabytes of solver state would be a nasty surprise to copy or back up.
+///
+/// Under `cfg(test)` it is a process-scoped temp directory, as the settings
+/// file is (see "App-written settings" in CLAUDE.md): a test that solves a
+/// Cache-on simnet must not leave solver state in the user's own cache, and
+/// the suite never sets an environment variable, since libtest runs tests in
+/// parallel and one that did would race every other test reading it.
 fn sim_cache_path(node_id: &str) -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    let base = std::env::temp_dir().join(format!("cce-designer-test-cache-{}", std::process::id()));
+    #[cfg(not(test))]
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))?;
@@ -6279,23 +6291,31 @@ fn sim_cache_path(node_id: &str) -> Option<std::path::PathBuf> {
 /// The header in front of a cached state: which solve it belongs to and which
 /// frame it stopped at. Both are checked before the geometry is trusted — a
 /// cache from a different chain is worse than no cache, because it looks like
-/// an answer.
-fn write_sim_cache(node_id: &str, key: u64, frame: i32, state: &Detail) {
+/// an answer. Then the state's byte length, the state, and what its last
+/// substep consumed (`SimSolve::prev`), so a resume can draw the interior
+/// view without a step. The length field is what tells a file written before
+/// `prev` was carried (2026-09-28) apart: there the Detail magic sits where
+/// the length goes, reads as an impossible length, and the file is refused —
+/// no cache, a solve from the seed, and the file rewritten in the new shape.
+fn write_sim_cache(node_id: &str, key: u64, frame: i32, state: &Detail, prev: &Detail) {
     let Some(path) = sim_cache_path(node_id) else { return };
-    write_sim_cache_at(&path, key, frame, state);
+    write_sim_cache_at(&path, key, frame, state, prev);
 }
 
 /// [`write_sim_cache`] against a given path, so the format can be exercised
 /// without a process-wide environment variable.
-fn write_sim_cache_at(path: &std::path::Path, key: u64, frame: i32, state: &Detail) {
+fn write_sim_cache_at(path: &std::path::Path, key: u64, frame: i32, state: &Detail, prev: &Detail) {
     let Some(dir) = path.parent() else { return };
     if std::fs::create_dir_all(dir).is_err() {
         return;
     }
+    let state_bytes = state.to_bytes();
     let mut blob = Vec::new();
     blob.extend_from_slice(&key.to_le_bytes());
     blob.extend_from_slice(&frame.to_le_bytes());
-    blob.extend_from_slice(&state.to_bytes());
+    blob.extend_from_slice(&(state_bytes.len() as u64).to_le_bytes());
+    blob.extend_from_slice(&state_bytes);
+    blob.extend_from_slice(&prev.to_bytes());
     // Written beside the target and renamed, so a cache half-written when the
     // app dies is never read as a whole one.
     let tmp = path.with_extension("simcache.tmp");
@@ -6304,23 +6324,31 @@ fn write_sim_cache_at(path: &std::path::Path, key: u64, frame: i32, state: &Deta
     }
 }
 
-/// A cached state for this solve, if one is on disk and has not run past the
-/// frame being asked for. Any failure — missing, truncated, stale, corrupt —
-/// reads as "no cache" and the sim solves from its seed.
-fn read_sim_cache(node_id: &str, key: u64, due: i32) -> Option<(Detail, i32)> {
+/// A cached solve — `(state, prev, frame)` — if one is on disk and has not
+/// run past the frame being asked for. Any failure — missing, truncated,
+/// stale, corrupt, the old shape without `prev` — reads as "no cache" and
+/// the sim solves from its seed.
+fn read_sim_cache(node_id: &str, key: u64, due: i32) -> Option<(Detail, Detail, i32)> {
     read_sim_cache_at(&sim_cache_path(node_id)?, key, due)
 }
 
-fn read_sim_cache_at(path: &std::path::Path, key: u64, due: i32) -> Option<(Detail, i32)> {
+fn read_sim_cache_at(path: &std::path::Path, key: u64, due: i32) -> Option<(Detail, Detail, i32)> {
     let blob = std::fs::read(path).ok()?;
-    if blob.len() < 12 || u64::from_le_bytes(blob[0..8].try_into().ok()?) != key {
+    if blob.len() < 20 || u64::from_le_bytes(blob[0..8].try_into().ok()?) != key {
         return None;
     }
     let frame = i32::from_le_bytes(blob[8..12].try_into().ok()?);
     if frame < 0 || frame > due {
         return None;
     }
-    Detail::from_bytes(&blob[12..]).ok().map(|d| (d, frame))
+    let state_len = usize::try_from(u64::from_le_bytes(blob[12..20].try_into().ok()?)).ok()?;
+    let state_end = state_len.checked_add(20)?;
+    if state_end > blob.len() {
+        return None;
+    }
+    let state = Detail::from_bytes(&blob[20..state_end]).ok()?;
+    let prev = Detail::from_bytes(&blob[state_end..]).ok()?;
+    Some((state, prev, frame))
 }
 
 /// Does this graph contain a simnet anywhere? The frame-change invalidation asks
@@ -7708,15 +7736,19 @@ mod simnet_tests {
         let path = dir.join("sim.simcache");
         let mut state = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
         state.points_mut().create("acc", AttribValue::Float(9.0));
+        let mut prev = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
+        prev.points_mut().create("acc", AttribValue::Float(8.0));
 
-        write_sim_cache_at(&path, 0xABCD, 12, &state);
+        write_sim_cache_at(&path, 0xABCD, 12, &state, &prev);
         assert!(path.exists(), "the cache was written");
 
-        // The right solve, at or before the frame being asked for.
-        let (got, frame) = read_sim_cache_at(&path, 0xABCD, 20).expect("a matching cache resumes");
+        // The right solve, at or before the frame being asked for — and what
+        // its last substep consumed, so a resume can draw the interior.
+        let (got, got_prev, frame) = read_sim_cache_at(&path, 0xABCD, 20).expect("a matching cache resumes");
         assert_eq!(frame, 12);
         assert_eq!(got.points().value("acc", 0), Some(AttribValue::Float(9.0)));
         assert_eq!(got.ids(), state.ids());
+        assert_eq!(got_prev.points().value("acc", 0), Some(AttribValue::Float(8.0)), "prev rides the file");
 
         // A cache from a DIFFERENT chain is worse than no cache, because it
         // looks like an answer.
@@ -7728,6 +7760,16 @@ mod simnet_tests {
         assert!(read_sim_cache_at(&dir.join("absent"), 0xABCD, 20).is_none());
         std::fs::write(&path, b"rubbish").unwrap();
         assert!(read_sim_cache_at(&path, 0xABCD, 20).is_none());
+        // A file in the shape written before `prev` was carried: key, frame,
+        // then the state with no length in front of it. The Detail magic
+        // reads as the length, and the file is refused rather than the
+        // state read back with a seed for a prev.
+        let mut old = Vec::new();
+        old.extend_from_slice(&0xABCDu64.to_le_bytes());
+        old.extend_from_slice(&12i32.to_le_bytes());
+        old.extend_from_slice(&state.to_bytes());
+        std::fs::write(&path, &old).unwrap();
+        assert!(read_sim_cache_at(&path, 0xABCD, 20).is_none(), "the old shape is no cache");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("simcache.tmp"));
@@ -8426,6 +8468,66 @@ mod simnet_tests {
         let mut err = None;
         let fed = simnet_step_feedback(&root, &root.children[1], &mut visited, &mut err, &mut sim).expect("solved");
         assert!((min_x(&fed) - (min_x(&shown) - 1.0)).abs() < 1e-4, "the feedback is one pull short of the display");
+    }
+
+    /// A Cache-on simnet resumed from DISK exactly at the frame asked for
+    /// runs no step, so the feedback the interior view and the pull arrows
+    /// read has to come from the file: until 2026-09-28 it was the seed for
+    /// that one frame, once per app launch. The disk path is process-scoped
+    /// under `cfg(test)`, so the node id here reaches no user cache.
+    #[test]
+    fn a_disk_resume_landing_on_the_frame_keeps_its_last_substeps_input() {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let pull = node(
+            "id-pull",
+            "pull1",
+            "attribute",
+            vec![
+                param("Input", "input1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "Pos"),
+                param("Value", "1.00:0.00:0.00"),
+                param("Combine", "Add"),
+                param("Group", ""),
+            ],
+            vec![],
+        );
+        let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+        let sim_node = node(
+            "id-sim-disk-resume",
+            "Simnet 1",
+            "simnet",
+            vec![param("Input", "Sphere 1"), param("Substeps", "2"), param("Cache", "true")],
+            vec![inner_input, pull, inner_output],
+        );
+        let root = node("id-root", "root", "node", vec![], vec![sphere, sim_node]);
+        let simnet = &root.children[1];
+        let path = sim_cache_path(&simnet.id).expect("a cache path");
+        let _ = std::fs::remove_file(&path);
+
+        // Solve to frame 3 (two frames of two pulls): the file is written.
+        let shown = solve_at(&root, 3);
+        assert!(path.exists(), "Cache on wrote {path:?}");
+        assert!((min_x(&shown) - (min_x(&solve_at(&root, 1)) + 4.0)).abs() < 1e-4);
+
+        // A fresh in-memory cache — a relaunch — asked for frame 3 resumes
+        // from the file with no step to run. The feedback is the last
+        // substep's input, one pull short of the display, not the seed.
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(3, 1, &mut cache);
+        let mut visited = Vec::new();
+        let mut err = None;
+        let fed = simnet_step_feedback(&root, simnet, &mut visited, &mut err, &mut sim).expect("resumed");
+        assert!((min_x(&fed) - (min_x(&shown) - 1.0)).abs() < 1e-4, "feedback at {}, display at {}", min_x(&fed), min_x(&shown));
+        let moved = point_displacements(&root, &simnet.children[1], &mut sim);
+        assert_eq!(moved.len(), shown.num_points());
+        for (i, (_, b)) in moved.iter().enumerate() {
+            assert!(b.distance(shown.pos(i)) < 1e-4, "arrow {i} ends on the displayed point after a disk resume");
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("simcache.tmp"));
     }
 
     /// A Relax's `Rest` wire resolves to its OWN sibling. It was a
