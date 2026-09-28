@@ -8,7 +8,7 @@
   { "name": "To", "type": "node", "default": "" },
   { "name": "Orient", "type": "choice:None,Normal", "default": "None" },
   { "name": "Scale", "type": "float", "default": "1.00" },
-  { "name": "Scale Attribute", "type": "text", "default": "" },
-  { "name": "Group", "type": "text", "default": "" }
+  { "name": "Scale Attribute", "type": "attribute", "default": "" },
+  { "name": "Group", "type": "group", "default": "" }
  ]
 }

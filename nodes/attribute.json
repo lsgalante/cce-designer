@@ -16,7 +16,7 @@
     },
     {
       "name": "Attribute Name",
-      "type": "text",
+      "type": "attribute",
       "default": "attr1"
     },
     {
@@ -39,37 +39,37 @@
     },
     {
       "name": "Group",
-      "type": "text",
+      "type": "group",
       "default": "",
       "show_when": "Operation != Promote"
     },
     {
       "name": "From Min",
-      "type": "text",
+      "type": "float",
       "default": "0.00",
       "show_when": "Operation == Remap|Clip"
     },
     {
       "name": "From Max",
-      "type": "text",
+      "type": "float",
       "default": "1.00",
       "show_when": "Operation == Remap|Clip"
     },
     {
       "name": "To Min",
-      "type": "text",
+      "type": "float",
       "default": "0.00",
       "show_when": "Operation == Remap"
     },
     {
       "name": "To Max",
-      "type": "text",
+      "type": "float",
       "default": "1.00",
       "show_when": "Operation == Remap|Normalize"
     },
     {
       "name": "Source B",
-      "type": "text",
+      "type": "attribute",
       "default": "",
       "show_when": "Operation == Composite"
     },

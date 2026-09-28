@@ -569,10 +569,13 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
         // then write zero back over it.
         let ptype = if p.is_expr() {
             "text".to_string()
-        } else if matches!(kind, ParamKind::Text | ParamKind::Float | ParamKind::Node) {
+        } else if matches!(kind, ParamKind::Text | ParamKind::Float | ParamKind::Node | ParamKind::Attribute | ParamKind::Group) {
             // The pane has no numeric-text or node-picker row; both are a
             // text box there. `string` (an absent type) is one too — the
-            // pane does not know that word and would draw nothing.
+            // pane does not know that word and would draw nothing. An
+            // attribute or group name is a text box as well, upgraded to a
+            // `textpick` row by `add_pick_lists` when the input has names
+            // to offer.
             "text".to_string()
         } else if p.ty() == "slider" {
             let min = p.min.unwrap_or(0.0);
@@ -3843,36 +3846,51 @@ impl State {
         self.param_pane_source = if self.is_detached_network { None } else { self.param_pane_target() };
     }
 
-    /// Upgrade a selected group/attribute node's group- and attribute-name
-    /// text rows to `textpick` rows carrying the candidates read off the
-    /// node's INPUT geometry (the Houdini attribute/group chooser). Rows stay
-    /// plain text when there is no input, evaluation fails, or the list is
-    /// empty — the picker degrades to nothing rather than an empty menu.
+    /// Upgrade the selected node's `attribute`- and `group`-kind text rows
+    /// to `textpick` rows carrying the candidates read off the node's INPUT
+    /// geometry (the Houdini attribute/group chooser). Rows stay plain text
+    /// when there is no input, evaluation fails, or the list is empty — the
+    /// picker degrades to nothing rather than an empty menu.
+    ///
+    /// By KIND, not by name: until 2026-09-28 this knew four rows on three
+    /// node types by their names (Attribute's Attribute Name and Group, the
+    /// Group node's Group Name, Relax's Pin Group), and the other thirty-odd
+    /// rows that name an attribute or a group — every Visualize, Cull,
+    /// Neighbour and Wrangle Group, every operator's output Attribute — were
+    /// text boxes you typed into blind. The template says what a row names
+    /// now (`ParamKind::Attribute` / `Group`), so a row gets the picker by
+    /// declaring it, and a new template needs no entry here.
     fn add_pick_lists(
         &mut self,
         mut params: Vec<(String, String, String)>,
     ) -> Vec<(String, String, String)> {
-        let (node_type, node_id) = {
+        // Rows are keyed as `param_display` keys them — by label when
+        // there is one, by name otherwise — so the kind is looked up the
+        // same way the pane's write-back resolves a row.
+        let (node_id, kinds) = {
             if self.is_detached_network {
                 return params;
             }
             let Some(slot) = self.param_editor_selected() else { return params };
             let dir = self.param_editor_dir();
             let Some(node) = dir.children.get(slot) else { return params };
-            let nt = node.node_type.to_lowercase();
-            if nt != "attribute" && nt != "group" && nt != "relax" {
+            let kinds: Vec<(String, ParamKind)> = node
+                .params
+                .iter()
+                .filter(|p| matches!(p.kind(), ParamKind::Attribute | ParamKind::Group))
+                .map(|p| (if p.label.is_empty() { p.name.clone() } else { p.label.clone() }, p.kind()))
+                .collect();
+            if kinds.is_empty() {
                 return params;
             }
-            (nt, node.id.clone())
+            (node.id.clone(), kinds)
         };
         let (groups, attrs) = self.input_pick_lists(&node_id);
         for row in params.iter_mut() {
-            let list = match (node_type.as_str(), row.0.as_str()) {
-                ("attribute", "Attribute Name") => &attrs,
-                ("attribute", "Group") => &groups,
-                ("group", "Group Name") => &groups,
-                ("relax", "Pin Group") => &groups,
-                _ => continue,
+            let Some((_, kind)) = kinds.iter().find(|(key, _)| *key == row.0) else { continue };
+            let list = match kind {
+                ParamKind::Attribute => &attrs,
+                _ => &groups,
             };
             if row.2 == "text" && !list.is_empty() {
                 row.2 = format!("textpick:{}", list.join(","));
@@ -4507,7 +4525,7 @@ impl State {
                     .map(|p| p.kind())
                     .unwrap_or(ParamKind::Text);
                 let func = match target_kind {
-                    ParamKind::Text | ParamKind::Node | ParamKind::Choice | ParamKind::Code => "chs",
+                    ParamKind::Text | ParamKind::Node | ParamKind::Attribute | ParamKind::Group | ParamKind::Choice | ParamKind::Code => "chs",
                     _ => "ch",
                 };
                 let full = if path.is_empty() { src_p.clone() } else { format!("{path}/{src_p}") };

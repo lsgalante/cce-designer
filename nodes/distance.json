@@ -6,8 +6,8 @@
  "params": [
   { "name": "Input", "type": "node", "default": "" },
   { "name": "To", "type": "node", "default": "" },
-  { "name": "Attribute", "type": "text", "default": "dist" },
-  { "name": "Direction", "type": "text", "default": "" },
+  { "name": "Attribute", "type": "attribute", "default": "dist" },
+  { "name": "Direction", "type": "attribute", "default": "" },
   { "name": "Signed", "type": "choice:false,true", "default": "false" },
   { "name": "Maximum", "type": "slider", "default": "0.00", "min": 0.0, "max": 10.0, "step": 0.05 }
  ]

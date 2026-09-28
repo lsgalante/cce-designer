@@ -24,7 +24,7 @@
       "type": "choice:Points,Primitives",
       "default": "Points"
     },
-    { "name": "Group Name", "default": "collisions", "type": "text" },
+    { "name": "Group Name", "default": "collisions", "type": "group" },
     {
       "name": "Invert",
       "type": "toggle",

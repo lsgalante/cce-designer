@@ -6,7 +6,7 @@
   "params": [
     { "name": "Input", "default": "", "type": "node" },
     { "name": "Class", "type": "choice:Points,Primitives,Detail", "default": "Points" },
-    { "name": "Group", "default": "", "type": "text" },
+    { "name": "Group", "default": "", "type": "group" },
     {
       "name": "Code",
       "type": "code",

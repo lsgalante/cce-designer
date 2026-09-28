@@ -16,13 +16,13 @@
     },
     {
       "name": "Attribute",
-      "type": "text",
+      "type": "attribute",
       "default": "mass",
       "show_when": "Source == Attribute"
     },
     {
       "name": "Group",
-      "type": "text",
+      "type": "group",
       "default": "",
       "show_when": "Source == Attribute"
     }

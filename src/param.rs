@@ -59,13 +59,24 @@ pub enum ParamKind {
     /// `geometry::find_input_node` — an `Input` wire, a Boolean's `With`,
     /// a Relax's `Rest`. Empty means unconnected.
     Node,
+    /// The NAME of a point attribute on the node's input — one it reads
+    /// (Visualize's Attribute, Neighbour's Direction) or one it writes
+    /// (Normal's Attribute, Suture's Counter). Any text is a valid value;
+    /// what the kind changes is the pane, which offers the input's
+    /// attributes as a picker on every row of this kind
+    /// (`State::add_pick_lists`), where it used to know four rows by name.
+    Attribute,
+    /// The NAME of a point group on the node's input, read or written; the
+    /// pane offers the input's groups. Empty means every point, which is
+    /// what every Group row's default is.
+    Group,
 }
 
 impl ParamKind {
     /// The type-string heads [`ParamKind::parse`] accepts, for messages.
     /// `string` is left out: it is an alias, not something to ask for.
     pub const NAMES: &'static [&'static str] =
-        &["text", "float", "slider", "spinbox", "float3", "choice", "toggle", "button", "code", "node"];
+        &["text", "float", "slider", "spinbox", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group"];
 
     /// The kind a `type` string names, or `None` when it names none.
     pub fn parse(ty: &str) -> Option<Self> {
@@ -81,6 +92,8 @@ impl ParamKind {
             "button" => Self::Button,
             "code" => Self::Code,
             "node" => Self::Node,
+            "attribute" => Self::Attribute,
+            "group" => Self::Group,
             _ => return None,
         })
     }
@@ -98,7 +111,7 @@ pub enum ParamValue {
     /// The option, spelled as the options list spells it (the text may
     /// differ in case, and an empty text means the first option).
     Choice(String),
-    /// Text, Node, Code and Button: the text is the value.
+    /// Text, Node, Attribute, Group, Code and Button: the text is the value.
     Text(String),
 }
 
@@ -238,7 +251,9 @@ pub fn parse_value(kind: ParamKind, text: &str, options: &[String]) -> Result<Pa
     let t = text.trim();
     let number = |t: &str| t.parse::<f32>().ok().filter(|n| n.is_finite());
     match kind {
-        ParamKind::Text | ParamKind::Node | ParamKind::Code | ParamKind::Button => Ok(ParamValue::Text(text.to_string())),
+        ParamKind::Text | ParamKind::Node | ParamKind::Attribute | ParamKind::Group | ParamKind::Code | ParamKind::Button => {
+            Ok(ParamValue::Text(text.to_string()))
+        }
         ParamKind::Float | ParamKind::Slider => {
             number(t).map(ParamValue::Number).ok_or_else(|| format!("'{text}' is not a number"))
         }

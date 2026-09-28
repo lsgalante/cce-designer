@@ -6,6 +6,6 @@
  "params": [
   { "name": "Input", "type": "node", "default": "" },
   { "name": "Prefix", "type": "text", "default": "bounds" },
-  { "name": "Group", "type": "text", "default": "" }
+  { "name": "Group", "type": "group", "default": "" }
  ]
 }

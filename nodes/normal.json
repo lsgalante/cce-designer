@@ -5,7 +5,7 @@
  "outputs": 1,
  "params": [
   { "name": "Input", "type": "node", "default": "" },
-  { "name": "Attribute", "type": "text", "default": "N" },
+  { "name": "Attribute", "type": "attribute", "default": "N" },
   { "name": "Flip", "type": "choice:false,true", "default": "false" }
  ]
 }

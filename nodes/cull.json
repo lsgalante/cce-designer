@@ -5,8 +5,8 @@
  "outputs": 1,
  "params": [
   { "name": "Input", "type": "node", "default": "" },
-  { "name": "Group", "type": "text", "default": "" },
-  { "name": "Attribute", "type": "text", "default": "" },
+  { "name": "Group", "type": "group", "default": "" },
+  { "name": "Attribute", "type": "attribute", "default": "" },
   { "name": "Comparison", "type": "choice:Below,Above", "default": "Below" },
   { "name": "Threshold", "type": "float", "default": "0.50" },
   { "name": "Invert", "type": "choice:false,true", "default": "false" }

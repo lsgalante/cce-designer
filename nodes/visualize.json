@@ -11,7 +11,7 @@
     },
     {
       "name": "Attribute",
-      "type": "text",
+      "type": "attribute",
       "default": "mass"
     },
     {
@@ -69,7 +69,7 @@
     },
     {
       "name": "Group",
-      "type": "text",
+      "type": "group",
       "default": ""
     }
   ]

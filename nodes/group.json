@@ -11,7 +11,7 @@
     },
     {
       "name": "Group Name",
-      "type": "text",
+      "type": "group",
       "default": "group1"
     },
     {
@@ -71,7 +71,7 @@
     },
     {
       "name": "Attribute",
-      "type": "text",
+      "type": "attribute",
       "default": "",
       "show_when": "Mode == Attribute"
     },
@@ -89,7 +89,7 @@
     },
     {
       "name": "Source Group",
-      "type": "text",
+      "type": "group",
       "default": "",
       "show_when": "Mode == Expand"
     },

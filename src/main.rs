@@ -3631,11 +3631,13 @@ mod tests {
         assert!(!geom.points().has("mass"));
     }
 
-    /// The param pane's attribute/group pickers: selecting an Attribute node
-    /// upgrades its name/group text rows to textpick rows whose candidates
-    /// are read off the INPUT geometry (groups from group: tags, attributes
-    /// plus the Pos/Col built-ins); a Group node with a group-less input
-    /// keeps a plain text row (no empty menu).
+    /// The param pane's attribute/group pickers: selecting a node upgrades
+    /// its `attribute`- and `group`-kind rows to textpick rows whose
+    /// candidates are read off the INPUT geometry (attributes plus the
+    /// Pos/Col built-ins); a Group node with a group-less input keeps a
+    /// plain text row (no empty menu). By KIND: a Visualize node — one the
+    /// old by-name table never listed — gets the same pickers, and its
+    /// `float` rows stay text.
     #[test]
     fn test_param_pane_pick_lists() {
         let templates_root = crate::app::load_fs_tree();
@@ -3664,6 +3666,7 @@ mod tests {
                 ("Size", "2.00:0.50:2.00"),
             ]),
             instance(find("Attribute"), "a", "Attr 1", &[("Input", "Group 1")]),
+            instance(find("Visualize"), "v", "Vis 1", &[("Input", "Group 1"), ("Range", "Manual")]),
         ];
         state.sync_nodes();
 
@@ -3691,6 +3694,20 @@ mod tests {
         let rows = state.param_mut().node_params();
         let gn = rows.iter().find(|r| r.0 == "Group Name").unwrap();
         assert_eq!(gn.2, "text");
+
+        // Visualize: its Attribute and Group rows are pickers because the
+        // template says what they name, not because this node is listed
+        // anywhere; From and To are numbers and stay text boxes.
+        state.graph_mut().set_selected_node(Some(3));
+        state.sync_parameters_pane();
+        let rows = state.param_mut().node_params();
+        let row = |name: &str| {
+            rows.iter().find(|r| r.0 == name).unwrap_or_else(|| panic!("row {name}")).2.clone()
+        };
+        assert!(row("Attribute").starts_with("textpick:") && row("Attribute").contains("Pos"), "got {}", row("Attribute"));
+        assert_eq!(row("Group"), "textpick:group1");
+        assert_eq!(row("From"), "text");
+        assert_eq!(row("Input"), "text");
     }
 
     /// The point overlays are a VIEW setting, not a node property: the
@@ -4195,7 +4212,12 @@ mod tests {
     /// Phase 1: every parameter that names another node is a `node`, and
     /// the numbers and vectors that shipped as `text` are what they hold.
     /// By TEMPLATE, not by name: Visualize's From and To are numbers where
-    /// Transfer's From and Copy's To are wires.
+    /// Transfer's From and Copy's To are wires. Since 2026-09-28 a row that
+    /// names a point attribute is an `attribute` and one that names a group
+    /// a `group` — read or written, the picker is the same — and what is
+    /// still `text` is text for a reason: Attribute's Value is as wide as
+    /// its Type row says, Transfer's Attributes is a comma list, Simnet's
+    /// Start Frame is empty for "the playbar's".
     #[test]
     fn template_params_carry_the_kind_they_hold() {
         use crate::app::ParamKind as K;
@@ -4216,8 +4238,34 @@ mod tests {
         for (ty, name) in [("grid", "Center"), ("polygon", "Center"), ("soft_transform", "Center"), ("soft_transform", "Translation")] {
             assert_eq!(kind(ty, name), K::Float3, "{ty}'s {name}");
         }
-        for (ty, name) in [("cull", "Threshold"), ("group", "Threshold"), ("copy", "Scale"), ("visualize", "From"), ("visualize", "To")] {
+        for (ty, name) in [
+            ("cull", "Threshold"), ("group", "Threshold"), ("copy", "Scale"), ("visualize", "From"), ("visualize", "To"),
+            ("attribute", "From Min"), ("attribute", "From Max"), ("attribute", "To Min"), ("attribute", "To Max"),
+        ] {
             assert_eq!(kind(ty, name), K::Float, "{ty}'s {name}");
+        }
+        assert_eq!(kind("neighbour", "Constant"), K::Float3);
+        for (ty, name) in [
+            ("attribute", "Attribute Name"), ("attribute", "Source B"), ("visualize", "Attribute"), ("neighbour", "Attribute"),
+            ("neighbour", "Direction"), ("neighbour", "Source"), ("distance", "Direction"), ("develop", "Source"),
+            ("copy", "Scale Attribute"), ("normal", "Attribute"), ("suture", "Counter"), ("time", "Attribute"),
+        ] {
+            assert_eq!(kind(ty, name), K::Attribute, "{ty}'s {name}");
+        }
+        for (ty, name) in [
+            ("attribute", "Group"), ("group", "Group Name"), ("group", "Source Group"), ("relax", "Pin Group"),
+            ("collision", "Group Name"), ("wrangle", "Group"), ("visualize", "Group"), ("cull", "Group"),
+        ] {
+            assert_eq!(kind(ty, name), K::Group, "{ty}'s {name}");
+        }
+        // Every row called Group, on every template, names a group.
+        for t in &root.children {
+            for p in t.params.iter().filter(|p| p.name == "Group") {
+                assert_eq!(p.kind(), K::Group, "{}'s Group", t.name);
+            }
+        }
+        for (ty, name) in [("attribute", "Value"), ("transfer", "Attributes"), ("simnet", "Start Frame"), ("bounds", "Prefix")] {
+            assert_eq!(kind(ty, name), K::Text, "{ty}'s {name} stays text on purpose");
         }
         // Every template's Input is a wire, top level and composed children alike.
         fn inputs(n: &FsNode, out: &mut Vec<(String, crate::app::ParamKind)>) {
@@ -4256,13 +4304,14 @@ mod tests {
 
     /// The pane has no node or numeric-text row: both show as text, and so
     /// does `string` (an absent type), which the pane would otherwise not
-    /// recognise at all.
+    /// recognise at all — and so do an attribute and a group name, until
+    /// `add_pick_lists` has candidates to offer.
     #[test]
     fn node_and_float_rows_show_as_text() {
         let row = |ty: &str| crate::app::ParamDef::new("X", ty, "1");
-        let shown = crate::app::param_display(&[row("node"), row("float"), row("string"), row("toggle")]);
+        let shown = crate::app::param_display(&[row("node"), row("float"), row("string"), row("attribute"), row("group"), row("toggle")]);
         let types: Vec<&str> = shown.iter().map(|r| r.2.as_str()).collect();
-        assert_eq!(types, vec!["text", "text", "text", "toggle"]);
+        assert_eq!(types, vec!["text", "text", "text", "text", "text", "toggle"]);
     }
 
     /// Phase 2's toggle reader: the words a toggle can hold, in any case,

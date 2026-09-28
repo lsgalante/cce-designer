@@ -539,6 +539,26 @@ old text Center a float3 from the load on. Tests build parameters with
   (trimmed, `None` when unconnected) or resolve them with `param_node`,
   never by hand. By template, not by name: Visualize's `From`/`To` are
   numbers.
+- **`attribute` and `group` name a point attribute or a point group on the
+  node's input** (since 2026-09-28) — read or written, it is the same kind:
+  Visualize's `Attribute` and Normal's are both `attribute`, Relax's `Pin
+  Group` and the Group node's `Group Name` both `group`. Any text is a valid
+  value; what the kind changes is the params pane, where `add_pick_lists`
+  upgrades every row of either kind to a `textpick` (the Houdini chooser,
+  a text box with a picker of the input's names) when the input has any to
+  offer. Until then the pane knew FOUR rows by (node type, row name) —
+  Attribute's `Attribute Name` and `Group`, Group's `Group Name`, Relax's
+  `Pin Group` — and the other thirty-odd rows that name one were text boxes
+  typed into blind; a template declares it now and needs no entry anywhere.
+  What is still `text` is text for a reason: Attribute's `Value` is as wide
+  as its `Type` row says (one number or two, three or four), Transfer's
+  `Attributes` is a comma LIST of names, Simnet's `Start Frame` is empty for
+  "the playbar's", Bounds' `Prefix` is a prefix, Curve's `Points` a list of
+  positions, Export's `File` a path. The same day Attribute's `From Min` /
+  `From Max` / `To Min` / `To Max` became `float` and Neighbour's `Constant`
+  a `float3`, the numbers phase 1 missed.
+  `template_params_carry_the_kind_they_hold` pins all of it, including the
+  rows that stay text.
 - **`float` is a number with no range.** The pane's slider and float3 rows
   hold a FRACTION of their range and clamp to it, so a threshold, a scale
   factor or a manual ramp end cannot be a slider without losing values
@@ -725,6 +745,8 @@ way — both in `src/geometry.rs`:
   chain's `Input` and the params pane's group/attribute pickers still
   searched the whole tree by name, so in a second copy of a subnet they
   found the first copy's node (`a_rest_wire_resolves_to_its_own_sibling`).
+  Which rows GET a picker is the parameter's kind — `attribute` / `group`,
+  see "Parameter kinds" — not a table of row names.
 - **`switch`** passes one of `Input`, `Input 2` … `Input 4` by `Index`,
   clamped; an empty slot passes nothing. Only `Input` draws a wire, the
   limit every second operand has (Boolean's With, Copy's target).
