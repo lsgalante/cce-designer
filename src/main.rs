@@ -7760,9 +7760,10 @@ mod tests {
             "nothing copied yet, and the row holds a value"
         );
         // The two header rows read the parameter out: its control's kind
-        // and its value's type. Radius is a slider holding a number.
+        // and its value's type, in a programmer's terms. Radius is a slider
+        // holding a float.
         let shown = cce_ui::widget::context_menu::options();
-        assert_eq!(&shown[..3], &["Control: slider".to_string(), "Value: number".to_string(), "-".to_string()]);
+        assert_eq!(&shown[..3], &["Control: slider".to_string(), "Value: float".to_string(), "-".to_string()]);
         let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
         assert_eq!(headers, 2);
         // A click on a header runs nothing.
@@ -7806,13 +7807,13 @@ mod tests {
         assert!(radius(&state, ball).is_expr());
         // …and the menu's readout says so: the control is still a slider,
         // the value is now an expression. Method is a choice holding an
-        // option, Rows a spinbox holding a whole number.
+        // enum, Rows a spinbox holding an integer.
         let (rows, _, _) = state.param_menu_rows(ball, "Radius");
         assert_eq!(&rows[..2], &["Control: slider".to_string(), "Value: expression".to_string()]);
         let (rows, _, _) = state.param_menu_rows(ball, "Method");
-        assert_eq!(&rows[..2], &["Control: choice".to_string(), "Value: option".to_string()]);
+        assert_eq!(&rows[..2], &["Control: choice".to_string(), "Value: enum".to_string()]);
         let (rows, _, _) = state.param_menu_rows(ball, "Rows");
-        assert_eq!(&rows[..2], &["Control: spinbox".to_string(), "Value: whole number".to_string()]);
+        assert_eq!(&rows[..2], &["Control: spinbox".to_string(), "Value: integer".to_string()]);
 
         // And a reference typed straight into a row (or scripted) becomes one.
         state.apply_action(McpAction::SetParam { slot: ball, name: "Rows".into(), value: "chi(\"../sphere1/Rows\") * 2".into() }, &mut redraw).unwrap();

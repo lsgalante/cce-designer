@@ -4437,8 +4437,8 @@ impl State {
     ///
     /// The two headers read the parameter out: `Control:` is its kind
     /// (`ParamKind::name` — slider, float3, attribute…) and `Value:` what
-    /// its text holds right now (`ParamDef::value_type` — number,
-    /// expression, invalid…). Two lines rather than one because they
+    /// its text holds right now (`ParamDef::value_type` — float, integer,
+    /// boolean, expression, invalid…). Two lines rather than one because they
     /// answer different questions: the first is the template's, the second
     /// the instance's, and they differ exactly when something is off — a
     /// `Control: slider` over `Value: expression` is a row whose slider

@@ -719,8 +719,9 @@ and paste still pastes the right path. **Two header rows read the
 parameter out** (since 2026-09-28, `param_menu_rows`): `Control:` is the
 kind the template gave it (`ParamKind::name` — slider, float3,
 attribute…) and `Value:` what its text holds right now
-(`ParamDef::value_type` — number, whole number, vector, true/false,
-option, text, expression, or invalid with the reason). Two lines because
+(`ParamDef::value_type` — float, integer, vec3, boolean, enum, string,
+expression, or invalid with the reason; a programmer's terms, by
+request). Two lines because
 they answer different questions, the template's and the instance's, and
 they differ exactly when something is off: a slider over an expression is
 a row whose slider cannot be drawn, a slider over `invalid (…)` a load that

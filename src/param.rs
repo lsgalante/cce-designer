@@ -398,20 +398,20 @@ impl ParamDef {
         self.slot == ParamSlot::Expr
     }
 
-    /// What the parameter HOLDS right now, in words — the row menu's
-    /// `Value:` readout: the parsed value's type (`number`, `whole number`,
-    /// `vector`, `true/false`, `option`, `text`), `expression` for one
-    /// still to be evaluated, or `invalid` with the reason. The control's
-    /// kind is [`ParamKind::name`]; the two differ exactly when the text
-    /// is not a value of the kind, which is what the pair is for.
+    /// What the parameter HOLDS right now — the row menu's `Value:`
+    /// readout: the parsed value's type in a programmer's terms (`float`,
+    /// `integer`, `vec3`, `boolean`, `enum`, `string`), `expression` for
+    /// one still to be evaluated, or `invalid` with the reason. The
+    /// control's kind is [`ParamKind::name`]; the two differ exactly when
+    /// the text is not a value of the kind, which is what the pair is for.
     pub fn value_type(&self) -> String {
         match &self.slot {
-            ParamSlot::Value(ParamValue::Number(_)) => "number".to_string(),
-            ParamSlot::Value(ParamValue::Int(_)) => "whole number".to_string(),
-            ParamSlot::Value(ParamValue::Vec3(_)) => "vector".to_string(),
-            ParamSlot::Value(ParamValue::Bool(_)) => "true/false".to_string(),
-            ParamSlot::Value(ParamValue::Choice(_)) => "option".to_string(),
-            ParamSlot::Value(ParamValue::Text(_)) => "text".to_string(),
+            ParamSlot::Value(ParamValue::Number(_)) => "float".to_string(),
+            ParamSlot::Value(ParamValue::Int(_)) => "integer".to_string(),
+            ParamSlot::Value(ParamValue::Vec3(_)) => "vec3".to_string(),
+            ParamSlot::Value(ParamValue::Bool(_)) => "boolean".to_string(),
+            ParamSlot::Value(ParamValue::Choice(_)) => "enum".to_string(),
+            ParamSlot::Value(ParamValue::Text(_)) => "string".to_string(),
             ParamSlot::Expr => "expression".to_string(),
             ParamSlot::Invalid(why) => format!("invalid ({why})"),
         }
