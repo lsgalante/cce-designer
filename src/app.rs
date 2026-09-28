@@ -9739,20 +9739,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
         }
 
-        // A simnet's geometry is a function of the frame, so advancing the
-        // timeline invalidates the scene the way editing a node does. Gated on
-        // the graph actually containing one: without this, every frame of
-        // playback would rebuild the scene for a graph that cannot have
-        // changed.
-        let frame_now = self.sim_frame();
-        if frame_now != self.last_sim_frame {
-            self.last_sim_frame = frame_now;
-            if crate::geometry::contains_simnet(&self.fs_root) {
-                self.rebuild_scene_geometry();
-                self.viewport_dirty = true;
-            }
-        }
-
         // A detached window the user closed hands its pane back here, so a
         // closed window cannot strand the pane as a stub nothing can revive.
         let reclaimed = self.poll_detached_children();
@@ -9840,6 +9826,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if i == CONTENT_IDX {
                     graph_ticked = true;
                 }
+            }
+        }
+        // A simnet's geometry is a function of the frame, so advancing the
+        // timeline invalidates the scene the way editing a node does. Gated on
+        // the graph actually containing one: without this, every frame of
+        // playback would rebuild the scene for a graph that cannot have
+        // changed. AFTER the widget ticks, because the Playbar's tick is what
+        // advances the frame during playback: until 2026-09-28 this ran
+        // before them, so every tick rebuilt the scene for the frame the
+        // playbar showed LAST tick and then advanced the readout — the whole
+        // scene a frame behind the number on the playbar, for as long as it
+        // played.
+        let frame_now = self.sim_frame();
+        let frame_moved = frame_now != self.last_sim_frame;
+        if frame_moved {
+            self.last_sim_frame = frame_now;
+            if crate::geometry::contains_simnet(&self.fs_root) {
+                self.rebuild_scene_geometry();
+                self.viewport_dirty = true;
             }
         }
         // Every slot (and, through the adapter, its embedded children) was
@@ -9987,7 +9992,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.read_panel_offsets();
         }
 
-        tick_changed || panned || reclaimed || glow_animating
+        tick_changed || panned || reclaimed || glow_animating || frame_moved
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.
