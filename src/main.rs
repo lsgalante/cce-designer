@@ -10644,6 +10644,70 @@ mod tests {
         assert_eq!(scene(vec![off]).num_points(), 0);
     }
 
+    /// Bypass in the 2D context, which has a resolver of its own: a
+    /// bypassed page node passes the sheet it was handed, a bypassed sheet
+    /// is no sheet, and a bypassed Export — the one node in both contexts —
+    /// passes either.
+    #[test]
+    fn a_bypassed_page_node_passes_its_sheet_through() {
+        use crate::page::{displayed_page, resolve_page};
+        let node = |id: &str, name: &str, ty: &str, params: &[(&str, &str)]| {
+            ref_node(id, name, ty, params.iter().map(|&(n, v)| (n, "text", v)).collect(), vec![])
+        };
+        let chain = |bypassed: &[&str]| {
+            let mut nodes = vec![
+                node("p", "page1", "page", &[("Preset", "Letter"), ("Orientation", "Portrait"), ("Resolution", "72"), ("Color", "1.00:1.00:1.00")]),
+                node("g", "grid1", "page_grid", &[("Input", "page1"), ("Cell Size", "0.5"), ("Line Width", "0.02"), ("Line Color", "0.00:0.00:0.00"), ("Fill Cells", "false")]),
+                node("b", "border1", "page_border", &[("Input", "grid1"), ("Width", "0.1"), ("Inset", "0.25"), ("Color", "1.00:0.00:0.00")]),
+                node("e", "export1", "export", &[("Input", "border1")]),
+            ];
+            for n in &mut nodes {
+                n.bypassed = bypassed.contains(&n.name.as_str());
+            }
+            ref_node("r", "root", "node", vec![], nodes)
+        };
+        let sheet = |root: &FsNode, name: &str| resolve_page(root, root.children.iter().find(|c| c.name == name).unwrap(), &mut Vec::new());
+        // Where the border's ink is, and where a rule of the grid is:
+        // green is what tells red ink and black ink from the white sheet.
+        let border = |p: &crate::page::Page| p.pixels[(400 * p.width + 20) as usize];
+        let rule = |p: &crate::page::Page| p.pixels[(400 * p.width + 36 * 4) as usize];
+
+        let whole = sheet(&chain(&[]), "border1").expect("the chain resolves");
+        assert!(border(&whole)[0] > 0.9 && border(&whole)[1] < 0.1, "the border is red: {:?}", border(&whole));
+        assert!(rule(&whole)[1] < 0.4, "the grid ruled the sheet: {:?}", rule(&whole));
+
+        // The border bypassed: the grid's sheet, as the grid made it.
+        let no_border = sheet(&chain(&["border1"]), "border1").expect("passes the grid's sheet");
+        assert_eq!(no_border.pixels, sheet(&chain(&[]), "grid1").unwrap().pixels);
+        assert!(border(&no_border)[1] > 0.9, "no border ink: {:?}", border(&no_border));
+        assert!(rule(&no_border)[1] < 0.4, "and the rules are still there");
+
+        // The grid bypassed, in the middle: the border on a sheet with no
+        // rules.
+        let no_grid = sheet(&chain(&["grid1"]), "border1").expect("the border reads through the grid");
+        assert!(border(&no_grid)[0] > 0.9 && border(&no_grid)[1] < 0.1);
+        assert!(rule(&no_grid)[1] > 0.9, "no rule: {:?}", rule(&no_grid));
+        assert_eq!((no_grid.width, no_grid.height), (whole.width, whole.height));
+
+        // Both: the sheet itself.
+        let bare = sheet(&chain(&["grid1", "border1"]), "border1").expect("the sheet");
+        assert_eq!(bare.pixels, sheet(&chain(&[]), "page1").unwrap().pixels);
+
+        // A bypassed sheet is no sheet, and nothing drawn on it is a page.
+        assert!(sheet(&chain(&["page1"]), "page1").is_none());
+        assert!(sheet(&chain(&["page1"]), "border1").is_none());
+
+        // Export passes a page through, bypassed or not.
+        assert_eq!(sheet(&chain(&[]), "export1").unwrap().pixels, whole.pixels);
+        assert_eq!(sheet(&chain(&["export1"]), "export1").unwrap().pixels, whole.pixels);
+
+        // What the pane shows is the level's last shown page node, and a
+        // bypassed one shows what it passes.
+        let mut root = chain(&["border1"]);
+        root.children.pop();
+        assert_eq!(displayed_page(&root, &root).expect("displayed").pixels, no_border.pixels);
+    }
+
     /// The flag is written only when it is set, so a file that never
     /// bypassed anything is byte for byte the file it was — and a simnet's
     /// solve, keyed by its JSON, restarts when a node in its chain is

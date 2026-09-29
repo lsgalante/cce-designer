@@ -874,6 +874,12 @@ The node is found by `GraphController::node_at` at the body's centre, so
 the second network editor marks its own level's. Nothing in cce-ui
 changed.
 
+`a_bypassed_node_passes_its_input_through` covers the geometry resolver
+and the scene walk, `a_bypassed_page_node_passes_its_sheet_through` the
+page resolver — with each node of a sheet, grid, border and export chain
+bypassed in turn — and `bypass_is_one_flag_however_it_is_asked_for` the
+three ways of asking.
+
 ### Sibling-first inputs and the Switch node
 
 Two pieces added on 2026-09-21 so a node can be BUILT FROM other nodes
