@@ -930,6 +930,90 @@ struct SimSolve {
     /// 2026-09-28 it was the state at the START of the frame, which under
     /// substeps showed one substep of a frame that took several.
     prev: Detail,
+    /// Earlier frames of the same solve, kept so a backward scrub resumes
+    /// from the nearest one behind it instead of the seed. See
+    /// [`Checkpoint`].
+    checkpoints: Checkpoints,
+}
+
+/// A frame of a solve, kept in memory: its state and what its last substep
+/// consumed, as [`SimSolve`] keeps the latest.
+///
+/// A step is not invertible, so going BACK used to mean solving from the
+/// seed: a scrub from frame 120 to 119 was 119 steps, and dragging the
+/// playhead backwards re-solved the whole history at every frame it passed.
+/// One of these is kept every [`CHECKPOINT_EVERY`] frames as a solve runs
+/// (further apart once there are too many: [`Checkpoints::keep`]),
+/// and the frame a solve is asked to leave behind is kept too, so a scrub
+/// in either direction inside what has been solved steps less than an
+/// interval.
+///
+/// They belong to one key. An edit to the chain or the seed changes it and
+/// they go with the state they were frames of, which is why an edit at
+/// frame 120 is still 120 steps: nothing earlier than the edit survives it.
+#[derive(Clone)]
+struct Checkpoint {
+    frame: i32,
+    state: Detail,
+    prev: Detail,
+}
+
+/// How many frames apart checkpoints start out.
+pub const CHECKPOINT_EVERY: i32 = 10;
+/// The most kept for one simnet, however large its states.
+pub const CHECKPOINTS_MAX: usize = 48;
+/// What one simnet's checkpoints may hold, by [`checkpoint_bytes`]. A state
+/// is kept twice over (itself and what its last substep consumed), so a
+/// hundred-thousand-point surface is tens of megabytes a checkpoint.
+pub const CHECKPOINT_BUDGET: usize = 512 * 1024 * 1024;
+
+/// About what a checkpoint of `state` holds: positions, ids and a handful
+/// of attributes a point, the primitives' indices, twice. An estimate — the
+/// budget is a guard against a runaway, not an accounting.
+fn checkpoint_bytes(state: &Detail) -> usize {
+    2 * (state.num_points() * 96 + state.num_verts() * 8 + state.num_prims() * 8 + 256)
+}
+
+/// One solve's checkpoints, in frame order, and how far apart they are
+/// being kept.
+struct Checkpoints {
+    every: i32,
+    kept: Vec<Checkpoint>,
+}
+
+impl Default for Checkpoints {
+    fn default() -> Self {
+        Checkpoints { every: CHECKPOINT_EVERY, kept: Vec::new() }
+    }
+}
+
+impl Checkpoints {
+    /// Keep `at`, within the count and the budget. When there is no room
+    /// the SPACING doubles, and stays doubled: what is not on the wider
+    /// interval goes, and what arrives from then on arrives that far
+    /// apart. Dropping the oldest would leave a long solve with nothing
+    /// near its start, and dropping every other one while new ones kept
+    /// arriving at the old spacing thinned the start again and again — a
+    /// scrub is as likely to land there as anywhere, and an even spacing
+    /// is what bounds the steps from anywhere.
+    fn keep(&mut self, at: Checkpoint) {
+        let each = checkpoint_bytes(&at.state).max(1);
+        match self.kept.binary_search_by_key(&at.frame, |c| c.frame) {
+            Ok(i) => self.kept[i] = at,
+            Err(i) => self.kept.insert(i, at),
+        }
+        let room = (CHECKPOINT_BUDGET / each).clamp(2, CHECKPOINTS_MAX);
+        while self.kept.len() > room {
+            self.every = self.every.saturating_mul(2);
+            let every = self.every;
+            self.kept.retain(|c| c.frame % every == 0);
+        }
+    }
+
+    /// The nearest kept frame at or behind `due` and ahead of `after`.
+    fn behind(&self, due: i32, after: i32) -> Option<&Checkpoint> {
+        self.kept.iter().rev().find(|c| c.frame <= due && c.frame > after)
+    }
 }
 
 /// Per-simnet solved states, keyed by node id. Owned by the caller (the app keeps
@@ -938,11 +1022,26 @@ struct SimSolve {
 #[derive(Default)]
 pub struct SimCache {
     entries: std::collections::HashMap<String, SimSolve>,
+    /// Runs of a chain since this cache was made — every substep of every
+    /// simnet. What a solve COST, for the tests that a scrub resumes and
+    /// does not re-solve.
+    steps_run: usize,
 }
 
 impl SimCache {
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    /// See [`SimCache::steps_run`].
+    pub fn steps_run(&self) -> usize {
+        self.steps_run
+    }
+
+    /// The frames simnet `id` has checkpoints at, ascending — relative to
+    /// its start frame, as the solve counts them.
+    pub fn checkpoint_frames(&self, id: &str) -> Vec<i32> {
+        self.entries.get(id).map(|e| e.checkpoints.kept.iter().map(|c| c.frame).collect()).unwrap_or_default()
     }
 }
 
@@ -6240,12 +6339,41 @@ pub fn resolve_simnet_geometry_with_errors(
     let start_frame = node_param_f32(target, "Start Frame", sim.start_frame as f32).round() as i32;
     let due = (sim.frame - start_frame).max(0);
 
-    // Resume from the cached solve when it is still valid and has not run PAST
-    // the frame asked for; scrubbing backwards has to restart from the seed,
-    // because a step is not invertible. Memory first, then disk.
-    let cached = sim.cache.entries.get(&target.id).and_then(|prev| {
-        (prev.key == key && prev.frame <= due).then(|| (prev.state.clone(), prev.frame))
-    });
+    // Resume from what is kept of this solve: the latest state when it has
+    // not run PAST the frame asked for, else the nearest checkpoint behind
+    // it — a step is not invertible, so going back means going forward from
+    // somewhere earlier. Memory first, then disk, then the seed.
+    //
+    // The entry is taken out while the solve runs and put back at its end.
+    // One of another key (the chain or the seed was edited) is dropped
+    // here, its checkpoints with it.
+    let prior = sim.cache.entries.remove(&target.id).filter(|e| e.key == key);
+    let mut checkpoints = Checkpoints::default();
+    let mut cached: Option<(Detail, Detail, i32)> = None;
+    if let Some(prior) = prior {
+        checkpoints = prior.checkpoints;
+        if prior.frame <= due {
+            // Playing forward a frame at a time, the frame in hand is
+            // always the one before the frame asked for, so the solve never
+            // PASSES a frame on the interval — it arrives on one and leaves
+            // from it. Kept as it is left.
+            if prior.frame < due && prior.frame > 0 && prior.frame % checkpoints.every == 0 {
+                checkpoints.keep(Checkpoint { frame: prior.frame, state: prior.state.clone(), prev: prior.prev.clone() });
+            }
+            cached = Some((prior.state, prior.prev, prior.frame));
+        } else {
+            // Going back. The frame being left is kept, so coming forward
+            // to it again is a resume too.
+            checkpoints.keep(Checkpoint { frame: prior.frame, state: prior.state, prev: prior.prev });
+        }
+    }
+    // A checkpoint nearer the frame than what is in hand wins: behind a
+    // backward scrub there is nothing in hand, and a forward jump past
+    // several may land on one.
+    let in_hand = cached.as_ref().map_or(-1, |c| c.2);
+    if let Some(c) = checkpoints.behind(due, in_hand) {
+        cached = Some((c.state.clone(), c.prev.clone(), c.frame));
+    }
     let caching = node_param_bool(target, "Cache", false);
     // What the last substep consumed, carried with the solve so the interior
     // view can be drawn without re-solving: resumed from the cache when the
@@ -6255,15 +6383,10 @@ pub fn resolve_simnet_geometry_with_errors(
     // seed for that frame — the interior view and the pull arrows drawn from
     // where the sim started, once per app launch with Cache on.
     let disk = if cached.is_none() && caching { read_sim_cache(&target.id, key, due) } else { None };
-    let mut prev_frame = match (&cached, &disk) {
-        (Some(_), _) => sim.cache.entries.get(&target.id).map(|e| e.prev.clone()).unwrap_or_default(),
-        (None, Some((_, prev, _))) => prev.clone(),
-        (None, None) => seed.clone(),
-    };
-    let (mut state, mut done) = match (cached, disk) {
+    let (mut state, mut prev_frame, mut done) = match (cached, disk) {
         (Some(hit), _) => hit,
-        (None, Some((state, _, frame))) => (state, frame),
-        (None, None) => (seed, 0),
+        (None, Some(hit)) => hit,
+        (None, None) => (seed.clone(), seed, 0),
     };
 
     // Substeps run the chain more than once per frame. A step's size is what
@@ -6314,8 +6437,14 @@ pub fn resolve_simnet_geometry_with_errors(
             // 3 — no longer silently takes the simulation's memory with it.
             state.restore_live_from(&prev);
             prev_frame = prev;
+            sim.cache.steps_run += 1;
         }
         done += 1;
+        // A frame on the interval is kept as the solve passes it — not the
+        // frame asked for, which is the entry itself.
+        if done % checkpoints.every == 0 && done < due {
+            checkpoints.keep(Checkpoint { frame: done, state: state.clone(), prev: prev_frame.clone() });
+        }
     }
 
     if caching && due > 0 {
@@ -6323,7 +6452,7 @@ pub fn resolve_simnet_geometry_with_errors(
     }
     sim.cache.entries.insert(
         target.id.clone(),
-        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame },
+        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame, checkpoints },
     );
     Some(state)
 }
@@ -8819,6 +8948,101 @@ mod simnet_tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("simcache.tmp"));
+    }
+
+    /// A solve keeps checkpoints, and a scrub resumes from the nearest one
+    /// behind it: going back a frame is a handful of steps, not the whole
+    /// history. What it arrives at is what a solve from the seed arrives
+    /// at — the state and the feedback both — whichever way it came; an
+    /// edit drops them; and they are kept within a count however long the
+    /// solve runs.
+    #[test]
+    fn a_scrub_resumes_from_a_checkpoint_and_arrives_at_the_same_state() {
+        let sim_of = |value: &str, substeps: &str| {
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+            let pull = node("id-pull", "pull1", "attribute", vec![
+                param("Input", "input1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
+                param("Value", value), param("Combine", "Multiply"), param("Group", ""),
+            ], vec![]);
+            let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+            let sim_node = node("id-sim-checkpoints", "Simnet 1", "simnet",
+                vec![param("Input", "Sphere 1"), param("Substeps", substeps)],
+                vec![inner_input, pull, inner_output]);
+            node("id-root", "root", "node", vec![], vec![sphere, sim_node])
+        };
+        // A Multiply, so every frame's state is a function of the one
+        // before and a wrong resume shows.
+        let root = sim_of("1.01:0.99:1.02", "2");
+        let simnet = &root.children[1];
+        let at = |cache: &mut SimCache, frame: i32| -> (Detail, Detail, usize) {
+            let before = cache.steps_run();
+            let mut sim = EvalSim::new(frame, 1, cache);
+            let mut err = None;
+            let fed = simnet_step_feedback(&root, simnet, &mut Vec::new(), &mut err, &mut sim).expect("solves");
+            let state = resolve_simnet_geometry_with_errors(&root, simnet, &mut Vec::new(), &mut err, &mut sim).expect("solves");
+            (state, fed, cache.steps_run() - before)
+        };
+        let fresh = |frame: i32| {
+            let mut cache = SimCache::default();
+            let (state, fed, _) = at(&mut cache, frame);
+            (state, fed)
+        };
+
+        let mut cache = SimCache::default();
+        // Out to frame 101: a hundred frames of two substeps.
+        let (_, _, cost) = at(&mut cache, 101);
+        assert_eq!(cost, 200);
+        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
+
+        // Back, forward, back again, onto a checkpoint, to the start and to
+        // where it came from: each arrives where a solve from the seed
+        // does, and costs the frames from the checkpoint behind it.
+        for (frame, frames_stepped) in [(100, 9), (38, 7), (84, 3), (37, 6), (61, 0), (1, 0), (101, 0), (96, 5), (99, 3)] {
+            let (state, fed, cost) = at(&mut cache, frame);
+            let (want, want_fed) = fresh(frame);
+            assert_eq!(state.positions(), want.positions(), "frame {frame}: the state");
+            assert_eq!(fed.positions(), want_fed.positions(), "frame {frame}: what its last substep consumed");
+            assert_eq!(cost, frames_stepped * 2, "frame {frame} cost {cost} substeps");
+        }
+        // The frames a scrub LEFT are kept beside the interval's.
+        let kept = cache.checkpoint_frames(&simnet.id);
+        for frame in [100, 83, 60] {
+            assert!(kept.contains(&frame), "{frame} was left behind, and kept: {kept:?}");
+        }
+
+        // Played a frame at a time, as the playbar does, the interval's
+        // frames are kept as they are left.
+        let mut cache = SimCache::default();
+        for frame in 1..=35 {
+            at(&mut cache, frame);
+        }
+        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![10, 20, 30]);
+        let (state, _, cost) = at(&mut cache, 24);
+        assert_eq!((cost, state.positions() == fresh(24).0.positions()), (3 * 2, true));
+
+        // An edit is another solve: nothing of the old one is resumed from.
+        let edited = sim_of("1.02:0.99:1.02", "2");
+        let mut sim = EvalSim::new(51, 1, &mut cache);
+        let mut err = None;
+        let before = sim.cache.steps_run();
+        let state = resolve_simnet_geometry_with_errors(&edited, &edited.children[1], &mut Vec::new(), &mut err, &mut sim).unwrap();
+        assert_eq!(sim.cache.steps_run() - before, 100, "fifty frames from the seed");
+        assert_ne!(state.positions(), fresh(51).0.positions());
+        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![10, 20, 30, 40], "and its own checkpoints");
+
+        // However long it runs, the count is bounded, and what is kept
+        // stays spread over the whole of it.
+        let root = sim_of("1.0001:1.0:1.0", "1");
+        let simnet = &root.children[1];
+        let mut cache = SimCache::default();
+        let mut sim = EvalSim::new(2001, 1, &mut cache);
+        resolve_simnet_geometry_with_errors(&root, simnet, &mut Vec::new(), &mut None, &mut sim).unwrap();
+        let kept = cache.checkpoint_frames(&simnet.id);
+        assert!(kept.len() <= CHECKPOINTS_MAX && kept.len() > CHECKPOINTS_MAX / 3, "{}", kept.len());
+        assert!(kept[0] <= 100 && *kept.last().unwrap() >= 1900, "{kept:?}");
+        let widest = kept.windows(2).map(|w| w[1] - w[0]).max().unwrap();
+        assert!(widest <= 80, "no gap wider than the spacing the cap asks for: {widest}");
     }
 
     /// A Relax's `Rest` wire resolves to its OWN sibling. It was a

@@ -171,8 +171,10 @@ gone from cce-ui with the wgpu path).
   `input` node reads off the feedback stack instead of jumping to the outer
   graph. Solves run up to the playbar frame and cache per node id on `State::
   sim_cache` (playing forward = one step per frame); the cache key hashes the
-  simnet subtree + seed, so edits restart the sim, and backward scrubs restart
-  from the seed (steps are not invertible). The scene walk does NOT recurse
+  simnet subtree + seed, so edits restart the sim, and backward scrubs resume
+  from the nearest CHECKPOINT behind them (steps are not invertible; until
+  2026-09-29 they restarted from the seed — see "Simulation checkpoints"
+  below). The scene walk does NOT recurse
   into a simnet's children — that would draw one un-iterated pass of the chain
   on top of the solved result. Dived INTO a simnet, the output child's
   geometry flag draws the solved state, and every OTHER visible child draws
@@ -1156,9 +1158,49 @@ thickness of itself every pass runs and the pairs themselves are the
 work, and no bookkeeping saves that.
 
 What still costs is the solver's, not the node's: an edit inside a simnet
-and a backward scrub both re-solve from the seed, so a change at frame
-120 is 120 steps. In-memory checkpoints are the fix for scrubs and are
-not built.
+re-solves from the seed, so a change at frame 120 is 120 steps. A
+backward scrub no longer does — the next section.
+
+### Simulation checkpoints
+
+A step is not invertible, so going back means going forward from
+somewhere earlier, and until 2026-09-29 that somewhere was the seed: a
+scrub from frame 120 to 119 was 119 steps, and dragging the playhead
+backwards re-solved the whole history at every frame it passed. A solve
+now keeps CHECKPOINTS in memory (`geometry::Checkpoint`, on the
+`SimSolve` beside the latest state): a frame's state and what its last
+substep consumed, which is everything a resume and the interior view
+need.
+
+- **One every `CHECKPOINT_EVERY` (10) frames**, kept as the solve passes
+  it — and as it LEAVES it, which is the case that is easy to miss:
+  played a frame at a time the solve is always asked for the very next
+  frame, so it never passes a frame on the interval, it arrives on one
+  and leaves from it.
+- **The frame a backward scrub leaves is kept too**, so coming forward
+  to it again is a resume.
+- **A resume takes the nearest kept frame at or behind the one asked
+  for**, the latest state included, so a scrub either way inside what
+  has been solved steps fewer than an interval's frames.
+- **They belong to one key.** An edit to the chain or the seed changes
+  the key and they go with the solve they were frames of. An edit at
+  frame 120 is still 120 steps: nothing earlier than an edit survives it.
+- **Within a count and a budget** (`CHECKPOINTS_MAX` 48,
+  `CHECKPOINT_BUDGET` 512 MB by an estimate of a state's size). With no
+  room the SPACING doubles and stays doubled — what is off the wider
+  interval goes, and what arrives after arrives that far apart. Not the
+  oldest: a scrub is as likely to land near the start. And not every
+  other one while new ones arrive at the old spacing, which is what the
+  first cut did and which thinned the start of a long solve again and
+  again until it had gaps of hundreds of frames.
+
+What a resume arrives at is what a solve from the seed arrives at, state
+and feedback both: `a_scrub_resumes_from_a_checkpoint_and_arrives_at_the_same_state`
+compares them frame by frame and counts the steps each cost
+(`SimCache::steps_run`). On the project this was measured on, a scrub
+back over sixty frames from frame 120 went from a mean of 15 ms a frame
+to 1.3, and from frame 240 from 67 to 4. The disk cache (`Cache` on the
+simnet) is unchanged and still holds the one latest frame.
 
 ### The volume representation
 
