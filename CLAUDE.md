@@ -2064,20 +2064,52 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 
 ### Display mode: the viewport menu, and smooth shading
 
-The viewport's right-click menu carries the DISPLAY MODE under Frame All
-and View 1:1, in five groups a separator apart — guides (Show Grid, Show
+The viewport's right-click menu has a top level and two PAGES (since
+2026-09-29; until then it was one list of some twenty rows). The top level
+holds what is done — Frame All, View 1:1 — the guides (Show Grid, Show
 Origin; the reference CUBE guide was removed on 2026-09-25 — its command,
 mesh, RT-scene copy, settings field and menubar item, with the Guides
 menubar addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto
 another's action, while old files carrying `show_cube_enabled` still load),
-the
-scene furniture that is not the geometry); wireframe (switch,
-thickness, opacity); points (Show Points, Point Size, Group Marker Scale, which
-multiplies it, and Pull Arrow Scale); overlays (Show Point Markers and its size, Show Point
-Numbers, Show Point Normals — the annotations over the scene's points);
-surface (shading, opacity, Show Occluded).
+and a row into each page: **Style ›** (how the geometry is drawn: the
+wireframe's switch, thickness and opacity, then the surface's shading,
+opacity and Show Occluded) and **Markers ›** (what is drawn on it: Show
+Points, Point Size, Group Marker Scale and Pull Arrow Scale; then the
+overlays a class at a time — Show Point Markers and its size, Show Point
+Numbers, Show Point Normals; Show Primitive Numbers, Show Primitive
+Normals; Show Vertex Numbers).
+
+**A submenu is the same popup showing another page.** cce-ui's context
+menu is one thread-local menu in one popup surface and has no cascade, so
+`ViewportMenuAction::Submenu(page)` re-shows the menu with the page's rows
+at `viewport_menu_anchor`, where it was opened, and the page's first row
+(`‹ Markers`, `ViewportMenuAction::Back`) re-shows the top level.
+`viewport_menu_rows_of(page)` is the rows of any page, `viewport_menu_rows`
+those of the one showing (`State::viewport_menu_page`), and
+`show_viewport_menu_page` the one place the menu is put up. **A row of a
+page keeps the menu open**: a page is a panel of settings, entered to set
+several, so a switch flips, the page is shown again for its marks, and the
+menu closes on a press outside it or Escape; a top-level row closes it as
+before. `the_viewport_menu_turns_to_a_page_and_stays_open` drives it by
+presses. A cascading flyout beside the parent row would be a cce-ui
+change, to the menu and to the runner's popup hosting.
+
+**The primitive and vertex overlays** (`toggle_prim_numbers`,
+`toggle_prim_normals`, `toggle_vertex_numbers`, the same day) are
+collected by `render::scene_element_overlays` off the scene `Detail` the
+point overlays read: a primitive's number at its centroid, its normal
+(Newell's, so a quad not quite flat has one) a whisker from there, and a
+vertex's number — its index in the detail — inset `VERTEX_LABEL_INSET` of
+the way from its point toward its primitive's centroid, so the vertices
+sharing a point stand apart, each inside its own primitive. Warm for
+primitives, green for vertices, the points' pale blue unchanged. They are
+persisted beside the point overlays in `ViewportSettings`, capped at 2000
+labels a class, and dimmed by the fill in front of them as the point
+numbers are (one `point_transmittance` call over all three lists).
+`primitives_and_vertices_are_numbered_where_they_are` is the test.
+
 `the_viewport_menu_groups_its_display_rows` holds the
-order. The rows: the Show Wireframe switch (its registry command), **Flat
+order of all three. The rows: the Show Wireframe switch (its registry command), **Flat
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
 a **Wire Thickness** slider under the wireframe switch (1–8 px by
 half a pixel, the palette row's range), a **Wire Opacity** slider under

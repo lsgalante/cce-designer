@@ -410,8 +410,33 @@ pub const GUIDE_GRID: usize = 0;
 pub const GUIDE_ORIGIN: usize = 1;
 pub const GUIDE_CAMERA_PIVOT: usize = 2;
 
+/// A page of the viewport menu below its top level: the menu is one popup,
+/// so a submenu is the same popup showing another page, entered by a row
+/// and left by the page's first row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewportMenuPage {
+    /// How the geometry itself is drawn: the wireframe and the surface.
+    Style,
+    /// What is drawn ON it: the points, and the markers, numbers and
+    /// normals of its points, primitives and vertices.
+    Markers,
+}
+
+impl ViewportMenuPage {
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewportMenuPage::Style => "Style",
+            ViewportMenuPage::Markers => "Markers",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewportMenuAction {
+    /// Show a page of the menu in its place. The menu stays open.
+    Submenu(ViewportMenuPage),
+    /// A page's first row: back to the top level. The menu stays open.
+    Back,
     /// Move the active camera so the visible node geometry fills the view.
     FrameAll,
     /// Put the pivot plane at true size: one world unit (the Guides "World
@@ -1245,6 +1270,14 @@ pub struct ViewportSettings {
     pub show_point_numbers: bool,
     #[serde(default)]
     pub show_point_normals: bool,
+    /// The same for the other two element classes. Absent from older
+    /// files — off.
+    #[serde(default)]
+    pub show_prim_numbers: bool,
+    #[serde(default)]
+    pub show_prim_normals: bool,
+    #[serde(default)]
+    pub show_vertex_numbers: bool,
     /// World-unit radius and colour of the Show Point Markers overlay.
     #[serde(default = "default_point_marker_size")]
     pub point_marker_size: f32,
@@ -1444,6 +1477,9 @@ impl Default for ViewportSettings {
             show_point_markers: false,
             show_point_numbers: false,
             show_point_normals: false,
+            show_prim_numbers: false,
+            show_prim_normals: false,
+            show_vertex_numbers: false,
             point_marker_size: default_point_marker_size(),
             point_marker_color: default_point_marker_color(),
             world_unit: default_world_unit(),
@@ -2010,6 +2046,10 @@ pub struct State {
     /// machinery as the node menu; this flag says the open menu is OURS).
     pub viewport_menu_active: bool,
     pub viewport_menu_actions: Vec<ViewportMenuAction>,
+    /// The page the viewport menu shows, `None` for its top level, and
+    /// where it was opened: a page is shown where the menu already is.
+    pub viewport_menu_page: Option<ViewportMenuPage>,
+    pub viewport_menu_anchor: (f32, f32),
     /// A parameter row's right-click menu — the same thread-local; the
     /// target is (node id, parameter name) rather than a slot and a row, so
     /// it holds across a re-layout of the pane.
@@ -2389,6 +2429,14 @@ pub struct State {
     /// only occlusion they get. Emptied with every rebuild of the labels; a
     /// label with no entry draws whole.
     pub overlay_number_alpha: Vec<f32>,
+    /// Show Primitive Numbers and Show Vertex Numbers, the same two lists
+    /// each: a primitive's label stands at its centroid, a vertex's inside
+    /// its primitive, part of the way from its point to that centroid, so
+    /// the vertices that share a point are told apart.
+    pub overlay_prim_labels: Vec<([f32; 3], u32)>,
+    pub overlay_prim_alpha: Vec<f32>,
+    pub overlay_vertex_labels: Vec<([f32; 3], u32)>,
+    pub overlay_vertex_alpha: Vec<f32>,
     /// Show Point Normals: LINE_LIST whiskers from each distinct point along
     /// its smooth vertex normal (computed from topology — the kernel outputs
     /// carry only a default up-normal attribute).
@@ -2399,6 +2447,9 @@ pub struct State {
     pub show_point_markers: bool,
     pub show_point_numbers: bool,
     pub show_point_normals: bool,
+    pub show_prim_numbers: bool,
+    pub show_prim_normals: bool,
+    pub show_vertex_numbers: bool,
     /// The visible scene's own edges for the wire pass (LINE_LIST pairs),
     /// rebuilt with the scene while Show Wireframe is on and empty while it
     /// is off. Topological — see `render::scene_edge_verts`.
@@ -2573,6 +2624,9 @@ impl State {
                 show_point_markers: self.show_point_markers,
                 show_point_numbers: self.show_point_numbers,
                 show_point_normals: self.show_point_normals,
+                show_prim_numbers: self.show_prim_numbers,
+                show_prim_normals: self.show_prim_normals,
+                show_vertex_numbers: self.show_vertex_numbers,
                 point_marker_size: self.point_marker_size,
                 point_marker_color: self.point_marker_color,
                 world_unit: self.world_unit.suffix().to_string(),
@@ -2648,6 +2702,9 @@ impl State {
         self.show_point_markers = v.show_point_markers;
         self.show_point_numbers = v.show_point_numbers;
         self.show_point_normals = v.show_point_normals;
+        self.show_prim_numbers = v.show_prim_numbers;
+        self.show_prim_normals = v.show_prim_normals;
+        self.show_vertex_numbers = v.show_vertex_numbers;
         self.point_marker_size = v.point_marker_size;
         self.point_marker_color = v.point_marker_color;
         if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
@@ -4996,9 +5053,20 @@ impl State {
 
     /// Open the viewport right-click context menu at the cursor.
     pub(crate) fn open_viewport_context_menu(&mut self) {
+        self.viewport_menu_anchor = (self.cursor_x, self.cursor_y);
+        self.show_viewport_menu_page(None);
+    }
+
+    /// Show a page of the viewport menu (`None`, its top level) where the
+    /// menu was opened. It is how the menu opens, how a submenu row and a
+    /// Back row turn the page, and how a page re-reads its marks after one
+    /// of its switches was flipped.
+    pub(crate) fn show_viewport_menu_page(&mut self, page: Option<ViewportMenuPage>) {
+        self.viewport_menu_page = page;
         let (options, actions) = self.viewport_menu_rows();
         let target = self.slots.viewport.id();
-        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        let (x, y) = self.viewport_menu_anchor;
+        cce_ui::widget::context_menu::show(x, y, options, 0, target);
         for (i, a) in actions.iter().enumerate() {
             if let Some(slider) = self.viewport_menu_slider(*a) {
                 cce_ui::widget::context_menu::set_row_slider(i, slider);
@@ -5202,8 +5270,27 @@ impl State {
     /// test can read it. Marks are the ●/○ the pin rows and the network menu
     /// use.
     pub(crate) fn viewport_menu_rows(&self) -> (Vec<String>, Vec<ViewportMenuAction>) {
-        let mut options = vec!["Frame All".to_string(), "View 1:1".to_string()];
-        let mut actions = vec![ViewportMenuAction::FrameAll, ViewportMenuAction::OneToOne];
+        self.viewport_menu_rows_of(self.viewport_menu_page)
+    }
+
+    /// The page of the viewport menu that holds `action`, `None` for the
+    /// top level's own rows — how a test finds a row without knowing the
+    /// menu's layout.
+    #[cfg(test)]
+    pub(crate) fn viewport_menu_page_of(&self, action: ViewportMenuAction) -> Option<ViewportMenuPage> {
+        [ViewportMenuPage::Style, ViewportMenuPage::Markers]
+            .into_iter()
+            .find(|page| self.viewport_menu_rows_of(Some(*page)).1.contains(&action))
+    }
+
+    /// The rows of one page of the viewport menu. The top level holds what
+    /// is DONE (framing), the guides, and a row into each page; the STYLE
+    /// page holds how the geometry is drawn (wireframe, then surface) and
+    /// the MARKERS page what is drawn on it (the points, then the overlays
+    /// of each element class). A page's first row names it and leads back.
+    pub(crate) fn viewport_menu_rows_of(&self, page: Option<ViewportMenuPage>) -> (Vec<String>, Vec<ViewportMenuAction>) {
+        let mut options: Vec<String> = Vec::new();
+        let mut actions: Vec<ViewportMenuAction> = Vec::new();
         let mark = |on: bool| if on { "●" } else { "○" };
         let label = |id: &str, fallback: &'static str| crate::command::by_id(id).map(|c| c.label).unwrap_or(fallback);
         let row = |options: &mut Vec<String>, actions: &mut Vec<ViewportMenuAction>, text: String, a: ViewportMenuAction| {
@@ -5211,39 +5298,71 @@ impl State {
             actions.push(a);
         };
         let sep = ViewportMenuAction::Separator;
+        let toggle = |options: &mut Vec<String>, actions: &mut Vec<ViewportMenuAction>, id: &'static str| {
+            let on = self.command_toggle_state(id).unwrap_or(false);
+            options.push(format!("{} {}", mark(on), label(id, id)));
+            actions.push(ViewportMenuAction::Command(id));
+        };
+
+        match page {
+            Some(ViewportMenuPage::Style) => {
+                row(&mut options, &mut actions, format!("‹ {}", ViewportMenuPage::Style.label()), ViewportMenuAction::Back);
+
+                // Wireframe.
+                row(&mut options, &mut actions, "-".into(), sep);
+                toggle(&mut options, &mut actions, "toggle_wireframe");
+                row(&mut options, &mut actions, "Wire Thickness".into(), ViewportMenuAction::WireThicknessSlider);
+                row(&mut options, &mut actions, "Wire Opacity".into(), ViewportMenuAction::WireOpacitySlider);
+
+                // Surface.
+                row(&mut options, &mut actions, "-".into(), sep);
+                row(&mut options, &mut actions, format!("{} Flat Shading", mark(!self.smooth_shading)), ViewportMenuAction::Shading(false));
+                row(&mut options, &mut actions, format!("{} Smooth Shading", mark(self.smooth_shading)), ViewportMenuAction::Shading(true));
+                row(&mut options, &mut actions, "Opacity".into(), ViewportMenuAction::OpacitySlider);
+                toggle(&mut options, &mut actions, "toggle_show_occluded");
+                return (options, actions);
+            }
+            Some(ViewportMenuPage::Markers) => {
+                row(&mut options, &mut actions, format!("‹ {}", ViewportMenuPage::Markers.label()), ViewportMenuAction::Back);
+
+                // The Render points, the group markers sized off them, and
+                // the pull arrows' length, the other selection feedback.
+                row(&mut options, &mut actions, "-".into(), sep);
+                toggle(&mut options, &mut actions, "toggle_render_points");
+                row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
+                row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
+                row(&mut options, &mut actions, "Pull Arrow Scale".into(), ViewportMenuAction::PullArrowScaleSlider);
+
+                // The overlays, a class at a time: points, primitives,
+                // vertices.
+                row(&mut options, &mut actions, "-".into(), sep);
+                toggle(&mut options, &mut actions, "toggle_point_markers");
+                row(&mut options, &mut actions, "Point Marker Size".into(), ViewportMenuAction::PointMarkerSizeSlider);
+                toggle(&mut options, &mut actions, "toggle_point_numbers");
+                toggle(&mut options, &mut actions, "toggle_point_normals");
+                row(&mut options, &mut actions, "-".into(), sep);
+                toggle(&mut options, &mut actions, "toggle_prim_numbers");
+                toggle(&mut options, &mut actions, "toggle_prim_normals");
+                row(&mut options, &mut actions, "-".into(), sep);
+                toggle(&mut options, &mut actions, "toggle_vertex_numbers");
+                return (options, actions);
+            }
+            None => {}
+        }
+
+        row(&mut options, &mut actions, "Frame All".into(), ViewportMenuAction::FrameAll);
+        row(&mut options, &mut actions, "View 1:1".into(), ViewportMenuAction::OneToOne);
 
         // Guides: the scene furniture that is not the geometry.
         row(&mut options, &mut actions, "-".into(), sep);
-        row(&mut options, &mut actions, format!("{} {}", mark(self.viewport().show_grid), label("toggle_grid", "Show Grid")), ViewportMenuAction::Command("toggle_grid"));
-        row(&mut options, &mut actions, format!("{} {}", mark(self.viewport().show_origin), label("toggle_origin", "Show Origin")), ViewportMenuAction::Command("toggle_origin"));
+        toggle(&mut options, &mut actions, "toggle_grid");
+        toggle(&mut options, &mut actions, "toggle_origin");
 
-        // Wireframe.
+        // The display settings, a page each.
         row(&mut options, &mut actions, "-".into(), sep);
-        row(&mut options, &mut actions, format!("{} {}", mark(self.wireframe), label("toggle_wireframe", "Show Wireframe")), ViewportMenuAction::Command("toggle_wireframe"));
-        row(&mut options, &mut actions, "Wire Thickness".into(), ViewportMenuAction::WireThicknessSlider);
-        row(&mut options, &mut actions, "Wire Opacity".into(), ViewportMenuAction::WireOpacitySlider);
-
-        // Points: the Render points, the group markers sized off them, and
-        // the pull arrows' length, the other selection feedback beside them.
-        row(&mut options, &mut actions, "-".into(), sep);
-        row(&mut options, &mut actions, format!("{} {}", mark(self.render_points), label("toggle_render_points", "Show Points")), ViewportMenuAction::Command("toggle_render_points"));
-        row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
-        row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
-        row(&mut options, &mut actions, "Pull Arrow Scale".into(), ViewportMenuAction::PullArrowScaleSlider);
-
-        // Overlays: the three annotations over the scene's points.
-        row(&mut options, &mut actions, "-".into(), sep);
-        row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_markers), label("toggle_point_markers", "Show Point Markers")), ViewportMenuAction::Command("toggle_point_markers"));
-        row(&mut options, &mut actions, "Point Marker Size".into(), ViewportMenuAction::PointMarkerSizeSlider);
-        row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_numbers), label("toggle_point_numbers", "Show Point Numbers")), ViewportMenuAction::Command("toggle_point_numbers"));
-        row(&mut options, &mut actions, format!("{} {}", mark(self.show_point_normals), label("toggle_point_normals", "Show Point Normals")), ViewportMenuAction::Command("toggle_point_normals"));
-
-        // Surface.
-        row(&mut options, &mut actions, "-".into(), sep);
-        row(&mut options, &mut actions, format!("{} Flat Shading", mark(!self.smooth_shading)), ViewportMenuAction::Shading(false));
-        row(&mut options, &mut actions, format!("{} Smooth Shading", mark(self.smooth_shading)), ViewportMenuAction::Shading(true));
-        row(&mut options, &mut actions, "Opacity".into(), ViewportMenuAction::OpacitySlider);
-        row(&mut options, &mut actions, format!("{} {}", mark(self.show_occluded), label("toggle_show_occluded", "Show Occluded")), ViewportMenuAction::Command("toggle_show_occluded"));
+        for page in [ViewportMenuPage::Style, ViewportMenuPage::Markers] {
+            row(&mut options, &mut actions, format!("{} ›", page.label()), ViewportMenuAction::Submenu(page));
+        }
 
         // The viewport's editor binding, as a radio group: follow the active
         // editor, or pin to one. Pin rows appear only while a second editor
@@ -5277,6 +5396,8 @@ impl State {
             ViewportMenuAction::OneToOne => {
                 self.view_one_to_one();
             }
+            ViewportMenuAction::Submenu(page) => self.show_viewport_menu_page(Some(page)),
+            ViewportMenuAction::Back => self.show_viewport_menu_page(None),
             ViewportMenuAction::PinFollow => {
                 self.viewport_pin = None;
                 self.rebuild_scene_geometry();
@@ -5313,6 +5434,7 @@ impl State {
         cce_ui::widget::context_menu::hide();
         self.viewport_menu_active = false;
         self.viewport_menu_actions.clear();
+        self.viewport_menu_page = None;
     }
 
     /// Route a left press while the viewport menu is open — same contract as
@@ -5330,9 +5452,27 @@ impl State {
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = idx.and_then(|i| self.viewport_menu_actions.get(i).copied());
-            self.close_viewport_menu();
-            if let Some(action) = picked {
-                self.run_viewport_menu_action(action);
+            // Turning the page keeps the menu up, and so does a row of a
+            // page: a page is a panel of settings, entered to set several,
+            // and a switch that closed it would cost a right-click and a
+            // row per setting. It is shown again for its marks.
+            let page = self.viewport_menu_page;
+            match picked {
+                Some(a @ (ViewportMenuAction::Submenu(_) | ViewportMenuAction::Back)) => {
+                    self.run_viewport_menu_action(a);
+                }
+                picked if page.is_some() => {
+                    if let Some(action) = picked {
+                        self.run_viewport_menu_action(action);
+                        self.show_viewport_menu_page(page);
+                    }
+                }
+                picked => {
+                    self.close_viewport_menu();
+                    if let Some(action) = picked {
+                        self.run_viewport_menu_action(action);
+                    }
+                }
             }
             return true;
         }
@@ -6041,19 +6181,32 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// the eye the stage pass is staging (`eye` in mesh space, the space of
     /// the labels and the triangles).
     pub(crate) fn sync_point_number_alpha(&mut self, mvp: Mat4, eye: Vec3) {
-        if self.overlay_number_labels.is_empty() {
+        // One pass over the three lists, so the mesh is binned once.
+        let (points_n, prims_n) = (self.overlay_number_labels.len(), self.overlay_prim_labels.len());
+        let at: Vec<[f32; 3]> = self
+            .overlay_number_labels
+            .iter()
+            .chain(&self.overlay_prim_labels)
+            .chain(&self.overlay_vertex_labels)
+            .map(|(p, _)| *p)
+            .collect();
+        if at.is_empty() {
             self.overlay_number_alpha.clear();
+            self.overlay_prim_alpha.clear();
+            self.overlay_vertex_alpha.clear();
             return;
         }
-        let points: Vec<[f32; 3]> = self.overlay_number_labels.iter().map(|(p, _)| *p).collect();
-        self.overlay_number_alpha = crate::geometry::point_transmittance(
+        let mut alpha = crate::geometry::point_transmittance(
             &self.rt_sphere_verts,
             mvp,
             eye,
-            &points,
+            &at,
             self.geo_opacity,
             self.see_through_active(),
         );
+        self.overlay_vertex_alpha = alpha.split_off(points_n + prims_n);
+        self.overlay_prim_alpha = alpha.split_off(points_n);
+        self.overlay_number_alpha = alpha;
     }
 
     /// Build the Selected-Group marker spheres from the kept members at the
@@ -6317,6 +6470,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             node_menu_actions: Vec::new(),
             viewport_menu_active: false,
             viewport_menu_actions: Vec::new(),
+            viewport_menu_page: None,
+            viewport_menu_anchor: (0.0, 0.0),
             param_menu_active: false,
             param_menu_actions: Vec::new(),
             param_menu_target: None,
@@ -6519,11 +6674,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             overlay_point_count: 0,
             overlay_number_labels: Vec::new(),
             overlay_number_alpha: Vec::new(),
+            overlay_prim_labels: Vec::new(),
+            overlay_prim_alpha: Vec::new(),
+            overlay_vertex_labels: Vec::new(),
+            overlay_vertex_alpha: Vec::new(),
             overlay_normal_verts: Vec::new(),
             overlay_normal_count: 0,
             show_point_markers: settings.viewport.show_point_markers,
             show_point_numbers: settings.viewport.show_point_numbers,
             show_point_normals: settings.viewport.show_point_normals,
+            show_prim_numbers: settings.viewport.show_prim_numbers,
+            show_prim_normals: settings.viewport.show_prim_normals,
+            show_vertex_numbers: settings.viewport.show_vertex_numbers,
             scene_edge_verts: Vec::new(),
             point_marker_size: settings.viewport.point_marker_size,
             point_marker_color: settings.viewport.point_marker_color,
@@ -8163,6 +8325,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::TogglePointNormals => {
                 self.show_point_normals = !self.show_point_normals;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::TogglePrimNumbers => {
+                self.show_prim_numbers = !self.show_prim_numbers;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::TogglePrimNormals => {
+                self.show_prim_normals = !self.show_prim_normals;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::ToggleVertexNumbers => {
+                self.show_vertex_numbers = !self.show_vertex_numbers;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }

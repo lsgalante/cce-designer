@@ -25,6 +25,12 @@ pub enum Action {
     TogglePointMarkers,
     TogglePointNumbers,
     TogglePointNormals,
+    /// The overlays over the other two element classes: a primitive's
+    /// number and normal at its centroid, a vertex's number inside its
+    /// primitive's corner.
+    TogglePrimNumbers,
+    TogglePrimNormals,
+    ToggleVertexNumbers,
     /// The path-traced preview, the wireframe's single-colour mode, and the
     /// point display. All three were toggles on the root meta node's utility
     /// subnets and reachable ONLY there; with those nodes retired they are
