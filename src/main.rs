@@ -12892,4 +12892,54 @@ mod tests {
         // The parameter itself never changed kind: it is text in the node.
         assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "Value").unwrap().kind(), crate::param::ParamKind::Text);
     }
+
+    /// A trackpad swipe over a band of the pull node's float3 Value row
+    /// turns that component, and the node's Value follows: Y alone, written
+    /// back as the `x:y:z` text the Attribute node parses. Until 2026-09-28
+    /// the params pane kept every finger gesture for its own scroll, so a
+    /// slider could be turned by a wheel notch and not by a trackpad — and a
+    /// float3 gave a scroll over its Y band to X, the first row in order.
+    #[test]
+    fn a_trackpad_swipe_over_a_float3_band_turns_that_component() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{scroll_motion::set_scroll_phase, MouseScrollDelta, ParametersBg, Position, ScrollPhase};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
+        let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
+        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.00:0.00")] {
+            state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        state.graph_mut().set_selected_node(Some(pull));
+        state.sync_parameters_pane();
+        state.rebuild_positions();
+        state.apply_layout();
+
+        // The Y band of the Value row, from the pane's own float3 group.
+        let (bx, by) = {
+            // The slot is statically an `Adapted<ParametersBg>`.
+            let pane: &ParametersBg = state.slots.param.inner();
+            let f = pane.float3s.iter().flatten().next().expect("the Value row is a float3");
+            let (rx, ry, rw, rh) = f.get_row_rects()[1];
+            (rx + (rw - 68.0) * 0.5, ry + rh * 0.5)
+        };
+        let value = |state: &State| -> Vec<f32> {
+            state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+                .text().split(':').map(|v| v.parse().unwrap()).collect()
+        };
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: bx as f64, y: by as f64 } });
+        set_scroll_phase(ScrollPhase::Finger);
+        state.ui_context.scroll_gesture_new = true;
+        state.ui_context.scroll_initiate_widget_id = None;
+        assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: -60.0 }) }));
+        set_scroll_phase(ScrollPhase::Wheel);
+        let v = value(&state);
+        assert_eq!((v[0], v[2]), (0.0, 0.0), "X and Z hold: {v:?}");
+        assert_ne!(v[1], 0.0, "Y turned, and the node's Value followed: {v:?}");
+    }
 }
