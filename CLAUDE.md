@@ -1329,6 +1329,22 @@ every look of the hold, was repeating one spatial search.
   it was measured on, 149 ms became 27; the first three changes alone took
   186 to 149.
 
+**On a project** (`detangle_on_a_project`, ignored; release, `--ignored
+--nocapture`, with `CCE_DETANGLE_PROJECT` naming a project directory or its
+state.json, `CCE_DETANGLE_FRAMES` how far to play, 240, and
+`CCE_DETANGLE_OUT` a directory for each way's last frame as an OBJ). The
+file is read and never written: the detangle node inside its simnet is set
+each way in turn in memory and the simnet played forward a frame at a
+time on one cache, as playback does. It is how the node was first run on
+something that was not a test's fixture — a 162-point icosphere with one
+point pulled through its own far wall, relaxed behind it: as saved
+(Points) the first crossing is at frame 20 and 35 edges are through a
+triangle at frame 240, the pulled point a spike out of the far side;
+Surface alone 71, later (frame 81); with Fold Contact 9; with everything
+on none at any frame, the far wall carried out ahead of the point as a
+tent, at 5.1 ms a frame against 0.5. Every row mattered there: the edges
+alone and the folds alone each left crossings.
+
 `detangle::self_intersections` is the MEASURE: every edge passing through a
 triangle (`spatial::segment_crosses_triangle`, tolerance relative to the
 lengths, so scale does not change the answer), no thickness and no rings.

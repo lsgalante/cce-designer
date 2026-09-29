@@ -10548,6 +10548,81 @@ mod tests {
         }
     }
 
+    /// The Detangle node's settings tried on a PROJECT: the file named by
+    /// `CCE_DETANGLE_PROJECT` (a project directory or its state.json), read
+    /// and never written, its first simnet played forward a frame at a
+    /// time to `CCE_DETANGLE_FRAMES` (240) with the detangle node inside it
+    /// set each way in turn. Says what crossed, when, and what a frame
+    /// cost. Run in release with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn detangle_on_a_project() {
+        let Ok(path) = std::env::var("CCE_DETANGLE_PROJECT") else {
+            println!("CCE_DETANGLE_PROJECT is not set");
+            return;
+        };
+        let frames: i32 = std::env::var("CCE_DETANGLE_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(240);
+        let path = std::path::PathBuf::from(path);
+        let file = if path.is_dir() { path.join("state.json") } else { path };
+        let mut proj: crate::app::Project = serde_json::from_str(&std::fs::read_to_string(&file).expect("reads")).expect("parses");
+        let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
+        proj.sanitize_node_names();
+        proj.migrate_param_refs();
+        crate::app::merge_template_defs(&mut proj.root, &templates);
+
+        fn find<'a>(n: &'a mut FsNode, ty: &str) -> Option<&'a mut FsNode> {
+            if n.node_type == ty {
+                return Some(n);
+            }
+            n.children.iter_mut().find_map(|c| find(c, ty))
+        }
+        let saved: Vec<(String, String)> = find(&mut proj.root, "detangle").expect("a detangle node").params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect();
+        println!("as loaded: {saved:?}");
+        let ways: [(&str, &[(&str, &str)]); 6] = [
+            ("off (thickness 0)", &[("Method", "Points"), ("Thickness", "0.00")]),
+            ("points", &[("Method", "Points")]),
+            ("surface", &[("Method", "Surface"), ("Edge Contact", "false"), ("Fold Contact", "false")]),
+            ("surface, edges", &[("Method", "Surface"), ("Edge Contact", "true"), ("Fold Contact", "false")]),
+            ("surface, folds", &[("Method", "Surface"), ("Edge Contact", "false"), ("Fold Contact", "true")]),
+            ("all", &[("Method", "Surface"), ("Edge Contact", "true"), ("Fold Contact", "true")]),
+        ];
+        let out = std::env::var("CCE_DETANGLE_OUT").ok();
+        for (name, settings) in ways {
+            let node = find(&mut proj.root, "detangle").unwrap();
+            for (param, text) in saved.iter().map(|(a, b)| (a.as_str(), b.as_str())).chain(settings.iter().copied()) {
+                node.params.iter_mut().find(|p| p.name == param).expect("the template's row").set_text(text);
+            }
+            let root = &proj.root;
+            let simnet = crate::geometry::find_node_by_name(root, "simnet1").expect("simnet1");
+            let mut cache = crate::geometry::SimCache::default();
+            let (mut worst, mut first, mut last, mut spent, mut moved) = (0, None, 0, std::time::Duration::ZERO, 0.0f32);
+            let mut began: Option<Detail> = None;
+            for frame in 1..=frames {
+                let mut sim = crate::geometry::EvalSim::new(frame, 1, &mut cache);
+                let mut err = None;
+                let t = std::time::Instant::now();
+                let d = crate::geometry::generate_single_node_geometry_with_errors(root, simnet, &mut Vec::new(), &mut err, &mut sim).expect("solves");
+                spent += t.elapsed();
+                assert!(err.is_none(), "{err:?}");
+                let crossings = crate::detangle::self_intersections(&d).crossings;
+                if crossings > 0 && first.is_none() {
+                    first = Some(frame);
+                }
+                (worst, last) = (worst.max(crossings), crossings);
+                let began = began.get_or_insert_with(|| d.clone());
+                moved = (0..d.num_points()).map(|p| (d.pos(p) - began.pos(p)).length()).fold(0.0, f32::max);
+                if let (Some(out), true) = (&out, frame == frames) {
+                    let file = std::path::PathBuf::from(out).join(format!("{}.obj", name.replace([' ', ',', '(', ')'], "_")));
+                    crate::export::write(&d, &file, crate::export::Format::from_path(&file), 1.0).expect("writes");
+                }
+            }
+            println!(
+                "{name:>18}: first crossing at frame {first:?}, worst {worst}, at frame {frames} {last}; {:.2} ms a frame; the furthest point went {moved:.3}",
+                spent.as_secs_f64() * 1000.0 / frames as f64
+            );
+        }
+    }
+
     /// What the whole of the Surface method costs where most of a mesh is
     /// in contact: the sphere test's workload with every row on,
     /// at a fifth of an edge a step. The sum is of every position at every
