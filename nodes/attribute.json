@@ -50,6 +50,12 @@
       "show_when": "Operation == Modify"
     },
     {
+      "name": "Per Frame",
+      "type": "toggle",
+      "default": "true",
+      "show_when": "Operation == Modify && Combine != Set"
+    },
+    {
       "name": "Group",
       "type": "group",
       "default": "",

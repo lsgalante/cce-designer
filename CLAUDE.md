@@ -1830,6 +1830,23 @@ written as it always was, bit for bit, so a save from before the rows
 numbers. A Scale By naming no attribute is an error on the node and moves
 nothing. The arrows are measured, so they show the scaled pull.
 
+**Per Frame makes the amount a rate.** Inside a simnet the chain runs once
+per SUBSTEP, so a pull that lands whole each run pulls four times as far
+a frame at four substeps — the substep count, which is there to steady a
+solve, becomes its speed. With `Per Frame` on (the template's default)
+the node reads the solver's `dt` off the state and scales what
+ACCUMULATES: an Add lands `dt` of its amount, a Multiply the `dt`-th
+power of its factor, which is what compounds back to the factor over a
+frame. A Set does not accumulate and is left alone, and the row is shown
+only for the other two. Outside a simnet there is no `dt`. It is a
+switch rather than the rule because the other use of an Add is real: a
+chain that adds one to a counter to COUNT its runs
+(`test_substeps_run_the_chain_more_than_once_per_frame`) wants the step,
+not the frame. A node that does not carry the row reads off, which is
+every hand-built node; a saved instance gets the row, on, from the
+template merge — so an existing pull in a simnet with substeps above one
+moves a substep-count slower after this, which is the point.
+
 At most `State::PULL_ARROWS_MAX` (12) points get one, picked by farthest-point
 sampling (`spread_sample`) so they cover the region the pull covers rather
 than bunching wherever the point numbering runs locally. A node inside a

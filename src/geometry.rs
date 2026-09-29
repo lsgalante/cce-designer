@@ -4215,7 +4215,39 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                 Some(affected.iter().map(|&p| geom.points().value(&scale_by, p).map_or(0.0, |v| v.as_f32())).collect())
             };
             let amount = |i: usize| strength * weights.as_ref().map_or(1.0, |w| w[i]);
+            // The step's size. Inside a simnet the chain runs once per
+            // SUBSTEP and the solver leaves `dt` on the state — a frame
+            // over the substep count — so a change that ACCUMULATES has to
+            // be a rate, or four substeps pull four times as far a frame
+            // and the substep count, which is there to steady a solve,
+            // becomes its speed. An Add lands `dt` of its amount; a
+            // Multiply the `dt`-th power of its factor, which is what
+            // compounds back to the factor over a frame (a factor that is
+            // not positive has no such power, and lands `dt` of its amount
+            // instead). A Set does not accumulate — setting twice is
+            // setting once — and is left alone. Outside a simnet there is
+            // no `dt` and the step is the whole of it.
+            //
+            // `Per Frame` is the switch, on in the template. A node that
+            // does not carry the row reads OFF: that is every node built
+            // before it, and the chains that Add one to a counter to count
+            // the runs of the chain, which a rate would make a count of
+            // frames.
+            let per_frame = node_param_bool(target, "Per Frame", false);
+            let dt = if per_frame { geom.detail().value("dt", 0).map_or(1.0, |v| v.as_f32()) } else { 1.0 };
+            let dt = if dt.is_finite() && dt > 0.0 { dt } else { 1.0 };
+            let (adds, multiplies) = (combine_mode == "add", combine_mode == "multiply");
             let blend = |old: &[f32], new: &mut [f32], k: f32| {
+                if multiplies && dt != 1.0 {
+                    for (n, o) in new.iter_mut().zip(old) {
+                        // The factor this point takes at amount k, over a
+                        // whole frame: 1 at none of it, Value at all of it.
+                        let factor = if o.abs() > 1e-12 { 1.0 + (*n / o - 1.0) * k } else { 1.0 };
+                        *n = if factor > 0.0 { o * factor.powf(dt) } else { o + (o * factor - o) * dt };
+                    }
+                    return;
+                }
+                let k = if adds { k * dt } else { k };
                 if k != 1.0 {
                     for (n, o) in new.iter_mut().zip(old) {
                         *n = o + (*n - o) * k;
@@ -8471,6 +8503,71 @@ mod simnet_tests {
             assert!(err.is_none(), "{err:?}");
             assert!(all(&d, up * (frame as f32 / 10.0)), "frame {frame}: {:?}", d[0]);
         }
+    }
+
+    /// Per Frame makes the pull a RATE: inside a simnet it lands the same
+    /// distance a frame whatever the substep count, where without it four
+    /// substeps pull four times as far. A Multiply compounds to its factor
+    /// over the frame, a Set — which does not accumulate — is left alone,
+    /// and a node without the row keeps the per-step behaviour it had.
+    #[test]
+    fn per_frame_makes_the_pull_independent_of_the_substep_count() {
+        let sim_of = |substeps: &str, combine: &str, value: &str, extra: Vec<(&str, &str)>| {
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let mover = node("id-shift", "Shift 1", "attribute", vec![
+                param("Input", "Sphere 1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
+                param("Value", "3.00:0.00:0.00"), param("Combine", "Add"), param("Group", ""),
+            ], vec![]);
+            let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+            let mut params = vec![
+                param("Input", "input1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
+                param("Value", value), param("Combine", combine), param("Group", ""),
+            ];
+            params.extend(extra.into_iter().map(|(k, v)| param(k, v)));
+            let pull = node("id-pull", "pull1", "attribute", params, vec![]);
+            let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+            let sim_node = node("id-sim", "Simnet 1", "simnet",
+                vec![param("Input", "Shift 1"), param("Substeps", substeps)],
+                vec![inner_input, pull, inner_output]);
+            node("id-root", "root", "node", vec![], vec![sphere, mover, sim_node])
+        };
+        let at = |root: &FsNode, frame: i32| min_x(&solve_at(root, frame));
+        let seed = at(&sim_of("1", "Add", "1.00:0.00:0.00", vec![]), 1);
+
+        // Add: five frames on from the seed, one unit a frame, at any count.
+        for substeps in ["1", "4", "16"] {
+            let root = sim_of(substeps, "Add", "1.00:0.00:0.00", vec![("Per Frame", "true")]);
+            assert!((at(&root, 6) - (seed + 5.0)).abs() < 1e-3, "{substeps} substeps: {}", at(&root, 6) - seed);
+        }
+        // With Strength: half a unit a frame.
+        let root = sim_of("4", "Add", "1.00:0.00:0.00", vec![("Per Frame", "true"), ("Strength", "0.50")]);
+        assert!((at(&root, 6) - (seed + 2.5)).abs() < 1e-3);
+        // Off, or on a node without the row: per step, four times as far.
+        for extra in [vec![("Per Frame", "false")], vec![]] {
+            let root = sim_of("4", "Add", "1.00:0.00:0.00", extra);
+            assert!((at(&root, 6) - (seed + 20.0)).abs() < 1e-3, "{}", at(&root, 6) - seed);
+        }
+
+        // Multiply compounds to its factor over a frame: doubling a frame,
+        // whatever the count. (The seed sits well clear of zero.)
+        assert!(seed > 0.1, "the fixture's points are on the positive side: {seed}");
+        for substeps in ["1", "4", "16"] {
+            let root = sim_of(substeps, "Multiply", "2.00:1.00:1.00", vec![("Per Frame", "true")]);
+            let got = at(&root, 4);
+            assert!((got - seed * 8.0).abs() < seed * 8.0 * 1e-3, "{substeps} substeps: {got} against {}", seed * 8.0);
+        }
+        // A Set does not accumulate: it sets, at any count, switch or no.
+        let root = sim_of("4", "Set", "7.00:0.00:0.00", vec![("Per Frame", "true")]);
+        assert!((at(&root, 3) - 7.0).abs() < 1e-4);
+
+        // Outside a simnet there is no step to account for.
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let pull = node("id-pull", "Pull 1", "attribute", vec![
+            param("Input", "Sphere 1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
+            param("Value", "1.00:0.00:0.00"), param("Combine", "Add"), param("Group", ""), param("Per Frame", "true"),
+        ], vec![]);
+        let root = node("id-root", "root", "node", vec![], vec![sphere, pull]);
+        assert!((min_x(&eval(&root, "Pull 1")) - (min_x(&eval(&root, "Sphere 1")) + 1.0)).abs() < 1e-5);
     }
 
     /// Farthest-point sampling takes the extremes before anything between
