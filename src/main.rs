@@ -13029,4 +13029,56 @@ mod tests {
             .text().split(':').map(|c| c.parse().unwrap()).collect();
         assert!((v[0] - 0.06).abs() < 2e-3 && v[1].abs() < 2e-3 && v[2].abs() < 2e-3, "the pull points along +X: {v:?}");
     }
+
+    /// A scroll over the trackball rolls it, through the designer's own
+    /// wheel path and the write-back: a two-finger gesture to the right
+    /// turns the pull, pointing at the viewer, toward +X at the length it
+    /// had, and a wheel notch down (content up) turns it toward +Y.
+    #[test]
+    fn a_scroll_over_the_trackball_rolls_the_pull_nodes_vector() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{scroll_motion::set_scroll_phase, MouseScrollDelta, ParametersBg, Position, ScrollPhase};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
+        let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
+        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.00:0.06")] {
+            state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        state.graph_mut().set_selected_node(Some(pull));
+        state.sync_parameters_pane();
+        state.rebuild_positions();
+        state.apply_layout();
+        let (cx, cy, _) = {
+            let pane: &ParametersBg = state.slots.param.inner();
+            pane.float3s.iter().flatten().next().expect("the Value row").ball_circle().expect("its ball")
+        };
+        let value = |state: &State| -> Vec<f32> {
+            state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+                .text().split(':').map(|c| c.parse().unwrap()).collect()
+        };
+        let len = |v: &[f32]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: cx as f64, y: cy as f64 } });
+
+        set_scroll_phase(ScrollPhase::Finger);
+        state.ui_context.scroll_gesture_new = true;
+        state.ui_context.scroll_initiate_widget_id = None;
+        assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 120.0, y: 0.0 }) }));
+        set_scroll_phase(ScrollPhase::Wheel);
+        let v = value(&state);
+        assert!(v[0] > 0.02 && v[1].abs() < 2e-3 && v[2] > 0.0, "turned toward +X: {v:?}");
+        assert!((len(&v) - 0.06).abs() < 2e-3, "at the length it had: {v:?}");
+
+        state.ui_context.scroll_gesture_new = true;
+        state.ui_context.scroll_initiate_widget_id = None;
+        assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -1.0) }));
+        let w = value(&state);
+        assert!(w[1] > 0.01, "a notch down turns it toward +Y: {w:?}");
+        assert!((len(&w) - 0.06).abs() < 2e-3);
+    }
 }
