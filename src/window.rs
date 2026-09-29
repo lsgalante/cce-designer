@@ -502,7 +502,9 @@ impl State {
                     // the expressions anywhere in the tree, the active camera.
                     crate::geometry::rename_node_in_tree(&mut state.fs_root, &id, &new_name);
                     if state.active_camera == old_name {
-                        state.active_camera = new_name.clone();
+                        // Both copies of the name: the viewport's routes
+                        // the wheel by its own.
+                        state.set_active_camera(new_name.clone());
                     }
                     state.sync_nodes();
                     // Connections reference nodes by name (Input params), so a

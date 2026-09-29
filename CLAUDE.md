@@ -140,8 +140,8 @@ them back in the order they were made:
   pane's write-back (`sync_parameters_to_project`), the row menu
   (`run_param_action`, whose work is `run_param_action_unrecorded`), MCP's
   `set_param`, and Reset Parameters.
-- **Structure**: nodes added, removed and moved, wires made and broken,
-  the display and bypass flags. Recorded by NOTICING:
+- **Structure**: nodes added, removed, moved and renamed, wires made and
+  broken, the display and bypass flags. Recorded by NOTICING:
   `record_structure_changes` compares the tree with how it stood at the
   last look (`State::structure_base`) and what differs is the step. It
   runs at the end of `process_window_event` and of `apply_action`, and
@@ -183,14 +183,22 @@ The rules:
   then this (`Application::undo` for the chord, `Action::Undo` for the
   palette) — so the order ACROSS the three is by owner and not by time. A
   focused text box is ahead of all of them, in the toolkit's runner.
-- **A rename is not recorded.** It rewrites the expression paths and
-  wires that name the node, anywhere in the tree, and a step that put the
-  name back without them would leave them naming nothing.
+- **A rename is put back by renaming.** A structure step holds the
+  nodes renamed as (id, the name it was), and `restore` runs
+  `rename_node_in_tree` on each, so the wires and the expression paths
+  that name the node, anywhere in the tree, are written back with it —
+  writing the name alone would leave them naming nothing. The active
+  camera is held by id across the step. The names go back AFTER the wires
+  the step holds: the other way round, what is filed for redo is those
+  wires as the rename had just left them, and redo puts the old name on
+  them. A name a sibling has taken since is not taken twice; the node
+  keeps the one it has.
 - It is not cce-ui's `History` because that has no way to look at a step
   before taking it, and what is filed for redo is the current state of
   what the step names.
 
 `the_graph_is_undone_a_step_at_a_time`,
+`a_rename_is_undone_with_what_names_the_node`,
 `a_parameter_edit_is_undone_a_gesture_at_a_time` and
 `reset_parameters_is_undone_and_redone` are the tests.
 

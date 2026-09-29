@@ -9,8 +9,8 @@
 //!   something changed them: a row of the params pane, the row menu,
 //!   `set_param`, or a command that rewrites the lot (Reset Parameters).
 //!   Recorded by the writers.
-//! - **Structure** — nodes added, nodes removed, nodes moved, wires made
-//!   and broken, the display and bypass flags. Recorded by NOTICING: the
+//! - **Structure** — nodes added, nodes removed, nodes moved, nodes
+//!   renamed, wires made and broken, the display and bypass flags. Recorded by NOTICING: the
 //!   tree is compared with how it stood at the last look
 //!   (`State::structure_base`) once an event or an action has been
 //!   applied, and what differs is the step. There are a dozen writers of
@@ -92,6 +92,10 @@ pub struct LevelBefore {
 #[derive(Clone)]
 pub struct StructureStep {
     pub levels: Vec<LevelBefore>,
+    /// Nodes that had another name: (id, the name it was). Put back by
+    /// renaming, not by writing the name, so that what names the node —
+    /// wires, expression paths anywhere in the tree — follows it back.
+    pub renames: Vec<(String, String)>,
     pub what: String,
 }
 
@@ -200,6 +204,8 @@ fn ids_tell_apart(nodes: &[FsNode]) -> bool {
 pub struct Difference {
     /// The structure that changed, as it WAS: a step's content.
     pub levels: Vec<LevelBefore>,
+    /// The nodes renamed: (id, the name it was).
+    pub renames: Vec<(String, String)>,
     /// Whether anything differs at all, a parameter's value included —
     /// which is no step, and is when the base has to be taken again.
     pub any: bool,
@@ -217,7 +223,12 @@ impl Difference {
             [one] => one.clone(),
             many => format!("{} nodes", many.len()),
         };
-        if !self.added.is_empty() && self.removed.is_empty() {
+        if !self.renames.is_empty() && self.added.is_empty() && self.removed.is_empty() {
+            // The wires that named the node changed with it, and are part
+            // of the rename.
+            let names: Vec<String> = self.renames.iter().map(|(_, was)| was.clone()).collect();
+            format!("Rename {}", list(&names))
+        } else if !self.added.is_empty() && self.removed.is_empty() {
             format!("Add {}", list(&self.added))
         } else if !self.removed.is_empty() && self.added.is_empty() {
             format!("Delete {}", list(&self.removed))
@@ -236,7 +247,7 @@ impl Difference {
     /// else: a run of alt+hjkl is one step.
     pub fn move_group(&self) -> Option<String> {
         let only_moves = self.added.is_empty() && self.removed.is_empty() && self.wired == 0 && self.flagged == 0;
-        (only_moves && !self.moved.is_empty()).then(|| format!("move\u{0}{}", self.moved.join("\u{0}")))
+        (only_moves && self.renames.is_empty() && !self.moved.is_empty()).then(|| format!("move\u{0}{}", self.moved.join("\u{0}")))
     }
 }
 
@@ -272,6 +283,9 @@ pub fn difference(base: &FsNode, now: &FsNode, out: &mut Difference) {
                 bypassed: was.bypassed,
                 wires: changed_wires,
             });
+        }
+        if was.name != is.name {
+            out.renames.push((was.id.clone(), was.name.clone()));
         }
         out.any |= was.name != is.name
             || was.params.len() != is.params.len()
@@ -342,7 +356,24 @@ pub fn restore(root: &mut FsNode, step: StructureStep) -> StructureStep {
         }
         levels.push(LevelBefore { dir_id: level.dir_id, nodes });
     }
-    StructureStep { levels, what: step.what }
+    // The names last, and by renaming: every wire and every expression
+    // path that names the node is written back with it. After the wires
+    // the step holds, or what is filed for redo would be those wires as
+    // the rename had just left them. Last renamed, first put back.
+    let mut renames = Vec::new();
+    for (id, was) in step.renames.into_iter().rev() {
+        let Some(is) = crate::viewer_state::find_node_by_id(root, &id).map(|n| n.name.clone()) else { continue };
+        // A sibling has taken the name since: two nodes of one name would
+        // leave every wire to either naming both. The node keeps the name
+        // it has.
+        let taken = crate::geometry::find_parent_node(root, &id)
+            .is_some_and(|p| p.children.iter().any(|c| c.id != id && c.name == was));
+        if !taken && crate::geometry::rename_node_in_tree(root, &id, &was) {
+            renames.push((id, is));
+        }
+    }
+    renames.reverse();
+    StructureStep { levels, renames, what: step.what }
 }
 
 impl State {
@@ -378,9 +409,10 @@ impl State {
         if !diff.any {
             return;
         }
-        if !diff.levels.is_empty() {
+        if !diff.levels.is_empty() || !diff.renames.is_empty() {
             let group = diff.move_group();
-            let step = Step::Structure(StructureStep { what: diff.what(), levels: diff.levels });
+            let step =
+                Step::Structure(StructureStep { what: diff.what(), levels: diff.levels, renames: diff.renames });
             match group {
                 Some(group) => self.edit_history.record_grouped(step, group),
                 None => self.edit_history.record(step),
@@ -480,10 +512,23 @@ impl State {
                     .selected_node()
                     .and_then(|i| self.current_dir().children.get(i))
                     .map(|n| n.id.clone());
+                // The active camera is a name, which a rename changes.
+                let camera = self
+                    .current_dir()
+                    .children
+                    .iter()
+                    .find(|c| c.node_type == "camera" && c.name == self.active_camera)
+                    .map(|c| c.id.clone());
                 let inverse = restore(&mut self.fs_root, step);
                 self.edit_history.file(undo, Step::Structure(inverse));
                 self.current_path = self.slots_along(&path);
                 self.current_path2 = self.slots_along(&path2);
+                let camera = camera
+                    .and_then(|id| crate::viewer_state::find_node_by_id(&self.fs_root, &id))
+                    .map(|n| n.name.clone());
+                if let Some(name) = camera {
+                    self.set_active_camera(name);
+                }
                 let slot = selected.and_then(|id| self.current_dir().children.iter().position(|n| n.id == id));
                 self.graph_mut().set_selected_node(slot);
                 self.slots.content2.set_selected_node(None);

@@ -6755,9 +6755,13 @@ mod tests {
         assert!(state.run_command("undo"));
         assert_eq!(texts(&state), edited);
 
-        // A rename between the reset and the undo: the step is by id.
+        // A rename between the reset and the undo: the step is by id, and
+        // is reached under the rename, which is a step of its own.
         state.run_command("reset_parameters");
-        state.current_dir_mut().children[slot].name = "ball".to_string();
+        let id = state.current_dir().children[slot].id.clone();
+        crate::geometry::rename_node_in_tree(&mut state.fs_root, &id, "ball");
+        assert!(state.history_step(true));
+        assert_ne!(state.current_dir().children[slot].name, "ball");
         assert!(state.history_step(true));
         assert_eq!(texts(&state), edited);
 
@@ -7015,6 +7019,88 @@ mod tests {
         state.new_project();
         state.record_structure_changes();
         assert_eq!(state.edit_history.undo_len(), 0, "New Project was recorded as an edit");
+    }
+
+    /// A rename is taken back with everything that named the node: the
+    /// wires to it, the expression paths through it wherever they stand,
+    /// and the active camera.
+    #[test]
+    fn a_rename_is_undone_with_what_names_the_node() {
+        use crate::app::McpAction;
+        let mut state = State::new(false);
+        let mut redraw = false;
+        let add = |state: &mut State, template: &str, x: f32| {
+            state
+                .apply_action(McpAction::AddNode { template_name: template.into(), name: None, x, y: 9.0 }, &mut false)
+                .unwrap();
+            state.current_dir().children.len() - 1
+        };
+        let sphere = state.current_dir().children.iter().position(|c| c.node_type == "sphere").unwrap();
+        let old = state.current_dir().children[sphere].name.clone();
+        let normal = add(&mut state, "Normal", 3.0);
+        let embryo = add(&mut state, "Embryo", 5.0);
+        state.apply_action(McpAction::SetParam { slot: normal, name: "Input".into(), value: old.clone() }, &mut redraw).unwrap();
+        // An expression a level down, reaching up and across to the sphere.
+        let reference = format!("ch(\"../../{old}/Radius\") * 2");
+        let inside = state.current_dir().children[embryo]
+            .children
+            .iter()
+            .position(|c| !c.params.is_empty())
+            .expect("the Embryo has a child with parameters");
+        {
+            let inner = &mut state.current_dir_mut().children[embryo].children[inside];
+            let p = &mut inner.params[0];
+            p.set_text(reference.clone());
+            p.set_expr(true);
+        }
+        let camera = state.current_dir().children.iter().position(|c| c.node_type == "camera").unwrap();
+        let camera_name = state.current_dir().children[camera].name.clone();
+        state.set_active_camera(camera_name.clone());
+        state.record_structure_changes();
+        state.edit_history.clear();
+
+        let names = |state: &State| -> (String, String, String, String, String) {
+            let dir = state.current_dir();
+            (
+                dir.children[sphere].name.clone(),
+                dir.children[normal].params.iter().find(|p| p.name == "Input").unwrap().text().to_string(),
+                dir.children[embryo].children[inside].params[0].text().to_string(),
+                state.active_camera.clone(),
+                state.viewport().active_camera.clone(),
+            )
+        };
+        let before = names(&state);
+        assert_eq!(before.2, reference);
+
+        state.apply_action(McpAction::RenameNode { slot: sphere, new_name: "Ball".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::RenameNode { slot: camera, new_name: "lens".into() }, &mut redraw).unwrap();
+        let after = names(&state);
+        assert_eq!(after.0, "ball");
+        assert_eq!(after.1, "ball", "the wire followed the rename");
+        assert!(after.2.contains("../../ball/Radius"), "{}", after.2);
+        assert_eq!((after.3.as_str(), after.4.as_str()), ("lens", "lens"), "both copies of the camera's name");
+        assert_eq!(state.edit_history.undo_len(), 2, "each rename is one step, its wires with it");
+
+        assert!(state.run_command("undo"));
+        assert!(state.last_status_text.contains(&format!("Undo Rename {camera_name}")), "{}", state.last_status_text);
+        assert_eq!(names(&state).3, camera_name);
+        assert_eq!(names(&state).4, camera_name);
+        assert!(state.run_command("undo"));
+        assert_eq!(names(&state), before);
+        assert!(state.run_command("redo"));
+        assert!(state.run_command("redo"));
+        assert_eq!(names(&state), after);
+
+        // A name taken since is not taken twice: the node keeps its own.
+        assert!(state.run_command("undo"));
+        assert!(state.run_command("undo"));
+        state.apply_action(McpAction::RenameNode { slot: sphere, new_name: "ball".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::RenameNode { slot: normal, new_name: old.clone() }, &mut redraw).unwrap();
+        state.edit_history.take(true);
+        assert!(state.history_step(true), "the step is taken");
+        let dir = state.current_dir();
+        assert_eq!(dir.children[sphere].name, "ball", "the sphere took a name its sibling has");
+        assert_eq!(dir.children[normal].name, old);
     }
 
     /// New Project from the palette starts a project. The command named a
