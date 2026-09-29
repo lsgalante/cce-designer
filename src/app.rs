@@ -2250,7 +2250,6 @@ pub struct State {
     /// fading). None once fully faded. Advanced in [`State::tick_frame`],
     /// drawn by the CONTENT branch in render.rs.
     pub drop_glow: Option<DropGlow>,
-    pub uniform_background: bool,
     pub network_opacity: f32,
     /// Node-domain opacity (style.surface.graph.node.opacity) — independent of
     /// the pane's network_opacity; fades node bodies/wires/ports and node text.
@@ -6635,7 +6634,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // the cell tint): the checkerboard grout is off by design; the
             // drop-target glow (render.rs) carries the only cell highlight.
             drop_glow: None,
-            uniform_background: true,
             network_opacity: 0.95,
             node_opacity: 1.0,
             node_compression: None,
@@ -6979,7 +6977,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
         if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
-            graph.set_uniform_background(self.uniform_background);
             graph.set_network_opacity(self.network_opacity);
             graph.set_node_opacity(self.node_opacity);
             graph.set_grid_color(self.graph_grid_color);
@@ -7004,7 +7001,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             g2.set_grid_snap_enabled(grid_snap_enabled);
         }
         if let Some(g2) = self.slots.content2.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
-            g2.set_uniform_background(self.uniform_background);
             g2.set_network_opacity(self.network_opacity);
             g2.set_node_opacity(self.node_opacity);
             g2.set_grid_color(self.graph_grid_color);

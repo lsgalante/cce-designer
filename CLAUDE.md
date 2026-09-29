@@ -1804,9 +1804,10 @@ spec / shininess / curvature live as `relief.spec` / `.shininess` /
 (since 2026-09-29): its cells are whatever it is painted on — the pane
 plate, or the scene with the plate off — and `style.surface.graph` sets
 only the lines (`grid_color`, `line_width`), their `opacity`, and `blur`.
-Until then the graph filled itself with `cell_color` (this app hard-codes
-`uniform_background` true, which chose it) and drew its lines in
-`gap_color`; both keys are retired, reported by path at load and not read.
+Until then the graph filled itself with `cell_color` (chosen by a
+`uniform_background` flag this app hard-coded true) and drew its lines in
+`gap_color`; all three keys are retired, reported by path at load and not
+read.
 The next section is about dropping the pane plate entirely.
 The params widget alone also reads `style.surface.param.backdrop_compression`.
 The rules live in cce-ui's CLAUDE.md ("There is one roll width", "The
