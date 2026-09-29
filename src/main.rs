@@ -6611,7 +6611,13 @@ mod tests {
         let start = src
             .find("pub fn execute_menu_action")
             .expect("execute_menu_action moved; this test scans for it");
-        let body = &src[start..];
+        // The function alone, not the rest of the file: the menubars are
+        // built further down with their items spelled out, and scanning on
+        // to the end found "New Project" THERE while no arm dispatched it.
+        let end = src[start..]
+            .find("\n    }\n")
+            .expect("execute_menu_action has no end");
+        let body = &src[start..start + end];
         for c in COMMANDS {
             let Run::Menu(label) = c.run else { continue };
             let arm = format!("\"{label}\"");
@@ -6621,6 +6627,17 @@ mod tests {
                 c.id
             );
         }
+    }
+
+    /// New Project from the palette starts a project. The command named a
+    /// label no arm dispatched, so the row ran and nothing happened.
+    #[test]
+    fn the_new_project_command_starts_an_empty_project() {
+        let mut state = State::new(false);
+        assert!(!state.fs_root.children.is_empty(), "the bundled project has nodes");
+        assert!(state.run_command("new_project"));
+        assert!(state.fs_root.children.is_empty(), "New Project left the old nodes in place");
+        assert_eq!(state.loaded_project_path, None);
     }
 
     /// Two commands on one chord is silent at the keyboard — the second never

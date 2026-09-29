@@ -3799,6 +3799,10 @@ impl State {
             "Set As Default" => {
                 self.set_current_as_default();
             }
+            "New Project" | "New" => {
+                self.new_project();
+                self.update_status_text("New project");
+            }
             "Open" => {
                 self.open_file_chooser();
             }
