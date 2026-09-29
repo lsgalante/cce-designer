@@ -10671,6 +10671,11 @@ mod tests {
         // green is what tells red ink and black ink from the white sheet.
         let border = |p: &crate::page::Page| p.pixels[(400 * p.width + 20) as usize];
         let rule = |p: &crate::page::Page| p.pixels[(400 * p.width + 36 * 4) as usize];
+        // Said, not shown: a sheet that differs is half a million pixels.
+        let same = |a: &crate::page::Page, b: &crate::page::Page, what: &str| {
+            let differ = a.pixels.iter().zip(&b.pixels).filter(|(x, y)| x != y).count();
+            assert!(a.pixels.len() == b.pixels.len() && differ == 0, "{what}: {differ} of {} pixels differ", a.pixels.len());
+        };
 
         let whole = sheet(&chain(&[]), "border1").expect("the chain resolves");
         assert!(border(&whole)[0] > 0.9 && border(&whole)[1] < 0.1, "the border is red: {:?}", border(&whole));
@@ -10678,7 +10683,7 @@ mod tests {
 
         // The border bypassed: the grid's sheet, as the grid made it.
         let no_border = sheet(&chain(&["border1"]), "border1").expect("passes the grid's sheet");
-        assert_eq!(no_border.pixels, sheet(&chain(&[]), "grid1").unwrap().pixels);
+        same(&no_border, &sheet(&chain(&[]), "grid1").unwrap(), "the border bypassed");
         assert!(border(&no_border)[1] > 0.9, "no border ink: {:?}", border(&no_border));
         assert!(rule(&no_border)[1] < 0.4, "and the rules are still there");
 
@@ -10691,21 +10696,21 @@ mod tests {
 
         // Both: the sheet itself.
         let bare = sheet(&chain(&["grid1", "border1"]), "border1").expect("the sheet");
-        assert_eq!(bare.pixels, sheet(&chain(&[]), "page1").unwrap().pixels);
+        same(&bare, &sheet(&chain(&[]), "page1").unwrap(), "the grid and the border bypassed");
 
         // A bypassed sheet is no sheet, and nothing drawn on it is a page.
         assert!(sheet(&chain(&["page1"]), "page1").is_none());
         assert!(sheet(&chain(&["page1"]), "border1").is_none());
 
         // Export passes a page through, bypassed or not.
-        assert_eq!(sheet(&chain(&[]), "export1").unwrap().pixels, whole.pixels);
-        assert_eq!(sheet(&chain(&["export1"]), "export1").unwrap().pixels, whole.pixels);
+        same(&sheet(&chain(&[]), "export1").unwrap(), &whole, "through an export");
+        same(&sheet(&chain(&["export1"]), "export1").unwrap(), &whole, "through a bypassed export");
 
         // What the pane shows is the level's last shown page node, and a
         // bypassed one shows what it passes.
         let mut root = chain(&["border1"]);
         root.children.pop();
-        assert_eq!(displayed_page(&root, &root).expect("displayed").pixels, no_border.pixels);
+        same(&displayed_page(&root, &root).expect("displayed"), &no_border, "what the pane shows");
     }
 
     /// The flag is written only when it is set, so a file that never
