@@ -1253,6 +1253,44 @@ not: folds inside the excluded rings, which the measure still counts and
 which in the thin, fast runs were MORE with it on (545 against 358 at
 2562 points, Thickness 0.5, four fifths of an edge a step).
 
+**Fold Contact** (a toggle, shown for Surface, on in the template, inside a
+simnet only; a node without the row reads off). The rings are excluded
+from contact because a neighbour is nearer than a thickness by
+construction, and no distance says whether it is too near — so a surface
+folding through its own neighbourhood was seen by nothing, and on the
+sphere test everything the other rows left was that. But going THROUGH is
+not a distance. `detangle::folded` asks the through question of every pair
+inside each other's rings that shares no point: a point and the triangles
+at the points of its rings, a side and the sides at the points of its
+ends' rings (sides only with Edge Contact on). It walks the MESH
+(`Topo::tris_at` / `sides_at`), not the grid: what is in a point's rings is
+in them however far apart the fold has left them. It runs once when the
+solve begins, and what it finds is a contact in every pass — put back as
+far over its neighbour as it BEGAN (`height.min(thickness)`), not out to a
+thickness, which a neighbour never was — and again in each look of the
+hold, which returns what is still folded to where the step began.
+
+**When something went through is searched for, not read off**
+(`crossing_time`). The first `went_through` took the moment and the place
+from a straight line between the two ends' heights and weights, which is
+right for a small step and wrong for a long one: a point carried across
+several triangles was said to have gone around the one it went through,
+and two edges were put back on the wrong side of each other. Both tests
+now take the volume the four points span, which changes sign when they
+are in one plane, find that moment by halving, and ask where the foot (or
+the lines' meeting) was THEN. `fold_contact_puts_back_what_went_through_its_own_neighbourhood`
+is the fixture that showed it.
+
+With all three on the sphere test ends with NO crossing of any kind, at
+any step, in all twelve runs (the `all` row), where the side and the edges
+together left up to 604. What that costs: about seven times the Surface
+method told the side alone where most of the mesh is in contact (234 ms a
+step against 32 at 2562 points, 12 against 2 at 162), most of it the
+edges'. And it is bought by HOLDING: some 200 points a step at 2562 are
+put back where the step began, a tenth of the mesh, so a fold that is
+being forced stops moving there rather than folding. That is the
+guarantee working, and it will read as the surface sticking.
+
 `detangle::self_intersections` is the MEASURE: every edge passing through a
 triangle (`spatial::segment_crosses_triangle`, tolerance relative to the
 lengths, so scale does not change the answer), no thickness and no rings.

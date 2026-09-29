@@ -10428,6 +10428,88 @@ mod tests {
         assert_eq!(d.positions(), round.positions());
     }
 
+    /// A fold: a point carried through a triangle of its own neighbourhood.
+    /// The rings are excluded from contact, since a neighbour is nearer
+    /// than a thickness by construction — but going through is not a
+    /// distance, and told where the step began the solve puts the point
+    /// back over its neighbour, as far over it as it was.
+    #[test]
+    fn fold_contact_puts_back_what_went_through_its_own_neighbourhood() {
+        // A shallow bowl, so that nothing lies in its neighbour's plane.
+        let at = |i: usize, j: usize| (i * 6 + j) as u32;
+        let bowl = {
+            let mut d = Detail::new();
+            for i in 0..6 {
+                for j in 0..6 {
+                    let (x, z) = (i as f32 - 2.5, j as f32 - 2.5);
+                    d.add_point(Vec3::new(x * 0.25, 0.02 * (x * x + z * z), z * 0.25));
+                }
+            }
+            for i in 0..5 {
+                for j in 0..5 {
+                    d.add_prim(&[at(i, j), at(i + 1, j + 1), at(i + 1, j)]);
+                    d.add_prim(&[at(i, j), at(i, j + 1), at(i + 1, j + 1)]);
+                }
+            }
+            d.points_mut().add_to_group("mover", at(2, 2) as usize);
+            d
+        };
+        let mover = at(2, 2) as usize;
+        // A triangle one hop away: it has the mover's neighbour for a corner.
+        let tri = [at(3, 3), at(4, 4), at(4, 3)].map(|p| p as usize);
+        let over = |d: &Detail| {
+            let [a, b, c] = tri.map(|p| d.pos(p));
+            (d.pos(mover) - a).dot((b - a).cross(c - a).normalize())
+        };
+        let began = over(&bowl);
+        assert!(began > 0.01, "the mover begins over its neighbour: {began}");
+        let mut carried = bowl.clone();
+        let [a, b, c] = tri.map(|p| bowl.pos(p));
+        carried.set_pos(mover, (a + b + c) / 3.0 - (b - a).cross(c - a).normalize() * 0.04);
+        assert!(over(&carried) < 0.0);
+        assert!(crate::detangle::self_intersections(&carried).crossings > 0, "the fixture crosses");
+        assert_eq!(crate::detangle::crossings_beyond(&carried, 2), 0, "and inside the rings, where contact does not look");
+
+        let settings = |folds: &'static str| {
+            phase3_node(
+                "detangle",
+                &[("Method", "Surface"), ("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "8"), ("Edge Contact", "true"), ("Fold Contact", folds), ("Group", "mover")],
+            )
+        };
+        // Without it, and with it but not told where the step began, the
+        // fold stays.
+        for (node, told) in [(settings("false"), true), (settings("true"), false), (phase3_node("detangle", &[("Method", "Surface"), ("Group", "mover")]), true)] {
+            let mut d = carried.clone();
+            let work = crate::detangle::apply_from(&mut d, told.then_some(&bowl), &node);
+            assert_eq!(work.folds, 0);
+            assert!(over(&d) < 0.0, "told {told}: {work:?}");
+        }
+        let mut d = carried.clone();
+        let work = crate::detangle::apply_from(&mut d, Some(&bowl), &settings("true"));
+        assert!(work.folds > 0, "{work:?}");
+        assert!(over(&d) > 0.0, "back over its neighbour: {}, {work:?}", over(&d));
+        // As far over it as it began and no further: a neighbour is nearer
+        // than a thickness, and is not pushed out to one.
+        assert!(over(&d) < began * 1.5 + 1e-4, "{} against {began}", over(&d));
+        assert_eq!(crate::detangle::self_intersections(&d).crossings, 0);
+        for p in (0..d.num_points()).filter(|&p| p != mover) {
+            assert_eq!(d.pos(p), carried.pos(p), "only the group moves");
+        }
+
+        // A step that folds nothing finds nothing and holds nothing.
+        let mut still = bowl.clone();
+        for p in 0..still.num_points() {
+            let v = still.pos(p);
+            still.set_pos(p, v + Vec3::new(0.01, 0.02 * v.x, 0.0));
+        }
+        let moved = still.clone();
+        let mut node = settings("true");
+        node.params.retain(|p| p.name != "Group");
+        let work = crate::detangle::apply_from(&mut still, Some(&bowl), &node);
+        assert_eq!((work.folds, work.held), (0, 0), "{work:?}");
+        assert_eq!(still.positions(), moved.positions());
+    }
+
     /// The Step Limit holds a point's move since the step began to that
     /// many thicknesses, in the direction it was going. It is the Surface
     /// method's, it needs to know where the step began, and only what may
@@ -10477,13 +10559,15 @@ mod tests {
     fn detangle_methods_compared() {
         // The method, whether it is told where the step began, and its
         // Step Limit.
-        let ways: [(&str, &str, bool, &str); 6] = [
-            ("none", "None", false, "false"),
-            ("points", "Points", false, "false"),
-            ("surface", "Surface", false, "false"),
-            ("surface, edges", "Surface", false, "true"),
-            ("sided", "Surface", true, "false"),
-            ("sided, edges", "Surface", true, "true"),
+        let ways: [(&str, &str, bool, &str, &str); 8] = [
+            ("none", "None", false, "false", "false"),
+            ("points", "Points", false, "false", "false"),
+            ("surface", "Surface", false, "false", "false"),
+            ("surface, edges", "Surface", false, "true", "false"),
+            ("sided", "Surface", true, "false", "false"),
+            ("sided, edges", "Surface", true, "true", "false"),
+            ("sided, folds", "Surface", true, "false", "true"),
+            ("all", "Surface", true, "true", "true"),
         ];
         for frequency in ["4", "8", "16"] {
             let sphere = crate::shapes::sphere_node_detail(
@@ -10498,10 +10582,10 @@ mod tests {
                 let rate = edge * pace;
                 let steps = (1.1 / rate).ceil() as usize;
                 for thickness in ["0.50", "1.00"] {
-                    for (name, method, told, edges) in ways {
+                    for (name, method, told, edges, folds) in ways {
                         let node = phase3_node(
                             "detangle",
-                            &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4"), ("Edge Contact", edges)],
+                            &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4"), ("Edge Contact", edges), ("Fold Contact", folds)],
                         );
                         let mut d = sphere.clone();
                         let (mut worst, mut far, mut spent) = (0, 0, std::time::Duration::ZERO);
@@ -10519,18 +10603,19 @@ mod tests {
                                 tally.crossed += w.crossed;
                                 tally.held += w.held;
                                 tally.edges_searched += w.edges_searched;
+                                tally.folds += w.folds;
                             }
                             worst = worst.max(crate::detangle::self_intersections(&d).crossings);
                             far = far.max(crate::detangle::crossings_beyond(&d, 2));
                         }
                         let last = crate::detangle::self_intersections(&d).crossings;
                         println!(
-                            "{:>5} points, pace {pace}, {steps:>4} steps, thickness {thickness}, {name:>15}: worst {worst:>5} crossings ({far:>5} beyond the rings), last {last:>5}, {:.2} ms a step; {} put back through, {} held, {} edges searched",
+                            "{:>5} points, pace {pace}, {steps:>4} steps, thickness {thickness}, {name:>15}: worst {worst:>5} crossings ({far:>5} beyond the rings), last {last:>5}, {:.2} ms a step; {} put back through, {} held, {} folds",
                             d.num_points(),
                             spent.as_secs_f64() * 1000.0 / steps as f64,
                             tally.crossed,
                             tally.held,
-                            tally.edges_searched / steps
+                            tally.folds
                         );
                     }
                 }

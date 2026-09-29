@@ -60,6 +60,12 @@ struct Topo {
     /// triangles are made of, which is what can pass through itself.
     sides: Vec<[u32; 2]>,
     tri_sides: Vec<[u32; 3]>,
+    /// The triangles at each point, and the sides: point `p`'s are
+    /// `at_tris[tri_starts[p]..tri_starts[p + 1]]`, and likewise.
+    tri_starts: Vec<u32>,
+    at_tris: Vec<u32>,
+    side_starts: Vec<u32>,
+    at_sides: Vec<u32>,
     /// Each point's excluded neighbourhood, itself included, ascending:
     /// point `p`'s is `excluded[starts[p]..starts[p + 1]]`.
     starts: Vec<u32>,
@@ -126,13 +132,51 @@ impl Topo {
                 })
             })
             .collect();
-        Topo { key, rings, edges: geom.edges().to_vec(), tris, tri_prims, sides, tri_sides, starts, excluded }
+        let tri_sides: Vec<[u32; 3]> = tri_sides;
+        let (tri_starts, at_tris) = by_point(n, tris.iter().map(|t| &t[..]));
+        let (side_starts, at_sides) = by_point(n, sides.iter().map(|e| &e[..]));
+        Topo { key, rings, edges: geom.edges().to_vec(), tris, tri_prims, sides, tri_sides, tri_starts, at_tris, side_starts, at_sides, starts, excluded }
+    }
+
+    fn own(&self, p: usize) -> &[u32] {
+        &self.excluded[self.starts[p] as usize..self.starts[p + 1] as usize]
+    }
+
+    fn tris_at(&self, p: usize) -> &[u32] {
+        &self.at_tris[self.tri_starts[p] as usize..self.tri_starts[p + 1] as usize]
+    }
+
+    fn sides_at(&self, p: usize) -> &[u32] {
+        &self.at_sides[self.side_starts[p] as usize..self.side_starts[p + 1] as usize]
     }
 
     fn excludes(&self, p: usize, q: u32) -> bool {
         let (a, b) = (self.starts[p] as usize, self.starts[p + 1] as usize);
         self.excluded[a..b].binary_search(&q).is_ok()
     }
+}
+
+/// Which of `items` each point is part of, flat: point `p`'s are
+/// `ids[starts[p]..starts[p + 1]]`, ascending.
+fn by_point<'a>(n: usize, items: impl Iterator<Item = &'a [u32]> + Clone) -> (Vec<u32>, Vec<u32>) {
+    let mut starts = vec![0u32; n + 1];
+    for item in items.clone() {
+        for &p in item {
+            starts[p as usize + 1] += 1;
+        }
+    }
+    for p in 0..n {
+        starts[p + 1] += starts[p];
+    }
+    let mut next = starts.clone();
+    let mut ids = vec![0u32; starts[n] as usize];
+    for (i, item) in items.enumerate() {
+        for &p in item {
+            ids[next[p as usize] as usize] = i as u32;
+            next[p as usize] += 1;
+        }
+    }
+    (starts, ids)
 }
 
 /// How many topologies are kept: a project has a few detangles at most, and
@@ -301,6 +345,9 @@ pub struct Work {
     /// the step began — a point through a triangle, an edge through an
     /// edge — and put back on the side they came from.
     pub crossed: usize,
+    /// Pairs inside each other's rings found gone through each other when
+    /// the solve began: folds.
+    pub folds: usize,
     /// Points put back where the step began, being still through a
     /// triangle when the passes were done, or a corner of one.
     pub held: usize,
@@ -643,6 +690,14 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     work.grids += 1;
     let mut drift = 0.0f32;
     let mut search = Search { near: Vec::new(), seen: vec![u32::MAX; topo.tris.len()], stamp: 0, met: vec![u32::MAX; topo.sides.len()], held: Vec::new() };
+    // What has folded through its own neighbourhood since the step began.
+    // A node without the row is one from before it.
+    let folds_too = before.is_some() && crate::geometry::node_param_bool(target, "Fold Contact", false);
+    let mut folds: Vec<Fold> = Vec::new();
+    if let (Some(was), true) = (before, folds_too) {
+        folded(topo, was, &pos, edges_too, 0.0, &mut search, &mut folds);
+        work.folds = folds.len();
+    }
     let mut push = vec![Vec3::ZERO; n];
     let mut weight = vec![0.0f32; n];
     let mut found: Vec<Contact> = Vec::new();
@@ -673,6 +728,28 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
         // thickness and a drift of here when it was filed; one a point
         // went through lies along the way it came.
         let reach = thickness + drift + if before.is_some() { travelled } else { 0.0 };
+        // What folded through is put back as far over its neighbour as it
+        // began, which is nearer than a thickness: that is what a
+        // neighbour is.
+        if let Some(was) = before {
+            for fold in &folds {
+                let (who, then, now) = fold.points(topo, was, &pos);
+                if fold.sides {
+                    let ([e0, e1], [f0, f1]) = ([now[0], now[1]], [now[2], now[3]]);
+                    if let Some((side, at, height)) = edges_went_through([then[0], then[1]], [then[2], then[3]], [e0, e1], [f0, f1], 0.0) {
+                        let (s, t) = (at[0].clamp(0.0, 1.0), at[1].clamp(0.0, 1.0));
+                        let below = ((e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t)).dot(side);
+                        found.push(Contact { who, share: [1.0 - s, s, t - 1.0, -t], dir: side, deep: height.min(thickness) - below, through: true, edges: true });
+                        who.iter().for_each(|&p| through[p] = true);
+                    }
+                } else if let Some((side, height)) = went_through(then[0], [then[1], then[2], then[3]], now[0], [now[1], now[2], now[3]], 0.0) {
+                    let w = crate::spatial::closest_weights_on_triangle(now[0], now[1], now[2], now[3]);
+                    let below = (now[0] - now[1]).dot(side);
+                    found.push(Contact { who, share: [1.0, -w[0], -w[1], -w[2]], dir: side, deep: height.min(thickness) - below, through: true, edges: false });
+                    through[who[0]] = true;
+                }
+            }
+        }
         near_something.iter_mut().for_each(|t| *t = false);
         if edges_too {
             half.iter_mut().for_each(|h| *h = 0.0);
@@ -717,7 +794,7 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                     continue;
                 }
                 let (who, share) = ([p, ia, ib, ic], [1.0, -w[0], -w[1], -w[2]]);
-                if let Some(side) = before.and_then(|was| went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], 0.0)) {
+                if let Some((side, _)) = before.and_then(|was| went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], 0.0)) {
                     // `side` is the triangle's normal, turned to the side
                     // the point came from; it is below the plane by that
                     // much and belongs a thickness above it.
@@ -768,7 +845,7 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                     }
                     let who = [e[0] as usize, e[1] as usize, f[0] as usize, f[1] as usize];
                     let was = before.map(|was| (e.map(|p| was[p as usize]), f.map(|p| was[p as usize])));
-                    if let Some((side, at)) = was.and_then(|(e_was, f_was)| edges_went_through(e_was, f_was, [e0, e1], [f0, f1], 0.0)) {
+                    if let Some((side, at, _)) = was.and_then(|(e_was, f_was)| edges_went_through(e_was, f_was, [e0, e1], [f0, f1], 0.0)) {
                         let (s, t) = (at[0].clamp(0.0, 1.0), at[1].clamp(0.0, 1.0));
                         let below = ((e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t)).dot(side);
                         let share = [1.0 - s, s, t - 1.0, -t];
@@ -907,6 +984,12 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                     }
                 }
             }
+            if folds_too {
+                folded(topo, was, &pos, edges_too, HOLD_MARGIN, &mut search, &mut folds);
+                for fold in &folds {
+                    back.extend(fold.points(topo, was, &pos).0);
+                }
+            }
             let mut put = 0;
             for &i in &back {
                 if movable[i] && pos[i] != was[i] {
@@ -925,6 +1008,91 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     if moved_at_all {
         for (p, v) in pos.iter().enumerate() {
             geom.set_pos(p, *v);
+        }
+    }
+}
+
+/// A point and a triangle of its own neighbourhood, or two sides that are
+/// each other's, one of which went through the other.
+#[derive(Clone, Copy)]
+struct Fold {
+    sides: bool,
+    /// The point and the triangle, or the two sides.
+    pair: [u32; 2],
+}
+
+impl Fold {
+    /// The four points of it, where they were and where they are.
+    fn points(&self, topo: &Topo, was: &[Vec3], pos: &[Vec3]) -> ([usize; 4], [Vec3; 4], [Vec3; 4]) {
+        let who = if self.sides {
+            let ([a, b], [c, d]) = (topo.sides[self.pair[0] as usize], topo.sides[self.pair[1] as usize]);
+            [a, b, c, d].map(|p| p as usize)
+        } else {
+            let [a, b, c] = topo.tris[self.pair[1] as usize];
+            [self.pair[0], a, b, c].map(|p| p as usize)
+        };
+        (who, who.map(|p| was[p]), who.map(|p| pos[p]))
+    }
+}
+
+/// Everything that has gone through its own NEIGHBOURHOOD since the step
+/// began: a point through a triangle with a corner inside the point's
+/// rings, a side through a side with an end inside the other's.
+///
+/// The rings are excluded from contact because a neighbour is nearer than
+/// a thickness by construction, and no distance says whether it is too
+/// near. Going THROUGH is not a distance. A point that was on one side of
+/// its neighbour's triangle and is on the other has folded the surface
+/// through itself, whatever the thickness, and the only pairs with nothing
+/// to say are the ones that share a point — which meet there.
+///
+/// Found through the mesh and not through the grid: what is in a point's
+/// rings is the triangles at the points of its rings, however far apart
+/// the fold has left them.
+fn folded(topo: &Topo, was: &[Vec3], pos: &[Vec3], sides_too: bool, margin: f32, search: &mut Search, out: &mut Vec<Fold>) {
+    out.clear();
+    for p in 0..pos.len() {
+        search.next();
+        for &q in topo.own(p) {
+            for &t in topo.tris_at(q as usize) {
+                if search.seen[t as usize] == search.stamp {
+                    continue;
+                }
+                search.seen[t as usize] = search.stamp;
+                let corners = topo.tris[t as usize];
+                if corners.contains(&(p as u32)) {
+                    continue;
+                }
+                let [a, b, c] = corners.map(|c| c as usize);
+                if went_through(was[p], [was[a], was[b], was[c]], pos[p], [pos[a], pos[b], pos[c]], margin).is_some() {
+                    out.push(Fold { sides: false, pair: [p as u32, t] });
+                }
+            }
+        }
+    }
+    if !sides_too {
+        return;
+    }
+    for (i, e) in topo.sides.iter().enumerate() {
+        search.next();
+        let (e_was, e_now) = (e.map(|p| was[p as usize]), e.map(|p| pos[p as usize]));
+        for &end in e {
+            for &q in topo.own(end as usize) {
+                for &j in topo.sides_at(q as usize) {
+                    if j as usize <= i || search.met[j as usize] == search.stamp {
+                        continue;
+                    }
+                    search.met[j as usize] = search.stamp;
+                    let f = topo.sides[j as usize];
+                    if f.iter().any(|q| e.contains(q)) {
+                        continue;
+                    }
+                    let (f_was, f_now) = (f.map(|p| was[p as usize]), f.map(|p| pos[p as usize]));
+                    if edges_went_through(e_was, f_was, e_now, f_now, margin).is_some() {
+                        out.push(Fold { sides: true, pair: [i as u32, j] });
+                    }
+                }
+            }
         }
     }
 }
@@ -1043,26 +1211,50 @@ fn over_edge([e0, e1]: [Vec3; 2], [f0, f1]: [Vec3; 2]) -> Option<(f32, [f32; 2],
     Some((r.dot(across), [s, t], across))
 }
 
+/// When, between nought and one, something that is `at(0)` on one side of
+/// nothing and `at(1)` on the other is nothing: found by halving, since
+/// what is asked of is a cubic in the time and its ends are all that is
+/// known of it.
+fn crossing_time(at: impl Fn(f32) -> f32, began: f32) -> f32 {
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..20 {
+        let mid = (lo + hi) * 0.5;
+        if at(mid) * began > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) * 0.5
+}
+
 /// Whether two edges passed through each other between then and now, and
 /// if so the direction across them as they are now, turned to the side the
-/// first came from, and where on each they are nearest.
+/// first came from, where on each they are nearest, and how far apart
+/// they began.
 ///
-/// [`went_through`]'s question, of two edges: the first's height over the
-/// second changed sign, and where it was nothing the place was within both.
-/// Two edges that have swung past running the same way have turned their
-/// own direction over, and their heights say nothing about each other.
-fn edges_went_through(e_then: [Vec3; 2], f_then: [Vec3; 2], e_now: [Vec3; 2], f_now: [Vec3; 2], margin: f32) -> Option<(Vec3, [f32; 2])> {
-    let (h0, at0, across0) = over_edge(e_then, f_then)?;
-    let (h1, at1, across) = over_edge(e_now, f_now)?;
-    if h0 == 0.0 || h0 * h1 >= 0.0 || across0.dot(across) <= 0.0 {
+/// [`went_through`]'s question, of two edges, each point taken to have
+/// gone straight from where it was to where it is: the volume the four
+/// span changed sign — they were in one plane at some moment between — and
+/// at that moment the lines met within both edges. A volume is also
+/// nothing when the two run the same way, which is no meeting, and then
+/// there is no place on either where they are nearest.
+fn edges_went_through(e_then: [Vec3; 2], f_then: [Vec3; 2], e_now: [Vec3; 2], f_now: [Vec3; 2], margin: f32) -> Option<(Vec3, [f32; 2], f32)> {
+    let volume = |e: [Vec3; 2], f: [Vec3; 2]| (e[0] - f[0]).dot((e[1] - e[0]).cross(f[1] - f[0]));
+    let (v0, v1) = (volume(e_then, f_then), volume(e_now, f_now));
+    if v0 == 0.0 || v0 * v1 >= 0.0 {
         return None;
     }
-    let when = h0 / (h0 - h1);
-    let inside = (0..2).all(|i| {
-        let at = at0[i] + (at1[i] - at0[i]) * when;
-        at >= -margin && at <= 1.0 + margin
-    });
-    inside.then(|| (across * h0.signum(), at1))
+    let between = |when: f32| ([0, 1].map(|i| e_then[i].lerp(e_now[i], when)), [0, 1].map(|i| f_then[i].lerp(f_now[i], when)));
+    let when = crossing_time(|t| { let (e, f) = between(t); volume(e, f) }, v0);
+    let (e, f) = between(when);
+    let (_, at, _) = over_edge(e, f)?;
+    if !at.iter().all(|&a| a >= -margin && a <= 1.0 + margin) {
+        return None;
+    }
+    let (began, _, _) = over_edge(e_then, f_then)?;
+    let (_, at_now, across) = over_edge(e_now, f_now)?;
+    Some((across * v0.signum(), at_now, began.abs()))
 }
 
 /// A point's height over a triangle's plane, along the normal its winding
@@ -1097,22 +1289,32 @@ const HOLD_ROUNDS: usize = 8;
 
 /// Whether a point went through a triangle between then and now, and if so
 /// the triangle's normal as it is now, turned to the side the point came
-/// from.
+/// from, and how far over the triangle it began.
 ///
-/// Both move, so the question is asked in the TRIANGLE'S terms: the point's
-/// height over it and the place of its foot in it, then and now, with the
-/// passage taken as a straight line between the two. It went through if
-/// the height changed sign and the foot, where the height was nothing, was
-/// inside the triangle.
-fn went_through(p_then: Vec3, tri_then: [Vec3; 3], p_now: Vec3, tri_now: [Vec3; 3], margin: f32) -> Option<Vec3> {
-    let (h0, w0, _) = over_triangle(p_then, tri_then)?;
-    let (h1, w1, normal) = over_triangle(p_now, tri_now)?;
-    if h0 == 0.0 || h0 * h1 >= 0.0 {
+/// Both move, each point taken to have gone straight from where it was to
+/// where it is. It went through if the volume the four span changed sign —
+/// the point was in the triangle's plane at some moment between — and at
+/// that moment its foot was inside the triangle. Until 2026-09-29 the
+/// moment and the foot were read off a straight line between the two ends'
+/// heights and weights, which is right for a small step and wrong for a
+/// long one: a point carried across several triangles was said to have
+/// gone around the one it went through.
+fn went_through(p_then: Vec3, tri_then: [Vec3; 3], p_now: Vec3, tri_now: [Vec3; 3], margin: f32) -> Option<(Vec3, f32)> {
+    let volume = |p: Vec3, [a, b, c]: [Vec3; 3]| (p - a).dot((b - a).cross(c - a));
+    let (v0, v1) = (volume(p_then, tri_then), volume(p_now, tri_now));
+    if v0 == 0.0 || v0 * v1 >= 0.0 {
         return None;
     }
-    let at = h0 / (h0 - h1);
-    let inside = (0..3).all(|i| w0[i] + (w1[i] - w0[i]) * at >= -margin);
-    inside.then(|| normal * h0.signum())
+    let between = |when: f32| (p_then.lerp(p_now, when), [0, 1, 2].map(|i| tri_then[i].lerp(tri_now[i], when)));
+    let when = crossing_time(|t| { let (p, tri) = between(t); volume(p, tri) }, v0);
+    let (p, tri) = between(when);
+    let (_, w, _) = over_triangle(p, tri)?;
+    if !w.iter().all(|&w| w >= -margin) {
+        return None;
+    }
+    let (began, _, _) = over_triangle(p_then, tri_then)?;
+    let (_, _, normal) = over_triangle(p_now, tri_now)?;
+    Some((normal * v0.signum(), began.abs()))
 }
 
 /// Where a surface passes through itself.

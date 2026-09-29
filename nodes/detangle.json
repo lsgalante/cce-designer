@@ -10,6 +10,7 @@
   { "name": "Rings", "type": "spinbox", "default": "2", "min": 0.0, "max": 6.0, "step": 1.0 },
   { "name": "Iterations", "type": "spinbox", "default": "4", "min": 1.0, "max": 32.0, "step": 1.0 },
   { "name": "Edge Contact", "type": "toggle", "default": "true", "show_when": "Method == Surface" },
+  { "name": "Fold Contact", "type": "toggle", "default": "true", "show_when": "Method == Surface" },
   { "name": "Step Limit", "type": "slider", "default": "0.00", "min": 0.0, "max": 2.0, "step": 0.05, "show_when": "Method == Surface" },
   { "name": "Group", "type": "group", "default": "" },
   { "name": "Tangled Group", "type": "group", "default": "" }
