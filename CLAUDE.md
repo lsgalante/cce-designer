@@ -105,12 +105,28 @@ the schemas in sync — `test_mcp_tools_map_to_actions` enforces the mapping.
 `HEADER_H` and `MENUBAR_H` are 0 — kept as pane identities and for their
 checkmarks, so the MCP tool is the only thing that can click one. What
 `process_window_event` still dispatches by index is what no registry command
-does: the viewport menubar's Camera menu, and the parameters menubar's Preset
-and Reset (`window::menu_is_dispatched`). Everything else they list is a
-command, reached through `run_command`; a click on it is an error saying so,
+was then: the viewport menubar's Camera menu, and the parameters menubar's
+Preset and Reset (`window::menu_is_dispatched`). Everything else they list is
+a command, reached through `run_command`; a click on it is an error saying so,
 where it used to be accepted and, the item lists having drifted from the
 matches, ran the wrong item (the header's Save opened a project).
 `a_menubar_click_is_dispatched_or_refused` is the test.
+
+**The cameras and the presets are commands too** (the same day), so the
+palette reaches them and a chord can: `next_camera` / `previous_camera`
+step through `State::camera_names` (the Default Camera, then the level's
+camera nodes) and wrap, `default_camera` goes back to it, and each camera
+NODE is a row of the palette — `Camera: camera1`, id under
+`CAMERA_ROW_PREFIX`, ranked among the commands as the viewport's, with
+`active` in the chord column of the one in use. They are rows and not
+registry commands because they are nodes, as the recent projects are paths.
+`State::choose_camera` is the one entry. `reset_parameters` and
+`custom_preset` run `State::apply_param_preset` on the node the params pane
+shows, from `template_default` — so a child inside a subnet instance resets
+to the subnet template's override, where the menubar's arm looked the
+template up by node type and missed it. All five ship unbound. The three
+menubar menus run the same functions.
+`the_cameras_and_the_presets_are_commands` is the test.
 
 (The former bespoke HTTP API on port 3000 was retired in favor of this;
 app-internal threads like the cce-files choosers now return results via

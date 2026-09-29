@@ -26,8 +26,9 @@ pub enum WindowEvent {
 }
 
 /// The menubar menus `process_window_event` still dispatches by index: the
-/// viewport's Camera menu and the parameters' Preset and Reset. The rest of
-/// what the menubars list is a registry command.
+/// viewport's Camera menu and the parameters' Preset and Reset, which run
+/// what the camera and preset commands run. The rest of what the menubars
+/// list is reached as a registry command.
 pub(crate) fn menu_is_dispatched(widget_idx: usize, menu_idx: usize) -> bool {
     match widget_idx {
         RIGHT_MENUBAR_IDX => menu_idx == 0,
@@ -153,97 +154,24 @@ impl State {
 
             // The menubars are not drawn (their bars have no height), so a
             // click reaches these only through MCP's `menu_click`. What is
-            // dispatched here is what no registry command does: choosing the
-            // active camera, and the parameter presets. Everything else the
-            // menubars list is a command, and is run as one.
+            // dispatched here is the two menus whose items are chosen by
+            // position: the cameras, and the parameter presets. Both run what
+            // their commands run. Everything else the menubars list is
+            // reached as a command.
             if let Some((menu_idx, item_idx)) = state.menu_mut(RIGHT_MENUBAR_IDX).menu_click() {
                 if menu_idx == 0 {
-                    let camera_nodes: Vec<String> = state.current_dir().children.iter()
-                        .filter(|c| c.node_type == "camera")
-                        .map(|c| c.name.clone())
-                        .collect();
-                    let mut items = vec!["Default Camera".to_string()];
-                    items.extend(camera_nodes);
-                    if item_idx < items.len() {
-                        state.set_active_camera(items[item_idx].clone());
-                        let active_cam = state.active_camera.clone();
-                        for (i, item) in items.iter().enumerate() {
-                            state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(0, i, item == &active_cam);
-                        }
-                        changed = true;
+                    if let Some(name) = state.camera_names().get(item_idx).cloned() {
+                        changed |= state.choose_camera(&name);
                     }
                 }
             }
 
             if let Some((menu_idx, item_idx)) = state.menu_mut(PARAM_MENUBAR_IDX).menu_click() {
-                if menu_idx == 0 { // Preset
-                    if let Some(slot_idx) = state.graph().selected_node() {
-                        let node_type = state.current_dir().children[slot_idx].node_type.clone();
-                        let template_params = state.node_templates.iter()
-                            .find(|t| t.node.node_type == node_type)
-                            .map(|t| t.node.params.clone());
-                        if let Some(params_to_reset) = template_params {
-                            if item_idx == 0 { // Default
-                                for template_param in &params_to_reset {
-                                    if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
-                                        // The template's text AND whether it is an
-                                        // expression: a default that is a reference
-                                        // is one again after a reset.
-                                        p.set_text(template_param.text().to_string());
-                                        p.set_expr(template_param.is_expr());
-                                    }
-                                }
-                            } else if item_idx == 1 { // Custom
-                                for template_param in &params_to_reset {
-                                    if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
-                                        if let Ok(v) = template_param.text().parse::<f32>() {
-                                            p.set_text(format!("{:.2}", v * 1.5));
-                                        } else if let Ok(v) = template_param.text().parse::<i32>() {
-                                            p.set_text(format!("{}", v * 2));
-                                        } else if template_param.text().contains(':') {
-                                            let parts: Vec<&str> = template_param.text().split(':').collect();
-                                            let custom_parts: Vec<String> = parts.iter().map(|p_str| {
-                                                if let Ok(v) = p_str.parse::<f32>() {
-                                                    format!("{:.2}", v * 1.5)
-                                                } else {
-                                                    p_str.to_string()
-                                                }
-                                            }).collect();
-                                            p.set_text(custom_parts.join(":"));
-                                        } else {
-                                            p.set_text(template_param.text().to_string());
-                                        }
-                                    }
-                                }
-                            }
-                            state.sync_nodes();
-                            state.rebuild_scene_geometry();
-                            changed = true;
-                        }
-                    }
-                } else if menu_idx == 1 { // Reset
-                    if item_idx == 0 { // All
-                        if let Some(slot_idx) = state.graph().selected_node() {
-                            let node_type = state.current_dir().children[slot_idx].node_type.clone();
-                            let template_params = state.node_templates.iter()
-                                .find(|t| t.node.node_type == node_type)
-                                .map(|t| t.node.params.clone());
-                            if let Some(params_to_reset) = template_params {
-                                for template_param in &params_to_reset {
-                                    if let Some(p) = state.current_dir_mut().children[slot_idx].params.iter_mut().find(|p| p.name == template_param.name) {
-                                        // The template's text AND whether it is an
-                                        // expression: a default that is a reference
-                                        // is one again after a reset.
-                                        p.set_text(template_param.text().to_string());
-                                        p.set_expr(template_param.is_expr());
-                                    }
-                                }
-                                state.sync_nodes();
-                                state.rebuild_scene_geometry();
-                                changed = true;
-                            }
-                        }
-                    }
+                // Preset: Default, Custom. Reset: All, which is Default.
+                match (menu_idx, item_idx) {
+                    (0, 0) | (1, 0) => changed |= state.apply_param_preset(false),
+                    (0, 1) => changed |= state.apply_param_preset(true),
+                    _ => {}
                 }
             }
 

@@ -3058,6 +3058,107 @@ impl State {
         self.active_camera = name;
     }
 
+    /// The cameras this level offers, the Default Camera first: what the
+    /// camera commands step through and the palette's camera rows list.
+    pub fn camera_names(&self) -> Vec<String> {
+        let mut names = vec!["Default Camera".to_string()];
+        names.extend(
+            self.current_dir()
+                .children
+                .iter()
+                .filter(|c| c.node_type == "camera")
+                .map(|c| c.name.clone()),
+        );
+        names
+    }
+
+    /// Look through the named camera, if this level has it. The one entry
+    /// the camera commands, the palette's camera rows and the menubar's
+    /// Camera menu share.
+    pub fn choose_camera(&mut self, name: &str) -> bool {
+        if !self.camera_names().iter().any(|n| n == name) {
+            self.update_status_text(&format!("No camera named '{name}' here"));
+            return false;
+        }
+        self.set_active_camera(name);
+        // Re-checks the menubar's marks and the readouts keyed on the view.
+        self.sync_nodes();
+        self.update_status_text(&format!("Camera: {name}"));
+        true
+    }
+
+    /// Step to the next camera (or the previous), wrapping.
+    pub fn cycle_camera(&mut self, step: i32) -> bool {
+        let names = self.camera_names();
+        let at = names.iter().position(|n| *n == self.active_camera).unwrap_or(0) as i32;
+        let next = (at + step).rem_euclid(names.len() as i32) as usize;
+        self.choose_camera(&names[next])
+    }
+
+    /// Set every parameter of the node the params pane shows back to its
+    /// template's default — the text AND whether it is an expression, so a
+    /// default that is a reference is one again. `custom` is the menubar's
+    /// other preset: the defaults with their numbers half as large again.
+    pub fn apply_param_preset(&mut self, custom: bool) -> bool {
+        let Some(slot) = self.param_editor_selected() else {
+            self.update_status_text("No node selected");
+            return false;
+        };
+        let dir = self.param_editor_dir();
+        let Some(node) = dir.children.get(slot) else { return false };
+        // A subnet template's override for a child inside an instance wins,
+        // as it does for the row menu's Default.
+        let defaults: Vec<(String, String, bool)> = node
+            .params
+            .iter()
+            .filter_map(|p| {
+                self.template_default(dir, node, &p.name)
+                    .map(|d| (p.name.clone(), d.text().to_string(), d.is_expr()))
+            })
+            .collect();
+        let name = node.name.clone();
+        if defaults.is_empty() {
+            self.update_status_text(&format!("{name} has no template to reset to"));
+            return false;
+        }
+        let half_again = |text: &str| -> String {
+            let one = |t: &str| -> Option<String> {
+                if let Ok(v) = t.parse::<i32>() {
+                    Some(format!("{}", v * 2))
+                } else {
+                    t.parse::<f32>().ok().map(|v| format!("{:.2}", v * 1.5))
+                }
+            };
+            if let Some(v) = one(text) {
+                v
+            } else if text.contains(':') {
+                text.split(':').map(|t| one(t).unwrap_or_else(|| t.to_string())).collect::<Vec<_>>().join(":")
+            } else {
+                text.to_string()
+            }
+        };
+        let node = &mut self.param_editor_dir_mut().children[slot];
+        for (pname, text, is_expr) in defaults {
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == pname) {
+                if custom && !is_expr {
+                    p.set_text(half_again(&text));
+                } else {
+                    p.set_text(text);
+                }
+                p.set_expr(is_expr);
+            }
+        }
+        self.sync_nodes();
+        self.rebuild_scene_geometry();
+        self.sync_parameters_pane();
+        self.update_status_text(&if custom {
+            format!("{name}: custom preset")
+        } else {
+            format!("{name}: parameters reset")
+        });
+        true
+    }
+
     pub fn cursor_in_viewport(&self) -> bool {
         if self.network_overlay() {
             // The complement of the overlay: everything in the body the
@@ -3809,6 +3910,21 @@ impl State {
             }
             "Set As Default" => {
                 self.set_current_as_default();
+            }
+            "Next Camera" => {
+                self.cycle_camera(1);
+            }
+            "Previous Camera" => {
+                self.cycle_camera(-1);
+            }
+            "Default Camera" => {
+                self.choose_camera("Default Camera");
+            }
+            "Reset Parameters" => {
+                self.apply_param_preset(false);
+            }
+            "Custom Preset" => {
+                self.apply_param_preset(true);
             }
             "New Project" | "New" => {
                 self.new_project();

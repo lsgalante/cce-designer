@@ -219,10 +219,20 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "toggle_vertex_normals", label: "Show Vertex Normals", context: Context::Viewport, run: Run::Key(Action::ToggleVertexNormals), default_chord: None },
     Command { id: "toggle_wire_single_color", label: "Wireframe Single Color", context: Context::Viewport, run: Run::Key(Action::ToggleWireSingleColor), default_chord: None },
     Command { id: "toggle_ray_traced_preview", label: "Ray Traced Preview", context: Context::Viewport, run: Run::Key(Action::ToggleRayTracedPreview), default_chord: None },
+    // The viewport menubar's Camera menu, as commands. The cameras
+    // themselves are rows of the palette (`CAMERA_ROW_PREFIX`), being nodes
+    // and not a fixed list.
+    Command { id: "next_camera", label: "Next Camera", context: Context::Viewport, run: Run::Menu("Next Camera"), default_chord: None },
+    Command { id: "previous_camera", label: "Previous Camera", context: Context::Viewport, run: Run::Menu("Previous Camera"), default_chord: None },
+    Command { id: "default_camera", label: "Default Camera", context: Context::Viewport, run: Run::Menu("Default Camera"), default_chord: None },
     Command { id: "toggle_square_viewport", label: "Square Aspect", context: Context::Viewport, run: Run::Key(Action::ToggleSquareViewport), default_chord: Some("Ctrl+a") },
 
     // --- Parameters ---
     Command { id: "export", label: "Export", context: Context::Parameters, run: Run::Menu("Export"), default_chord: None },
+    // The parameters menubar's Preset and Reset menus. That bar is not
+    // drawn, so until these rows the two were reachable by MCP alone.
+    Command { id: "reset_parameters", label: "Reset Parameters", context: Context::Parameters, run: Run::Menu("Reset Parameters"), default_chord: None },
+    Command { id: "custom_preset", label: "Custom Preset", context: Context::Parameters, run: Run::Menu("Custom Preset"), default_chord: None },
 
     // --- Playbar ---
     Command { id: "play_pause", label: "Play / Pause", context: Context::Playbar, run: Run::Key(Action::PlayPause), default_chord: Some("Up") },

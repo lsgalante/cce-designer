@@ -1177,6 +1177,10 @@ pub const PATH_ROW_ID: &str = "project_path";
 /// document's own path already is: rows under the path row, each opening its
 /// project. Ranked against the path text like everything else.
 pub const RECENT_ROW_PREFIX: &str = "recent:";
+/// A camera NODE of the current level, as a palette row: picking it looks
+/// through that camera. The Default Camera is a registry command instead
+/// (`default_camera`), there being always exactly one.
+pub const CAMERA_ROW_PREFIX: &str = "camera:";
 
 /// How many recent projects the list offers. `recent_files` keeps ten; five
 /// is what fits above the commands without the palette reading as a file
@@ -1392,12 +1396,18 @@ impl State {
         let rows: Vec<Row> = match self.slots.dialog.mode {
             Mode::Commands => {
                 let cmds = crate::command::COMMANDS;
+                // The level's camera nodes rank among the commands, as
+                // the viewport's: "Camera: camera1".
+                let cameras: Vec<String> = self.camera_names().into_iter().skip(1).collect();
+                let camera_labels: Vec<String> = cameras.iter().map(|n| format!("Camera: {n}")).collect();
                 let mut labels: Vec<&str> = cmds.iter().map(|c| c.label).collect();
                 labels.extend(SETTINGS.iter().map(|s| s.label));
+                labels.extend(camera_labels.iter().map(|l| l.as_str()));
                 let contexts: Vec<Context> = cmds
                     .iter()
                     .map(|c| c.context)
                     .chain(SETTINGS.iter().map(|_| Context::Always))
+                    .chain(cameras.iter().map(|_| Context::Viewport))
                     .collect();
                 let ranked = crate::command::rank_with_focus(&query, &labels, &contexts, self.focused_context());
                 let mut rows: Vec<Row> = ranked
@@ -1416,8 +1426,20 @@ impl State {
                                 control: self.command_toggle_state(c.id).map(Control::Toggle),
                                 truncate_head: false,
                             }
-                        } else {
+                        } else if i < cmds.len() + SETTINGS.len() {
                             self.setting_row(&SETTINGS[i - cmds.len()])
+                        } else {
+                            let at = i - cmds.len() - SETTINGS.len();
+                            let active = cameras[at] == self.active_camera;
+                            Row {
+                                id: format!("{CAMERA_ROW_PREFIX}{}", cameras[at]),
+                                label: camera_labels[at].clone(),
+                                // The column a chord would use says which
+                                // camera the viewport is looking through.
+                                chord: if active { "active".to_string() } else { String::new() },
+                                control: None,
+                                truncate_head: false,
+                            }
                         }
                     })
                     .collect();
@@ -2175,6 +2197,14 @@ impl State {
                 if let Err(e) = self.load_from_file(&path) {
                     self.update_status_text(&format!("Could not open {}: {e}", path.display()));
                 }
+                return;
+            }
+        }
+        if mode == Mode::Commands {
+            if let Some(name) = id.strip_prefix(CAMERA_ROW_PREFIX) {
+                let name = name.to_string();
+                self.close_dialog();
+                self.choose_camera(&name);
                 return;
             }
         }

@@ -6653,6 +6653,66 @@ mod tests {
         assert_eq!(state.fs_root.children.len(), nodes, "a refused click ran New Project");
     }
 
+    /// The cameras and the parameter presets are commands. They were menus
+    /// of two menubars that are not drawn, so nothing on screen reached them.
+    #[test]
+    fn the_cameras_and_the_presets_are_commands() {
+        use crate::dialog::CAMERA_ROW_PREFIX;
+        let mut state = State::new(false);
+        assert!(state.camera_names().contains(&"camera1".to_string()), "the bundled project has camera1");
+
+        // Stepping wraps, and both copies of the name follow.
+        state.set_active_camera("Default Camera");
+        let count = state.camera_names().len();
+        for _ in 0..count {
+            assert!(state.run_command("next_camera"));
+            assert_eq!(state.viewport().active_camera, state.active_camera);
+        }
+        assert_eq!(state.active_camera, "Default Camera", "a full turn comes back");
+        assert!(state.run_command("previous_camera"));
+        assert_eq!(state.active_camera, *state.camera_names().last().unwrap());
+        assert!(state.run_command("default_camera"));
+        assert_eq!(state.active_camera, "Default Camera");
+
+        // A camera node is a row of the palette, found by its name.
+        state.open_dialog();
+        state.slots.dialog.query = "camera1".to_string();
+        state.refresh_dialog_rows();
+        let id = format!("{CAMERA_ROW_PREFIX}camera1");
+        let row = state.slots.dialog.rows.iter().position(|r| r.id == id).expect("no row for camera1");
+        assert_eq!(state.slots.dialog.rows[row].label, "Camera: camera1");
+        state.slots.dialog.selected = row;
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(!state.dialog_visible());
+        assert_eq!(state.active_camera, "camera1");
+        assert_eq!(state.viewport().active_camera, "camera1");
+
+        // Reset puts a changed parameter back; the custom preset moves it.
+        let slot = state
+            .current_dir()
+            .children
+            .iter()
+            .position(|c| c.node_type == "sphere")
+            .expect("the bundled project has a sphere");
+        state.graph_mut().set_selected_node(Some(slot));
+        let default = {
+            let dir = state.current_dir();
+            state.template_default(dir, &dir.children[slot], "Radius").expect("no Radius default").text().to_string()
+        };
+        let radius = |state: &State| {
+            state.current_dir().children[slot].params.iter().find(|p| p.name == "Radius").unwrap().text().to_string()
+        };
+        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Radius").unwrap().set_text("3.25".to_string());
+        assert!(state.run_command("reset_parameters"));
+        assert_eq!(radius(&state), default);
+        assert!(state.run_command("custom_preset"));
+        assert_ne!(radius(&state), default, "the custom preset left Radius at its default");
+
+        // With nothing selected there is nothing to reset, and it says so.
+        state.graph_mut().set_selected_node(None);
+        state.run_command("reset_parameters");
+    }
+
     /// New Project from the palette starts a project. The command named a
     /// label no arm dispatched, so the row ran and nothing happened.
     #[test]
@@ -12078,10 +12138,11 @@ mod tests {
 
         assert!(state.run_command("toggle_dialog"));
         assert!(state.dialog_visible());
-        // Every command — beside the setting rows, and the network pane's
-        // zoom slider row when that pane is focused (it is by default).
+        // Every command — beside the setting rows, the level's camera
+        // rows, and the network pane's zoom slider row when that pane is
+        // focused (it is by default).
         assert_eq!(
-            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID).count(),
+            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID && !r.id.starts_with(crate::dialog::CAMERA_ROW_PREFIX)).count(),
             crate::command::COMMANDS.len(),
             "an empty query lists everything"
         );
@@ -12552,7 +12613,7 @@ mod tests {
         }
         assert_eq!(state.slots.dialog.query, "");
         assert_eq!(
-            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID).count(),
+            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID && !r.id.starts_with(crate::dialog::CAMERA_ROW_PREFIX)).count(),
             crate::command::COMMANDS.len()
         );
     }
