@@ -95,6 +95,131 @@ pub fn sort_triangles_back_to_front(verts: &[Vertex3D], eye: Vec3) -> Vec<Vertex
     out
 }
 
+/// How much of what stands at each of `points` reaches `eye` through the
+/// translucent fill: 1 with nothing in front, `(1 - opacity)` per layer of
+/// fill the sight line crosses, 0 behind an opaque one. It is what the depth
+/// test and the blend do to a marker drawn under the fill, worked out on the
+/// CPU for the point NUMBERS, which are 2D text and never meet the depth
+/// buffer.
+///
+/// A layer is what the raster pass would blend there. Seen through, that
+/// is every triangle the line crosses, either side. Otherwise the fill
+/// culls back faces and writes depth, so a triangle counts when it faces
+/// the eye and is nearer than every one drawn before it — `verts` is in
+/// draw order. Triangles are binned by their screen bounds (`mvp`) so a
+/// point is tested against the ones over its own pixel, not the mesh; the
+/// primitives that meet AT the point cross the line at its end and are not
+/// in front of it. The wires are not counted: a number is not behind a line
+/// a pixel wide in any way a single alpha could show.
+pub fn point_transmittance(
+    verts: &[Vertex3D],
+    mvp: glam::Mat4,
+    eye: Vec3,
+    points: &[[f32; 3]],
+    opacity: f32,
+    see_through: bool,
+) -> Vec<f32> {
+    const CELLS: usize = 48;
+    let tris = verts.len() / 3;
+    let opacity = opacity.clamp(0.0, 1.0);
+    if tris == 0 || opacity <= 0.0 || points.is_empty() {
+        return vec![1.0; points.len()];
+    }
+    let corner = |t: usize, k: usize| Vec3::from_array(verts[3 * t + k].position);
+    let cell_of = |ndc: f32| (((ndc * 0.5 + 0.5) * CELLS as f32).floor().max(0.0) as usize).min(CELLS - 1);
+    let mut cells: Vec<Vec<u32>> = vec![Vec::new(); CELLS * CELLS];
+    // Triangles reaching behind the eye have no screen bounds to bin by.
+    let mut everywhere: Vec<u32> = Vec::new();
+    for t in 0..tris {
+        let (mut lo, mut hi, mut behind) = ([f32::MAX; 2], [f32::MIN; 2], false);
+        for k in 0..3 {
+            let c = mvp * corner(t, k).extend(1.0);
+            if c.w <= 1e-6 {
+                behind = true;
+                break;
+            }
+            for (axis, v) in [c.x / c.w, c.y / c.w].into_iter().enumerate() {
+                lo[axis] = lo[axis].min(v);
+                hi[axis] = hi[axis].max(v);
+            }
+        }
+        if behind {
+            everywhere.push(t as u32);
+            continue;
+        }
+        if hi[0] < -1.0 || lo[0] > 1.0 || hi[1] < -1.0 || lo[1] > 1.0 {
+            continue;
+        }
+        for y in cell_of(lo[1])..=cell_of(hi[1]) {
+            for x in cell_of(lo[0])..=cell_of(hi[0]) {
+                cells[y * CELLS + x].push(t as u32);
+            }
+        }
+    }
+    let through = 1.0 - opacity;
+    let mut candidates: Vec<u32> = Vec::new();
+    points
+        .iter()
+        .map(|&p| {
+            let p = Vec3::from_array(p);
+            let c = mvp * p.extend(1.0);
+            if c.w <= 1e-6 {
+                return 1.0;
+            }
+            let (x, y) = (c.x / c.w, c.y / c.w);
+            if x.abs() > 1.0 || y.abs() > 1.0 {
+                return 1.0;
+            }
+            candidates.clear();
+            candidates.extend_from_slice(&cells[cell_of(y) * CELLS + cell_of(x)]);
+            if !everywhere.is_empty() {
+                candidates.extend_from_slice(&everywhere);
+                candidates.sort_unstable();
+            }
+            let d = p - eye;
+            let (mut layers, mut nearest) = (0i32, f32::MAX);
+            for &t in &candidates {
+                let t = t as usize;
+                let (v0, v1, v2) = (corner(t, 0), corner(t, 1), corner(t, 2));
+                let (e1, e2) = (v1 - v0, v2 - v0);
+                if !see_through && e1.cross(e2).dot(eye - v0) <= 0.0 {
+                    continue;
+                }
+                // Möller–Trumbore with the sight line as the ray, the
+                // tolerance relative to the lengths as in
+                // `spatial::segment_crosses_triangle`.
+                let h = d.cross(e2);
+                let det = e1.dot(h);
+                if det.abs() <= 1e-7 * e1.length() * e2.length() * d.length() {
+                    continue;
+                }
+                let f = 1.0 / det;
+                let s = eye - v0;
+                let u = f * s.dot(h);
+                if !(0.0..=1.0).contains(&u) {
+                    continue;
+                }
+                let q = s.cross(e1);
+                let v = f * d.dot(q);
+                if v < 0.0 || u + v > 1.0 {
+                    continue;
+                }
+                let at = f * e2.dot(q);
+                if at <= 0.0 || at >= 1.0 - 1e-3 {
+                    continue;
+                }
+                if see_through {
+                    layers += 1;
+                } else if at < nearest {
+                    nearest = at;
+                    layers += 1;
+                }
+            }
+            through.powi(layers)
+        })
+        .collect()
+}
+
 /// The raster pass's light, in WORLD space — `scene3d.wgsl`'s `l`, which the
 /// smooth bake below has to match or switching shading modes would move
 /// the lit side of the model.

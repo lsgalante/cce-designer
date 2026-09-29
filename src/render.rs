@@ -990,7 +990,13 @@ impl State {
             return;
         }
         pc.clip(rect(vx, vy, vw, vh), |pc| {
-            for (pos, idx) in &self.overlay_number_labels {
+            for (i, (pos, idx)) in self.overlay_number_labels.iter().enumerate() {
+                // What the fill in front of the point lets through; a
+                // number behind an opaque face is not drawn.
+                let alpha = self.overlay_number_alpha.get(i).copied().unwrap_or(1.0);
+                if alpha < 0.02 {
+                    continue;
+                }
                 let clip_pos = mvp * glam::Vec4::new(pos[0], pos[1], pos[2], 1.0);
                 if clip_pos.w <= 0.0 {
                     continue;
@@ -1001,7 +1007,7 @@ impl State {
                 }
                 let sx = vx + (ndc.x * 0.5 + 0.5) * vw;
                 let sy = vy + (0.5 - ndc.y * 0.5) * vh;
-                pc.text(idx.to_string(), sx + 4.0, sy - 6.0, 10.0, [0xee, 0xee, 0xff]);
+                pc.text_faded(idx.to_string(), sx + 4.0, sy - 6.0, 10.0, [0xee, 0xee, 0xff], alpha, None, None);
             }
         });
     }
@@ -1203,6 +1209,7 @@ impl State {
             Vec::new()
         };
         self.overlay_number_labels = labels;
+        self.overlay_number_alpha.clear();
         self.overlay_normal_verts = normals;
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.

@@ -2168,6 +2168,33 @@ is taken in MESH space, the inverse of view × model. Leaving see-through
 clears the key and re-uploads nothing: sorted order is still a valid
 opaque mesh.
 
+**Every annotation is dimmed by what is in front of it** (since
+2026-09-29). Three mechanisms, because there are three kinds of annotation.
+The MARKERS (Render points, Selected-Group markers, Show Point Markers)
+always were: they draw before the fill and the wires and write depth, so a
+nearer translucent face or wire blends over them. The LINE annotations —
+the normal whiskers, Visualize's vectors, the pull arrows — drew AFTER the
+fill until then, which was wrong both ways: behind a translucent fill that
+writes depth they were hidden outright, and behind a see-through one, which
+writes none, the far side's painted over the near faces at full strength
+(the wires' own bug of 2026-09-25). They go before the geometry now, on the
+depth-writing line pipeline (`see_through: true` on a wire draw selects
+it). The point NUMBERS are 2D text and never meet the depth buffer, so
+their dimming is worked out on the CPU: `geometry::point_transmittance`
+counts the fill layers the sight line to each point crosses — every
+triangle when seen through; otherwise the front-facing ones nearer than all
+drawn before them, which is what culling and the depth write leave — and
+the label's alpha is `(1 - Opacity)` to that power. Triangles are binned by
+screen bounds, so the cost is a projection of the mesh per camera move and
+a few tests per label. `State::sync_point_number_alpha` runs it from the
+stage pass, for the eye being staged; a label under 2% is not drawn, so
+behind an OPAQUE face a number is hidden, where until then every number
+showed through everything. The wires are not counted against a number: a
+line a pixel wide is not in front of a label in any way one alpha could
+show. `a_point_number_is_dimmed_by_the_fill_in_front_of_it` is the test;
+the whiskers' order has none, being a draw list only a renderer reads, and
+was checked in a shadow session before and after.
+
 ### Pull arrows
 
 While the params pane shows an Attribute node that writes `Pos`

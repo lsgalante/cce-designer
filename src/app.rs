@@ -2383,6 +2383,12 @@ pub struct State {
     pub overlay_dirty: bool,
     pub overlay_point_count: u32,
     pub overlay_number_labels: Vec<([f32; 3], u32)>,
+    /// How much of each label above shows through the fill in front of its
+    /// point (`geometry::point_transmittance`), worked out by the stage
+    /// pass for the eye it staged. The labels are 2D text, so this is the
+    /// only occlusion they get. Emptied with every rebuild of the labels; a
+    /// label with no entry draws whole.
+    pub overlay_number_alpha: Vec<f32>,
     /// Show Point Normals: LINE_LIST whiskers from each distinct point along
     /// its smooth vertex normal (computed from topology — the kernel outputs
     /// carry only a default up-normal attribute).
@@ -6031,6 +6037,25 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.point_size * self.group_marker_scale
     }
 
+    /// Works out how much of each point number shows through the fill, for
+    /// the eye the stage pass is staging (`eye` in mesh space, the space of
+    /// the labels and the triangles).
+    pub(crate) fn sync_point_number_alpha(&mut self, mvp: Mat4, eye: Vec3) {
+        if self.overlay_number_labels.is_empty() {
+            self.overlay_number_alpha.clear();
+            return;
+        }
+        let points: Vec<[f32; 3]> = self.overlay_number_labels.iter().map(|(p, _)| *p).collect();
+        self.overlay_number_alpha = crate::geometry::point_transmittance(
+            &self.rt_sphere_verts,
+            mvp,
+            eye,
+            &points,
+            self.geo_opacity,
+            self.see_through_active(),
+        );
+    }
+
     /// Build the Selected-Group marker spheres from the kept members at the
     /// current size — the cheap half of the markers, with no evaluation, so
     /// a size change can run it on every motion of a drag. The Highlight
@@ -6493,6 +6518,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             overlay_dirty: false,
             overlay_point_count: 0,
             overlay_number_labels: Vec::new(),
+            overlay_number_alpha: Vec::new(),
             overlay_normal_verts: Vec::new(),
             overlay_normal_count: 0,
             show_point_markers: settings.viewport.show_point_markers,
@@ -10685,6 +10711,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     self.last_scene_mvp = Some(mvp_mat);
                     self.last_scene_view_rect =
                         (sx as f32 / s, sy as f32 / s, cw as f32 / s, ch as f32 / s);
+                    self.sync_point_number_alpha(mvp_mat, (view_mat * model).inverse().transform_point3(Vec3::ZERO));
 
                     // The camera-pivot marker is WORLD-FIXED at the pivot point, like
                     // the origin gizmo. Its old yaw rotation existed to keep it glued
@@ -10744,6 +10771,29 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         draws.push(SceneDraw { mesh: meshes.overlay_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     if self.vertex_count_spheres > 0 {
+                        // The line annotations go UNDER the geometry, as
+                        // the markers above do, and write depth (the wire
+                        // draw's `see_through` selects the depth-writing
+                        // line pipeline): what is nearer then blends over
+                        // them, so a whisker behind a translucent face or
+                        // wire is dimmed by it, and what is farther fails
+                        // the test and leaves them whole. Drawn after the
+                        // fill they were hidden outright behind one that
+                        // writes depth, and painted at full strength over
+                        // the near faces of one that does not.
+                        //
+                        // Show Point Normals: thin cyan whiskers,
+                        // width deliberately fixed (a chunky Wire Width is a
+                        // wireframe styling choice, not a normals one).
+                        if self.overlay_normal_count > 0 {
+                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: true });
+                        }
+                        // Pull arrows: selection feedback, like the group
+                        // markers — full opacity, a little heavier than the
+                        // whiskers.
+                        if self.pull_arrow_count > 0 {
+                            draws.push(SceneDraw { mesh: meshes.pull_arrows, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 2.0, wire_base_width: 0.0, prelit: false, see_through: true });
+                        }
                         // With wires coming, the fill is pushed back by its
                         // slope-scaled offset so the lattice reads solid.
                         let base = if self.wireframe { self.wire_width } else { 0.0 };
@@ -10780,18 +10830,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through });
                         }
                         draws.extend(fill);
-                        // Show Point Normals: thin cyan whiskers,
-                        // width deliberately fixed (a chunky Wire Width is a
-                        // wireframe styling choice, not a normals one).
-                        if self.overlay_normal_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
-                        }
-                        // Pull arrows: selection feedback, like the group
-                        // markers — full opacity, a little heavier than the
-                        // whiskers so they read over a wireframe.
-                        if self.pull_arrow_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.pull_arrows, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 2.0, wire_base_width: 0.0, prelit: false, see_through: false });
-                        }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
                     }

@@ -1653,6 +1653,62 @@ mod tests {
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// A point number is dimmed by the fill in front of its point, as a
+    /// marker drawn under that fill is: whole on the near side, one layer
+    /// down on the far side of a closed mesh (the faces that meet AT the
+    /// point are not in front of it), gone behind an opaque face. Behind
+    /// the whole mesh the two fills differ — seen through, both walls
+    /// blend; otherwise the far wall is culled and only the near one does.
+    #[test]
+    fn a_point_number_is_dimmed_by_the_fill_in_front_of_it() {
+        use glam::{Mat4, Vec3};
+        let sphere = crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        let verts = crate::geometry::detail_vertices(&sphere);
+        let eye = Vec3::new(0.3, 0.2, 5.0);
+        let mvp = Mat4::perspective_rh(0.9, 1.0, 0.1, 100.0) * Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
+        let positions = sphere.positions();
+        let nearest = |to: Vec3| {
+            *positions
+                .iter()
+                .min_by(|a, b| (Vec3::from_array(**a) - to).length().total_cmp(&(Vec3::from_array(**b) - to).length()))
+                .unwrap()
+        };
+        let near = nearest(Vec3::new(0.0, 0.0, 1.0));
+        let far = nearest(Vec3::new(0.2, 0.3, -1.0));
+        let behind = [0.05, 0.05, -3.0];
+        let points = [near, far, behind];
+        let t = |opacity: f32, see_through: bool| {
+            crate::geometry::point_transmittance(&verts, mvp, eye, &points, opacity, see_through)
+        };
+        let close = |a: &[f32], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
+        assert!(close(&t(0.5, true), [1.0, 0.5, 0.25]), "seen through: {:?}", t(0.5, true));
+        assert!(close(&t(0.5, false), [1.0, 0.5, 0.5]), "culled: {:?}", t(0.5, false));
+        assert!(close(&t(1.0, false), [1.0, 0.0, 0.0]), "opaque: {:?}", t(1.0, false));
+        assert!(close(&t(0.0, true), [1.0, 1.0, 1.0]), "invisible fill: {:?}", t(0.0, true));
+
+        // And the paint reads it: a label behind an opaque face is not drawn.
+        let mut state = State::new(false);
+        state.show_point_numbers = true;
+        state.rebuild_scene_geometry();
+        assert!(state.overlay_number_alpha.is_empty(), "a rebuild drops the old eye's answers");
+        let labels = |state: &mut State| {
+            let numbers: std::collections::HashSet<String> =
+                state.overlay_number_labels.iter().map(|(_, i)| i.to_string()).collect();
+            state
+                .collect_display_list()
+                .items
+                .iter()
+                .filter(|item| matches!(&item.prim, cce_ui::scene::paint::Prim::Text { text, .. } if numbers.contains(text)))
+                .count()
+        };
+        state.show_viewport = true;
+        state.last_scene_mvp = Some(Mat4::IDENTITY);
+        state.last_scene_view_rect = (0.0, 0.0, 800.0, 600.0);
+        let whole = labels(&mut state);
+        state.overlay_number_alpha = vec![0.0; state.overlay_number_labels.len()];
+        assert!(labels(&mut state) < whole, "hidden labels are not drawn");
+    }
+
     /// Smooth shading bakes the raster pass's own light, so on a PLANE —
     /// where every point normal is the face normal — it gives exactly the
     /// flat shader's factor at every corner: switching modes changes how
