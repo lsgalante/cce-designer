@@ -10134,6 +10134,212 @@ mod tests {
         assert_eq!(a.positions(), b.positions());
     }
 
+    /// A sheet of two large triangles with a fine patch over the middle of
+    /// one of them: the patch's points are nowhere near any corner of the
+    /// sheet, which is the case a point-to-point test cannot see. The patch
+    /// is tilted by `tilt` so its edges straddle the sheet when it is
+    /// lowered through it, and is the group "patch".
+    fn sheet_and_patch(height: f32, tilt: f32) -> Detail {
+        let mut d = Detail::new();
+        let s: Vec<u32> = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]
+            .iter()
+            .map(|&(x, z)| d.add_point(Vec3::new(x, 0.0, z)))
+            .collect();
+        d.add_prim(&[s[0], s[2], s[1]]);
+        d.add_prim(&[s[0], s[3], s[2]]);
+        let mut patch = Vec::new();
+        for i in 0..5 {
+            for j in 0..5 {
+                let (x, z) = (i as f32 * 0.1, j as f32 * 0.1);
+                patch.push(d.add_point(Vec3::new(0.9 + x, height + tilt * x, -1.1 + z)));
+            }
+        }
+        for i in 0..4 {
+            for j in 0..4 {
+                let at = |a: usize, b: usize| patch[a * 5 + b];
+                d.add_prim(&[at(i, j), at(i + 1, j + 1), at(i + 1, j)]);
+                d.add_prim(&[at(i, j), at(i, j + 1), at(i + 1, j + 1)]);
+            }
+        }
+        for &p in &patch {
+            d.points_mut().add_to_group("patch", p as usize);
+        }
+        d
+    }
+
+    /// How far the patch's nearest point is from the sheet's surface.
+    fn patch_clearance(d: &Detail) -> f32 {
+        let tris = [[0usize, 2, 1], [0, 3, 2]];
+        (4..d.num_points())
+            .flat_map(|p| tris.iter().map(move |t| (p, *t)))
+            .map(|(p, t)| {
+                let q = crate::spatial::closest_point_on_triangle(d.pos(p), d.pos(t[0]), d.pos(t[1]), d.pos(t[2]));
+                (d.pos(p) - q).length()
+            })
+            .fold(f32::MAX, f32::min)
+    }
+
+    /// The measure: every edge that passes through a triangle, and the
+    /// points of both. A surface that does not cross itself has none,
+    /// quads and shared corners included.
+    #[test]
+    fn the_tangle_measure_counts_edges_through_triangles() {
+        use crate::detangle::self_intersections;
+        assert_eq!(self_intersections(&Detail::new()).crossings, 0);
+        assert_eq!(self_intersections(&sphere_detail(Vec3::ZERO, 0.5, 10, 14)).crossings, 0);
+        assert_eq!(self_intersections(&box_detail(Vec3::ZERO, Vec3::ONE, 0.2)).crossings, 0, "quads fan into triangles that share a side");
+        // The patch above the sheet, then tilted through it.
+        assert_eq!(self_intersections(&sheet_and_patch(0.05, 0.0)).crossings, 0);
+        let through = self_intersections(&sheet_and_patch(-0.06, 0.3));
+        assert!(through.crossings > 0, "{through:?}");
+        // The points named are the crossing edges' and the crossed
+        // triangle's: some of the patch, not all of it, and the sheet's.
+        let of_patch = through.points.iter().filter(|&&p| p >= 4).count();
+        assert!(of_patch > 0 && of_patch < 25, "{through:?}");
+        assert!(through.points.iter().any(|&p| p < 4), "{through:?}");
+        assert!(through.points.windows(2).all(|w| w[0] < w[1]), "ascending, each once");
+        // The same answer at a thousandth of the size: the tolerance is
+        // relative.
+        let mut small = sheet_and_patch(-0.06, 0.3);
+        for p in 0..small.num_points() {
+            let v = small.pos(p);
+            small.set_pos(p, v * 0.001);
+        }
+        assert_eq!(self_intersections(&small), through);
+    }
+
+    /// What the Surface method is for: a point over the middle of a large
+    /// triangle is near none of its corners, so Points sees nothing and
+    /// Surface parts them.
+    #[test]
+    fn the_surface_method_sees_a_point_over_the_middle_of_a_triangle() {
+        let start = sheet_and_patch(0.03, 0.0);
+        let settings = |method: &'static str| {
+            phase3_node("detangle", &[("Method", method), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8")])
+        };
+        let mut by_points = start.clone();
+        let work = crate::detangle::apply(&mut by_points, &settings("Points"));
+        assert_eq!(by_points.positions(), start.positions(), "nothing is within a thickness of a corner: {work:?}");
+
+        let mut by_surface = start.clone();
+        let work = crate::detangle::apply(&mut by_surface, &settings("Surface"));
+        assert!(work.contacts > 0, "{work:?}");
+        let (before, after) = (patch_clearance(&start), patch_clearance(&by_surface));
+        assert!((before - 0.03).abs() < 1e-5);
+        assert!(after > 0.1, "the patch is {after} from the sheet");
+        // The patch moved as one: it was pushed off the sheet, not apart.
+        let edge = |d: &Detail| (d.pos(5) - d.pos(4)).length();
+        assert!((edge(&by_surface) / edge(&start) - 1.0).abs() < 0.05, "{} to {}", edge(&start), edge(&by_surface));
+        // The move is shared, so the sheet gave way too, downward.
+        assert!((0..4).all(|p| by_surface.pos(p).y <= 0.0) && (0..4).any(|p| by_surface.pos(p).y < 0.0));
+
+        // With the sheet outside the Group it stays where it is and the
+        // patch takes the whole move, not half of it.
+        let node = phase3_node(
+            "detangle",
+            &[("Method", "Surface"), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8"), ("Group", "patch")],
+        );
+        let mut held = start.clone();
+        crate::detangle::apply(&mut held, &node);
+        assert_eq!(held.positions()[..4], start.positions()[..4]);
+        assert!(patch_clearance(&held) > 0.1, "{}", patch_clearance(&held));
+
+        // A surface that touches itself nowhere is left alone, in one pass.
+        let round = sphere_detail(Vec3::ZERO, 0.5, 10, 14);
+        let mut d = round.clone();
+        let node = phase3_node("detangle", &[("Method", "Surface"), ("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "8")]);
+        let work = crate::detangle::apply(&mut d, &node);
+        assert_eq!((work.passes, work.contacts), (1, 0), "{work:?}");
+        assert_eq!(d.positions(), round.positions());
+    }
+
+    /// The two methods as a simulation runs them: the patch is lowered a
+    /// little each step, by less than the thickness, toward a sheet that
+    /// does not move. Points lets it through; Surface holds it off. The
+    /// measure is what says so, and the node's Tangled Group is the measure
+    /// written onto the geometry.
+    #[test]
+    fn the_surface_method_holds_a_patch_off_a_sheet_step_after_step() {
+        let run = |method: &'static str| {
+            let node = phase3_node(
+                "detangle",
+                &[("Method", method), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8"), ("Group", "patch"), ("Tangled Group", "tangled")],
+            );
+            let mut d = sheet_and_patch(0.2, 0.3);
+            let (mut worst, mut marked) = (0, 0);
+            for _ in 0..25 {
+                for p in 4..d.num_points() {
+                    let v = d.pos(p);
+                    d.set_pos(p, v - Vec3::new(0.0, 0.02, 0.0));
+                }
+                let work = crate::detangle::apply(&mut d, &node);
+                assert_eq!(work.crossings, crate::detangle::self_intersections(&d).crossings);
+                assert_eq!(work.crossings > 0, d.points().group_len("tangled") > 0);
+                worst = worst.max(work.crossings);
+                marked = marked.max(d.points().group_len("tangled"));
+            }
+            (d, worst, marked)
+        };
+        let (through, worst, marked) = run("Points");
+        assert!(worst > 0 && marked > 0, "Points should have let it through: {worst}");
+        assert!((4..through.num_points()).all(|p| through.pos(p).y < 0.0), "and out the other side");
+
+        let (held, worst, marked) = run("Surface");
+        assert_eq!((worst, marked), (0, 0), "no edge went through at any step");
+        assert!((4..held.num_points()).all(|p| held.pos(p).y > 0.0), "the patch is still above the sheet");
+        assert!(held.points().has_group("tangled"), "the group is written, empty");
+    }
+
+    /// The two methods side by side, by the measure and by the clock: a
+    /// sphere's cap pushed down into its own bowl a little each step, until
+    /// it would have come out underneath. Run in release with `--ignored
+    /// --nocapture`. (Not pressed flat by the sign of y: that carries the
+    /// equator's points past their own neighbours, inside the excluded
+    /// rings, which no setting of the node is meant to see.)
+    #[test]
+    #[ignore]
+    fn detangle_methods_compared() {
+        for frequency in ["4", "8", "16"] {
+            let sphere = crate::shapes::sphere_node_detail(
+                &phase3_node("sphere", &[("Method", "Icosphere"), ("Frequency", frequency), ("Radius", "0.5")]),
+                Some(Vec3::ZERO),
+            );
+            let edges = sphere.edges();
+            let edge = edges.iter().map(|e| (sphere.pos(e[1] as usize) - sphere.pos(e[0] as usize)).length()).sum::<f32>() / edges.len() as f32;
+            // A fifth of an edge a step, until the pole has travelled the
+            // diameter and a little more.
+            let rate = edge * 0.2;
+            let steps = (1.1 / rate).ceil() as usize;
+            let cap: Vec<usize> = (0..sphere.num_points()).filter(|&p| sphere.pos(p).y > 0.2).collect();
+            for thickness in ["0.50", "1.00"] {
+                for method in ["None", "Points", "Surface"] {
+                    let node = phase3_node("detangle", &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4")]);
+                    let mut d = sphere.clone();
+                    let (mut worst, mut far, mut spent) = (0, 0, std::time::Duration::ZERO);
+                    for _ in 0..steps {
+                        for &p in &cap {
+                            let v = d.pos(p);
+                            d.set_pos(p, v - Vec3::new(0.0, rate, 0.0));
+                        }
+                        if method != "None" {
+                            let t = std::time::Instant::now();
+                            crate::detangle::apply(&mut d, &node);
+                            spent += t.elapsed();
+                        }
+                        worst = worst.max(crate::detangle::self_intersections(&d).crossings);
+                        far = far.max(crate::detangle::crossings_beyond(&d, 2));
+                    }
+                    let last = crate::detangle::self_intersections(&d).crossings;
+                    println!(
+                        "{:>5} points, {steps:>3} steps, thickness {thickness}, {method:>7}: worst {worst:>5} crossings ({far:>5} beyond the rings), last {last:>5}, {:.2} ms a step",
+                        d.num_points(),
+                        spent.as_secs_f64() * 1000.0 / steps as f64
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_suture_counts_sustained_contact_before_it_fuses() {
         // A grid sitting just above a collider it is in contact with.

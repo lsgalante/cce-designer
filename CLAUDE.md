@@ -1157,6 +1157,46 @@ to frame 240 from 113 to 71: once the whole surface is within a
 thickness of itself every pass runs and the pairs themselves are the
 work, and no bookkeeping saves that.
 
+**The Surface method and the measure (2026-09-29).** Everything above is
+the node's `Points` method, which is what a node without a `Method` row
+runs and what the template defaults to, so a save from before solves as it
+did. `Method: Surface` (`detangle::solve_surface`) tests each point against
+the TRIANGLES near it: a point over the middle of a triangle is near no
+corner of it, so where triangles are larger than the thickness the point
+test sees nothing at all. A contact is resolved along the line from the
+closest point on the triangle to the point (the triangle's normal where the
+point lies on it), and the move is SHARED — the point one way, the corners
+the other by how much of the closest point each is
+(`spatial::closest_weights_on_triangle`), with what is outside the Group
+taking none and the rest all of it, so a contact with a fixed triangle is
+resolved whole where Points resolves half. What a point receives from
+several contacts is their average weighted by depth, not their sum: a point
+over a shared edge touches both triangles and must move once. A triangle
+with a corner inside the point's excluded rings is not a contact. It does
+NOT know which side a point belongs on — one already through is pushed
+further through; that needs the positions the step began from and is the
+next piece of work, as are a cap on movement per substep and edge-edge
+contact.
+
+`detangle::self_intersections` is the MEASURE: every edge passing through a
+triangle (`spatial::segment_crosses_triangle`, tolerance relative to the
+lengths, so scale does not change the answer), no thickness and no rings.
+`crossings_beyond(geom, rings)` counts only those the solve is meant to see
+at a ring count, which is what separates a miss of the method from a fold
+inside the excluded neighbourhood. The node's **Tangled Group** row, when
+it names one, writes the points of what is STILL crossed after the solve
+(empty when nothing is); it costs a second search of the mesh and is off
+by default. `detangle_methods_compared` (ignored; release, `--ignored
+--nocapture`) pushes an icosphere's cap down into its own bowl a fifth of
+an edge a step. At 2562 points, Thickness 1, Rings 2: no detangle 1117
+crossings, all beyond the rings; Points 1699 (892 beyond), 5.1 ms a step;
+Surface 408, NONE beyond the rings, and none left at the end, 17 ms a step.
+At Thickness 0.5 Surface let 72 through beyond the rings at that size and
+none at 162 and 642 points. What Surface leaves is the fold at the cap's
+rim, inside the rings. Do not measure by pressing a sphere flat by the sign
+of y: that carries the equator's points past their own neighbours, which no
+setting is meant to see, and both methods look equally bad.
+
 What still costs is the solver's, not the node's: an edit inside a simnet
 re-solves from the seed, so a change at frame 120 is 120 steps. A
 backward scrub no longer does — the next section.

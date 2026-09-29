@@ -59,6 +59,82 @@ pub fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     a + ab * (vb / denom) + ac * (vc / denom)
 }
 
+/// [`closest_point_on_triangle`] as WEIGHTS: how much of the closest point
+/// each corner is, summing to one. The point is `a * w[0] + b * w[1] +
+/// c * w[2]`, and the weights are what lets a caller hand a push on that
+/// point back to the corners that carry it.
+///
+/// The same Voronoi-region walk, region for region.
+pub fn closest_weights_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> [f32; 3] {
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return [1.0, 0.0, 0.0];
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return [0.0, 1.0, 0.0];
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let denom = d1 - d3;
+        let v = if denom.abs() < 1e-20 { 0.0 } else { d1 / denom };
+        return [1.0 - v, v, 0.0];
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return [0.0, 0.0, 1.0];
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let denom = d2 - d6;
+        let w = if denom.abs() < 1e-20 { 0.0 } else { d2 / denom };
+        return [1.0 - w, 0.0, w];
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let denom = (d4 - d3) + (d5 - d6);
+        let w = if denom.abs() < 1e-20 { 0.0 } else { (d4 - d3) / denom };
+        return [0.0, 1.0 - w, w];
+    }
+    let denom = va + vb + vc;
+    if denom.abs() < 1e-20 {
+        return [1.0, 0.0, 0.0];
+    }
+    let (v, w) = (vb / denom, vc / denom);
+    [1.0 - v - w, v, w]
+}
+
+/// Whether the segment `a`-`b` passes through triangle `(v0, v1, v2)`,
+/// strictly between its ends.
+///
+/// Möller–Trumbore with the segment as the ray, and a tolerance RELATIVE to
+/// the lengths involved, so the answer does not change with the model's
+/// scale. A segment lying in the triangle's plane does not cross it.
+pub fn segment_crosses_triangle(a: Vec3, b: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> bool {
+    let (d, e1, e2) = (b - a, v1 - v0, v2 - v0);
+    let h = d.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() <= 1e-7 * e1.length() * e2.length() * d.length() {
+        return false;
+    }
+    let f = 1.0 / det;
+    let s = a - v0;
+    let u = f * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return false;
+    }
+    let q = s.cross(e1);
+    let v = f * d.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return false;
+    }
+    let t = f * e2.dot(q);
+    t > 0.0 && t < 1.0
+}
+
 /// Where a ray meets a triangle, as a distance along the ray.
 ///
 /// Möller–Trumbore. Lives here beside the other spatial queries because three

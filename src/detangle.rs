@@ -24,6 +24,18 @@
 //! The results are the first version's BIT FOR BIT, which is what lets these
 //! be optimizations and not changes: the same pairs, summed in the same
 //! order. `the_detangle_solve_matches_its_reference` holds them together.
+//!
+//! That is the node's `Points` method. Two things here are NOT the first
+//! version's, and are asked for by name:
+//!
+//! - **The `Surface` method** ([`solve_surface`]) tests each point against
+//!   the TRIANGLES near it, where Points tests it against points. A point
+//!   over the middle of a triangle is near no corner of it, so on a mesh
+//!   whose triangles are larger than the thickness the point test sees
+//!   nothing at all.
+//! - **The measure** ([`self_intersections`]): every edge that passes
+//!   through a triangle. It is what says whether a change to the solve
+//!   helped, and what the node's `Tangled Group` is written from.
 
 use crate::app::FsNode;
 use crate::detail::Detail;
@@ -37,6 +49,10 @@ struct Topo {
     key: u64,
     rings: usize,
     edges: Vec<[u32; 2]>,
+    /// The primitives as triangles, fanned as `Detail::triangulate` fans
+    /// them, and the primitive each came from.
+    tris: Vec<[u32; 3]>,
+    tri_prims: Vec<u32>,
     /// Each point's excluded neighbourhood, itself included, ascending:
     /// point `p`'s is `excluded[starts[p]..starts[p + 1]]`.
     starts: Vec<u32>,
@@ -80,7 +96,16 @@ impl Topo {
             excluded.extend_from_slice(&seen);
         }
         starts.push(excluded.len() as u32);
-        Topo { key, rings, edges: geom.edges().to_vec(), starts, excluded }
+        let mut tris = Vec::new();
+        let mut tri_prims = Vec::new();
+        for prim in 0..geom.num_prims() {
+            let pts = geom.prim_points(prim);
+            for i in 1..pts.len().saturating_sub(1) {
+                tris.push([pts[0], pts[i], pts[i + 1]]);
+                tri_prims.push(prim as u32);
+            }
+        }
+        Topo { key, rings, edges: geom.edges().to_vec(), tris, tri_prims, starts, excluded }
     }
 
     fn excludes(&self, p: usize, q: u32) -> bool {
@@ -244,6 +269,11 @@ pub struct Work {
     pub passes: usize,
     pub grids: usize,
     pub searched: usize,
+    /// Point-triangle contacts the Surface method resolved, over every pass.
+    pub contacts: usize,
+    /// Edges passing through a triangle when the solve was done — counted
+    /// only when the node names a Tangled Group to write them to.
+    pub crossings: usize,
 }
 
 pub fn apply(geom: &mut Detail, target: &FsNode) -> Work {
@@ -257,17 +287,48 @@ pub fn apply(geom: &mut Detail, target: &FsNode) -> Work {
     if topo.edges.is_empty() {
         return work;
     }
-    // Thickness in EDGE LENGTHS, so the setting means the same thing before
-    // and after a remesh.
-    let mean_edge = topo
-        .edges
+    // A node without the row is one from before it, and solves as it did.
+    if node_param_str(target, "Method", "Points").trim().eq_ignore_ascii_case("Surface") {
+        solve_surface(geom, target, &topo, &mut work);
+    } else {
+        solve_points(geom, target, &topo, &mut work);
+    }
+    // What is STILL crossed once the solve is done, which is the part worth
+    // looking at. Only when asked for: it is a second search of the mesh.
+    let mark = node_param_str(target, "Tangled Group", "");
+    let mark = mark.trim();
+    if !mark.is_empty() {
+        let found = intersections_of(geom, &topo, false);
+        work.crossings = found.crossings;
+        geom.points_mut().create_group(mark);
+        for p in found.points {
+            geom.points_mut().add_to_group(mark, p as usize);
+        }
+    }
+    work
+}
+
+/// The node's thickness as a length: the setting is in EDGE LENGTHS, so it
+/// means the same thing before and after a remesh.
+fn thickness_of(geom: &Detail, target: &FsNode, topo: &Topo) -> f32 {
+    let mean_edge = mean_edge(geom, topo);
+    node_param_f32(target, "Thickness", 1.0).max(0.0) * mean_edge
+}
+
+fn mean_edge(geom: &Detail, topo: &Topo) -> f32 {
+    topo.edges
         .iter()
         .map(|e| (geom.pos(e[1] as usize) - geom.pos(e[0] as usize)).length())
         .sum::<f32>()
-        / topo.edges.len() as f32;
-    let thickness = node_param_f32(target, "Thickness", 1.0).max(0.0) * mean_edge;
+        / topo.edges.len() as f32
+}
+
+/// The Points method: the first version's solve.
+fn solve_points(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Work) {
+    let n = geom.num_points();
+    let thickness = thickness_of(geom, target, topo);
     if thickness <= 0.0 {
-        return work;
+        return;
     }
     let iterations = node_param_f32(target, "Iterations", 4.0).clamp(1.0, 32.0) as usize;
     let group = node_param_str(target, "Group", "");
@@ -340,5 +401,325 @@ pub fn apply(geom: &mut Detail, target: &FsNode) -> Work {
             geom.set_pos(p, *v);
         }
     }
-    work
+}
+
+/// Triangles filed by cell, flat, as [`FlatGrid`] files points: a triangle
+/// is in every cell its bounding box touched when it was filed.
+struct TriCells {
+    min: Vec3,
+    cell: f32,
+    dims: [i32; 3],
+    starts: Vec<u32>,
+    ids: Vec<u32>,
+    /// Where each POINT was when the triangles were filed.
+    filed: Vec<Vec3>,
+}
+
+impl TriCells {
+    fn build(points: &[Vec3], tris: &[[u32; 3]], cell: f32) -> TriCells {
+        let (min, max) = points.iter().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        );
+        let (min, max) = if points.is_empty() { (Vec3::ZERO, Vec3::ZERO) } else { (min, max) };
+        let span = (max - min).max(Vec3::splat(1e-6));
+        let cell = cell.max(span.max_element() / 128.0).max(1e-6);
+        let dims = [
+            ((span.x / cell).ceil() as i32 + 1).clamp(1, 256),
+            ((span.y / cell).ceil() as i32 + 1).clamp(1, 256),
+            ((span.z / cell).ceil() as i32 + 1).clamp(1, 256),
+        ];
+        let mut grid = TriCells { min, cell, dims, starts: Vec::new(), ids: Vec::new(), filed: points.to_vec() };
+        let cells = (dims[0] * dims[1] * dims[2]) as usize;
+        let boxes: Vec<([i32; 3], [i32; 3])> = tris
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| points[i as usize]);
+                (grid.coord(a.min(b).min(c)), grid.coord(a.max(b).max(c)))
+            })
+            .collect();
+        // The counting sort again, a triangle counted once per cell it is
+        // in. Placing in triangle order leaves each cell's ids ascending.
+        let mut starts = vec![0u32; cells + 1];
+        for (a, b) in &boxes {
+            for z in a[2]..=b[2] {
+                for y in a[1]..=b[1] {
+                    for x in a[0]..=b[0] {
+                        starts[grid.index([x, y, z]) + 1] += 1;
+                    }
+                }
+            }
+        }
+        for c in 0..cells {
+            starts[c + 1] += starts[c];
+        }
+        let mut next = starts.clone();
+        let mut ids = vec![0u32; starts[cells] as usize];
+        for (i, (a, b)) in boxes.iter().enumerate() {
+            for z in a[2]..=b[2] {
+                for y in a[1]..=b[1] {
+                    for x in a[0]..=b[0] {
+                        let c = grid.index([x, y, z]);
+                        ids[next[c] as usize] = i as u32;
+                        next[c] += 1;
+                    }
+                }
+            }
+        }
+        grid.starts = starts;
+        grid.ids = ids;
+        grid
+    }
+
+    fn coord(&self, p: Vec3) -> [i32; 3] {
+        let rel = (p - self.min) / self.cell;
+        [
+            (rel.x.floor() as i32).clamp(0, self.dims[0] - 1),
+            (rel.y.floor() as i32).clamp(0, self.dims[1] - 1),
+            (rel.z.floor() as i32).clamp(0, self.dims[2] - 1),
+        ]
+    }
+
+    fn index(&self, c: [i32; 3]) -> usize {
+        ((c[2] * self.dims[1] + c[1]) * self.dims[0] + c[0]) as usize
+    }
+
+    /// Every triangle filed in a cell the box touches, once, in the order
+    /// the cells are walked. `seen` is one mark per triangle and `stamp`
+    /// this gather's, which is cheaper than sorting what came back to find
+    /// the triangles that came back twice.
+    fn gather(&self, lo: Vec3, hi: Vec3, seen: &mut [u32], stamp: u32, out: &mut Vec<u32>) {
+        out.clear();
+        let (a, b) = (self.coord(lo), self.coord(hi));
+        for z in a[2]..=b[2] {
+            for y in a[1]..=b[1] {
+                for x in a[0]..=b[0] {
+                    let c = self.index([x, y, z]);
+                    for &t in &self.ids[self.starts[c] as usize..self.starts[c + 1] as usize] {
+                        if seen[t as usize] != stamp {
+                            seen[t as usize] = stamp;
+                            out.push(t);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn drift(&self, points: &[Vec3]) -> f32 {
+        points.iter().zip(&self.filed).map(|(p, f)| (*p - *f).length_squared()).fold(0.0f32, f32::max).sqrt()
+    }
+}
+
+/// The Surface method: each point against the triangles near it.
+///
+/// A contact is a point closer than the thickness to a triangle none of
+/// whose corners is in the point's excluded rings. It is resolved along the
+/// line from the closest point on the triangle to the point — the triangle's
+/// own normal where the point lies ON it, which is a direction, where two
+/// coincident points have none — and the move is SHARED: the point takes
+/// its part one way and the triangle's corners theirs the other, each corner
+/// by how much of the closest point it is. What cannot move (outside the
+/// Group) takes none and the rest take all of it, so a contact with a fixed
+/// triangle is resolved whole, where Points resolves half of it.
+///
+/// A pass is gathered against the positions at its start and applied at its
+/// end, as Points is. What a point receives from several contacts is their
+/// AVERAGE, weighted by how deep each is: a point over a shared edge is in
+/// contact with both triangles and must move once, not twice, and a sum is
+/// what makes a dense contact overshoot and ring.
+///
+/// What it does not know is which SIDE a point belongs on. A point already
+/// through a triangle is pushed further through; that takes the positions
+/// the step started from, and is not here.
+fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Work) {
+    let n = geom.num_points();
+    let thickness = thickness_of(geom, target, topo);
+    if thickness <= 0.0 || topo.tris.is_empty() {
+        return;
+    }
+    let iterations = node_param_f32(target, "Iterations", 4.0).clamp(1.0, 32.0) as usize;
+    let group = node_param_str(target, "Group", "");
+    let group = group.trim().to_string();
+    let movable: Vec<bool> = (0..n).map(|p| group.is_empty() || geom.points().in_group(&group, p)).collect();
+    let free = |p: usize| if movable[p] { 1.0f32 } else { 0.0 };
+
+    let mut pos: Vec<Vec3> = (0..n).map(|p| geom.pos(p)).collect();
+    // Cells no smaller than a triangle, or each is filed in dozens.
+    let cell = thickness.max(mean_edge(geom, topo));
+    let mut grid = TriCells::build(&pos, &topo.tris, cell);
+    work.grids += 1;
+    let mut drift = 0.0f32;
+    let mut near = Vec::new();
+    let mut seen = vec![u32::MAX; topo.tris.len()];
+    let mut stamp = 0u32;
+    let mut push = vec![Vec3::ZERO; n];
+    let mut weight = vec![0.0f32; n];
+    let mut moved_at_all = false;
+    for _ in 0..iterations {
+        work.passes += 1;
+        if drift > DRIFT_CELLS * grid.cell {
+            grid = TriCells::build(&pos, &topo.tris, cell);
+            work.grids += 1;
+            drift = 0.0;
+        }
+        push.iter_mut().for_each(|v| *v = Vec3::ZERO);
+        weight.iter_mut().for_each(|w| *w = 0.0);
+        let mut any = false;
+        for p in 0..n {
+            work.searched += 1;
+            // A triangle within a thickness of here now had its box within
+            // a thickness and a drift of here when it was filed.
+            let reach = Vec3::splat(thickness + drift);
+            stamp = stamp.wrapping_add(1);
+            if stamp == u32::MAX {
+                seen.iter_mut().for_each(|m| *m = u32::MAX);
+                stamp = 0;
+            }
+            grid.gather(pos[p] - reach, pos[p] + reach, &mut seen, stamp, &mut near);
+            for &t in &near {
+                let corners = topo.tris[t as usize];
+                let [ia, ib, ic] = corners.map(|c| c as usize);
+                let (a, b, c) = (pos[ia], pos[ib], pos[ic]);
+                // Most of what a cell holds is nowhere near: a triangle
+                // whose box is a thickness away on any axis is further
+                // than that, and is turned away before it costs a search
+                // of the rings or a closest point.
+                let (lo, hi) = (a.min(b).min(c) - thickness, a.max(b).max(c) + thickness);
+                if pos[p].cmplt(lo).any() || pos[p].cmpgt(hi).any() {
+                    continue;
+                }
+                if corners.iter().any(|&c| topo.excludes(p, c)) {
+                    continue;
+                }
+                let w = crate::spatial::closest_weights_on_triangle(pos[p], a, b, c);
+                let d = pos[p] - (a * w[0] + b * w[1] + c * w[2]);
+                let len = d.length();
+                if len >= thickness {
+                    continue;
+                }
+                // Inverse masses of one or none: the point's, and each
+                // corner's by the square of its share.
+                let give = free(p) + free(ia) * w[0] * w[0] + free(ib) * w[1] * w[1] + free(ic) * w[2] * w[2];
+                if give <= 0.0 {
+                    continue;
+                }
+                let dir = if len < 1e-9 {
+                    let normal = (b - a).cross(c - a).normalize_or_zero();
+                    if normal == Vec3::ZERO {
+                        continue;
+                    }
+                    normal
+                } else {
+                    d / len
+                };
+                let deep = thickness - len;
+                let step = dir * (deep / give);
+                push[p] += step * (free(p) * deep);
+                weight[p] += free(p) * deep;
+                for (i, share) in [(ia, w[0]), (ib, w[1]), (ic, w[2])] {
+                    // The corner moves by its share; its say in the average
+                    // is its share too, so a corner that is barely part of
+                    // one contact does not water down another it carries.
+                    push[i] -= step * (share * free(i) * share * deep);
+                    weight[i] += free(i) * share * deep;
+                }
+                work.contacts += 1;
+                any = true;
+            }
+        }
+        if !any {
+            break;
+        }
+        for p in 0..n {
+            if weight[p] > 0.0 {
+                pos[p] += push[p] / weight[p];
+            }
+        }
+        moved_at_all = true;
+        drift = grid.drift(&pos);
+    }
+    if moved_at_all {
+        for (p, v) in pos.iter().enumerate() {
+            geom.set_pos(p, *v);
+        }
+    }
+}
+
+/// Where a surface passes through itself.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Tangles {
+    /// Edge-triangle pairs where the edge passes through the triangle.
+    pub crossings: usize,
+    /// The points of those edges and triangles, ascending, each once.
+    pub points: Vec<u32>,
+}
+
+/// Every edge of `geom` that passes through one of its triangles.
+///
+/// This is the MEASURE, and it is geometric: no thickness and no rings. An
+/// edge is not tested against a triangle it shares a point with — they meet
+/// there by construction — nor against one fanned from a primitive the edge
+/// is a side of.
+pub fn self_intersections(geom: &Detail) -> Tangles {
+    if geom.num_points() == 0 || geom.num_prims() == 0 {
+        return Tangles::default();
+    }
+    let topo = topo_for(geom, 0);
+    if topo.edges.is_empty() {
+        return Tangles::default();
+    }
+    intersections_of(geom, &topo, false)
+}
+
+/// [`self_intersections`] counting only what the solve is MEANT to see at
+/// this ring count: an edge through a triangle none of whose corners is
+/// within `rings` of either end of it. The rest are folds inside the
+/// excluded neighbourhood, which the node leaves alone by design, and
+/// telling the two apart is what says whether a crossing is the method's
+/// miss or the setting's.
+pub fn crossings_beyond(geom: &Detail, rings: usize) -> usize {
+    if geom.num_points() == 0 || geom.num_prims() == 0 {
+        return 0;
+    }
+    let topo = topo_for(geom, rings);
+    if topo.edges.is_empty() {
+        return 0;
+    }
+    intersections_of(geom, &topo, true).crossings
+}
+
+fn intersections_of(geom: &Detail, topo: &Topo, beyond_rings: bool) -> Tangles {
+    let pos: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
+    let grid = TriCells::build(&pos, &topo.tris, mean_edge(geom, topo));
+    let mut found = Tangles::default();
+    let mut marked = vec![false; pos.len()];
+    let mut near = Vec::new();
+    let mut seen = vec![u32::MAX; topo.tris.len()];
+    for (stamp, e) in topo.edges.iter().enumerate() {
+        let (a, b) = (pos[e[0] as usize], pos[e[1] as usize]);
+        grid.gather(a.min(b), a.max(b), &mut seen, stamp as u32, &mut near);
+        for &t in &near {
+            let tri = topo.tris[t as usize];
+            if tri.contains(&e[0]) || tri.contains(&e[1]) {
+                continue;
+            }
+            if beyond_rings && tri.iter().any(|&c| topo.excludes(e[0] as usize, c) || topo.excludes(e[1] as usize, c)) {
+                continue;
+            }
+            let of = geom.prim_points(topo.tri_prims[t as usize] as usize);
+            if of.contains(&e[0]) && of.contains(&e[1]) {
+                continue;
+            }
+            let [v0, v1, v2] = tri.map(|i| pos[i as usize]);
+            if crate::spatial::segment_crosses_triangle(a, b, v0, v1, v2) {
+                found.crossings += 1;
+                for i in e.iter().chain(tri.iter()) {
+                    marked[*i as usize] = true;
+                }
+            }
+        }
+    }
+    found.points = (0..pos.len() as u32).filter(|&p| marked[p as usize]).collect();
+    found
 }
