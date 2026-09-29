@@ -1283,6 +1283,10 @@ pub struct ViewportSettings {
     pub show_prim_normals: bool,
     #[serde(default)]
     pub show_vertex_numbers: bool,
+    #[serde(default)]
+    pub show_vertex_markers: bool,
+    #[serde(default)]
+    pub show_vertex_normals: bool,
     /// World-unit radius and colour of the Show Point Markers overlay.
     #[serde(default = "default_point_marker_size")]
     pub point_marker_size: f32,
@@ -1485,6 +1489,8 @@ impl Default for ViewportSettings {
             show_prim_numbers: false,
             show_prim_normals: false,
             show_vertex_numbers: false,
+            show_vertex_markers: false,
+            show_vertex_normals: false,
             point_marker_size: default_point_marker_size(),
             point_marker_color: default_point_marker_color(),
             world_unit: default_world_unit(),
@@ -2424,6 +2430,9 @@ pub struct State {
     /// Marker Size slider does that on every motion of a drag
     /// (`rebuild_overlay_marker_verts`).
     pub overlay_marker_points: Vec<Vertex3D>,
+    /// The same for Show Vertex Markers: where each vertex's marker
+    /// stands, inset from its point as its number is.
+    pub overlay_vertex_marker_points: Vec<Vertex3D>,
     pub overlay_dirty: bool,
     pub overlay_point_count: u32,
     pub overlay_number_labels: Vec<([f32; 3], u32)>,
@@ -2454,6 +2463,8 @@ pub struct State {
     pub show_prim_numbers: bool,
     pub show_prim_normals: bool,
     pub show_vertex_numbers: bool,
+    pub show_vertex_markers: bool,
+    pub show_vertex_normals: bool,
     /// The visible scene's own edges for the wire pass (LINE_LIST pairs),
     /// rebuilt with the scene while Show Wireframe is on and empty while it
     /// is off. Topological — see `render::scene_edge_verts`.
@@ -2636,6 +2647,8 @@ impl State {
                 show_prim_numbers: self.show_prim_numbers,
                 show_prim_normals: self.show_prim_normals,
                 show_vertex_numbers: self.show_vertex_numbers,
+                show_vertex_markers: self.show_vertex_markers,
+                show_vertex_normals: self.show_vertex_normals,
                 point_marker_size: self.point_marker_size,
                 point_marker_color: self.point_marker_color,
                 world_unit: self.world_unit.suffix().to_string(),
@@ -2714,6 +2727,8 @@ impl State {
         self.show_prim_numbers = v.show_prim_numbers;
         self.show_prim_normals = v.show_prim_normals;
         self.show_vertex_numbers = v.show_vertex_numbers;
+        self.show_vertex_markers = v.show_vertex_markers;
+        self.show_vertex_normals = v.show_vertex_normals;
         self.point_marker_size = v.point_marker_size;
         self.point_marker_color = v.point_marker_color;
         if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
@@ -5387,7 +5402,9 @@ impl State {
                 toggle(&mut options, &mut actions, "toggle_prim_numbers");
                 toggle(&mut options, &mut actions, "toggle_prim_normals");
                 row(&mut options, &mut actions, "-".into(), sep);
+                toggle(&mut options, &mut actions, "toggle_vertex_markers");
                 toggle(&mut options, &mut actions, "toggle_vertex_numbers");
+                toggle(&mut options, &mut actions, "toggle_vertex_normals");
                 return (options, actions);
             }
             None => {}
@@ -6267,16 +6284,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// current size — the cheap half of the markers, with no evaluation, so
     /// a size change can run it on every motion of a drag. The Highlight
     /// bake's warm accent, so the markers and the tint read as one feature.
-    /// Build the Show Point Markers overlay's spheres from the kept scene
-    /// positions at the current Point Marker Size — the same call
-    /// `render::scene_point_overlays` makes, without the evaluation that
-    /// produced the positions.
+    /// Build the marker overlays' spheres from the kept scene positions at
+    /// the current Point Marker Size, without the evaluation that produced
+    /// the positions: the points' in the marker colour, and the vertices'
+    /// in the vertex overlays' green at `VERTEX_MARKER_SCALE` of the size —
+    /// smaller, so that a point's marker is not lost among the markers of
+    /// the vertices around it.
     pub(crate) fn rebuild_overlay_marker_verts(&mut self) {
         self.overlay_marker_verts = crate::geometry::points_vertices(
             &self.overlay_marker_points,
             self.point_marker_size,
             cce_ui::colors::to_linear_rgb(self.point_marker_color),
         );
+        self.overlay_marker_verts.extend(crate::geometry::points_vertices(
+            &self.overlay_vertex_marker_points,
+            self.point_marker_size * crate::render::VERTEX_MARKER_SCALE,
+            cce_ui::colors::to_linear_rgb(crate::render::VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
+        ));
         self.overlay_dirty = true;
     }
 
@@ -6711,6 +6735,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             last_group_marker_size: 0.0,
             overlay_marker_verts: Vec::new(),
             overlay_marker_points: Vec::new(),
+            overlay_vertex_marker_points: Vec::new(),
             overlay_dirty: false,
             overlay_point_count: 0,
             overlay_number_labels: Vec::new(),
@@ -6727,6 +6752,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             show_prim_numbers: settings.viewport.show_prim_numbers,
             show_prim_normals: settings.viewport.show_prim_normals,
             show_vertex_numbers: settings.viewport.show_vertex_numbers,
+            show_vertex_markers: settings.viewport.show_vertex_markers,
+            show_vertex_normals: settings.viewport.show_vertex_normals,
             scene_edge_verts: Vec::new(),
             point_marker_size: settings.viewport.point_marker_size,
             point_marker_color: settings.viewport.point_marker_color,
@@ -8368,6 +8395,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::TogglePrimNormals => {
                 self.show_prim_normals = !self.show_prim_normals;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::ToggleVertexMarkers => {
+                self.show_vertex_markers = !self.show_vertex_markers;
+                self.rebuild_scene_geometry();
+                settings_changed = true;
+            }
+            Action::ToggleVertexNormals => {
+                self.show_vertex_normals = !self.show_vertex_normals;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }

@@ -31,6 +31,8 @@ pub enum Action {
     TogglePrimNumbers,
     TogglePrimNormals,
     ToggleVertexNumbers,
+    ToggleVertexMarkers,
+    ToggleVertexNormals,
     /// The path-traced preview, the wireframe's single-colour mode, and the
     /// point display. All three were toggles on the root meta node's utility
     /// subnets and reachable ONLY there; with those nodes retired they are

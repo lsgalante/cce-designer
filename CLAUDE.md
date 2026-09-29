@@ -2184,7 +2184,7 @@ opacity and Show Occluded) and **Markers** (what is drawn on it: Show
 Points, Point Size, Group Marker Scale and Pull Arrow Scale; then the
 overlays a class at a time — Show Point Markers and its size, Show Point
 Numbers, Show Point Normals; Show Primitive Numbers, Show Primitive
-Normals; Show Vertex Numbers).
+Normals; Show Vertex Markers, Show Vertex Numbers, Show Vertex Normals).
 
 **The submenus are cce-ui's** (`context_menu::set_row_submenu`, see its
 CLAUDE.md, "A row can open a submenu"): a second menu in its own popup
@@ -2219,6 +2219,22 @@ persisted beside the point overlays in `ViewportSettings`, capped at 2000
 labels a class, and dimmed by the fill in front of them as the point
 numbers are (one `point_transmittance` call over all three lists).
 `primitives_and_vertices_are_numbered_where_they_are` is the test.
+
+**Vertex markers and vertex normals** (`toggle_vertex_markers`,
+`toggle_vertex_normals`, later the same day) stand where the vertex's
+number does, so all three of a vertex's overlays name one place. The
+markers are the point markers' spheres at `VERTEX_MARKER_SCALE` (0.6) of
+Point Marker Size, in the vertex green, smaller so a point's marker is not
+lost among the markers of the vertices around it; they share the point
+markers' mesh, and `rebuild_overlay_marker_verts` builds both lists, so
+the size slider re-sizes both without an evaluation. **A vertex's normal
+is its `N` attribute where the detail carries a Float3 one on its
+vertices, and its primitive's normal where it does not** — the normal of
+this corner of this face, where a point's is the average over the faces
+around it. No node here writes vertex normals yet, so today the whiskers
+show the faceting: the corners of one face agree, and a shared point
+wears a fan of them. `scene_element_overlays` takes an `ElementOverlays`
+of what is wanted and returns an `ElementOverlayGeometry`.
 
 `the_viewport_menu_groups_its_display_rows` holds the
 order of all three. The rows: the Show Wireframe switch (its registry command), **Flat

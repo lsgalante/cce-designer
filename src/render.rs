@@ -1247,18 +1247,27 @@ impl State {
         self.overlay_number_labels = labels;
         self.overlay_number_alpha.clear();
         self.overlay_normal_verts = normals;
-        let (prim_labels, vertex_labels, prim_normals) = scene_element_overlays(
+        let elements = scene_element_overlays(
             &geom,
-            self.show_prim_numbers,
-            self.show_vertex_numbers,
-            self.show_prim_normals,
+            ElementOverlays {
+                prim_numbers: self.show_prim_numbers,
+                prim_normals: self.show_prim_normals,
+                vertex_numbers: self.show_vertex_numbers,
+                vertex_markers: self.show_vertex_markers,
+                vertex_normals: self.show_vertex_normals,
+            },
             self.point_marker_size * 4.0,
         );
-        self.overlay_prim_labels = prim_labels;
+        self.overlay_prim_labels = elements.prim_labels;
         self.overlay_prim_alpha.clear();
-        self.overlay_vertex_labels = vertex_labels;
+        self.overlay_vertex_labels = elements.vertex_labels;
         self.overlay_vertex_alpha.clear();
-        self.overlay_normal_verts.extend(prim_normals);
+        self.overlay_normal_verts.extend(elements.normals);
+        self.overlay_vertex_marker_points = elements.vertex_markers;
+        if !self.overlay_vertex_marker_points.is_empty() {
+            // Both marker lists, by the one builder the size slider uses.
+            self.rebuild_overlay_marker_verts();
+        }
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.
         self.scene_edge_verts =
@@ -1428,35 +1437,62 @@ pub(crate) const VERTEX_LABEL_COLOR: [u8; 3] = [0xa0, 0xf0, 0xb0];
 /// near enough to say which corner each is.
 pub(crate) const VERTEX_LABEL_INSET: f32 = 0.3;
 
+/// A vertex marker's radius as a fraction of Point Marker Size.
+pub(crate) const VERTEX_MARKER_SCALE: f32 = 0.6;
+
+/// Which of the primitive and vertex overlays to collect.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ElementOverlays {
+    pub prim_numbers: bool,
+    pub prim_normals: bool,
+    pub vertex_numbers: bool,
+    pub vertex_markers: bool,
+    pub vertex_normals: bool,
+}
+
+/// What `scene_element_overlays` collected: `(position, index)` labels for
+/// the two kinds of number, the places the vertex markers stand, and the
+/// LINE_LIST whiskers of both kinds of normal.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ElementOverlayGeometry {
+    pub prim_labels: Vec<([f32; 3], u32)>,
+    pub vertex_labels: Vec<([f32; 3], u32)>,
+    pub vertex_markers: Vec<crate::geometry::Vertex3D>,
+    pub normals: Vec<crate::geometry::Vertex3D>,
+}
+
 /// The overlays of the other two element classes, read off the same scene
-/// `Detail` as the points': `(position, index)` labels for Show Primitive
-/// Numbers, at each primitive's centroid; the same for Show Vertex Numbers,
-/// each vertex inset from its point toward its primitive's centroid; and
-/// LINE_LIST whiskers for Show Primitive Normals, from the centroid along
-/// the primitive's own normal, `len` long.
+/// `Detail` as the points'. A PRIMITIVE's number stands at its centroid and
+/// its normal is a whisker from there, `len` long. A VERTEX stands inset
+/// from its point toward its primitive's centroid — its number, its marker
+/// and the foot of its normal all there — so the vertices that share a
+/// point are apart, each inside its own primitive.
 ///
 /// A vertex's number is its index in the detail, which is its row in the
-/// spreadsheet, as a point's is. The normal is Newell's, so a quad that is
-/// not quite flat still has one; a primitive of fewer than three points has
-/// a number and no normal. Each list of labels is capped as the points' is.
+/// spreadsheet, as a point's is. A primitive's normal is Newell's, so a
+/// quad that is not quite flat still has one; a primitive of fewer than
+/// three points has a number and no normal. **A vertex's normal is its `N`
+/// attribute where the detail carries one on its vertices, and its
+/// primitive's normal where it does not** — which is what a vertex normal
+/// is for: the normal of this corner of this face, where a point's is the
+/// average over every face around it. So on a mesh with no vertex normals
+/// the whiskers show the faceting, a fan of them at every shared point.
+/// Each list of labels is capped as the points' is.
 pub(crate) fn scene_element_overlays(
     geom: &crate::detail::Detail,
-    prim_numbers: bool,
-    vertex_numbers: bool,
-    prim_normals: bool,
+    want: ElementOverlays,
     len: f32,
-) -> (
-    Vec<([f32; 3], u32)>,
-    Vec<([f32; 3], u32)>,
-    Vec<crate::geometry::Vertex3D>,
-) {
+) -> ElementOverlayGeometry {
     use glam::Vec3;
     const MAX_LABELS: usize = 2000;
-    let (mut prims, mut verts, mut normals) = (Vec::new(), Vec::new(), Vec::new());
-    if !(prim_numbers || vertex_numbers || prim_normals) {
-        return (prims, verts, normals);
+    let mut out = ElementOverlayGeometry::default();
+    if want == ElementOverlays::default() {
+        return out;
     }
-    let color = cce_ui::colors::to_linear_rgb(PRIM_LABEL_COLOR.map(|c| c as f32 / 255.0));
+    let to_linear = |c: [u8; 3]| cce_ui::colors::to_linear_rgb(c.map(|c| c as f32 / 255.0));
+    let (prim_color, vertex_color) = (to_linear(PRIM_LABEL_COLOR), to_linear(VERTEX_LABEL_COLOR));
+    let own_normals = geom.verts().get("N").filter(|n| n.ty().components() == 3);
+    let by_vertex = want.vertex_numbers || want.vertex_markers || want.vertex_normals;
     for prim in 0..geom.num_prims() {
         let pts = geom.prim_points(prim);
         if pts.is_empty() {
@@ -1464,31 +1500,49 @@ pub(crate) fn scene_element_overlays(
         }
         let at: Vec<Vec3> = pts.iter().map(|&p| geom.pos(p as usize)).collect();
         let centroid = at.iter().copied().sum::<Vec3>() / at.len() as f32;
-        if prim_numbers && prims.len() < MAX_LABELS {
-            prims.push((centroid.to_array(), prim as u32));
-        }
-        if vertex_numbers {
-            for (v, &p) in geom.prim_verts(prim).zip(&at) {
-                if verts.len() >= MAX_LABELS {
-                    break;
-                }
-                verts.push((p.lerp(centroid, VERTEX_LABEL_INSET).to_array(), v as u32));
-            }
-        }
-        if prim_normals && at.len() >= 3 {
+        let normal = if (want.prim_normals || want.vertex_normals) && at.len() >= 3 {
             let mut n = Vec3::ZERO;
             for (k, &a) in at.iter().enumerate() {
                 let b = at[(k + 1) % at.len()];
                 n += Vec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
             }
-            let n = n.normalize_or_zero();
+            n.normalize_or_zero()
+        } else {
+            Vec3::ZERO
+        };
+        let mut whisker = |from: Vec3, n: Vec3, len: f32, color: [f32; 3]| {
             if n != Vec3::ZERO {
-                normals.push(crate::geometry::Vertex3D { position: centroid.to_array(), color });
-                normals.push(crate::geometry::Vertex3D { position: (centroid + n * len).to_array(), color });
+                out.normals.push(crate::geometry::Vertex3D { position: from.to_array(), color });
+                out.normals.push(crate::geometry::Vertex3D { position: (from + n * len).to_array(), color });
+            }
+        };
+        if want.prim_normals {
+            whisker(centroid, normal, len, prim_color);
+        }
+        if by_vertex {
+            for (v, &p) in geom.prim_verts(prim).zip(&at) {
+                let stands = p.lerp(centroid, VERTEX_LABEL_INSET);
+                if want.vertex_normals {
+                    let n = own_normals
+                        .and_then(|n| n.get(v))
+                        .map(|n| n.as_vec3().normalize_or_zero())
+                        .filter(|n| *n != Vec3::ZERO)
+                        .unwrap_or(normal);
+                    whisker(stands, n, len * VERTEX_MARKER_SCALE, vertex_color);
+                }
+                if want.vertex_markers {
+                    out.vertex_markers.push(crate::geometry::Vertex3D { position: stands.to_array(), color: [0.0; 3] });
+                }
+                if want.vertex_numbers && out.vertex_labels.len() < MAX_LABELS {
+                    out.vertex_labels.push((stands.to_array(), v as u32));
+                }
             }
         }
+        if want.prim_numbers && out.prim_labels.len() < MAX_LABELS {
+            out.prim_labels.push((centroid.to_array(), prim as u32));
+        }
     }
-    (prims, verts, normals)
+    out
 }
 
 /// The scene's own edges as LINE_LIST pairs for the wire pass, carrying the

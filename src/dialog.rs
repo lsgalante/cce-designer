@@ -1611,6 +1611,8 @@ impl State {
             "toggle_prim_numbers" => self.show_prim_numbers,
             "toggle_prim_normals" => self.show_prim_normals,
             "toggle_vertex_numbers" => self.show_vertex_numbers,
+            "toggle_vertex_markers" => self.show_vertex_markers,
+            "toggle_vertex_normals" => self.show_vertex_normals,
             "toggle_render_points" => self.render_points,
             "toggle_wire_single_color" => self.wire_single_color,
             "toggle_ray_traced_preview" => self.viewport().rt_mode,

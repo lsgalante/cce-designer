@@ -2064,7 +2064,11 @@ mod tests {
                     A::Command("toggle_point_normals"),
                 ],
                 vec![A::Command("toggle_prim_numbers"), A::Command("toggle_prim_normals")],
-                vec![A::Command("toggle_vertex_numbers")],
+                vec![
+                    A::Command("toggle_vertex_markers"),
+                    A::Command("toggle_vertex_numbers"),
+                    A::Command("toggle_vertex_normals"),
+                ],
             ]
         );
     }
@@ -2144,10 +2148,13 @@ mod tests {
             .collect();
         d.add_prim(&[p[0], p[1], p[2], p[3]]);
         d.add_prim(&[p[1], p[4], p[2]]);
-        let (prims, verts, normals) = crate::render::scene_element_overlays(&d, false, false, false, 1.0);
-        assert!(prims.is_empty() && verts.is_empty() && normals.is_empty());
+        use crate::render::ElementOverlays as Want;
+        let none = crate::render::scene_element_overlays(&d, Want::default(), 1.0);
+        assert!(none.prim_labels.is_empty() && none.vertex_labels.is_empty() && none.normals.is_empty() && none.vertex_markers.is_empty());
 
-        let (prims, verts, normals) = crate::render::scene_element_overlays(&d, true, true, true, 0.5);
+        let want = Want { prim_numbers: true, prim_normals: true, vertex_numbers: true, ..Want::default() };
+        let got = crate::render::scene_element_overlays(&d, want, 0.5);
+        let (prims, verts, normals) = (got.prim_labels, got.vertex_labels, got.normals);
         assert_eq!(prims.len(), 2);
         assert_eq!(prims[0], ([1.0, 1.0, 0.0], 0));
         assert_eq!(prims[1].1, 1);
@@ -2160,6 +2167,39 @@ mod tests {
         assert_eq!(normals.len(), 4, "a whisker a primitive");
         let n = Vec3::from_array(normals[1].position) - Vec3::from_array(normals[0].position);
         assert!((n - Vec3::new(0.0, 0.0, 0.5)).length() < 1e-6, "{n:?}");
+
+        // A vertex's marker stands where its number does, and its normal
+        // is its primitive's: on a mesh that carries no vertex normals the
+        // corners of one face agree and the faces around a point do not.
+        let got = crate::render::scene_element_overlays(&d, Want { vertex_markers: true, vertex_normals: true, ..Want::default() }, 0.5);
+        assert_eq!(got.vertex_markers.len(), 7);
+        assert_eq!(got.vertex_markers.iter().map(|m| m.position).collect::<Vec<_>>(), verts.iter().map(|(p, _)| *p).collect::<Vec<_>>());
+        assert_eq!(got.normals.len(), 14, "a whisker a vertex");
+        assert_eq!(got.normals[2].position, verts[1].0, "from where the vertex stands");
+        let n = Vec3::from_array(got.normals[3].position) - Vec3::from_array(got.normals[2].position);
+        assert!((n - Vec3::new(0.0, 0.0, 0.5 * crate::render::VERTEX_MARKER_SCALE)).length() < 1e-6, "{n:?}");
+        // Its own N, where the detail carries one on its vertices.
+        let mut tilted = d.clone();
+        tilted.verts_mut().create("N", crate::detail::AttribValue::Float3([1.0, 0.0, 0.0]));
+        let got = crate::render::scene_element_overlays(&tilted, Want { vertex_normals: true, ..Want::default() }, 1.0);
+        let n = Vec3::from_array(got.normals[1].position) - Vec3::from_array(got.normals[0].position);
+        assert!((n.normalize() - Vec3::X).length() < 1e-6, "{n:?}");
+
+        // The markers are built with the points', and re-sized with them.
+        let mut state = State::new(false);
+        state.show_point_markers = false;
+        state.show_vertex_markers = false;
+        state.rebuild_scene_geometry();
+        assert!(state.overlay_marker_verts.is_empty());
+        state.run_command("toggle_vertex_markers");
+        let built = state.overlay_marker_verts.clone();
+        assert!(!built.is_empty() && !state.overlay_vertex_marker_points.is_empty());
+        state.point_marker_size *= 2.0;
+        state.rebuild_overlay_marker_verts();
+        assert_eq!(state.overlay_marker_verts.len(), built.len());
+        assert_ne!(state.overlay_marker_verts[0].position, built[0].position, "re-sized");
+        state.run_command("toggle_vertex_markers");
+        assert!(state.overlay_marker_verts.is_empty(), "and gone with the switch");
 
         // And the app collects them by its switches, and persists those.
         let mut state = State::new(false);
