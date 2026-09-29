@@ -4250,6 +4250,15 @@ mod tests {
             assert_eq!(kind(ty, name), K::Float, "{ty}'s {name}");
         }
         assert_eq!(kind("neighbour", "Constant"), K::Float3);
+        // The pull's Strength is a slider over none-to-double, one in the
+        // middle: a number set by hand and by eye, where the `float` it
+        // was for a day is a box to type into. It still takes an
+        // expression, shown as text like any other.
+        let strength = root.children.iter().find(|t| t.node_type == "attribute").unwrap()
+            .params.iter().find(|p| p.name == "Strength").expect("attribute has a Strength");
+        assert_eq!(strength.kind(), K::Slider);
+        assert_eq!(strength.range().map(|(lo, hi, _)| (lo, hi)), Some((0.0, 2.0)));
+        assert_eq!(strength.text(), "1.00");
         for (ty, name) in [
             ("attribute", "Attribute Name"), ("attribute", "Source B"), ("visualize", "Attribute"), ("neighbour", "Attribute"),
             ("neighbour", "Direction"), ("neighbour", "Source"), ("distance", "Direction"), ("develop", "Source"),
