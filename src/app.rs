@@ -5770,6 +5770,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let path_strs = self.current_path_names();
         self.path_mut().set_path(&path_strs);
 
+        // The shared sim cache, taken out BEFORE the selected node is
+        // borrowed off self and put back once that borrow is dead: the two
+        // evaluations below are of whatever is selected, and when that is
+        // a simnet, or anything downstream of one, the scene rebuild has
+        // already solved this frame. Each used a throwaway cache until
+        // 2026-09-29 — "the shared one cannot be reached from here" — so a
+        // spreadsheet or a selected group downstream of a simulation solved
+        // it again from the seed at every refresh, at frame 240 of the
+        // project this was found on two and a half times what the frame
+        // itself cost.
+        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+
         // The spreadsheet (and the group markers with it) read the
         // SPREADSHEET's binding: its pin when set, else the active editor —
         // exactly the parameters pane's rule with its own pin.
@@ -5817,11 +5829,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             if let Some(node) = selected_node {
                 let mut visited = Vec::new();
                 let mut ocl_error = None;
-                // A throwaway cache: `selected_node` borrows self, so the
-                // shared one cannot be reached from here. The answer is the
-                // same either way — a simnet just re-solves for the
-                // spreadsheet, which only runs when the selection changed.
-                let mut sim_cache = crate::geometry::SimCache::default();
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
                 if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
                     let (h, r) = Self::geometry_to_spreadsheet_data(&geom);
@@ -5852,8 +5859,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let group_name = node_param_str(node, "Group Name", "group1");
                 let mut visited = Vec::new();
                 let mut ocl_error = None;
-                // Throwaway sim cache, as for the spreadsheet above.
-                let mut sim_cache = crate::geometry::SimCache::default();
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
                 if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
                     member_verts = crate::geometry::group_member_positions(&geom, &group_name);
@@ -5861,6 +5866,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             group_update = Some(member_verts);
         }
+        // `selected_node` is not read past here.
+        self.sim_cache = sim_cache;
 
         if let Some((headers, rows)) = spreadsheet_update {
             self.spreadsheet_mut().set_spreadsheet_data(headers, rows);

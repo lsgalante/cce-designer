@@ -13408,4 +13408,70 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
     }
+
+    /// The spreadsheet and the selected-group markers evaluate through the
+    /// SHARED sim cache: with either reading something downstream of a
+    /// simnet, a refresh costs no steps beyond the ones the frame itself
+    /// took. Each used a cache of its own until 2026-09-29, and solved the
+    /// simulation again from the seed.
+    #[test]
+    fn the_spreadsheet_and_group_markers_share_the_sim_cache() {
+        let steps = || crate::geometry::STEPS_ON_THIS_THREAD.with(|s| s.get());
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        state.show_spreadsheet = true;
+        let mut redraw = false;
+        // sphere1 -> sim (a pull inside) -> tagged (a Group reading the sim).
+        state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("tagged".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
+        let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        let (sim, tagged) = (slot_of(&state, "sim"), slot_of(&state, "tagged"));
+        state.apply_action(McpAction::SetParam { slot: sim, name: "Input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "Input".into(), value: "sim".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "Mode".into(), value: "Random".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "Count".into(), value: "5".into() }, &mut redraw).unwrap();
+        {
+            let simnet = &mut state.current_dir_mut().children[sim];
+            let template = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
+            let mut node = template.clone();
+            node.id = "pull-in-sim".into();
+            node.name = "pull1".into();
+            for (name, value) in [("Input", "input1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.01:0.00:0.00"), ("Combine", "Add")] {
+                node.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
+            }
+            simnet.children.push(node);
+            let output = simnet.children.iter_mut().find(|c| c.node_type == "output").expect("a simnet has an output");
+            output.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("pull1".to_string());
+        }
+        state.slots.playbar.inner_mut().current_frame = 61.0;
+        state.sync_nodes();
+        state.rebuild_scene_geometry();
+
+        // Select the Group downstream of the simulation: the spreadsheet
+        // fills and the markers stage. Whatever solving the frame takes is
+        // done ONCE, by whoever asks first…
+        state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
+        state.sync_nodes();
+        assert_eq!(state.group_members.len(), 5, "the markers were staged from the simulated geometry");
+        let solved = steps();
+        assert!(solved >= 60, "the fixture simulates: {solved} steps");
+        assert!(solved < 120, "the spreadsheet and the markers solved it between them once, not once each: {solved}");
+        // …and nobody after: the simnet itself in the spreadsheet, the
+        // group again, a scene rebuild — all through the one cache.
+        state.apply_action(McpAction::Select { slot: sim }, &mut redraw).unwrap();
+        state.sync_nodes();
+        assert_eq!(steps(), solved, "the simnet in the spreadsheet");
+        state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
+        state.sync_nodes();
+        assert_eq!(steps(), solved, "the group again");
+        state.rebuild_scene_geometry();
+        state.sync_nodes();
+        assert_eq!(steps(), solved, "and the scene");
+        // And the cache is back where it lives, its solve intact.
+        assert!(!state.sim_cache.checkpoint_frames(&state.current_dir().children[sim].id).is_empty());
+    }
 }

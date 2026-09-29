@@ -958,6 +958,13 @@ struct Checkpoint {
     prev: Detail,
 }
 
+// Every run of a chain on this thread, through whichever cache — so a
+// test can see a solve that went through a cache it has no hold of.
+#[cfg(test)]
+thread_local! {
+    pub static STEPS_ON_THIS_THREAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How many frames apart checkpoints start out.
 pub const CHECKPOINT_EVERY: i32 = 10;
 /// The most kept for one simnet, however large its states.
@@ -6438,6 +6445,8 @@ pub fn resolve_simnet_geometry_with_errors(
             state.restore_live_from(&prev);
             prev_frame = prev;
             sim.cache.steps_run += 1;
+            #[cfg(test)]
+            STEPS_ON_THIS_THREAD.with(|s| s.set(s.get() + 1));
         }
         done += 1;
         // A frame on the interval is kept as the solve passes it — not the

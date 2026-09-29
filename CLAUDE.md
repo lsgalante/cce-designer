@@ -121,7 +121,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~9.8k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~10.8k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
@@ -1197,7 +1197,15 @@ need.
 What a resume arrives at is what a solve from the seed arrives at, state
 and feedback both: `a_scrub_resumes_from_a_checkpoint_and_arrives_at_the_same_state`
 compares them frame by frame and counts the steps each cost
-(`SimCache::steps_run`). On the project this was measured on, a scrub
+(`SimCache::steps_run`). **Every evaluation goes through the one cache**
+(`State::sim_cache`): the scene rebuild, the pull arrows, the params
+pane's pickers, and since 2026-09-29 the spreadsheet and the
+selected-group markers, which `sync_nodes` evaluates against a node
+borrowed off `State` and which each used a throwaway cache for that
+reason — a full solve from the seed at every refresh of either. The
+cache is taken out before that borrow begins and put back after it, as
+the scene rebuild takes it.
+`the_spreadsheet_and_group_markers_share_the_sim_cache` counts the steps. On the project this was measured on, a scrub
 back over sixty frames from frame 120 went from a mean of 15 ms a frame
 to 1.3, and from frame 240 from 67 to 4. The disk cache (`Cache` on the
 simnet) is unchanged and still holds the one latest frame.
