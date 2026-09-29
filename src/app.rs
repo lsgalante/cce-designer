@@ -2059,10 +2059,13 @@ pub struct State {
     /// Copy Parameter's clipboard: (node id, parameter name). An id, so a
     /// rename between the copy and the paste still pastes the right path.
     pub copied_param: Option<(String, String)>,
-    /// Undo for commands that rewrite a node's parameters whole — see
-    /// `src/param_history.rs`. Consulted after a code row and a viewer
+    /// Undo for edits to the node tree, parameters and structure — see
+    /// `src/edit_history.rs`. Consulted after a code row and a viewer
     /// state have had their turn.
-    pub param_history: crate::param_history::ParamHistory,
+    pub edit_history: crate::edit_history::EditHistory,
+    /// The tree as it stood when its structure was last looked at, which
+    /// the next look is compared with. None until the first.
+    pub structure_base: Option<FsNode>,
     /// The network editor's right-click menu — the same thread-local again,
     /// with the flag saying the open menu is this one.
     pub network_menu_active: bool,
@@ -3132,72 +3135,24 @@ impl State {
                 p.set_expr(is_expr);
             }
         }
-        let before = crate::param_history::ParamSnapshot {
+        let before = crate::edit_history::ParamSnapshot {
             node_id: node.id.clone(),
             params: was
                 .into_iter()
                 .zip(node.params.iter())
-                .filter(|(a, b)| !crate::param_history::same(a, b))
+                .filter(|(a, b)| !crate::edit_history::same(a, b))
                 .map(|(a, _)| a)
                 .collect(),
             what: "Reset Parameters".to_string(),
         };
         if !before.params.is_empty() {
-            self.param_history.record(before);
+            self.record_params(before, false);
         }
         self.sync_nodes();
         self.rebuild_scene_geometry();
         self.sync_parameters_pane();
         self.update_status_text(&format!("{name}: parameters reset"));
         true
-    }
-
-    /// Undo (or redo) the last command that rewrote a node's parameters.
-    /// False when there is no such step, so the caller can say nothing was
-    /// taken.
-    pub fn param_history_step(&mut self, undo: bool) -> bool {
-        let Some(step) = self.param_history.take(undo) else { return false };
-        let verb = if undo { "Undo" } else { "Redo" };
-        let Some(node) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, &step.node_id) else {
-            // Deleted since. The step names nothing, and is dropped.
-            self.update_status_text(&format!("{verb} {}: the node is gone", step.what));
-            return false;
-        };
-        // By name: the step holds the parameters that changed, and the rest
-        // of the node is as whatever wrote it last left it.
-        let mut replaced = Vec::new();
-        for was in step.params {
-            if let Some(p) = node.params.iter_mut().find(|p| p.name == was.name) {
-                replaced.push(std::mem::replace(p, was));
-            }
-        }
-        let name = node.name.clone();
-        let what = step.what.clone();
-        self.param_history.file(
-            undo,
-            crate::param_history::ParamSnapshot { node_id: step.node_id, params: replaced, what: step.what },
-        );
-        self.sync_grid_settings();
-        self.sync_nodes();
-        self.rebuild_scene_geometry();
-        self.sync_parameters_pane();
-        self.update_status_text(&format!("{verb} {what}: {name}"));
-        true
-    }
-
-    /// Record that `pname` of a node was `before` until just now, if it is
-    /// not still. For the writers that change one parameter in one go: the
-    /// row menu and `set_param`.
-    pub fn record_param_edit(&mut self, node_id: &str, before: ParamDef) {
-        let now = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
-            .and_then(|n| n.params.iter().find(|p| p.name == before.name));
-        if now.is_some_and(|p| !crate::param_history::same(p, &before)) {
-            self.param_history.record(crate::param_history::ParamSnapshot {
-                node_id: node_id.to_string(),
-                what: before.name.clone(),
-                params: vec![before],
-            });
-        }
     }
 
     pub fn cursor_in_viewport(&self) -> bool {
@@ -3812,15 +3767,15 @@ impl State {
                     // motion. A button or the Open dropdown ends as it
                     // began, and is no edit.
                     was.retain(|w| {
-                        child.params.iter().find(|p| p.name == w.name).is_some_and(|p| !crate::param_history::same(p, w))
+                        child.params.iter().find(|p| p.name == w.name).is_some_and(|p| !crate::edit_history::same(p, w))
                     });
-                    let edit = (!was.is_empty()).then(|| crate::param_history::ParamSnapshot {
+                    let edit = (!was.is_empty()).then(|| crate::edit_history::ParamSnapshot {
                         node_id: child.id.clone(),
                         what: was.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "),
                         params: was,
                     });
                     if let Some(edit) = edit {
-                        self.param_history.record_grouped(edit);
+                        self.record_params(edit, true);
                     }
 
                     if !triggered_buttons.is_empty() || !display_resets.is_empty() || !rejected.is_empty() {
@@ -6741,7 +6696,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             param_menu_actions: Vec::new(),
             param_menu_target: None,
             copied_param: None,
-            param_history: Default::default(),
+            edit_history: Default::default(),
+            structure_base: None,
             network_menu_active: false,
             network_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
@@ -8504,13 +8460,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // chords arrive through `Application::undo` / `redo` (the
             // toolkit routes them, after the focused text box's turn); the
             // Edit menu rows come here directly. A viewer state's history
-            // first, then the parameter history (`src/param_history.rs`);
+            // first, then the edit history (`src/edit_history.rs`);
             // a project-wide one would be consulted after both decline.
             Action::Undo => {
-                let _ = self.viewer_tool_undo() || self.param_history_step(true);
+                let _ = self.viewer_tool_undo() || self.history_step(true);
             }
             Action::Redo => {
-                let _ = self.viewer_tool_redo() || self.param_history_step(false);
+                let _ = self.viewer_tool_redo() || self.history_step(false);
             }
             Action::ToggleGrid => {
                 let val = !self.viewport().show_grid;
@@ -8907,13 +8863,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // A press, a release, or a key that ends an entry ends the gesture
         // an undo step is: what the params pane writes next is a new one.
         match event {
-            WindowEvent::MouseInput { .. } => self.param_history.break_group(),
+            WindowEvent::MouseInput { .. } => self.edit_history.break_group(),
             WindowEvent::KeyboardInput { event } if event.state == ElementState::Pressed => {
                 if matches!(
                     event.logical_key,
                     Key::Named(NamedKey::Enter | NamedKey::Tab | NamedKey::Escape)
                 ) {
-                    self.param_history.break_group();
+                    self.edit_history.break_group();
                 }
             }
             _ => {}

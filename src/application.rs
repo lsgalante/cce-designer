@@ -328,7 +328,7 @@ impl Application for State {
         // undo, ahead of a viewer tool that may also be active.
         let taken = self.code_editor_action(cce_ui::widget::ContextAction::Undo)
             || self.viewer_tool_undo()
-            || self.param_history_step(true);
+            || self.history_step(true);
         if taken {
             *needs_rebuild = true;
         }
@@ -338,7 +338,7 @@ impl Application for State {
     fn redo(&mut self, needs_rebuild: &mut bool) -> bool {
         let taken = self.code_editor_action(cce_ui::widget::ContextAction::Redo)
             || self.viewer_tool_redo()
-            || self.param_history_step(false);
+            || self.history_step(false);
         if taken {
             *needs_rebuild = true;
         }

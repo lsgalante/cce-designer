@@ -439,6 +439,8 @@ impl State {
         proj.migrate_param_refs();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         self.fs_root = proj.root;
+        // Another window's edits, or the bundled file: not this one's to undo.
+        self.structure_base = None;
         self.migrate_meta_settings_node();
         if !keep_own_view {
             // Before the default view, whose camera-node rule has the last
@@ -519,7 +521,8 @@ impl State {
         proj.migrate_param_refs();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         self.fs_root = proj.root;
-        self.param_history.clear();
+        self.edit_history.clear();
+        self.structure_base = None;
         self.migrate_meta_settings_node();
         // As in the default-project branch.
         if let Some(d) = &proj.view_state.display {
@@ -645,7 +648,8 @@ impl State {
             inputs: 0,
             outputs: 0,
         };
-        self.param_history.clear();
+        self.edit_history.clear();
+        self.structure_base = None;
         self.migrate_meta_settings_node();
         self.set_active_camera("Default Camera");
         self.pan_x = 0.0;

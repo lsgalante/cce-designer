@@ -1,7 +1,7 @@
 
 pub mod app;
 pub mod param;
-pub mod param_history;
+pub mod edit_history;
 pub mod application;
 pub mod curve_tool;
 pub mod soft_transform_tool;
@@ -6742,7 +6742,7 @@ mod tests {
         }
         let edited = texts(&state);
 
-        assert!(!state.param_history_step(true), "nothing to undo before the reset");
+        assert!(!state.history_step(true), "nothing to undo before the reset");
         assert!(state.run_command("reset_parameters"));
         let reset = texts(&state);
         assert_ne!(reset, edited);
@@ -6758,20 +6758,24 @@ mod tests {
         // A rename between the reset and the undo: the step is by id.
         state.run_command("reset_parameters");
         state.current_dir_mut().children[slot].name = "ball".to_string();
-        assert!(state.param_history_step(true));
+        assert!(state.history_step(true));
         assert_eq!(texts(&state), edited);
 
-        // A node that is gone takes its step with it, and says so.
+        // A node deleted since comes back first, and then its parameters.
         state.run_command("reset_parameters");
-        state.current_dir_mut().children.remove(slot);
-        assert!(!state.param_history_step(true));
+        let reset = texts(&state);
+        state.delete_node(slot);
+        assert!(state.history_step(true), "the delete is the last step");
+        assert_eq!(texts(&state), reset, "the node came back as it was deleted");
+        assert!(state.history_step(true));
+        assert_eq!(texts(&state), edited);
 
         // Another document's steps are not this one's.
         let mut state = State::new(false);
         state.graph_mut().set_selected_node(Some(slot));
         state.run_command("reset_parameters");
         state.new_project();
-        assert!(!state.param_history_step(true), "New Project kept the old project's undo");
+        assert!(!state.history_step(true), "New Project kept the old project's undo");
     }
 
     /// An edit to a parameter can be taken back however it was made: a row
@@ -6812,19 +6816,19 @@ mod tests {
         for v in ["1.10", "1.20", "1.30"] {
             pane(&mut state, "Radius", v);
         }
-        assert_eq!(state.param_history.undo_len(), 1, "a drag is one step");
+        assert_eq!(state.edit_history.undo_len(), 1, "a drag is one step");
         // A write-back that changes nothing records nothing.
         state.sync_parameters_to_project();
-        assert_eq!(state.param_history.undo_len(), 1);
+        assert_eq!(state.edit_history.undo_len(), 1);
         // A release and a press, then a second drag of the same row.
-        state.param_history.break_group();
+        state.edit_history.break_group();
         for v in ["1.40", "1.50"] {
             pane(&mut state, "Radius", v);
         }
-        assert_eq!(state.param_history.undo_len(), 2, "a second drag is a second step");
+        assert_eq!(state.edit_history.undo_len(), 2, "a second drag is a second step");
         // Another row, with no press between: its own step all the same.
         pane(&mut state, "Rows", "9");
-        assert_eq!(state.param_history.undo_len(), 3);
+        assert_eq!(state.edit_history.undo_len(), 3);
 
         assert!(state.run_command("undo"));
         assert_eq!(param(&state, "Rows"), rows);
@@ -6833,7 +6837,7 @@ mod tests {
         assert_eq!(param(&state, "Radius").0, "1.30");
         assert!(state.run_command("undo"));
         assert_eq!(param(&state, "Radius"), radius);
-        assert!(!state.param_history_step(true), "three steps were recorded");
+        assert!(!state.history_step(true), "three steps were recorded");
         let shown = state.param().node_params().into_iter().find(|r| r.0 == "Radius").unwrap().1;
         assert_eq!(shown, radius.0, "the pane shows the restored value");
         for want in ["1.30", "1.50"] {
@@ -6842,9 +6846,9 @@ mod tests {
         }
         // An edit after an undo forks: what was undone is not redone over it.
         assert!(state.run_command("undo"));
-        state.param_history.break_group();
+        state.edit_history.break_group();
         pane(&mut state, "Radius", "2.00");
-        assert!(!state.param_history_step(false), "a new edit left the redo branch standing");
+        assert!(!state.history_step(false), "a new edit left the redo branch standing");
         assert!(state.run_command("undo"));
         assert_eq!(param(&state, "Radius").0, "1.30");
 
@@ -6856,10 +6860,10 @@ mod tests {
         assert_eq!(param(&state, "Rows").0, "21", "undoing Radius took back an edit to Rows");
 
         // set_param, and one that is refused.
-        let before = state.param_history.undo_len();
+        let before = state.edit_history.undo_len();
         state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "3.00".into() }, &mut redraw).unwrap();
         assert!(state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "abc".into() }, &mut redraw).is_err());
-        assert_eq!(state.param_history.undo_len(), before + 1, "a refused value recorded a step");
+        assert_eq!(state.edit_history.undo_len(), before + 1, "a refused value recorded a step");
         assert!(state.run_command("undo"));
         assert_eq!(param(&state, "Radius").0, "1.30");
 
@@ -6869,6 +6873,148 @@ mod tests {
         state.run_param_action(&node_id, "Radius", ParamMenuAction::CopyParameter);
         assert!(state.run_command("undo"));
         assert_eq!(param(&state, "Radius"), ("1.30".to_string(), false), "Copy Parameter is no edit, and Edit Expression is one");
+    }
+
+    /// Adding, deleting, moving and wiring nodes can be taken back, in the
+    /// order they were done, among the parameter edits made between them.
+    #[test]
+    fn the_graph_is_undone_a_step_at_a_time() {
+        use crate::app::McpAction;
+        let mut state = State::new(false);
+        let mut redraw = false;
+        // The first look takes the tree as it stands and records nothing.
+        state.record_structure_changes();
+        assert_eq!(state.edit_history.undo_len(), 0);
+        let shape = |state: &State| -> Vec<(String, (f32, f32), String, bool, bool)> {
+            state
+                .current_dir()
+                .children
+                .iter()
+                .map(|c| {
+                    let input = c.params.iter().find(|p| p.name == "Input").map(|p| p.text().to_string()).unwrap_or_default();
+                    (c.name.clone(), c.position, input, c.geometry_visible, c.bypassed)
+                })
+                .collect()
+        };
+        let start = shape(&state);
+
+        // Add, through MCP as the palette's pick adds.
+        state
+            .apply_action(McpAction::AddNode { template_name: "Box".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
+            .unwrap();
+        let added = shape(&state);
+        assert_eq!(added.len(), start.len() + 1);
+        assert_eq!(state.edit_history.undo_len(), 1);
+        let slot = added.len() - 1;
+        let name = added[slot].0.clone();
+
+        // Wire it to the sphere, by the parameter, and move it.
+        state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "1".into() }, &mut redraw).ok();
+        let steps = state.edit_history.undo_len();
+        state.current_dir_mut().children[slot].position = (12.0, 9.0);
+        state.record_structure_changes();
+        assert_eq!(state.edit_history.undo_len(), steps + 1, "a move is a step");
+        let moved = shape(&state);
+        // A second move of the same node straight after is the same step.
+        state.current_dir_mut().children[slot].position = (13.0, 9.0);
+        state.record_structure_changes();
+        assert_eq!(state.edit_history.undo_len(), steps + 1, "a run of moves is one step");
+        // A press between them, and it is another.
+        state.edit_history.break_group();
+        state.current_dir_mut().children[slot].position = (14.0, 9.0);
+        state.record_structure_changes();
+        assert_eq!(state.edit_history.undo_len(), steps + 2);
+        let moved_again = shape(&state);
+
+        // Flags: bypass, through its command's writer.
+        state.set_bypassed(&[slot], true);
+        state.record_structure_changes();
+        let bypassed = shape(&state);
+        assert!(bypassed[slot].4);
+
+        // Delete the first node of the level, which moves every slot.
+        let first = state.current_dir().children[0].clone();
+        state.delete_node(0);
+        state.record_structure_changes();
+        let deleted = shape(&state);
+        assert_eq!(deleted.len(), added.len() - 1);
+
+        // Back, a step at a time.
+        assert!(state.run_command("undo"));
+        assert_eq!(shape(&state), bypassed, "the deleted node came back where it was");
+        assert_eq!(state.current_dir().children[0].id, first.id);
+        assert_eq!(state.current_dir().children[0].params.len(), first.params.len());
+        assert!(state.last_status_text.contains("Undo Delete"), "{}", state.last_status_text);
+        assert!(state.run_command("undo"));
+        assert_eq!(shape(&state), moved_again);
+        assert!(state.run_command("undo"));
+        assert_eq!(shape(&state)[slot].1, (13.0, 9.0), "the run of two moves is where the third began");
+        assert!(state.run_command("undo"));
+        assert_eq!(shape(&state)[slot].1, (9.0, 9.0));
+        let _ = moved;
+        while state.edit_history.undo_len() > 1 {
+            assert!(state.run_command("undo"));
+        }
+        assert_eq!(shape(&state), added);
+        assert!(state.run_command("undo"));
+        assert_eq!(shape(&state), start, "undoing the add took the node out");
+        assert!(!state.history_step(true));
+
+        // And forward again, to the end.
+        while state.history_step(false) {}
+        assert_eq!(shape(&state), deleted);
+        assert!(!state.current_dir().children.iter().any(|c| c.id == first.id));
+        assert!(state.current_dir().children.iter().any(|c| c.name == name));
+
+        // Undoing the add of a node the editor has gone into comes out of it.
+        let mut state = State::new(false);
+        state.record_structure_changes();
+        state
+            .apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
+            .unwrap();
+        let slot = state.current_dir().children.len() - 1;
+        state.current_path = vec![slot];
+        state.sync_nodes();
+        assert!(state.history_step(true));
+        assert!(state.current_path.is_empty(), "the editor is inside a node that is gone");
+
+        // A wire, made as the graph makes one and as the pane does: each is
+        // one step, and the second is not noticed a second time.
+        let mut state = State::new(false);
+        state
+            .apply_action(McpAction::AddNode { template_name: "Normal".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
+            .unwrap();
+        state.edit_history.clear();
+        let wired = state
+            .current_dir()
+            .children
+            .iter()
+            .position(|c| c.params.iter().any(|p| p.name == "Input" && p.kind() == crate::app::ParamKind::Node))
+            .expect("a Normal node has an Input");
+        let input = |state: &State| {
+            state.current_dir().children[wired].params.iter().find(|p| p.name == "Input").unwrap().text().to_string()
+        };
+        let was = input(&state);
+        state.current_dir_mut().children[wired].params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("camera1".to_string());
+        state.record_structure_changes();
+        assert_eq!(state.edit_history.undo_len(), 1);
+        state
+            .apply_action(McpAction::SetParam { slot: wired, name: "Input".into(), value: String::new() }, &mut redraw)
+            .unwrap();
+        assert_eq!(state.edit_history.undo_len(), 2, "a wire set as a parameter is one step, not two");
+        assert!(state.run_command("undo"));
+        assert_eq!(input(&state), "camera1");
+        assert!(state.run_command("undo"));
+        assert_eq!(input(&state), was);
+        assert!(state.last_status_text.contains("Wire"), "{}", state.last_status_text);
+
+        // A project opened is not an edit, and takes the history with it.
+        state
+            .apply_action(McpAction::AddNode { template_name: "Box".into(), name: None, x: 3.0, y: 9.0 }, &mut redraw)
+            .unwrap();
+        state.new_project();
+        state.record_structure_changes();
+        assert_eq!(state.edit_history.undo_len(), 0, "New Project was recorded as an edit");
     }
 
     /// New Project from the palette starts a project. The command named a

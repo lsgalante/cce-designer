@@ -130,40 +130,67 @@ template's defaults with their numbers scaled by half again, a stand-in
 that stored nothing and read nothing of the node's own values.
 `the_cameras_and_the_parameter_reset_are_commands` is the test.
 
-**Parameter edits are undoable** (`src/param_history.rs`, the same day),
-the first thing outside a text box or a viewer state that is.
-`State::param_history` holds one kind of step: the parameters of one node
-that CHANGED, as they stood before. Four writers record: the params pane's
-write-back (`sync_parameters_to_project`), the row menu
-(`run_param_action`, whose work is `run_param_action_unrecorded`), MCP's
-`set_param`, and Reset Parameters; the middle two through
-`State::record_param_edit`. What writes a parameter without passing one
-of them is not recorded: a viewer state's handles (which have their own
-history while the state lasts), a camera node under an orbit, View 1:1
-and the image commands, the template merge.
+**Edits to the node tree are undoable** (`src/edit_history.rs`, the same
+day), the first thing outside a text box or a viewer state that is.
+`State::edit_history` is ONE stack of two kinds of step, so that undo takes
+them back in the order they were made:
 
-- **By node ID and parameter NAME.** A rename in between does not lose a
-  step, and a deleted node drops its step with a line on the status bar.
-  A step restores the parameters it names and nothing else — not the
-  node's whole list, which would take back a camera's orbit or a curve's
-  handles along with a slider, and not the tree.
-- **One step per gesture.** The pane writes back on every motion of a
-  drag, so records of one group (the node and the parameters changed) are
-  one step until the group is broken: by any press or release, by Enter,
-  Tab or Escape (all at the top of `handle_event`), or by
-  `GROUP_IDLE` (a second) with nothing recorded, which is what ends a run
-  of wheel notches. A write-back that changes nothing records nothing, so
-  a button and the Open dropdown, which end as they began, are no edit.
+- **Parameters**: the parameters of one node that CHANGED, as they stood.
+  Recorded by the writers, through `State::record_params` — the params
+  pane's write-back (`sync_parameters_to_project`), the row menu
+  (`run_param_action`, whose work is `run_param_action_unrecorded`), MCP's
+  `set_param`, and Reset Parameters.
+- **Structure**: nodes added, removed and moved, wires made and broken,
+  the display and bypass flags. Recorded by NOTICING:
+  `record_structure_changes` compares the tree with how it stood at the
+  last look (`State::structure_base`) and what differs is the step. It
+  runs at the end of `process_window_event` and of `apply_action`, and
+  ahead of every undo and every parameter record, so nothing done is left
+  unlooked at. There are a dozen writers of the graph — the widget's drag
+  read back by `read_panel_offsets`, the keyboard families, paste, the
+  palette's pick, MCP, the image commands, Arrange — and a recording call
+  in each is one the thirteenth would not make. **A new writer of the
+  graph needs nothing.**
+
+The rules:
+
+- **A step holds what changed and nothing else.** A parameter step names
+  its parameters; a structure step names its nodes, by id, and of a node
+  that stayed only its position, its two flags and its wires (the
+  parameters of the `node` kind). So what is written without being
+  recorded is left as it is by an undo: a camera node's Rotation under an
+  orbit, a curve's Points under its handles (which have their own history
+  while the viewer state lasts), View 1:1, the template merge. A removed
+  node is kept whole, children and all, and comes back at the place it had
+  among its siblings.
+- **What replaces the tree is not an edit.** New Project and Open clear
+  the history and drop the base; the sync channel's reload drops the base
+  and keeps the history. A level whose children cannot be told apart by id
+  (a hand-built tree with empty ids) is not followed.
+- **One step per gesture.** Records that share a group are one step until
+  the group is broken: by any press or release, by Enter, Tab or Escape
+  (all at the top of `handle_event`), or by `GROUP_IDLE` (a second) with
+  nothing recorded. The pane's group is the node and the parameters
+  changed; the graph's is a MOVE of the same nodes, so a run of alt+hjkl is
+  one step. The graph is not looked at while a drag is held
+  (`gesture_held`), so a dragged node is one step from where it was picked
+  up.
+- **Slots are held by id across a structure step**: the two editors'
+  paths and the selection, which a node coming or going would move. An
+  editor inside a node that an undo takes out comes up to where the node
+  was.
 - **Undo and Redo consult it LAST** — a code row, then a viewer state,
   then this (`Application::undo` for the chord, `Action::Undo` for the
-  palette) — so the order across the three is by owner and not by time.
-  A focused text box is ahead of all of them, in the toolkit's runner.
-- **New Project and Open clear it**; the sync channel's reload does not,
-  the nodes being the same ones.
+  palette) — so the order ACROSS the three is by owner and not by time. A
+  focused text box is ahead of all of them, in the toolkit's runner.
+- **A rename is not recorded.** It rewrites the expression paths and
+  wires that name the node, anywhere in the tree, and a step that put the
+  name back without them would leave them naming nothing.
 - It is not cce-ui's `History` because that has no way to look at a step
-  before taking it, and what is filed for redo is the current state of the
-  node the step names.
+  before taking it, and what is filed for redo is the current state of
+  what the step names.
 
+`the_graph_is_undone_a_step_at_a_time`,
 `a_parameter_edit_is_undone_a_gesture_at_a_time` and
 `reset_parameters_is_undone_and_redone` are the tests.
 

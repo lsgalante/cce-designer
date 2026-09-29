@@ -197,6 +197,8 @@ impl State {
                 }
                 result = true;
             }
+            // Whatever the event did to the graph is a step of undo.
+            state.record_structure_changes();
         }
         result
     }
@@ -694,6 +696,7 @@ impl State {
         if needs_redraw {
             *redraw = true;
         }
+        state.record_structure_changes();
         res
     }
 }
