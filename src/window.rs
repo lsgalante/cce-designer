@@ -347,7 +347,9 @@ impl State {
             McpAction::SetParam { slot, name, value } => {
                 let dir = state.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot) {
+                    let node_id = child.id.clone();
                     if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
+                        let before = p.clone();
                         // A value that reads as a reference becomes an
                         // expression, as one typed into the pane does; an
                         // expression is checked when it evaluates. Anything
@@ -362,6 +364,7 @@ impl State {
                         if as_expr {
                             p.set_expr(true);
                         }
+                        state.record_param_edit(&node_id, before);
                         // Same sequence as the interactive param-pane
                         // path, so settings params (viewport flags,
                         // grid) actually take effect via automation.

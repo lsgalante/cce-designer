@@ -6774,6 +6774,103 @@ mod tests {
         assert!(!state.param_history_step(true), "New Project kept the old project's undo");
     }
 
+    /// An edit to a parameter can be taken back however it was made: a row
+    /// of the pane, `set_param`, the row menu. A drag writes back on every
+    /// motion and is one step; a press between two drags makes them two.
+    #[test]
+    fn a_parameter_edit_is_undone_a_gesture_at_a_time() {
+        use crate::app::{McpAction, ParamMenuAction};
+        let mut state = State::new(false);
+        let mut redraw = false;
+        let slot = state
+            .current_dir()
+            .children
+            .iter()
+            .position(|c| c.node_type == "sphere")
+            .expect("the bundled project has a sphere");
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+        let node_id = state.current_dir().children[slot].id.clone();
+        let param = |state: &State, name: &str| -> (String, bool) {
+            let p = state.current_dir().children[slot].params.iter().find(|p| p.name == name).unwrap();
+            (p.text().to_string(), p.is_expr())
+        };
+        // The pane reporting a row at a value, as a drag does per motion.
+        let pane = |state: &mut State, name: &str, value: &str| {
+            let rows: Vec<(String, String, String)> = state
+                .param()
+                .node_params()
+                .into_iter()
+                .map(|(n, v, t)| if n == name { (n, value.to_string(), t) } else { (n, v, t) })
+                .collect();
+            state.param_mut().set_display_params(&rows);
+            state.sync_parameters_to_project();
+        };
+        let radius = param(&state, "Radius");
+        let rows = param(&state, "Rows");
+
+        // One drag: three motions, one step.
+        for v in ["1.10", "1.20", "1.30"] {
+            pane(&mut state, "Radius", v);
+        }
+        assert_eq!(state.param_history.undo_len(), 1, "a drag is one step");
+        // A write-back that changes nothing records nothing.
+        state.sync_parameters_to_project();
+        assert_eq!(state.param_history.undo_len(), 1);
+        // A release and a press, then a second drag of the same row.
+        state.param_history.break_group();
+        for v in ["1.40", "1.50"] {
+            pane(&mut state, "Radius", v);
+        }
+        assert_eq!(state.param_history.undo_len(), 2, "a second drag is a second step");
+        // Another row, with no press between: its own step all the same.
+        pane(&mut state, "Rows", "9");
+        assert_eq!(state.param_history.undo_len(), 3);
+
+        assert!(state.run_command("undo"));
+        assert_eq!(param(&state, "Rows"), rows);
+        assert_eq!(param(&state, "Radius").0, "1.50", "undoing Rows left Radius alone");
+        assert!(state.run_command("undo"));
+        assert_eq!(param(&state, "Radius").0, "1.30");
+        assert!(state.run_command("undo"));
+        assert_eq!(param(&state, "Radius"), radius);
+        assert!(!state.param_history_step(true), "three steps were recorded");
+        let shown = state.param().node_params().into_iter().find(|r| r.0 == "Radius").unwrap().1;
+        assert_eq!(shown, radius.0, "the pane shows the restored value");
+        for want in ["1.30", "1.50"] {
+            assert!(state.run_command("redo"));
+            assert_eq!(param(&state, "Radius").0, want);
+        }
+        // An edit after an undo forks: what was undone is not redone over it.
+        assert!(state.run_command("undo"));
+        state.param_history.break_group();
+        pane(&mut state, "Radius", "2.00");
+        assert!(!state.param_history_step(false), "a new edit left the redo branch standing");
+        assert!(state.run_command("undo"));
+        assert_eq!(param(&state, "Radius").0, "1.30");
+
+        // A step restores what it changed and nothing else on the node.
+        pane(&mut state, "Radius", "2.50");
+        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Rows").unwrap().set_text("21".to_string());
+        assert!(state.run_command("undo"));
+        assert_eq!(param(&state, "Radius").0, "1.30");
+        assert_eq!(param(&state, "Rows").0, "21", "undoing Radius took back an edit to Rows");
+
+        // set_param, and one that is refused.
+        let before = state.param_history.undo_len();
+        state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "3.00".into() }, &mut redraw).unwrap();
+        assert!(state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "abc".into() }, &mut redraw).is_err());
+        assert_eq!(state.param_history.undo_len(), before + 1, "a refused value recorded a step");
+        assert!(state.run_command("undo"));
+        assert_eq!(param(&state, "Radius").0, "1.30");
+
+        // The row menu: the expression flag is part of what comes back.
+        state.run_param_action(&node_id, "Radius", ParamMenuAction::EditExpression);
+        assert!(param(&state, "Radius").1);
+        state.run_param_action(&node_id, "Radius", ParamMenuAction::CopyParameter);
+        assert!(state.run_command("undo"));
+        assert_eq!(param(&state, "Radius"), ("1.30".to_string(), false), "Copy Parameter is no edit, and Edit Expression is one");
+    }
+
     /// New Project from the palette starts a project. The command named a
     /// label no arm dispatched, so the row ran and nothing happened.
     #[test]

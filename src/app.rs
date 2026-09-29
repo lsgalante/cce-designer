@@ -3125,18 +3125,26 @@ impl State {
             return false;
         }
         let node = &mut self.param_editor_dir_mut().children[slot];
-        let before = crate::param_history::ParamSnapshot {
-            node_id: node.id.clone(),
-            params: node.params.clone(),
-            what: "Reset Parameters",
-        };
+        let was = node.params.clone();
         for (pname, text, is_expr) in defaults {
             if let Some(p) = node.params.iter_mut().find(|p| p.name == pname) {
                 p.set_text(text);
                 p.set_expr(is_expr);
             }
         }
-        self.param_history.record(before);
+        let before = crate::param_history::ParamSnapshot {
+            node_id: node.id.clone(),
+            params: was
+                .into_iter()
+                .zip(node.params.iter())
+                .filter(|(a, b)| !crate::param_history::same(a, b))
+                .map(|(a, _)| a)
+                .collect(),
+            what: "Reset Parameters".to_string(),
+        };
+        if !before.params.is_empty() {
+            self.param_history.record(before);
+        }
         self.sync_nodes();
         self.rebuild_scene_geometry();
         self.sync_parameters_pane();
@@ -3155,18 +3163,41 @@ impl State {
             self.update_status_text(&format!("{verb} {}: the node is gone", step.what));
             return false;
         };
-        let replaced = crate::param_history::ParamSnapshot {
-            node_id: step.node_id.clone(),
-            params: std::mem::replace(&mut node.params, step.params),
-            what: step.what,
-        };
+        // By name: the step holds the parameters that changed, and the rest
+        // of the node is as whatever wrote it last left it.
+        let mut replaced = Vec::new();
+        for was in step.params {
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == was.name) {
+                replaced.push(std::mem::replace(p, was));
+            }
+        }
         let name = node.name.clone();
-        self.param_history.file(undo, replaced);
+        let what = step.what.clone();
+        self.param_history.file(
+            undo,
+            crate::param_history::ParamSnapshot { node_id: step.node_id, params: replaced, what: step.what },
+        );
+        self.sync_grid_settings();
         self.sync_nodes();
         self.rebuild_scene_geometry();
         self.sync_parameters_pane();
-        self.update_status_text(&format!("{verb} {}: {name}", step.what));
+        self.update_status_text(&format!("{verb} {what}: {name}"));
         true
+    }
+
+    /// Record that `pname` of a node was `before` until just now, if it is
+    /// not still. For the writers that change one parameter in one go: the
+    /// row menu and `set_param`.
+    pub fn record_param_edit(&mut self, node_id: &str, before: ParamDef) {
+        let now = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+            .and_then(|n| n.params.iter().find(|p| p.name == before.name));
+        if now.is_some_and(|p| !crate::param_history::same(p, &before)) {
+            self.param_history.record(crate::param_history::ParamSnapshot {
+                node_id: node_id.to_string(),
+                what: before.name.clone(),
+                params: vec![before],
+            });
+        }
     }
 
     pub fn cursor_in_viewport(&self) -> bool {
@@ -3713,6 +3744,8 @@ impl State {
                     // text again and the status line says why.
                     let mut rejected: Vec<(String, String, String)> = Vec::new();
                     let mut pane_actions = Vec::new();
+                    // What each changed parameter was, for undo.
+                    let mut was: Vec<ParamDef> = Vec::new();
                     for (u_name, u_val, _) in &updated_params {
                         // The params pane reports its display key (label when
                         // set, else name), so resolve back to the param by that
@@ -3735,6 +3768,7 @@ impl State {
                                         continue;
                                     }
                                 }
+                                was.push(p.clone());
                                 p.set_text(u_val.clone());
                                 param_changed = true;
                                 if as_expr {
@@ -3772,6 +3806,21 @@ impl State {
                                 }
                             }
                         }
+                    }
+
+                    // One step per gesture: a drag writes back on every
+                    // motion. A button or the Open dropdown ends as it
+                    // began, and is no edit.
+                    was.retain(|w| {
+                        child.params.iter().find(|p| p.name == w.name).is_some_and(|p| !crate::param_history::same(p, w))
+                    });
+                    let edit = (!was.is_empty()).then(|| crate::param_history::ParamSnapshot {
+                        node_id: child.id.clone(),
+                        what: was.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "),
+                        params: was,
+                    });
+                    if let Some(edit) = edit {
+                        self.param_history.record_grouped(edit);
                     }
 
                     if !triggered_buttons.is_empty() || !display_resets.is_empty() || !rejected.is_empty() {
@@ -5089,6 +5138,16 @@ impl State {
     /// One row-menu action on one parameter, by node id and name — the
     /// entry the menu, a test and any future command share.
     pub fn run_param_action(&mut self, node_id: &str, pname: &str, action: ParamMenuAction) {
+        let before = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+            .and_then(|n| n.params.iter().find(|p| p.name == pname))
+            .cloned();
+        self.run_param_action_unrecorded(node_id, pname, action);
+        if let Some(before) = before {
+            self.record_param_edit(node_id, before);
+        }
+    }
+
+    fn run_param_action_unrecorded(&mut self, node_id: &str, pname: &str, action: ParamMenuAction) {
         let node_label = crate::geometry::node_path_names(&self.fs_root, node_id)
             .map(|n| format!("/{}", n.join("/")))
             .unwrap_or_else(|| node_id.to_string());
@@ -8845,6 +8904,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
+        // A press, a release, or a key that ends an entry ends the gesture
+        // an undo step is: what the params pane writes next is a new one.
+        match event {
+            WindowEvent::MouseInput { .. } => self.param_history.break_group(),
+            WindowEvent::KeyboardInput { event } if event.state == ElementState::Pressed => {
+                if matches!(
+                    event.logical_key,
+                    Key::Named(NamedKey::Enter | NamedKey::Tab | NamedKey::Escape)
+                ) {
+                    self.param_history.break_group();
+                }
+            }
+            _ => {}
+        }
         match event {
             WindowEvent::MouseWheel { delta } => {
                 // The dialog is modal: a wheel over it scrolls it, and a wheel

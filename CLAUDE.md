@@ -130,23 +130,42 @@ template's defaults with their numbers scaled by half again, a stand-in
 that stored nothing and read nothing of the node's own values.
 `the_cameras_and_the_parameter_reset_are_commands` is the test.
 
-**Reset Parameters is undoable** (`src/param_history.rs`, the same day),
-which makes it the first thing outside a text box or a viewer state that
-is. `State::param_history` holds one kind of step: a node's whole
-parameter list as it stood before a command rewrote it, by node ID, so a
-rename in between does not lose it and a deleted node drops its step with
-a line on the status bar. A snapshot of ONE node, not of the tree:
-restoring the tree would take back every edit made anywhere since, none of
-which are recorded. Undo and Redo consult it LAST — a code row, then a
-viewer state, then this (`Application::undo` for the chord,
-`Action::Undo` for the palette) — so the order across the three is by
-owner and not by time. New Project and Open clear it; the sync channel's
-reload does not, the nodes being the same ones. It is not cce-ui's
-`History` because that has no way to look at a step before taking it, and
-what is filed for redo is the current state of the node the step names.
-Any other command that rewrites a node's parameters at once records the
-same way: a `ParamSnapshot` to `param_history.record` before the write.
-`reset_parameters_is_undone_and_redone` is the test.
+**Parameter edits are undoable** (`src/param_history.rs`, the same day),
+the first thing outside a text box or a viewer state that is.
+`State::param_history` holds one kind of step: the parameters of one node
+that CHANGED, as they stood before. Four writers record: the params pane's
+write-back (`sync_parameters_to_project`), the row menu
+(`run_param_action`, whose work is `run_param_action_unrecorded`), MCP's
+`set_param`, and Reset Parameters; the middle two through
+`State::record_param_edit`. What writes a parameter without passing one
+of them is not recorded: a viewer state's handles (which have their own
+history while the state lasts), a camera node under an orbit, View 1:1
+and the image commands, the template merge.
+
+- **By node ID and parameter NAME.** A rename in between does not lose a
+  step, and a deleted node drops its step with a line on the status bar.
+  A step restores the parameters it names and nothing else — not the
+  node's whole list, which would take back a camera's orbit or a curve's
+  handles along with a slider, and not the tree.
+- **One step per gesture.** The pane writes back on every motion of a
+  drag, so records of one group (the node and the parameters changed) are
+  one step until the group is broken: by any press or release, by Enter,
+  Tab or Escape (all at the top of `handle_event`), or by
+  `GROUP_IDLE` (a second) with nothing recorded, which is what ends a run
+  of wheel notches. A write-back that changes nothing records nothing, so
+  a button and the Open dropdown, which end as they began, are no edit.
+- **Undo and Redo consult it LAST** — a code row, then a viewer state,
+  then this (`Application::undo` for the chord, `Action::Undo` for the
+  palette) — so the order across the three is by owner and not by time.
+  A focused text box is ahead of all of them, in the toolkit's runner.
+- **New Project and Open clear it**; the sync channel's reload does not,
+  the nodes being the same ones.
+- It is not cce-ui's `History` because that has no way to look at a step
+  before taking it, and what is filed for redo is the current state of the
+  node the step names.
+
+`a_parameter_edit_is_undone_a_gesture_at_a_time` and
+`reset_parameters_is_undone_and_redone` are the tests.
 
 (The former bespoke HTTP API on port 3000 was retired in favor of this;
 app-internal threads like the cce-files choosers now return results via
