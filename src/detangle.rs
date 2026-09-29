@@ -55,6 +55,11 @@ struct Topo {
     /// them, and the primitive each came from.
     tris: Vec<[u32; 3]>,
     tri_prims: Vec<u32>,
+    /// Every side of every triangle, once, and each triangle's three. The
+    /// mesh's edges and the diagonals a fan cuts across a quad: what the
+    /// triangles are made of, which is what can pass through itself.
+    sides: Vec<[u32; 2]>,
+    tri_sides: Vec<[u32; 3]>,
     /// Each point's excluded neighbourhood, itself included, ascending:
     /// point `p`'s is `excluded[starts[p]..starts[p + 1]]`.
     starts: Vec<u32>,
@@ -107,7 +112,21 @@ impl Topo {
                 tri_prims.push(prim as u32);
             }
         }
-        Topo { key, rings, edges: geom.edges().to_vec(), tris, tri_prims, starts, excluded }
+        let mut sides: Vec<[u32; 2]> = Vec::new();
+        let mut side_of: std::collections::HashMap<[u32; 2], u32> = std::collections::HashMap::new();
+        let tri_sides = tris
+            .iter()
+            .map(|t| {
+                [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]].map(|[a, b]| {
+                    let ends = [a.min(b), a.max(b)];
+                    *side_of.entry(ends).or_insert_with(|| {
+                        sides.push(ends);
+                        sides.len() as u32 - 1
+                    })
+                })
+            })
+            .collect();
+        Topo { key, rings, edges: geom.edges().to_vec(), tris, tri_prims, sides, tri_sides, starts, excluded }
     }
 
     fn excludes(&self, p: usize, q: u32) -> bool {
@@ -273,8 +292,14 @@ pub struct Work {
     pub searched: usize,
     /// Point-triangle contacts the Surface method resolved, over every pass.
     pub contacts: usize,
-    /// Of those, the ones resolved as a point that had gone THROUGH a
-    /// triangle since the step began, and was put back on its own side.
+    /// Edges tested against the edges near them, over every pass: the
+    /// ones with an end near something that is not their own neighbourhood.
+    pub edges_searched: usize,
+    /// Of those contacts, the ones between two EDGES.
+    pub edge_contacts: usize,
+    /// Of those contacts, the ones resolved as having gone THROUGH since
+    /// the step began — a point through a triangle, an edge through an
+    /// edge — and put back on the side they came from.
     pub crossed: usize,
     /// Points put back where the step began, being still through a
     /// triangle when the passes were done, or a corner of one.
@@ -564,6 +589,18 @@ impl TriCells {
 /// The memory is one step long. A point the passes did not bring back is,
 /// to the next step, a point that began on that side.
 ///
+/// **Edges meet edges.** Two edges can pass through each other with no
+/// point of either going through any triangle, and then every test above
+/// reports nothing while the measure counts a crossing. With Edge Contact
+/// on, each side of each triangle is tested against the sides near it
+/// that share no neighbourhood with it: where the two are nearest at a
+/// place INSIDE both — an end is a point, and a point near an edge is near
+/// the edge's triangle, which is the test above — they are parted along
+/// the line between those places, the four ends sharing the move by how
+/// near each is to it. Told where the step began, two edges that have
+/// passed through each other ([`edges_went_through`]) are put back, and
+/// held if the passes leave them through.
+///
 /// **The Step Limit** cuts each point's move since the step began to that
 /// many thicknesses before anything is resolved, so what arrives here is
 /// close to what left and a contact is met while it is still a contact.
@@ -574,6 +611,8 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
         return;
     }
     let iterations = node_param_f32(target, "Iterations", 4.0).clamp(1.0, 32.0) as usize;
+    // A node without the row is one from before it: points and triangles.
+    let edges_too = crate::geometry::node_param_bool(target, "Edge Contact", false);
     let group = node_param_str(target, "Group", "");
     let group = group.trim().to_string();
     let movable: Vec<bool> = (0..n).map(|p| group.is_empty() || geom.points().in_group(&group, p)).collect();
@@ -594,8 +633,8 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
             }
         }
     }
-    // How far anything has come since the step began: a triangle a point
-    // went through may be that far from where either is now.
+    // How far anything has come since the step began: what a point or an
+    // edge went through may be that far from where either is now.
     let travelled = before.map_or(0.0, |b| pos.iter().zip(b).map(|(p, q)| (*p - *q).length_squared()).fold(0.0f32, f32::max).sqrt());
 
     // Cells no smaller than a triangle, or each is filed in dozens.
@@ -603,12 +642,24 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     let mut grid = TriCells::build(&pos, &topo.tris, cell);
     work.grids += 1;
     let mut drift = 0.0f32;
-    let mut near = Vec::new();
-    let mut seen = vec![u32::MAX; topo.tris.len()];
-    let mut stamp = 0u32;
+    let mut search = Search { near: Vec::new(), seen: vec![u32::MAX; topo.tris.len()], stamp: 0, met: vec![u32::MAX; topo.sides.len()], held: Vec::new() };
     let mut push = vec![Vec3::ZERO; n];
     let mut weight = vec![0.0f32; n];
     let mut found: Vec<Contact> = Vec::new();
+    // Which points have gone through something this pass.
+    let mut through = vec![false; n];
+    // Which points are near a triangle with a side that is none of their
+    // own neighbourhood: what says which edges are worth testing against
+    // others. Two edges nearer than `close` somewhere along them have an
+    // end within that and half the edge's length of the other edge, which
+    // is a side of a triangle — so an edge with neither end that near
+    // anything is near nothing, and most of a mesh is. `close` is the
+    // thickness, or as far as two edges that have passed through each
+    // other this step can have come apart since.
+    let mut near_something = vec![false; n];
+    let close = thickness.max(2.0 * travelled);
+    // Half the longest side at each point, as the points now stand.
+    let mut half = vec![0.0f32; n];
     for _ in 0..iterations {
         work.passes += 1;
         if drift > DRIFT_CELLS * grid.cell {
@@ -616,27 +667,30 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
             work.grids += 1;
             drift = 0.0;
         }
-        push.iter_mut().for_each(|v| *v = Vec3::ZERO);
-        weight.iter_mut().for_each(|w| *w = 0.0);
-        let mut any = false;
+        found.clear();
+        through.iter_mut().for_each(|t| *t = false);
+        // A triangle within a thickness of here now had its box within a
+        // thickness and a drift of here when it was filed; one a point
+        // went through lies along the way it came.
+        let reach = thickness + drift + if before.is_some() { travelled } else { 0.0 };
+        near_something.iter_mut().for_each(|t| *t = false);
+        if edges_too {
+            half.iter_mut().for_each(|h| *h = 0.0);
+            for e in &topo.sides {
+                let [a, b] = e.map(|p| p as usize);
+                let len = (pos[b] - pos[a]).length() * 0.5;
+                (half[a], half[b]) = (half[a].max(len), half[b].max(len));
+            }
+        }
         for p in 0..n {
             work.searched += 1;
-            // A triangle within a thickness of here now had its box within
-            // a thickness and a drift of here when it was filed; one the
-            // point went through lies along the way it came.
-            let reach = thickness + drift;
             let from = before.map_or(pos[p], |b| b[p]);
             let (lo, hi) = (pos[p].min(from), pos[p].max(from));
-            stamp = stamp.wrapping_add(1);
-            if stamp == u32::MAX {
-                seen.iter_mut().for_each(|m| *m = u32::MAX);
-                stamp = 0;
-            }
-            let wide = if before.is_some() { reach + travelled } else { reach };
-            grid.gather(lo - wide, hi + wide, &mut seen, stamp, &mut near);
-            found.clear();
-            let mut through = false;
-            for &t in &near {
+            // How far this point looks: a thickness for what it may touch,
+            // and further for what its edges may.
+            let look = if edges_too { close + half[p] } else { thickness };
+            search.triangles(&grid, lo - reach.max(look + drift), hi + reach.max(look + drift));
+            for &t in &search.near {
                 let corners = topo.tris[t as usize];
                 let [ia, ib, ic] = corners.map(|c| c as usize);
                 let (a, b, c) = (pos[ia], pos[ib], pos[ic]);
@@ -644,21 +698,32 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                 // whose box is a thickness away on any axis is further
                 // than that, and is turned away before it costs a search
                 // of the rings or a closest point.
-                let (tlo, thi) = (a.min(b).min(c) - thickness, a.max(b).max(c) + thickness);
+                let (tlo, thi) = (a.min(b).min(c) - look, a.max(b).max(c) + look);
                 if hi.cmplt(tlo).any() || lo.cmpgt(thi).any() {
                     continue;
                 }
-                if corners.iter().any(|&c| topo.excludes(p, c)) {
+                // A triangle with two corners that are none of the point's
+                // own has a side its edges may meet; one with three is a
+                // triangle it may touch.
+                let own = corners.iter().filter(|&&c| topo.excludes(p, c)).count();
+                if own > 1 || (own == 1 && !edges_too) {
                     continue;
                 }
                 let w = crate::spatial::closest_weights_on_triangle(pos[p], a, b, c);
+                if edges_too && !near_something[p] {
+                    near_something[p] = (pos[p] - (a * w[0] + b * w[1] + c * w[2])).length_squared() <= look * look;
+                }
+                if own > 0 {
+                    continue;
+                }
+                let (who, share) = ([p, ia, ib, ic], [1.0, -w[0], -w[1], -w[2]]);
                 if let Some(side) = before.and_then(|was| went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], 0.0)) {
                     // `side` is the triangle's normal, turned to the side
                     // the point came from; it is below the plane by that
                     // much and belongs a thickness above it.
                     let below = (pos[p] - a).dot(side);
-                    found.push(Contact { corners: [ia, ib, ic], w, dir: side, deep: thickness - below, through: true });
-                    through = true;
+                    found.push(Contact { who, share, dir: side, deep: thickness - below, through: true, edges: false });
+                    through[p] = true;
                     continue;
                 }
                 let d = pos[p] - (a * w[0] + b * w[1] + c * w[2]);
@@ -675,30 +740,97 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                 } else {
                     d / len
                 };
-                found.push(Contact { corners: [ia, ib, ic], w, dir, deep: thickness - len, through: false });
+                found.push(Contact { who, share, dir, deep: thickness - len, through: false, edges: false });
             }
-            for contact in found.iter().filter(|c| c.through == through) {
-                let Contact { corners: [ia, ib, ic], w, dir, deep, .. } = *contact;
-                // Inverse masses of one or none: the point's, and each
-                // corner's by the square of its share.
-                let give = free(p) + free(ia) * w[0] * w[0] + free(ib) * w[1] * w[1] + free(ic) * w[2] * w[2];
-                if give <= 0.0 {
+        }
+        if edges_too {
+            for (i, e) in topo.sides.iter().enumerate() {
+                if !e.iter().any(|&p| near_something[p as usize]) {
                     continue;
                 }
-                let step = dir * (deep / give);
-                push[p] += step * (free(p) * deep);
-                weight[p] += free(p) * deep;
-                for (i, share) in [(ia, w[0]), (ib, w[1]), (ic, w[2])] {
-                    // The corner moves by its share; its say in the average
-                    // is its share too, so a corner that is barely part of
-                    // one contact does not water down another it carries.
-                    push[i] -= step * (share * free(i) * share * deep);
-                    weight[i] += free(i) * share * deep;
+                work.edges_searched += 1;
+                let [e0, e1] = e.map(|p| pos[p as usize]);
+                let (mut lo, mut hi) = (e0.min(e1), e0.max(e1));
+                if let Some(was) = before {
+                    let [w0, w1] = e.map(|p| was[p as usize]);
+                    (lo, hi) = (lo.min(w0).min(w1), hi.max(w0).max(w1));
                 }
-                work.contacts += 1;
-                work.crossed += through as usize;
-                any = true;
+                search.sides(&grid, topo, i, lo - reach, hi + reach);
+                for &j in &search.near {
+                    let f = topo.sides[j as usize];
+                    let [f0, f1] = f.map(|p| pos[p as usize]);
+                    let (flo, fhi) = (f0.min(f1) - thickness, f0.max(f1) + thickness);
+                    if hi.cmplt(flo).any() || lo.cmpgt(fhi).any() {
+                        continue;
+                    }
+                    if e.iter().any(|&p| f.iter().any(|&q| topo.excludes(p as usize, q))) {
+                        continue;
+                    }
+                    let who = [e[0] as usize, e[1] as usize, f[0] as usize, f[1] as usize];
+                    let was = before.map(|was| (e.map(|p| was[p as usize]), f.map(|p| was[p as usize])));
+                    if let Some((side, at)) = was.and_then(|(e_was, f_was)| edges_went_through(e_was, f_was, [e0, e1], [f0, f1], 0.0)) {
+                        let (s, t) = (at[0].clamp(0.0, 1.0), at[1].clamp(0.0, 1.0));
+                        let below = ((e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t)).dot(side);
+                        let share = [1.0 - s, s, t - 1.0, -t];
+                        found.push(Contact { who, share, dir: side, deep: thickness - below, through: true, edges: true });
+                        who.iter().for_each(|&p| through[p] = true);
+                        continue;
+                    }
+                    let (s, t) = nearest_on_segments([e0, e1], [f0, f1]);
+                    // An end is a point, and the point test has it.
+                    if !(s > ENDS && s < 1.0 - ENDS && t > ENDS && t < 1.0 - ENDS) {
+                        continue;
+                    }
+                    let d = (e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t);
+                    let len = d.length();
+                    if len >= thickness {
+                        continue;
+                    }
+                    let dir = if len < 1e-9 {
+                        let across = (e1 - e0).cross(f1 - f0).normalize_or_zero();
+                        if across == Vec3::ZERO {
+                            continue;
+                        }
+                        across
+                    } else {
+                        d / len
+                    };
+                    let share = [1.0 - s, s, t - 1.0, -t];
+                    found.push(Contact { who, share, dir, deep: thickness - len, through: false, edges: true });
+                }
             }
+        }
+        push.iter_mut().for_each(|v| *v = Vec3::ZERO);
+        weight.iter_mut().for_each(|w| *w = 0.0);
+        let mut any = false;
+        for contact in &found {
+            let Contact { who, share, dir, deep, .. } = *contact;
+            // What has gone through something is put back before it is
+            // parted from anything: whatever is beside the thing it went
+            // through sees it near, on the wrong side, and would push it on.
+            let subjects = if contact.edges { &who[..] } else { &who[..1] };
+            if !contact.through && subjects.iter().any(|&p| through[p]) {
+                continue;
+            }
+            // Inverse masses of one or none, each by the square of its
+            // share of the contact.
+            let give: f32 = (0..4).map(|i| free(who[i]) * share[i] * share[i]).sum();
+            if give <= 0.0 {
+                continue;
+            }
+            let step = dir * (deep / give);
+            for i in 0..4 {
+                // Each moves by its share; its say in the average is its
+                // share too, so one that is barely part of a contact does
+                // not water down another it carries.
+                let say = free(who[i]) * share[i].abs() * deep;
+                push[who[i]] += step * (share[i] * say);
+                weight[who[i]] += say;
+            }
+            work.contacts += 1;
+            work.edge_contacts += contact.edges as usize;
+            work.crossed += contact.through as usize;
+            any = true;
         }
         if !any {
             break;
@@ -715,9 +847,9 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     // given, and under a push that does not let up they can run out before
     // a point is back on its side — and a point left through a triangle is,
     // to the next step, a point that began there. So whatever is still
-    // through a triangle goes back to where the step began, and the
-    // triangle with it: the one arrangement of the four known not to cross.
-    // It costs them the step's movement and nothing else.
+    // through goes back to where the step began, and what it is through
+    // with it: the one arrangement of them known not to cross. It costs
+    // them the step's movement and nothing else.
     if let Some(was) = before {
         let mut back: Vec<usize> = Vec::new();
         for _ in 0..HOLD_ROUNDS {
@@ -727,16 +859,11 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                 drift = 0.0;
             }
             back.clear();
+            let wide = Vec3::splat(drift + travelled);
             for p in 0..n {
                 let (lo, hi) = (pos[p].min(was[p]), pos[p].max(was[p]));
-                stamp = stamp.wrapping_add(1);
-                if stamp == u32::MAX {
-                    seen.iter_mut().for_each(|m| *m = u32::MAX);
-                    stamp = 0;
-                }
-                let wide = Vec3::splat(drift + travelled);
-                grid.gather(lo - wide, hi + wide, &mut seen, stamp, &mut near);
-                for &t in &near {
+                search.triangles(&grid, lo - wide, hi + wide);
+                for &t in &search.near {
                     let corners = topo.tris[t as usize];
                     let [ia, ib, ic] = corners.map(|c| c as usize);
                     let (a, b, c) = (pos[ia], pos[ib], pos[ic]);
@@ -749,6 +876,34 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                     }
                     if went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], HOLD_MARGIN).is_some() {
                         back.extend([p, ia, ib, ic]);
+                    }
+                }
+            }
+            if edges_too {
+                for (i, e) in topo.sides.iter().enumerate() {
+                    // The last pass's word on it: what was near nothing
+                    // then has not gone through anything since.
+                    if !e.iter().any(|&p| near_something[p as usize]) {
+                        continue;
+                    }
+                    let (e_now, e_was) = (e.map(|p| pos[p as usize]), e.map(|p| was[p as usize]));
+                    let lo = e_now[0].min(e_now[1]).min(e_was[0]).min(e_was[1]);
+                    let hi = e_now[0].max(e_now[1]).max(e_was[0]).max(e_was[1]);
+                    search.sides(&grid, topo, i, lo - wide, hi + wide);
+                    for &j in &search.near {
+                        let f = topo.sides[j as usize];
+                        let (f_now, f_was) = (f.map(|p| pos[p as usize]), f.map(|p| was[p as usize]));
+                        let flo = f_now[0].min(f_now[1]).min(f_was[0]).min(f_was[1]);
+                        let fhi = f_now[0].max(f_now[1]).max(f_was[0]).max(f_was[1]);
+                        if hi.cmplt(flo).any() || lo.cmpgt(fhi).any() {
+                            continue;
+                        }
+                        if e.iter().any(|&p| f.iter().any(|&q| topo.excludes(p as usize, q))) {
+                            continue;
+                        }
+                        if edges_went_through(e_was, f_was, e_now, f_now, HOLD_MARGIN).is_some() {
+                            back.extend(e.iter().chain(f.iter()).map(|&p| p as usize));
+                        }
                     }
                 }
             }
@@ -774,17 +929,140 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     }
 }
 
-/// One point against one triangle, as a pass found it.
+/// A contact as a pass found it: a point and a triangle's three corners,
+/// or two edges' four ends.
 #[derive(Clone, Copy)]
 struct Contact {
-    corners: [usize; 3],
-    /// How much of the closest point each corner is.
-    w: [f32; 3],
-    /// The way the point is to move.
+    who: [usize; 4],
+    /// How much of the move each takes, and which way: the point one, the
+    /// corners against it by how much of the closest point each is; an
+    /// edge's ends by how near each is to where the edges are nearest, and
+    /// the other edge's against them.
+    share: [f32; 4],
+    /// The way the first of them is to move.
     dir: Vec3,
-    /// How far, were it to take the whole move.
+    /// How far they are to part.
     deep: f32,
     through: bool,
+    edges: bool,
+}
+
+/// How near its end, as a part of its length, the nearest place on an edge
+/// may be and still be the edge's and not the end's.
+const ENDS: f32 = 1e-3;
+
+/// What a search of the grid keeps between one query and the next.
+struct Search {
+    near: Vec<u32>,
+    seen: Vec<u32>,
+    stamp: u32,
+    /// One mark per side, as `seen` is one per triangle.
+    met: Vec<u32>,
+    /// The triangles a search for sides went through.
+    held: Vec<u32>,
+}
+
+impl Search {
+    fn next(&mut self) {
+        self.stamp = self.stamp.wrapping_add(1);
+        if self.stamp == u32::MAX {
+            self.seen.iter_mut().for_each(|m| *m = u32::MAX);
+            self.met.iter_mut().for_each(|m| *m = u32::MAX);
+            self.stamp = 0;
+        }
+    }
+
+    /// The triangles filed in the cells the box touches, into `near`.
+    fn triangles(&mut self, grid: &TriCells, lo: Vec3, hi: Vec3) {
+        self.next();
+        grid.gather(lo, hi, &mut self.seen, self.stamp, &mut self.near);
+    }
+
+    /// The sides of those triangles that come AFTER side `i`, each once,
+    /// into `near`: a pair of sides is met from the earlier of the two.
+    fn sides(&mut self, grid: &TriCells, topo: &Topo, i: usize, lo: Vec3, hi: Vec3) {
+        self.triangles(grid, lo, hi);
+        std::mem::swap(&mut self.near, &mut self.held);
+        self.near.clear();
+        for &t in &self.held {
+            for &j in &topo.tri_sides[t as usize] {
+                if j as usize > i && self.met[j as usize] != self.stamp {
+                    self.met[j as usize] = self.stamp;
+                    self.near.push(j);
+                }
+            }
+        }
+    }
+}
+
+/// Where two segments are nearest each other, as a part of each one's
+/// length. Ericson's *Real-Time Collision Detection* §5.1.9.
+fn nearest_on_segments([p1, q1]: [Vec3; 2], [p2, q2]: [Vec3; 2]) -> (f32, f32) {
+    let (d1, d2, r) = (q1 - p1, q2 - p2, p1 - p2);
+    let (a, e, f) = (d1.length_squared(), d2.length_squared(), d2.dot(r));
+    if a <= 1e-30 && e <= 1e-30 {
+        return (0.0, 0.0);
+    }
+    if a <= 1e-30 {
+        return (0.0, (f / e).clamp(0.0, 1.0));
+    }
+    let c = d1.dot(r);
+    if e <= 1e-30 {
+        return ((-c / a).clamp(0.0, 1.0), 0.0);
+    }
+    let b = d1.dot(d2);
+    let denom = a * e - b * b;
+    let mut s = if denom > 1e-12 * a * e { ((b * f - c * e) / denom).clamp(0.0, 1.0) } else { 0.0 };
+    let mut t = (b * s + f) / e;
+    if t < 0.0 {
+        t = 0.0;
+        s = (-c / a).clamp(0.0, 1.0);
+    } else if t > 1.0 {
+        t = 1.0;
+        s = ((b - c) / a).clamp(0.0, 1.0);
+    }
+    (s, t)
+}
+
+/// One edge over another, as lines: how far the first is from the second
+/// along the direction across both, where on each the two are nearest (as
+/// a part of its length, outside nought to one beyond its ends), and that
+/// direction. `None` for edges that run the same way, which have none.
+fn over_edge([e0, e1]: [Vec3; 2], [f0, f1]: [Vec3; 2]) -> Option<(f32, [f32; 2], Vec3)> {
+    let (d1, d2, r) = (e1 - e0, f1 - f0, e0 - f0);
+    let across = d1.cross(d2);
+    let (a, e) = (d1.length_squared(), d2.length_squared());
+    let denom = across.length_squared();
+    if denom <= 1e-8 * a * e {
+        return None;
+    }
+    let (b, c, f) = (d1.dot(d2), d1.dot(r), d2.dot(r));
+    let s = (b * f - c * e) / denom;
+    let t = (a * f - b * c) / denom;
+    let across = across / denom.sqrt();
+    Some((r.dot(across), [s, t], across))
+}
+
+/// Whether two edges passed through each other between then and now, and
+/// if so the direction across them as they are now, turned to the side the
+/// first came from, and where on each they are nearest.
+///
+/// [`went_through`]'s question, of two edges: the first's height over the
+/// second changed sign, and where it was nothing the place was within both.
+/// Two edges that have swung past running the same way have turned their
+/// own direction over, and their heights say nothing about each other.
+fn edges_went_through(e_then: [Vec3; 2], f_then: [Vec3; 2], e_now: [Vec3; 2], f_now: [Vec3; 2], margin: f32) -> Option<(Vec3, [f32; 2])> {
+    let (h0, at0, across0) = over_edge(e_then, f_then)?;
+    let (h1, at1, across) = over_edge(e_now, f_now)?;
+    if h0 == 0.0 || h0 * h1 >= 0.0 || across0.dot(across) <= 0.0 {
+        return None;
+    }
+    let when = h0 / (h0 - h1);
+    let inside = (0..2).all(|i| {
+        let at = at0[i] + (at1[i] - at0[i]) * when;
+        at >= -margin && at <= 1.0 + margin
+    });
+    inside.then(|| (across * h0.signum(), at1))
 }
 
 /// A point's height over a triangle's plane, along the normal its winding

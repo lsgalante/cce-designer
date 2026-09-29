@@ -1212,12 +1212,46 @@ around its edge; `the_step_limit_holds_a_step_to_a_length` and
 `a_detangle_in_a_simnet_knows_where_the_step_began` (in `geometry.rs`'s
 tests, where the feedback stack can be reached) are the other two.
 
-What is left is **edge-edge**. On the sphere test at Thickness 1 the solve
-reports nothing put back and nothing held, and still leaves crossings
-beyond the rings at a pace of half an edge a step and more (48 at 0.5, 98
-at 0.8, 2562 points): no point went through any triangle, an edge went
-through an edge. That, and folds inside the excluded rings, are what the
-measure still counts.
+**Edge Contact** (a toggle, shown for Surface, on in the template; a node
+without the row is one from before it and reads off). Two edges can pass
+through each other with no point of either going through any triangle:
+on the sphere test at Thickness 1 the solve above put nothing back and
+held nothing, and still left 48 crossings beyond the rings at half an edge
+a step and 98 at four fifths. With it on, every side of every triangle
+(`Topo::sides` — the mesh's edges and the diagonals a fan cuts across a
+quad) is tested against the sides near it that share no neighbourhood
+with it, a pair met once from the earlier of the two. Where the two are
+nearest at a place INSIDE both (`nearest_on_segments`; an end is a point,
+and the point test has it) they are parted along the line between those
+places, the four ends sharing the move by how near each is. Told where the
+step began, two edges that went through each other (`edges_went_through`,
+`went_through`'s question asked of two lines, and refused where the two
+have swung past running the same way, which turns their own direction
+over) are put back, and held if the passes leave them through. A contact
+is one shape for both tests — four points, a share each, a direction — so
+the averaging and the group rule are written once.
+
+**Which edges are tested is a bound, not a guess.** Two edges nearer than
+`close` somewhere along them have an end within that and half the edge's
+length of the other edge, which is a side of a triangle; so the point loop
+looks that far (`close + half[p]`, half the longest side at the point) for
+a triangle with at least two corners outside the point's rings, and an
+edge with neither end near one is skipped. The first cut flagged a point
+only when a triangle was within a THICKNESS of it, which cost nothing and
+kept every number on the sphere test — and skipped the one case only an
+edge test can see, two edges meeting at right angles with every point far
+from the other triangle. `edge_contact_parts_edges_no_point_test_can_see`
+is that case, near and carried through.
+
+What it costs, 2562 points, release: nothing is searched on a round
+sphere at Thickness 0.5 (5.0 ms against 2.7, the wider look), a quarter of
+the edges at Thickness 1 (11 ms against 5); on the sphere test, where most
+of the mesh is in contact, 129 ms a step against 24. What it buys there:
+NO crossing beyond the rings in any of the twelve runs (three sizes, two
+paces, two thicknesses), where the side alone left up to 140. What it does
+not: folds inside the excluded rings, which the measure still counts and
+which in the thin, fast runs were MORE with it on (545 against 358 at
+2562 points, Thickness 0.5, four fifths of an edge a step).
 
 `detangle::self_intersections` is the MEASURE: every edge passing through a
 triangle (`spatial::segment_crosses_triangle`, tolerance relative to the
@@ -1238,7 +1272,8 @@ the thickness, Surface alone let 804 through beyond the rings and the side
 brought that to 140 (642 points: 294 to 0).
 At Thickness 0.5 Surface let 72 through beyond the rings at that size and
 none at 162 and 642 points. What Surface leaves is the fold at the cap's
-rim, inside the rings. Do not measure by pressing a sphere flat by the sign
+rim, inside the rings. (Those figures are with Edge Contact off, as the
+test's `surface` and `sided` rows are.) Do not measure by pressing a sphere flat by the sign
 of y: that carries the equator's points past their own neighbours, which no
 setting is meant to see, and both methods look equally bad.
 

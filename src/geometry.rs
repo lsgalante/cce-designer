@@ -2929,6 +2929,7 @@ pub fn resolve_detangle_geometry_with_errors(
     Some(geom)
 }
 
+#[cfg(test)]
 pub(crate) fn apply_detangle(geom: &mut Detail, target: &FsNode) {
     crate::detangle::apply(geom, target);
 }

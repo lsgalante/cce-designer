@@ -10342,6 +10342,92 @@ mod tests {
         assert_eq!(told.positions(), carried.positions(), "{work:?}");
     }
 
+    /// Two triangles at right angles, an edge of each facing an edge of the
+    /// other across `gap`: the first lies flat with its edge along x, the
+    /// second stands upright with its edge along y, in front of it. No
+    /// point of either is anywhere near the other triangle — the edges are
+    /// nearest at their middles — so this is the contact only an edge test
+    /// can see. The second triangle is the group "upright".
+    fn crossed_triangles(gap: f32) -> Detail {
+        let mut d = Detail::new();
+        let flat = [Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 2.0)].map(|p| d.add_point(p));
+        let upright = [Vec3::new(0.0, -1.0, -gap), Vec3::new(0.0, 1.0, -gap), Vec3::new(0.0, 0.0, -2.0 - gap)].map(|p| d.add_point(p));
+        d.add_prim(&flat);
+        d.add_prim(&upright);
+        for p in upright {
+            d.points_mut().add_to_group("upright", p as usize);
+        }
+        d
+    }
+
+    /// Edge contact: two edges near each other, or through each other,
+    /// where no point is near or through any triangle. Without it the
+    /// Surface method sees nothing in either, and the second is a crossing
+    /// the measure counts.
+    #[test]
+    fn edge_contact_parts_edges_no_point_test_can_see() {
+        let settings = |edges: &'static str, group: &'static str| {
+            phase3_node(
+                "detangle",
+                &[("Method", "Surface"), ("Thickness", "0.20"), ("Rings", "2"), ("Iterations", "8"), ("Edge Contact", edges), ("Group", group)],
+            )
+        };
+        let gap = |d: &Detail| d.pos(0).z - d.pos(3).z;
+        let near = crossed_triangles(0.1);
+        let edges = near.edges();
+        let thickness = 0.2 * edges.iter().map(|e| (near.pos(e[1] as usize) - near.pos(e[0] as usize)).length()).sum::<f32>() / edges.len() as f32;
+        assert!(thickness > 0.3 && thickness < 0.9, "more than the gap, less than any point is from the other triangle: {thickness}");
+
+        let mut without = near.clone();
+        let work = crate::detangle::apply(&mut without, &settings("false", ""));
+        assert_eq!((work.contacts, without.positions()), (0, near.positions()));
+        // A node from before the row is one without it.
+        let mut before_the_row = near.clone();
+        crate::detangle::apply(&mut before_the_row, &phase3_node("detangle", &[("Method", "Surface"), ("Thickness", "0.20")]));
+        assert_eq!(before_the_row.positions(), near.positions());
+
+        let mut with = near.clone();
+        let work = crate::detangle::apply(&mut with, &settings("true", ""));
+        assert!(work.edge_contacts > 0 && work.edge_contacts == work.contacts, "{work:?}");
+        assert!(gap(&with) > thickness * 0.95, "parted to {} of {thickness}", gap(&with));
+        // The move is shared by the four ends and no one else.
+        assert!(with.pos(0).z > 0.0 && with.pos(3).z < -0.1);
+        assert_eq!((with.pos(2), with.pos(5)), (near.pos(2), near.pos(5)));
+        // Outside the group the flat triangle stays, and the upright one
+        // takes the whole move.
+        let mut held = near.clone();
+        crate::detangle::apply(&mut held, &settings("true", "upright"));
+        assert_eq!(held.positions()[..3], near.positions()[..3]);
+        assert!(gap(&held) > thickness * 0.95, "{}", gap(&held));
+
+        // Carried through: the upright edge from in front of the flat one
+        // to behind it, by less than a thickness and by several.
+        for to in [-0.1f32, -1.2] {
+            let carried = crossed_triangles(to);
+            assert!(crate::detangle::self_intersections(&carried).crossings > 0, "to {to}: the fixture crosses");
+            for (edges, told, parted) in [("false", true, false), ("true", false, false), ("true", true, true)] {
+                let mut d = carried.clone();
+                let work = crate::detangle::apply_from(&mut d, told.then_some(&near), &settings(edges, "upright"));
+                let crossings = crate::detangle::self_intersections(&d).crossings;
+                assert_eq!(crossings == 0 && gap(&d) > 0.0, parted, "to {to}, edges {edges}, told {told}: gap {}, {crossings} crossings, {work:?}", gap(&d));
+                if parted {
+                    assert!(work.crossed > 0 || work.held > 0, "{work:?}");
+                    assert_eq!(d.positions()[..3], carried.positions()[..3]);
+                }
+            }
+        }
+
+        // An edge with neither end near anything is not tested at all.
+        let round = crate::shapes::sphere_node_detail(
+            &phase3_node("sphere", &[("Method", "Icosphere"), ("Frequency", "8"), ("Radius", "0.5")]),
+            Some(Vec3::ZERO),
+        );
+        let mut d = round.clone();
+        let work = crate::detangle::apply(&mut d, &phase3_node("detangle", &[("Method", "Surface"), ("Thickness", "0.50"), ("Rings", "2"), ("Edge Contact", "true")]));
+        assert_eq!((work.edges_searched, work.contacts), (0, 0), "{work:?}");
+        assert_eq!(d.positions(), round.positions());
+    }
+
     /// The Step Limit holds a point's move since the step began to that
     /// many thicknesses, in the direction it was going. It is the Surface
     /// method's, it needs to know where the step began, and only what may
@@ -10391,12 +10477,13 @@ mod tests {
     fn detangle_methods_compared() {
         // The method, whether it is told where the step began, and its
         // Step Limit.
-        let ways: [(&str, &str, bool, &str); 5] = [
-            ("none", "None", false, "0"),
-            ("points", "Points", false, "0"),
-            ("surface", "Surface", false, "0"),
-            ("sided", "Surface", true, "0"),
-            ("sided, limited", "Surface", true, "0.50"),
+        let ways: [(&str, &str, bool, &str); 6] = [
+            ("none", "None", false, "false"),
+            ("points", "Points", false, "false"),
+            ("surface", "Surface", false, "false"),
+            ("surface, edges", "Surface", false, "true"),
+            ("sided", "Surface", true, "false"),
+            ("sided, edges", "Surface", true, "true"),
         ];
         for frequency in ["4", "8", "16"] {
             let sphere = crate::shapes::sphere_node_detail(
@@ -10411,18 +10498,14 @@ mod tests {
                 let rate = edge * pace;
                 let steps = (1.1 / rate).ceil() as usize;
                 for thickness in ["0.50", "1.00"] {
-                    for (name, method, told, limit) in ways {
+                    for (name, method, told, edges) in ways {
                         let node = phase3_node(
                             "detangle",
-                            &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4"), ("Step Limit", limit)],
+                            &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4"), ("Edge Contact", edges)],
                         );
                         let mut d = sphere.clone();
                         let (mut worst, mut far, mut spent) = (0, 0, std::time::Duration::ZERO);
                         let mut tally = crate::detangle::Work::default();
-                        // A limited step covers less ground, and is given
-                        // the steps to cover the same: what Substeps is for.
-                        let held = limit.parse::<f32>().unwrap() * thickness.parse::<f32>().unwrap();
-                        let steps = if held > 0.0 && held < pace { (steps as f32 * pace / held).ceil() as usize } else { steps };
                         for _ in 0..steps {
                             let before = d.clone();
                             for &p in &cap {
@@ -10435,19 +10518,19 @@ mod tests {
                                 spent += t.elapsed();
                                 tally.crossed += w.crossed;
                                 tally.held += w.held;
-                                tally.limited += w.limited;
+                                tally.edges_searched += w.edges_searched;
                             }
                             worst = worst.max(crate::detangle::self_intersections(&d).crossings);
                             far = far.max(crate::detangle::crossings_beyond(&d, 2));
                         }
                         let last = crate::detangle::self_intersections(&d).crossings;
                         println!(
-                            "{:>5} points, pace {pace}, {steps:>4} steps, thickness {thickness}, {name:>14}: worst {worst:>5} crossings ({far:>5} beyond the rings), last {last:>5}, {:.2} ms a step; {} put back through, {} held, {} limited",
+                            "{:>5} points, pace {pace}, {steps:>4} steps, thickness {thickness}, {name:>15}: worst {worst:>5} crossings ({far:>5} beyond the rings), last {last:>5}, {:.2} ms a step; {} put back through, {} held, {} edges searched",
                             d.num_points(),
                             spent.as_secs_f64() * 1000.0 / steps as f64,
                             tally.crossed,
                             tally.held,
-                            tally.limited
+                            tally.edges_searched / steps
                         );
                     }
                 }
