@@ -9,8 +9,7 @@
 use std::path::Path;
 
 use cce_ui::widget::WidgetHost;
-use crate::shortcut::Action;
-use crate::app::{State, CustomEvent, McpAction, get_next_visible_pane, Project, ParamDef};
+use crate::app::{State, CustomEvent, McpAction, Project, ParamDef};
 use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, SPREADSHEET_MENUBAR_IDX, HEADER_IDX, PARAM_IDX, WIDGET_COUNT};
 
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +23,17 @@ pub enum WindowEvent {
     CursorMoved { position: LocalPosition },
     MouseInput { state: cce_ui::widget::ElementState, button: cce_ui::widget::MouseButton },
     KeyboardInput { event: cce_ui::widget::KeyEvent },
+}
+
+/// The menubar menus `process_window_event` still dispatches by index: the
+/// viewport's Camera menu and the parameters' Preset and Reset. The rest of
+/// what the menubars list is a registry command.
+pub(crate) fn menu_is_dispatched(widget_idx: usize, menu_idx: usize) -> bool {
+    match widget_idx {
+        RIGHT_MENUBAR_IDX => menu_idx == 0,
+        PARAM_MENUBAR_IDX => menu_idx <= 1,
+        _ => false,
+    }
 }
 
 impl State {
@@ -141,241 +151,11 @@ impl State {
                 }
             }
 
-            if let Some((menu_idx, item_idx)) = state.menu_mut(HEADER_IDX).menu_click() {
-                if menu_idx == 0 { // File
-                    match item_idx {
-                        0 => { // New Project
-                            state.new_project();
-                            changed = true;
-                        }
-                        1 => { // Open
-                            state.open_file_chooser();
-                            changed = true;
-                        }
-                        2 => { // Save
-                            let path_opt = state.loaded_project_path.clone();
-                            if let Some(path) = path_opt {
-                                if let Err(e) = state.save_to_file(&path) {
-                                    eprintln!("Failed to save project: {:?}", e);
-                                    state.update_status_text(&format!("Failed to save: {:?}", e));
-                                } else {
-                                    state.update_status_text(&format!("Project saved to {}", path.display()));
-                                    state.add_recent_file(path);
-                                }
-                            } else {
-                                state.save_file_chooser();
-                            }
-                            changed = true;
-                        }
-                        3 => { // Save As
-                            state.save_file_chooser();
-                            changed = true;
-                        }
-                        4 => { // Exit
-                            state.exit_requested = true;
-                        }
-                        _ => {}
-                    }
-                } else if menu_idx == 2 { // View
-                    match item_idx {
-                        0 => { // Zoom In
-                            state.zoom(1.15, None);
-                            changed = true;
-                        }
-                        1 => { // Zoom Out
-                            state.zoom(1.0 / 1.15, None);
-                            changed = true;
-                        }
-                        2 => { // Reset Zoom
-                            state.set_grid_geometry(crate::app::configured_grid_geometry());
-                            state.sync_grid_settings();
-                            changed = true;
-                        }
-                        3 => { // Detach Circular Window
-                            state.execute_action(Action::DetachCircularWindow);
-                            changed = true;
-                        }
-                        4 => { // Show Network Pane
-                            state.show_network = !state.show_network;
-                            state.slots.content.set_visible(state.show_network);
-                            state.slots.left_menubar.set_visible(state.show_network);
-                            state.slots.breadcrumb.set_visible(state.show_network);
-                            let val = state.show_network;
-                            state.menu_mut(HEADER_IDX).set_item_checked(2, 4, val);
-                            if !state.show_network && state.focused_pane == LEFT_MENUBAR_IDX {
-                                state.focused_pane = get_next_visible_pane(
-                                    state.focused_pane,
-                                    state.show_network,
-                                    state.show_viewport,
-                                    state.show_parameters,
-                                    state.show_spreadsheet,
-                                    false,
-                                );
-                            }
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.sync_pane_focus();
-                            state.sync_nodes();
-                            changed = true;
-                        }
-                        5 => { // Show Viewport Pane
-                            state.show_viewport = !state.show_viewport;
-                            state.slots.viewport.set_visible(state.show_viewport);
-                            state.slots.right_menubar.set_visible(state.show_viewport);
-                            let val = state.show_viewport;
-                            state.menu_mut(HEADER_IDX).set_item_checked(2, 5, val);
-                            if !state.show_viewport && state.focused_pane == RIGHT_MENUBAR_IDX {
-                                state.focused_pane = get_next_visible_pane(
-                                    state.focused_pane,
-                                    state.show_network,
-                                    state.show_viewport,
-                                    state.show_parameters,
-                                    state.show_spreadsheet,
-                                    false,
-                                );
-                            }
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.sync_pane_focus();
-                            state.sync_nodes();
-                            changed = true;
-                        }
-                        6 => { // Show Parameters Pane
-                            state.show_parameters = !state.show_parameters;
-                            state.slots.param.set_visible(state.show_parameters);
-                            state.slots.param_menubar.set_visible(state.show_parameters);
-                            let val = state.show_parameters;
-                            state.menu_mut(HEADER_IDX).set_item_checked(2, 6, val);
-                            if !state.show_parameters && state.focused_pane == PARAM_MENUBAR_IDX {
-                                state.focused_pane = get_next_visible_pane(
-                                    state.focused_pane,
-                                    state.show_network,
-                                    state.show_viewport,
-                                    state.show_parameters,
-                                    state.show_spreadsheet,
-                                    false,
-                                );
-                            }
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.sync_pane_focus();
-                            state.sync_nodes();
-                            changed = true;
-                        }
-                        7 => { // Show Spreadsheet Pane
-                            state.show_spreadsheet = !state.show_spreadsheet;
-                            state.slots.spreadsheet.set_visible(state.show_spreadsheet);
-                            state.slots.spreadsheet_menubar.set_visible(state.show_spreadsheet);
-                            let val = state.show_spreadsheet;
-                            state.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
-                            if !state.show_spreadsheet && state.focused_pane == SPREADSHEET_MENUBAR_IDX {
-                                state.focused_pane = get_next_visible_pane(
-                                    state.focused_pane,
-                                    state.show_network,
-                                    state.show_viewport,
-                                    state.show_parameters,
-                                    state.show_spreadsheet,
-                                    false,
-                                );
-                            }
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.sync_pane_focus();
-                            state.sync_nodes();
-                            changed = true;
-                        }
-                        8 => { // Show Playbar Pane
-                            state.execute_menu_action("Show Playbar Pane");
-                            state.sync_nodes();
-                            changed = true;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            if let Some((menu_idx, item_idx)) = state.menu_mut(LEFT_MENUBAR_IDX).menu_click() {
-                if menu_idx == 0 { // File
-                    match item_idx {
-                        0 => { // New
-                            state.new_project();
-                            changed = true;
-                        }
-                        1 => { // Open
-                            state.open_file_chooser();
-                            changed = true;
-                        }
-                        2 => { // Save
-                            let path_opt = state.loaded_project_path.clone();
-                            if let Some(path) = path_opt {
-                                if let Err(e) = state.save_to_file(&path) {
-                                    eprintln!("Failed to save project: {:?}", e);
-                                    state.update_status_text(&format!("Failed to save: {:?}", e));
-                                } else {
-                                    state.update_status_text(&format!("Project saved to {}", path.display()));
-                                    state.add_recent_file(path);
-                                }
-                            } else {
-                                state.save_file_chooser();
-                            }
-                            changed = true;
-                        }
-                        3 => { // Save As
-                            state.save_file_chooser();
-                            changed = true;
-                        }
-                        _ => {}
-                    }
-                } else if menu_idx == 2 { // View
-                    match item_idx {
-                        0 => { // Zoom In
-                            state.zoom(1.15, None);
-                            changed = true;
-                        }
-                        1 => { // Zoom Out
-                            state.zoom(1.0 / 1.15, None);
-                            changed = true;
-                        }
-                        2 => {
-                            state.circular_network_pane = !state.circular_network_pane;
-                            let val = state.circular_network_pane;
-                            state.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 2, val);
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.sync_grid_settings();
-                            changed = true;
-                        }
-                        3 => { // Detach Pane
-                            state.execute_action(Action::DetachCircularWindow);
-                            changed = true;
-                        }
-                        4 => { // Close Pane
-                            state.show_network = false;
-                            state.slots.content.set_visible(false);
-                            state.slots.left_menubar.set_visible(false);
-                            state.slots.breadcrumb.set_visible(false);
-                            state.menu_mut(HEADER_IDX).set_item_checked(2, 4, false);
-                            if state.focused_pane == LEFT_MENUBAR_IDX {
-                                state.focused_pane = get_next_visible_pane(
-                                    state.focused_pane,
-                                    state.show_network,
-                                    state.show_viewport,
-                                    state.show_parameters,
-                                    state.show_spreadsheet,
-                                    false,
-                                );
-                            }
-                            state.rebuild_positions();
-                            state.apply_layout();
-                            state.sync_pane_focus();
-                            state.sync_nodes();
-                            changed = true;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
+            // The menubars are not drawn (their bars have no height), so a
+            // click reaches these only through MCP's `menu_click`. What is
+            // dispatched here is what no registry command does: choosing the
+            // active camera, and the parameter presets. Everything else the
+            // menubars list is a command, and is run as one.
             if let Some((menu_idx, item_idx)) = state.menu_mut(RIGHT_MENUBAR_IDX).menu_click() {
                 if menu_idx == 0 {
                     let camera_nodes: Vec<String> = state.current_dir().children.iter()
@@ -390,43 +170,6 @@ impl State {
                         for (i, item) in items.iter().enumerate() {
                             state.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(0, i, item == &active_cam);
                         }
-                        changed = true;
-                    }
-                } else if menu_idx == 3 { // View
-                    if item_idx == 0 { // Close Pane
-                        state.show_viewport = false;
-                        state.slots.viewport.set_visible(false);
-                        state.slots.right_menubar.set_visible(false);
-                        state.menu_mut(HEADER_IDX).set_item_checked(2, 5, false);
-                        if state.focused_pane == RIGHT_MENUBAR_IDX {
-                            state.focused_pane = get_next_visible_pane(
-                                state.focused_pane,
-                                state.show_network,
-                                state.show_viewport,
-                                state.show_parameters,
-                                state.show_spreadsheet,
-                                false,
-                            );
-                        }
-                        state.rebuild_positions();
-                        state.apply_layout();
-                        state.sync_pane_focus();
-                        state.sync_nodes();
-                        changed = true;
-                    }
-                } else {
-                    let action = if menu_idx == 1 {
-                        Some(Action::ToggleSquareViewport)
-                    } else if menu_idx == crate::app::GUIDES_MENU {
-                        match item_idx {
-                            crate::app::GUIDE_GRID => Some(Action::ToggleGrid),
-                            crate::app::GUIDE_ORIGIN => Some(Action::ToggleOrigin),
-                            crate::app::GUIDE_CAMERA_PIVOT => Some(Action::ToggleCameraPivot),
-                            _ => None,
-                        }
-                    } else { None };
-                    if let Some(a) = action {
-                        state.execute_action(a);
                         changed = true;
                     }
                 }
@@ -500,54 +243,6 @@ impl State {
                                 changed = true;
                             }
                         }
-                    }
-                } else if menu_idx == 2 { // View
-                    if item_idx == 0 { // Close Pane
-                        state.show_parameters = false;
-                        state.slots.param.set_visible(false);
-                        state.slots.param_menubar.set_visible(false);
-                        state.menu_mut(HEADER_IDX).set_item_checked(2, 6, false);
-                        if state.focused_pane == PARAM_MENUBAR_IDX {
-                            state.focused_pane = get_next_visible_pane(
-                                state.focused_pane,
-                                state.show_network,
-                                state.show_viewport,
-                                state.show_parameters,
-                                state.show_spreadsheet,
-                                false,
-                            );
-                        }
-                        state.rebuild_positions();
-                        state.apply_layout();
-                        state.sync_pane_focus();
-                        state.sync_nodes();
-                        changed = true;
-                    }
-                }
-            }
-
-            if let Some((menu_idx, item_idx)) = state.menu_mut(SPREADSHEET_MENUBAR_IDX).menu_click() {
-                if menu_idx == 0 { // View
-                    if item_idx == 0 { // Close Pane
-                        state.show_spreadsheet = false;
-                        state.slots.spreadsheet.set_visible(false);
-                        state.slots.spreadsheet_menubar.set_visible(false);
-                        state.menu_mut(HEADER_IDX).set_item_checked(2, 7, false);
-                        if state.focused_pane == SPREADSHEET_MENUBAR_IDX {
-                            state.focused_pane = get_next_visible_pane(
-                                state.focused_pane,
-                                state.show_network,
-                                state.show_viewport,
-                                state.show_parameters,
-                                state.show_spreadsheet,
-                                false,
-                            );
-                        }
-                        state.rebuild_positions();
-                        state.apply_layout();
-                        state.sync_pane_focus();
-                        state.sync_nodes();
-                        changed = true;
                     }
                 }
             }
@@ -1007,12 +702,15 @@ impl State {
             McpAction::MenuClick { widget_idx, menu_idx, item_idx } => {
                 // Validate before touching menu_mut(): a non-menubar widget_idx
                 // panics its MenuBar downcast, and out-of-range menu/item indices
-                // used to reply "Menu clicked" while dispatching nowhere. NB the
-                // pane-toggle items ("Show Spreadsheet Pane", ...) are NOT in these
-                // menubars — they are toggle params in the menu pane, drained by
-                // sync_parameters_to_project's label match, unreachable from here.
+                // used to reply "Menu clicked" while dispatching nowhere.
                 let validated: Result<String, String> = if widget_idx >= WIDGET_COUNT {
                     Err(format!("widget_idx {widget_idx} out of range (widget slots: 0..{WIDGET_COUNT})"))
+                } else if state.menubar_at(widget_idx).is_some() && !menu_is_dispatched(widget_idx, menu_idx) {
+                    // Everything else a menubar lists is a registry command;
+                    // a click that was accepted here would dispatch nowhere.
+                    Err(format!(
+                        "menu {menu_idx} of menubar {widget_idx} is not dispatched by index: use run_command"
+                    ))
                 } else if let Some(menubar) = state.menubar_at(widget_idx) {
                     match menubar.menu_dropdowns.get(menu_idx) {
                         None => Err(format!(

@@ -6629,6 +6629,30 @@ mod tests {
         }
     }
 
+    /// The menubars are not drawn, and what they listed is commands. A
+    /// click by index is dispatched for the two things no command does —
+    /// the active camera, the parameter presets — and refused for the rest,
+    /// where it used to be accepted and, for the header's File menu, run
+    /// the item one below the one named.
+    #[test]
+    fn a_menubar_click_is_dispatched_or_refused() {
+        use crate::app::McpAction;
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state.set_active_camera("camera1");
+        state
+            .apply_action(McpAction::MenuClick { widget_idx: RIGHT_MENUBAR_IDX, menu_idx: 0, item_idx: 0 }, &mut redraw)
+            .expect("the Camera menu is dispatched");
+        assert_eq!(state.active_camera, "Default Camera");
+
+        let nodes = state.fs_root.children.len();
+        for (widget_idx, menu_idx) in [(crate::slots::HEADER_IDX, 0), (LEFT_MENUBAR_IDX, 0), (RIGHT_MENUBAR_IDX, 2)] {
+            let res = state.apply_action(McpAction::MenuClick { widget_idx, menu_idx, item_idx: 0 }, &mut redraw);
+            assert!(res.is_err(), "menubar {widget_idx} menu {menu_idx} was accepted: {res:?}");
+        }
+        assert_eq!(state.fs_root.children.len(), nodes, "a refused click ran New Project");
+    }
+
     /// New Project from the palette starts a project. The command named a
     /// label no arm dispatched, so the row ran and nothing happened.
     #[test]

@@ -100,6 +100,18 @@ the window is off-screen. The
 tool list lives in `mcp_tools()` in `src/api.rs`; the protocol layer is
 `cce_ui::mcp` (tools-only Streamable HTTP). Keep the enum, the tool list, and
 the schemas in sync — `test_mcp_tools_map_to_actions` enforces the mapping.
+**`menu_click` dispatches three menus and refuses the rest** (since
+2026-09-29). The five menubars are roster slots that are never drawn —
+`HEADER_H` and `MENUBAR_H` are 0 — kept as pane identities and for their
+checkmarks, so the MCP tool is the only thing that can click one. What
+`process_window_event` still dispatches by index is what no registry command
+does: the viewport menubar's Camera menu, and the parameters menubar's Preset
+and Reset (`window::menu_is_dispatched`). Everything else they list is a
+command, reached through `run_command`; a click on it is an error saying so,
+where it used to be accepted and, the item lists having drifted from the
+matches, ran the wrong item (the header's Save opened a project).
+`a_menubar_click_is_dispatched_or_refused` is the test.
+
 (The former bespoke HTTP API on port 3000 was retired in favor of this;
 app-internal threads like the cce-files choosers now return results via
 `CustomEvent::RunAction` instead of POSTing to it.)

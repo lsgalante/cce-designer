@@ -236,7 +236,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool(
             "menu_click",
-            "Click a menubar item by indices (widget_idx must be a menubar widget slot).",
+            "Click a menubar item by indices. Only the viewport menubar's Camera menu (menu 0) and the parameters menubar's Preset and Reset menus (0, 1) are dispatched this way; everything else is a command, see run_command.",
             json!({
                 "type": "object",
                 "properties": {
