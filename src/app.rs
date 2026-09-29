@@ -2147,6 +2147,8 @@ pub struct State {
     pub show_playbar: bool,
     pub last_spreadsheet_node_name: Option<String>,
     pub last_spreadsheet_node_params: Option<Vec<(String, String)>>,
+    /// The frame and geometry version the spreadsheet's rows were read at.
+    pub last_spreadsheet_read_at: (i32, u64),
     pub grid_thickness: f32,
     pub focused_pane: usize,
     pub graph_scroll_speed: f32,
@@ -5770,6 +5772,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let path_strs = self.current_path_names();
         self.path_mut().set_path(&path_strs);
 
+        self.sync_selection_readouts();
+        self.sync_pull_arrows();
+    }
+
+    /// The readouts of what is SELECTED: the spreadsheet's rows and the
+    /// selected Group's viewport markers. Each evaluates the selected node
+    /// when its key moves, and the key is everything the answer depends on
+    /// — the node and its parameters, the geometry version (which every
+    /// scene rebuild bumps, so an edit anywhere upstream is in it) and the
+    /// frame. Until 2026-09-29 the spreadsheet's key was the node and its
+    /// OWN parameters alone, so it showed the frame and the upstream values
+    /// it had been opened on until the selection itself was touched; and
+    /// both ran from `sync_nodes` only, which a frame change does not call.
+    /// From there and from the end of every scene rebuild now, as the pull
+    /// arrows are.
+    pub(crate) fn sync_selection_readouts(&mut self) {
         // The shared sim cache, taken out BEFORE the selected node is
         // borrowed off self and put back once that borrow is dead: the two
         // evaluations below are of whatever is selected, and when that is
@@ -5806,10 +5824,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let mut current_name = None;
         let mut current_params = None;
 
+        // What the rows were read at: a frame and a geometry version.
+        let read_at = (sim_frame, self.rt_geometry_version);
         if let Some(node) = selected_node {
             current_name = Some(node.id.clone());
             current_params = Some(node.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>());
-            if self.last_spreadsheet_node_name == current_name && self.last_spreadsheet_node_params == current_params {
+            if self.last_spreadsheet_node_name == current_name
+                && self.last_spreadsheet_node_params == current_params
+                && self.last_spreadsheet_read_at == read_at
+            {
                 cache_hit = true;
             }
         } else {
@@ -5845,11 +5868,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // the Highlight bake and of which node holds the display flag. The
         // geometry version keeps the key honest against upstream edits (the
         // scene rebuild bumps it); a non-group selection clears the markers.
+        // The version and the frame both: a frame change rebuilds the
+        // scene, and bumps the version, only when the graph holds a simnet.
         let group_key = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")).map(|n| {
             (
                 n.id.clone(),
                 n.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>(),
-                self.rt_geometry_version,
+                self.rt_geometry_version.wrapping_add((sim_frame as u64).wrapping_mul(0x9E3779B97F4A7C15)),
             )
         });
         let mut group_update = None;
@@ -5873,6 +5898,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.spreadsheet_mut().set_spreadsheet_data(headers, rows);
             self.last_spreadsheet_node_name = current_name;
             self.last_spreadsheet_node_params = current_params;
+            self.last_spreadsheet_read_at = read_at;
         }
         if let Some(members) = group_update {
             self.group_members = members;
@@ -5883,7 +5909,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // Marker Scale): re-size without re-evaluating.
             self.rebuild_group_marker_verts();
         }
-        self.sync_pull_arrows();
     }
 
     /// How many points of a pull get an arrow. A dozen show the direction
@@ -6291,6 +6316,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             show_playbar: false,
             last_spreadsheet_node_name: None,
             last_spreadsheet_node_params: None,
+            last_spreadsheet_read_at: (i32::MIN, 0),
             grid_thickness: settings.viewport.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
             // Config-owned; update_inertial_settings overwrites these from
@@ -10093,6 +10119,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             if crate::geometry::contains_simnet(&self.fs_root) {
                 self.rebuild_scene_geometry();
                 self.viewport_dirty = true;
+            } else {
+                // No simulation, so no rebuild — but a node whose value is
+                // an expression of the frame still reads differently, and
+                // what is selected is read again.
+                self.sync_selection_readouts();
             }
         }
         // Every slot (and, through the adapter, its embedded children) was

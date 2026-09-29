@@ -13474,4 +13474,90 @@ mod tests {
         // And the cache is back where it lives, its solve intact.
         assert!(!state.sim_cache.checkpoint_frames(&state.current_dir().children[sim].id).is_empty());
     }
+
+    /// The spreadsheet reads what is selected again whenever the answer
+    /// may have changed: the frame moved — with a simulation in the graph
+    /// or without one — or something upstream was edited. It used to read
+    /// again only when the selected node or its OWN parameters changed, so
+    /// during playback it showed the frame it had been opened on. The
+    /// selected Group's markers follow the frame the same way.
+    #[test]
+    fn the_spreadsheet_and_markers_follow_the_frame_and_upstream_edits() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        state.show_spreadsheet = true;
+        let mut redraw = false;
+        let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        let sphere = slot_of(&state, "sphere1");
+        // Where the markers stand, as plain numbers.
+        let marks = |state: &State| -> Vec<[f32; 3]> { state.group_members.iter().map(|v| v.position).collect() };
+
+        // No simulation in the graph. The frame moves; nothing rebuilds the
+        // scene; what is selected is still read again.
+        assert!(!crate::geometry::contains_simnet(&state.fs_root));
+        state.apply_action(McpAction::Select { slot: sphere }, &mut redraw).unwrap();
+        state.sync_nodes();
+        state.tick_frame(1.0 / 60.0);
+        let opened_at = state.last_spreadsheet_read_at;
+        assert_eq!(opened_at.0, state.sim_frame());
+        state.slots.playbar.inner_mut().current_frame = 7.0;
+        state.tick_frame(1.0 / 60.0);
+        assert_eq!(state.last_spreadsheet_read_at.0, 7, "read again at the new frame");
+        // The same frame again reads nothing again.
+        let at = state.last_spreadsheet_read_at;
+        state.tick_frame(1.0 / 60.0);
+        state.sync_nodes();
+        assert_eq!(state.last_spreadsheet_read_at, at);
+
+        // An edit UPSTREAM of the selection: the selected node and its own
+        // parameters are as they were, and the rows are read again.
+        state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("tagged".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
+        let tagged = slot_of(&state, "tagged");
+        for (name, value) in [("Input", "sphere1"), ("Mode", "Random"), ("Count", "5")] {
+            state.apply_action(McpAction::SetParam { slot: tagged, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
+        state.sync_nodes();
+        let (before, markers) = (state.last_spreadsheet_read_at, marks(&state));
+        assert_eq!(markers.len(), 5);
+        state.apply_action(McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
+        assert_eq!(state.param_editor_selected(), Some(tagged), "the selection did not move");
+        assert_ne!(state.last_spreadsheet_read_at, before, "the rows were read again");
+        assert_ne!(marks(&state), markers, "and the markers moved out with the sphere");
+
+        // With a simulation, playback: every frame the playbar arrives at
+        // is the frame the rows and the markers were read at.
+        state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        let sim = slot_of(&state, "sim");
+        state.apply_action(McpAction::SetParam { slot: sim, name: "Input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
+        {
+            let simnet = &mut state.current_dir_mut().children[sim];
+            let mut pull = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
+            pull.id = "pull-in-sim".into();
+            pull.name = "pull1".into();
+            for (name, value) in [("Input", "input1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.05:0.00:0.00"), ("Combine", "Add")] {
+                pull.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
+            }
+            simnet.children.push(pull);
+            let output = simnet.children.iter_mut().find(|c| c.node_type == "output").unwrap();
+            output.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("pull1".to_string());
+        }
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "Input".into(), value: "sim".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
+        state.slots.playbar.inner_mut().current_frame = 10.0;
+        state.tick_frame(1.0 / 60.0);
+        let mut last = marks(&state);
+        state.slots.playbar.inner_mut().playing = true;
+        state.slots.playbar.inner_mut().fps = 60.0;
+        for _ in 0..3 {
+            state.tick_frame(1.0 / 60.0);
+            assert_eq!(state.last_spreadsheet_read_at.0, state.sim_frame(), "the rows are this frame's");
+            assert_ne!(marks(&state), last, "the markers moved with the simulation");
+            last = marks(&state);
+        }
+    }
 }

@@ -1205,7 +1205,19 @@ borrowed off `State` and which each used a throwaway cache for that
 reason — a full solve from the seed at every refresh of either. The
 cache is taken out before that borrow begins and put back after it, as
 the scene rebuild takes it.
-`the_spreadsheet_and_group_markers_share_the_sim_cache` counts the steps. On the project this was measured on, a scrub
+`the_spreadsheet_and_group_markers_share_the_sim_cache` counts the steps.
+
+**The spreadsheet and the group markers follow the frame and upstream
+edits** (`State::sync_selection_readouts`, since 2026-09-29). Their keys
+are the selected node, its parameters, the geometry version and the
+frame; they run from `sync_nodes`, from the end of every scene rebuild —
+as the pull arrows do — and from the tick's frame change when the graph
+holds no simnet and so nothing rebuilds. The spreadsheet's key had been
+the node and its OWN parameters, and both ran from `sync_nodes` alone,
+which a frame change does not call: during playback the spreadsheet
+showed the frame it had been opened on, and an edit upstream of the
+selection left it showing the values from before. A refresh keeps the
+spreadsheet's scroll and sort. On the project this was measured on, a scrub
 back over sixty frames from frame 120 went from a mean of 15 ms a frame
 to 1.3, and from frame 240 from 67 to 4. The disk cache (`Cache` on the
 simnet) is unchanged and still holds the one latest frame.

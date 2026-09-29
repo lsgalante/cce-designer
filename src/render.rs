@@ -1191,6 +1191,7 @@ impl State {
         self.overlay_dirty = true;
         // The pull arrows measure the selected node against this new
         // geometry version; a playing simnet reaches here every frame.
+        self.sync_selection_readouts();
         self.sync_pull_arrows();
 
         // Last, not first: the page's status line would otherwise be
