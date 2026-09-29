@@ -2072,7 +2072,7 @@ mod tests {
             groups(None),
             vec![
                 vec![A::FrameAll, A::OneToOne],
-                vec![A::Command("toggle_grid"), A::Command("toggle_origin")],
+                vec![A::Command("toggle_grid"), A::Command("toggle_origin"), A::Command("toggle_camera_pivot")],
                 vec![A::Submenu(P::Style), A::Submenu(P::Markers)],
             ]
         );
@@ -2336,6 +2336,27 @@ mod tests {
         assert!(!state.overlay_number_labels.is_empty(), "the labels were collected");
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
         assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_numbers, "persisted");
+    }
+
+    /// Show Camera Pivot is a guide row of the menu itself, beside the
+    /// grid and the origin, marked from the live flag; the row runs the
+    /// command the Guides menubar and the palette run.
+    #[test]
+    fn the_viewport_menu_toggles_the_camera_pivot_marker() {
+        use crate::app::ViewportMenuAction as A;
+        let mut state = State::new(false);
+        state.viewport_mut().show_camera_pivot = false;
+        let row = |state: &State| {
+            let (options, actions) = state.viewport_menu_rows_of(None);
+            let i = actions.iter().position(|a| *a == A::Command("toggle_camera_pivot")).expect("a Show Camera Pivot row");
+            options[i].clone()
+        };
+        assert_eq!(row(&state), "○ Show Camera Pivot");
+        state.run_viewport_menu_action(A::Command("toggle_camera_pivot"));
+        assert!(state.viewport().show_camera_pivot);
+        assert_eq!(row(&state), "● Show Camera Pivot");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_camera_pivot_enabled, "persisted");
     }
 
     /// Show Point Markers is a switch in the Points group, over its own

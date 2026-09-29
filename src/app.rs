@@ -5373,6 +5373,7 @@ impl State {
         row(&mut options, &mut actions, "-".into(), sep);
         toggle(&mut options, &mut actions, "toggle_grid");
         toggle(&mut options, &mut actions, "toggle_origin");
+        toggle(&mut options, &mut actions, "toggle_camera_pivot");
 
         // The display settings, a submenu each; the menu marks the rows.
         row(&mut options, &mut actions, "-".into(), sep);
