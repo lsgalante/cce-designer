@@ -964,7 +964,18 @@ impl State {
     /// camera or pane changes (`stage_frame`), so the labels track orbits;
     /// a frame staged before the first scene staging simply draws none.
     fn append_point_numbers(&self, pc: &mut PaintCtx) {
-        if !self.show_viewport || self.overlay_number_labels.is_empty() {
+        if !self.show_viewport {
+            return;
+        }
+        // Points, primitives, vertices: each its own colour, and its own
+        // nudge off the place it names — a point's number beside its
+        // marker, the other two about on the spot, which is theirs alone.
+        let lists: [(&[([f32; 3], u32)], &[f32], [u8; 3], (f32, f32)); 3] = [
+            (&self.overlay_number_labels, &self.overlay_number_alpha, [0xee, 0xee, 0xff], (4.0, -6.0)),
+            (&self.overlay_prim_labels, &self.overlay_prim_alpha, PRIM_LABEL_COLOR, (-4.0, -6.0)),
+            (&self.overlay_vertex_labels, &self.overlay_vertex_alpha, VERTEX_LABEL_COLOR, (-3.0, -5.0)),
+        ];
+        if lists.iter().all(|(labels, ..)| labels.is_empty()) {
             return;
         }
         let Some(mvp) = self.last_scene_mvp else { return };
@@ -973,18 +984,26 @@ impl State {
             return;
         }
         pc.clip(rect(vx, vy, vw, vh), |pc| {
-            for (pos, idx) in &self.overlay_number_labels {
-                let clip_pos = mvp * glam::Vec4::new(pos[0], pos[1], pos[2], 1.0);
-                if clip_pos.w <= 0.0 {
-                    continue;
+            for (labels, alphas, color, (dx, dy)) in lists {
+                for (i, (pos, idx)) in labels.iter().enumerate() {
+                    // What the fill in front of the place lets through; a
+                    // number behind an opaque face is not drawn.
+                    let alpha = alphas.get(i).copied().unwrap_or(1.0);
+                    if alpha < 0.02 {
+                        continue;
+                    }
+                    let clip_pos = mvp * glam::Vec4::new(pos[0], pos[1], pos[2], 1.0);
+                    if clip_pos.w <= 0.0 {
+                        continue;
+                    }
+                    let ndc = clip_pos / clip_pos.w;
+                    if ndc.x.abs() > 1.02 || ndc.y.abs() > 1.02 {
+                        continue;
+                    }
+                    let sx = vx + (ndc.x * 0.5 + 0.5) * vw;
+                    let sy = vy + (0.5 - ndc.y * 0.5) * vh;
+                    pc.text_faded(idx.to_string(), sx + dx, sy + dy, 10.0, color, alpha, None, None);
                 }
-                let ndc = clip_pos / clip_pos.w;
-                if ndc.x.abs() > 1.02 || ndc.y.abs() > 1.02 {
-                    continue;
-                }
-                let sx = vx + (ndc.x * 0.5 + 0.5) * vw;
-                let sy = vy + (0.5 - ndc.y * 0.5) * vh;
-                pc.text(idx.to_string(), sx + 4.0, sy - 6.0, 10.0, [0xee, 0xee, 0xff]);
             }
         });
     }
@@ -1190,7 +1209,20 @@ impl State {
             Vec::new()
         };
         self.overlay_number_labels = labels;
+        self.overlay_number_alpha.clear();
         self.overlay_normal_verts = normals;
+        let (prim_labels, vertex_labels, prim_normals) = scene_element_overlays(
+            &geom,
+            self.show_prim_numbers,
+            self.show_vertex_numbers,
+            self.show_prim_normals,
+            self.point_marker_size * 4.0,
+        );
+        self.overlay_prim_labels = prim_labels;
+        self.overlay_prim_alpha.clear();
+        self.overlay_vertex_labels = vertex_labels;
+        self.overlay_vertex_alpha.clear();
+        self.overlay_normal_verts.extend(prim_normals);
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.
         self.scene_edge_verts =
@@ -1348,6 +1380,79 @@ pub(crate) fn scene_point_overlays(
         }
     }
     (markers, labels, normals)
+}
+
+/// The colours the primitive and vertex overlays are told from the points'
+/// by: warm for a primitive's number and its normal, green for a vertex's.
+pub(crate) const PRIM_LABEL_COLOR: [u8; 3] = [0xff, 0xc8, 0x8c];
+pub(crate) const VERTEX_LABEL_COLOR: [u8; 3] = [0xa0, 0xf0, 0xb0];
+
+/// How far from its point toward its primitive's centroid a vertex's
+/// number stands: far enough that the vertices sharing a point are apart,
+/// near enough to say which corner each is.
+pub(crate) const VERTEX_LABEL_INSET: f32 = 0.3;
+
+/// The overlays of the other two element classes, read off the same scene
+/// `Detail` as the points': `(position, index)` labels for Show Primitive
+/// Numbers, at each primitive's centroid; the same for Show Vertex Numbers,
+/// each vertex inset from its point toward its primitive's centroid; and
+/// LINE_LIST whiskers for Show Primitive Normals, from the centroid along
+/// the primitive's own normal, `len` long.
+///
+/// A vertex's number is its index in the detail, which is its row in the
+/// spreadsheet, as a point's is. The normal is Newell's, so a quad that is
+/// not quite flat still has one; a primitive of fewer than three points has
+/// a number and no normal. Each list of labels is capped as the points' is.
+pub(crate) fn scene_element_overlays(
+    geom: &crate::detail::Detail,
+    prim_numbers: bool,
+    vertex_numbers: bool,
+    prim_normals: bool,
+    len: f32,
+) -> (
+    Vec<([f32; 3], u32)>,
+    Vec<([f32; 3], u32)>,
+    Vec<crate::geometry::Vertex3D>,
+) {
+    use glam::Vec3;
+    const MAX_LABELS: usize = 2000;
+    let (mut prims, mut verts, mut normals) = (Vec::new(), Vec::new(), Vec::new());
+    if !(prim_numbers || vertex_numbers || prim_normals) {
+        return (prims, verts, normals);
+    }
+    let color = cce_ui::colors::to_linear_rgb(PRIM_LABEL_COLOR.map(|c| c as f32 / 255.0));
+    for prim in 0..geom.num_prims() {
+        let pts = geom.prim_points(prim);
+        if pts.is_empty() {
+            continue;
+        }
+        let at: Vec<Vec3> = pts.iter().map(|&p| geom.pos(p as usize)).collect();
+        let centroid = at.iter().copied().sum::<Vec3>() / at.len() as f32;
+        if prim_numbers && prims.len() < MAX_LABELS {
+            prims.push((centroid.to_array(), prim as u32));
+        }
+        if vertex_numbers {
+            for (v, &p) in geom.prim_verts(prim).zip(&at) {
+                if verts.len() >= MAX_LABELS {
+                    break;
+                }
+                verts.push((p.lerp(centroid, VERTEX_LABEL_INSET).to_array(), v as u32));
+            }
+        }
+        if prim_normals && at.len() >= 3 {
+            let mut n = Vec3::ZERO;
+            for (k, &a) in at.iter().enumerate() {
+                let b = at[(k + 1) % at.len()];
+                n += Vec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
+            }
+            let n = n.normalize_or_zero();
+            if n != Vec3::ZERO {
+                normals.push(crate::geometry::Vertex3D { position: centroid.to_array(), color });
+                normals.push(crate::geometry::Vertex3D { position: (centroid + n * len).to_array(), color });
+            }
+        }
+    }
+    (prims, verts, normals)
 }
 
 /// The scene's own edges as LINE_LIST pairs for the wire pass, carrying the

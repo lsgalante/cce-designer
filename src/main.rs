@@ -1654,6 +1654,62 @@ mod tests {
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// A point number is dimmed by the fill in front of its point, as a
+    /// marker drawn under that fill is: whole on the near side, one layer
+    /// down on the far side of a closed mesh (the faces that meet AT the
+    /// point are not in front of it), gone behind an opaque face. Behind
+    /// the whole mesh the two fills differ — seen through, both walls
+    /// blend; otherwise the far wall is culled and only the near one does.
+    #[test]
+    fn a_point_number_is_dimmed_by_the_fill_in_front_of_it() {
+        use glam::{Mat4, Vec3};
+        let sphere = crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        let verts = crate::geometry::detail_vertices(&sphere);
+        let eye = Vec3::new(0.3, 0.2, 5.0);
+        let mvp = Mat4::perspective_rh(0.9, 1.0, 0.1, 100.0) * Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
+        let positions = sphere.positions();
+        let nearest = |to: Vec3| {
+            *positions
+                .iter()
+                .min_by(|a, b| (Vec3::from_array(**a) - to).length().total_cmp(&(Vec3::from_array(**b) - to).length()))
+                .unwrap()
+        };
+        let near = nearest(Vec3::new(0.0, 0.0, 1.0));
+        let far = nearest(Vec3::new(0.2, 0.3, -1.0));
+        let behind = [0.05, 0.05, -3.0];
+        let points = [near, far, behind];
+        let t = |opacity: f32, see_through: bool| {
+            crate::geometry::point_transmittance(&verts, mvp, eye, &points, opacity, see_through)
+        };
+        let close = |a: &[f32], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
+        assert!(close(&t(0.5, true), [1.0, 0.5, 0.25]), "seen through: {:?}", t(0.5, true));
+        assert!(close(&t(0.5, false), [1.0, 0.5, 0.5]), "culled: {:?}", t(0.5, false));
+        assert!(close(&t(1.0, false), [1.0, 0.0, 0.0]), "opaque: {:?}", t(1.0, false));
+        assert!(close(&t(0.0, true), [1.0, 1.0, 1.0]), "invisible fill: {:?}", t(0.0, true));
+
+        // And the paint reads it: a label behind an opaque face is not drawn.
+        let mut state = State::new(false);
+        state.show_point_numbers = true;
+        state.rebuild_scene_geometry();
+        assert!(state.overlay_number_alpha.is_empty(), "a rebuild drops the old eye's answers");
+        let labels = |state: &mut State| {
+            let numbers: std::collections::HashSet<String> =
+                state.overlay_number_labels.iter().map(|(_, i)| i.to_string()).collect();
+            state
+                .collect_display_list()
+                .items
+                .iter()
+                .filter(|item| matches!(&item.prim, cce_ui::scene::paint::Prim::Text { text, .. } if numbers.contains(text)))
+                .count()
+        };
+        state.show_viewport = true;
+        state.last_scene_mvp = Some(Mat4::IDENTITY);
+        state.last_scene_view_rect = (0.0, 0.0, 800.0, 600.0);
+        let whole = labels(&mut state);
+        state.overlay_number_alpha = vec![0.0; state.overlay_number_labels.len()];
+        assert!(labels(&mut state) < whole, "hidden labels are not drawn");
+    }
+
     /// Smooth shading bakes the raster pass's own light, so on a PLANE —
     /// where every point normal is the face normal — it gives exactly the
     /// flat shader's factor at every corner: switching modes changes how
@@ -1740,7 +1796,7 @@ mod tests {
         let mut state = State::new(false);
         state.show_occluded = false;
         state.geo_opacity = 1.0;
-        let (options, actions) = state.viewport_menu_rows();
+        let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_show_occluded")));
         let i = actions.iter().position(|a| *a == A::Command("toggle_show_occluded")).expect("a Show Occluded row");
         assert_eq!(options[i], "○ Show Occluded");
 
@@ -1768,7 +1824,7 @@ mod tests {
         state.smooth_shading = false;
         state.geo_opacity = 1.0;
         let row = |state: &State, a: A| {
-            let (options, actions) = state.viewport_menu_rows();
+            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(a));
             let i = actions.iter().position(|x| *x == a).unwrap_or_else(|| panic!("no {a:?} row"));
             options[i].clone()
         };
@@ -1814,6 +1870,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
+        state.show_viewport_menu_page(state.viewport_menu_page_of(A::OpacitySlider));
         assert!(state.viewport_menu_open());
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::OpacitySlider).expect("an Opacity row");
         let s = context_menu::slider(i).expect("the row is a slider");
@@ -1904,6 +1961,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
+        state.show_viewport_menu_page(state.viewport_menu_page_of(A::WireOpacitySlider));
         let acts = state.viewport_menu_actions.clone();
         let i = acts.iter().position(|a| *a == A::WireOpacitySlider).expect("a Wire Opacity row");
         let sl = context_menu::slider(i).expect("the row is a slider");
@@ -1965,41 +2023,141 @@ mod tests {
         assert_eq!((d.render.wire_color, d.render.wire_opacity), ([0.0; 3], 1.0));
     }
 
-    /// The viewport menu reads in groups a separator apart: framing, then
-    /// the guides, the wireframe, the points, the point overlays, and the surface
-    /// (shading, opacity, Show Occluded) — every display row in exactly one
-    /// group.
+    /// The viewport menu's top level holds framing, the guides and a row
+    /// into each page; the display rows are on the pages, in groups a
+    /// separator apart — Style the wireframe then the surface, Markers the
+    /// points then each element class's overlays — every one on exactly one
+    /// page, under a first row that leads back.
     #[test]
     fn the_viewport_menu_groups_its_display_rows() {
-        use crate::app::ViewportMenuAction as A;
+        use crate::app::{ViewportMenuAction as A, ViewportMenuPage as P};
         let state = State::new(false);
-        let (options, actions) = state.viewport_menu_rows();
-        let groups: Vec<Vec<A>> = actions
-            .split(|a| *a == A::Separator)
-            .map(|g| g.to_vec())
-            .collect();
-        assert_eq!(groups[0], vec![A::FrameAll, A::OneToOne]);
-        assert_eq!(groups[1], vec![A::Command("toggle_grid"), A::Command("toggle_origin")]);
-        assert_eq!(groups[2], vec![A::Command("toggle_wireframe"), A::WireThicknessSlider, A::WireOpacitySlider]);
+        let groups = |page: Option<P>| -> Vec<Vec<A>> {
+            let (options, actions) = state.viewport_menu_rows_of(page);
+            assert_eq!(options.len(), actions.len());
+            assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+            actions.split(|a| *a == A::Separator).map(|g| g.to_vec()).collect()
+        };
         assert_eq!(
-            groups[3],
-            vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider, A::PullArrowScaleSlider]
-        );
-        assert_eq!(
-            groups[4],
+            groups(None),
             vec![
-                A::Command("toggle_point_markers"),
-                A::PointMarkerSizeSlider,
-                A::Command("toggle_point_numbers"),
-                A::Command("toggle_point_normals"),
+                vec![A::FrameAll, A::OneToOne],
+                vec![A::Command("toggle_grid"), A::Command("toggle_origin")],
+                vec![A::Submenu(P::Style), A::Submenu(P::Markers)],
             ]
         );
         assert_eq!(
-            groups[5],
-            vec![A::Shading(false), A::Shading(true), A::OpacitySlider, A::Command("toggle_show_occluded")]
+            groups(Some(P::Style)),
+            vec![
+                vec![A::Back],
+                vec![A::Command("toggle_wireframe"), A::WireThicknessSlider, A::WireOpacitySlider],
+                vec![A::Shading(false), A::Shading(true), A::OpacitySlider, A::Command("toggle_show_occluded")],
+            ]
         );
-        assert_eq!(options.len(), actions.len());
-        assert!(options.iter().zip(&actions).all(|(o, a)| (o == "-") == (*a == A::Separator)), "separator rows line up");
+        assert_eq!(
+            groups(Some(P::Markers)),
+            vec![
+                vec![A::Back],
+                vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider, A::PullArrowScaleSlider],
+                vec![
+                    A::Command("toggle_point_markers"),
+                    A::PointMarkerSizeSlider,
+                    A::Command("toggle_point_numbers"),
+                    A::Command("toggle_point_normals"),
+                ],
+                vec![A::Command("toggle_prim_numbers"), A::Command("toggle_prim_normals")],
+                vec![A::Command("toggle_vertex_numbers")],
+            ]
+        );
+    }
+
+    /// A submenu is the menu showing another page where it stands: a press
+    /// on a page's row turns to it and keeps the menu up, a switch on a
+    /// page flips, re-marks and keeps it up, the first row leads back, and
+    /// a top-level row closes the menu as it always did.
+    #[test]
+    fn the_viewport_menu_turns_to_a_page_and_stays_open() {
+        use crate::app::{ViewportMenuAction as A, ViewportMenuPage as P};
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.show_prim_numbers = false;
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let press = |state: &mut State, action: A| {
+            let i = state.viewport_menu_actions.iter().position(|a| *a == action).unwrap_or_else(|| panic!("no {action:?} row"));
+            state.cursor_x = context_menu::x() + 20.0;
+            state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        };
+        let at = (context_menu::x(), context_menu::y());
+        press(&mut state, A::Submenu(P::Markers));
+        assert!(state.viewport_menu_open(), "turning the page keeps the menu up");
+        assert_eq!(state.viewport_menu_page, Some(P::Markers));
+        assert_eq!((context_menu::x(), context_menu::y()), at, "where it was");
+        assert_eq!(state.viewport_menu_actions[0], A::Back);
+
+        press(&mut state, A::Command("toggle_prim_numbers"));
+        assert!(state.show_prim_numbers, "the switch flipped");
+        assert!(state.viewport_menu_open(), "and the page is still up");
+        let i = state.viewport_menu_actions.iter().position(|a| *a == A::Command("toggle_prim_numbers")).unwrap();
+        assert!(context_menu::options()[i].starts_with('●'), "re-marked: {}", context_menu::options()[i]);
+
+        press(&mut state, A::Back);
+        assert!(state.viewport_menu_open());
+        assert_eq!(state.viewport_menu_page, None);
+        assert_eq!(state.viewport_menu_actions[0], A::FrameAll);
+
+        press(&mut state, A::Command("toggle_grid"));
+        assert!(!state.viewport_menu_open(), "a top-level row closes the menu");
+    }
+
+    /// The primitive and vertex overlays read off the scene as the points'
+    /// do: a primitive's number at its centroid, a vertex's — its index in
+    /// the detail — inset from its point toward that centroid, a
+    /// primitive's normal from the centroid along the face. Off, nothing
+    /// is collected.
+    #[test]
+    fn primitives_and_vertices_are_numbered_where_they_are() {
+        use glam::Vec3;
+        let mut d = crate::detail::Detail::new();
+        let p: Vec<u32> = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 2.0, 0.0], [0.0, 2.0, 0.0], [4.0, 0.0, 0.0]]
+            .into_iter()
+            .map(|at| d.add_point(Vec3::from_array(at)))
+            .collect();
+        d.add_prim(&[p[0], p[1], p[2], p[3]]);
+        d.add_prim(&[p[1], p[4], p[2]]);
+        let (prims, verts, normals) = crate::render::scene_element_overlays(&d, false, false, false, 1.0);
+        assert!(prims.is_empty() && verts.is_empty() && normals.is_empty());
+
+        let (prims, verts, normals) = crate::render::scene_element_overlays(&d, true, true, true, 0.5);
+        assert_eq!(prims.len(), 2);
+        assert_eq!(prims[0], ([1.0, 1.0, 0.0], 0));
+        assert_eq!(prims[1].1, 1);
+        assert_eq!(verts.iter().map(|(_, v)| *v).collect::<Vec<_>>(), (0..7).collect::<Vec<u32>>(), "every vertex, by its index");
+        // Points 1 and 2 are shared: each has a vertex in either primitive,
+        // and the two stand apart, each inside its own.
+        let inset = crate::render::VERTEX_LABEL_INSET;
+        assert!((Vec3::from_array(verts[1].0) - Vec3::new(2.0, 0.0, 0.0).lerp(Vec3::new(1.0, 1.0, 0.0), inset)).length() < 1e-6);
+        assert!(verts[1].0[0] < 2.0 && verts[4].0[0] > 2.0, "{:?} {:?}", verts[1], verts[4]);
+        assert_eq!(normals.len(), 4, "a whisker a primitive");
+        let n = Vec3::from_array(normals[1].position) - Vec3::from_array(normals[0].position);
+        assert!((n - Vec3::new(0.0, 0.0, 0.5)).length() < 1e-6, "{n:?}");
+
+        // And the app collects them by its switches, and persists those.
+        let mut state = State::new(false);
+        state.show_prim_numbers = false;
+        state.show_vertex_numbers = false;
+        state.rebuild_scene_geometry();
+        assert!(state.overlay_prim_labels.is_empty() && state.overlay_vertex_labels.is_empty());
+        state.run_command("toggle_prim_numbers");
+        state.run_command("toggle_vertex_numbers");
+        assert!(!state.overlay_prim_labels.is_empty() && !state.overlay_vertex_labels.is_empty());
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        let back = crate::app::DesignSettings::from_kdl_str(&kdl).viewport;
+        assert!(back.show_prim_numbers && back.show_vertex_numbers && !back.show_prim_normals);
     }
 
     /// Show Grid heads the Guides group, marked from the live flag; the row
@@ -2010,7 +2168,7 @@ mod tests {
         let mut state = State::new(false);
         state.viewport_mut().show_grid = true;
         let row = |state: &State| {
-            let (options, actions) = state.viewport_menu_rows();
+            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_grid")));
             let i = actions.iter().position(|a| *a == A::Command("toggle_grid")).expect("a Show Grid row");
             options[i].clone()
         };
@@ -2032,7 +2190,7 @@ mod tests {
         let mut state = State::new(false);
         state.viewport_mut().show_origin = true;
         let row = |state: &State| {
-            let (options, actions) = state.viewport_menu_rows();
+            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_origin")));
             let i = actions.iter().position(|a| *a == A::Command("toggle_origin")).expect("a Show Origin row");
             options[i].clone()
         };
@@ -2056,7 +2214,7 @@ mod tests {
         state.rebuild_scene_geometry();
         let whiskers = state.overlay_normal_verts.len();
         let row = |state: &State| {
-            let (options, actions) = state.viewport_menu_rows();
+            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_point_normals")));
             let i = actions.iter().position(|a| *a == A::Command("toggle_point_normals")).expect("a Show Point Normals row");
             options[i].clone()
         };
@@ -2080,7 +2238,7 @@ mod tests {
         state.show_point_numbers = false;
         state.rebuild_scene_geometry();
         let row = |state: &State| {
-            let (options, actions) = state.viewport_menu_rows();
+            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_point_numbers")));
             let i = actions.iter().position(|a| *a == A::Command("toggle_point_numbers")).expect("a Show Point Numbers row");
             options[i].clone()
         };
@@ -2106,7 +2264,7 @@ mod tests {
         state.show_point_markers = false;
         state.rebuild_scene_geometry();
         let row = |state: &State| {
-            let (options, actions) = state.viewport_menu_rows();
+            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_point_markers")));
             let i = actions.iter().position(|a| *a == A::Command("toggle_point_markers")).expect("a Show Point Markers row");
             options[i].clone()
         };
@@ -2130,7 +2288,7 @@ mod tests {
         let mut state = State::new(false);
         state.render_points = false;
         let row = |state: &State| {
-            let (options, actions) = state.viewport_menu_rows();
+            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_render_points")));
             let i = actions.iter().position(|a| *a == A::Command("toggle_render_points")).expect("a Show Points row");
             options[i].clone()
         };
@@ -2156,6 +2314,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
+        state.show_viewport_menu_page(state.viewport_menu_page_of(A::WireThicknessSlider));
         let acts = state.viewport_menu_actions.clone();
         let i = acts.iter().position(|a| *a == A::WireThicknessSlider).expect("a Wire Thickness row");
         assert_eq!(acts[i - 1], A::Command("toggle_wireframe"), "it sits under Show Wireframe");
@@ -2250,6 +2409,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
+        state.show_viewport_menu_page(state.viewport_menu_page_of(A::PointSizeSlider));
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::PointSizeSlider).expect("a Point Size row");
         let sl = context_menu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step, sl.decimals), (0.0, 0.1, 0.005, 3));
@@ -2292,6 +2452,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
+        state.show_viewport_menu_page(state.viewport_menu_page_of(A::PointMarkerSizeSlider));
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::PointMarkerSizeSlider).expect("a Point Marker Size row");
         assert_eq!(state.viewport_menu_actions[i - 1], A::Command("toggle_point_markers"), "it sits under its switch");
         let sl = context_menu::slider(i).expect("a slider");
@@ -2341,6 +2502,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
+        state.show_viewport_menu_page(state.viewport_menu_page_of(A::PullArrowScaleSlider));
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::PullArrowScaleSlider).expect("a Pull Arrow Scale row");
         let sl = context_menu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.25, 10.0, 0.25, "x"));
@@ -2379,6 +2541,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
+        state.show_viewport_menu_page(state.viewport_menu_page_of(A::GroupMarkerScaleSlider));
         let i = state.viewport_menu_actions.iter().position(|a| *a == A::GroupMarkerScaleSlider).expect("a Group Marker Scale row");
         assert_eq!(state.viewport_menu_actions[i - 1], A::PointSizeSlider, "it sits under the size it multiplies");
         let sl = context_menu::slider(i).expect("a slider");
