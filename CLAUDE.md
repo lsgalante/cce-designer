@@ -130,6 +130,24 @@ template's defaults with their numbers scaled by half again, a stand-in
 that stored nothing and read nothing of the node's own values.
 `the_cameras_and_the_parameter_reset_are_commands` is the test.
 
+**Reset Parameters is undoable** (`src/param_history.rs`, the same day),
+which makes it the first thing outside a text box or a viewer state that
+is. `State::param_history` holds one kind of step: a node's whole
+parameter list as it stood before a command rewrote it, by node ID, so a
+rename in between does not lose it and a deleted node drops its step with
+a line on the status bar. A snapshot of ONE node, not of the tree:
+restoring the tree would take back every edit made anywhere since, none of
+which are recorded. Undo and Redo consult it LAST — a code row, then a
+viewer state, then this (`Application::undo` for the chord,
+`Action::Undo` for the palette) — so the order across the three is by
+owner and not by time. New Project and Open clear it; the sync channel's
+reload does not, the nodes being the same ones. It is not cce-ui's
+`History` because that has no way to look at a step before taking it, and
+what is filed for redo is the current state of the node the step names.
+Any other command that rewrites a node's parameters at once records the
+same way: a `ParamSnapshot` to `param_history.record` before the write.
+`reset_parameters_is_undone_and_redone` is the test.
+
 (The former bespoke HTTP API on port 3000 was retired in favor of this;
 app-internal threads like the cce-files choosers now return results via
 `CustomEvent::RunAction` instead of POSTing to it.)

@@ -1,6 +1,7 @@
 
 pub mod app;
 pub mod param;
+pub mod param_history;
 pub mod application;
 pub mod curve_tool;
 pub mod soft_transform_tool;
@@ -6710,6 +6711,67 @@ mod tests {
         // With nothing selected there is nothing to reset, and it says so.
         state.graph_mut().set_selected_node(None);
         state.run_command("reset_parameters");
+    }
+
+    /// Reset Parameters can be taken back, and put back again. It rewrites
+    /// every parameter of a node at once, and until it recorded a step the
+    /// values it replaced were gone.
+    #[test]
+    fn reset_parameters_is_undone_and_redone() {
+        let mut state = State::new(false);
+        let slot = state
+            .current_dir()
+            .children
+            .iter()
+            .position(|c| c.node_type == "sphere")
+            .expect("the bundled project has a sphere");
+        state.graph_mut().set_selected_node(Some(slot));
+        let texts = |state: &State| -> Vec<(String, String, bool)> {
+            state.current_dir().children[slot]
+                .params
+                .iter()
+                .map(|p| (p.name.clone(), p.text().to_string(), p.is_expr()))
+                .collect()
+        };
+        {
+            let node = &mut state.current_dir_mut().children[slot];
+            node.params.iter_mut().find(|p| p.name == "Radius").unwrap().set_text("3.25".to_string());
+            let rows = node.params.iter_mut().find(|p| p.name == "Rows").unwrap();
+            rows.set_text("$F + 4".to_string());
+            rows.set_expr(true);
+        }
+        let edited = texts(&state);
+
+        assert!(!state.param_history_step(true), "nothing to undo before the reset");
+        assert!(state.run_command("reset_parameters"));
+        let reset = texts(&state);
+        assert_ne!(reset, edited);
+
+        // Through the Undo command, as the palette and the chord arrive.
+        assert!(state.run_command("undo"));
+        assert_eq!(texts(&state), edited, "undo did not bring the values back, expression flag included");
+        assert!(state.run_command("redo"));
+        assert_eq!(texts(&state), reset);
+        assert!(state.run_command("undo"));
+        assert_eq!(texts(&state), edited);
+
+        // A rename between the reset and the undo: the step is by id.
+        state.run_command("reset_parameters");
+        state.current_dir_mut().children[slot].name = "ball".to_string();
+        assert!(state.param_history_step(true));
+        assert_eq!(texts(&state), edited);
+
+        // A node that is gone takes its step with it, and says so.
+        state.run_command("reset_parameters");
+        state.current_dir_mut().children.remove(slot);
+        assert!(!state.param_history_step(true));
+
+        // Another document's steps are not this one's.
+        let mut state = State::new(false);
+        state.graph_mut().set_selected_node(Some(slot));
+        state.run_command("reset_parameters");
+        state.new_project();
+        assert!(!state.param_history_step(true), "New Project kept the old project's undo");
     }
 
     /// New Project from the palette starts a project. The command named a

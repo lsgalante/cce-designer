@@ -321,11 +321,14 @@ impl Application for State {
     }
 
     /// The toolkit's undo/redo routing lands here once no focused text box
-    /// wanted the chord. Only the curve viewer state has a history today.
+    /// wanted the chord: a code row, a viewer state, then the parameter
+    /// history, the first with something to take back.
     fn undo(&mut self, needs_rebuild: &mut bool) -> bool {
         // A code row being edited owns the chord: its typing is the thing to
         // undo, ahead of a viewer tool that may also be active.
-        let taken = self.code_editor_action(cce_ui::widget::ContextAction::Undo) || self.viewer_tool_undo();
+        let taken = self.code_editor_action(cce_ui::widget::ContextAction::Undo)
+            || self.viewer_tool_undo()
+            || self.param_history_step(true);
         if taken {
             *needs_rebuild = true;
         }
@@ -333,7 +336,9 @@ impl Application for State {
     }
 
     fn redo(&mut self, needs_rebuild: &mut bool) -> bool {
-        let taken = self.code_editor_action(cce_ui::widget::ContextAction::Redo) || self.viewer_tool_redo();
+        let taken = self.code_editor_action(cce_ui::widget::ContextAction::Redo)
+            || self.viewer_tool_redo()
+            || self.param_history_step(false);
         if taken {
             *needs_rebuild = true;
         }

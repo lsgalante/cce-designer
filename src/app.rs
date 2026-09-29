@@ -2059,6 +2059,10 @@ pub struct State {
     /// Copy Parameter's clipboard: (node id, parameter name). An id, so a
     /// rename between the copy and the paste still pastes the right path.
     pub copied_param: Option<(String, String)>,
+    /// Undo for commands that rewrite a node's parameters whole — see
+    /// `src/param_history.rs`. Consulted after a code row and a viewer
+    /// state have had their turn.
+    pub param_history: crate::param_history::ParamHistory,
     /// The network editor's right-click menu — the same thread-local again,
     /// with the flag saying the open menu is this one.
     pub network_menu_active: bool,
@@ -3121,16 +3125,47 @@ impl State {
             return false;
         }
         let node = &mut self.param_editor_dir_mut().children[slot];
+        let before = crate::param_history::ParamSnapshot {
+            node_id: node.id.clone(),
+            params: node.params.clone(),
+            what: "Reset Parameters",
+        };
         for (pname, text, is_expr) in defaults {
             if let Some(p) = node.params.iter_mut().find(|p| p.name == pname) {
                 p.set_text(text);
                 p.set_expr(is_expr);
             }
         }
+        self.param_history.record(before);
         self.sync_nodes();
         self.rebuild_scene_geometry();
         self.sync_parameters_pane();
         self.update_status_text(&format!("{name}: parameters reset"));
+        true
+    }
+
+    /// Undo (or redo) the last command that rewrote a node's parameters.
+    /// False when there is no such step, so the caller can say nothing was
+    /// taken.
+    pub fn param_history_step(&mut self, undo: bool) -> bool {
+        let Some(step) = self.param_history.take(undo) else { return false };
+        let verb = if undo { "Undo" } else { "Redo" };
+        let Some(node) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, &step.node_id) else {
+            // Deleted since. The step names nothing, and is dropped.
+            self.update_status_text(&format!("{verb} {}: the node is gone", step.what));
+            return false;
+        };
+        let replaced = crate::param_history::ParamSnapshot {
+            node_id: step.node_id.clone(),
+            params: std::mem::replace(&mut node.params, step.params),
+            what: step.what,
+        };
+        let name = node.name.clone();
+        self.param_history.file(undo, replaced);
+        self.sync_nodes();
+        self.rebuild_scene_geometry();
+        self.sync_parameters_pane();
+        self.update_status_text(&format!("{verb} {}: {name}", step.what));
         true
     }
 
@@ -6647,6 +6682,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             param_menu_actions: Vec::new(),
             param_menu_target: None,
             copied_param: None,
+            param_history: Default::default(),
             network_menu_active: false,
             network_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
@@ -8408,14 +8444,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // Undo/Redo reach whichever editing state owns a history. The
             // chords arrive through `Application::undo` / `redo` (the
             // toolkit routes them, after the focused text box's turn); the
-            // Edit menu rows come here directly. The curve viewer state is
-            // the only history so far; a project-wide one would be consulted
-            // here after the tool declines.
+            // Edit menu rows come here directly. A viewer state's history
+            // first, then the parameter history (`src/param_history.rs`);
+            // a project-wide one would be consulted after both decline.
             Action::Undo => {
-                self.viewer_tool_undo();
+                let _ = self.viewer_tool_undo() || self.param_history_step(true);
             }
             Action::Redo => {
-                self.viewer_tool_redo();
+                let _ = self.viewer_tool_redo() || self.param_history_step(false);
             }
             Action::ToggleGrid => {
                 let val = !self.viewport().show_grid;
