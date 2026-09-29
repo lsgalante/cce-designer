@@ -328,7 +328,8 @@ Where it all went:
   the zoom family, Detach Circular Window) were already registry commands.
   Three settings that were toggles on those nodes and reachable NOWHERE else
   became commands: `toggle_ray_traced_preview`, `toggle_wire_single_color`,
-  `toggle_render_points`.
+  and `toggle_render_points` — Show Points, which was retired on
+  2026-09-29 (see "Display mode" below).
 - **The recent-projects list** was the Main node's "Open" dropdown, which
   would have left `recent_files` written and read by nothing. It is rows at
   the head of the palette's Commands list (`RECENT_ROW_PREFIX`), under the
@@ -2185,8 +2186,8 @@ addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto another's
 action, while old files carrying `show_cube_enabled` still load), and a
 row for each submenu: **Style** (how the geometry is drawn: the
 wireframe's switch, thickness and opacity, then the surface's shading,
-opacity and Show Occluded) and **Markers** (what is drawn on it: Show
-Points, Point Size, Group Marker Scale and Pull Arrow Scale; then the
+opacity and Show Occluded) and **Markers** (what is drawn on it: Group
+Marker Size and Pull Arrow Scale; then the
 overlays a class at a time — Show Point Markers and its size, Show Point
 Numbers, Show Point Normals; Show Primitive Numbers, Show Primitive
 Normals; Show Vertex Markers, Show Vertex Numbers, Show Vertex Normals).
@@ -2248,10 +2249,10 @@ half a pixel, the palette row's range), a **Wire Opacity** slider under
 that (percent by 5, `State::wire_opacity` — the wires' own, apart from the
 polygons' Opacity; until 2026-09-25 it was the Wire Color's ALPHA, and
 `StoredRenderSettings` moves an old alpha, from state.kdl's `#rrggbbaa` or
-a project's four-component array, into it on load), a **Point Size** slider (0–0.1
-world units by 0.005, no suffix since the World Unit names them), a
-**Point Marker Size** slider (the palette row's 0.005–0.1), a **Group
-Marker Scale** slider (0.5–4 by 0.05, read "1.25x"), and the
+a project's four-component array, into it on load), a
+**Point Marker Size** slider (the palette row's 0.005–0.1, no suffix since
+the World Unit names the units), a **Group
+Marker Size** slider (0–0.2 world units by 0.005), and the
 polygon **Opacity** as a
 SLIDER row — cce-ui's `context_menu::MenuSlider` (2026-09-25), set on the
 shown menu by `open_viewport_context_menu`. `viewport_menu_slider` is the
@@ -2267,8 +2268,8 @@ MouseInput, and `mouse_wheel` at the top of MouseWheel — where a wheel
 anywhere over the open menu is swallowed rather than orbiting the scene.
 `drain_viewport_menu_slider` lands a change through
 `land_viewport_menu_slider`, which sets the live field and redoes only what
-it feeds: opacity and wire thickness are draw-time, and point size re-bakes
-the Render points (the stage pass's size key) and the Selected-Group
+it feeds: opacity and wire thickness are draw-time, and group marker size
+re-bakes the Selected-Group
 markers — re-sized from `State::group_members`, the positions `sync_nodes`
 keeps from its evaluation, by `rebuild_group_marker_verts`; point marker
 size re-sizes the Show Point Markers overlay from the scene positions
@@ -2276,10 +2277,23 @@ size re-sizes the Show Point Markers overlay from the scene positions
 `rebuild_overlay_marker_verts`). None of it
 re-evaluates the graph, which `apply_setting`'s regenerate pass would do per
 pixel of drag. `sync_nodes` also re-sizes the markers when only the size
-moved (`last_group_marker_size`), so the palette's Point Size and Group
-Marker Scale rows reach them the same way. `viewport_menu_rows`
+moved (`last_group_marker_size`), so the palette's Group
+Marker Size row reaches them the same way. `viewport_menu_rows`
 and `run_viewport_menu_action` are split from the open and the click so a
 test reads and runs the rows.
+
+**There is one display of a marker on every point, Show Point Markers**
+(since 2026-09-29). Until then there was a second, **Show Points**
+(`toggle_render_points`, with Point Size and Point Color), which the
+retired Render node had brought: the same small sphere on the same points
+of the same scene, with a size and a colour of its own, differing only in
+following the fill's Opacity. It is gone — the command, the mesh, the three
+settings. The group markers were sized off it, Point Size times Group
+Marker Scale, and have a size of their own now
+(`State::group_marker_size`, world units); `StoredRenderSettings` reads a
+file from before by multiplying the old pair out, and does not read
+`render_points` or `point_color`.
+`an_older_render_block_gives_the_group_markers_their_size` is the test.
 
 **Smooth shading is baked, not shaded.** The raster pass flat-shades every
 fill in `scene3d.wgsl` from screen-space derivative normals, and cce-ui's
@@ -2334,7 +2348,7 @@ opaque mesh.
 
 **Every annotation is dimmed by what is in front of it** (since
 2026-09-29). Three mechanisms, because there are three kinds of annotation.
-The MARKERS (Render points, Selected-Group markers, Show Point Markers)
+The MARKERS (Selected-Group markers, Show Point Markers)
 always were: they draw before the fill and the wires and write depth, so a
 nearer translucent face or wire blends over them. The LINE annotations —
 the normal whiskers, Visualize's vectors, the pull arrows — drew AFTER the
@@ -2398,7 +2412,7 @@ and the arrowed points are exactly the ones that moved. An arrow's full length,
 head included, is the displacement times **Pull Arrow Scale**
 (`State::pull_arrow_scale`, default 1 — the true vector; a dialog row and a
 viewport-menu slider, 0.25–10x, persisted in the render block beside Group
-Marker Scale). The scale is display only: the sampled pairs are kept
+Marker Size). The scale is display only: the sampled pairs are kept
 unscaled on `pull_arrow_pairs`, and `rebuild_pull_arrow_verts` stretches
 each arrow from its fixed base, so a slider drag re-evaluates nothing.
 
@@ -2680,10 +2694,10 @@ would throw the selection to the top. `dialog_settings_rows_name_owners_that_exi
 is the backstop, because the failure is silent — a `Field` key no dispatch
 arm names reads a default and writes nowhere, so the row draws, takes an
 edit and does nothing, which is why that test round-trips every one of them.
-**Group Marker Scale** is the one row added with the collapse: the
-Selected-Group markers' radius as a multiple of Point Size
-(`State::group_marker_scale`, persisted in the render block; 1.25 was the
-hard-coded ratio).
+**Group Marker Size** is the one row added with the collapse: the
+Selected-Group markers' radius in world units
+(`State::group_marker_size`, persisted in the render block; it was a
+multiple of the retired Point Size until 2026-09-29).
 
 **The open project's PATH heads the Commands list**, as a row rather than a
 command (`PATH_ROW_ID`): the label is the path, the chord column carries the

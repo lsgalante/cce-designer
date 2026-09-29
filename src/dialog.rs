@@ -1297,13 +1297,8 @@ pub const SETTINGS: &[Setting] = &[
     // polygons'. It was the wire colour's alpha until 2026-09-25.
     Setting::field("Wire Opacity", "wire_opacity", Ctl::Slider { min: 0.0, max: 1.0, dec: 2 }),
     Setting::field("Wire Thickness", "wire_width", Ctl::Slider { min: 1.0, max: 8.0, dec: 1 }),
-    Setting::field("Point Size", "point_size", Ctl::Slider { min: 0.0, max: 0.1, dec: 3 }),
-    Setting::field("Point Color", "point_color", Ctl::Color),
-    // The Selected-Group markers, as a multiple of Point Size: they draw
-    // beside the Render points on the same vertices, so what matters is
-    // how much larger they are — 1.25 was the hard-coded ratio until
-    // 2026-09-24.
-    Setting::field("Group Marker Scale", "group_marker_scale", Ctl::Slider { min: 0.5, max: 4.0, dec: 2 }),
+    // The Selected-Group markers' radius, in world units.
+    Setting::field("Group Marker Size", "group_marker_size", Ctl::Slider { min: 0.0, max: crate::app::GROUP_MARKER_SIZE_MAX, dec: 3 }),
     // The pull arrows' length over the true displacement; 1 is the vector
     // as it is.
     Setting::field("Pull Arrow Scale", "pull_arrow_scale", Ctl::Slider { min: 0.25, max: 10.0, dec: 2 }),
@@ -1613,7 +1608,6 @@ impl State {
             "toggle_vertex_numbers" => self.show_vertex_numbers,
             "toggle_vertex_markers" => self.show_vertex_markers,
             "toggle_vertex_normals" => self.show_vertex_normals,
-            "toggle_render_points" => self.render_points,
             "toggle_wire_single_color" => self.wire_single_color,
             "toggle_ray_traced_preview" => self.viewport().rt_mode,
             "toggle_square_viewport" => self.square_viewport,
@@ -1754,7 +1748,6 @@ impl State {
     fn settings_field_bool(&self, key: &str) -> bool {
         match key {
             "wire_single_color" => self.wire_single_color,
-            "render_points" => self.render_points,
             _ => false,
         }
     }
@@ -1763,7 +1756,6 @@ impl State {
         match key {
             "bg_color" => self.viewport().bg_color,
             "grid_color" => self.viewport().grid_color,
-            "point_color" => self.point_color,
             "point_marker_color" => self.point_marker_color,
             "wire_color" => self.wire_color,
             _ => [0.0; 3],
@@ -1778,8 +1770,7 @@ impl State {
             "wire_width" => self.wire_width,
             "geo_opacity" => self.geo_opacity,
             "wire_opacity" => self.wire_opacity,
-            "point_size" => self.point_size,
-            "group_marker_scale" => self.group_marker_scale,
+            "group_marker_size" => self.group_marker_size,
             "pull_arrow_scale" => self.pull_arrow_scale,
             _ => 0.0,
         }
@@ -1805,7 +1796,6 @@ impl State {
                 let on = value == "true";
                 match key {
                     "wire_single_color" => self.wire_single_color = on,
-                    "render_points" => self.render_points = on,
                     _ => {}
                 }
             }
@@ -1814,7 +1804,6 @@ impl State {
                 match key {
                     "bg_color" => self.viewport_mut().bg_color = c,
                     "grid_color" => self.viewport_mut().grid_color = c,
-                    "point_color" => self.point_color = c,
                     "point_marker_color" => self.point_marker_color = c,
                     "wire_color" => {
                         // Setting a wire colour means wanting to see it: the
@@ -1847,8 +1836,7 @@ impl State {
                     "wire_width" => self.wire_width = v,
                     "geo_opacity" => self.geo_opacity = v,
                     "wire_opacity" => self.wire_opacity = v,
-                    "point_size" => self.point_size = v,
-                    "group_marker_scale" => self.group_marker_scale = v,
+                    "group_marker_size" => self.group_marker_size = v,
                     "pull_arrow_scale" => {
                         self.pull_arrow_scale = v;
                         self.rebuild_pull_arrow_verts();

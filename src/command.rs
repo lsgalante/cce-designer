@@ -217,7 +217,6 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "toggle_vertex_markers", label: "Show Vertex Markers", context: Context::Viewport, run: Run::Key(Action::ToggleVertexMarkers), default_chord: None },
     Command { id: "toggle_vertex_numbers", label: "Show Vertex Numbers", context: Context::Viewport, run: Run::Key(Action::ToggleVertexNumbers), default_chord: None },
     Command { id: "toggle_vertex_normals", label: "Show Vertex Normals", context: Context::Viewport, run: Run::Key(Action::ToggleVertexNormals), default_chord: None },
-    Command { id: "toggle_render_points", label: "Show Points", context: Context::Viewport, run: Run::Key(Action::ToggleRenderPoints), default_chord: None },
     Command { id: "toggle_wire_single_color", label: "Wireframe Single Color", context: Context::Viewport, run: Run::Key(Action::ToggleWireSingleColor), default_chord: None },
     Command { id: "toggle_ray_traced_preview", label: "Ray Traced Preview", context: Context::Viewport, run: Run::Key(Action::ToggleRayTracedPreview), default_chord: None },
     Command { id: "toggle_square_viewport", label: "Square Aspect", context: Context::Viewport, run: Run::Key(Action::ToggleSquareViewport), default_chord: Some("Ctrl+a") },

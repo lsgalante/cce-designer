@@ -471,15 +471,12 @@ pub enum ViewportMenuAction {
     /// and stepped the same 5%: the two are independent, so a translucent
     /// fill can carry a solid lattice and the other way round.
     WireOpacitySlider,
-    /// Point Size in world units, the Render points' radius and (times
-    /// Group Marker Scale) the group markers': 0–0.1 like the palette's row.
-    PointSizeSlider,
     /// Point Marker Size in world units, the Show Point Markers overlay's
     /// radius: the palette row's 0.005–0.1.
     PointMarkerSizeSlider,
-    /// Group Marker Scale, the Selected-Group markers' radius as a multiple
-    /// of Point Size: the palette row's 0.5–4.
-    GroupMarkerScaleSlider,
+    /// Group Marker Size in world units, the Selected-Group markers'
+    /// radius: the palette row's 0–0.2.
+    GroupMarkerSizeSlider,
     /// Pull Arrow Scale, the pull arrows' length as a multiple of the true
     /// displacement: the palette row's 0.25–10.
     PullArrowScaleSlider,
@@ -1337,13 +1334,12 @@ pub struct RenderSettings {
     pub wire_opacity: f32,
     pub wire_width: f32,
     pub geo_opacity: f32,
-    pub render_points: bool,
-    pub point_size: f32,
-    pub point_color: [f32; 3],
-    /// The Selected-Group markers' radius as a multiple of `point_size` —
-    /// they draw on the same vertices as the Render points, so the ratio is
-    /// what keeps both legible. Hard-coded at 1.25 until 2026-09-24.
-    pub group_marker_scale: f32,
+    /// The Selected-Group markers' radius, in world units. Until
+    /// 2026-09-29 it was Point Size times Group Marker Scale, Point Size
+    /// being the radius of the Show Points display, which went that day as
+    /// a double of Show Point Markers; [`StoredRenderSettings`] multiplies
+    /// an old pair out.
+    pub group_marker_size: f32,
     /// The pull arrows' length as a multiple of the displacement they show.
     /// 1 draws the true vector; a longer arrow is legible when the pull is
     /// small beside the model. Display only — the pull itself is untouched.
@@ -1364,7 +1360,10 @@ pub struct RenderSettings {
 /// with three components or four. A fourth is the wire opacity as it was
 /// stored before `wire_opacity` existed, and becomes it when the file names
 /// no `wire_opacity` of its own — dropping it would make every translucent
-/// wireframe opaque on the first load.
+/// wireframe opaque on the first load. The group markers' size is read the
+/// same way: its own key, else the `point_size` x `group_marker_scale` it
+/// was until 2026-09-29. `render_points` and `point_color`, the rest of the
+/// retired Show Points display, are in older files and not read.
 #[derive(Deserialize)]
 struct StoredRenderSettings {
     #[serde(default)]
@@ -1380,13 +1379,11 @@ struct StoredRenderSettings {
     #[serde(default = "default_geo_opacity")]
     geo_opacity: f32,
     #[serde(default)]
-    render_points: bool,
-    #[serde(default = "default_point_size")]
-    point_size: f32,
-    #[serde(default = "default_point_color")]
-    point_color: [f32; 3],
-    #[serde(default = "default_group_marker_scale")]
-    group_marker_scale: f32,
+    group_marker_size: Option<f32>,
+    #[serde(default)]
+    point_size: Option<f32>,
+    #[serde(default)]
+    group_marker_scale: Option<f32>,
     #[serde(default = "default_pull_arrow_scale")]
     pull_arrow_scale: f32,
     #[serde(default)]
@@ -1410,10 +1407,10 @@ impl From<StoredRenderSettings> for RenderSettings {
             wire_opacity: s.wire_opacity.or(old_alpha).unwrap_or(1.0).clamp(0.0, 1.0),
             wire_width: s.wire_width,
             geo_opacity: s.geo_opacity,
-            render_points: s.render_points,
-            point_size: s.point_size,
-            point_color: s.point_color,
-            group_marker_scale: s.group_marker_scale,
+            group_marker_size: s
+                .group_marker_size
+                .unwrap_or_else(|| s.point_size.unwrap_or(0.02) * s.group_marker_scale.unwrap_or(1.25))
+                .clamp(0.0, GROUP_MARKER_SIZE_MAX),
             pull_arrow_scale: s.pull_arrow_scale,
             smooth_shading: s.smooth_shading,
             show_occluded: s.show_occluded,
@@ -1421,9 +1418,12 @@ impl From<StoredRenderSettings> for RenderSettings {
     }
 }
 
-fn default_group_marker_scale() -> f32 {
-    1.25
+fn default_group_marker_size() -> f32 {
+    0.025
 }
+
+/// The far end of Group Marker Size's range, in world units.
+pub(crate) const GROUP_MARKER_SIZE_MAX: f32 = 0.2;
 
 fn default_pull_arrow_scale() -> f32 {
     1.0
@@ -1441,14 +1441,6 @@ fn default_geo_opacity() -> f32 {
     1.0
 }
 
-fn default_point_size() -> f32 {
-    0.02
-}
-
-fn default_point_color() -> [f32; 3] {
-    [1.0, 1.0, 1.0]
-}
-
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
@@ -1458,10 +1450,7 @@ impl Default for RenderSettings {
             wire_opacity: 1.0,
             wire_width: default_wire_width(),
             geo_opacity: default_geo_opacity(),
-            render_points: false,
-            point_size: default_point_size(),
-            point_color: default_point_color(),
-            group_marker_scale: default_group_marker_scale(),
+            group_marker_size: default_group_marker_size(),
             pull_arrow_scale: default_pull_arrow_scale(),
             smooth_shading: false,
             show_occluded: false,
@@ -1762,7 +1751,6 @@ impl DesignSettings {
         ("viewport", "grid_color", 3),
         ("viewport", "point_marker_color", 3),
         ("render", "wire_color", 4),
-        ("render", "point_color", 3),
     ];
 
     pub(crate) fn from_kdl_str(content: &str) -> Self {
@@ -1942,8 +1930,6 @@ pub struct SceneMeshes {
     pub grid: cce_ui::vk::MeshId,
     pub origin: cce_ui::vk::MeshId,
     pub pivot: cce_ui::vk::MeshId,
-    /// The Render node's point display (one octahedron per distinct vertex).
-    pub points: cce_ui::vk::MeshId,
     /// Selected-Group membership markers: while a Group node is selected, one
     /// marker per vertex it tags, so the selection SHOWS the group.
     pub group_points: cce_ui::vk::MeshId,
@@ -2344,15 +2330,9 @@ pub struct State {
     /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
     pub geo_opacity: f32,
     pub last_viewport_geo_opacity: f32,
-    /// Point display of the node geometry (the Render node's "Render Points"
-    /// toggle): one small octahedron per distinct vertex, sized by
-    /// "Point Size" and tinted by "Point Color".
-    pub render_points: bool,
-    pub point_size: f32,
-    pub point_color: [f32; 3],
-    /// Selected-Group marker radius as a multiple of `point_size` (a
-    /// setting row of the dialog; persisted in the render block).
-    pub group_marker_scale: f32,
+    /// Selected-Group marker radius in world units (a setting row of the
+    /// dialog and a viewport-menu slider; persisted in the render block).
+    pub group_marker_size: f32,
     /// Pull arrow length as a multiple of the true displacement (a setting
     /// row of the dialog and a viewport-menu slider; persisted in the render
     /// block).
@@ -2376,13 +2356,6 @@ pub struct State {
     /// orbit is every frame — and clears it when see-through ends, so the
     /// next entry sorts afresh.
     pub sorted_fill_key: Option<(u64, bool, [f32; 3])>,
-    /// (geometry version, quantized size, color) the points mesh was last
-    /// built from; `point_vertex_count` gates the draw.
-    pub last_points_key: Option<(u64, i32, [u8; 3])>,
-    pub point_vertex_count: u32,
-    pub last_viewport_render_points: bool,
-    pub last_viewport_point_size: f32,
-    pub last_viewport_point_color: [f32; 3],
     /// Selected-Group membership markers: marker vertices staged CPU-side by
     /// `sync_nodes` whenever the selection is a Group node (empty otherwise),
     /// flushed to `meshes.group_points`; `group_point_vertex_count` gates the
@@ -2406,9 +2379,9 @@ pub struct State {
     pub pull_arrow_count: u32,
     pub last_pull_arrows_key: Option<(String, Vec<(String, String)>, u64)>,
     /// The selected Group's member positions, kept from the evaluation so
-    /// the markers can be re-SIZED without re-evaluating the node — a point
-    /// size or marker scale change (the viewport menu's slider, per motion
-    /// of a drag) only rebuilds the spheres (`rebuild_group_marker_verts`).
+    /// the markers can be re-SIZED without re-evaluating the node — a
+    /// marker size change (the viewport menu's slider, per motion of a
+    /// drag) only rebuilds the spheres (`rebuild_group_marker_verts`).
     pub group_members: Vec<Vertex3D>,
     /// The marker radius `group_point_verts` was built at.
     pub last_group_marker_size: f32,
@@ -2662,10 +2635,7 @@ impl State {
                 wire_opacity: self.wire_opacity,
                 wire_width: self.wire_width,
                 geo_opacity: self.geo_opacity,
-                render_points: self.render_points,
-                point_size: self.point_size,
-                point_color: self.point_color,
-                group_marker_scale: self.group_marker_scale,
+                group_marker_size: self.group_marker_size,
                 pull_arrow_scale: self.pull_arrow_scale,
                 smooth_shading: self.smooth_shading,
                 show_occluded: self.show_occluded,
@@ -2740,10 +2710,7 @@ impl State {
         self.wire_opacity = r.wire_opacity;
         self.wire_width = r.wire_width;
         self.geo_opacity = r.geo_opacity;
-        self.render_points = r.render_points;
-        self.point_size = r.point_size;
-        self.point_color = r.point_color;
-        self.group_marker_scale = r.group_marker_scale;
+        self.group_marker_size = r.group_marker_size;
         self.pull_arrow_scale = r.pull_arrow_scale;
         self.rebuild_pull_arrow_verts();
         self.smooth_shading = r.smooth_shading;
@@ -5160,14 +5127,6 @@ impl State {
             // World units, so no suffix — the World Unit declaration is what
             // names them, and a readout saying "mm" under a cm declaration
             // would be wrong.
-            ViewportMenuAction::PointSizeSlider => MenuSlider {
-                value: self.point_size.clamp(0.0, 0.1),
-                min: 0.0,
-                max: 0.1,
-                step: 0.005,
-                decimals: 3,
-                suffix: "",
-            },
             // The palette row's spin is 5–100 thousandths; the same range in
             // world units here, where the readout has room for the decimals.
             ViewportMenuAction::PointMarkerSizeSlider => MenuSlider {
@@ -5178,19 +5137,19 @@ impl State {
                 decimals: 3,
                 suffix: "",
             },
-            // A multiple of Point Size, read as one ("1.25x"): a plain x
-            // rather than a multiplication sign, which the menu face may not
-            // carry and which a fallback glyph would then under-measure.
-            ViewportMenuAction::GroupMarkerScaleSlider => MenuSlider {
-                value: self.group_marker_scale.clamp(0.5, 4.0),
-                min: 0.5,
-                max: 4.0,
-                step: 0.05,
-                decimals: 2,
-                suffix: "x",
+            // World units, as the point markers' size is.
+            ViewportMenuAction::GroupMarkerSizeSlider => MenuSlider {
+                value: self.group_marker_size.clamp(0.0, GROUP_MARKER_SIZE_MAX),
+                min: 0.0,
+                max: GROUP_MARKER_SIZE_MAX,
+                step: 0.005,
+                decimals: 3,
+                suffix: "",
             },
-            // A multiple of the true displacement, read as the group
-            // markers' scale is.
+            // A multiple of the true displacement, read as one ("1.25x"): a
+            // plain x rather than a multiplication sign, which the menu face
+            // may not carry and which a fallback glyph would then
+            // under-measure.
             ViewportMenuAction::PullArrowScaleSlider => MenuSlider {
                 value: self.pull_arrow_scale.clamp(0.25, 10.0),
                 min: 0.25,
@@ -5205,10 +5164,9 @@ impl State {
 
     /// Write a slider row's value onto the live field, and redo only what
     /// that value feeds. The opacities and wire thickness are draw-time values (a
-    /// uniform, a line width and the fill's matching depth bias). Point
-    /// size is baked into two meshes: the Render points re-bake in the stage
-    /// pass off their own size key, and the group markers are re-sized here
-    /// from their kept members. Point Marker Size re-sizes the overlay from
+    /// uniform, a line width and the fill's matching depth bias). Group
+    /// Marker Size re-sizes the group markers from their kept members,
+    /// Point Marker Size re-sizes the overlay from
     /// the scene positions its rebuild kept. None of it re-evaluates the
     /// graph.
     fn land_viewport_menu_slider(&mut self, action: ViewportMenuAction, v: f32) {
@@ -5217,9 +5175,8 @@ impl State {
             ViewportMenuAction::OpacitySlider => ("geo_opacity", v / 100.0),
             ViewportMenuAction::WireThicknessSlider => ("wire_width", v),
             ViewportMenuAction::WireOpacitySlider => ("wire_opacity", v / 100.0),
-            ViewportMenuAction::PointSizeSlider => ("point_size", v),
             ViewportMenuAction::PointMarkerSizeSlider => ("point_marker_size", v),
-            ViewportMenuAction::GroupMarkerScaleSlider => ("group_marker_scale", v),
+            ViewportMenuAction::GroupMarkerSizeSlider => ("group_marker_size", v),
             ViewportMenuAction::PullArrowScaleSlider => ("pull_arrow_scale", v),
             _ => return,
         };
@@ -5245,16 +5202,12 @@ impl State {
             "geo_opacity" => self.geo_opacity = v.clamp(0.0, 1.0),
             "wire_width" => self.wire_width = v.clamp(1.0, 8.0),
             "wire_opacity" => self.wire_opacity = v.clamp(0.0, 1.0),
-            "point_size" => {
-                self.point_size = v.clamp(0.0, 0.1);
-                self.rebuild_group_marker_verts();
-            }
             "point_marker_size" => {
                 self.point_marker_size = v.clamp(0.005, 0.1);
                 self.rebuild_overlay_marker_verts();
             }
-            "group_marker_scale" => {
-                self.group_marker_scale = v.clamp(0.5, 4.0);
+            "group_marker_size" => {
+                self.group_marker_size = v.clamp(0.0, GROUP_MARKER_SIZE_MAX);
                 self.rebuild_group_marker_verts();
             }
             "pull_arrow_scale" => {
@@ -5315,9 +5268,8 @@ impl State {
     /// apart: framing; the GUIDES (Show Grid, Show Origin — the scene
     /// furniture that is not the geometry); the WIREFRAME (its switch,
     /// thickness and opacity); the
-    /// POINTS
-    /// (the Show Points switch, point size, and the group marker scale that
-    /// multiplies it); the OVERLAYS (Show Point Markers and its size, Show
+    /// SELECTION FEEDBACK
+    /// (the group markers' size and the pull arrows' scale); the OVERLAYS (Show Point Markers and its size, Show
     /// Point Numbers, Show Point Normals — the annotations drawn over the
     /// scene's points); the SURFACE (flat or smooth shading as a radio pair,
     /// the polygon opacity, Show Occluded — the three that decide how the
@@ -5384,11 +5336,9 @@ impl State {
                 return (options, actions);
             }
             Some(ViewportMenuPage::Markers) => {
-                // The Render points, the group markers sized off them, and
-                // the pull arrows' length, the other selection feedback.
-                toggle(&mut options, &mut actions, "toggle_render_points");
-                row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
-                row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
+                // The selection feedback: the group markers' size and the
+                // pull arrows' length.
+                row(&mut options, &mut actions, "Group Marker Size".into(), ViewportMenuAction::GroupMarkerSizeSlider);
                 row(&mut options, &mut actions, "Pull Arrow Scale".into(), ViewportMenuAction::PullArrowScaleSlider);
 
                 // The overlays, a class at a time: points, primitives,
@@ -5489,9 +5439,8 @@ impl State {
             ViewportMenuAction::OpacitySlider
             | ViewportMenuAction::WireThicknessSlider
             | ViewportMenuAction::WireOpacitySlider
-            | ViewportMenuAction::PointSizeSlider
             | ViewportMenuAction::PointMarkerSizeSlider
-            | ViewportMenuAction::GroupMarkerScaleSlider
+            | ViewportMenuAction::GroupMarkerSizeSlider
             | ViewportMenuAction::PullArrowScaleSlider => {}
             ViewportMenuAction::Separator => {}
         }
@@ -6164,9 +6113,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.group_members = members;
             self.last_group_points_key = group_key;
             self.rebuild_group_marker_verts();
-        } else if (self.group_marker_size() - self.last_group_marker_size).abs() > f32::EPSILON {
-            // Same members, new size (the palette's Point Size or Group
-            // Marker Scale): re-size without re-evaluating.
+        } else if (self.group_marker_size - self.last_group_marker_size).abs() > f32::EPSILON {
+            // Same members, new size (the palette's Group Marker Size):
+            // re-size without re-evaluating.
             self.rebuild_group_marker_verts();
         }
     }
@@ -6241,13 +6190,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.pull_arrows_dirty = true;
     }
 
-    /// The Selected-Group markers' radius: Point Size times Group Marker
-    /// Scale, larger than the Render node's points so both stay legible
-    /// together.
-    pub fn group_marker_size(&self) -> f32 {
-        self.point_size * self.group_marker_scale
-    }
-
     /// Works out how much of each point number shows through the fill, for
     /// the eye the stage pass is staging (`eye` in mesh space, the space of
     /// the labels and the triangles).
@@ -6305,7 +6247,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     }
 
     pub(crate) fn rebuild_group_marker_verts(&mut self) {
-        let size = self.group_marker_size();
+        let size = self.group_marker_size;
         self.group_point_verts = crate::geometry::points_vertices(
             &self.group_members,
             size,
@@ -6706,21 +6648,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             last_viewport_wire_width: 1.0,
             geo_opacity: settings.render.geo_opacity,
             last_viewport_geo_opacity: 1.0,
-            render_points: settings.render.render_points,
-            point_size: settings.render.point_size,
-            point_color: settings.render.point_color,
-            group_marker_scale: settings.render.group_marker_scale,
+            group_marker_size: settings.render.group_marker_size,
             pull_arrow_scale: settings.render.pull_arrow_scale,
             pull_arrow_pairs: Vec::new(),
             smooth_shading: settings.render.smooth_shading,
             show_occluded: settings.render.show_occluded,
             sorted_fill_key: None,
             scene_smooth_verts: Vec::new(),
-            last_points_key: None,
-            point_vertex_count: 0,
-            last_viewport_render_points: false,
-            last_viewport_point_size: 0.0,
-            last_viewport_point_color: [0.0, 0.0, 0.0],
             group_point_verts: Vec::new(),
             group_points_dirty: false,
             group_point_vertex_count: 0,
@@ -8400,11 +8334,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleVertexNumbers => {
                 self.show_vertex_numbers = !self.show_vertex_numbers;
                 self.rebuild_scene_geometry();
-                settings_changed = true;
-            }
-            Action::ToggleRenderPoints => {
-                self.render_points = !self.render_points;
-                self.viewport_dirty = true;
                 settings_changed = true;
             }
             Action::ToggleWireSingleColor => {
@@ -10624,31 +10553,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&self.scene_edge_verts));
         }
 
-        // The Render node's point display: rebuilt whenever the geometry or
-        // the point params moved (the key), skipped entirely while off.
-        if self.render_points {
-            let key = (
-                self.rt_geometry_version,
-                (self.point_size * 1000.0).round() as i32,
-                [
-                    (self.point_color[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                    (self.point_color[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                    (self.point_color[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-                ],
-            );
-            if self.last_points_key != Some(key) {
-                let verts = crate::geometry::points_vertices(
-                    &self.rt_sphere_verts,
-                    self.point_size,
-                    cce_ui::colors::to_linear_rgb(self.point_color),
-                );
-                self.point_vertex_count = verts.len() as u32;
-                renderer.update_mesh(meshes.points, bytemuck::cast_slice(&verts));
-                self.last_points_key = Some(key);
-                self.viewport_dirty = true;
-            }
-        }
-
         // Selected-Group markers, staged by sync_nodes.
         if self.group_points_dirty {
             self.group_points_dirty = false;
@@ -10724,7 +10628,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             grid: renderer.create_mesh(bytemuck::cast_slice(&grid_verts)),
             origin: renderer.create_mesh(bytemuck::cast_slice(&origin_verts)),
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
-            points: renderer.create_mesh(&[]),
             group_points: renderer.create_mesh(&[]),
             overlay_points: renderer.create_mesh(&[]),
             overlay_normals: renderer.create_mesh(&[]),
@@ -10936,10 +10839,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     || self.last_viewport_wire_single_color != self.wire_single_color
                     || self.last_viewport_wire_color != self.wire_color
                     || self.last_viewport_wire_opacity != self.wire_opacity
-                    || self.last_viewport_wire_width != self.wire_width
-                    || self.last_viewport_render_points != self.render_points
-                    || self.last_viewport_point_size != self.point_size
-                    || self.last_viewport_point_color != self.point_color;
+                    || self.last_viewport_wire_width != self.wire_width;
 
                 if viewport_changed {
                     if !rt_mode {
@@ -11000,9 +10900,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     }
                     if self.viewport().show_camera_pivot {
                         draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
-                    }
-                    if self.render_points && self.point_vertex_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     // Selected-Group markers: full-opacity selection feedback,
                     // deliberately outside the Render node's Opacity.
@@ -11114,9 +11011,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     self.last_viewport_wire_color = self.wire_color;
                     self.last_viewport_wire_opacity = self.wire_opacity;
                     self.last_viewport_wire_width = self.wire_width;
-                    self.last_viewport_render_points = self.render_points;
-                    self.last_viewport_point_size = self.point_size;
-                    self.last_viewport_point_color = self.point_color;
                     self.last_viewport_rt_mode = rt_mode;
                     self.viewport_dirty = false;
                 }

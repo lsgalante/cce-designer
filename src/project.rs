@@ -784,9 +784,8 @@ impl State {
                 },
                 "Wire Thickness" => if let Some(v) = as_f32(&p) { self.wire_width = v.clamp(1.0, 8.0); },
                 "Opacity" => if let Some(v) = as_f32(&p) { self.geo_opacity = v.clamp(0.0, 1.0); },
-                "Render Points" => if let Some(v) = as_bool(&p) { self.render_points = v; },
-                "Point Size" => if let Some(v) = as_f32(&p) { self.point_size = v.clamp(0.0, 0.1); },
-                "Point Color" => if let Some(c) = hex_to_color(p.text()) { self.point_color = c; },
+                // Render Points, Point Size and Point Color were the Show
+                // Points display, retired as a double of Show Point Markers.
                 _ => {}
             }
         }

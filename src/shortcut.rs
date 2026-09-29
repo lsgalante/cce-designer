@@ -39,7 +39,6 @@ pub enum Action {
     /// commands, which is what makes them reachable at all.
     ToggleRayTracedPreview,
     ToggleWireSingleColor,
-    ToggleRenderPoints,
     ToggleCircularPane,
     DetachCircularWindow,
     Save,

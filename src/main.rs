@@ -951,7 +951,6 @@ mod tests {
                 subnet("render", vec![
                     p("Show Wireframe", "toggle", "true"),
                     p("Wire Thickness", "slider", "4.0"),
-                    p("Point Color", "color", "#00ff00"),
                 ]),
                 subnet("main", vec![p("Circular Pane", "toggle", "true")]),
             ],
@@ -981,7 +980,6 @@ mod tests {
         assert!((state.grid_thickness - 0.04).abs() < 1e-6);
         assert!(state.wireframe);
         assert!((state.wire_width - 4.0).abs() < 1e-6);
-        assert_eq!(state.point_color[1], 1.0);
         assert!(state.circular_network_pane);
 
         // Idempotent: a second pass has nothing to find and changes nothing.
@@ -1646,7 +1644,7 @@ mod tests {
         state.geo_opacity = 0.5;
         state.grid_thickness = 0.07;
         state.world_unit = cce_ui::units::Unit::Cm;
-        state.point_color = [0.1, 0.9, 0.2];
+        state.point_marker_color = [0.1, 0.9, 0.2];
         state.save_to_file(&dir).expect("save");
         assert!(!state.has_unsaved_changes());
 
@@ -1660,7 +1658,7 @@ mod tests {
         state.geo_opacity = 1.0;
         state.grid_thickness = 0.03;
         state.world_unit = cce_ui::units::Unit::Mm;
-        state.point_color = [1.0, 1.0, 1.0];
+        state.point_marker_color = [1.0, 1.0, 1.0];
 
         state.load_from_file(&dir).expect("load");
         assert!(!state.viewport().show_grid, "the grid comes back off");
@@ -1669,7 +1667,7 @@ mod tests {
         assert!((state.geo_opacity - 0.5).abs() < 1e-6);
         assert!((state.grid_thickness - 0.07).abs() < 1e-6);
         assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
-        assert_eq!(state.point_color, [0.1, 0.9, 0.2]);
+        assert_eq!(state.point_marker_color, [0.1, 0.9, 0.2]);
         assert!(!state.scene_smooth_verts.is_empty(), "the scene was rebuilt smooth");
         assert!(!state.has_unsaved_changes(), "a fresh load is clean");
         assert_eq!(state.command_toggle_state("toggle_grid"), Some(false), "the palette's switch agrees");
@@ -2088,7 +2086,7 @@ mod tests {
         assert_eq!(
             groups(Some(P::Markers)),
             vec![
-                vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider, A::PullArrowScaleSlider],
+                vec![A::GroupMarkerSizeSlider, A::PullArrowScaleSlider],
                 vec![
                     A::Command("toggle_point_markers"),
                     A::PointMarkerSizeSlider,
@@ -2367,26 +2365,6 @@ mod tests {
         assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_markers, "persisted");
     }
 
-    /// Show Points heads the Points group as a switch over the Render
-    /// points, marked from the live flag, and the row runs its command.
-    #[test]
-    fn the_viewport_menu_toggles_show_points() {
-        use crate::app::ViewportMenuAction as A;
-        let mut state = State::new(false);
-        state.render_points = false;
-        let row = |state: &State| {
-            let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_render_points")));
-            let i = actions.iter().position(|a| *a == A::Command("toggle_render_points")).expect("a Show Points row");
-            options[i].clone()
-        };
-        assert_eq!(row(&state), "○ Show Points");
-        state.run_viewport_menu_action(A::Command("toggle_render_points"));
-        assert!(state.render_points);
-        assert_eq!(row(&state), "● Show Points");
-        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
-        assert!(crate::app::DesignSettings::from_kdl_str(&kdl).render.render_points, "persisted");
-    }
-
     /// Wire Thickness is a slider row right under Show Wireframe, over the
     /// palette row's 1–8 px: the wheel steps half a pixel and saves, a press
     /// on the band jumps, and the value is the live `wire_width` the wire
@@ -2470,56 +2448,6 @@ mod tests {
         context_menu::hide();
     }
 
-    /// Point Size is a viewport-menu slider over the palette row's 0–0.1,
-    /// and it re-sizes what it feeds without re-evaluating anything: the
-    /// Selected-Group markers are rebuilt from their KEPT members at Point
-    /// Size x Group Marker Scale on every step.
-    #[test]
-    fn the_viewport_menu_sets_the_point_size_and_resizes_the_group_markers() {
-        use crate::app::ViewportMenuAction as A;
-        use crate::window::WindowEvent;
-        use cce_ui::widget::{context_menu, MouseScrollDelta};
-        let mut state = State::new(false);
-        state.point_size = 0.02;
-        state.group_marker_scale = 2.0;
-        let centre = [0.3f32, 0.4, 0.5];
-        state.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
-        state.rebuild_group_marker_verts();
-        let radius = |state: &State| {
-            state.group_point_verts.iter().map(|v| {
-                let d = [v.position[0] - centre[0], v.position[1] - centre[1], v.position[2] - centre[2]];
-                (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
-            }).fold(0.0f32, f32::max)
-        };
-        assert!((radius(&state) - 0.04).abs() < 1e-4, "{}", radius(&state));
-
-        state.cursor_x = 300.0;
-        state.cursor_y = 200.0;
-        state.open_viewport_context_menu();
-        let sub_actions = state.open_viewport_submenu_with(A::PointSizeSlider);
-        let i = sub_actions.iter().position(|a| *a == A::PointSizeSlider).expect("a Point Size row");
-        let sl = context_menu::submenu::slider(i).expect("a slider");
-        assert_eq!((sl.min, sl.max, sl.step, sl.decimals), (0.0, 0.1, 0.005, 3));
-        assert!((sl.value - 0.02).abs() < 1e-6);
-
-        state.cursor_x = context_menu::submenu::x() + 20.0;
-        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
-        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
-        assert!((state.point_size - 0.03).abs() < 1e-5, "{}", state.point_size);
-        assert!((radius(&state) - 0.06).abs() < 1e-4, "the markers re-sized: {}", radius(&state));
-        assert!(state.group_points_dirty, "and will re-upload");
-        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
-        let saved = crate::app::DesignSettings::from_kdl_str(&kdl).render.point_size;
-        assert!((saved - 0.03).abs() < 1e-6, "persisted: {saved}");
-
-        // A size change arriving another way (the palette's Group Marker
-        // Scale) re-sizes too, through sync_nodes' size check.
-        context_menu::hide();
-        state.group_marker_scale = 1.0;
-        state.sync_nodes();
-        assert!((radius(&state) - 0.03).abs() < 1e-4, "{}", radius(&state));
-    }
-
     /// Point Marker Size is a viewport-menu slider over the palette row's
     /// 0.005–0.1, and it re-sizes the Show Point Markers overlay from the
     /// scene positions the last rebuild kept — landing on exactly what a full
@@ -2567,7 +2495,7 @@ mod tests {
 
     /// Pull Arrow Scale stretches the pull arrows along the pull from their
     /// kept pairs, base fixed — 1 by default, the true vector — and is a
-    /// viewport-menu slider under Group Marker Scale.
+    /// viewport-menu slider under Group Marker Size.
     #[test]
     fn pull_arrow_scale_stretches_the_arrows_from_their_base() {
         use crate::app::ViewportMenuAction as A;
@@ -2606,17 +2534,16 @@ mod tests {
         context_menu::hide();
     }
 
-    /// Group Marker Scale is a viewport-menu slider over the palette row's
-    /// 0.5–4, re-sizing the Selected-Group markers from their kept members
-    /// at Point Size x the scale — no re-evaluation of the Group node.
+    /// Group Marker Size is a viewport-menu slider over the palette row's
+    /// 0–0.2 world units, re-sizing the Selected-Group markers from their
+    /// kept members — no re-evaluation of the Group node.
     #[test]
-    fn the_viewport_menu_sets_the_group_marker_scale() {
+    fn the_viewport_menu_sets_the_group_marker_size() {
         use crate::app::ViewportMenuAction as A;
         use crate::window::WindowEvent;
         use cce_ui::widget::{context_menu, MouseScrollDelta};
         let mut state = State::new(false);
-        state.point_size = 0.02;
-        state.group_marker_scale = 1.25;
+        state.group_marker_size = 0.025;
         let centre = [0.0f32, 1.0, 0.0];
         state.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
         state.rebuild_group_marker_verts();
@@ -2628,22 +2555,45 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        let sub_actions = state.open_viewport_submenu_with(A::GroupMarkerScaleSlider);
-        let i = sub_actions.iter().position(|a| *a == A::GroupMarkerScaleSlider).expect("a Group Marker Scale row");
-        assert_eq!(sub_actions[i - 1], A::PointSizeSlider, "it sits under the size it multiplies");
+        let sub_actions = state.open_viewport_submenu_with(A::GroupMarkerSizeSlider);
+        let i = sub_actions.iter().position(|a| *a == A::GroupMarkerSizeSlider).expect("a Group Marker Size row");
         let sl = context_menu::submenu::slider(i).expect("a slider");
-        assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.5, 4.0, 0.05, "x"));
-        assert_eq!(sl.readout(), "1.25x");
+        assert_eq!((sl.min, sl.max, sl.step, sl.decimals), (0.0, 0.2, 0.005, 3));
+        assert!((sl.value - 0.025).abs() < 1e-6);
 
         state.cursor_x = context_menu::submenu::x() + 20.0;
         state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
-        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 15.0) });
-        assert!((state.group_marker_scale - 2.0).abs() < 1e-5, "{}", state.group_marker_scale);
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 3.0) });
+        assert!((state.group_marker_size - 0.04).abs() < 1e-5, "{}", state.group_marker_size);
         assert!((radius(&state) - 0.04).abs() < 1e-5, "the markers re-sized: {}", radius(&state));
+        assert!(state.group_points_dirty, "and will re-upload");
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
-        let saved = crate::app::DesignSettings::from_kdl_str(&kdl).render.group_marker_scale;
-        assert!((saved - 2.0).abs() < 1e-5, "persisted: {saved}");
+        let saved = crate::app::DesignSettings::from_kdl_str(&kdl).render.group_marker_size;
+        assert!((saved - 0.04).abs() < 1e-5, "persisted: {saved}");
+
+        // A size change arriving another way re-sizes too, through
+        // sync_nodes' size check.
         context_menu::hide();
+        state.group_marker_size = 0.03;
+        state.sync_nodes();
+        assert!((radius(&state) - 0.03).abs() < 1e-5, "{}", radius(&state));
+    }
+
+    /// Show Points, the second display of a marker on every point, is
+    /// retired for Show Point Markers, and the group markers' size is a
+    /// setting of its own. A file from before carries the old keys: the
+    /// size is the old pair multiplied out, and the rest is not read.
+    #[test]
+    fn an_older_render_block_gives_the_group_markers_their_size() {
+        assert!(crate::command::by_id("toggle_render_points").is_none());
+        let old = "render {\n    render_points (bool)true\n    point_size (f64)0.04\n    point_color (rgb)\"#00ff00\"\n    group_marker_scale (f64)2.0\n}\n";
+        let read = crate::app::DesignSettings::from_kdl_str(old).render;
+        assert!((read.group_marker_size - 0.08).abs() < 1e-6, "{}", read.group_marker_size);
+        let new = "render {\n    point_size (f64)0.04\n    group_marker_size (f64)0.01\n}\n";
+        let read = crate::app::DesignSettings::from_kdl_str(new).render;
+        assert!((read.group_marker_size - 0.01).abs() < 1e-6, "its own key wins: {}", read.group_marker_size);
+        let none = crate::app::DesignSettings::from_kdl_str("render {\n    wireframe (bool)true\n}\n").render;
+        assert!((none.group_marker_size - 0.025).abs() < 1e-6, "{}", none.group_marker_size);
     }
 
     /// The dialog plate IS the menu plate: its fill is `Material::menu`'s
@@ -6440,10 +6390,7 @@ mod tests {
         a.wire_opacity = 0.5;
         a.wire_width = 3.0;
         a.geo_opacity = 0.75;
-        a.render_points = true;
-        a.point_size = 0.05;
-        a.point_color = [0.0, 1.0, 0.0];
-        a.group_marker_scale = 2.5;
+        a.group_marker_size = 0.125;
         a.pull_arrow_scale = 4.0;
         a.smooth_shading = true;
         a.show_occluded = true;
@@ -6466,7 +6413,6 @@ mod tests {
             (back.viewport.bg_color, [0.1, 0.2, 0.3]),
             (back.viewport.grid_color, [0.4, 0.5, 0.6]),
             (back.viewport.point_marker_color, [1.0, 0.5, 0.0]),
-            (back.render.point_color, [0.0, 1.0, 0.0]),
         ] {
             for k in 0..3 {
                 assert!(close(got[k], want[k]), "colour {got:?} came back as {want:?}");
@@ -6479,9 +6425,7 @@ mod tests {
         assert!(close(back.render.wire_opacity, 0.5));
         assert!(close(back.render.wire_width, 3.0));
         assert!(close(back.render.geo_opacity, 0.75));
-        assert!(back.render.render_points);
-        assert!(close(back.render.point_size, 0.05));
-        assert!(close(back.render.group_marker_scale, 2.5));
+        assert!((back.render.group_marker_size - 0.125).abs() < 1e-4);
         assert!(close(back.render.pull_arrow_scale, 4.0));
         assert!(back.render.smooth_shading);
         assert!(back.render.show_occluded);
@@ -12417,10 +12361,11 @@ mod tests {
         assert!((state.geo_opacity - 1.0).abs() < 1e-6, "clamped");
         assert_eq!(state.rt_geometry_version, version);
 
-        // Point Size re-sizes the group markers from their kept members.
-        state.land_dialog_slider(&setting_row_id("Point Size"), 0.05);
-        assert!((state.point_size - 0.05).abs() < 1e-6);
-        assert!((state.last_group_marker_size - state.group_marker_size()).abs() < 1e-6);
+        // Group Marker Size re-sizes the group markers from their kept
+        // members.
+        state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
+        assert!((state.group_marker_size - 0.05).abs() < 1e-6);
+        assert!((state.last_group_marker_size - 0.05).abs() < 1e-6);
         assert_eq!(state.rt_geometry_version, version);
 
         // The spin rows land the same way: a whole number over the row's
@@ -12538,7 +12483,7 @@ mod tests {
         assert!(matches!(control("Grid Thickness"), Some(Control::Slider { dec: 0, .. })), "a spin is a whole-number slider");
         assert!(matches!(control("Geometry Opacity"), Some(Control::Slider { dec: 2, .. })));
         assert!(matches!(control("World Unit"), Some(Control::Choice { .. })));
-        assert!(matches!(control("Group Marker Scale"), Some(Control::Slider { .. })));
+        assert!(matches!(control("Group Marker Size"), Some(Control::Slider { .. })));
         // A command's switch is its own row; the settings table lists none
         // of them twice.
         assert!(control("Show Grid").is_none());
@@ -12597,13 +12542,13 @@ mod tests {
         assert_ne!(state.world_unit, before, "Enter steps a choice too");
         assert!(state.dialog_visible(), "and keeps the dialog up");
 
-        let scale_row = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("Group Marker Scale")).unwrap();
+        let scale_row = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("Group Marker Size")).unwrap();
         state.slots.dialog.selected = scale_row;
-        let before = state.group_marker_scale;
+        let before = state.group_marker_size;
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
-        assert!(state.group_marker_scale > before, "right arrow grows the markers");
+        assert!(state.group_marker_size > before, "right arrow grows the markers");
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
-        assert!((state.group_marker_scale - before).abs() < 1e-5, "left arrow shrinks them back");
+        assert!((state.group_marker_size - before).abs() < 1e-5, "left arrow shrinks them back");
 
         // And it survives an unrelated parameter edit, which is the whole
         // reason the subnets had to be the owner before.
@@ -12675,7 +12620,7 @@ mod tests {
             "Grid Color", "Grid Thickness", "Origin Size", "Point Marker Size",
             "Point Marker Color", "World Unit",
             // render
-            "Wireframe Color", "Wire Opacity", "Wire Thickness", "Geometry Opacity", "Point Size", "Point Color",
+            "Wireframe Color", "Wire Opacity", "Wire Thickness", "Geometry Opacity",
             // main
             "Background Color",
             // camera
@@ -12686,7 +12631,7 @@ mod tests {
         let mut state = State::new(false);
         for id in [
             "toggle_grid", "toggle_origin", "toggle_wireframe",
-            "toggle_wire_single_color", "toggle_render_points", "toggle_ray_traced_preview",
+            "toggle_wire_single_color", "toggle_ray_traced_preview",
             "toggle_circular_pane", "toggle_camera_pivot", "toggle_square_viewport",
             "toggle_network_plate",
         ] {
