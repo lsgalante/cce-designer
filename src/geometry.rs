@@ -1110,6 +1110,20 @@ pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &m
     generate_single_node_geometry_with_errors(root, target, visited, &mut err, &mut sim)
 }
 
+/// Whether a node is bypassed: in the graph, and doing nothing.
+///
+/// What reads a bypassed node gets what the node reads — its `Input`,
+/// untouched, and nothing at all from a node that has none, which is what a
+/// generator switched off gives. It is decided HERE, ahead of every
+/// resolver and ahead of the node's own parameters, so an expression that
+/// fails on a bypassed node is not evaluated and not reported.
+///
+/// `input` and `output` are a subnet's plumbing and a camera is not
+/// geometry: the flag on any of them says nothing.
+pub fn is_bypassed(node: &FsNode) -> bool {
+    node.bypassed && !["input", "output", "camera"].iter().any(|ty| node.node_type.eq_ignore_ascii_case(ty))
+}
+
 pub fn generate_single_node_geometry_with_errors(
     root: &FsNode,
     target: &FsNode,
@@ -1130,6 +1144,12 @@ pub fn generate_single_node_geometry_with_errors(
     // Parameter references resolve here, once, for every resolver below:
     // a child of a composed subnet reads its parent's controls through
     // `ch("Name")` and the resolvers never know.
+    if is_bypassed(target) {
+        let res = param_node(root, target, "Input").and_then(|input| generate_single_node_geometry_with_errors(root, input, visited, ocl_error, sim));
+        visited.pop();
+        return res;
+    }
+
     let resolved = resolve_param_refs(root, target, sim.frame, ocl_error);
     let target = resolved.as_ref().unwrap_or(target);
 
@@ -4974,6 +4994,21 @@ pub fn network_sphere_vertices_with_errors(
         // The walk hands nodes to their resolvers directly, so it resolves
         // references itself — dived into a composed subnet, its children are
         // what is drawn, and their controls live on the subnet.
+        if is_bypassed(node) {
+            // Counted as it would have been, so that what is placed by its
+            // index stays where it was; drawn, if it is shown, as what it
+            // passes through; and not gone into — a bypassed subnet's
+            // children are part of what is switched off.
+            if is_geometry_node_type(&node.node_type) {
+                *count += 1;
+            }
+            if parent_visible && node.geometry_visible {
+                if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut Vec::new(), ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
+            return;
+        }
         let resolved = resolve_param_refs(root, node, sim.frame, ocl_error);
         let node = resolved.as_ref().unwrap_or(node);
         let is_visible = parent_visible && node.geometry_visible;
@@ -6063,6 +6098,7 @@ mod tests {
                 .map(|(name, default)| crate::app::ParamDef::new(name.to_string(), "text".to_string(), default.to_string()))
                 .collect(),
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 1,
@@ -6096,6 +6132,7 @@ mod tests {
                 crate::app::ParamDef::new("Shape".to_string(), "choice:None,Spiral,Line,Circle,Grid".to_string(), shape.to_string()),
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let root = FsNode {
@@ -6107,6 +6144,7 @@ mod tests {
             children: vec![points_node("None")],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let geom = network_sphere_vertices(&root);
@@ -6150,6 +6188,7 @@ mod tests {
                 crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.5".to_string())
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let transform1 = FsNode {
@@ -6164,6 +6203,7 @@ mod tests {
                 crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "1.00:2.00:3.00".to_string())
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let root = FsNode {
@@ -6175,6 +6215,7 @@ mod tests {
             children: vec![sphere.clone(), transform1.clone()],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
 
@@ -6202,6 +6243,7 @@ mod tests {
                 crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "-1.00:-1.00:-1.00".to_string())
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let root_chained = FsNode {
@@ -6213,6 +6255,7 @@ mod tests {
             children: vec![sphere, transform1, transform2.clone()],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let mut visited = Vec::new();
@@ -6237,6 +6280,7 @@ mod tests {
                 crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "1.00:1.00:1.00".to_string())
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let root_loop = FsNode {
@@ -6248,6 +6292,7 @@ mod tests {
             children: vec![transform_loop.clone()],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
         let mut visited = Vec::new();
@@ -6268,6 +6313,7 @@ mod tests {
                 crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.5".to_string())
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
 
@@ -6284,6 +6330,7 @@ mod tests {
                 crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.02".to_string())
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
 
@@ -6296,6 +6343,7 @@ mod tests {
             children: vec![sphere, scatter.clone()],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         };
 
@@ -6614,6 +6662,7 @@ mod simnet_tests {
             children,
             params,
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
         }
     }

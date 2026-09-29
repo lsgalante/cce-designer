@@ -791,6 +791,16 @@ impl State {
                     Ok("Project saved".to_string())
                 }
             }
+            McpAction::ToggleBypass { slot } => {
+                match state.current_dir().children.get(slot).map(|n| !n.bypassed) {
+                    Some(bypassed) => {
+                        state.set_bypassed(&[slot], bypassed);
+                        needs_redraw = true;
+                        Ok(format!("Bypassed: {}", bypassed))
+                    }
+                    None => Err("Slot out of bounds".to_string()),
+                }
+            }
             McpAction::ToggleGeometry { slot } => {
                 let active_nodes = state.current_dir().children.len();
                 if slot < active_nodes {

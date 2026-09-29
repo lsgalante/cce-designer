@@ -91,6 +91,15 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
             }),
         ),
         tool(
+            "toggle_bypass",
+            "Bypass the node at the given slot, or stop bypassing it. A bypassed node stays in the graph and does nothing: what reads it gets the node's own Input.",
+            json!({
+                "type": "object",
+                "properties": { "slot": slot("Child index in the current network level") },
+                "required": ["slot"],
+            }),
+        ),
+        tool(
             "toggle_geometry",
             "Toggle geometry visibility for the node at the given slot.",
             json!({

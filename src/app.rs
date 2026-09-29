@@ -149,6 +149,12 @@ pub struct FsNode {
     pub params: Vec<ParamDef>,
     #[serde(default = "default_node_geometry_visible")]
     pub geometry_visible: bool,
+    /// Bypassed: the node is in the graph and does nothing. What reads it
+    /// gets what it reads — its `Input`, untouched — and a node with no
+    /// input gives nothing. Written only when set, so a file that never
+    /// bypassed anything is the file it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bypassed: bool,
     #[serde(default = "default_node_position")]
     pub position: (f32, f32),
     #[serde(default = "default_node_inputs")]
@@ -213,6 +219,7 @@ pub(crate) struct ParamPaneTarget {
 
 fn default_node_type() -> String { "node".to_string() }
 fn default_node_geometry_visible() -> bool { true }
+fn is_false(flag: &bool) -> bool { !*flag }
 fn default_node_position() -> (f32, f32) { (0.0, 0.0) }
 
 #[derive(Clone, Deserialize, Serialize, Default)]
@@ -363,6 +370,7 @@ pub enum NodeMenuAction {
     Enter,
     /// Flip the node's geometry visibility.
     ToggleGeometry,
+    ToggleBypass,
     /// Enter/exit the curve viewer state (curve nodes only).
     EditCurve,
     /// Remove the node.
@@ -508,6 +516,7 @@ pub enum McpAction {
     Load { path: String },
     Save { path: String },
     ToggleGeometry { slot: usize },
+    ToggleBypass { slot: usize },
     AddNode { template_name: String, name: Option<String>, x: f32, y: f32 },
     DeleteNode { slot: usize },
     RenameNode { slot: usize, new_name: String },
@@ -969,6 +978,7 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                     fresh.name = c.name.clone();
                     fresh.position = c.position;
                     fresh.geometry_visible = c.geometry_visible;
+                    fresh.bypassed = c.bypassed;
                     for p in &c.params {
                         if let Some(fp) = fresh.params.iter_mut().find(|fp| fp.name == p.name) {
                             fp.set_text(p.text().to_string());
@@ -1153,6 +1163,7 @@ pub fn load_fs_tree() -> FsNode {
                     // draws), or viewing the subnet from outside draws the
                     // chain's intermediate stages on top of its result.
                     resolved_child.geometry_visible = child.geometry_visible;
+                    resolved_child.bypassed = child.bypassed;
                     // Merge parameters
                     for override_p in &child.params {
                         if let Some(base_p) = resolved_child.params.iter_mut().find(|p| p.name == override_p.name) {
@@ -1189,6 +1200,7 @@ pub fn load_fs_tree() -> FsNode {
         children,
         params: vec![],
         geometry_visible: true,
+        bypassed: false,
         position: (0.0, 0.0),
         inputs: 0,
         outputs: 0,
@@ -4386,6 +4398,7 @@ impl State {
     /// items are contextual: Enter (dive into the subnet) for enterable nodes,
     /// Show/Hide Geometry, and Delete.
     fn open_node_context_menu(&mut self, slot: usize) {
+        let bypassed = self.current_dir().children.get(slot).is_some_and(|n| n.bypassed);
         let (is_utility, geom_visible, enterable, curve_editing) = {
             let dir = self.current_dir();
             let Some(node) = dir.children.get(slot) else { return };
@@ -4420,6 +4433,8 @@ impl State {
         if !is_utility {
             options.push(if geom_visible { "Hide Geometry" } else { "Show Geometry" }.to_string());
             actions.push(NodeMenuAction::ToggleGeometry);
+            options.push(if bypassed { "Stop Bypassing" } else { "Bypass" }.to_string());
+            actions.push(NodeMenuAction::ToggleBypass);
         }
         if let Some(editing) = curve_editing {
             // "Handles", not "Points": a soft transform's are a centre and a
@@ -5409,6 +5424,9 @@ impl State {
                 let mut redraw = false;
                 let _ = self.apply_action(McpAction::ToggleGeometry { slot }, &mut redraw);
             }
+            NodeMenuAction::ToggleBypass => {
+                self.set_bypassed(&[slot], !self.current_dir().children.get(slot).is_some_and(|n| n.bypassed));
+            }
             NodeMenuAction::EditCurve => {
                 self.toggle_viewer_state(slot);
             }
@@ -5723,6 +5741,31 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         } else {
             false
         }
+    }
+
+    /// Bypass the nodes at `slots` of the current level, or stop: the one
+    /// way the flag changes, whichever of the key, the node's menu and MCP
+    /// asked. Returns how many nodes it changed.
+    pub fn set_bypassed(&mut self, slots: &[usize], bypassed: bool) -> usize {
+        let mut changed = Vec::new();
+        for &slot in slots {
+            if let Some(node) = self.current_dir_mut().children.get_mut(slot) {
+                if node.bypassed != bypassed {
+                    node.bypassed = bypassed;
+                    changed.push(node.name.clone());
+                }
+            }
+        }
+        if changed.is_empty() {
+            return 0;
+        }
+        self.sync_nodes();
+        self.rebuild_scene_geometry();
+        self.sync_parameters_pane();
+        self.viewport_dirty = true;
+        let what = if bypassed { "Bypassed" } else { "No longer bypassing" };
+        self.update_status_text(&format!("{what} {}.", changed.join(", ")));
+        changed.len()
     }
 
     /// One level's children as the graph widget's rows.
@@ -6070,6 +6113,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 children: vec![],
                 params: vec![],
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 0,
                 outputs: 0,
@@ -7976,6 +8020,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::Deselect => {
                 self.deselect_node();
+            }
+            Action::ToggleBypass => {
+                // The network's, like the rest of its bare-letter family:
+                // `b` typed anywhere else is a letter. The whole selection
+                // follows the FIRST node's flag, as `e` has it follow the
+                // first node's geometry flag.
+                if self.focused_pane == LEFT_MENUBAR_IDX {
+                    let selected = self.selected_slots();
+                    if let Some(&first) = selected.first() {
+                        let bypassed = !self.current_dir().children.get(first).is_some_and(|n| n.bypassed);
+                        self.set_bypassed(&selected, bypassed);
+                    }
+                }
             }
             Action::LayoutNodes => {
                 self.layout_current_level();

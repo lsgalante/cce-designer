@@ -829,6 +829,51 @@ stands BEFORE the name changes since a path is names; sibling wires whose
 value is the old name follow, as the load-time sanitizer rewrites them;
 and the active camera. A same-named node elsewhere is not this one.
 
+### Bypass
+
+A node can be BYPASSED (since 2026-09-29): it stays in the graph, wired as
+it was, and does nothing. `FsNode::bypassed`, and `geometry::is_bypassed` is
+the one reading of it.
+
+- **What reads a bypassed node gets what the node reads**: its `Input`,
+  untouched. A node with no input — a generator — gives nothing, which is
+  what a generator switched off should give. A bypassed subnet or simnet
+  passes its Input and its children are not run.
+- **It is decided ahead of the node's own parameters.** The check sits at
+  the top of `generate_single_node_geometry_with_errors`, before
+  `resolve_param_refs`, so an expression that would fail on the node is
+  not evaluated and not reported: bypassing is how a broken node is taken
+  out of a chain while it is fixed.
+- **In three places, because there are three dispatches**: that function,
+  the scene walk's `visit` (which hands nodes to their resolvers itself —
+  a shown, bypassed node draws what it passes, is still counted for the
+  nodes placed by index, and is not gone into), and `page::resolve_page`
+  for the 2D context.
+- **`input`, `output` and `camera` ignore it.** The first two are a
+  subnet's plumbing, and a bypassed `input` would be a chain that reads
+  nothing.
+- **The flag is written only when it is set** (`skip_serializing_if`), so
+  a file that never bypassed anything is byte for byte the file it was and
+  `sim_solve_key`, a hash of the simnet's JSON, restarts a simulation when
+  a node in its chain is bypassed and not otherwise.
+
+`State::set_bypassed(slots, bool)` is the one writer, and three things
+call it: the **`bypass_node`** command (`b`, the network's, acting on the
+selection, the whole of which follows the FIRST node's flag as `e` does
+for the geometry flag); the node's right-click menu (**Bypass** / **Stop
+Bypassing**); and MCP's `toggle_bypass`. The id is not `toggle_bypass`
+because the `toggle_*` family is the settings' switches, which
+`dialog_toggle_rows_cover_every_toggle_command` holds to a table this has
+no place in.
+
+A bypassed node wears amber (`render::BYPASS_TINT`): its roll tinted
+through the bevel's own tint channel, and a flat bar down its left side,
+drawn after the bodies with the geometry toggles. The bar is what still
+says so while the node is selected and its roll is the selection's colour.
+The node is found by `GraphController::node_at` at the body's centre, so
+the second network editor marks its own level's. Nothing in cce-ui
+changed.
+
 ### Sibling-first inputs and the Switch node
 
 Two pieces added on 2026-09-21 so a node can be BUILT FROM other nodes

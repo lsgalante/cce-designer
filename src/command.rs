@@ -168,6 +168,10 @@ pub const COMMANDS: &[Command] = &[
     // like `deselect` above, the row ships unbound rather than duplicating a
     // key the event loop already claims), and it is the first row of the
     // network's right-click menu, which dispatches through this id.
+    // `b`, as `e` is the geometry flag's: the selection's nodes stay in the
+    // graph and do nothing. Not `toggle_`: that family is the settings'
+    // switches, and this acts on what is selected.
+    Command { id: "bypass_node", label: "Bypass Node", context: Context::Network, run: Run::Key(Action::ToggleBypass), default_chord: Some("b") },
     Command { id: "add_node", label: "Add Node", context: Context::Network, run: Run::Menu("Add Node"), default_chord: None },
     Command { id: "zoom_in", label: "Zoom In", context: Context::Network, run: Run::Menu("Zoom In"), default_chord: None },
     Command { id: "zoom_out", label: "Zoom Out", context: Context::Network, run: Run::Menu("Zoom Out"), default_chord: None },

@@ -639,6 +639,7 @@ impl State {
             children: vec![],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,

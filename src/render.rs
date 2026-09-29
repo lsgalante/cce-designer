@@ -31,6 +31,10 @@ fn merge_bounds(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
     }
 }
 
+/// What a bypassed node wears in the network: Houdini's bypass flag is
+/// this colour, and nothing else in the pane is.
+const BYPASS_TINT: [f32; 3] = [1.0, 0.74, 0.18];
+
 impl State {
     /// Per-corner plate radii for a pane rect: a corner that sits ON a window
     /// corner is this pane's share of the window silhouette — the compositor
@@ -445,7 +449,14 @@ impl State {
                 let g: &dyn cce_ui::widget::GraphController =
                     if second { &*self.slots.content2 } else { self.graph() };
                 let cell_r = g.cell_corner_radius();
-                let mut bodies: Vec<(f32, f32, f32, f32, bool)> = Vec::new();
+                // Which of this pane's nodes are bypassed, by slot: the
+                // widget knows a node's rect and its slot, the tree knows
+                // the flag.
+                let bypassed: Vec<bool> = {
+                    let level = if second { self.dir_at(&self.current_path2.clone()) } else { self.current_dir() };
+                    level.children.iter().map(crate::geometry::is_bypassed).collect()
+                };
+                let mut bodies: Vec<(f32, f32, f32, f32, bool, bool)> = Vec::new();
                 let mut overlays: Vec<(f32, f32, f32, f32, [f32; 4])> = Vec::new();
                 let mut seen_node = false;
                 // The grid lines (flat, gap colour at the network opacity)
@@ -469,7 +480,8 @@ impl State {
                                 let (col, row) = self.cell_at(qx + qw * 0.5, qy + qh * 0.5);
                                 self.grid_cursor_covers(col, row)
                             };
-                        bodies.push((qx, qy, qw, qh, in_region || same_rgb(qc, sel) || same_rgb(qc, drag)));
+                        let off = g.node_at(qx + qw * 0.5, qy + qh * 0.5).is_some_and(|slot| bypassed.get(slot).copied().unwrap_or(false));
+                        bodies.push((qx, qy, qw, qh, in_region || same_rgb(qc, sel) || same_rgb(qc, drag), off));
                     } else if seen_node {
                         overlays.push((qx, qy, qw, qh, qc));
                     } else if let Some(corners) = cell {
@@ -495,15 +507,30 @@ impl State {
                         );
                     }
                 }
-                for (qx, qy, qw, qh, highlighted) in bodies {
+                // A bypassed node wears amber: its roll tinted, through the
+                // bevel's own tint channel, and a bar down its left side,
+                // flat and on top with the geometry toggles. The bar is
+                // what still says so while the node is selected and its
+                // roll is the selection's colour.
+                let mut bars: Vec<cce_ui::scene::layout::Rect> = Vec::new();
+                for (qx, qy, qw, qh, highlighted, off) in bodies {
                     if highlighted {
                         pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel, hl_tint);
+                    } else if off {
+                        pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel, BYPASS_TINT);
                     } else {
                         pc.bevel(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel);
+                    }
+                    if off {
+                        let (inset, wide) = (qh * 0.22, (qw * 0.05).max(2.0));
+                        bars.push(rect(qx + inset, qy + inset, wide, qh - inset * 2.0));
                     }
                 }
                 for (qx, qy, qw, qh, qc) in overlays {
                     pc.quad(rect(qx, qy, qw, qh), qc);
+                }
+                for bar in bars {
+                    pc.quad(bar, [BYPASS_TINT[0], BYPASS_TINT[1], BYPASS_TINT[2], 0.9]);
                 }
             });
 

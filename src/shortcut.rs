@@ -3,6 +3,7 @@ use crate::ModifiersState;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
+    ToggleBypass,
     ToggleGrid,
     ToggleSquareViewport,
     ToggleConfigure,

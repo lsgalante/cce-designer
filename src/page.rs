@@ -431,6 +431,13 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
     }
     visited.push(target.id.clone());
 
+    // Bypassed, a page node passes the sheet it was handed, and a sheet that
+    // is bypassed is no sheet.
+    if crate::geometry::is_bypassed(target) {
+        let input = crate::geometry::param_node(root, target, "Input")?;
+        return resolve_page(root, input, visited);
+    }
+
     let kind = target.node_type.to_ascii_lowercase();
     if kind == "page" {
         let preset = node_param_str(target, "Preset", "Letter");

@@ -216,6 +216,7 @@ mod tests {
             children: vec![],
             params: vec![],
             geometry_visible: false,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 1,
             outputs: 1,
@@ -250,6 +251,7 @@ mod tests {
             children: vec![],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 1,
             outputs: 1,
@@ -261,6 +263,7 @@ mod tests {
             children: vec![child("a"), child("b"), child("c")],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -820,6 +823,7 @@ mod tests {
                 style("Plate Color", "rgba", "#11223344"),
             ],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 1,
             outputs: 1,
@@ -925,6 +929,7 @@ mod tests {
             children: vec![],
             params,
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 1,
             outputs: 1,
@@ -950,6 +955,7 @@ mod tests {
             ],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -998,6 +1004,7 @@ mod tests {
             children: vec![],
             params: vec![],
             geometry_visible: false,
+            bypassed: false,
             position: (2.0, 3.0),
             inputs: 1,
             outputs: 1,
@@ -1014,6 +1021,7 @@ mod tests {
                     children: vec![],
                     params: vec![],
                     geometry_visible: true,
+                    bypassed: false,
                     position: (0.0, 4.0),
                     inputs: 1,
                     outputs: 1,
@@ -1022,6 +1030,7 @@ mod tests {
             ],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -1060,6 +1069,7 @@ mod tests {
             children: vec![],
             params: vec![crate::app::ParamDef::new("Show Grid Guide".to_string(), "toggle".to_string(), "false".to_string())],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 4.0),
             inputs: 1,
             outputs: 1,
@@ -2697,6 +2707,7 @@ mod tests {
                 children: vec![inst],
                 params: vec![],
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 0,
                 outputs: 0,
@@ -2812,6 +2823,7 @@ mod tests {
                 children: vec![inst],
                 params: vec![],
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 0,
                 outputs: 0,
@@ -2876,6 +2888,7 @@ mod tests {
             children: vec![sphere_instance],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -2921,6 +2934,7 @@ mod tests {
             children: vec![instance],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -3363,6 +3377,7 @@ mod tests {
             children: vec![sphere_instance, group_instance],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -3477,6 +3492,7 @@ mod tests {
             children,
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -3744,6 +3760,7 @@ mod tests {
             children: vec![],
             params: vec![],
             geometry_visible: false,
+            bypassed: false,
             position: (0.0, 4.0),
             inputs: 0,
             outputs: 0,
@@ -3762,6 +3779,7 @@ mod tests {
             children: vec![inner],
             params: vec![],
             geometry_visible: false,
+            bypassed: false,
             position: (2.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -3777,6 +3795,7 @@ mod tests {
             children: vec![sphere, camera, session, sub],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -3887,6 +3906,7 @@ mod tests {
                 children: vec![inst],
                 params: vec![],
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 0,
                 outputs: 0,
@@ -4384,6 +4404,7 @@ mod tests {
             children: vec![],
             params: vec![crate::app::ParamDef::new("Code", "code", "OLD KERNEL")],
             geometry_visible: true,
+            bypassed: false,
             position: (4.0, 2.0),
             inputs: 1,
             outputs: 1,
@@ -4399,6 +4420,7 @@ mod tests {
             children: vec![opencl1, output1],
             params: vec![crate::app::ParamDef::new("Radius", "slider", "0.70")],
             geometry_visible: true,
+            bypassed: false,
             position: (3.0, 1.0),
             inputs: 0,
             outputs: 1,
@@ -4419,6 +4441,7 @@ mod tests {
             children: vec![],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -4431,6 +4454,7 @@ mod tests {
             children: vec![old_sphere, old_group, lookalike],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -4504,6 +4528,7 @@ mod tests {
                 children: vec![inst],
                 params: vec![],
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 0,
                 outputs: 0,
@@ -4587,6 +4612,7 @@ mod tests {
                 children: vec![inst],
                 params: vec![],
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 0,
                 outputs: 0,
@@ -4686,6 +4712,7 @@ mod tests {
             ],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -4751,6 +4778,7 @@ mod tests {
                 children: vec![inst],
                 params: vec![],
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 0,
                 outputs: 0,
@@ -4808,6 +4836,7 @@ mod tests {
                     children: vec![],
                     params: vec![],
                     geometry_visible: true,
+                    bypassed: false,
                     position: (5.0, 6.0),
                     inputs: 0,
                     outputs: 1,
@@ -4815,6 +4844,7 @@ mod tests {
             ],
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -5846,6 +5876,7 @@ mod tests {
                     .map(|(n, v)| crate::app::ParamDef::new(n.to_string(), "text".to_string(), v.to_string()))
                     .collect(),
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 1,
                 outputs: 1,
@@ -7392,6 +7423,7 @@ mod tests {
                 })
                 .collect(),
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 1,
             outputs: 1,
@@ -8315,6 +8347,7 @@ mod tests {
                     .map(|(n, v)| crate::app::ParamDef::new(n.to_string(), "text".to_string(), v.to_string()))
                     .collect(),
                 geometry_visible: true,
+                bypassed: false,
                 position: (0.0, 0.0),
                 inputs: 1,
                 outputs: 1,
@@ -8837,6 +8870,7 @@ mod tests {
             children,
             params: vec![],
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 0,
             outputs: 0,
@@ -9747,6 +9781,7 @@ mod tests {
                 .map(|(name, default)| crate::app::ParamDef::new(name, "text", default))
                 .collect(),
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 1,
             outputs: 1,
@@ -9781,6 +9816,7 @@ mod tests {
                 .map(|(name, default)| crate::app::ParamDef::new(*name, "text", *default))
                 .collect(),
             geometry_visible: true,
+            bypassed: false,
             position: (0.0, 0.0),
             inputs: 1,
             outputs: 1,
@@ -10508,6 +10544,178 @@ mod tests {
         let work = crate::detangle::apply_from(&mut still, Some(&bowl), &node);
         assert_eq!((work.folds, work.held), (0, 0), "{work:?}");
         assert_eq!(still.positions(), moved.positions());
+    }
+
+    /// A bypassed node is in the graph and does nothing: what reads it gets
+    /// what it reads. A generator, which reads nothing, gives nothing; a
+    /// subnet passes its Input and its children are not run; and a node
+    /// whose own parameters would fail is not evaluated to find that out.
+    #[test]
+    fn a_bypassed_node_passes_its_input_through() {
+        let pull = |bypassed: bool| {
+            let mut n = ref_node(
+                "pull",
+                "pull1",
+                "attribute",
+                vec![("Input", "node", "sphere1"), ("Operation", "text", "Modify"), ("Attribute Name", "text", "Pos"), ("Value", "text", "1.00:0.00:0.00"), ("Combine", "text", "Add")],
+                vec![],
+            );
+            n.bypassed = bypassed;
+            n
+        };
+        let sphere = || ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "0.5"), ("Center X", "slider", "0"), ("Center Y", "slider", "0"), ("Center Z", "slider", "0")], vec![]);
+        let root = |nodes: Vec<FsNode>| ref_node("root", "root", "node", vec![], nodes);
+        let min_x = |d: &Detail| d.positions().iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+
+        let (plain, _) = eval_node(&root(vec![sphere()]), "sphere1");
+        let (moved, err) = eval_node(&root(vec![sphere(), pull(false)]), "pull1");
+        assert!(err.is_none() && (min_x(&moved) - min_x(&plain) - 1.0).abs() < 1e-5);
+        let (passed, err) = eval_node(&root(vec![sphere(), pull(true)]), "pull1");
+        assert!(err.is_none());
+        assert_eq!(passed.positions(), plain.positions());
+
+        // What reads a bypassed node reads through it.
+        let mut second = pull(false);
+        (second.id, second.name) = ("pull2".into(), "pull2".into());
+        second.params[0].set_text("pull1");
+        let (after, _) = eval_node(&root(vec![sphere(), pull(true), second]), "pull2");
+        assert!((min_x(&after) - min_x(&plain) - 1.0).abs() < 1e-5, "one pull, not two");
+
+        // A generator reads nothing and gives nothing.
+        let mut off = sphere();
+        off.bypassed = true;
+        let tree = root(vec![off]);
+        let mut cache = crate::geometry::SimCache::default();
+        let mut sim = crate::geometry::EvalSim::new(0, 0, &mut cache);
+        let mut err = None;
+        assert!(crate::geometry::generate_single_node_geometry_with_errors(&tree, &tree.children[0], &mut Vec::new(), &mut err, &mut sim).is_none());
+        assert!(err.is_none());
+
+        // Its own parameters are not evaluated: an expression that names
+        // nothing is an error on the node, and not on a bypassed one.
+        let broken = |bypassed: bool| {
+            let mut n = pull(bypassed);
+            n.params.push(crate::app::ParamDef::new("Strength", "slider", "ch(\"../nothing/Here\")").as_expr());
+            root(vec![sphere(), n])
+        };
+        assert!(eval_node(&broken(false), "pull1").1.is_some());
+        let (passed, err) = eval_node(&broken(true), "pull1");
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(passed.positions(), plain.positions());
+
+        // A subnet passes its Input, and what is inside it is not run.
+        let mut subnet = ref_node(
+            "sub",
+            "sub1",
+            "node",
+            vec![("Input", "node", "sphere1")],
+            vec![
+                ref_node("in", "input1", "input", vec![], vec![]),
+                { let mut p = pull(false); p.params[0].set_text("input1"); p },
+                ref_node("out", "output1", "output", vec![("Input", "node", "pull1")], vec![]),
+            ],
+        );
+        let (through, _) = eval_node(&root(vec![sphere(), subnet.clone()]), "sub1");
+        assert!((min_x(&through) - min_x(&plain) - 1.0).abs() < 1e-5);
+        subnet.bypassed = true;
+        let (passed, _) = eval_node(&root(vec![sphere(), subnet.clone()]), "sub1");
+        assert_eq!(passed.positions(), plain.positions());
+
+        // The flag says nothing on a subnet's plumbing.
+        subnet.bypassed = false;
+        subnet.children[0].bypassed = true;
+        subnet.children[2].bypassed = true;
+        let (through, _) = eval_node(&root(vec![sphere(), subnet]), "sub1");
+        assert!((min_x(&through) - min_x(&plain) - 1.0).abs() < 1e-5);
+
+        // The scene draws a shown, bypassed node as what it passes, and a
+        // bypassed generator as nothing.
+        let scene = |nodes: Vec<FsNode>| {
+            let tree = root(nodes);
+            let mut cache = crate::geometry::SimCache::default();
+            let mut sim = crate::geometry::EvalSim::new(0, 0, &mut cache);
+            crate::geometry::network_sphere_vertices_with_errors(&tree, &tree, &mut None, &mut sim)
+        };
+        let hidden = |mut n: FsNode| { n.geometry_visible = false; n };
+        assert_eq!(scene(vec![hidden(sphere()), pull(true)]).positions(), plain.positions());
+        assert!((min_x(&scene(vec![hidden(sphere()), pull(false)])) - min_x(&plain) - 1.0).abs() < 1e-5);
+        let mut off = sphere();
+        off.bypassed = true;
+        assert_eq!(scene(vec![off]).num_points(), 0);
+    }
+
+    /// The flag is written only when it is set, so a file that never
+    /// bypassed anything is byte for byte the file it was — and a simnet's
+    /// solve, keyed by its JSON, restarts when a node in its chain is
+    /// bypassed and not otherwise.
+    #[test]
+    fn the_bypass_flag_is_saved_only_when_it_is_set() {
+        let mut node = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.5")], vec![]);
+        let plain = serde_json::to_string(&node).unwrap();
+        assert!(!plain.contains("bypassed"), "{plain}");
+        node.bypassed = true;
+        let set = serde_json::to_string(&node).unwrap();
+        assert!(set.contains("\"bypassed\":true"), "{set}");
+        let back: FsNode = serde_json::from_str(&set).unwrap();
+        assert!(back.bypassed);
+        let old: FsNode = serde_json::from_str(&plain).unwrap();
+        assert!(!old.bypassed);
+    }
+
+    /// Bypass from each place that asks for it — the `b` command on the
+    /// network's selection, the node's menu, MCP — and the scene, the
+    /// status line and the node's look follow.
+    #[test]
+    fn bypass_is_one_flag_however_it_is_asked_for() {
+        use crate::app::McpAction;
+        let mut state = State::new(false);
+        let mut redraw = false;
+        while !state.current_path.is_empty() {
+            state.apply_action(McpAction::Up, &mut redraw).unwrap();
+        }
+        state.current_dir_mut().children.clear();
+        state.sync_nodes();
+        state.apply_action(McpAction::AddNode { template_name: "Sphere".into(), name: Some("ball".into()), x: 3.0, y: 3.0 }, &mut redraw).unwrap();
+        state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 3.0, y: 4.0 }, &mut redraw).unwrap();
+        let slot = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).unwrap();
+        let (ball, pull) = (slot(&state, "ball"), slot(&state, "pull1"));
+        for (name, value) in [("Input", "ball"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "1.00:0.00:0.00"), ("Combine", "Add")] {
+            state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        state.apply_action(McpAction::ToggleGeometry { slot: pull }, &mut redraw).unwrap();
+        let min_x = |state: &State| state.rt_sphere_verts.iter().map(|v| v.position[0]).fold(f32::INFINITY, f32::min);
+        let shown = min_x(&state);
+
+        // MCP.
+        let said = state.apply_action(McpAction::ToggleBypass { slot: pull }, &mut redraw).unwrap();
+        assert_eq!(said, "Bypassed: true");
+        assert!(state.current_dir().children[pull].bypassed);
+        assert!((min_x(&state) - (shown - 1.0)).abs() < 1e-4, "the scene is the sphere where it was: {} from {shown}", min_x(&state));
+        assert_eq!(state.last_status_text, "Bypassed pull1.");
+        assert!(state.apply_action(McpAction::ToggleBypass { slot: 99 }, &mut redraw).is_err());
+
+        // The command, on the selection, and only with the network focused.
+        state.apply_action(McpAction::Select { slot: pull }, &mut redraw).unwrap();
+        state.focused_pane = crate::slots::PARAM_IDX;
+        state.run_command("bypass_node");
+        assert!(state.current_dir().children[pull].bypassed, "a `b` typed elsewhere is a letter");
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.run_command("bypass_node");
+        assert!(!state.current_dir().children[pull].bypassed);
+        assert!((min_x(&state) - shown).abs() < 1e-4);
+        assert_eq!(state.last_status_text, "No longer bypassing pull1.");
+        assert_eq!(crate::command::by_id("bypass_node").unwrap().default_chord, Some("b"));
+
+        // The node's menu, which says which way it will go.
+        assert_eq!(state.set_bypassed(&[ball, pull], true), 2);
+        assert_eq!(state.set_bypassed(&[ball, pull], true), 0, "already");
+        assert!(state.rt_sphere_verts.is_empty(), "a bypassed sphere behind a bypassed pull is nothing");
+        assert_eq!(state.set_bypassed(&[ball], false), 1);
+
+        // It is saved with the project and comes back with it.
+        let saved = serde_json::to_string(&state.fs_root).unwrap();
+        let back: FsNode = serde_json::from_str(&saved).unwrap();
+        assert!(back.children[pull].bypassed && !back.children[ball].bypassed);
     }
 
     /// The Step Limit holds a point's move since the step began to that
