@@ -38,6 +38,18 @@
       "show_when": "Operation == Modify"
     },
     {
+      "name": "Strength",
+      "type": "float",
+      "default": "1.00",
+      "show_when": "Operation == Modify"
+    },
+    {
+      "name": "Scale By",
+      "type": "attribute",
+      "default": "",
+      "show_when": "Operation == Modify"
+    },
+    {
       "name": "Group",
       "type": "group",
       "default": "",

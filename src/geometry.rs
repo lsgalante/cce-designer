@@ -4196,14 +4196,44 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             }
         }
         "modify" => {
-            if !value_ok {
+            // How much of the change lands, per point: Strength, times the
+            // point's value of the Scale By attribute when one is named.
+            // They scale the EFFECT — the difference the node makes — so
+            // they mean the same under every Combine: an Add moves by that
+            // much of Value, a Set goes that far toward it, a Multiply that
+            // far toward the product. At exactly one the combined value is
+            // written as it always was, bit for bit.
+            let strength = node_param_f32(target, "Strength", 1.0);
+            let scale_by = node_param_str(target, "Scale By", "");
+            let scale_by = scale_by.trim().to_string();
+            let weights: Option<Vec<f32>> = if scale_by.is_empty() {
+                None
+            } else if !geom.points().has(&scale_by) {
+                fail = format!("Scale By '{}' is not a point attribute", scale_by);
+                None
+            } else {
+                Some(affected.iter().map(|&p| geom.points().value(&scale_by, p).map_or(0.0, |v| v.as_f32())).collect())
+            };
+            let amount = |i: usize| strength * weights.as_ref().map_or(1.0, |w| w[i]);
+            let blend = |old: &[f32], new: &mut [f32], k: f32| {
+                if k != 1.0 {
+                    for (n, o) in new.iter_mut().zip(old) {
+                        *n = o + (*n - o) * k;
+                    }
+                }
+            };
+            if !fail.is_empty() {
+                // Scale By names nothing: the message is set, nothing moves.
+            } else if !value_ok {
                 fail = format!("Value '{}' does not parse as numbers", value_str);
             } else if builtin {
                 match fit(3) {
                     Some(src) => {
-                        for &p in &affected {
-                            let mut v = if is_col { geom.color(p) } else { geom.pos(p).to_array() };
+                        for (i, &p) in affected.iter().enumerate() {
+                            let old = if is_col { geom.color(p) } else { geom.pos(p).to_array() };
+                            let mut v = old;
                             combine(&mut v, &src);
+                            blend(&old, &mut v, amount(i));
                             if is_col {
                                 geom.set_color(p, v);
                             } else {
@@ -4219,10 +4249,12 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                     Some(ty) => match fit(ty.components()) {
                         None => fail = format!("Value '{}' does not fit '{}'", value_str, name),
                         Some(src) => {
-                            for &p in &affected {
+                            for (i, &p) in affected.iter().enumerate() {
                                 let Some(cur) = geom.points().value(&name, p) else { continue };
-                                let mut buf = attrib_components(cur);
+                                let old = attrib_components(cur);
+                                let mut buf = old.clone();
                                 combine(&mut buf, &src);
+                                blend(&old, &mut buf, amount(i));
                                 let _ = geom.points_mut().set_value(&name, p, components_attrib(ty, &buf));
                             }
                         }
@@ -8353,6 +8385,92 @@ mod simnet_tests {
         // Five strokes per arrow: the shaft and a four-stroke head.
         let shown: Vec<(Vec3, Vec3)> = picked.iter().map(|&i| moved[i]).collect();
         assert_eq!(arrow_vertices(&shown, [1.0; 3]).len(), 12 * 10);
+    }
+
+    /// Strength and Scale By scale the pull's EFFECT — the change the node
+    /// makes — so they mean one thing under every Combine: an Add moves by
+    /// that much of Value, a Set goes that far toward it. Scale By is a
+    /// point attribute, so the pull can fall off across the mesh; Strength
+    /// is a number, so it takes an expression and the pull can ramp with
+    /// the frame. At one, nothing changes from before they existed.
+    #[test]
+    fn strength_and_scale_by_scale_the_pulls_effect() {
+        let pull_of = |extra: Vec<(&str, &str)>, combine: &str, value: &str| {
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let mut params = vec![
+                param("Input", "Sphere 1"),
+                param("Operation", "Modify"),
+                param("Attribute Name", "Pos"),
+                param("Value", value),
+                param("Combine", combine),
+                param("Group", ""),
+            ];
+            params.extend(extra.into_iter().map(|(k, v)| param(k, v)));
+            let pull = node("id-pull", "Pull 1", "attribute", params, vec![]);
+            node("id-root", "root", "node", vec![], vec![sphere, pull])
+        };
+        let moved_by = |root: &FsNode, frame: i32| -> (Vec<Vec3>, Option<String>) {
+            let mut err = None;
+            let mut cache = SimCache::default();
+            let mut sim = EvalSim::new(frame, 1, &mut cache);
+            let before = generate_single_node_geometry_with_errors(root, &root.children[0], &mut Vec::new(), &mut err, &mut sim).unwrap();
+            let after = generate_single_node_geometry_with_errors(root, &root.children[1], &mut Vec::new(), &mut err, &mut sim).unwrap();
+            ((0..after.num_points()).map(|p| after.pos(p) - before.pos(p)).collect(), err)
+        };
+        let up = Vec3::new(0.0, 0.06, 0.0);
+        let all = |d: &[Vec3], want: Vec3| d.iter().all(|v| v.distance(want) < 1e-5);
+
+        // Absent (an older save) and at one: the pull as it always was.
+        let (d, err) = moved_by(&pull_of(vec![], "Add", "0.00:0.06:0.00"), 1);
+        assert!(err.is_none() && all(&d, up), "{err:?}");
+        let (d, _) = moved_by(&pull_of(vec![("Strength", "1.00")], "Add", "0.00:0.06:0.00"), 1);
+        assert!(all(&d, up));
+        // Half, none, double.
+        for (strength, want) in [("0.50", up * 0.5), ("0.00", Vec3::ZERO), ("2.00", up * 2.0)] {
+            let (d, _) = moved_by(&pull_of(vec![("Strength", strength)], "Add", "0.00:0.06:0.00"), 1);
+            assert!(all(&d, want), "strength {strength}: {:?}", d[0]);
+        }
+        // Under Set it is how far toward Value each point goes: at a half,
+        // halfway from where it was to (0, 2, 0).
+        let root = pull_of(vec![("Strength", "0.50")], "Set", "0.00:2.00:0.00");
+        let base = eval(&root, "Sphere 1");
+        let out = eval(&root, "Pull 1");
+        for p in 0..out.num_points() {
+            let want = base.pos(p).lerp(Vec3::new(0.0, 2.0, 0.0), 0.5);
+            assert!(out.pos(p).distance(want) < 1e-5, "point {p}: {:?} against {want:?}", out.pos(p));
+        }
+
+        // Scale By: each point by its own value of the attribute — the
+        // sphere's UV, whose first component runs around it — times Strength.
+        let root = pull_of(vec![("Strength", "0.50"), ("Scale By", "UV")], "Add", "0.00:0.06:0.00");
+        let base = eval(&root, "Sphere 1");
+        let (d, err) = moved_by(&root, 1);
+        assert!(err.is_none(), "{err:?}");
+        let mut weights = Vec::new();
+        for (p, moved) in d.iter().enumerate() {
+            let w = base.points().value("UV", p).expect("the sphere carries UV").as_f32();
+            assert!(moved.distance(up * 0.5 * w) < 1e-5, "point {p} weighs {w}: {moved:?}");
+            weights.push(w);
+        }
+        let (lo, hi) = weights.iter().fold((f32::MAX, f32::MIN), |(l, h), w| (l.min(*w), h.max(*w)));
+        assert!(hi - lo > 0.5, "the fixture's weights vary, or this proves nothing: {lo}..{hi}");
+
+        // An attribute the input lacks is said, and nothing moves.
+        let (d, err) = moved_by(&pull_of(vec![("Scale By", "nothing_here")], "Add", "0.00:0.06:0.00"), 1);
+        assert!(err.as_deref().is_some_and(|e| e.contains("Scale By") && e.contains("nothing_here")), "{err:?}");
+        assert!(all(&d, Vec3::ZERO));
+
+        // Strength is a number, so it takes an expression: a pull that
+        // ramps in over ten frames.
+        let mut root = pull_of(vec![("Strength", "$F / 10")], "Add", "0.00:0.06:0.00");
+        let strength = root.children[1].params.iter_mut().find(|p| p.name == "Strength").unwrap();
+        strength.set_type("float");
+        strength.set_expr(true);
+        for frame in [2, 5, 10] {
+            let (d, err) = moved_by(&root, frame);
+            assert!(err.is_none(), "{err:?}");
+            assert!(all(&d, up * (frame as f32 / 10.0)), "frame {frame}: {:?}", d[0]);
+        }
     }
 
     /// Farthest-point sampling takes the extremes before anything between

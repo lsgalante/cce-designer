@@ -1814,6 +1814,22 @@ Marker Scale). The scale is display only: the sampled pairs are kept
 unscaled on `pull_arrow_pairs`, and `rebuild_pull_arrow_verts` stretches
 each arrow from its fixed base, so a slider drag re-evaluates nothing.
 
+**Strength and Scale By scale the pull** (the Attribute node's Modify,
+since 2026-09-29). `Strength` is a `float`, `Scale By` an `attribute`
+naming a point attribute whose value weighs each point; the amount that
+lands at a point is their product. They scale the EFFECT — the change the
+node makes, `old + (combined - old) * amount` — so they mean one thing
+under every Combine: an Add moves by that much of Value, a Set goes that
+far toward it, a Multiply that far toward the product. Two rows rather
+than a longer vector because the Value row is text holding three numbers
+and takes no expression per component, while Strength is a number: `$F /
+10` ramps a pull in, and the trackball keeps the direction while one
+slider sets how hard. At an amount of exactly one the combined value is
+written as it always was, bit for bit, so a save from before the rows
+(which the template merge gives a Strength of 1) solves to the same
+numbers. A Scale By naming no attribute is an error on the node and moves
+nothing. The arrows are measured, so they show the scaled pull.
+
 At most `State::PULL_ARROWS_MAX` (12) points get one, picked by farthest-point
 sampling (`spread_sample`) so they cover the region the pull covers rather
 than bunching wherever the point numbering runs locally. A node inside a
