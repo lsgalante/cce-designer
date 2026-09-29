@@ -1830,6 +1830,14 @@ written as it always was, bit for bit, so a save from before the rows
 numbers. A Scale By naming no attribute is an error on the node and moves
 nothing. The arrows are measured, so they show the scaled pull.
 
+**Composite broadcasts a single number** (since 2026-09-29): a Source B
+of ONE component is every component's, so a Float3 times a Float is the
+vector scaled — by a constant, or per point by a weight. The componentwise
+operations used to pair the number with X and zero with the rest, which
+kept X and zeroed Y and Z under Multiply and touched X alone under Add. A
+Source B of two or more components still pairs off by position; Dot,
+Distance and Length reduce to one number and did not change.
+
 **Per Frame makes the amount a rate.** Inside a simnet the chain runs once
 per SUBSTEP, so a pull that lands whole each run pulls four times as far
 a frame at four substeps — the substep count, which is there to steady a

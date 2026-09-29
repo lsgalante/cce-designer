@@ -4390,7 +4390,18 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                         }
                         _ => (0..k)
                             .map(|i| {
-                                let (x, y) = (at(&a, i), at(&b, i));
+                                // A single number is every component's:
+                                // a Float3 times a Float is the vector
+                                // scaled. Until 2026-09-29 the components
+                                // Source B lacked read zero, so that
+                                // product kept X and zeroed Y and Z — and
+                                // a sum or a minimum touched X alone. A
+                                // Source B of two or more components still
+                                // pairs off by position, the missing ones
+                                // zero: only ONE number has an obvious
+                                // meaning for all of them.
+                                let y = if b.len() == 1 { b[0] } else { at(&b, i) };
+                                let x = at(&a, i);
                                 match op.as_str() {
                                     "subtract" => x - y,
                                     "multiply" => x * y,
@@ -6570,6 +6581,63 @@ mod simnet_tests {
             &[("Operation", "Composite"), ("Source B", "nope"), ("Combine Op", "Add")],
         );
         assert!(err.is_some(), "a missing Source B must be reported");
+    }
+
+    /// A single number is every component's: a Float3 composited with a
+    /// Float scales, shifts or clamps the whole vector. It used to pair the
+    /// number with X and zero with the rest, so the product kept X and
+    /// zeroed Y and Z. Wider pairs still go by position, and the three
+    /// operations that reduce to one number are as they were.
+    #[test]
+    fn test_composite_broadcasts_a_single_number_across_a_vector() {
+        let mut before = ramped_mass();
+        before.points_mut().create("v", AttribValue::Float3([1.0, 2.0, 3.0]));
+        before.points_mut().create("w", AttribValue::Float(0.5));
+        before.points_mut().create("uv", AttribValue::Float2([10.0, 20.0]));
+        let v = |d: &Detail| match d.points().value("v", 3).unwrap() {
+            AttribValue::Float3(x) => x,
+            other => panic!("v is still a Float3: {other:?}"),
+        };
+        let with = |b: &str, op: &str| {
+            let (g, err) = run_attr(
+                &before,
+                &[("Attribute Name", "v"), ("Operation", "Composite"), ("Source B", b), ("Combine Op", op)],
+            );
+            assert!(err.is_none(), "{op} with {b}: {err:?}");
+            v(&g)
+        };
+        for (op, want) in [
+            ("Multiply", [0.5, 1.0, 1.5]),
+            ("Add", [1.5, 2.5, 3.5]),
+            ("Subtract", [0.5, 1.5, 2.5]),
+            ("Divide", [2.0, 4.0, 6.0]),
+            ("Minimum", [0.5, 0.5, 0.5]),
+            ("Maximum", [1.0, 2.0, 3.0]),
+            ("Average", [0.75, 1.25, 1.75]),
+            ("Difference", [0.5, 1.5, 2.5]),
+        ] {
+            assert_eq!(with("w", op), want, "{op}");
+        }
+        // Two numbers against three pair off by position, as before: the
+        // third has nothing to meet.
+        assert_eq!(with("uv", "Add"), [11.0, 22.0, 3.0]);
+        assert_eq!(with("uv", "Multiply"), [10.0, 40.0, 0.0]);
+        // The reductions are not componentwise, and did not change.
+        assert_eq!(with("w", "Length"), [0.5, 0.5, 0.5]);
+        assert_eq!(with("w", "Dot"), [0.5, 0.5, 0.5]);
+
+        // A per-point weight scales a vector per point: the ramped mass,
+        // which differs from point to point, times the same vector.
+        let (g, err) = run_attr(
+            &before,
+            &[("Attribute Name", "v"), ("Operation", "Composite"), ("Source B", "mass"), ("Combine Op", "Multiply")],
+        );
+        assert!(err.is_none(), "{err:?}");
+        for p in [0, 3, g.num_points() - 1] {
+            let m = before.points().value("mass", p).unwrap().as_f32();
+            let got = match g.points().value("v", p).unwrap() { AttribValue::Float3(x) => x, _ => unreachable!() };
+            assert_eq!(got, [m, 2.0 * m, 3.0 * m], "point {p} weighs {m}");
+        }
     }
 
     #[test]
