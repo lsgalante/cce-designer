@@ -7103,6 +7103,72 @@ mod tests {
         assert_eq!(dir.children[normal].name, old);
     }
 
+    /// Rename is a row of the node's menu and a command: the dialog opens
+    /// holding the node's name, the row says what Enter will do, and a name
+    /// that cannot be written is refused there and not on the way in.
+    #[test]
+    fn a_node_is_renamed_from_its_menu() {
+        use crate::dialog::{Mode, RENAME_ROW_ID};
+        let mut state = State::new(false);
+        state.record_structure_changes();
+        let sphere = state.current_dir().children.iter().position(|c| c.node_type == "sphere").unwrap();
+        let camera = state.current_dir().children.iter().position(|c| c.node_type == "camera").unwrap();
+        let old = state.current_dir().children[sphere].name.clone();
+        let other = state.current_dir().children[camera].name.clone();
+        let row = |state: &State| state.slots.dialog.rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
+        let retype = |state: &mut State, name: &str| {
+            while !state.slots.dialog.query.is_empty() {
+                state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
+            }
+            for c in name.chars() {
+                if c == ' ' {
+                    state.dialog_key_input(&key_press(Key::Named(NamedKey::Space)));
+                } else {
+                    state.dialog_key_input(&typed(&c.to_string()));
+                }
+            }
+        };
+
+        state.run_node_menu_action(sphere, crate::app::NodeMenuAction::Rename);
+        assert!(state.dialog_visible());
+        assert_eq!(state.slots.dialog.mode, Mode::Rename);
+        assert_eq!(state.slots.dialog.query, old, "the dialog opens holding the name");
+        assert_eq!(state.slots.dialog.rows[0].id, RENAME_ROW_ID);
+
+        // Its own name, a sibling's, and none: each is said, and Enter on
+        // it writes nothing.
+        assert!(row(&state)[0].contains("already"), "{:?}", row(&state));
+        retype(&mut state, &other);
+        assert!(row(&state)[0].contains("another node"), "{:?}", row(&state));
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert_eq!(state.current_dir().children[sphere].name, old);
+
+        // A name as typed is written as a name is: lowercase, no spaces.
+        state.run_node_menu_action(sphere, crate::app::NodeMenuAction::Rename);
+        retype(&mut state, "My Ball");
+        assert_eq!(row(&state), vec![format!("Rename {old} to my_ball")]);
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(!state.dialog_visible());
+        assert_eq!(state.current_dir().children[sphere].name, "my_ball");
+        assert!(state.last_status_text.contains("my_ball"), "{}", state.last_status_text);
+
+        // And it is a step.
+        assert!(state.run_command("undo"));
+        assert_eq!(state.current_dir().children[sphere].name, old);
+
+        // The command renames the selection, and says so when there is none.
+        state.graph_mut().set_selected_node(Some(sphere));
+        assert!(state.run_command("rename_node"));
+        assert_eq!(state.slots.dialog.mode, Mode::Rename);
+        assert_eq!(state.slots.dialog.query, old);
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
+        assert_eq!(state.current_dir().children[sphere].name, old, "Escape renames nothing");
+
+        // The menu has the row.
+        let labels = state.node_menu_rows(sphere).0;
+        assert!(labels.iter().any(|l| l == "Rename"), "{labels:?}");
+    }
+
     /// New Project from the palette starts a project. The command named a
     /// label no arm dispatched, so the row ran and nothing happened.
     #[test]

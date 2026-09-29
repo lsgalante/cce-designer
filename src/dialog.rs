@@ -45,6 +45,10 @@ pub enum Mode {
     /// that instantiates one at the grid cursor. Tab is what opened it, so
     /// Tab closes it again.
     AddNode,
+    /// The node menu's Rename and the `rename_node` command: the query
+    /// line is the NAME, opened holding the one the node has, and the one
+    /// row says what Enter will do with it.
+    Rename,
 }
 
 /// The control a row carries, drawn over its right end and worked in place —
@@ -785,6 +789,7 @@ impl Paint for Dialog {
                 match self.mode {
                     Mode::Commands => "Type to filter commands and settings",
                     Mode::AddNode => "Add Node: type to filter nodes",
+                    Mode::Rename => "Rename: type the node's name",
                 },
                 q_w,
             );
@@ -819,6 +824,7 @@ impl Paint for Dialog {
             let empty = match self.mode {
                 Mode::Commands => "No matching command or setting",
                 Mode::AddNode => "No matching node",
+                Mode::Rename => "No node to rename",
             };
             ctx.text_with(empty, list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
             return;
@@ -1177,6 +1183,8 @@ pub const PATH_ROW_ID: &str = "project_path";
 /// document's own path already is: rows under the path row, each opening its
 /// project. Ranked against the path text like everything else.
 pub const RECENT_ROW_PREFIX: &str = "recent:";
+/// The one row of [`Mode::Rename`].
+pub const RENAME_ROW_ID: &str = "rename:";
 /// A camera NODE of the current level, as a palette row: picking it looks
 /// through that camera. The Default Camera is a registry command instead
 /// (`default_camera`), there being always exactly one.
@@ -1349,6 +1357,29 @@ impl State {
         self.open_dialog_in(Mode::AddNode);
     }
 
+    /// Open the dialog to rename the node in `slot` of the current level.
+    /// The query line is the name: it opens holding the one the node has,
+    /// so a rename that changes a letter is a letter typed.
+    pub fn open_rename_dialog(&mut self, slot: usize) {
+        let Some((id, name)) = self.current_dir().children.get(slot).map(|n| (n.id.clone(), n.name.clone())) else {
+            self.update_status_text("Select a node to rename.");
+            return;
+        };
+        self.rename_target = Some(id);
+        self.open_dialog_in(Mode::Rename);
+        self.slots.dialog.query = name;
+        self.refresh_dialog_rows();
+    }
+
+    /// What renaming the dialog's node to `typed` would do: the name it
+    /// has and the one it would get, or why not. None when the node is
+    /// gone.
+    pub fn rename_outcome(&self, typed: &str) -> Option<Result<(String, String), String>> {
+        let id = self.rename_target.as_ref()?;
+        let node = crate::viewer_state::find_node_by_id(&self.fs_root, id)?;
+        Some(self.rename_check(id, typed).map(|new| (node.name.clone(), new)))
+    }
+
     fn open_dialog_in(&mut self, mode: Mode) {
         // Always with an empty query: a dialog that reopens holding the last
         // search has to be cleared before it can be used, which is a step
@@ -1364,6 +1395,7 @@ impl State {
         self.update_status_text(match mode {
             Mode::Commands => "Dialog: type to filter commands and settings, Escape closes.",
             Mode::AddNode => "Add Node: type to filter, Enter adds at the cursor, Escape closes.",
+            Mode::Rename => "Rename: type the name, Enter renames, Escape closes.",
         });
     }
 
@@ -1394,6 +1426,13 @@ impl State {
     pub fn refresh_dialog_rows(&mut self) {
         let query = self.slots.dialog.query.clone();
         let rows: Vec<Row> = match self.slots.dialog.mode {
+            // One row, which is what Enter will do: the name as it will be
+            // written, or why it will not be.
+            Mode::Rename => match self.rename_outcome(&query) {
+                Some(Ok((old, new))) => vec![Row::plain(RENAME_ROW_ID, format!("Rename {old} to {new}"), "")],
+                Some(Err(why)) => vec![Row::plain(RENAME_ROW_ID, why, "")],
+                None => vec![],
+            },
             Mode::Commands => {
                 let cmds = crate::command::COMMANDS;
                 // The level's camera nodes rank among the commands, as
@@ -2227,6 +2266,13 @@ impl State {
             // Fire-and-forget at the grid cursor, exactly as the popup's
             // answer used to arrive — read BEFORE the close, since closing
             // relays the panes.
+            Mode::Rename => {
+                let Some(target) = self.rename_target.take() else { return };
+                let typed = self.slots.dialog.query.clone();
+                match self.rename_node(&target, &typed) {
+                    Ok(said) | Err(said) => self.update_status_text(&said),
+                }
+            }
             Mode::AddNode => {
                 let mut redraw = false;
                 let action = crate::app::McpAction::AddNode {

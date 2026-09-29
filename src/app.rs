@@ -381,6 +381,8 @@ pub enum NodeMenuAction {
     ToggleBypass,
     /// Enter/exit the curve viewer state (curve nodes only).
     EditCurve,
+    /// Open the dialog on the node's name.
+    Rename,
     /// Remove the node.
     Delete,
 }
@@ -2059,6 +2061,8 @@ pub struct State {
     /// Copy Parameter's clipboard: (node id, parameter name). An id, so a
     /// rename between the copy and the paste still pastes the right path.
     pub copied_param: Option<(String, String)>,
+    /// The node the rename dialog is open on, by id.
+    pub rename_target: Option<String>,
     /// Undo for edits to the node tree, parameters and structure — see
     /// `src/edit_history.rs`. Consulted after a code row and a viewer
     /// state have had their turn.
@@ -3937,6 +3941,10 @@ impl State {
             "Reset Parameters" => {
                 self.reset_parameters();
             }
+            "Rename Node" => match self.selected_slots().first().copied() {
+                Some(slot) => self.open_rename_dialog(slot),
+                None => self.update_status_text("Select a node to rename."),
+            },
             "New Project" | "New" => {
                 self.new_project();
                 self.update_status_text("New project");
@@ -4597,11 +4605,13 @@ impl State {
     /// Open the node right-click context menu at the cursor for `slot`. The
     /// items are contextual: Enter (dive into the subnet) for enterable nodes,
     /// Show/Hide Geometry, and Delete.
-    fn open_node_context_menu(&mut self, slot: usize) {
+    /// The rows of a node's right-click menu and the action each runs.
+    /// Split from the open so a test reads them.
+    pub(crate) fn node_menu_rows(&self, slot: usize) -> (Vec<String>, Vec<NodeMenuAction>) {
         let bypassed = self.current_dir().children.get(slot).is_some_and(|n| n.bypassed);
         let (is_utility, geom_visible, enterable, curve_editing) = {
             let dir = self.current_dir();
-            let Some(node) = dir.children.get(slot) else { return };
+            let Some(node) = dir.children.get(slot) else { return (Vec::new(), Vec::new()) };
             let enterable = node.is_enterable();
             // None: no viewer state for this node type; Some(bool): editable,
             // and whether it is being edited right now. The types that have a
@@ -4643,10 +4653,20 @@ impl State {
             actions.push(NodeMenuAction::EditCurve);
         }
         if deletable {
+            options.push("Rename".to_string());
+            actions.push(NodeMenuAction::Rename);
             options.push("Delete".to_string());
             actions.push(NodeMenuAction::Delete);
         }
 
+        (options, actions)
+    }
+
+    fn open_node_context_menu(&mut self, slot: usize) {
+        let (options, actions) = self.node_menu_rows(slot);
+        if options.is_empty() {
+            return;
+        }
         let target = self.slots.get_dyn(CONTENT_IDX).base().id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
         self.node_menu_slot = Some(slot);
@@ -5753,6 +5773,11 @@ impl State {
         false
     }
 
+    /// Run a row of a node's menu: what a click on it runs.
+    pub(crate) fn run_node_menu_action(&mut self, slot: usize, action: NodeMenuAction) {
+        self.dispatch_node_menu(slot, action);
+    }
+
     fn dispatch_node_menu(&mut self, slot: usize, action: NodeMenuAction) {
         match action {
             NodeMenuAction::Enter => {
@@ -5771,10 +5796,61 @@ impl State {
             NodeMenuAction::EditCurve => {
                 self.toggle_viewer_state(slot);
             }
+            NodeMenuAction::Rename => {
+                self.open_rename_dialog(slot);
+            }
             NodeMenuAction::Delete => {
                 self.delete_node(slot);
             }
         }
+    }
+
+    /// The name a rename of `id` to `typed` would write, or why it would
+    /// write none. A name is a segment of a path: it is sanitized as every
+    /// name is, and a sibling's is refused, since wires are by name and
+    /// two nodes of one name leave every wire to either naming both.
+    pub fn rename_check(&self, id: &str, typed: &str) -> Result<String, String> {
+        let node = crate::viewer_state::find_node_by_id(&self.fs_root, id).ok_or("The node is gone")?;
+        if typed.trim().is_empty() {
+            return Err("A node needs a name".to_string());
+        }
+        let new = sanitize_node_name(typed);
+        if new == node.name {
+            return Err(format!("{new} is its name already"));
+        }
+        let taken = crate::geometry::find_parent_node(&self.fs_root, id)
+            .is_some_and(|p| p.children.iter().any(|c| c.id != id && c.name == new));
+        if taken {
+            return Err(format!("{new} is another node's name"));
+        }
+        Ok(new)
+    }
+
+    /// Rename the node `id`, and everything that names it with it: the
+    /// wires, the expression paths anywhere in the tree, the active
+    /// camera. The one entry the node menu, the command and MCP share.
+    pub fn rename_node(&mut self, id: &str, typed: &str) -> Result<String, String> {
+        let new = self.rename_check(id, typed)?;
+        let old = crate::viewer_state::find_node_by_id(&self.fs_root, id).map(|n| n.name.clone()).unwrap_or_default();
+        // The active camera is looked up where it applies, the current
+        // level, and is this node only if this node is there.
+        let is_camera = self
+            .current_dir()
+            .children
+            .iter()
+            .any(|c| c.id == id && c.node_type == "camera" && c.name == self.active_camera);
+        crate::geometry::rename_node_in_tree(&mut self.fs_root, id, &new);
+        if is_camera {
+            // Both copies of the name: the viewport routes the wheel by
+            // its own.
+            self.set_active_camera(new.clone());
+        }
+        self.sync_nodes();
+        // Connections reference nodes by name (Input params), so a rename
+        // changes downstream evaluation.
+        self.rebuild_scene_geometry();
+        self.sync_parameters_pane();
+        Ok(format!("Renamed {old} to {new}"))
     }
 
 
@@ -6696,6 +6772,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             param_menu_actions: Vec::new(),
             param_menu_target: None,
             copied_param: None,
+            rename_target: None,
             edit_history: Default::default(),
             structure_base: None,
             network_menu_active: false,

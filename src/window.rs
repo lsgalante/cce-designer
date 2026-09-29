@@ -491,29 +491,14 @@ impl State {
                 }
             }
             McpAction::RenameNode { slot, new_name } => {
-                let len = state.current_dir().children.len();
-                if slot < len {
-                    let new_name = crate::app::sanitize_node_name(&new_name);
-                    let (id, old_name) = {
-                        let n = &state.current_dir().children[slot];
-                        (n.id.clone(), n.name.clone())
-                    };
-                    // Everything that names the node follows it: the wires,
-                    // the expressions anywhere in the tree, the active camera.
-                    crate::geometry::rename_node_in_tree(&mut state.fs_root, &id, &new_name);
-                    if state.active_camera == old_name {
-                        // Both copies of the name: the viewport's routes
-                        // the wheel by its own.
-                        state.set_active_camera(new_name.clone());
+                match state.current_dir().children.get(slot).map(|n| n.id.clone()) {
+                    Some(id) => {
+                        let res = state.rename_node(&id, &new_name);
+                        needs_redraw |= res.is_ok();
+                        // The reply body is interpolated into JSON unescaped.
+                        res.map(|_| "Node renamed".to_string())
                     }
-                    state.sync_nodes();
-                    // Connections reference nodes by name (Input params), so a
-                    // rename changes downstream evaluation.
-                    state.rebuild_scene_geometry();
-                    needs_redraw = true;
-                    Ok("Node renamed".to_string())
-                } else {
-                    Err("Slot out of bounds".to_string())
+                    None => Err("Slot out of bounds".to_string()),
                 }
             }
             McpAction::MoveNode { slot, x, y } => {

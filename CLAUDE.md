@@ -2737,6 +2737,16 @@ rather than two:
   section rows and the second slot are gone, and with them the double
   paint, the `dispatch_uncovered` routing into a second slot and the
   `dialog_settings_shown` baseline the writeback diffed against.
+- `Mode::Rename` (the node menu's **Rename**, the `rename_node` command)
+  — the query line is the NAME, opened holding the one the node has, and
+  the one row (`RENAME_ROW_ID`) says what Enter will do: `Rename camera1
+  to lens`, the name as it will be written (`sanitize_node_name`, so
+  `My Ball` reads `my_ball` before it is committed), or why it will not
+  be — its name already, another node's, none. `State::rename_check` is
+  that rule and `State::rename_node` the one entry the dialog and MCP's
+  `rename_node` share; a sibling's name is refused in both, since wires
+  are by name. `State::rename_target` holds the node by id.
+  `a_node_is_renamed_from_its_menu` is the test.
 - `Mode::AddNode` (**Tab**, in the network pane) — one list of node
   templates, and a pick that instantiates at the grid cursor. Tab is what
   opened it, so Tab closes it again. The query hint names the mode; there
