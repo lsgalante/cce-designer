@@ -150,6 +150,12 @@ impl Topo {
         &self.at_sides[self.side_starts[p] as usize..self.side_starts[p + 1] as usize]
     }
 
+    /// Whether `q`, or a point a side away from it, is stirred: the other
+    /// end of a pair reaches one ring past the rings.
+    fn neighbours_stirred(&self, q: u32, stirred: &[bool]) -> bool {
+        stirred[q as usize] || self.sides_at(q as usize).iter().any(|&j| self.sides[j as usize].iter().any(|&r| stirred[r as usize]))
+    }
+
     fn excludes(&self, p: usize, q: u32) -> bool {
         let (a, b) = (self.starts[p] as usize, self.starts[p + 1] as usize);
         self.excluded[a..b].binary_search(&q).is_ok()
@@ -505,8 +511,6 @@ struct TriCells {
     dims: [i32; 3],
     starts: Vec<u32>,
     ids: Vec<u32>,
-    /// Where each POINT was when the triangles were filed.
-    filed: Vec<Vec3>,
 }
 
 impl TriCells {
@@ -523,7 +527,7 @@ impl TriCells {
             ((span.y / cell).ceil() as i32 + 1).clamp(1, 256),
             ((span.z / cell).ceil() as i32 + 1).clamp(1, 256),
         ];
-        let mut grid = TriCells { min, cell, dims, starts: Vec::new(), ids: Vec::new(), filed: points.to_vec() };
+        let mut grid = TriCells { min, cell, dims, starts: Vec::new(), ids: Vec::new() };
         let cells = (dims[0] * dims[1] * dims[2]) as usize;
         let boxes: Vec<([i32; 3], [i32; 3])> = tris
             .iter()
@@ -598,10 +602,6 @@ impl TriCells {
                 }
             }
         }
-    }
-
-    fn drift(&self, points: &[Vec3]) -> f32 {
-        points.iter().zip(&self.filed).map(|(p, f)| (*p - *f).length_squared()).fold(0.0f32, f32::max).sqrt()
     }
 }
 
@@ -680,22 +680,17 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
             }
         }
     }
-    // How far anything has come since the step began: what a point or an
-    // edge went through may be that far from where either is now.
-    let travelled = before.map_or(0.0, |b| pos.iter().zip(b).map(|(p, q)| (*p - *q).length_squared()).fold(0.0f32, f32::max).sqrt());
 
-    // Cells no smaller than a triangle, or each is filed in dozens.
-    let cell = thickness.max(mean_edge(geom, topo));
-    let mut grid = TriCells::build(&pos, &topo.tris, cell);
+    let looking = Looking { thickness, cell: thickness.max(mean_edge(geom, topo)), edges_too };
+    let mut near = Near::find(topo, before, &pos, looking);
     work.grids += 1;
-    let mut drift = 0.0f32;
-    let mut search = Search { near: Vec::new(), seen: vec![u32::MAX; topo.tris.len()], stamp: 0, met: vec![u32::MAX; topo.sides.len()], held: Vec::new() };
+    work.edges_searched += near.sides_looked_at;
     // What has folded through its own neighbourhood since the step began.
     // A node without the row is one from before it.
     let folds_too = before.is_some() && crate::geometry::node_param_bool(target, "Fold Contact", false);
     let mut folds: Vec<Fold> = Vec::new();
     if let (Some(was), true) = (before, folds_too) {
-        folded(topo, was, &pos, edges_too, 0.0, &mut search, &mut folds);
+        folded(topo, was, &pos, edges_too, 0.0, None, &mut folds);
         work.folds = folds.len();
     }
     let mut push = vec![Vec3::ZERO; n];
@@ -703,31 +698,15 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     let mut found: Vec<Contact> = Vec::new();
     // Which points have gone through something this pass.
     let mut through = vec![false; n];
-    // Which points are near a triangle with a side that is none of their
-    // own neighbourhood: what says which edges are worth testing against
-    // others. Two edges nearer than `close` somewhere along them have an
-    // end within that and half the edge's length of the other edge, which
-    // is a side of a triangle — so an edge with neither end that near
-    // anything is near nothing, and most of a mesh is. `close` is the
-    // thickness, or as far as two edges that have passed through each
-    // other this step can have come apart since.
-    let mut near_something = vec![false; n];
-    let close = thickness.max(2.0 * travelled);
-    // Half the longest side at each point, as the points now stand.
-    let mut half = vec![0.0f32; n];
     for _ in 0..iterations {
         work.passes += 1;
-        if drift > DRIFT_CELLS * grid.cell {
-            grid = TriCells::build(&pos, &topo.tris, cell);
+        if near.is_stale(&pos) {
+            near = Near::find(topo, before, &pos, looking);
             work.grids += 1;
-            drift = 0.0;
+            work.edges_searched += near.sides_looked_at;
         }
         found.clear();
         through.iter_mut().for_each(|t| *t = false);
-        // A triangle within a thickness of here now had its box within a
-        // thickness and a drift of here when it was filed; one a point
-        // went through lies along the way it came.
-        let reach = thickness + drift + if before.is_some() { travelled } else { 0.0 };
         // What folded through is put back as far over its neighbour as it
         // began, which is nearer than a thickness: that is what a
         // neighbour is.
@@ -750,59 +729,31 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                 }
             }
         }
-        near_something.iter_mut().for_each(|t| *t = false);
-        if edges_too {
-            half.iter_mut().for_each(|h| *h = 0.0);
-            for e in &topo.sides {
-                let [a, b] = e.map(|p| p as usize);
-                let len = (pos[b] - pos[a]).length() * 0.5;
-                (half[a], half[b]) = (half[a].max(len), half[b].max(len));
-            }
-        }
-        for p in 0..n {
-            work.searched += 1;
-            let from = before.map_or(pos[p], |b| b[p]);
-            let (lo, hi) = (pos[p].min(from), pos[p].max(from));
-            // How far this point looks: a thickness for what it may touch,
-            // and further for what its edges may.
-            let look = if edges_too { close + half[p] } else { thickness };
-            search.triangles(&grid, lo - reach.max(look + drift), hi + reach.max(look + drift));
-            for &t in &search.near {
-                let corners = topo.tris[t as usize];
-                let [ia, ib, ic] = corners.map(|c| c as usize);
+        let (touching, positions) = (&near.touching, &pos);
+        let by_point = in_pieces(touching.len(), 4096, |pairs| {
+            let (pos, mut found) = (positions, Vec::new());
+            for &[p, t] in &touching[pairs] {
+                let p = p as usize;
+                let [ia, ib, ic] = topo.tris[t as usize].map(|c| c as usize);
                 let (a, b, c) = (pos[ia], pos[ib], pos[ic]);
-                // Most of what a cell holds is nowhere near: a triangle
-                // whose box is a thickness away on any axis is further
-                // than that, and is turned away before it costs a search
-                // of the rings or a closest point.
-                let (tlo, thi) = (a.min(b).min(c) - look, a.max(b).max(c) + look);
-                if hi.cmplt(tlo).any() || lo.cmpgt(thi).any() {
-                    continue;
-                }
-                // A triangle with two corners that are none of the point's
-                // own has a side its edges may meet; one with three is a
-                // triangle it may touch.
-                let own = corners.iter().filter(|&&c| topo.excludes(p, c)).count();
-                if own > 1 || (own == 1 && !edges_too) {
-                    continue;
-                }
-                let w = crate::spatial::closest_weights_on_triangle(pos[p], a, b, c);
-                if edges_too && !near_something[p] {
-                    near_something[p] = (pos[p] - (a * w[0] + b * w[1] + c * w[2])).length_squared() <= look * look;
-                }
-                if own > 0 {
-                    continue;
-                }
-                let (who, share) = ([p, ia, ib, ic], [1.0, -w[0], -w[1], -w[2]]);
+                let who = [p, ia, ib, ic];
                 if let Some((side, _)) = before.and_then(|was| went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], 0.0)) {
                     // `side` is the triangle's normal, turned to the side
                     // the point came from; it is below the plane by that
                     // much and belongs a thickness above it.
+                    let w = crate::spatial::closest_weights_on_triangle(pos[p], a, b, c);
                     let below = (pos[p] - a).dot(side);
-                    found.push(Contact { who, share, dir: side, deep: thickness - below, through: true, edges: false });
-                    through[p] = true;
+                    found.push(Contact { who, share: [1.0, -w[0], -w[1], -w[2]], dir: side, deep: thickness - below, through: true, edges: false });
                     continue;
                 }
+                // What is listed is what was near when it was listed, and
+                // most of it is not near enough: a triangle whose box is a
+                // thickness away on any axis is further than that.
+                let (tlo, thi) = (a.min(b).min(c) - thickness, a.max(b).max(c) + thickness);
+                if pos[p].cmplt(tlo).any() || pos[p].cmpgt(thi).any() {
+                    continue;
+                }
+                let w = crate::spatial::closest_weights_on_triangle(pos[p], a, b, c);
                 let d = pos[p] - (a * w[0] + b * w[1] + c * w[2]);
                 let len = d.length();
                 if len >= thickness {
@@ -817,65 +768,59 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
                 } else {
                     d / len
                 };
-                found.push(Contact { who, share, dir, deep: thickness - len, through: false, edges: false });
+                found.push(Contact { who, share: [1.0, -w[0], -w[1], -w[2]], dir, deep: thickness - len, through: false, edges: false });
             }
-        }
-        if edges_too {
-            for (i, e) in topo.sides.iter().enumerate() {
-                if !e.iter().any(|&p| near_something[p as usize]) {
+            found
+        });
+        found.extend(by_point.into_iter().flatten());
+        work.searched += n;
+        let meeting = &near.meeting;
+        let by_side = in_pieces(meeting.len(), 4096, |pairs| {
+            let (pos, mut found) = (positions, Vec::new());
+            for &[i, j] in &meeting[pairs] {
+                let (e, f) = (topo.sides[i as usize], topo.sides[j as usize]);
+                let ([e0, e1], [f0, f1]) = (e.map(|p| pos[p as usize]), f.map(|p| pos[p as usize]));
+                let who = [e[0] as usize, e[1] as usize, f[0] as usize, f[1] as usize];
+                let was = before.map(|was| (e.map(|p| was[p as usize]), f.map(|p| was[p as usize])));
+                if let Some((side, at, _)) = was.and_then(|(e_was, f_was)| edges_went_through(e_was, f_was, [e0, e1], [f0, f1], 0.0)) {
+                    let (s, t) = (at[0].clamp(0.0, 1.0), at[1].clamp(0.0, 1.0));
+                    let below = ((e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t)).dot(side);
+                    found.push(Contact { who, share: [1.0 - s, s, t - 1.0, -t], dir: side, deep: thickness - below, through: true, edges: true });
                     continue;
                 }
-                work.edges_searched += 1;
-                let [e0, e1] = e.map(|p| pos[p as usize]);
-                let (mut lo, mut hi) = (e0.min(e1), e0.max(e1));
-                if let Some(was) = before {
-                    let [w0, w1] = e.map(|p| was[p as usize]);
-                    (lo, hi) = (lo.min(w0).min(w1), hi.max(w0).max(w1));
+                let (lo, hi) = (e0.min(e1), e0.max(e1));
+                let (flo, fhi) = (f0.min(f1) - thickness, f0.max(f1) + thickness);
+                if hi.cmplt(flo).any() || lo.cmpgt(fhi).any() {
+                    continue;
                 }
-                search.sides(&grid, topo, i, lo - reach, hi + reach);
-                for &j in &search.near {
-                    let f = topo.sides[j as usize];
-                    let [f0, f1] = f.map(|p| pos[p as usize]);
-                    let (flo, fhi) = (f0.min(f1) - thickness, f0.max(f1) + thickness);
-                    if hi.cmplt(flo).any() || lo.cmpgt(fhi).any() {
-                        continue;
-                    }
-                    if e.iter().any(|&p| f.iter().any(|&q| topo.excludes(p as usize, q))) {
-                        continue;
-                    }
-                    let who = [e[0] as usize, e[1] as usize, f[0] as usize, f[1] as usize];
-                    let was = before.map(|was| (e.map(|p| was[p as usize]), f.map(|p| was[p as usize])));
-                    if let Some((side, at, _)) = was.and_then(|(e_was, f_was)| edges_went_through(e_was, f_was, [e0, e1], [f0, f1], 0.0)) {
-                        let (s, t) = (at[0].clamp(0.0, 1.0), at[1].clamp(0.0, 1.0));
-                        let below = ((e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t)).dot(side);
-                        let share = [1.0 - s, s, t - 1.0, -t];
-                        found.push(Contact { who, share, dir: side, deep: thickness - below, through: true, edges: true });
-                        who.iter().for_each(|&p| through[p] = true);
-                        continue;
-                    }
-                    let (s, t) = nearest_on_segments([e0, e1], [f0, f1]);
-                    // An end is a point, and the point test has it.
-                    if !(s > ENDS && s < 1.0 - ENDS && t > ENDS && t < 1.0 - ENDS) {
-                        continue;
-                    }
-                    let d = (e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t);
-                    let len = d.length();
-                    if len >= thickness {
-                        continue;
-                    }
-                    let dir = if len < 1e-9 {
-                        let across = (e1 - e0).cross(f1 - f0).normalize_or_zero();
-                        if across == Vec3::ZERO {
-                            continue;
-                        }
-                        across
-                    } else {
-                        d / len
-                    };
-                    let share = [1.0 - s, s, t - 1.0, -t];
-                    found.push(Contact { who, share, dir, deep: thickness - len, through: false, edges: true });
+                let (s, t) = nearest_on_segments([e0, e1], [f0, f1]);
+                // An end is a point, and the point test has it.
+                if !(s > ENDS && s < 1.0 - ENDS && t > ENDS && t < 1.0 - ENDS) {
+                    continue;
                 }
+                let d = (e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t);
+                let len = d.length();
+                if len >= thickness {
+                    continue;
+                }
+                let dir = if len < 1e-9 {
+                    let across = (e1 - e0).cross(f1 - f0).normalize_or_zero();
+                    if across == Vec3::ZERO {
+                        continue;
+                    }
+                    across
+                } else {
+                    d / len
+                };
+                found.push(Contact { who, share: [1.0 - s, s, t - 1.0, -t], dir, deep: thickness - len, through: false, edges: true });
             }
+            found
+        });
+        found.extend(by_side.into_iter().flatten());
+        // What has gone through something, this pass.
+        for contact in found.iter().filter(|c| c.through) {
+            let subjects = if contact.edges { &contact.who[..] } else { &contact.who[..1] };
+            subjects.iter().for_each(|&p| through[p] = true);
         }
         push.iter_mut().for_each(|v| *v = Vec3::ZERO);
         weight.iter_mut().for_each(|w| *w = 0.0);
@@ -918,7 +863,6 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
             }
         }
         moved_at_all = true;
-        drift = grid.drift(&pos);
     }
     // The hold. The passes share a move out and average what they are
     // given, and under a push that does not let up they can run out before
@@ -929,71 +873,60 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     // them the step's movement and nothing else.
     if let Some(was) = before {
         let mut back: Vec<usize> = Vec::new();
+        // What the last look put back, and so what this one has to look
+        // at: a pair none of whose points has moved since it was last
+        // looked at is as it was. The first look is at everything.
+        let mut stirred = vec![true; n];
         for _ in 0..HOLD_ROUNDS {
-            if drift > DRIFT_CELLS * grid.cell {
-                grid = TriCells::build(&pos, &topo.tris, cell);
+            if near.is_stale(&pos) {
+                near = Near::find(topo, before, &pos, looking);
                 work.grids += 1;
-                drift = 0.0;
+                work.edges_searched += near.sides_looked_at;
             }
             back.clear();
-            let wide = Vec3::splat(drift + travelled);
-            for p in 0..n {
-                let (lo, hi) = (pos[p].min(was[p]), pos[p].max(was[p]));
-                search.triangles(&grid, lo - wide, hi + wide);
-                for &t in &search.near {
-                    let corners = topo.tris[t as usize];
-                    let [ia, ib, ic] = corners.map(|c| c as usize);
-                    let (a, b, c) = (pos[ia], pos[ib], pos[ic]);
-                    let (tlo, thi) = (a.min(b).min(c).min(was[ia]).min(was[ib]).min(was[ic]), a.max(b).max(c).max(was[ia]).max(was[ib]).max(was[ic]));
-                    if hi.cmplt(tlo).any() || lo.cmpgt(thi).any() {
+            let (touching, meeting, positions, stirred_now) = (&near.touching, &near.meeting, &pos, &stirred);
+            let by_point = in_pieces(touching.len(), 8192, |pairs| {
+                let (pos, stirred, mut back) = (positions, stirred_now, Vec::new());
+                for &[p, t] in &touching[pairs] {
+                    let p = p as usize;
+                    let [ia, ib, ic] = topo.tris[t as usize].map(|c| c as usize);
+                    if !(stirred[p] || stirred[ia] || stirred[ib] || stirred[ic]) {
                         continue;
                     }
-                    if corners.iter().any(|&c| topo.excludes(p, c)) {
-                        continue;
-                    }
-                    if went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], HOLD_MARGIN).is_some() {
+                    if went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [pos[ia], pos[ib], pos[ic]], HOLD_MARGIN).is_some() {
                         back.extend([p, ia, ib, ic]);
                     }
                 }
-            }
-            if edges_too {
-                for (i, e) in topo.sides.iter().enumerate() {
-                    // The last pass's word on it: what was near nothing
-                    // then has not gone through anything since.
-                    if !e.iter().any(|&p| near_something[p as usize]) {
+                back
+            });
+            let by_side = in_pieces(meeting.len(), 8192, |pairs| {
+                let (pos, stirred, mut back) = (positions, stirred_now, Vec::new());
+                for &[i, j] in &meeting[pairs] {
+                    let (e, f) = (topo.sides[i as usize], topo.sides[j as usize]);
+                    if !e.iter().chain(f.iter()).any(|&p| stirred[p as usize]) {
                         continue;
                     }
                     let (e_now, e_was) = (e.map(|p| pos[p as usize]), e.map(|p| was[p as usize]));
-                    let lo = e_now[0].min(e_now[1]).min(e_was[0]).min(e_was[1]);
-                    let hi = e_now[0].max(e_now[1]).max(e_was[0]).max(e_was[1]);
-                    search.sides(&grid, topo, i, lo - wide, hi + wide);
-                    for &j in &search.near {
-                        let f = topo.sides[j as usize];
-                        let (f_now, f_was) = (f.map(|p| pos[p as usize]), f.map(|p| was[p as usize]));
-                        let flo = f_now[0].min(f_now[1]).min(f_was[0]).min(f_was[1]);
-                        let fhi = f_now[0].max(f_now[1]).max(f_was[0]).max(f_was[1]);
-                        if hi.cmplt(flo).any() || lo.cmpgt(fhi).any() {
-                            continue;
-                        }
-                        if e.iter().any(|&p| f.iter().any(|&q| topo.excludes(p as usize, q))) {
-                            continue;
-                        }
-                        if edges_went_through(e_was, f_was, e_now, f_now, HOLD_MARGIN).is_some() {
-                            back.extend(e.iter().chain(f.iter()).map(|&p| p as usize));
-                        }
+                    let (f_now, f_was) = (f.map(|p| pos[p as usize]), f.map(|p| was[p as usize]));
+                    if edges_went_through(e_was, f_was, e_now, f_now, HOLD_MARGIN).is_some() {
+                        back.extend(e.iter().chain(f.iter()).map(|&p| p as usize));
                     }
                 }
-            }
+                back
+            });
+            back.extend(by_point.into_iter().chain(by_side).flatten());
             if folds_too {
-                folded(topo, was, &pos, edges_too, HOLD_MARGIN, &mut search, &mut folds);
+                folded(topo, was, &pos, edges_too, HOLD_MARGIN, Some(&stirred), &mut folds);
                 for fold in &folds {
                     back.extend(fold.points(topo, was, &pos).0);
                 }
             }
+            stirred.iter_mut().for_each(|s| *s = false);
             let mut put = 0;
             for &i in &back {
                 if movable[i] && pos[i] != was[i] {
                     pos[i] = was[i];
+                    stirred[i] = true;
                     put += 1;
                 }
             }
@@ -1002,13 +935,198 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
             }
             work.held += put;
             moved_at_all = true;
-            drift = grid.drift(&pos);
         }
     }
     if moved_at_all {
         for (p, v) in pos.iter().enumerate() {
             geom.set_pos(p, *v);
         }
+    }
+}
+
+/// `run` over `0..count` in pieces, on as many threads as the machine has
+/// and the work is worth — no piece smaller than `least` — and what each
+/// piece made, in order. The order is what makes this a way of RUNNING the
+/// work and not a change to it: put end to end, the pieces are what one
+/// thread would have made.
+///
+/// Threads and not a pool, since the crate has none: a thread costs tens
+/// of microseconds to start, which is what `least` is for.
+fn in_pieces<R: Send>(count: usize, least: usize, run: impl Fn(std::ops::Range<usize>) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(count / least.max(1)).max(1);
+    if threads == 1 {
+        return vec![run(0..count)];
+    }
+    let size = count.div_ceil(threads);
+    std::thread::scope(|scope| {
+        let run = &run;
+        let pieces: Vec<_> = (0..threads).map(|k| scope.spawn(move || run((k * size).min(count)..((k + 1) * size).min(count)))).collect();
+        pieces.into_iter().map(|piece| piece.join().expect("a piece of the detangle solve panicked")).collect()
+    })
+}
+
+/// What a search is for.
+#[derive(Clone, Copy)]
+struct Looking {
+    thickness: f32,
+    cell: f32,
+    edges_too: bool,
+}
+
+/// How much further than a thickness the search looks, as a part of one,
+/// so that what it finds is still everything near once the passes have
+/// moved the points: until any has moved half of this.
+const SLACK: f32 = 0.5;
+
+/// What is near what: the pairs a pass has to look at, found ONCE and kept
+/// while the points stay near where they were when it was.
+///
+/// The passes of a solve, and the looks of the hold after them, ask the
+/// same question of nearly the same positions, and until 2026-09-29 each
+/// answered it from the grid: a gather of cells per point and per edge, a
+/// search of the rings per candidate, four or five times over. Measured
+/// on the sphere test, that — and not the contacts — was what the Surface
+/// method cost. The pairs are found with [`SLACK`] to spare, and found
+/// again only when a point has moved half of it.
+struct Near {
+    /// Where the points were when this was found.
+    filed: Vec<Vec3>,
+    slack: f32,
+    /// A point and a triangle none of whose corners is in its rings.
+    touching: Vec<[u32; 2]>,
+    /// Two sides neither of whose ends is in the rings of the other's.
+    meeting: Vec<[u32; 2]>,
+    /// How many sides were searched for sides near them.
+    sides_looked_at: usize,
+}
+
+impl Near {
+    fn is_stale(&self, pos: &[Vec3]) -> bool {
+        let moved = pos.iter().zip(&self.filed).map(|(p, f)| (*p - *f).length_squared()).fold(0.0f32, f32::max);
+        moved > (self.slack * 0.5) * (self.slack * 0.5)
+    }
+
+    fn find(topo: &Topo, before: Option<&[Vec3]>, pos: &[Vec3], looking: Looking) -> Near {
+        let Looking { thickness, cell, edges_too } = looking;
+        let n = pos.len();
+        let slack = thickness * SLACK;
+        let grid = TriCells::build(pos, &topo.tris, cell);
+        // How far anything has come since the step began: what a point or
+        // an edge went through may be that far from where either is now.
+        let travelled = before.map_or(0.0, |b| pos.iter().zip(b).map(|(p, q)| (*p - *q).length_squared()).fold(0.0f32, f32::max).sqrt());
+        // Which points are near a triangle with a side that is none of
+        // their own neighbourhood: what says which edges are worth testing
+        // against others. Two edges nearer than `close` somewhere along
+        // them have an end within that and half the edge's length of the
+        // other edge, which is a side of a triangle — so an edge with
+        // neither end that near anything is near nothing, and most of a
+        // mesh is. `close` is the thickness, or as far as two edges that
+        // have passed through each other this step can have come apart
+        // since.
+        let mut near_something = vec![false; n];
+        let close = thickness.max(2.0 * travelled) + slack;
+        // Half the longest side at each point.
+        let mut half = vec![0.0f32; n];
+        if edges_too {
+            for e in &topo.sides {
+                let [a, b] = e.map(|p| p as usize);
+                let len = (pos[b] - pos[a]).length() * 0.5;
+                (half[a], half[b]) = (half[a].max(len), half[b].max(len));
+            }
+        }
+        // What may touch is what is within a thickness, and what may have
+        // gone through since the step began is what is within twice what
+        // anything has travelled: each has come no further than that from
+        // where they met. Boxes turn most of a cell away; the distance
+        // itself turns away most of what is left, which on one sheet is
+        // the sides a few edges off — near enough for their boxes, and
+        // further than any thickness.
+        let reach = thickness.max(2.0 * travelled) + slack;
+        let boxed = |points: &[u32]| points.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |at, &p| (at.0.min(pos[p as usize]), at.1.max(pos[p as usize])));
+        let by_point = in_pieces(n, 64, |points| {
+            let mut search = Search::new(topo);
+            let (mut touching, mut near_something) = (Vec::new(), Vec::new());
+            for p in points {
+                // How far this point looks: for what it may touch, and
+                // further for what its edges may.
+                let look = if edges_too { close + half[p] } else { reach };
+                let mut near = false;
+                search.triangles(&grid, pos[p] - look, pos[p] + look);
+                for &t in &search.near {
+                    let corners = topo.tris[t as usize];
+                    let (tlo, thi) = boxed(&corners);
+                    if pos[p].cmplt(tlo - look).any() || pos[p].cmpgt(thi + look).any() {
+                        continue;
+                    }
+                    let [a, b, c] = corners.map(|c| pos[c as usize]);
+                    let away = (pos[p] - crate::spatial::closest_point_on_triangle(pos[p], a, b, c)).length_squared();
+                    if away > look * look {
+                        continue;
+                    }
+                    // A triangle with two corners that are none of the
+                    // point's own has a side its edges may meet; one with
+                    // three is a triangle it may touch.
+                    let own = corners.iter().filter(|&&c| topo.excludes(p, c)).count();
+                    if own > 1 || (own == 1 && !edges_too) {
+                        continue;
+                    }
+                    near = true;
+                    if own == 0 && away <= reach * reach {
+                        touching.push([p as u32, t]);
+                    }
+                }
+                if near {
+                    near_something.push(p);
+                }
+            }
+            (touching, near_something)
+        });
+        let mut touching = Vec::new();
+        for (pairs, near) in by_point {
+            touching.extend(pairs);
+            near.into_iter().for_each(|p| near_something[p] = true);
+        }
+        let near_something = &near_something;
+        let mut meeting = Vec::new();
+        let mut sides_looked_at = 0;
+        if edges_too {
+            let by_side = in_pieces(topo.sides.len(), 64, |sides| {
+                let mut search = Search::new(topo);
+                let (mut meeting, mut looked_at) = (Vec::new(), 0);
+                for i in sides {
+                    let e = topo.sides[i];
+                    if !e.iter().any(|&p| near_something[p as usize]) {
+                        continue;
+                    }
+                    looked_at += 1;
+                    let (lo, hi) = boxed(&e);
+                    let [e0, e1] = e.map(|p| pos[p as usize]);
+                    search.sides(&grid, topo, i, lo - reach, hi + reach);
+                    for &j in &search.near {
+                        let f = topo.sides[j as usize];
+                        let (flo, fhi) = boxed(&f);
+                        if hi.cmplt(flo - reach).any() || lo.cmpgt(fhi + reach).any() {
+                            continue;
+                        }
+                        let [f0, f1] = f.map(|p| pos[p as usize]);
+                        let (s, t) = nearest_on_segments([e0, e1], [f0, f1]);
+                        if ((e0 + (e1 - e0) * s) - (f0 + (f1 - f0) * t)).length_squared() > reach * reach {
+                            continue;
+                        }
+                        if e.iter().any(|&p| f.iter().any(|&q| topo.excludes(p as usize, q))) {
+                            continue;
+                        }
+                        meeting.push([i as u32, j]);
+                    }
+                }
+                (meeting, looked_at)
+            });
+            for (pairs, looked_at) in by_side {
+                meeting.extend(pairs);
+                sides_looked_at += looked_at;
+            }
+        }
+        Near { filed: pos.to_vec(), slack, touching, meeting, sides_looked_at }
     }
 }
 
@@ -1049,52 +1167,77 @@ impl Fold {
 /// Found through the mesh and not through the grid: what is in a point's
 /// rings is the triangles at the points of its rings, however far apart
 /// the fold has left them.
-fn folded(topo: &Topo, was: &[Vec3], pos: &[Vec3], sides_too: bool, margin: f32, search: &mut Search, out: &mut Vec<Fold>) {
+fn folded(topo: &Topo, was: &[Vec3], pos: &[Vec3], sides_too: bool, margin: f32, stirred: Option<&[bool]>, out: &mut Vec<Fold>) {
     out.clear();
-    for p in 0..pos.len() {
-        search.next();
-        for &q in topo.own(p) {
-            for &t in topo.tris_at(q as usize) {
-                if search.seen[t as usize] == search.stamp {
-                    continue;
-                }
-                search.seen[t as usize] = search.stamp;
-                let corners = topo.tris[t as usize];
-                if corners.contains(&(p as u32)) {
-                    continue;
-                }
-                let [a, b, c] = corners.map(|c| c as usize);
-                if went_through(was[p], [was[a], was[b], was[c]], pos[p], [pos[a], pos[b], pos[c]], margin).is_some() {
-                    out.push(Fold { sides: false, pair: [p as u32, t] });
+    // With `stirred`, only the pairs with a point that is: what has a
+    // stirred point in its rings, or is one, is warm, and of a warm
+    // point's pairs the ones with no stirred point are as they were.
+    let is = |p: u32| stirred.is_none_or(|s| s[p as usize]);
+    let warm: Option<Vec<bool>> = stirred.map(|s| (0..pos.len()).map(|p| topo.own(p).iter().any(|&q| topo.neighbours_stirred(q, s))).collect());
+    let is_warm = |p: u32| warm.as_ref().is_none_or(|w| w[p as usize]);
+    let by_point = in_pieces(pos.len(), 256, |points| {
+        let mut search = Search::new(topo);
+        let mut out = Vec::new();
+        for p in points {
+            if !is_warm(p as u32) {
+                continue;
+            }
+            search.next();
+            for &q in topo.own(p) {
+                for &t in topo.tris_at(q as usize) {
+                    if search.seen[t as usize] == search.stamp {
+                        continue;
+                    }
+                    search.seen[t as usize] = search.stamp;
+                    let corners = topo.tris[t as usize];
+                    if corners.contains(&(p as u32)) || !(is(p as u32) || corners.iter().any(|&c| is(c))) {
+                        continue;
+                    }
+                    let [a, b, c] = corners.map(|c| c as usize);
+                    if went_through(was[p], [was[a], was[b], was[c]], pos[p], [pos[a], pos[b], pos[c]], margin).is_some() {
+                        out.push(Fold { sides: false, pair: [p as u32, t] });
+                    }
                 }
             }
         }
-    }
+        out
+    });
+    out.extend(by_point.into_iter().flatten());
     if !sides_too {
         return;
     }
-    for (i, e) in topo.sides.iter().enumerate() {
-        search.next();
-        let (e_was, e_now) = (e.map(|p| was[p as usize]), e.map(|p| pos[p as usize]));
-        for &end in e {
-            for &q in topo.own(end as usize) {
-                for &j in topo.sides_at(q as usize) {
-                    if j as usize <= i || search.met[j as usize] == search.stamp {
-                        continue;
-                    }
-                    search.met[j as usize] = search.stamp;
-                    let f = topo.sides[j as usize];
-                    if f.iter().any(|q| e.contains(q)) {
-                        continue;
-                    }
-                    let (f_was, f_now) = (f.map(|p| was[p as usize]), f.map(|p| pos[p as usize]));
-                    if edges_went_through(e_was, f_was, e_now, f_now, margin).is_some() {
-                        out.push(Fold { sides: true, pair: [i as u32, j] });
+    let by_side = in_pieces(topo.sides.len(), 256, |sides| {
+        let mut search = Search::new(topo);
+        let mut out = Vec::new();
+        for i in sides {
+            let e = topo.sides[i];
+            if !e.iter().any(|&p| is_warm(p)) {
+                continue;
+            }
+            search.next();
+            let (e_was, e_now) = (e.map(|p| was[p as usize]), e.map(|p| pos[p as usize]));
+            for &end in &e {
+                for &q in topo.own(end as usize) {
+                    for &j in topo.sides_at(q as usize) {
+                        if j as usize <= i || search.met[j as usize] == search.stamp {
+                            continue;
+                        }
+                        search.met[j as usize] = search.stamp;
+                        let f = topo.sides[j as usize];
+                        if f.iter().any(|q| e.contains(q)) || !e.iter().chain(f.iter()).any(|&p| is(p)) {
+                            continue;
+                        }
+                        let (f_was, f_now) = (f.map(|p| was[p as usize]), f.map(|p| pos[p as usize]));
+                        if edges_went_through(e_was, f_was, e_now, f_now, margin).is_some() {
+                            out.push(Fold { sides: true, pair: [i as u32, j] });
+                        }
                     }
                 }
             }
         }
-    }
+        out
+    });
+    out.extend(by_side.into_iter().flatten());
 }
 
 /// A contact as a pass found it: a point and a triangle's three corners,
@@ -1131,6 +1274,10 @@ struct Search {
 }
 
 impl Search {
+    fn new(topo: &Topo) -> Search {
+        Search { near: Vec::new(), seen: vec![u32::MAX; topo.tris.len()], stamp: 0, met: vec![u32::MAX; topo.sides.len()], held: Vec::new() }
+    }
+
     fn next(&mut self) {
         self.stamp = self.stamp.wrapping_add(1);
         if self.stamp == u32::MAX {

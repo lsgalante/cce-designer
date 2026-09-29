@@ -10548,6 +10548,53 @@ mod tests {
         }
     }
 
+    /// What the whole of the Surface method costs where most of a mesh is
+    /// in contact: the sphere test's workload with every row on,
+    /// at a fifth of an edge a step. The sum is of every position at every
+    /// step, which is what says a change to how the solve is RUN left what
+    /// it does alone. Run in release with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn detangle_timing() {
+        for frequency in ["4", "8", "16"] {
+            let sphere = crate::shapes::sphere_node_detail(
+                &phase3_node("sphere", &[("Method", "Icosphere"), ("Frequency", frequency), ("Radius", "0.5")]),
+                Some(Vec3::ZERO),
+            );
+            let edges = sphere.edges();
+            let edge = edges.iter().map(|e| (sphere.pos(e[1] as usize) - sphere.pos(e[0] as usize)).length()).sum::<f32>() / edges.len() as f32;
+            let cap: Vec<usize> = (0..sphere.num_points()).filter(|&p| sphere.pos(p).y > 0.2).collect();
+            let rate = edge * 0.2;
+            let steps = (1.1 / rate).ceil() as usize;
+            let node = phase3_node(
+                "detangle",
+                &[("Method", "Surface"), ("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "4"), ("Edge Contact", "true"), ("Fold Contact", "true")],
+            );
+            let mut d = sphere.clone();
+            let (mut worst, mut sum, mut spent, mut held, mut finds) = (0, 0.0f64, std::time::Duration::ZERO, 0, 0);
+            for _ in 0..steps {
+                let before = d.clone();
+                for &p in &cap {
+                    let v = d.pos(p);
+                    d.set_pos(p, v - Vec3::new(0.0, rate, 0.0));
+                }
+                let t = std::time::Instant::now();
+                let w = crate::detangle::apply_from(&mut d, Some(&before), &node);
+                spent += t.elapsed();
+                finds += w.grids;
+                held += w.held;
+                worst = worst.max(crate::detangle::self_intersections(&d).crossings);
+                sum += d.positions().iter().flatten().map(|&c| c as f64).sum::<f64>();
+            }
+            println!(
+                "{:>5} points: {:.2} ms a step, {:.1} searches a step; worst {worst} crossings, {held} held, sum {sum:.6}",
+                d.num_points(),
+                spent.as_secs_f64() * 1000.0 / steps as f64,
+                finds as f64 / steps as f64
+            );
+        }
+    }
+
     /// The two methods side by side, by the measure and by the clock: a
     /// sphere's cap pushed down into its own bowl a little each step, until
     /// it would have come out underneath. Run in release with `--ignored

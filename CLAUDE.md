@@ -1291,6 +1291,44 @@ put back where the step began, a tenth of the mesh, so a fold that is
 being forced stops moving there rather than folding. That is the
 guarantee working, and it will read as the surface sticking.
 
+**How the Surface method is run (2026-09-29, later).** The costs quoted
+above are from before this and are kept as the record of what each piece
+cost when it landed; what it costs now is `detangle_timing` (ignored;
+release, `--ignored --nocapture`), the sphere test with every row on: 6 ms
+a step at 162 points, 11 at 642, 27 at 2562, where it was 9, 44 and 186 —
+and Surface alone 4.6 ms at 2562 where it was 18. The test prints the sum
+of every position at every step, and that sum did not move through any of
+the three changes (-55113.128580 at 2562 points): they are how the solve
+is run and not what it does. Timed split by phase first, which is what
+said the cost was not the contacts and not only the edges: every pass, and
+every look of the hold, was repeating one spatial search.
+
+- **What is near what is found once** (`detangle::Near`): the pairs a pass
+  looks at — a point and a triangle, two sides — are listed when the solve
+  begins, with half a thickness to spare (`SLACK`), and kept until a point
+  has moved half of that. The passes and the hold walk the list. On the
+  sphere test that is 1.0 to 1.3 searches a step where there were five or
+  more.
+- **A pair is listed by its DISTANCE, not its box.** On one sheet the
+  sides a few edges off are near enough for their boxes and further than
+  any thickness; listing by box put 197k pairs of sides on the list at
+  2562 points, by distance 79k. What may have gone through since the step
+  began is within twice what anything has travelled of what it went
+  through, so that, or the thickness, is how far a pair may be.
+- **The hold looks again only at what it put back** (`stirred`): a pair
+  none of whose points moved since it was last looked at is as it was.
+  The first look is at everything.
+- **The work is cut into pieces and run on every core** (`in_pieces`):
+  the search, the fold sweep, the pairs of a pass, the pairs of a look.
+  Each piece makes its own list and the lists are put end to end in order,
+  so the result is what one thread would have made, contact for contact —
+  which is why the sum holds. `std::thread::scope`, not a pool: the crate
+  has none, a thread costs tens of microseconds to start, and each call
+  names the least a piece may be so that small meshes stay on one thread.
+  Most of the gain is this, and it is the machine's: on the twenty threads
+  it was measured on, 149 ms became 27; the first three changes alone took
+  186 to 149.
+
 `detangle::self_intersections` is the MEASURE: every edge passing through a
 triangle (`spatial::segment_crosses_triangle`, tolerance relative to the
 lengths, so scale does not change the answer), no thickness and no rings.
