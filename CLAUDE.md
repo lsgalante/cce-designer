@@ -1800,10 +1800,14 @@ Two keys look like they apply and do not: `style.surface.plate.color`
 feeds `plate_color`, whose one consumer is the info box, and the finish's
 spec / shininess / curvature live as `relief.spec` / `.shininess` /
 `.curvature`, not under `plate`. The network pane is two layers: the
-`PassivePlate` above and the Graph on top with its own `style.surface.graph`
-fill (`cell_color`, `gap_color`, `opacity`, `blur`, `uniform_background`),
-nearly transparent by default so the lattice you see is the pane plate
-showing through — the next section is about dropping that plate entirely.
+`PassivePlate` above and the Graph on top, which has NO fill of its own
+(since 2026-09-29): its cells are whatever it is painted on — the pane
+plate, or the scene with the plate off — and `style.surface.graph` sets
+only the lines (`grid_color`, `line_width`), their `opacity`, and `blur`.
+Until then the graph filled itself with `cell_color` (this app hard-codes
+`uniform_background` true, which chose it) and drew its lines in
+`gap_color`; both keys are retired, reported by path at load and not read.
+The next section is about dropping the pane plate entirely.
 The params widget alone also reads `style.surface.param.backdrop_compression`.
 The rules live in cce-ui's CLAUDE.md ("There is one roll width", "The
 relief is two shapes", "Frost is one block"); this is the designer's view of
@@ -2014,7 +2018,7 @@ baseline Reset Zoom returns to and Frame All scales down from (never past
 100%); `MIN_PITCH_*` / `MAX_PITCH_*` are the old node-body zoom limits
 expressed on the pitch.
 
-The widget paints the lattice as lines (`paint_grid`: gap colour, network
+The widget paints the lattice as lines (`paint_grid`: `grid_color`, network
 opacity, `style.surface.graph.line_width` px, each line centred on its
 coordinate so the width changes nothing about where anything sits) with the
 two lines through the (0, 0) crossing heavier as the origin axes. Its

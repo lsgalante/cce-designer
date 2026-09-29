@@ -1995,8 +1995,9 @@ pub struct State {
     pub vertex_count_spheres: u32,
     pub node_color: [f32; 4],
     pub grid_color: [f32; 3],
-    pub cell_color: [f32; 3],
-    pub gap_color: [f32; 3],
+    /// The network lattice's line colour (`style.surface.graph.grid_color`);
+    /// `grid_color` above is the viewport's ground grid.
+    pub graph_grid_color: [f32; 3],
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
@@ -6510,8 +6511,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             vertex_count_spheres: 0,
             node_color: cce_ui::color::graph_node_color(),
             grid_color: settings.viewport.grid_color,
-            cell_color: cce_ui::color::graph_cell_color(),
-            gap_color: cce_ui::color::graph_gap_color(),
+            graph_grid_color: cce_ui::color::graph_grid_color(),
             origin_size: settings.viewport.origin_size,
             camera_pivot_size: settings.viewport.camera_pivot_size,
             fs_root: fs_root.clone(),
@@ -6982,8 +6982,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             graph.set_uniform_background(self.uniform_background);
             graph.set_network_opacity(self.network_opacity);
             graph.set_node_opacity(self.node_opacity);
-            graph.set_cell_color(self.cell_color);
-            graph.set_gap_color(self.gap_color);
+            graph.set_grid_color(self.graph_grid_color);
         }
         if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
             menubar.set_network_opacity(self.network_opacity);
@@ -7008,8 +7007,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             g2.set_uniform_background(self.uniform_background);
             g2.set_network_opacity(self.network_opacity);
             g2.set_node_opacity(self.node_opacity);
-            g2.set_cell_color(self.cell_color);
-            g2.set_gap_color(self.gap_color);
+            g2.set_grid_color(self.graph_grid_color);
         }
         if let Some(bc2) = self.slots.breadcrumb2.as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
             bc2.set_network_opacity(self.network_opacity);
@@ -7059,8 +7057,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         
         let opacity = cce_ui::color::graph_opacity();
         let node_opacity = cce_ui::color::graph_node_opacity();
-        let cell_color = cce_ui::color::graph_cell_color();
-        let gap_color = cce_ui::color::graph_gap_color();
+        let graph_grid_color = cce_ui::color::graph_grid_color();
         let snap_enabled = cce_ui::layout::graph_grid_snap();
         let node_color = cce_ui::color::graph_node_color();
         let node_compression = cce_ui::config::cached_config()
@@ -7082,12 +7079,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.node_opacity = node_opacity;
             changed = true;
         }
-        if self.cell_color != cell_color {
-            self.cell_color = cell_color;
-            changed = true;
-        }
-        if self.gap_color != gap_color {
-            self.gap_color = gap_color;
+        if self.graph_grid_color != graph_grid_color {
+            self.graph_grid_color = graph_grid_color;
             changed = true;
         }
         if self.node_color != node_color {
@@ -10390,8 +10383,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                          self.viewport_mut().grid_color = settings.viewport.grid_color;
                          self.origin_size = settings.viewport.origin_size;
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
-                         self.cell_color = cce_ui::color::graph_cell_color();
-                         self.gap_color = cce_ui::color::graph_gap_color();
+                         self.graph_grid_color = cce_ui::color::graph_grid_color();
 
                         colors::set_node_color(self.node_color);
 
