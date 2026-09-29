@@ -2812,6 +2812,14 @@ pub fn resolve_detangle_geometry_with_errors(
 }
 
 pub(crate) fn apply_detangle(geom: &mut Detail, target: &FsNode) {
+    crate::detangle::apply(geom, target);
+}
+
+/// The solve as it was first written, kept as what the one in
+/// `detangle.rs` is held to: the same algorithm with nothing kept between
+/// steps, every pass run, a grid per pass, every point searched for.
+#[cfg(test)]
+pub(crate) fn apply_detangle_reference(geom: &mut Detail, target: &FsNode) {
     let n = geom.num_points();
     if n == 0 || geom.num_prims() == 0 {
         return;

@@ -10,6 +10,7 @@ pub mod export;
 pub mod export_cli;
 pub mod remesh;
 pub mod spatial;
+pub mod detangle;
 pub mod volume;
 pub mod wrangle;
 pub mod shapes;
@@ -9958,6 +9959,166 @@ mod tests {
             (after_edge / before_edge - 1.0).abs() < 0.35,
             "the sheet stretched from {before_edge} to {after_edge}"
         );
+    }
+
+    /// The solve in `detangle.rs` is the first version's, bit for bit: the
+    /// same pairs summed in the same order, over meshes that tangle and
+    /// ones that do not, with and without a group, and step after step as a
+    /// simulation runs it — which is when the kept topology, the reused
+    /// grid and the early end are all in play.
+    #[test]
+    fn the_detangle_solve_matches_its_reference() {
+        // Two sheets closer than a thickness, sharing no topology.
+        let sheets = {
+            let mut d = Detail::new();
+            let mut rows = Vec::new();
+            for sheet in 0..2 {
+                let mut row = Vec::new();
+                for i in 0..6 {
+                    for j in 0..6 {
+                        row.push(d.add_point(Vec3::new(i as f32 * 0.25, sheet as f32 * 0.05 + (i * j) as f32 * 0.003, j as f32 * 0.25)));
+                    }
+                }
+                rows.push(row);
+            }
+            for sheet in 0..2 {
+                for i in 0..5 {
+                    for j in 0..5 {
+                        let at = |a: usize, b: usize| rows[sheet][a * 6 + b];
+                        d.add_prim(&[at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+                        d.add_prim(&[at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+                    }
+                }
+            }
+            for p in (0..d.num_points()).step_by(3) {
+                d.points_mut().add_to_group("some", p);
+            }
+            d
+        };
+        // A sphere pressed nearly flat, so its two sides meet; and one left
+        // round, which has nothing to separate.
+        let squashed = |flatten: f32| {
+            let mut d = sphere_detail(Vec3::ZERO, 0.5, 10, 14);
+            for p in 0..d.num_points() {
+                let v = d.pos(p);
+                d.set_pos(p, Vec3::new(v.x, v.y * flatten, v.z));
+            }
+            for p in (0..d.num_points()).step_by(2) {
+                d.points_mut().add_to_group("some", p);
+            }
+            d
+        };
+        let meshes = [("sheets", sheets), ("flat sphere", squashed(0.04)), ("round sphere", squashed(1.0))];
+        let settings: [&[(&str, &str)]; 7] = [
+            &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "4")],
+            &[("Thickness", "2.00"), ("Rings", "1"), ("Iterations", "8")],
+            &[("Thickness", "0.50"), ("Rings", "0"), ("Iterations", "1")],
+            &[("Thickness", "3.00"), ("Rings", "3"), ("Iterations", "32")],
+            &[("Thickness", "1.50"), ("Rings", "2"), ("Iterations", "6"), ("Group", "some")],
+            &[("Thickness", "0.00"), ("Rings", "2"), ("Iterations", "4")],
+            &[("Thickness", "1.00"), ("Rings", "6"), ("Iterations", "4"), ("Group", "nobody")],
+        ];
+        let mut moved_somewhere = 0;
+        for (name, mesh) in &meshes {
+            for params in settings {
+                let node = phase3_node("detangle", params);
+                let (mut a, mut b) = (mesh.clone(), mesh.clone());
+                // Step after step, with something moving the points between
+                // steps as the rest of a chain would.
+                for step in 0..6 {
+                    crate::geometry::apply_detangle(&mut a, &node);
+                    crate::geometry::apply_detangle_reference(&mut b, &node);
+                    assert_eq!(a.positions(), b.positions(), "{name}, {params:?}, step {step}");
+                    for d in [&mut a, &mut b] {
+                        for p in 0..d.num_points() {
+                            let v = d.pos(p);
+                            d.set_pos(p, v + Vec3::new(0.0, -0.01 * v.y.signum(), 0.002 * (p % 3) as f32));
+                        }
+                    }
+                }
+                if a.positions() != mesh.positions() {
+                    moved_somewhere += 1;
+                }
+            }
+        }
+        assert!(moved_somewhere > 10, "the fixtures tangle, or this proves nothing: {moved_somewhere}");
+    }
+
+    /// What the solve no longer pays for. A surface that touches itself
+    /// nowhere is one pass and one grid, whatever Iterations says; a group
+    /// is searched for its own points and no others; the grid is reused
+    /// across passes while the points stay near where it filed them; and a
+    /// simulation's steps share one topology.
+    #[test]
+    fn the_detangle_solve_skips_what_it_does_not_need() {
+        let round = sphere_detail(Vec3::ZERO, 0.5, 10, 14);
+        let n = round.num_points();
+        let node = phase3_node("detangle", &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "8")]);
+        let mut d = round.clone();
+        let work = crate::detangle::apply(&mut d, &node);
+        assert_eq!((work.passes, work.grids, work.searched), (1, 1, n), "nothing to separate: {work:?}");
+        assert_eq!(d.positions(), round.positions());
+
+        // A flattened one has work to do, over more than one pass, and does
+        // not build a grid for each.
+        let mut flat = round.clone();
+        for p in 0..n {
+            let v = flat.pos(p);
+            flat.set_pos(p, Vec3::new(v.x, v.y * 0.04, v.z));
+        }
+        let mut d = flat.clone();
+        let work = crate::detangle::apply(&mut d, &node);
+        assert!(work.passes > 1, "{work:?}");
+        assert_ne!(d.positions(), flat.positions());
+        // Pressed that flat, a pass moves points further than the grid
+        // allows for and it is built again. Two sheets a little closer than
+        // a thickness part gently, over several passes on one grid.
+        let mut sheets = Detail::new();
+        let mut rows = Vec::new();
+        for sheet in 0..2 {
+            let mut row = Vec::new();
+            for i in 0..6 {
+                for j in 0..6 {
+                    row.push(sheets.add_point(Vec3::new(i as f32 * 0.25, sheet as f32 * 0.24, j as f32 * 0.25)));
+                }
+            }
+            rows.push(row);
+        }
+        for sheet in 0..2 {
+            for i in 0..5 {
+                for j in 0..5 {
+                    let at = |a: usize, b: usize| rows[sheet][a * 6 + b];
+                    sheets.add_prim(&[at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+                    sheets.add_prim(&[at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+                }
+            }
+        }
+        let work = crate::detangle::apply(&mut sheets, &node);
+        assert!(work.passes > 1 && work.passes < 8, "several passes, then the early end: {work:?}");
+        assert_eq!(work.grids, 1, "on the one grid: {work:?}");
+
+        // With a group only its points are searched for.
+        let mut grouped = flat.clone();
+        for p in (0..n).step_by(4) {
+            grouped.points_mut().add_to_group("some", p);
+        }
+        let members = grouped.points().group_len("some");
+        let node = phase3_node("detangle", &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "1"), ("Group", "some")]);
+        let work = crate::detangle::apply(&mut grouped, &node);
+        assert_eq!(work.searched, members, "{work:?}");
+
+        // Steps of a simulation — fresh clones of one mesh, its points
+        // moving — share one topology; another mesh, or another ring count,
+        // is another.
+        let kept = crate::detangle::kept_topologies();
+        let node = phase3_node("detangle", &[("Thickness", "1.00"), ("Rings", "5"), ("Iterations", "2")]);
+        let mut step = flat.clone();
+        for _ in 0..5 {
+            let mut next = step.clone();
+            crate::detangle::apply(&mut next, &node);
+            step = next;
+        }
+        assert!(crate::detangle::kept_topologies() <= kept + 1, "five steps, one topology");
     }
 
     #[test]

@@ -1116,6 +1116,50 @@ fit a chained submission; a GPU-side grid is a project of its own, and a
 brute-force O(n^2) pass that the CPU twin would then have to match is a
 regression for every CPU user. Both stay native until a workload asks.
 
+### The Detangle solve
+
+`geometry::apply_detangle` is the node and says what it does; `src/detangle.rs`
+is how it is run. The algorithm did not change on 2026-09-29, what it
+costs did: measured on a 162-point simnet of pull, relax and detangle, the
+node was nine tenths of the solve (0.35 ms a step against 0.03 for the
+rest), and four things it paid for every step were things a step does not
+need.
+
+- **The topology is built once.** The edge list and each point's excluded
+  rings are connectivity, which this chain never changes — but every step
+  arrives as a fresh `Detail`, whose derived topology is deliberately not
+  cloned. They are kept per thread by a hash of the primitives (`Topo`,
+  the last four), so a solve of a hundred steps builds them on the first.
+- **A pass that separates nothing ends the solve.** The passes gather
+  against the positions at their start, so the next would find the same.
+  A surface that touches itself nowhere is one pass, whatever Iterations
+  says.
+- **The grid is reused between passes** while no point has drifted more
+  than half a cell from where it was filed (`DRIFT_CELLS`); the search
+  reaches a drift further than the thickness, so a moved point is still
+  found. It is flat — one array sorted by cell — where `spatial::PointGrid`
+  is a vector per cell and allocated a scratch list per query.
+- **A point outside the Group is not searched for.** Its push was worked
+  out and thrown away.
+
+**The results are the first version's bit for bit** — the same pairs,
+summed in the same order (candidates ascending, as `PointGrid` sorted
+them) — which is what makes these optimizations and not changes. The
+first version is kept as `apply_detangle_reference` under `cfg(test)`,
+and `the_detangle_solve_matches_its_reference` runs both step after step
+over meshes that tangle and ones that do not;
+`the_detangle_solve_skips_what_it_does_not_need` reads `detangle::Work`
+for each saving. On the project it was measured on, detangle's share of a
+solve to frame 30 went from 10 ms to 2, to frame 120 from 46 to 15, and
+to frame 240 from 113 to 71: once the whole surface is within a
+thickness of itself every pass runs and the pairs themselves are the
+work, and no bookkeeping saves that.
+
+What still costs is the solver's, not the node's: an edit inside a simnet
+and a backward scrub both re-solve from the seed, so a change at frame
+120 is 120 steps. In-memory checkpoints are the fix for scrubs and are
+not built.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,
