@@ -5914,9 +5914,12 @@ pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vert
     out
 }
 
+/// The camera-pivot marker: three axis beams from the pivot. `scale` is
+/// their LENGTH alone; the thickness is fixed, so a small marker is short
+/// rather than too thin to see.
 pub fn camera_pivot_vertices(scale: f32) -> Vec<Vertex3D> {
     let mut verts = Vec::new();
-    let t = 0.002 * scale; 
+    let t = 0.002;
     let len = 0.4 * scale;
     
     // Red for X-axis

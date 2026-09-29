@@ -2182,7 +2182,8 @@ until then it was one list of some twenty rows). The menu itself holds
 what is done — Frame All, View 1:1 — the guides (Show Grid, Show Origin,
 and since 2026-09-29 Show Camera Pivot with a Camera Pivot Size slider
 under it, 0–1 by a twentieth (the palette row is the coarse one, whole
-tenths up to 5), which until then were in the Guides
+tenths up to 5; the size is the LENGTH of the marker's beams, whose
+thickness is fixed), which until then were in the Guides
 menubar and the palette only;
 the reference CUBE guide was removed on 2026-09-25 — its command, mesh,
 RT-scene copy, settings field and menubar item, with the Guides menubar

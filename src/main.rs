@@ -2359,6 +2359,23 @@ mod tests {
         assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_camera_pivot_enabled, "persisted");
     }
 
+    /// The pivot marker's size is the length of its beams; their thickness
+    /// does not follow it.
+    #[test]
+    fn the_camera_pivot_size_leaves_the_line_width_alone() {
+        // The X beam: its extent along x is the length, along y the width.
+        let extent = |scale: f32, axis: usize| {
+            let v = crate::geometry::camera_pivot_vertices(scale);
+            let beam: Vec<_> = v.iter().filter(|p| p.color[0] > 0.5).collect();
+            let lo = beam.iter().map(|p| p.position[axis]).fold(f32::MAX, f32::min);
+            let hi = beam.iter().map(|p| p.position[axis]).fold(f32::MIN, f32::max);
+            hi - lo
+        };
+        assert!((extent(1.0, 0) - 2.0 * extent(0.5, 0)).abs() < 1e-6, "the length follows the size");
+        assert!((extent(1.0, 1) - extent(0.25, 1)).abs() < 1e-7, "the width does not");
+        assert!(extent(0.25, 1) > 0.0);
+    }
+
     /// Camera Pivot Size is a slider under Show Camera Pivot, over 0–1:
     /// the wheel steps a twentieth, re-bakes the marker and nothing else,
     /// and saves.
