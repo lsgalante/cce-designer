@@ -3097,9 +3097,8 @@ impl State {
 
     /// Set every parameter of the node the params pane shows back to its
     /// template's default — the text AND whether it is an expression, so a
-    /// default that is a reference is one again. `custom` is the menubar's
-    /// other preset: the defaults with their numbers half as large again.
-    pub fn apply_param_preset(&mut self, custom: bool) -> bool {
+    /// default that is a reference is one again.
+    pub fn reset_parameters(&mut self) -> bool {
         let Some(slot) = self.param_editor_selected() else {
             self.update_status_text("No node selected");
             return false;
@@ -3121,41 +3120,17 @@ impl State {
             self.update_status_text(&format!("{name} has no template to reset to"));
             return false;
         }
-        let half_again = |text: &str| -> String {
-            let one = |t: &str| -> Option<String> {
-                if let Ok(v) = t.parse::<i32>() {
-                    Some(format!("{}", v * 2))
-                } else {
-                    t.parse::<f32>().ok().map(|v| format!("{:.2}", v * 1.5))
-                }
-            };
-            if let Some(v) = one(text) {
-                v
-            } else if text.contains(':') {
-                text.split(':').map(|t| one(t).unwrap_or_else(|| t.to_string())).collect::<Vec<_>>().join(":")
-            } else {
-                text.to_string()
-            }
-        };
         let node = &mut self.param_editor_dir_mut().children[slot];
         for (pname, text, is_expr) in defaults {
             if let Some(p) = node.params.iter_mut().find(|p| p.name == pname) {
-                if custom && !is_expr {
-                    p.set_text(half_again(&text));
-                } else {
-                    p.set_text(text);
-                }
+                p.set_text(text);
                 p.set_expr(is_expr);
             }
         }
         self.sync_nodes();
         self.rebuild_scene_geometry();
         self.sync_parameters_pane();
-        self.update_status_text(&if custom {
-            format!("{name}: custom preset")
-        } else {
-            format!("{name}: parameters reset")
-        });
+        self.update_status_text(&format!("{name}: parameters reset"));
         true
     }
 
@@ -3921,10 +3896,7 @@ impl State {
                 self.choose_camera("Default Camera");
             }
             "Reset Parameters" => {
-                self.apply_param_preset(false);
-            }
-            "Custom Preset" => {
-                self.apply_param_preset(true);
+                self.reset_parameters();
             }
             "New Project" | "New" => {
                 self.new_project();
@@ -6546,7 +6518,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             canvas: Canvas::new(),
             left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Network Plate", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
             right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
-            param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default", "Custom"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
+            param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
             status: StatusBar::new().with_text("Ready"),
             breadcrumb: {
                 let mut bc = Breadcrumb::new();

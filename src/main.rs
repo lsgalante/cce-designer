@@ -6653,10 +6653,10 @@ mod tests {
         assert_eq!(state.fs_root.children.len(), nodes, "a refused click ran New Project");
     }
 
-    /// The cameras and the parameter presets are commands. They were menus
+    /// The cameras and the parameter reset are commands. They were menus
     /// of two menubars that are not drawn, so nothing on screen reached them.
     #[test]
-    fn the_cameras_and_the_presets_are_commands() {
+    fn the_cameras_and_the_parameter_reset_are_commands() {
         use crate::dialog::CAMERA_ROW_PREFIX;
         let mut state = State::new(false);
         assert!(state.camera_names().contains(&"camera1".to_string()), "the bundled project has camera1");
@@ -6687,7 +6687,7 @@ mod tests {
         assert_eq!(state.active_camera, "camera1");
         assert_eq!(state.viewport().active_camera, "camera1");
 
-        // Reset puts a changed parameter back; the custom preset moves it.
+        // Reset puts a changed parameter back.
         let slot = state
             .current_dir()
             .children
@@ -6705,8 +6705,7 @@ mod tests {
         state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Radius").unwrap().set_text("3.25".to_string());
         assert!(state.run_command("reset_parameters"));
         assert_eq!(radius(&state), default);
-        assert!(state.run_command("custom_preset"));
-        assert_ne!(radius(&state), default, "the custom preset left Radius at its default");
+        assert!(crate::command::by_id("custom_preset").is_none(), "the custom preset is retired");
 
         // With nothing selected there is nothing to reset, and it says so.
         state.graph_mut().set_selected_node(None);

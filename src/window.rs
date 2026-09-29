@@ -167,11 +167,9 @@ impl State {
             }
 
             if let Some((menu_idx, item_idx)) = state.menu_mut(PARAM_MENUBAR_IDX).menu_click() {
-                // Preset: Default, Custom. Reset: All, which is Default.
-                match (menu_idx, item_idx) {
-                    (0, 0) | (1, 0) => changed |= state.apply_param_preset(false),
-                    (0, 1) => changed |= state.apply_param_preset(true),
-                    _ => {}
+                // Preset's Default and Reset's All are one thing.
+                if menu_idx <= 1 && item_idx == 0 {
+                    changed |= state.reset_parameters();
                 }
             }
 

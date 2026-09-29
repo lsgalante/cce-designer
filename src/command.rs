@@ -229,10 +229,10 @@ pub const COMMANDS: &[Command] = &[
 
     // --- Parameters ---
     Command { id: "export", label: "Export", context: Context::Parameters, run: Run::Menu("Export"), default_chord: None },
-    // The parameters menubar's Preset and Reset menus. That bar is not
-    // drawn, so until these rows the two were reachable by MCP alone.
+    // The parameters menubar's Preset and Reset menus, which did one
+    // thing. That bar is not drawn, so until this row it was reachable by
+    // MCP alone.
     Command { id: "reset_parameters", label: "Reset Parameters", context: Context::Parameters, run: Run::Menu("Reset Parameters"), default_chord: None },
-    Command { id: "custom_preset", label: "Custom Preset", context: Context::Parameters, run: Run::Menu("Custom Preset"), default_chord: None },
 
     // --- Playbar ---
     Command { id: "play_pause", label: "Play / Pause", context: Context::Playbar, run: Run::Key(Action::PlayPause), default_chord: Some("Up") },
