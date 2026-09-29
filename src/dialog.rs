@@ -1860,25 +1860,6 @@ impl State {
         }
     }
 
-    /// The pivot marker's scale as the Camera Pivot Size row reads it: the
-    /// active camera's param where it has one, else the live field.
-    pub(crate) fn camera_pivot_size_shown(&self) -> f32 {
-        SETTINGS
-            .iter()
-            .find(|s| s.label == "Camera Pivot Size")
-            .and_then(|s| self.setting_value(s).parse::<f32>().ok())
-            .map_or(self.camera_pivot_size, |tenths| tenths / 10.0)
-    }
-
-    /// Set it, through the row's own write, and re-bake the marker. The
-    /// viewport menu's slider lands here; nothing is evaluated.
-    pub(crate) fn set_camera_pivot_size(&mut self, v: f32) {
-        if let Some(s) = SETTINGS.iter().find(|s| s.label == "Camera Pivot Size") {
-            self.setting_write(s, &((v * 10.0).round() as i64).to_string());
-            self.update_pivot_geometry();
-        }
-    }
-
     /// Write one setting's value to whatever owns it.
     fn setting_write(&mut self, s: &Setting, value: &str) {
         match s.owner {

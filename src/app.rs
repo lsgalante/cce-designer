@@ -480,8 +480,9 @@ pub enum ViewportMenuAction {
     /// Pull Arrow Scale, the pull arrows' length as a multiple of the true
     /// displacement: the palette row's 0.25–10.
     PullArrowScaleSlider,
-    /// Camera Pivot Size, the pivot marker's scale, under its switch: the
-    /// palette row's 0.1–5 by a tenth.
+    /// Camera Pivot Size, the pivot marker's scale, under its switch: 0–1
+    /// by a twentieth. The palette row is the coarse one, in tenths up
+    /// to 5.
     CameraPivotSizeSlider,
     /// A "-" row: engraved, inert.
     Separator,
@@ -5154,11 +5155,11 @@ impl State {
             // may not carry and which a fallback glyph would then
             // under-measure.
             ViewportMenuAction::CameraPivotSizeSlider => MenuSlider {
-                value: self.camera_pivot_size_shown().clamp(0.1, 5.0),
-                min: 0.1,
-                max: 5.0,
-                step: 0.1,
-                decimals: 1,
+                value: self.camera_pivot_size.clamp(0.0, 1.0),
+                min: 0.0,
+                max: 1.0,
+                step: 0.05,
+                decimals: 2,
                 suffix: "x",
             },
             ViewportMenuAction::PullArrowScaleSlider => MenuSlider {
@@ -5183,8 +5184,10 @@ impl State {
     fn land_viewport_menu_slider(&mut self, action: ViewportMenuAction, v: f32) {
         // The menu's opacity rows are in percent; the field is a fraction.
         if action == ViewportMenuAction::CameraPivotSizeSlider {
-            // Owned by the active camera, as the palette's row is.
-            self.set_camera_pivot_size(v.clamp(0.1, 5.0));
+            // The live field itself: the palette row writes whole tenths,
+            // which is coarser than this slider's step.
+            self.camera_pivot_size = v.clamp(0.0, 1.0);
+            self.update_pivot_geometry();
             self.viewport_dirty = true;
             return;
         }
