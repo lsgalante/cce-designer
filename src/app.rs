@@ -8690,7 +8690,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
             self.window_configured = true;
             if let Some(pg) = self.pending_plates.take() {
+                // The load took its saved baseline with the plates on the
+                // placeholder size. Landing them on the real one is the load
+                // finishing, not an edit — unless something was already
+                // unsaved, which stays so.
+                let clean = !self.has_unsaved_changes();
                 self.apply_plate_geometry(pg);
+                if clean {
+                    self.last_saved_layout_json = self.pane_layout_json();
+                    self.update_window_title();
+                }
             }
 
             self.sync_layout();

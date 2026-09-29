@@ -1429,6 +1429,38 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The startup load takes its saved baseline before the first configure,
+    /// with the plates on the placeholder size; the configure then lands
+    /// them on the real one. That is the load finishing, not an edit, so
+    /// the project opens clean.
+    #[test]
+    fn a_project_loaded_before_the_first_configure_opens_clean() {
+        let dir = std::env::temp_dir().join(format!("cce_designer_cleanopen_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut a = State::new(false);
+        a.resize(1400.0, 1080.0, 1.0);
+        a.floating_network_layout.2 = 350.0;
+        a.floating_param_width = 310.0;
+        a.rebuild_positions();
+        a.save_to_file(&dir).expect("save");
+
+        let mut b = State::new(false);
+        b.load_from_file(&dir).expect("load");
+        assert!(!b.has_unsaved_changes(), "a fresh load is clean");
+        b.resize(1400.0, 1080.0, 1.0);
+        assert!(!b.has_unsaved_changes(), "the first configure is not an edit");
+
+        // What was unsaved before the configure still is after it.
+        let mut c = State::new(false);
+        c.load_from_file(&dir).expect("load");
+        c.set_pane_collapsed(crate::slots::PARAM_IDX, true);
+        c.resize(1400.0, 1080.0, 1.0);
+        assert!(c.has_unsaved_changes(), "the configure must not hide an edit");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// A window briefly narrower than its plates squeezes them for as long as
     /// it lasts and no longer: the layout used to store the clamped size, so
     /// one transient shrink (a re-tile, a configure at startup) left every
