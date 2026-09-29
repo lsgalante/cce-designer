@@ -1172,11 +1172,52 @@ taking none and the rest all of it, so a contact with a fixed triangle is
 resolved whole where Points resolves half. What a point receives from
 several contacts is their average weighted by depth, not their sum: a point
 over a shared edge touches both triangles and must move once. A triangle
-with a corner inside the point's excluded rings is not a contact. It does
-NOT know which side a point belongs on — one already through is pushed
-further through; that needs the positions the step began from and is the
-next piece of work, as are a cap on movement per substep and edge-edge
-contact.
+with a corner inside the point's excluded rings is not a contact.
+
+**Inside a simnet a point has a SIDE** (`detangle::apply_from`, the same
+day). `resolve_detangle_geometry_with_errors` hands the solve the state the
+substep consumed — the nearest simnet above the node that has pushed one,
+so a detangle in a subnet inside a simnet gets it too — and a `before` that
+is not this mesh (another point count, other primitives) is not used.
+Outside a simnet there is none, and Surface is the distance test alone.
+Three things read it:
+
+- **The passes put back what went through.** `went_through` asks in the
+  TRIANGLE'S terms, since both move: the point's height over it and the
+  place of its foot in it, then and now, a straight line between. A sign
+  change with the foot inside is a passage, and the contact is resolved
+  along the triangle's normal to a thickness clear on the side the point
+  came from. A point with such a contact takes no other that pass — the
+  triangles beside the one it went through see it near, on the wrong side,
+  and would push it on. The passes take NO margin on "inside": a tenth of
+  one pushed points off triangles they had gone around and left more
+  crossed than no memory at all (642 points, Thickness 0.5: 40 beyond the
+  rings against 0).
+- **The hold.** Whatever is still through a triangle when the passes are
+  done goes back to where the step began, its triangle's corners with it
+  (`HOLD_ROUNDS` looks, a margin of `HOLD_MARGIN`, since holding a point
+  that did not quite go through costs it a step's movement and nothing
+  else). The memory is one step long — a point left through is, to the
+  next step, a point that began there — so this is what keeps a miss from
+  becoming permanent.
+- **Step Limit** (a row, shown for Surface, in thicknesses, 0 = off and
+  the default) cuts each movable point's move since the step began to that
+  length before anything is resolved. Off by default because it changes
+  how far a pull pulls, and because the measurements did not earn it a
+  default: it is for use WITH Substeps.
+
+`the_surface_method_puts_back_what_went_through` carries a patch through a
+fixed sheet in one step, by less than a thickness and by several, and
+around its edge; `the_step_limit_holds_a_step_to_a_length` and
+`a_detangle_in_a_simnet_knows_where_the_step_began` (in `geometry.rs`'s
+tests, where the feedback stack can be reached) are the other two.
+
+What is left is **edge-edge**. On the sphere test at Thickness 1 the solve
+reports nothing put back and nothing held, and still leaves crossings
+beyond the rings at a pace of half an edge a step and more (48 at 0.5, 98
+at 0.8, 2562 points): no point went through any triangle, an edge went
+through an edge. That, and folds inside the excluded rings, are what the
+measure still counts.
 
 `detangle::self_intersections` is the MEASURE: every edge passing through a
 triangle (`spatial::segment_crosses_triangle`, tolerance relative to the
@@ -1190,7 +1231,11 @@ by default. `detangle_methods_compared` (ignored; release, `--ignored
 --nocapture`) pushes an icosphere's cap down into its own bowl a fifth of
 an edge a step. At 2562 points, Thickness 1, Rings 2: no detangle 1117
 crossings, all beyond the rings; Points 1699 (892 beyond), 5.1 ms a step;
-Surface 408, NONE beyond the rings, and none left at the end, 17 ms a step.
+Surface 408, NONE beyond the rings, and none left at the end, 17 ms a step
+(24 told where the step began: the wider search and the hold's look).
+At four fifths of an edge a step and Thickness 0.5, where a step outruns
+the thickness, Surface alone let 804 through beyond the rings and the side
+brought that to 140 (642 points: 294 to 0).
 At Thickness 0.5 Surface let 72 through beyond the rings at that size and
 none at 162 and 642 points. What Surface leaves is the fold at the cap's
 rim, inside the rings. Do not measure by pressing a sphere flat by the sign

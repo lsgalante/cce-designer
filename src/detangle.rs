@@ -32,7 +32,9 @@
 //!   the TRIANGLES near it, where Points tests it against points. A point
 //!   over the middle of a triangle is near no corner of it, so on a mesh
 //!   whose triangles are larger than the thickness the point test sees
-//!   nothing at all.
+//!   nothing at all. Told where the points were when the step began
+//!   ([`apply_from`]), it also knows which side of a triangle a point
+//!   belongs on, and can hold a step to a length.
 //! - **The measure** ([`self_intersections`]): every edge that passes
 //!   through a triangle. It is what says whether a change to the solve
 //!   helped, and what the node's `Tangled Group` is written from.
@@ -271,12 +273,29 @@ pub struct Work {
     pub searched: usize,
     /// Point-triangle contacts the Surface method resolved, over every pass.
     pub contacts: usize,
+    /// Of those, the ones resolved as a point that had gone THROUGH a
+    /// triangle since the step began, and was put back on its own side.
+    pub crossed: usize,
+    /// Points put back where the step began, being still through a
+    /// triangle when the passes were done, or a corner of one.
+    pub held: usize,
+    /// Points whose move since the step began was cut to the Step Limit.
+    pub limited: usize,
     /// Edges passing through a triangle when the solve was done — counted
     /// only when the node names a Tangled Group to write them to.
     pub crossings: usize,
 }
 
 pub fn apply(geom: &mut Detail, target: &FsNode) -> Work {
+    apply_from(geom, None, target)
+}
+
+/// [`apply`], told where the points were when the step began: inside a
+/// simnet, the state the substep consumed. It is what the Surface method
+/// knows a point's SIDE from, and what the Step Limit is measured against.
+/// A `before` that is not this mesh — another point count, other
+/// primitives — is no memory of it and is not used.
+pub fn apply_from(geom: &mut Detail, before: Option<&Detail>, target: &FsNode) -> Work {
     let mut work = Work::default();
     let n = geom.num_points();
     if n == 0 || geom.num_prims() == 0 {
@@ -289,7 +308,10 @@ pub fn apply(geom: &mut Detail, target: &FsNode) -> Work {
     }
     // A node without the row is one from before it, and solves as it did.
     if node_param_str(target, "Method", "Points").trim().eq_ignore_ascii_case("Surface") {
-        solve_surface(geom, target, &topo, &mut work);
+        let before: Option<Vec<Vec3>> = before
+            .filter(|b| b.num_points() == n && b.num_prims() == geom.num_prims() && topology_key(b) == topo.key)
+            .map(|b| (0..n).map(|p| b.pos(p)).collect());
+        solve_surface(geom, before.as_deref(), target, &topo, &mut work);
     } else {
         solve_points(geom, target, &topo, &mut work);
     }
@@ -529,10 +551,23 @@ impl TriCells {
 /// contact with both triangles and must move once, not twice, and a sum is
 /// what makes a dense contact overshoot and ring.
 ///
-/// What it does not know is which SIDE a point belongs on. A point already
-/// through a triangle is pushed further through; that takes the positions
-/// the step started from, and is not here.
-fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Work) {
+/// **With `before`, a point has a side.** Distance alone cannot tell a
+/// point that is near a triangle from one that has gone through it, and
+/// pushes the second further through. Where the point was on one side of a
+/// triangle when the step began and is on the other now, having passed
+/// through the triangle's own extent ([`went_through`]), the contact is
+/// resolved along the triangle's normal back to the side it came from, to a
+/// thickness clear of it. A point with such a contact takes no other in
+/// that pass: the triangles beside the one it went through see it near and
+/// on the wrong side, and would push it on.
+///
+/// The memory is one step long. A point the passes did not bring back is,
+/// to the next step, a point that began on that side.
+///
+/// **The Step Limit** cuts each point's move since the step began to that
+/// many thicknesses before anything is resolved, so what arrives here is
+/// close to what left and a contact is met while it is still a contact.
+fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, topo: &Topo, work: &mut Work) {
     let n = geom.num_points();
     let thickness = thickness_of(geom, target, topo);
     if thickness <= 0.0 || topo.tris.is_empty() {
@@ -545,6 +580,24 @@ fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Wor
     let free = |p: usize| if movable[p] { 1.0f32 } else { 0.0 };
 
     let mut pos: Vec<Vec3> = (0..n).map(|p| geom.pos(p)).collect();
+    let mut moved_at_all = false;
+    // A node without the row is one from before it, and is not limited.
+    let limit = node_param_f32(target, "Step Limit", 0.0).max(0.0) * thickness;
+    if let (Some(before), true) = (before, limit > 0.0) {
+        for p in (0..n).filter(|&p| movable[p]) {
+            let d = pos[p] - before[p];
+            let len = d.length();
+            if len > limit {
+                pos[p] = before[p] + d * (limit / len);
+                work.limited += 1;
+                moved_at_all = true;
+            }
+        }
+    }
+    // How far anything has come since the step began: a triangle a point
+    // went through may be that far from where either is now.
+    let travelled = before.map_or(0.0, |b| pos.iter().zip(b).map(|(p, q)| (*p - *q).length_squared()).fold(0.0f32, f32::max).sqrt());
+
     // Cells no smaller than a triangle, or each is filed in dozens.
     let cell = thickness.max(mean_edge(geom, topo));
     let mut grid = TriCells::build(&pos, &topo.tris, cell);
@@ -555,7 +608,7 @@ fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Wor
     let mut stamp = 0u32;
     let mut push = vec![Vec3::ZERO; n];
     let mut weight = vec![0.0f32; n];
-    let mut moved_at_all = false;
+    let mut found: Vec<Contact> = Vec::new();
     for _ in 0..iterations {
         work.passes += 1;
         if drift > DRIFT_CELLS * grid.cell {
@@ -569,14 +622,20 @@ fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Wor
         for p in 0..n {
             work.searched += 1;
             // A triangle within a thickness of here now had its box within
-            // a thickness and a drift of here when it was filed.
-            let reach = Vec3::splat(thickness + drift);
+            // a thickness and a drift of here when it was filed; one the
+            // point went through lies along the way it came.
+            let reach = thickness + drift;
+            let from = before.map_or(pos[p], |b| b[p]);
+            let (lo, hi) = (pos[p].min(from), pos[p].max(from));
             stamp = stamp.wrapping_add(1);
             if stamp == u32::MAX {
                 seen.iter_mut().for_each(|m| *m = u32::MAX);
                 stamp = 0;
             }
-            grid.gather(pos[p] - reach, pos[p] + reach, &mut seen, stamp, &mut near);
+            let wide = if before.is_some() { reach + travelled } else { reach };
+            grid.gather(lo - wide, hi + wide, &mut seen, stamp, &mut near);
+            found.clear();
+            let mut through = false;
             for &t in &near {
                 let corners = topo.tris[t as usize];
                 let [ia, ib, ic] = corners.map(|c| c as usize);
@@ -585,23 +644,26 @@ fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Wor
                 // whose box is a thickness away on any axis is further
                 // than that, and is turned away before it costs a search
                 // of the rings or a closest point.
-                let (lo, hi) = (a.min(b).min(c) - thickness, a.max(b).max(c) + thickness);
-                if pos[p].cmplt(lo).any() || pos[p].cmpgt(hi).any() {
+                let (tlo, thi) = (a.min(b).min(c) - thickness, a.max(b).max(c) + thickness);
+                if hi.cmplt(tlo).any() || lo.cmpgt(thi).any() {
                     continue;
                 }
                 if corners.iter().any(|&c| topo.excludes(p, c)) {
                     continue;
                 }
                 let w = crate::spatial::closest_weights_on_triangle(pos[p], a, b, c);
+                if let Some(side) = before.and_then(|was| went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], 0.0)) {
+                    // `side` is the triangle's normal, turned to the side
+                    // the point came from; it is below the plane by that
+                    // much and belongs a thickness above it.
+                    let below = (pos[p] - a).dot(side);
+                    found.push(Contact { corners: [ia, ib, ic], w, dir: side, deep: thickness - below, through: true });
+                    through = true;
+                    continue;
+                }
                 let d = pos[p] - (a * w[0] + b * w[1] + c * w[2]);
                 let len = d.length();
                 if len >= thickness {
-                    continue;
-                }
-                // Inverse masses of one or none: the point's, and each
-                // corner's by the square of its share.
-                let give = free(p) + free(ia) * w[0] * w[0] + free(ib) * w[1] * w[1] + free(ic) * w[2] * w[2];
-                if give <= 0.0 {
                     continue;
                 }
                 let dir = if len < 1e-9 {
@@ -613,7 +675,16 @@ fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Wor
                 } else {
                     d / len
                 };
-                let deep = thickness - len;
+                found.push(Contact { corners: [ia, ib, ic], w, dir, deep: thickness - len, through: false });
+            }
+            for contact in found.iter().filter(|c| c.through == through) {
+                let Contact { corners: [ia, ib, ic], w, dir, deep, .. } = *contact;
+                // Inverse masses of one or none: the point's, and each
+                // corner's by the square of its share.
+                let give = free(p) + free(ia) * w[0] * w[0] + free(ib) * w[1] * w[1] + free(ic) * w[2] * w[2];
+                if give <= 0.0 {
+                    continue;
+                }
                 let step = dir * (deep / give);
                 push[p] += step * (free(p) * deep);
                 weight[p] += free(p) * deep;
@@ -625,6 +696,7 @@ fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Wor
                     weight[i] += free(i) * share * deep;
                 }
                 work.contacts += 1;
+                work.crossed += through as usize;
                 any = true;
             }
         }
@@ -639,11 +711,130 @@ fn solve_surface(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Wor
         moved_at_all = true;
         drift = grid.drift(&pos);
     }
+    // The hold. The passes share a move out and average what they are
+    // given, and under a push that does not let up they can run out before
+    // a point is back on its side — and a point left through a triangle is,
+    // to the next step, a point that began there. So whatever is still
+    // through a triangle goes back to where the step began, and the
+    // triangle with it: the one arrangement of the four known not to cross.
+    // It costs them the step's movement and nothing else.
+    if let Some(was) = before {
+        let mut back: Vec<usize> = Vec::new();
+        for _ in 0..HOLD_ROUNDS {
+            if drift > DRIFT_CELLS * grid.cell {
+                grid = TriCells::build(&pos, &topo.tris, cell);
+                work.grids += 1;
+                drift = 0.0;
+            }
+            back.clear();
+            for p in 0..n {
+                let (lo, hi) = (pos[p].min(was[p]), pos[p].max(was[p]));
+                stamp = stamp.wrapping_add(1);
+                if stamp == u32::MAX {
+                    seen.iter_mut().for_each(|m| *m = u32::MAX);
+                    stamp = 0;
+                }
+                let wide = Vec3::splat(drift + travelled);
+                grid.gather(lo - wide, hi + wide, &mut seen, stamp, &mut near);
+                for &t in &near {
+                    let corners = topo.tris[t as usize];
+                    let [ia, ib, ic] = corners.map(|c| c as usize);
+                    let (a, b, c) = (pos[ia], pos[ib], pos[ic]);
+                    let (tlo, thi) = (a.min(b).min(c).min(was[ia]).min(was[ib]).min(was[ic]), a.max(b).max(c).max(was[ia]).max(was[ib]).max(was[ic]));
+                    if hi.cmplt(tlo).any() || lo.cmpgt(thi).any() {
+                        continue;
+                    }
+                    if corners.iter().any(|&c| topo.excludes(p, c)) {
+                        continue;
+                    }
+                    if went_through(was[p], [was[ia], was[ib], was[ic]], pos[p], [a, b, c], HOLD_MARGIN).is_some() {
+                        back.extend([p, ia, ib, ic]);
+                    }
+                }
+            }
+            let mut put = 0;
+            for &i in &back {
+                if movable[i] && pos[i] != was[i] {
+                    pos[i] = was[i];
+                    put += 1;
+                }
+            }
+            if put == 0 {
+                break;
+            }
+            work.held += put;
+            moved_at_all = true;
+            drift = grid.drift(&pos);
+        }
+    }
     if moved_at_all {
         for (p, v) in pos.iter().enumerate() {
             geom.set_pos(p, *v);
         }
     }
+}
+
+/// One point against one triangle, as a pass found it.
+#[derive(Clone, Copy)]
+struct Contact {
+    corners: [usize; 3],
+    /// How much of the closest point each corner is.
+    w: [f32; 3],
+    /// The way the point is to move.
+    dir: Vec3,
+    /// How far, were it to take the whole move.
+    deep: f32,
+    through: bool,
+}
+
+/// A point's height over a triangle's plane, along the normal its winding
+/// gives, and where its foot is in the triangle's own terms: three weights
+/// summing to one, any of them negative outside it. `None` for a triangle
+/// with no area.
+fn over_triangle(p: Vec3, [a, b, c]: [Vec3; 3]) -> Option<(f32, [f32; 3], Vec3)> {
+    let (e1, e2, v) = (b - a, c - a, p - a);
+    let n = e1.cross(e2);
+    let nn = n.length_squared();
+    if nn < 1e-30 {
+        return None;
+    }
+    let (w1, w2) = (v.cross(e2).dot(n) / nn, e1.cross(v).dot(n) / nn);
+    let normal = n / nn.sqrt();
+    Some((v.dot(normal), [1.0 - w1 - w2, w1, w2], normal))
+}
+
+/// How far outside a triangle, in its own weights, a passage still counts
+/// as through it when the question is whether to HOLD the point. A point
+/// going through the edge two triangles share is, after rounding, a little
+/// outside both, and holding one that did not quite go through costs a
+/// step's movement there and nothing else. The passes take no margin: a
+/// push is along the triangle's normal, and measured on the sphere test a
+/// tenth of a margin pushed points off triangles they had gone around,
+/// leaving more crossed than no memory at all.
+const HOLD_MARGIN: f32 = 0.05;
+
+/// How many times the hold looks again: putting points back can leave
+/// others through what was put back.
+const HOLD_ROUNDS: usize = 8;
+
+/// Whether a point went through a triangle between then and now, and if so
+/// the triangle's normal as it is now, turned to the side the point came
+/// from.
+///
+/// Both move, so the question is asked in the TRIANGLE'S terms: the point's
+/// height over it and the place of its foot in it, then and now, with the
+/// passage taken as a straight line between the two. It went through if
+/// the height changed sign and the foot, where the height was nothing, was
+/// inside the triangle.
+fn went_through(p_then: Vec3, tri_then: [Vec3; 3], p_now: Vec3, tri_now: [Vec3; 3], margin: f32) -> Option<Vec3> {
+    let (h0, w0, _) = over_triangle(p_then, tri_then)?;
+    let (h1, w1, normal) = over_triangle(p_now, tri_now)?;
+    if h0 == 0.0 || h0 * h1 >= 0.0 {
+        return None;
+    }
+    let at = h0 / (h0 - h1);
+    let inside = (0..3).all(|i| w0[i] + (w1[i] - w0[i]) * at >= -margin);
+    inside.then(|| normal * h0.signum())
 }
 
 /// Where a surface passes through itself.

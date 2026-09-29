@@ -2913,7 +2913,19 @@ pub fn resolve_detangle_geometry_with_errors(
 ) -> Option<Detail> {
     let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    apply_detangle(&mut geom, target);
+    // Inside a simnet that is mid-solve, what the substep consumed is where
+    // the points were when the step began: the nearest simnet above this
+    // node that has pushed a state.
+    let mut before = None;
+    let mut at = target;
+    while let Some(parent) = find_parent_node(root, &at.id) {
+        if let Some(state) = sim.feedback_for(&parent.id) {
+            before = Some(state);
+            break;
+        }
+        at = parent;
+    }
+    crate::detangle::apply_from(&mut geom, before, target);
     Some(geom)
 }
 
@@ -8795,6 +8807,88 @@ mod simnet_tests {
         // Coincident points: no more picks than distinct positions.
         let same = vec![Vec3::ONE; 20];
         assert_eq!(spread_sample(&same, 12), vec![0]);
+    }
+
+    /// A detangle inside a simnet is told where the substep began: the
+    /// state its simnet pushed. The Step Limit is measured against it, so
+    /// a pull of a whole unit a frame arrives as half a thickness a frame —
+    /// and the same node outside a simnet, with nothing to measure against,
+    /// limits nothing. Inside a plain subnet inside the simnet it is still
+    /// the simnet's state: the nearest one above that has pushed.
+    #[test]
+    fn a_detangle_in_a_simnet_knows_where_the_step_began() {
+        let graph = |nested: bool| {
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let pull = |input: &str| {
+                node(
+                    "id-pull",
+                    "pull1",
+                    "attribute",
+                    vec![
+                        param("Input", input),
+                        param("Operation", "Modify"),
+                        param("Attribute Name", "Pos"),
+                        param("Value", "1.00:0.00:0.00"),
+                        param("Combine", "Add"),
+                        param("Group", ""),
+                    ],
+                    vec![],
+                )
+            };
+            let detangle = |input: &str| {
+                node(
+                    "id-detangle",
+                    "detangle1",
+                    "detangle",
+                    vec![param("Input", input), param("Method", "Surface"), param("Thickness", "1.00"), param("Step Limit", "0.50")],
+                    vec![],
+                )
+            };
+            let chain = if nested {
+                let inside = node(
+                    "id-sub",
+                    "sub1",
+                    "node",
+                    vec![param("Input", "pull1")],
+                    vec![
+                        node("id-sub-in", "input1", "input", vec![], vec![]),
+                        detangle("input1"),
+                        node("id-sub-out", "output1", "output", vec![param("Input", "detangle1")], vec![]),
+                    ],
+                );
+                vec![
+                    node("id-in", "input1", "input", vec![], vec![]),
+                    pull("input1"),
+                    inside,
+                    node("id-out", "output1", "output", vec![param("Input", "sub1")], vec![]),
+                ]
+            } else {
+                vec![
+                    node("id-in", "input1", "input", vec![], vec![]),
+                    pull("input1"),
+                    detangle("pull1"),
+                    node("id-out", "output1", "output", vec![param("Input", "detangle1")], vec![]),
+                ]
+            };
+            let sim = node("id-sim", "Simnet 1", "simnet", vec![param("Input", "Sphere 1")], chain);
+            let outside = detangle("pull1");
+            node("id-root", "root", "node", vec![], vec![sphere, sim, pull("Sphere 1"), outside])
+        };
+        for nested in [false, true] {
+            let root = graph(nested);
+            let seed = solve_at(&root, 1);
+            let edges = seed.edges();
+            let edge = edges.iter().map(|e| (seed.pos(e[1] as usize) - seed.pos(e[0] as usize)).length()).sum::<f32>() / edges.len() as f32;
+            let after = solve_at(&root, 4);
+            let moved = min_x(&after) - min_x(&seed);
+            assert!((moved - 3.0 * 0.5 * edge).abs() < 1e-4, "nested {nested}: three frames moved {moved}, an edge is {edge}");
+
+            let mut cache = SimCache::default();
+            let mut sim = EvalSim::new(4, 1, &mut cache);
+            let mut err = None;
+            let alone = generate_single_node_geometry_with_errors(&root, &root.children[3], &mut Vec::new(), &mut err, &mut sim).expect("evaluates");
+            assert!((min_x(&alone) - min_x(&seed) - 1.0).abs() < 1e-4, "outside a simnet the pull arrives whole");
+        }
     }
 
     /// Inside a simnet the arrows start where the points were going into

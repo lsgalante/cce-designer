@@ -10290,6 +10290,96 @@ mod tests {
         assert!(held.points().has_group("tangled"), "the group is written, empty");
     }
 
+    /// A point has a side once the solve is told where the step began. The
+    /// patch is carried through a sheet that does not move, in one step:
+    /// by less than a thickness, where distance alone sees it near the
+    /// sheet and pushes it on the way it was going; and by several, where
+    /// distance alone sees nothing at all.
+    #[test]
+    fn the_surface_method_puts_back_what_went_through() {
+        let node = phase3_node(
+            "detangle",
+            &[("Method", "Surface"), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8"), ("Group", "patch")],
+        );
+        let above = |d: &Detail| (4..d.num_points()).filter(|&p| d.pos(p).y > 0.0).count();
+        for (from, to) in [(0.04, -0.04), (0.3, -0.5)] {
+            let before = sheet_and_patch(from, 0.0);
+            let carried = sheet_and_patch(to, 0.0);
+
+            let mut blind = carried.clone();
+            crate::detangle::apply(&mut blind, &node);
+            assert_eq!(above(&blind), 0, "{from} to {to}: with no memory the patch stays under the sheet");
+            assert!(blind.pos(4).y <= carried.pos(4).y, "and is pushed no nearer to it");
+
+            let mut told = carried.clone();
+            let work = crate::detangle::apply_from(&mut told, Some(&before), &node);
+            assert_eq!(above(&told), 25, "{from} to {to}: {work:?}");
+            assert!(work.crossed > 0 || work.held > 0, "{work:?}");
+            assert!(patch_clearance(&told) > 0.03, "clear of the sheet: {}", patch_clearance(&told));
+            assert_eq!(crate::detangle::self_intersections(&told).crossings, 0);
+            assert_eq!(told.positions()[..4], carried.positions()[..4], "the sheet is outside the group");
+
+            // A `before` that is another mesh is no memory of this one.
+            let mut other = carried.clone();
+            let work = crate::detangle::apply_from(&mut other, Some(&sphere_detail(Vec3::ZERO, 0.5, 6, 8)), &node);
+            assert_eq!(other.positions(), blind.positions());
+            assert_eq!((work.crossed, work.held), (0, 0));
+        }
+
+        // What a point went AROUND it did not go through: carried past the
+        // sheet's edge and under it, the patch is left where it is.
+        let shift = |d: &mut Detail, by: Vec3| {
+            for p in 4..d.num_points() {
+                let v = d.pos(p);
+                d.set_pos(p, v + by);
+            }
+        };
+        let (mut before, mut carried) = (sheet_and_patch(0.5, 0.0), sheet_and_patch(-0.5, 0.0));
+        shift(&mut before, Vec3::new(2.0, 0.0, 0.0));
+        shift(&mut carried, Vec3::new(2.0, 0.0, 0.0));
+        let mut told = carried.clone();
+        let work = crate::detangle::apply_from(&mut told, Some(&before), &node);
+        assert_eq!(told.positions(), carried.positions(), "{work:?}");
+    }
+
+    /// The Step Limit holds a point's move since the step began to that
+    /// many thicknesses, in the direction it was going. It is the Surface
+    /// method's, it needs to know where the step began, and only what may
+    /// move is held.
+    #[test]
+    fn the_step_limit_holds_a_step_to_a_length() {
+        let settings = |method: &'static str, limit: &'static str| {
+            phase3_node(
+                "detangle",
+                &[("Method", method), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "4"), ("Step Limit", limit), ("Group", "patch")],
+            )
+        };
+        let before = sheet_and_patch(1.0, 0.0);
+        let mut carried = before.clone();
+        for p in 0..carried.num_points() {
+            let v = carried.pos(p);
+            carried.set_pos(p, v + Vec3::new(0.3, 0.0, 0.4));
+        }
+        let mut d = carried.clone();
+        let work = crate::detangle::apply_from(&mut d, Some(&before), &settings("Surface", "0.50"));
+        assert_eq!(work.limited, 25, "{work:?}");
+        let went = d.pos(10) - before.pos(10);
+        assert!((went.normalize() - Vec3::new(0.6, 0.0, 0.8)).length() < 1e-4, "the way it was going: {went:?}");
+        // Half of a thickness that is a quarter of the mean edge, as the
+        // mesh now stands.
+        let edges = carried.edges();
+        let edge = edges.iter().map(|e| (carried.pos(e[1] as usize) - carried.pos(e[0] as usize)).length()).sum::<f32>() / edges.len() as f32;
+        assert!((went.length() - 0.5 * 0.25 * edge).abs() < 1e-5, "{} of an edge of {edge}", went.length());
+        assert_eq!(d.positions()[..4], carried.positions()[..4], "the sheet is outside the group");
+
+        for (node, told) in [(settings("Surface", "0"), true), (settings("Surface", "0.50"), false), (settings("Points", "0.50"), true)] {
+            let mut d = carried.clone();
+            let work = crate::detangle::apply_from(&mut d, told.then_some(&before), &node);
+            assert_eq!(work.limited, 0);
+            assert_eq!(d.positions(), carried.positions());
+        }
+    }
+
     /// The two methods side by side, by the measure and by the clock: a
     /// sphere's cap pushed down into its own bowl a little each step, until
     /// it would have come out underneath. Run in release with `--ignored
@@ -10299,6 +10389,15 @@ mod tests {
     #[test]
     #[ignore]
     fn detangle_methods_compared() {
+        // The method, whether it is told where the step began, and its
+        // Step Limit.
+        let ways: [(&str, &str, bool, &str); 5] = [
+            ("none", "None", false, "0"),
+            ("points", "Points", false, "0"),
+            ("surface", "Surface", false, "0"),
+            ("sided", "Surface", true, "0"),
+            ("sided, limited", "Surface", true, "0.50"),
+        ];
         for frequency in ["4", "8", "16"] {
             let sphere = crate::shapes::sphere_node_detail(
                 &phase3_node("sphere", &[("Method", "Icosphere"), ("Frequency", frequency), ("Radius", "0.5")]),
@@ -10306,35 +10405,51 @@ mod tests {
             );
             let edges = sphere.edges();
             let edge = edges.iter().map(|e| (sphere.pos(e[1] as usize) - sphere.pos(e[0] as usize)).length()).sum::<f32>() / edges.len() as f32;
-            // A fifth of an edge a step, until the pole has travelled the
-            // diameter and a little more.
-            let rate = edge * 0.2;
-            let steps = (1.1 / rate).ceil() as usize;
             let cap: Vec<usize> = (0..sphere.num_points()).filter(|&p| sphere.pos(p).y > 0.2).collect();
-            for thickness in ["0.50", "1.00"] {
-                for method in ["None", "Points", "Surface"] {
-                    let node = phase3_node("detangle", &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4")]);
-                    let mut d = sphere.clone();
-                    let (mut worst, mut far, mut spent) = (0, 0, std::time::Duration::ZERO);
-                    for _ in 0..steps {
-                        for &p in &cap {
-                            let v = d.pos(p);
-                            d.set_pos(p, v - Vec3::new(0.0, rate, 0.0));
+            // In edges a step: a fifth, and then more than a thickness.
+            for pace in [0.2f32, 0.8] {
+                let rate = edge * pace;
+                let steps = (1.1 / rate).ceil() as usize;
+                for thickness in ["0.50", "1.00"] {
+                    for (name, method, told, limit) in ways {
+                        let node = phase3_node(
+                            "detangle",
+                            &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4"), ("Step Limit", limit)],
+                        );
+                        let mut d = sphere.clone();
+                        let (mut worst, mut far, mut spent) = (0, 0, std::time::Duration::ZERO);
+                        let mut tally = crate::detangle::Work::default();
+                        // A limited step covers less ground, and is given
+                        // the steps to cover the same: what Substeps is for.
+                        let held = limit.parse::<f32>().unwrap() * thickness.parse::<f32>().unwrap();
+                        let steps = if held > 0.0 && held < pace { (steps as f32 * pace / held).ceil() as usize } else { steps };
+                        for _ in 0..steps {
+                            let before = d.clone();
+                            for &p in &cap {
+                                let v = d.pos(p);
+                                d.set_pos(p, v - Vec3::new(0.0, rate, 0.0));
+                            }
+                            if method != "None" {
+                                let t = std::time::Instant::now();
+                                let w = crate::detangle::apply_from(&mut d, told.then_some(&before), &node);
+                                spent += t.elapsed();
+                                tally.crossed += w.crossed;
+                                tally.held += w.held;
+                                tally.limited += w.limited;
+                            }
+                            worst = worst.max(crate::detangle::self_intersections(&d).crossings);
+                            far = far.max(crate::detangle::crossings_beyond(&d, 2));
                         }
-                        if method != "None" {
-                            let t = std::time::Instant::now();
-                            crate::detangle::apply(&mut d, &node);
-                            spent += t.elapsed();
-                        }
-                        worst = worst.max(crate::detangle::self_intersections(&d).crossings);
-                        far = far.max(crate::detangle::crossings_beyond(&d, 2));
+                        let last = crate::detangle::self_intersections(&d).crossings;
+                        println!(
+                            "{:>5} points, pace {pace}, {steps:>4} steps, thickness {thickness}, {name:>14}: worst {worst:>5} crossings ({far:>5} beyond the rings), last {last:>5}, {:.2} ms a step; {} put back through, {} held, {} limited",
+                            d.num_points(),
+                            spent.as_secs_f64() * 1000.0 / steps as f64,
+                            tally.crossed,
+                            tally.held,
+                            tally.limited
+                        );
                     }
-                    let last = crate::detangle::self_intersections(&d).crossings;
-                    println!(
-                        "{:>5} points, {steps:>3} steps, thickness {thickness}, {method:>7}: worst {worst:>5} crossings ({far:>5} beyond the rings), last {last:>5}, {:.2} ms a step",
-                        d.num_points(),
-                        spent.as_secs_f64() * 1000.0 / steps as f64
-                    );
                 }
             }
         }
