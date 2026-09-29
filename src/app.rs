@@ -555,6 +555,59 @@ pub struct NodeTemplate {
     pub node: FsNode,
 }
 
+/// The row menu's `Control:` and `Type:` readouts for a row the pane shows
+/// as `shown` (a display type string) over a parameter of `kind`: the
+/// control drawn, and the type of value it sets. The control follows what
+/// is DRAWN — a float3 row is sliders, an expression a text box — and the
+/// type what is SET: a presented float3 sets a float3 whatever the
+/// parameter's kind, and otherwise the kind says (a `float` parameter in a
+/// text box still sets a float).
+pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static str) {
+    let head = shown.split(':').next().unwrap_or("");
+    let control = match head {
+        "slider" | "float3" => "slider",
+        "spinbox" => "spinbox",
+        "choice" => "dropdown",
+        "toggle" | "checkbox" => "toggle",
+        "button" => "button",
+        "code" => "code editor",
+        "textpick" => "text box with picker",
+        "ramp" => "ramp",
+        "color" | "rgb" | "rgba" => "color picker",
+        _ => "text box",
+    };
+    let ty = if head == "float3" {
+        "float3"
+    } else {
+        match kind {
+            ParamKind::Slider | ParamKind::Float => "float",
+            ParamKind::Spin => "integer",
+            ParamKind::Float3 => "float3",
+            ParamKind::Toggle => "boolean",
+            ParamKind::Choice => "enum",
+            ParamKind::Text | ParamKind::Code => "string",
+            ParamKind::Node => "node",
+            ParamKind::Attribute => "attribute",
+            ParamKind::Group => "group",
+            ParamKind::Button => "none",
+        }
+    };
+    (control, ty)
+}
+
+/// The range a presented row carries in its display type (`slider:lo:hi`,
+/// `float3:lo:hi`), for a row whose parameter declares none of its own.
+fn shown_row_range(shown: &str) -> Option<(f32, f32, Option<f32>)> {
+    let mut parts = shown.split(':');
+    let head = parts.next()?;
+    if head != "slider" && head != "float3" {
+        return None;
+    }
+    let lo = parts.next()?.parse::<f32>().ok()?;
+    let hi = parts.next()?.parse::<f32>().ok()?;
+    Some((lo, hi, None))
+}
+
 /// The Attribute node's Value row's range when it is presented as a float3
 /// (`add_pick_lists`): wide, because a float3 row clamps to its range and
 /// Pos is set to whatever the scene needs. A drag is coarse at this width;
@@ -4631,31 +4684,31 @@ impl State {
     /// runs, and how many leading rows are HEADERS. Split from the open so
     /// a test reads them.
     ///
-    /// The two headers read the parameter out: `Control:` is its kind
-    /// (`ParamKind::name` — slider, float3, attribute…) and `Value:` what
-    /// its text holds right now (`ParamDef::value_type` — float, integer,
-    /// boolean, expression, invalid…). Two lines rather than one because they
-    /// answer different questions: the first is the template's, the second
-    /// the instance's, and they differ exactly when something is off — a
-    /// `Control: slider` over `Value: expression` is a row whose slider
-    /// cannot be shown, over `Value: invalid (…)` a load that kept a text
-    /// the kind refuses. `Default:` is the template's value for the row
-    /// (`template_default`, as written there — an expression shows as the
-    /// expression), left out for a parameter no template names. A control
-    /// with a range adds `Range: lo..hi`, with its step when one is set
-    /// (`ParamDef::range`, the pane's own numbers); a choice adds
-    /// `Options: a, b, c`. `Type:` is the raw type STRING under
-    /// `Control:` — `slider:-2:2`, `choice:UV,Icosphere,Cube`, or `string`
-    /// for an absent one — exactly as the template or the file wrote it,
-    /// where Control is the kind that string parses to. Ahead of `Range:`, `Min:` / `Max:` / `Step:`
-    /// are what the template DECLARES (`ParamDef::declared_range`, an
-    /// inline `slider:-2:2` included), `none` where it declares nothing —
-    /// so Range is the clamp the pane applies and the three above it say
-    /// how much of that the template chose. `Expression:` is the row's expression FLAG,
-    /// `true` or `false` — the thing `ParamDef::expr` stores, which is
-    /// what Edit Expression sets and Delete Expression clears; `Value:`
-    /// already reads `expression` when it is set, and the flag row states
-    /// the bit itself. Around those, `Name:` heads the list — the
+    /// The headers read the parameter out. `Control:` is the control the
+    /// pane DRAWS for the row and `Type:` the type of value that control
+    /// sets, in a programmer's terms — both read off the row as the pane
+    /// shows it (`display_row_type`), not off the parameter's kind alone,
+    /// because the two part ways: the Attribute node's Value is a text
+    /// parameter the pane presents as three sliders over a float3
+    /// (`add_pick_lists`), and an expression is a text box whatever its
+    /// kind. Until 2026-09-28 Control was the kind's name, Type the raw
+    /// type string and a third `Value:` row the type of the text held, so
+    /// that Value row read `Control: text`, `Type: text`, `Value: string`
+    /// over a control that was plainly a slider setting a vector. The raw
+    /// type string's content is the rows below it (the range, the options).
+    /// `Expression:` is the row's expression FLAG, `true` or `false` — the
+    /// thing `ParamDef::expr` stores, which is what Edit Expression sets
+    /// and Delete Expression clears. `Invalid:` appears only for a text the
+    /// kind refuses, with the reason. `Default:` is the template's value
+    /// for the row (`template_default`, as written there — an expression
+    /// shows as the expression), left out for a parameter no template
+    /// names. A control with a range shows `Min:` / `Max:` / `Step:` as the
+    /// template DECLARES them (`ParamDef::declared_range`, an inline
+    /// `slider:-2:2` included), `none` where it declares nothing, then
+    /// `Range: lo..hi` as the pane APPLIES it, with its step when one is
+    /// set — the parameter's own range, or the presented row's when the
+    /// parameter has none (the Value row's `VALUE_ROW_RANGE`). A choice
+    /// adds `Options: a, b, c`. Around those, `Name:` heads the list — the
     /// parameter's name, which is what a `ch()` path and a wire spell —
     /// with `Label:` after it only when the template gives one (the pane
     /// shows the name otherwise, and a Label row repeating it would say
@@ -4666,21 +4719,27 @@ impl State {
         let child = &dir.children[slot];
         let param = child.params.iter().find(|p| p.name == pname);
         let is_expr = param.is_some_and(|p| p.is_expr());
-        let (control, value) = param
-            .map(|p| (p.kind().name().to_string(), p.value_type()))
-            .unwrap_or_else(|| ("?".to_string(), "?".to_string()));
+        let shown = param.map(|p| self.display_row_type(slot, p)).unwrap_or_default();
+        let (control, ty) = param
+            .map(|p| control_and_type(&shown, p.kind()))
+            .unwrap_or(("?", "?"));
         let mut options = vec![format!("Name: {pname}")];
         if let Some(label) = param.map(|p| p.label.as_str()).filter(|l| !l.is_empty()) {
             options.push(format!("Label: {label}"));
         }
         options.push(format!("Control: {control}"));
-        options.push(format!("Type: {}", param.map(|p| p.ty()).unwrap_or("?")));
-        options.push(format!("Value: {value}"));
+        options.push(format!("Type: {ty}"));
         options.push(format!("Expression: {is_expr}"));
+        if let Some(why) = param.and_then(|p| p.invalid()) {
+            options.push(format!("Invalid: {why}"));
+        }
         if let Some(d) = self.template_default(dir, child, pname) {
             options.push(format!("Default: {}", d.text()));
         }
-        if let Some((lo, hi, step)) = param.and_then(|p| p.range()) {
+        // The range the pane applies: the parameter's own, or — for a text
+        // parameter presented as a ranged control — the presented row's.
+        let applied = param.and_then(|p| p.range()).or_else(|| shown_row_range(&shown));
+        if let Some((lo, hi, step)) = applied {
             let fmt = |v: f32| crate::expr::fmt_num(v as f64);
             let declared = |v: Option<f32>| v.map(fmt).unwrap_or_else(|| "none".to_string());
             let (min, max, dstep) = param.map(|p| p.declared_range()).unwrap_or_default();
@@ -4718,6 +4777,20 @@ impl State {
             actions.push(ParamMenuAction::EditExpression);
         }
         (options, actions, headers)
+    }
+
+    /// The row type the pane shows `param` of node `slot` under — the
+    /// pane's own row when it is showing that node (so the picker and
+    /// float3 presentations `add_pick_lists` makes are seen), what
+    /// `param_display` alone would give otherwise.
+    fn display_row_type(&self, slot: usize, param: &ParamDef) -> String {
+        let key = if param.label.is_empty() { &param.name } else { &param.label };
+        if self.param_editor_selected() == Some(slot) {
+            if let Some(row) = self.param().node_params().into_iter().find(|r| r.0 == *key) {
+                return row.2;
+            }
+        }
+        param_display(std::slice::from_ref(param)).into_iter().next().map(|r| r.2).unwrap_or_default()
     }
 
     /// Open a parameter row's right-click menu.

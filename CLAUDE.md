@@ -742,15 +742,21 @@ parameter out** (since 2026-09-28, `param_menu_rows`): `Name:` is the
 parameter's name, what a `ch()` path spells, with `Label:` under it only
 when the template gives one (the pane shows the name otherwise, and a
 Label row repeating it would claim there is one); `Control:` is the
-kind the template gave it (`ParamKind::name` — slider, float3,
-attribute…), `Type:` the raw type string that kind parsed from
-(`slider:-2:2`, `choice:UV,Icosphere,Cube`, `string` for an absent one)
-exactly as the template or the file wrote it, and `Value:` what its text holds right now
-(`ParamDef::value_type` — float, integer, vec3, boolean, enum, string,
-expression, or invalid with the reason; a programmer's terms, by
-request), `Expression:` the row's expression FLAG as `true` / `false`
-(the bit Edit Expression sets and Delete Expression clears, stated on
-its own even though Value reads `expression` when it is set), `Default:`
+control the pane DRAWS for the row (slider, spinbox, dropdown, toggle,
+text box, text box with picker, code editor, button) and `Type:` the type
+of value that control SETS, in a programmer's terms (float, float3,
+integer, boolean, enum, string, and node / attribute / group for a text
+that names one) — `control_and_type`, read off the row as the pane shows
+it, since the Attribute node's Value is a text parameter presented as
+sliders over a float3 and an expression is a text box whatever its kind.
+Until later the same day Control was the kind's name, Type the raw type
+string and a third `Value:` row the type of the text held, which read
+`text` / `text` / `string` over what was plainly a slider setting a
+vector; the Value row is gone, the Type row being the value's type, and
+the raw string's content is the range and options rows. `Expression:` is
+the row's expression FLAG as `true` / `false` (the bit Edit Expression
+sets and Delete Expression clears), `Invalid:` the reason a kept text does
+not fit its kind, shown only then, `Default:`
 the template's value as written there
 (`State::template_default`, which takes a subnet template's override for
 a child inside an instance — the Embryo's `sphere1` defaults its Radius to
@@ -760,13 +766,10 @@ template DECLARES them (`ParamDef::declared_range`, an inline
 `slider:-2:2` included, `none` where it says nothing) followed by
 `Range: lo..hi` with its step as the pane APPLIES it (`ParamDef::range`,
 the numbers `param_display` builds the pane's row from — the declared
-ends, else the pane's defaults), `Options: a, b, c` for a choice, and `Shown when:`
-with the row's `show_when` condition when it has one. Control and Value
-are two lines because
-they answer different questions, the template's and the instance's, and
-they differ exactly when something is off: a slider over an expression is
-a row whose slider cannot be drawn, a slider over `invalid (…)` a load that
-kept a text the kind refuses. They are the context menu's header rows —
+ends, else the pane's defaults — or the presented row's own range for a
+parameter that has none, the Value row's `VALUE_ROW_RANGE`),
+`Options: a, b, c` for a choice, and `Shown when:`
+with the row's `show_when` condition when it has one. They are the context menu's header rows —
 dimmed, never hovered — and `ParamMenuAction::Info` runs nothing. The paste writes `chs()` when the
 target row holds text or a choice and `ch()` otherwise, by the TARGET,
 because that is what the value has to fit. Expression rows draw with a
