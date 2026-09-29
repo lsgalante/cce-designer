@@ -2144,35 +2144,40 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 
 ### Display mode: the viewport menu, and smooth shading
 
-The viewport's right-click menu has a top level and two PAGES (since
-2026-09-29; until then it was one list of some twenty rows). The top level
-holds what is done — Frame All, View 1:1 — the guides (Show Grid, Show
-Origin; the reference CUBE guide was removed on 2026-09-25 — its command,
-mesh, RT-scene copy, settings field and menubar item, with the Guides
-menubar addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto
-another's action, while old files carrying `show_cube_enabled` still load),
-and a row into each page: **Style ›** (how the geometry is drawn: the
+The viewport's right-click menu has two SUBMENUS (since 2026-09-29;
+until then it was one list of some twenty rows). The menu itself holds
+what is done — Frame All, View 1:1 — the guides (Show Grid, Show Origin;
+the reference CUBE guide was removed on 2026-09-25 — its command, mesh,
+RT-scene copy, settings field and menubar item, with the Guides menubar
+addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto another's
+action, while old files carrying `show_cube_enabled` still load), and a
+row for each submenu: **Style** (how the geometry is drawn: the
 wireframe's switch, thickness and opacity, then the surface's shading,
-opacity and Show Occluded) and **Markers ›** (what is drawn on it: Show
+opacity and Show Occluded) and **Markers** (what is drawn on it: Show
 Points, Point Size, Group Marker Scale and Pull Arrow Scale; then the
 overlays a class at a time — Show Point Markers and its size, Show Point
 Numbers, Show Point Normals; Show Primitive Numbers, Show Primitive
 Normals; Show Vertex Numbers).
 
-**A submenu is the same popup showing another page.** cce-ui's context
-menu is one thread-local menu in one popup surface and has no cascade, so
-`ViewportMenuAction::Submenu(page)` re-shows the menu with the page's rows
-at `viewport_menu_anchor`, where it was opened, and the page's first row
-(`‹ Markers`, `ViewportMenuAction::Back`) re-shows the top level.
-`viewport_menu_rows_of(page)` is the rows of any page, `viewport_menu_rows`
-those of the one showing (`State::viewport_menu_page`), and
-`show_viewport_menu_page` the one place the menu is put up. **A row of a
-page keeps the menu open**: a page is a panel of settings, entered to set
-several, so a switch flips, the page is shown again for its marks, and the
-menu closes on a press outside it or Escape; a top-level row closes it as
-before. `the_viewport_menu_turns_to_a_page_and_stays_open` drives it by
-presses. A cascading flyout beside the parent row would be a cce-ui
-change, to the menu and to the runner's popup hosting.
+**The submenus are cce-ui's** (`context_menu::set_row_submenu`, see its
+CLAUDE.md, "A row can open a submenu"): a second menu in its own popup
+that flies out beside the row under the pointer, which the toolkit opens,
+closes and places. What this app does is fill and dispatch.
+`viewport_menu_rows_of(page)` is the rows of the menu (`None`) or of a
+submenu; `fill_viewport_submenus` hands each `ViewportMenuAction::Submenu`
+row its rows and sliders, read from the live state, at the open and again
+after anything a submenu row did — the toolkit changes an open submenu
+where it stands, which is how a mark follows its switch — and
+`open_viewport_submenu_actions` is the open submenu's actions, by
+`submenu::parent_row`. **A row of a submenu keeps both menus up**: a
+submenu is a panel of settings, opened to set several, so they close on a
+press outside or Escape; a row of the menu itself closes it as before.
+The slider hooks are unchanged, the toolkit's pointer calls answering for
+both menus; `drain_viewport_menu_slider` drains the menu's sliders and
+then the submenu's. For one day the two were PAGES of the one popup,
+entered by a row and left by a Back row, because the toolkit had no
+submenu. `the_viewport_menu_flies_its_settings_out_beside_it` drives it
+by pointer.
 
 **The primitive and vertex overlays** (`toggle_prim_numbers`,
 `toggle_prim_normals`, `toggle_vertex_numbers`, the same day) are

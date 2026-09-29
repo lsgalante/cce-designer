@@ -1871,15 +1871,15 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        state.show_viewport_menu_page(state.viewport_menu_page_of(A::OpacitySlider));
+        let sub_actions = state.open_viewport_submenu_with(A::OpacitySlider);
         assert!(state.viewport_menu_open());
-        let i = state.viewport_menu_actions.iter().position(|a| *a == A::OpacitySlider).expect("an Opacity row");
-        let s = context_menu::slider(i).expect("the row is a slider");
+        let i = sub_actions.iter().position(|a| *a == A::OpacitySlider).expect("an Opacity row");
+        let s = context_menu::submenu::slider(i).expect("the row is a slider");
         assert_eq!((s.value, s.min, s.max, s.step), (50.0, 0.0, 100.0, 5.0));
 
         // Wheel over the row: one notch up is 5% more, saved, menu still up.
-        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
-        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::submenu::x() + 20.0;
         let wheel = |state: &mut State, notches: f32| {
             state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, notches) })
         };
@@ -1892,7 +1892,7 @@ mod tests {
         assert!((state.geo_opacity - 0.40).abs() < 1e-6);
 
         // Press on the band's right end: 100%, live; drag back; release.
-        let band = context_menu::CONTEXT_MENU.with(|m| m.borrow().slider_band(i));
+        let band = context_menu::SUBMENU.with(|m| m.borrow().slider_band(i));
         state.cursor_x = band.x + band.width - 1.0;
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         assert!((state.geo_opacity - 1.0).abs() < 1e-6, "{}", state.geo_opacity);
@@ -1962,20 +1962,20 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        state.show_viewport_menu_page(state.viewport_menu_page_of(A::WireOpacitySlider));
-        let acts = state.viewport_menu_actions.clone();
+        let sub_actions = state.open_viewport_submenu_with(A::WireOpacitySlider);
+        let acts = sub_actions.clone();
         let i = acts.iter().position(|a| *a == A::WireOpacitySlider).expect("a Wire Opacity row");
-        let sl = context_menu::slider(i).expect("the row is a slider");
+        let sl = context_menu::submenu::slider(i).expect("the row is a slider");
         assert_eq!((sl.value, sl.min, sl.max, sl.step), (50.0, 0.0, 100.0, 5.0));
 
-        state.cursor_x = context_menu::x() + 20.0;
-        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::submenu::x() + 20.0;
+        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -2.0) });
         assert!((state.wire_opacity - 0.40).abs() < 1e-6, "{}", state.wire_opacity);
         assert!((state.geo_opacity - 0.5).abs() < 1e-6, "the polygon opacity moved with the wires'");
 
         let j = acts.iter().position(|a| *a == A::OpacitySlider).expect("an Opacity row");
-        state.cursor_y = context_menu::row_y(j) + context_menu::ROW_H * 0.5;
+        state.cursor_y = context_menu::submenu::row_y(j) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
         assert!((state.geo_opacity - 0.60).abs() < 1e-6, "{}", state.geo_opacity);
         assert!((state.wire_opacity - 0.40).abs() < 1e-6, "the wires' opacity moved with the polygons'");
@@ -2024,11 +2024,10 @@ mod tests {
         assert_eq!((d.render.wire_color, d.render.wire_opacity), ([0.0; 3], 1.0));
     }
 
-    /// The viewport menu's top level holds framing, the guides and a row
-    /// into each page; the display rows are on the pages, in groups a
-    /// separator apart — Style the wireframe then the surface, Markers the
-    /// points then each element class's overlays — every one on exactly one
-    /// page, under a first row that leads back.
+    /// The viewport menu holds framing, the guides and a row for each
+    /// submenu; the display rows are in the submenus, in groups a separator
+    /// apart — Style the wireframe then the surface, Markers the points then
+    /// each element class's overlays — every one in exactly one.
     #[test]
     fn the_viewport_menu_groups_its_display_rows() {
         use crate::app::{ViewportMenuAction as A, ViewportMenuPage as P};
@@ -2050,7 +2049,6 @@ mod tests {
         assert_eq!(
             groups(Some(P::Style)),
             vec![
-                vec![A::Back],
                 vec![A::Command("toggle_wireframe"), A::WireThicknessSlider, A::WireOpacitySlider],
                 vec![A::Shading(false), A::Shading(true), A::OpacitySlider, A::Command("toggle_show_occluded")],
             ]
@@ -2058,7 +2056,6 @@ mod tests {
         assert_eq!(
             groups(Some(P::Markers)),
             vec![
-                vec![A::Back],
                 vec![A::Command("toggle_render_points"), A::PointSizeSlider, A::GroupMarkerScaleSlider, A::PullArrowScaleSlider],
                 vec![
                     A::Command("toggle_point_markers"),
@@ -2072,47 +2069,64 @@ mod tests {
         );
     }
 
-    /// A submenu is the menu showing another page where it stands: a press
-    /// on a page's row turns to it and keeps the menu up, a switch on a
-    /// page flips, re-marks and keeps it up, the first row leads back, and
-    /// a top-level row closes the menu as it always did.
+    /// The display settings fly out beside their row: the pointer on the
+    /// row opens its submenu, beside the menu and level with the row; a
+    /// switch in it flips, is re-marked where it stands and leaves both
+    /// menus up; the pointer on the other row swaps the submenu; a row of
+    /// the menu itself closes everything, as it always did.
     #[test]
-    fn the_viewport_menu_turns_to_a_page_and_stays_open() {
+    fn the_viewport_menu_flies_its_settings_out_beside_it() {
         use crate::app::{ViewportMenuAction as A, ViewportMenuPage as P};
-        use crate::window::WindowEvent;
-        use cce_ui::widget::{context_menu, ElementState, MouseButton};
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{context_menu, context_menu::submenu, ElementState, MouseButton};
         let mut state = State::new(false);
         state.show_prim_numbers = false;
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        let press = |state: &mut State, action: A| {
-            let i = state.viewport_menu_actions.iter().position(|a| *a == action).unwrap_or_else(|| panic!("no {action:?} row"));
-            state.cursor_x = context_menu::x() + 20.0;
-            state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        let row_of = |state: &State, a: A| state.viewport_menu_actions.iter().position(|x| *x == a).unwrap_or_else(|| panic!("no {a:?} row"));
+        let move_to = |state: &mut State, x: f32, y: f32| {
+            state.cursor_x = x;
+            state.cursor_y = y;
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        };
+        let press = |state: &mut State| {
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
         };
-        let at = (context_menu::x(), context_menu::y());
-        press(&mut state, A::Submenu(P::Markers));
-        assert!(state.viewport_menu_open(), "turning the page keeps the menu up");
-        assert_eq!(state.viewport_menu_page, Some(P::Markers));
-        assert_eq!((context_menu::x(), context_menu::y()), at, "where it was");
-        assert_eq!(state.viewport_menu_actions[0], A::Back);
+        let (style, markers) = (row_of(&state, A::Submenu(P::Style)), row_of(&state, A::Submenu(P::Markers)));
+        assert!(context_menu::has_submenu(style) && context_menu::has_submenu(markers));
+        assert!(!submenu::is_visible(), "nothing flies out until a row is pointed at");
 
-        press(&mut state, A::Command("toggle_prim_numbers"));
+        move_to(&mut state, context_menu::x() + 20.0, context_menu::row_y(markers) + 12.0);
+        assert_eq!(submenu::parent_row(), Some(markers));
+        assert_eq!(submenu::x(), context_menu::x() + context_menu::w(), "beside the menu");
+        assert_eq!(submenu::row_y(0), context_menu::row_y(markers), "level with its row");
+        let actions = state.open_viewport_submenu_actions().unwrap();
+        let prims = actions.iter().position(|a| *a == A::Command("toggle_prim_numbers")).unwrap();
+        assert!(submenu::options()[prims].starts_with('○'));
+
+        // Into the submenu: its row hovers, and the menu's row stays lit.
+        move_to(&mut state, submenu::x() + 20.0, submenu::row_y(prims) + 12.0);
+        assert_eq!(submenu::hovered_item(), Some(prims));
+        assert_eq!(context_menu::hovered_item(), Some(markers));
+        assert_eq!(context_menu::row_at(state.cursor_x, state.cursor_y), None, "a row of the submenu is not a row of the menu");
+        press(&mut state);
         assert!(state.show_prim_numbers, "the switch flipped");
-        assert!(state.viewport_menu_open(), "and the page is still up");
-        let i = state.viewport_menu_actions.iter().position(|a| *a == A::Command("toggle_prim_numbers")).unwrap();
-        assert!(context_menu::options()[i].starts_with('●'), "re-marked: {}", context_menu::options()[i]);
+        assert!(state.viewport_menu_open() && submenu::is_visible(), "and both are still up");
+        assert!(submenu::options()[prims].starts_with('●'), "re-marked: {}", submenu::options()[prims]);
 
-        press(&mut state, A::Back);
-        assert!(state.viewport_menu_open());
-        assert_eq!(state.viewport_menu_page, None);
-        assert_eq!(state.viewport_menu_actions[0], A::FrameAll);
+        // Straight back onto the other row: its submenu takes the place.
+        move_to(&mut state, context_menu::x() + 20.0, context_menu::row_y(style) + 12.0);
+        assert_eq!(submenu::parent_row(), Some(style));
+        assert_eq!(state.open_viewport_submenu_actions().unwrap()[0], A::Command("toggle_wireframe"));
 
-        press(&mut state, A::Command("toggle_grid"));
-        assert!(!state.viewport_menu_open(), "a top-level row closes the menu");
+        // A row with no submenu closes it; picking that row closes the menu.
+        let grid = row_of(&state, A::Command("toggle_grid"));
+        move_to(&mut state, context_menu::x() + 20.0, context_menu::row_y(grid) + 12.0);
+        assert!(!submenu::is_visible());
+        press(&mut state);
+        assert!(!state.viewport_menu_open(), "a row of the menu closes it");
     }
 
     /// The primitive and vertex overlays read off the scene as the points'
@@ -2315,26 +2329,26 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        state.show_viewport_menu_page(state.viewport_menu_page_of(A::WireThicknessSlider));
-        let acts = state.viewport_menu_actions.clone();
+        let sub_actions = state.open_viewport_submenu_with(A::WireThicknessSlider);
+        let acts = sub_actions.clone();
         let i = acts.iter().position(|a| *a == A::WireThicknessSlider).expect("a Wire Thickness row");
         assert_eq!(acts[i - 1], A::Command("toggle_wireframe"), "it sits under Show Wireframe");
-        let sl = context_menu::slider(i).expect("the row is a slider");
+        let sl = context_menu::submenu::slider(i).expect("the row is a slider");
         assert_eq!((sl.value, sl.min, sl.max, sl.step), (2.0, 1.0, 8.0, 0.5));
         // Every other slider the menu carries answers the same table.
         for (k, a) in acts.iter().enumerate() {
-            assert_eq!(context_menu::slider(k).is_some(), state.viewport_menu_slider(*a).is_some(), "row {k} {a:?}");
+            assert_eq!(context_menu::submenu::slider(k).is_some(), state.viewport_menu_slider(*a).is_some(), "row {k} {a:?}");
         }
 
-        state.cursor_x = context_menu::x() + 20.0;
-        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::submenu::x() + 20.0;
+        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
         assert!((state.wire_width - 3.0).abs() < 1e-6, "{}", state.wire_width);
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
         assert!(kdl.contains("wire_width (f64)3") || kdl.contains("wire_width 3"), "persisted: {kdl}");
         assert!(state.viewport_menu_open());
 
-        let band = context_menu::CONTEXT_MENU.with(|m| m.borrow().slider_band(i));
+        let band = context_menu::SUBMENU.with(|m| m.borrow().slider_band(i));
         state.cursor_x = band.x + 1.0;
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
@@ -2410,14 +2424,14 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        state.show_viewport_menu_page(state.viewport_menu_page_of(A::PointSizeSlider));
-        let i = state.viewport_menu_actions.iter().position(|a| *a == A::PointSizeSlider).expect("a Point Size row");
-        let sl = context_menu::slider(i).expect("a slider");
+        let sub_actions = state.open_viewport_submenu_with(A::PointSizeSlider);
+        let i = sub_actions.iter().position(|a| *a == A::PointSizeSlider).expect("a Point Size row");
+        let sl = context_menu::submenu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step, sl.decimals), (0.0, 0.1, 0.005, 3));
         assert!((sl.value - 0.02).abs() < 1e-6);
 
-        state.cursor_x = context_menu::x() + 20.0;
-        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::submenu::x() + 20.0;
+        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
         assert!((state.point_size - 0.03).abs() < 1e-5, "{}", state.point_size);
         assert!((radius(&state) - 0.06).abs() < 1e-4, "the markers re-sized: {}", radius(&state));
@@ -2453,15 +2467,15 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        state.show_viewport_menu_page(state.viewport_menu_page_of(A::PointMarkerSizeSlider));
-        let i = state.viewport_menu_actions.iter().position(|a| *a == A::PointMarkerSizeSlider).expect("a Point Marker Size row");
-        assert_eq!(state.viewport_menu_actions[i - 1], A::Command("toggle_point_markers"), "it sits under its switch");
-        let sl = context_menu::slider(i).expect("a slider");
+        let sub_actions = state.open_viewport_submenu_with(A::PointMarkerSizeSlider);
+        let i = sub_actions.iter().position(|a| *a == A::PointMarkerSizeSlider).expect("a Point Marker Size row");
+        assert_eq!(sub_actions[i - 1], A::Command("toggle_point_markers"), "it sits under its switch");
+        let sl = context_menu::submenu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step), (0.005, 0.1, 0.005));
         assert!((sl.value - 0.02).abs() < 1e-6);
 
-        state.cursor_x = context_menu::x() + 20.0;
-        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::submenu::x() + 20.0;
+        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 4.0) });
         assert!((state.point_marker_size - 0.04).abs() < 1e-5, "{}", state.point_marker_size);
         assert_eq!(state.rt_geometry_version, version, "no rebuild ran");
@@ -2503,14 +2517,14 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        state.show_viewport_menu_page(state.viewport_menu_page_of(A::PullArrowScaleSlider));
-        let i = state.viewport_menu_actions.iter().position(|a| *a == A::PullArrowScaleSlider).expect("a Pull Arrow Scale row");
-        let sl = context_menu::slider(i).expect("a slider");
+        let sub_actions = state.open_viewport_submenu_with(A::PullArrowScaleSlider);
+        let i = sub_actions.iter().position(|a| *a == A::PullArrowScaleSlider).expect("a Pull Arrow Scale row");
+        let sl = context_menu::submenu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.25, 10.0, 0.25, "x"));
         assert_eq!(sl.readout(), "1.00x");
 
-        state.cursor_x = context_menu::x() + 20.0;
-        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::submenu::x() + 20.0;
+        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 15.0) });
         let k = state.pull_arrow_scale;
         assert!(k > 1.0, "the wheel raised the scale: {k}");
@@ -2542,15 +2556,15 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        state.show_viewport_menu_page(state.viewport_menu_page_of(A::GroupMarkerScaleSlider));
-        let i = state.viewport_menu_actions.iter().position(|a| *a == A::GroupMarkerScaleSlider).expect("a Group Marker Scale row");
-        assert_eq!(state.viewport_menu_actions[i - 1], A::PointSizeSlider, "it sits under the size it multiplies");
-        let sl = context_menu::slider(i).expect("a slider");
+        let sub_actions = state.open_viewport_submenu_with(A::GroupMarkerScaleSlider);
+        let i = sub_actions.iter().position(|a| *a == A::GroupMarkerScaleSlider).expect("a Group Marker Scale row");
+        assert_eq!(sub_actions[i - 1], A::PointSizeSlider, "it sits under the size it multiplies");
+        let sl = context_menu::submenu::slider(i).expect("a slider");
         assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (0.5, 4.0, 0.05, "x"));
         assert_eq!(sl.readout(), "1.25x");
 
-        state.cursor_x = context_menu::x() + 20.0;
-        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.cursor_x = context_menu::submenu::x() + 20.0;
+        state.cursor_y = context_menu::submenu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 15.0) });
         assert!((state.group_marker_scale - 2.0).abs() < 1e-5, "{}", state.group_marker_scale);
         assert!((radius(&state) - 0.04).abs() < 1e-5, "the markers re-sized: {}", radius(&state));

@@ -418,9 +418,8 @@ pub const GUIDE_GRID: usize = 0;
 pub const GUIDE_ORIGIN: usize = 1;
 pub const GUIDE_CAMERA_PIVOT: usize = 2;
 
-/// A page of the viewport menu below its top level: the menu is one popup,
-/// so a submenu is the same popup showing another page, entered by a row
-/// and left by the page's first row.
+/// A submenu of the viewport menu: a second menu that flies out beside its
+/// row (cce-ui's `context_menu::SubmenuSpec`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewportMenuPage {
     /// How the geometry itself is drawn: the wireframe and the surface.
@@ -441,10 +440,8 @@ impl ViewportMenuPage {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewportMenuAction {
-    /// Show a page of the menu in its place. The menu stays open.
+    /// A row that opens a submenu beside it. The menu stays open.
     Submenu(ViewportMenuPage),
-    /// A page's first row: back to the top level. The menu stays open.
-    Back,
     /// Move the active camera so the visible node geometry fills the view.
     FrameAll,
     /// Put the pivot plane at true size: one world unit (the Guides "World
@@ -2054,10 +2051,6 @@ pub struct State {
     /// machinery as the node menu; this flag says the open menu is OURS).
     pub viewport_menu_active: bool,
     pub viewport_menu_actions: Vec<ViewportMenuAction>,
-    /// The page the viewport menu shows, `None` for its top level, and
-    /// where it was opened: a page is shown where the menu already is.
-    pub viewport_menu_page: Option<ViewportMenuPage>,
-    pub viewport_menu_anchor: (f32, f32),
     /// A parameter row's right-click menu — the same thread-local; the
     /// target is (node id, parameter name) rather than a slot and a row, so
     /// it holds across a re-layout of the pane.
@@ -5072,27 +5065,40 @@ impl State {
 
     /// Open the viewport right-click context menu at the cursor.
     pub(crate) fn open_viewport_context_menu(&mut self) {
-        self.viewport_menu_anchor = (self.cursor_x, self.cursor_y);
-        self.show_viewport_menu_page(None);
-    }
-
-    /// Show a page of the viewport menu (`None`, its top level) where the
-    /// menu was opened. It is how the menu opens, how a submenu row and a
-    /// Back row turn the page, and how a page re-reads its marks after one
-    /// of its switches was flipped.
-    pub(crate) fn show_viewport_menu_page(&mut self, page: Option<ViewportMenuPage>) {
-        self.viewport_menu_page = page;
         let (options, actions) = self.viewport_menu_rows();
         let target = self.slots.viewport.id();
-        let (x, y) = self.viewport_menu_anchor;
-        cce_ui::widget::context_menu::show(x, y, options, 0, target);
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
         for (i, a) in actions.iter().enumerate() {
             if let Some(slider) = self.viewport_menu_slider(*a) {
                 cce_ui::widget::context_menu::set_row_slider(i, slider);
             }
         }
-        self.viewport_menu_active = true;
         self.viewport_menu_actions = actions;
+        self.fill_viewport_submenus();
+        self.viewport_menu_active = true;
+    }
+
+    /// Give each submenu row of the open viewport menu its submenu, read
+    /// from the live state: at the open, and again after anything a row of
+    /// one did, which is how its marks and readouts follow. The menu changes
+    /// an open submenu where it stands.
+    pub(crate) fn fill_viewport_submenus(&self) {
+        use cce_ui::widget::context_menu::{self, SubmenuSpec};
+        for (i, a) in self.viewport_menu_actions.iter().enumerate() {
+            let ViewportMenuAction::Submenu(page) = *a else { continue };
+            let (options, actions) = self.viewport_menu_rows_of(Some(page));
+            let sliders = actions.iter().map(|a| self.viewport_menu_slider(*a)).collect();
+            context_menu::set_row_submenu(i, SubmenuSpec { options, header_count: 0, sliders });
+        }
+    }
+
+    /// The rows' actions of the submenu that is open, if one is.
+    pub(crate) fn open_viewport_submenu_actions(&self) -> Option<Vec<ViewportMenuAction>> {
+        let row = cce_ui::widget::context_menu::submenu::parent_row()?;
+        match self.viewport_menu_actions.get(row)? {
+            ViewportMenuAction::Submenu(page) => Some(self.viewport_menu_rows_of(Some(*page)).1),
+            _ => None,
+        }
     }
 
     /// The slider a viewport menu row carries, read from the live value —
@@ -5258,15 +5264,25 @@ impl State {
     /// drag. `persist` saves state.kdl, which the wheel does per step and a
     /// drag does once, on the release.
     pub(crate) fn drain_viewport_menu_slider(&mut self, persist: bool) -> bool {
-        let Some((idx, v)) = cce_ui::widget::context_menu::take_slider_change() else {
+        use cce_ui::widget::context_menu;
+        // The menu's own sliders, then those of its open submenu.
+        let changed = context_menu::take_slider_change()
+            .and_then(|(idx, v)| Some((self.viewport_menu_actions.get(idx).copied()?, v)))
+            .or_else(|| {
+                let (idx, v) = context_menu::submenu::take_slider_change()?;
+                Some((self.open_viewport_submenu_actions()?.get(idx).copied()?, v))
+            });
+        let Some((action, v)) = changed else {
             if persist {
                 self.save_settings();
             }
             return false;
         };
-        if let Some(action) = self.viewport_menu_actions.get(idx).copied() {
+        {
             if self.viewport_menu_slider(action).is_some() {
                 self.land_viewport_menu_slider(action, v);
+                // What a submenu is opened with next time is what is so now.
+                self.fill_viewport_submenus();
                 if persist {
                     self.save_settings();
                 }
@@ -5289,11 +5305,20 @@ impl State {
     /// test can read it. Marks are the ●/○ the pin rows and the network menu
     /// use.
     pub(crate) fn viewport_menu_rows(&self) -> (Vec<String>, Vec<ViewportMenuAction>) {
-        self.viewport_menu_rows_of(self.viewport_menu_page)
+        self.viewport_menu_rows_of(None)
+    }
+
+    /// Open the submenu of the open viewport menu that holds `action`, as a
+    /// press on its row does, and hand back that submenu's actions.
+    #[cfg(test)]
+    pub(crate) fn open_viewport_submenu_with(&mut self, action: ViewportMenuAction) -> Vec<ViewportMenuAction> {
+        let page = self.viewport_menu_page_of(action).expect("a submenu holds the row");
+        self.run_viewport_menu_action(ViewportMenuAction::Submenu(page));
+        self.open_viewport_submenu_actions().expect("the submenu opened")
     }
 
     /// The page of the viewport menu that holds `action`, `None` for the
-    /// top level's own rows — how a test finds a row without knowing the
+    /// menu's own rows — how a test finds a row without knowing the
     /// menu's layout.
     #[cfg(test)]
     pub(crate) fn viewport_menu_page_of(&self, action: ViewportMenuAction) -> Option<ViewportMenuPage> {
@@ -5302,11 +5327,11 @@ impl State {
             .find(|page| self.viewport_menu_rows_of(Some(*page)).1.contains(&action))
     }
 
-    /// The rows of one page of the viewport menu. The top level holds what
-    /// is DONE (framing), the guides, and a row into each page; the STYLE
-    /// page holds how the geometry is drawn (wireframe, then surface) and
-    /// the MARKERS page what is drawn on it (the points, then the overlays
-    /// of each element class). A page's first row names it and leads back.
+    /// The rows of the viewport menu (`None`) or of one of its submenus.
+    /// The menu holds what is DONE (framing), the guides, and a row for each
+    /// submenu; the STYLE submenu holds how the geometry is drawn
+    /// (wireframe, then surface) and the MARKERS submenu what is drawn on
+    /// it (the points, then the overlays of each element class).
     pub(crate) fn viewport_menu_rows_of(&self, page: Option<ViewportMenuPage>) -> (Vec<String>, Vec<ViewportMenuAction>) {
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<ViewportMenuAction> = Vec::new();
@@ -5325,10 +5350,7 @@ impl State {
 
         match page {
             Some(ViewportMenuPage::Style) => {
-                row(&mut options, &mut actions, format!("‹ {}", ViewportMenuPage::Style.label()), ViewportMenuAction::Back);
-
                 // Wireframe.
-                row(&mut options, &mut actions, "-".into(), sep);
                 toggle(&mut options, &mut actions, "toggle_wireframe");
                 row(&mut options, &mut actions, "Wire Thickness".into(), ViewportMenuAction::WireThicknessSlider);
                 row(&mut options, &mut actions, "Wire Opacity".into(), ViewportMenuAction::WireOpacitySlider);
@@ -5342,11 +5364,8 @@ impl State {
                 return (options, actions);
             }
             Some(ViewportMenuPage::Markers) => {
-                row(&mut options, &mut actions, format!("‹ {}", ViewportMenuPage::Markers.label()), ViewportMenuAction::Back);
-
                 // The Render points, the group markers sized off them, and
                 // the pull arrows' length, the other selection feedback.
-                row(&mut options, &mut actions, "-".into(), sep);
                 toggle(&mut options, &mut actions, "toggle_render_points");
                 row(&mut options, &mut actions, "Point Size".into(), ViewportMenuAction::PointSizeSlider);
                 row(&mut options, &mut actions, "Group Marker Scale".into(), ViewportMenuAction::GroupMarkerScaleSlider);
@@ -5383,10 +5402,10 @@ impl State {
         toggle(&mut options, &mut actions, "toggle_grid");
         toggle(&mut options, &mut actions, "toggle_origin");
 
-        // The display settings, a page each.
+        // The display settings, a submenu each; the menu marks the rows.
         row(&mut options, &mut actions, "-".into(), sep);
         for page in [ViewportMenuPage::Style, ViewportMenuPage::Markers] {
-            row(&mut options, &mut actions, format!("{} ›", page.label()), ViewportMenuAction::Submenu(page));
+            row(&mut options, &mut actions, page.label().into(), ViewportMenuAction::Submenu(page));
         }
 
         // The viewport's editor binding, as a radio group: follow the active
@@ -5421,8 +5440,13 @@ impl State {
             ViewportMenuAction::OneToOne => {
                 self.view_one_to_one();
             }
-            ViewportMenuAction::Submenu(page) => self.show_viewport_menu_page(Some(page)),
-            ViewportMenuAction::Back => self.show_viewport_menu_page(None),
+            // The menu opens a submenu under the pointer by itself; a press
+            // on the row opens it for a pointer that has not moved.
+            ViewportMenuAction::Submenu(_) => {
+                if let Some(i) = self.viewport_menu_actions.iter().position(|a| *a == action) {
+                    cce_ui::widget::context_menu::open_submenu(i);
+                }
+            }
             ViewportMenuAction::PinFollow => {
                 self.viewport_pin = None;
                 self.rebuild_scene_geometry();
@@ -5459,7 +5483,6 @@ impl State {
         cce_ui::widget::context_menu::hide();
         self.viewport_menu_active = false;
         self.viewport_menu_actions.clear();
-        self.viewport_menu_page = None;
     }
 
     /// Route a left press while the viewport menu is open — same contract as
@@ -5474,24 +5497,25 @@ impl State {
             self.drain_viewport_menu_slider(false);
             return true;
         }
-        if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
-            let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
+        use cce_ui::widget::context_menu;
+        // A row of the open submenu runs and the menu stays up: a submenu
+        // is a panel of settings, opened to set several, and a switch that
+        // closed the menu would cost a right-click and a row per setting.
+        // It is filled again for its marks.
+        if context_menu::submenu::hit_test(self.cursor_x, self.cursor_y) {
+            let picked = context_menu::submenu::row_at(self.cursor_x, self.cursor_y)
+                .and_then(|i| self.open_viewport_submenu_actions()?.get(i).copied());
+            if let Some(action) = picked {
+                self.run_viewport_menu_action(action);
+                self.fill_viewport_submenus();
+            }
+            return true;
+        }
+        if context_menu::hit_test(self.cursor_x, self.cursor_y) {
+            let idx = context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = idx.and_then(|i| self.viewport_menu_actions.get(i).copied());
-            // Turning the page keeps the menu up, and so does a row of a
-            // page: a page is a panel of settings, entered to set several,
-            // and a switch that closed it would cost a right-click and a
-            // row per setting. It is shown again for its marks.
-            let page = self.viewport_menu_page;
             match picked {
-                Some(a @ (ViewportMenuAction::Submenu(_) | ViewportMenuAction::Back)) => {
-                    self.run_viewport_menu_action(a);
-                }
-                picked if page.is_some() => {
-                    if let Some(action) = picked {
-                        self.run_viewport_menu_action(action);
-                        self.show_viewport_menu_page(page);
-                    }
-                }
+                Some(a @ ViewportMenuAction::Submenu(_)) => self.run_viewport_menu_action(a),
                 picked => {
                     self.close_viewport_menu();
                     if let Some(action) = picked {
@@ -6483,8 +6507,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             node_menu_actions: Vec::new(),
             viewport_menu_active: false,
             viewport_menu_actions: Vec::new(),
-            viewport_menu_page: None,
-            viewport_menu_anchor: (0.0, 0.0),
             param_menu_active: false,
             param_menu_actions: Vec::new(),
             param_menu_target: None,
