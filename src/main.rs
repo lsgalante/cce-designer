@@ -9128,6 +9128,78 @@ mod tests {
         assert!(f.points().value("N", 0).unwrap().as_vec3().dot(radial) < 0.0);
     }
 
+    /// The Normal node's Vertices class writes a normal per CORNER, cusped:
+    /// the faces around a point that turn less than the Cusp Angle from a
+    /// corner's own face are averaged into it, the rest are left out. On a
+    /// box, whose faces meet at 90 degrees, 60 keeps every corner to its
+    /// own face and 120 rounds them into the points' normals; the points'
+    /// own attribute is not written, and smooth shading lights each corner
+    /// by what the node wrote.
+    #[test]
+    fn the_normal_node_writes_cusped_vertex_normals() {
+        let mut d = Detail::new();
+        let p: Vec<u32> = (0..8)
+            .map(|i| d.add_point(Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32)))
+            .collect();
+        // Six quads, wound to face outward.
+        for q in [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]] {
+            d.add_prim(&q.map(|i| p[i]));
+        }
+        assert!(d.is_closed());
+        let face = |prim: usize| {
+            let pts = d.prim_points(prim);
+            (d.pos(pts[1] as usize) - d.pos(pts[0] as usize)).cross(d.pos(pts[2] as usize) - d.pos(pts[0] as usize)).normalize()
+        };
+        let points = crate::geometry::point_normals(&d);
+
+        let hard = crate::geometry::vertex_normals(&d, 60.0);
+        let soft = crate::geometry::vertex_normals(&d, 120.0);
+        let all = crate::geometry::vertex_normals(&d, 180.0);
+        let none = crate::geometry::vertex_normals(&d, 0.0);
+        assert_eq!(hard.len(), d.num_verts());
+        for prim in 0..d.num_prims() {
+            for (v, &pt) in d.prim_verts(prim).zip(d.prim_points(prim)) {
+                assert!((hard[v] - face(prim)).length() < 1e-5, "vertex {v}: a corner under the cusp keeps to its face");
+                assert!((none[v] - face(prim)).length() < 1e-5);
+                assert!((soft[v] - points[pt as usize]).length() < 1e-5, "vertex {v}: over it, the faces around the point");
+                assert!((all[v] - points[pt as usize]).length() < 1e-5);
+            }
+        }
+
+        // Through the node.
+        let root = modelling_root(
+            "1.0",
+            vec![phase3_node("normal", &[("Input", "sphere 1"), ("Class", "Vertices"), ("Cusp Angle", "180"), ("Flip", "true")])],
+        );
+        let (g, err) = eval_node(&root, "normal 1");
+        assert!(err.is_none(), "{err:?}");
+        assert!(!g.points().has("N"), "the points' is not written");
+        let n = crate::geometry::own_vertex_normals(&g).expect("a normal a vertex");
+        assert_eq!(n.len(), g.num_verts());
+        let of_points = crate::geometry::point_normals(&g);
+        for (v, &pt) in g.vert_points().iter().enumerate() {
+            let got = n.get(v).unwrap().as_vec3();
+            assert!((got + of_points[pt as usize]).length() < 1e-4, "vertex {v}: flipped, and its point's at 180");
+        }
+
+        // Smooth shading lights a corner by its own normal: cusped to the
+        // faces, every corner of a face is lit alike, which point normals
+        // on a box never are.
+        let mut cusped = d.clone();
+        cusped.verts_mut().create("N", crate::detail::AttribValue::Float3([0.0; 3]));
+        cusped
+            .verts_mut()
+            .insert("N", crate::detail::AttribData::Float3(hard.iter().map(|n| n.to_array()).collect()))
+            .unwrap();
+        let lit = crate::geometry::smooth_lit_vertices(&cusped);
+        let plain = crate::geometry::smooth_lit_vertices(&d);
+        assert_eq!(lit.len(), plain.len());
+        for tri in lit.chunks(3) {
+            assert!(tri.iter().all(|c| (c.color[0] - tri[0].color[0]).abs() < 1e-6), "one face, one light");
+        }
+        assert!(plain.chunks(3).any(|tri| tri.iter().any(|c| (c.color[0] - tri[0].color[0]).abs() > 1e-3)));
+    }
+
     #[test]
     fn test_bounds_measures_into_detail_attributes() {
         let root = modelling_root(

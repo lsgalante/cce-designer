@@ -254,16 +254,26 @@ pub fn shade_factor(n: Vec3) -> f32 {
 pub fn smooth_lit_vertices(d: &Detail) -> Vec<Vertex3D> {
     let normals = point_normals(d);
     let lit: Vec<f32> = normals.iter().map(|n| shade_factor(*n)).collect();
+    // Vertex normals, where the geometry carries them, are the normals it
+    // asked to be shaded by: a corner is lit by its own, so a crease the
+    // Normal node cusped reads hard and the rest smooth.
+    let own = own_vertex_normals(d);
     let mut out = Vec::new();
     for prim in 0..d.num_prims() {
         let pts = d.prim_points(prim);
         if pts.len() < 3 {
             continue;
         }
+        let first = d.prim_verts(prim).start;
         for i in 1..pts.len() - 1 {
-            for &p in &[pts[0], pts[i], pts[i + 1]] {
-                let p = p as usize;
-                let k = lit.get(p).copied().unwrap_or(1.0);
+            for &corner in &[0, i, i + 1] {
+                let p = pts[corner] as usize;
+                let by_vertex = own
+                    .and_then(|n| n.get(first + corner))
+                    .map(|n| n.as_vec3())
+                    .filter(|n| n.length_squared() > 1e-12)
+                    .map(|n| shade_factor(n.normalize()));
+                let k = by_vertex.unwrap_or_else(|| lit.get(p).copied().unwrap_or(1.0));
                 let c = d.color(p);
                 out.push(Vertex3D { position: d.pos(p).to_array(), color: [c[0] * k, c[1] * k, c[2] * k] });
             }
@@ -2010,6 +2020,15 @@ pub fn resolve_normal_geometry_with_errors(
     }
     let flip = node_param_bool(target, "Flip", false);
     let sign = if flip { -1.0 } else { 1.0 };
+    // A node without the Class row is one from before it, and writes the
+    // points' as it always did.
+    if node_param_str(target, "Class", "Points").trim().eq_ignore_ascii_case("Vertices") {
+        let cusp = node_param_f32(target, "Cusp Angle", 60.0);
+        let normals: Vec<[f32; 3]> = vertex_normals(&geom, cusp).iter().map(|n| (*n * sign).to_array()).collect();
+        geom.verts_mut().create(&name, AttribValue::Float3([0.0; 3]));
+        let _ = geom.verts_mut().insert(&name, AttribData::Float3(normals));
+        return Some(geom);
+    }
     let normals: Vec<[f32; 3]> = point_normals(&geom).iter().map(|n| (*n * sign).to_array()).collect();
     geom.points_mut().create(&name, AttribValue::Float3([0.0; 3]));
     let _ = geom.points_mut().insert(&name, AttribData::Float3(normals));
@@ -3888,6 +3907,64 @@ pub fn point_normals(geom: &Detail) -> Vec<Vec3> {
             sum.normalize_or_zero()
         })
         .collect()
+}
+
+/// Vertex normals with a cusp: for each vertex — a corner of one primitive
+/// — the normalized sum of the face normals of the primitives around its
+/// point that lie within `cusp_degrees` of its OWN primitive's.
+///
+/// That is what a vertex normal can say and a point normal cannot: the
+/// faces either side of a crease share the crease's points, and a point
+/// has one normal to give them both. Where the faces around a point turn
+/// less than the cusp angle from each other they are averaged and the
+/// surface reads smooth; where they turn more, each keeps to its own side
+/// and the edge reads hard. At 180 every face around the point is in, and a
+/// vertex's normal is its point's (`point_normals`, the same sum, term for
+/// term); at 0 it is its primitive's alone.
+///
+/// A primitive of fewer than three points has no face, and its vertices
+/// get zero.
+pub fn vertex_normals(geom: &Detail, cusp_degrees: f32) -> Vec<Vec3> {
+    // The face normal as `point_normals` takes it, unnormalized, so the two
+    // weigh the faces alike.
+    let faces: Vec<Vec3> = (0..geom.num_prims())
+        .map(|prim| {
+            let pts = geom.prim_points(prim);
+            if pts.len() < 3 {
+                return Vec3::ZERO;
+            }
+            let (a, b, c) = (geom.pos(pts[0] as usize), geom.pos(pts[1] as usize), geom.pos(pts[2] as usize));
+            let n = (b - a).cross(c - a);
+            if n.length_squared() > 1e-12 { n } else { Vec3::ZERO }
+        })
+        .collect();
+    let units: Vec<Vec3> = faces.iter().map(|n| n.normalize_or_zero()).collect();
+    // A hair of slack, so that faces exactly at the angle are in and 180
+    // takes faces that oppose each other outright.
+    let limit = cusp_degrees.clamp(0.0, 180.0).to_radians().cos() - 1e-5;
+    let mut out = vec![Vec3::ZERO; geom.num_verts()];
+    for prim in 0..geom.num_prims() {
+        let own = units[prim];
+        if own == Vec3::ZERO {
+            continue;
+        }
+        for (v, &p) in geom.prim_verts(prim).zip(geom.prim_points(prim)) {
+            let mut sum = Vec3::ZERO;
+            for &around in geom.point_prims(p as usize) {
+                if units[around as usize].dot(own) >= limit {
+                    sum += faces[around as usize];
+                }
+            }
+            out[v] = sum.normalize_or_zero();
+        }
+    }
+    out
+}
+
+/// The scene's vertex normals, where it carries them: a Float3 `N` on its
+/// vertices, which is what the Normal node's Vertices class writes.
+pub fn own_vertex_normals(d: &Detail) -> Option<&AttribData> {
+    d.verts().get("N").filter(|n| n.ty().components() == 3 && n.len() == d.num_verts())
 }
 
 /// Which points a neighbourhood operator treats as a point's neighbours.

@@ -5,7 +5,9 @@
  "outputs": 1,
  "params": [
   { "name": "Input", "type": "node", "default": "" },
+  { "name": "Class", "type": "choice:Points,Vertices", "default": "Points" },
   { "name": "Attribute", "type": "attribute", "default": "N" },
+  { "name": "Cusp Angle", "type": "slider", "default": "60", "min": 0.0, "max": 180.0, "step": 1.0, "show_when": "Class == Vertices" },
   { "name": "Flip", "type": "choice:false,true", "default": "false" }
  ]
 }

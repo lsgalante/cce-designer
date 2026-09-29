@@ -2231,9 +2231,8 @@ the size slider re-sizes both without an evaluation. **A vertex's normal
 is its `N` attribute where the detail carries a Float3 one on its
 vertices, and its primitive's normal where it does not** — the normal of
 this corner of this face, where a point's is the average over the faces
-around it. No node here writes vertex normals yet, so today the whiskers
-show the faceting: the corners of one face agree, and a shared point
-wears a fan of them. `scene_element_overlays` takes an `ElementOverlays`
+around it. Without the attribute the whiskers show the faceting: the
+corners of one face agree, and a shared point wears a fan of them. `scene_element_overlays` takes an `ElementOverlays`
 of what is wanted and returns an `ElementOverlayGeometry`.
 
 `the_viewport_menu_groups_its_display_rows` holds the
@@ -2354,6 +2353,34 @@ line a pixel wide is not in front of a label in any way one alpha could
 show. `a_point_number_is_dimmed_by_the_fill_in_front_of_it` is the test;
 the whiskers' order has none, being a draw list only a renderer reads, and
 was checked in a shadow session before and after.
+
+### The Normal node writes point or vertex normals
+
+`normal` has a **Class** row (since 2026-09-29): `Points`, what it always
+wrote, or `Vertices`, a normal per CORNER on the detail's vertex store,
+with a **Cusp Angle** (shown for Vertices, 0–180, default 60). It is a
+class of the one node and not a node of its own, for the reason
+`gem_graph` was not ported: two nodes that compute the same thing into two
+stores are one node with a choice. A node without the row is one from
+before it and writes the points'; the template merge gives a saved
+instance the row at `Points`.
+
+`geometry::vertex_normals(geom, cusp)` is the sum, for each corner, of the
+face normals around its point that lie within the cusp angle of its OWN
+face's — so faces that turn less than the angle from each other are
+averaged and read smooth, and those that turn more keep to their own side
+and the edge reads hard, which a point's one normal cannot say. At 180 it
+is `point_normals` term for term (the same unnormalized cross, so the two
+weigh faces alike); at 0 the face's alone.
+
+Two things read a Float3 `N` on the vertices (`own_vertex_normals`, which
+also asks that it is as long as the vertices are): the Show Vertex Normals
+overlay, and **smooth shading**, which lights each corner by its own
+normal where there is one (`smooth_lit_vertices`) and by its point's where
+there is not — so a cusp is visible in the fill, not only in the whiskers.
+Flat shading is the shader's and reads neither. The attribute rides the
+scene's merged `Detail` to both. `the_normal_node_writes_cusped_vertex_normals`
+is the test, on a box, whose faces meet at 90 degrees.
 
 ### Pull arrows
 

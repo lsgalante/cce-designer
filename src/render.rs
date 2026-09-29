@@ -1491,7 +1491,7 @@ pub(crate) fn scene_element_overlays(
     }
     let to_linear = |c: [u8; 3]| cce_ui::colors::to_linear_rgb(c.map(|c| c as f32 / 255.0));
     let (prim_color, vertex_color) = (to_linear(PRIM_LABEL_COLOR), to_linear(VERTEX_LABEL_COLOR));
-    let own_normals = geom.verts().get("N").filter(|n| n.ty().components() == 3);
+    let own_normals = crate::geometry::own_vertex_normals(geom);
     let by_vertex = want.vertex_numbers || want.vertex_markers || want.vertex_normals;
     for prim in 0..geom.num_prims() {
         let pts = geom.prim_points(prim);
