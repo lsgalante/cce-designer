@@ -70,6 +70,19 @@ gone.)
   so the file always carries the main window's layout.
   Note that detaching REWRITES `default_project.json` in the source tree, since that
   file is the sync channel; it is versioned, so check `git status` after testing.
+  **A detached pane window is a working satellite only since 2026-09-29.**
+  Two things were missing for every pane but the circular network. The
+  window never read the channel at startup: `State::new` seeds the tree,
+  camera name, pan and path from the bundled file and records its mtime, so
+  the window waited for a change the file it had just been handed was never
+  going to have, and a detached parameters window opened with nothing
+  selected — an empty pane (`seed_detached_window` takes the channel whole
+  now). And the two places that ASK for an autosave named only the circular
+  network, so with the parameters, spreadsheet or playbar detached neither
+  window wrote the channel again after the detach; `State::syncing_windows`
+  is the one test the requests, the poll and the exit save share.
+  `a_detached_params_window_follows_the_selection_and_the_camera` covers
+  both, and the camera that rides the same channel.
 
 ### MCP automation server
 
@@ -603,8 +616,15 @@ old text Center a float3 from the load on. Tests build parameters with
   rolling the ball right swings the vector to the right of the SCREEN. The
   numbers stay the scene's. The pane may already be painted when the
   stage pass runs, so a moved view returns true from `stage_frame` for one
-  more frame: the ball trails an orbit by a frame, never by more. A
-  detached params window has no viewport and keeps the identity view.
+  more frame: the ball trails an orbit by a frame, never by more. **A
+  detached parameters window follows the camera too**, over the sync
+  channel: the main window asks for an autosave when its trackball view
+  moves (`sync_trackball_view_from_camera`), the file carries the camera —
+  the active camera's name and node, the Default Camera's orbit in
+  `default_view` — and the detached window, which has no 3D canvas, works
+  the view out from what it reloaded (`active_camera_pose`, split out of
+  the stage pass for exactly this). It trails by the autosave's debounce
+  and the poll, a few tenths of a second.
 - **`float` is a number with no range.** The pane's slider and float3 rows
   hold a FRACTION of their range and clamp to it, so a threshold, a scale
   factor or a manual ramp end cannot be a slider without losing values

@@ -13155,4 +13155,87 @@ mod tests {
         assert!(orbited, "an orbit moves the view");
         assert!(Vec3::from(ball_view(&state)[2]).distance(toward) > 0.05);
     }
+
+    /// A detached parameters window is a working satellite: it opens on
+    /// the main window's selection and camera, the main window writes the
+    /// sync channel when its selection or its camera changes, and the
+    /// detached window's trackballs turn with a viewport it cannot see.
+    /// Until 2026-09-29 the window never read the channel at startup, so
+    /// it opened with nothing selected and an empty pane, and with a pane
+    /// other than the circular network detached neither window asked for
+    /// an autosave again.
+    #[test]
+    fn a_detached_params_window_follows_the_selection_and_the_camera() {
+        use cce_ui::widget::ParametersBg;
+        let dir = std::env::temp_dir().join(format!("cce-designer-detached-camera-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let channel = dir.join("default_project.json");
+        let ball_view = |state: &State| {
+            let pane: &ParametersBg = state.slots.param.inner();
+            pane.float3s.iter().flatten().next().expect("a float3 row").view()
+        };
+        let same = |a: [[f32; 3]; 3], b: [[f32; 3]; 3]| (0..3).all(|i| (0..3).all(|k| (a[i][k] - b[i][k]).abs() < 1e-4));
+
+        let mut main = State::new(false);
+        main.resize(1600.0, 900.0, 1.0);
+        main.rebuild_positions();
+        main.apply_layout();
+        main.focused_pane = LEFT_MENUBAR_IDX;
+        main.param_editor = crate::slots::CONTENT_IDX;
+        main.set_active_camera("Default Camera");
+        let mut redraw = false;
+        main.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
+        let pull = main.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
+        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.60:0.00")] {
+            main.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        main.apply_action(McpAction::Select { slot: pull }, &mut redraw).unwrap();
+        main.viewport_mut().rotation_y = 0.6;
+        main.sync_trackball_view_from_camera();
+        assert!(!main.syncing_windows() && !main.needs_autosave, "nothing detached: nothing to tell");
+
+        // Detach: the channel is written, the child is started on it.
+        main.detached_panes[crate::slots::PARAM_IDX] = true;
+        assert!(main.syncing_windows());
+        main.save_to_file(&channel).expect("the main window writes the channel");
+        let mut child = State::new(false);
+        child.detached_pane = Some(crate::slots::PARAM_IDX);
+        child.resize(640.0, 400.0, 1.0);
+        child.rebuild_positions();
+        child.apply_layout();
+        assert_eq!(child.param_mut().node_params().len(), 0, "a new state has nothing selected");
+        child.seed_detached_window(&channel);
+        assert_eq!(child.param_editor_selected(), Some(pull), "it opens on the main window's selection");
+        assert!(child.param_mut().node_params().iter().any(|r| r.0 == "Value" && r.2.ends_with(":trackball")), "with its rows");
+        assert!(same(ball_view(&child), ball_view(&main)), "and sees the ball from the main window's camera");
+        assert!(!child.needs_autosave, "a detached window has no camera to tell of");
+
+        // The main window's selection and camera each ask for an autosave…
+        let sphere = main.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
+        main.needs_autosave = false;
+        main.apply_custom_event(crate::app::CustomEvent::RunAction(McpAction::Select { slot: sphere }));
+        assert!(main.needs_autosave, "a selection change is written for the detached window");
+        main.apply_custom_event(crate::app::CustomEvent::RunAction(McpAction::Select { slot: pull }));
+        main.needs_autosave = false;
+        let before = ball_view(&main);
+        main.orbit_camera_by(150.0, 40.0);
+        assert!(main.sync_trackball_view_from_camera(), "the orbit moved the view");
+        assert!(main.needs_autosave, "and asks for the write that carries it");
+        assert!(!same(ball_view(&main), before));
+
+        // …and the detached window, reloading what was written, follows.
+        main.save_to_file(&channel).expect("autosave");
+        assert!(!same(ball_view(&child), ball_view(&main)), "not before it reloads");
+        child.load_sync_channel(&channel, false).expect("the detached window reloads");
+        child.sync_trackball_view_from_camera();
+        assert!(same(ball_view(&child), ball_view(&main)), "the detached ball turned with the viewport");
+
+        // A detached window's own change is written too, for the main one.
+        child.needs_autosave = false;
+        child.apply_custom_event(crate::app::CustomEvent::RunAction(McpAction::SetParam { slot: pull, name: "Value".into(), value: "0.10:0.20:0.30".into() }));
+        assert!(child.needs_autosave);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

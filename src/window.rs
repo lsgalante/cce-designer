@@ -571,7 +571,7 @@ impl State {
 
             if changed {
                 state.update_window_title();
-                if state.is_detached_network || state.detached_circular_network {
+                if state.syncing_windows() {
                     state.needs_autosave = true;
                 }
                 result = true;
@@ -604,7 +604,7 @@ impl State {
         }
         if needs_redraw {
             self.update_window_title();
-            if self.is_detached_network || self.detached_circular_network {
+            if self.syncing_windows() {
                 self.needs_autosave = true;
             }
         }

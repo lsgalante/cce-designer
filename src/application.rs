@@ -91,11 +91,7 @@ impl State {
     /// window wrote it. Returns true when a reload happened.
     fn poll_shared_project(&mut self) -> bool {
         let mut redraw = false;
-        let syncing = self.is_detached_network
-            || self.detached_circular_network
-            || self.detached_pane.is_some()
-            || self.detached_panes.iter().any(|d| *d);
-        if !syncing {
+        if !self.syncing_windows() {
             return false;
         }
 
@@ -139,12 +135,7 @@ impl State {
     }
 
     pub(crate) fn autosave_on_exit(&mut self) {
-        if self.needs_autosave
-            && (self.is_detached_network
-                || self.detached_circular_network
-                || self.detached_pane.is_some()
-                || self.detached_panes.iter().any(|d| *d))
-        {
+        if self.needs_autosave && self.syncing_windows() {
             let _ = self.save_to_file(&Self::default_project_path());
         }
     }
@@ -167,6 +158,9 @@ impl Application for State {
             state.detached_pane = Some(idx);
             state.rebuild_positions();
             state.apply_layout();
+            // The main window wrote the channel just before it started this
+            // one: take it whole, selection and camera included.
+            state.seed_detached_window(&Self::default_project_path());
         }
         state.event_sender = Some(sender.clone());
         // One MCP server per project: the detached windows are satellites of the

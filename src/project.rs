@@ -460,6 +460,13 @@ impl State {
             self.apply_default_view_from_project(proj.view_state.default_view);
         }
 
+        // The graph is given the loaded nodes BEFORE the selection: it
+        // resolves an index to a node's id against the nodes it holds, so a
+        // selection set first was dropped whenever the load brought a node
+        // the graph had not seen — a detached window reloading the node the
+        // main one had just added and selected showed nothing.
+        self.sync_grid_settings();
+        self.sync_nodes();
         let sel = proj.view_state.selected_node;
         self.graph_mut().set_selected_node(sel);
         if sel.is_some() {
@@ -528,6 +535,13 @@ impl State {
         self.current_path = proj.view_state.current_path;
         self.apply_default_view_from_project(proj.view_state.default_view);
 
+        // The graph is given the loaded nodes BEFORE the selection: it
+        // resolves an index to a node's id against the nodes it holds, so a
+        // selection set first was dropped whenever the load brought a node
+        // the graph had not seen — a detached window reloading the node the
+        // main one had just added and selected showed nothing.
+        self.sync_grid_settings();
+        self.sync_nodes();
         let sel = proj.view_state.selected_node;
         self.graph_mut().set_selected_node(sel);
         if sel.is_some() {

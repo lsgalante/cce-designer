@@ -10379,6 +10379,116 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// the 3D scene / RT pane. Returns true while the path tracer is still
     /// refining, to keep frames coming. The renderer's window-corner clip is
     /// left at the engine default (0) — the compositor rounds the window.
+    /// The pose of the camera the viewport looks through, as
+    /// `(position, rotation in degrees, pivot)`: the active camera node's
+    /// Position, Rotation and Pivot when it lives in the current directory,
+    /// the Default Camera's fixed eye ray from the viewport's own pivot
+    /// otherwise. The Default Camera's ORBIT is not in here — it is the
+    /// viewport widget's `rotation_x` / `rotation_y`, which `get_matrices`
+    /// folds in. Split out of the stage pass so a window with no 3D canvas
+    /// (a detached pane) can ask too.
+    pub fn active_camera_pose(&self) -> (Vec3, Vec3, Vec3) {
+        // The Default Camera: the fixed eye ray from the viewport's own
+        // pivot (`Viewport3D::pivot`, the origin until Frame All moves
+        // it). Also what a NAMED camera that is not in this directory
+        // resolves to — a camera node applies where it lives.
+        let mut pivot = self.viewport().pivot;
+        let mut camera_pos = pivot + Vec3::new(2.5, 1.8, 2.5);
+        let mut rx = 0.0f32;
+        let mut ry = 0.0f32;
+        let mut rz = 0.0f32;
+        if self.active_camera != "Default Camera" {
+            if let Some(node) = self.current_dir().children.iter().find(|c| c.node_type == "camera" && c.name == self.active_camera) {
+                let mut cx = 2.5f32;
+                let mut cy = 1.8f32;
+                let mut cz = 2.5f32;
+                for p in &node.params {
+                    if p.name == "Position" {
+                        let parts: Vec<&str> = p.text()
+                            .split(|c| c == ':' || c == ',' || c == ' ')
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        if parts.len() >= 3 {
+                            if let (Ok(vx), Ok(vy), Ok(vz)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                                cx = vx;
+                                cy = vy;
+                                cz = vz;
+                            }
+                        }
+                    } else if p.name == "Rotation" {
+                        let parts: Vec<&str> = p.text()
+                            .split(|c| c == ':' || c == ',' || c == ' ')
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        if parts.len() >= 3 {
+                            if let (Ok(vx), Ok(vy), Ok(vz)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                                rx = vx;
+                                ry = vy;
+                                rz = vz;
+                            }
+                        }
+                    } else if p.name == "Pivot" {
+                        let parts: Vec<&str> = p.text()
+                            .split(|c| c == ':' || c == ',' || c == ' ')
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        if parts.len() >= 3 {
+                            if let (Ok(vx), Ok(vy), Ok(vz)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                                pivot = Vec3::new(vx, vy, vz);
+                            }
+                        }
+                    }
+                }
+                camera_pos = Vec3::new(cx, cy, cz);
+            }
+        }
+
+        (camera_pos, Vec3::new(rx, ry, rz), pivot)
+    }
+
+    /// Whether this window shares the project with another over the sync
+    /// channel — a detached window, or the main one with a pane or the
+    /// circular network detached. The one test the autosave requests, the
+    /// poll and the exit save share: until 2026-09-29 the REQUESTS named
+    /// only the circular network, so with the parameters, spreadsheet or
+    /// playbar detached neither window ever wrote the channel again after
+    /// the detach, and the detached window showed what it started with.
+    pub fn syncing_windows(&self) -> bool {
+        self.is_detached_network
+            || self.detached_circular_network
+            || self.detached_pane.is_some()
+            || self.detached_panes.iter().any(|d| *d)
+    }
+
+    /// [`Self::sync_trackball_view`] from the camera this window knows
+    /// of, and the word to the other windows when it moved: the MAIN
+    /// window asks for an autosave of the sync channel, which carries the
+    /// camera (the active camera's name and node, the Default Camera's
+    /// orbit), so a detached parameters window's trackballs turn with the
+    /// viewport they cannot see. A detached window only reads: it has no
+    /// camera of its own to tell anyone about.
+    pub fn sync_trackball_view_from_camera(&mut self) -> bool {
+        let (position, rotation, pivot) = self.active_camera_pose();
+        let moved = self.sync_trackball_view(position, rotation, pivot);
+        if moved && self.syncing_windows() && !self.is_detached_network && self.detached_pane.is_none() {
+            self.needs_autosave = true;
+        }
+        moved
+    }
+
+    /// What a detached window does once, at startup: take the sync channel
+    /// WHOLE — the tree, the selection, the camera. `State::new` seeds the
+    /// tree, camera name, pan and path from the bundled file and records
+    /// its mtime, so without this the window waited for a change that the
+    /// file it had just been handed was never going to have, and a detached
+    /// parameters window opened with no node selected: an empty pane.
+    pub fn seed_detached_window(&mut self, channel: &std::path::Path) {
+        if let Err(e) = self.load_sync_channel(channel, false) {
+            eprintln!("Failed to read the sync channel at startup: {e:?}");
+        }
+        self.sync_trackball_view_from_camera();
+    }
+
     /// See the params pane's trackballs from the camera the viewport is
     /// looking through: the view matrix's rotation, as the camera's right,
     /// its up and the direction toward it, in the scene's space — which is
@@ -10404,6 +10514,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // been painted for this frame already, so a moved view asks for one
         // more — the ball trails the camera by a frame, never by more.
         let mut trackball_moved = false;
+        // A detached pane has no 3D canvas to resolve a camera for, but the
+        // sync channel gave it the main window's: see the balls from that.
+        if self.detached_pane.is_some() {
+            trackball_moved = self.sync_trackball_view_from_camera();
+        }
 
         // 3D canvas: stage the scene into the renderer's backdrop when the
         // viewport is visible and its inputs changed; unstaged frames reuse the
@@ -10429,62 +10544,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
 
             if cw > 0 && ch > 0 {
-                // The Default Camera: the fixed eye ray from the viewport's own
-                // pivot (`Viewport3D::pivot`, the origin until Frame All moves
-                // it). Also what a NAMED camera that is not in this directory
-                // resolves to — a camera node applies where it lives.
-                let mut pivot = self.viewport().pivot;
-                let mut camera_pos = pivot + Vec3::new(2.5, 1.8, 2.5);
-                let mut rx = 0.0f32;
-                let mut ry = 0.0f32;
-                let mut rz = 0.0f32;
-                if self.active_camera != "Default Camera" {
-                    if let Some(node) = self.current_dir().children.iter().find(|c| c.node_type == "camera" && c.name == self.active_camera) {
-                        let mut cx = 2.5f32;
-                        let mut cy = 1.8f32;
-                        let mut cz = 2.5f32;
-                        for p in &node.params {
-                            if p.name == "Position" {
-                                let parts: Vec<&str> = p.text()
-                                    .split(|c| c == ':' || c == ',' || c == ' ')
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
-                                if parts.len() >= 3 {
-                                    if let (Ok(vx), Ok(vy), Ok(vz)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
-                                        cx = vx;
-                                        cy = vy;
-                                        cz = vz;
-                                    }
-                                }
-                            } else if p.name == "Rotation" {
-                                let parts: Vec<&str> = p.text()
-                                    .split(|c| c == ':' || c == ',' || c == ' ')
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
-                                if parts.len() >= 3 {
-                                    if let (Ok(vx), Ok(vy), Ok(vz)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
-                                        rx = vx;
-                                        ry = vy;
-                                        rz = vz;
-                                    }
-                                }
-                            } else if p.name == "Pivot" {
-                                let parts: Vec<&str> = p.text()
-                                    .split(|c| c == ':' || c == ',' || c == ' ')
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
-                                if parts.len() >= 3 {
-                                    if let (Ok(vx), Ok(vy), Ok(vz)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
-                                        pivot = Vec3::new(vx, vy, vz);
-                                    }
-                                }
-                            }
-                        }
-                        camera_pos = Vec3::new(cx, cy, cz);
-                    }
-                }
-
-                trackball_moved = self.sync_trackball_view(camera_pos, Vec3::new(rx, ry, rz), pivot);
+                let (camera_pos, rotation, pivot) = self.active_camera_pose();
+                let (rx, ry, rz) = (rotation.x, rotation.y, rotation.z);
+                trackball_moved = self.sync_trackball_view_from_camera();
 
                 let rt_mode = self.viewport().rt_mode;
                 let viewport_changed = self.viewport_dirty
