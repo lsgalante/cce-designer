@@ -7882,7 +7882,7 @@ mod tests {
         }
         show(&mut state, pull);
         let (rows, _, h) = state.param_menu_rows(pull, "Value");
-        let want: Vec<String> = ["Name: Value", "Control: slider", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
+        let want: Vec<String> = ["Name: Value", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
         assert_eq!(&rows[..4], &want[..], "{rows:?}");
         assert!(rows[..h].contains(&"Range: -1000..1000".to_string()), "{rows:?}");
         assert!(rows[..h].iter().all(|r| !r.starts_with("Value:")), "{rows:?}");
@@ -12861,7 +12861,8 @@ mod tests {
             state.sync_parameters_pane();
             state.param_mut().node_params().iter().find(|r| r.0 == "Value").expect("a Value row").2.clone()
         };
-        let wide = format!("float3:{}:{}", crate::app::VALUE_ROW_RANGE.0, crate::app::VALUE_ROW_RANGE.1);
+        // A vector gets the trackball beside its sliders by default.
+        let wide = crate::app::float3_row(crate::app::VALUE_ROW_RANGE.0, crate::app::VALUE_ROW_RANGE.1, true);
         assert_eq!(value_row(&mut state), wide, "Modify on Pos");
         assert!(crate::app::VALUE_ROW_RANGE.0 <= -100.0 && crate::app::VALUE_ROW_RANGE.1 >= 100.0, "a wide range");
 
@@ -12941,5 +12942,91 @@ mod tests {
         let v = value(&state);
         assert_eq!((v[0], v[2]), (0.0, 0.0), "X and Z hold: {v:?}");
         assert_ne!(v[1], 0.0, "Y turned, and the node's Value followed: {v:?}");
+    }
+
+    /// The trackball is a float3 row's second control: on by default where
+    /// the three numbers are a VECTOR (the pull node's Value aimed at Pos),
+    /// off where they are a colour or a position, and the row menu's Show /
+    /// Hide Trackball chooses either way. The choice is the instance's — it
+    /// rides the file, only when made — and dragging the ball turns the
+    /// node's vector, keeping its length.
+    #[test]
+    fn the_trackball_turns_the_pull_nodes_vector() {
+        use crate::app::ParamMenuAction as A;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton, ParametersBg};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
+        state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("group1".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        let (pull, group) = (slot_of(&state, "pull1"), slot_of(&state, "group1"));
+        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.00:0.06")] {
+            state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        let show = |state: &mut State, slot: usize| {
+            state.graph_mut().set_selected_node(Some(slot));
+            state.sync_parameters_pane();
+            state.rebuild_positions();
+            state.apply_layout();
+        };
+        let row = |state: &mut State, name: &str| state.param_mut().node_params().iter().find(|r| r.0 == name).expect("the row").2.clone();
+        let entries = |state: &State, slot: usize, pname: &str| state.param_menu_rows(slot, pname).1;
+        let (lo, hi) = crate::app::VALUE_ROW_RANGE;
+
+        // The pull's Value: a vector, so the ball is there; the menu hides it.
+        show(&mut state, pull);
+        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, true));
+        assert!(entries(&state, pull, "Value").contains(&A::HideTrackball));
+        let pull_id = state.current_dir().children[pull].id.clone();
+        state.run_param_action(&pull_id, "Value", A::HideTrackball);
+        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, false));
+        assert!(entries(&state, pull, "Value").contains(&A::ShowTrackball));
+        let saved = serde_json::to_string(&state.current_dir().children[pull]).unwrap();
+        assert!(saved.contains("\"view\":\"sliders\""), "the choice rides the file: {saved}");
+        state.run_param_action(&pull_id, "Value", A::ShowTrackball);
+        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, true));
+
+        // Aimed at Col the three numbers are a colour: no ball by default.
+        state.apply_action(McpAction::SetParam { slot: pull, name: "Attribute Name".into(), value: "Col".into() }, &mut redraw).unwrap();
+        state.current_dir_mut().children[pull].params.iter_mut().find(|p| p.name == "Value").unwrap().view.clear();
+        show(&mut state, pull);
+        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, false));
+        state.apply_action(McpAction::SetParam { slot: pull, name: "Attribute Name".into(), value: "Pos".into() }, &mut redraw).unwrap();
+
+        // A position (the Group node's Center): no ball until asked, and a
+        // parameter that never chose writes no `view` at all.
+        show(&mut state, group);
+        assert!(row(&mut state, "Center").starts_with("float3:") && !row(&mut state, "Center").ends_with(":trackball"));
+        let untouched = serde_json::to_string(&state.current_dir().children[group]).unwrap();
+        assert!(!untouched.contains("\"view\""), "{untouched}");
+        let group_id = state.current_dir().children[group].id.clone();
+        state.run_param_action(&group_id, "Center", A::ShowTrackball);
+        assert!(row(&mut state, "Center").ends_with(":trackball"));
+        // A slider row is not a float3: it is offered neither.
+        assert!(!entries(&state, slot_of(&state, "sphere1"), "Radius").iter().any(|a| matches!(a, A::ShowTrackball | A::HideTrackball)));
+
+        // Drag the ball a quarter turn to the right: the pull, pointing at
+        // the viewer, swings onto +X at the length it had.
+        show(&mut state, pull);
+        let (cx, cy, r) = {
+            let pane: &ParametersBg = state.slots.param.inner();
+            pane.float3s.iter().flatten().next().expect("the Value row").ball_circle().expect("its ball")
+        };
+        let at = |x: f32, y: f32| WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } };
+        state.handle_event(&at(cx, cy));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        for i in 1..=20 {
+            state.handle_event(&at(cx + r * std::f32::consts::FRAC_PI_2 * i as f32 / 20.0, cy));
+        }
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+            .text().split(':').map(|c| c.parse().unwrap()).collect();
+        assert!((v[0] - 0.06).abs() < 2e-3 && v[1].abs() < 2e-3 && v[2].abs() < 2e-3, "the pull points along +X: {v:?}");
     }
 }

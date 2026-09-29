@@ -581,6 +581,21 @@ old text Center a float3 from the load on. Tests build parameters with
   a `float3`, the numbers phase 1 missed.
   `template_params_carry_the_kind_they_hold` pins all of it, including the
   rows that stay text.
+- **A float3 row can carry a trackball** (since 2026-09-28): cce-ui's
+  ball beside the three sliders, which turns the vector's DIRECTION and
+  keeps its length, where the sliders set a component at a time. The
+  display type is `float3:lo:hi:trackball` (`float3_row`). It is on by
+  default where the three numbers are a vector — the Attribute node's
+  Value aimed at Pos or a Float3 attribute, the pull node's — and off for
+  Col (a colour points nowhere) and for every `float3` parameter (a
+  Center, a Size); the row menu's **Show Trackball** / **Hide Trackball**
+  chooses either way. The choice is `ParamDef::view` (`trackball`,
+  `sliders`, empty for the default), the one piece of UI metadata the
+  INSTANCE owns: `adopt_ui_from` fills it from the template only where the
+  instance has not chosen, and it is serialized only when set, so a file
+  that never used it is byte-identical. The row menu reads such a row as
+  `Control: trackball and sliders`, `Type: float3`. With the ball on the
+  row writes three decimals.
 - **`float` is a number with no range.** The pane's slider and float3 rows
   hold a FRACTION of their range and clamp to it, so a threshold, a scale
   factor or a manual ramp end cannot be a slider without losing values

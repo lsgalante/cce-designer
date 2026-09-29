@@ -383,6 +383,10 @@ pub enum ParamMenuAction {
     EditExpression,
     /// Houdini's Delete Channels: the expression's CURRENT value, as a value.
     DeleteExpression,
+    /// Show a float3 row's trackball beside its sliders, or the sliders
+    /// alone — the parameter's `view`, kept with the instance.
+    ShowTrackball,
+    HideTrackball,
     Separator,
     /// A header row that reads something out — the control's kind, the
     /// value's type — and runs nothing.
@@ -565,6 +569,7 @@ pub struct NodeTemplate {
 pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static str) {
     let head = shown.split(':').next().unwrap_or("");
     let control = match head {
+        "float3" if shown.split(':').nth(3) == Some("trackball") => "trackball and sliders",
         "slider" | "float3" => "slider",
         "spinbox" => "spinbox",
         "choice" => "dropdown",
@@ -632,6 +637,12 @@ pub struct PickLists {
     pub widths: Vec<(String, usize)>,
 }
 
+/// A float3 row's display type: `float3:lo:hi`, with `:trackball` for the
+/// ball beside the sliders (cce-ui's `Float3::set_trackball`).
+pub fn float3_row(min: f32, max: f32, trackball: bool) -> String {
+    format!("float3:{}:{}{}", min, max, if trackball { ":trackball" } else { "" })
+}
+
 pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
     // Rows whose condition does not hold are not shown. Write-back resolves a
     // row by its display key rather than by position, so a hidden parameter
@@ -661,8 +672,10 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
             let (min, max, _) = p.range().expect("a slider has a range");
             format!("slider:{}:{}", min, max)
         } else if p.ty() == "float3" {
+            // A position or a size is set a component at a time: the ball
+            // is there for the asking (the row menu), not by default.
             let (min, max, _) = p.range().expect("a float3 has a range");
-            format!("float3:{}:{}", min, max)
+            float3_row(min, max, p.wants_trackball(false))
         } else if p.ty() == "spinbox" {
             let (min, max, step) = p.range().expect("a spinbox has a range");
             format!("spinbox:{}:{}:{}", min as i32, max as i32, step.unwrap_or(1.0) as i32)
@@ -4067,7 +4080,7 @@ impl State {
                 row.2 = format!("textpick:{}", list.join(","));
             }
         }
-        if let Some((key, target)) = value_row {
+        if let Some((key, target, ball)) = value_row {
             let width = match target {
                 ValueTarget::Width(w) => w,
                 ValueTarget::Named(name) => lists
@@ -4078,7 +4091,7 @@ impl State {
             };
             if width == 3 {
                 if let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") {
-                    row.2 = format!("float3:{}:{}", VALUE_ROW_RANGE.0, VALUE_ROW_RANGE.1);
+                    row.2 = float3_row(VALUE_ROW_RANGE.0, VALUE_ROW_RANGE.1, ball);
                 }
             }
         }
@@ -4090,7 +4103,12 @@ impl State {
     /// off the input for — when the row is one the float3 presentation can
     /// take: a plain (non-expression) text holding three numbers. `None`
     /// for any other node, operation, or text.
-    fn attribute_value_target(node: &FsNode) -> Option<(String, ValueTarget)> {
+    ///
+    /// The third member is whether the row shows the TRACKBALL: the
+    /// parameter's own choice (`ParamDef::view`), else on for a vector —
+    /// a displacement of Pos, a Float3 attribute — and off for Col, whose
+    /// three numbers are a colour and point nowhere.
+    fn attribute_value_target(node: &FsNode) -> Option<(String, ValueTarget, bool)> {
         if !node.node_type.eq_ignore_ascii_case("attribute") {
             return None;
         }
@@ -4111,6 +4129,7 @@ impl State {
         let key = if p.label.is_empty() { p.name.clone() } else { p.label.clone() };
         let name = node_param_str(node, "Attribute Name", "");
         let name = name.trim().to_string();
+        let ball = p.wants_trackball(!name.eq_ignore_ascii_case("Col"));
         let target = match node_param_str(node, "Operation", "Create").to_lowercase().as_str() {
             "create" => ValueTarget::Width(match node_param_str(node, "Type", "Float").to_lowercase().as_str() {
                 "float3" => 3,
@@ -4122,7 +4141,7 @@ impl State {
             "modify" => ValueTarget::Named(name),
             _ => return None,
         };
-        Some((key, target))
+        Some((key, target, ball))
     }
 
     /// The (groups, attributes) present on the evaluated geometry of node
@@ -4769,6 +4788,17 @@ impl State {
         }
         options.push("-".to_string());
         actions.push(ParamMenuAction::Separator);
+        // A row shown as a float3 can carry the trackball; the entry names
+        // what picking it does.
+        if shown.starts_with("float3") {
+            if shown.split(':').nth(3) == Some("trackball") {
+                options.push("Hide Trackball".to_string());
+                actions.push(ParamMenuAction::HideTrackball);
+            } else {
+                options.push("Show Trackball".to_string());
+                actions.push(ParamMenuAction::ShowTrackball);
+            }
+        }
         if is_expr {
             options.push("Delete Expression".to_string());
             actions.push(ParamMenuAction::DeleteExpression);
@@ -4883,6 +4913,19 @@ impl State {
                     p.set_expr(true);
                 }
                 self.update_status_text(&format!("{pname} = {value}"));
+            }
+            ParamMenuAction::ShowTrackball | ParamMenuAction::HideTrackball => {
+                let show = action == ParamMenuAction::ShowTrackball;
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                    .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
+                {
+                    p.view = if show { "trackball" } else { "sliders" }.to_string();
+                }
+                self.update_status_text(&if show {
+                    format!("{pname}: drag the ball to turn the vector; its length is kept.")
+                } else {
+                    format!("{pname}: sliders only.")
+                });
             }
             ParamMenuAction::EditExpression => {
                 if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)

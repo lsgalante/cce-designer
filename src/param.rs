@@ -186,6 +186,16 @@ pub struct ParamDef {
     /// because a template author is describing when a control APPLIES, and
     /// stating that directly is easier to get right than stating its negation.
     pub show_when: String,
+    /// How a float3-valued row is SHOWN, where there is a choice:
+    /// `trackball` for the ball beside the three sliders, `sliders` for
+    /// the sliders alone, empty for the row's default
+    /// ([`Self::wants_trackball`]). The row menu's Show / Hide Trackball
+    /// writes it. It is the one piece of UI metadata the INSTANCE owns —
+    /// a preference about a control, set by the person using it — so the
+    /// template merge fills it only where the instance has not chosen.
+    /// Serialized only when set, so a file that never used it is
+    /// byte-identical to what it was.
+    pub view: String,
 }
 
 /// The file shape of a [`ParamDef`] — the struct as it was before the value
@@ -218,6 +228,9 @@ struct ParamDefRepr {
     /// expression too; Houdini makes the same choice.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     expr: bool,
+    /// [`ParamDef::view`]; absent unless one was chosen.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    view: String,
 }
 
 fn default_param_type() -> String {
@@ -238,6 +251,7 @@ impl<'de> Deserialize<'de> for ParamDef {
             max: r.max,
             step: r.step,
             show_when: r.show_when,
+            view: r.view,
         };
         if !r.expr {
             p.reparse();
@@ -259,6 +273,7 @@ impl Serialize for ParamDef {
             step: self.step,
             show_when: self.show_when.clone(),
             expr: self.is_expr(),
+            view: self.view.clone(),
         }
         .serialize(s)
     }
@@ -326,9 +341,20 @@ impl ParamDef {
             max: None,
             step: None,
             show_when: String::new(),
+            view: String::new(),
         };
         p.reparse();
         p
+    }
+
+    /// Whether a float3-valued row of this parameter shows the trackball:
+    /// the instance's choice when it made one, `default` otherwise.
+    pub fn wants_trackball(&self, default: bool) -> bool {
+        match self.view.as_str() {
+            "trackball" => true,
+            "sliders" => false,
+            _ => default,
+        }
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
@@ -534,6 +560,11 @@ impl ParamDef {
         self.max = template.max;
         self.step = template.step;
         self.show_when = template.show_when.clone();
+        // The view is the instance's to choose; the template's is what it
+        // starts from.
+        if self.view.is_empty() {
+            self.view = template.view.clone();
+        }
         if !self.is_expr() {
             self.reparse();
         }
