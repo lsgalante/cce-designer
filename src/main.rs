@@ -2072,7 +2072,7 @@ mod tests {
             groups(None),
             vec![
                 vec![A::FrameAll, A::OneToOne],
-                vec![A::Command("toggle_grid"), A::Command("toggle_origin"), A::Command("toggle_camera_pivot")],
+                vec![A::Command("toggle_grid"), A::Command("toggle_origin"), A::Command("toggle_camera_pivot"), A::CameraPivotSizeSlider],
                 vec![A::Submenu(P::Style), A::Submenu(P::Markers)],
             ]
         );
@@ -2357,6 +2357,41 @@ mod tests {
         assert_eq!(row(&state), "● Show Camera Pivot");
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
         assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_camera_pivot_enabled, "persisted");
+    }
+
+    /// Camera Pivot Size is a slider under Show Camera Pivot, over the
+    /// palette row's 0.1–5: the wheel steps a tenth, re-bakes the marker
+    /// and nothing else, and saves.
+    #[test]
+    fn the_viewport_menu_sets_the_camera_pivot_size() {
+        use crate::app::ViewportMenuAction as A;
+        use crate::window::WindowEvent;
+        use cce_ui::widget::{context_menu, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.camera_pivot_size = 1.0;
+        state.pending_pivot = None;
+        let version = state.rt_geometry_version;
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let actions = state.viewport_menu_actions.clone();
+        let i = actions.iter().position(|a| *a == A::CameraPivotSizeSlider).expect("a Camera Pivot Size row");
+        assert_eq!(actions[i - 1], A::Command("toggle_camera_pivot"), "it sits under its switch");
+        let sl = context_menu::slider(i).expect("a slider");
+        assert_eq!((sl.min, sl.max, sl.step, sl.decimals), (0.1, 5.0, 0.1, 1));
+        assert!((sl.value - 1.0).abs() < 1e-6);
+
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 5.0) });
+        assert!((state.camera_pivot_size - 1.5).abs() < 1e-5, "{}", state.camera_pivot_size);
+        assert!(state.pending_pivot.is_some(), "the marker re-bakes");
+        assert_eq!(state.rt_geometry_version, version, "and the graph is not evaluated");
+        assert!(context_menu::is_visible(), "a slider row keeps the menu up");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        let saved = crate::app::DesignSettings::from_kdl_str(&kdl).viewport.camera_pivot_size;
+        assert!((saved - 1.5).abs() < 1e-5, "persisted: {saved}");
+        context_menu::hide();
     }
 
     /// Show Point Markers is a switch in the Points group, over its own

@@ -480,6 +480,9 @@ pub enum ViewportMenuAction {
     /// Pull Arrow Scale, the pull arrows' length as a multiple of the true
     /// displacement: the palette row's 0.25–10.
     PullArrowScaleSlider,
+    /// Camera Pivot Size, the pivot marker's scale, under its switch: the
+    /// palette row's 0.1–5 by a tenth.
+    CameraPivotSizeSlider,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -5150,6 +5153,14 @@ impl State {
             // plain x rather than a multiplication sign, which the menu face
             // may not carry and which a fallback glyph would then
             // under-measure.
+            ViewportMenuAction::CameraPivotSizeSlider => MenuSlider {
+                value: self.camera_pivot_size_shown().clamp(0.1, 5.0),
+                min: 0.1,
+                max: 5.0,
+                step: 0.1,
+                decimals: 1,
+                suffix: "x",
+            },
             ViewportMenuAction::PullArrowScaleSlider => MenuSlider {
                 value: self.pull_arrow_scale.clamp(0.25, 10.0),
                 min: 0.25,
@@ -5171,6 +5182,12 @@ impl State {
     /// graph.
     fn land_viewport_menu_slider(&mut self, action: ViewportMenuAction, v: f32) {
         // The menu's opacity rows are in percent; the field is a fraction.
+        if action == ViewportMenuAction::CameraPivotSizeSlider {
+            // Owned by the active camera, as the palette's row is.
+            self.set_camera_pivot_size(v.clamp(0.1, 5.0));
+            self.viewport_dirty = true;
+            return;
+        }
         let (key, v) = match action {
             ViewportMenuAction::OpacitySlider => ("geo_opacity", v / 100.0),
             ViewportMenuAction::WireThicknessSlider => ("wire_width", v),
@@ -5374,6 +5391,7 @@ impl State {
         toggle(&mut options, &mut actions, "toggle_grid");
         toggle(&mut options, &mut actions, "toggle_origin");
         toggle(&mut options, &mut actions, "toggle_camera_pivot");
+        row(&mut options, &mut actions, "Camera Pivot Size".into(), ViewportMenuAction::CameraPivotSizeSlider);
 
         // The display settings, a submenu each; the menu marks the rows.
         row(&mut options, &mut actions, "-".into(), sep);
@@ -5442,7 +5460,8 @@ impl State {
             | ViewportMenuAction::WireOpacitySlider
             | ViewportMenuAction::PointMarkerSizeSlider
             | ViewportMenuAction::GroupMarkerSizeSlider
-            | ViewportMenuAction::PullArrowScaleSlider => {}
+            | ViewportMenuAction::PullArrowScaleSlider
+            | ViewportMenuAction::CameraPivotSizeSlider => {}
             ViewportMenuAction::Separator => {}
         }
     }

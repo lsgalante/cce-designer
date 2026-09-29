@@ -2180,7 +2180,8 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 The viewport's right-click menu has two SUBMENUS (since 2026-09-29;
 until then it was one list of some twenty rows). The menu itself holds
 what is done — Frame All, View 1:1 — the guides (Show Grid, Show Origin,
-and since 2026-09-29 Show Camera Pivot, which until then was in the Guides
+and since 2026-09-29 Show Camera Pivot with a Camera Pivot Size slider
+under it, 0.1–5 by a tenth, which until then were in the Guides
 menubar and the palette only;
 the reference CUBE guide was removed on 2026-09-25 — its command, mesh,
 RT-scene copy, settings field and menubar item, with the Guides menubar
