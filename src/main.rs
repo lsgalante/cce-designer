@@ -14652,6 +14652,76 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A row of the spreadsheet is a point, and selecting rows marks their
+    /// points in the scene: a press selects one, ctrl adds another, and the
+    /// markers are staged from the positions the table was filled from —
+    /// nothing is evaluated. The selection goes when the table becomes
+    /// another node's.
+    #[test]
+    fn selected_spreadsheet_rows_are_marked_in_the_scene() {
+        use crate::slots::SPREADSHEET_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.execute_menu_action("Show Spreadsheet Pane");
+        state.rebuild_positions();
+        state.apply_layout();
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Box".into(), name: Some("rows_a".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        state.apply_action(McpAction::AddNode { template_name: "Box".into(), name: Some("rows_b".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
+        let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        let (a, b) = (slot_of(&state, "rows_a"), slot_of(&state, "rows_b"));
+        state.apply_action(McpAction::Select { slot: a }, &mut redraw).unwrap();
+        state.sync_nodes();
+        assert_eq!(state.spreadsheet_points.len(), 8, "a box has eight points, a row each");
+        assert!(state.row_marker_verts.is_empty());
+
+        let (sx, sy, sw, sh) = state.positions[SPREADSHEET_IDX];
+        assert!(sw > 0.0 && sh > 60.0, "the spreadsheet is laid out: {sw} x {sh}");
+        // Rows are 24 tall under a 24 header.
+        let press = |state: &mut State, row: usize| {
+            let (x, y) = (sx + 40.0, sy + 24.0 + 24.0 * row as f32 + 12.0);
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        };
+        let version = state.rt_geometry_version;
+        press(&mut state, 1);
+        assert_eq!(state.selected_spreadsheet_points(), vec![1]);
+        assert!(!state.row_marker_verts.is_empty() && state.row_markers_dirty, "the marker is staged");
+        let one = state.row_marker_verts.len();
+        // The marker stands on the row's point.
+        let p = state.spreadsheet_points[1];
+        let n = one as f32;
+        let mid = state.row_marker_verts.iter().fold([0.0f32; 3], |m, v| [m[0] + v.position[0] / n, m[1] + v.position[1] / n, m[2] + v.position[2] / n]);
+        assert!((0..3).all(|k| (mid[k] - p[k]).abs() < 1e-3), "{mid:?} is not at {p:?}");
+
+        state.modifiers.ctrl = true;
+        press(&mut state, 0);
+        state.modifiers.ctrl = false;
+        assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
+        assert_eq!(state.row_marker_verts.len(), 2 * one, "a marker a row");
+        assert_eq!(state.rt_geometry_version, version, "selecting evaluates nothing");
+
+        // A refresh of the same node's table keeps it.
+        state.apply_action(McpAction::SetParam { slot: a, name: "Center".into(), value: "1.00:0.50:0.25".into() }, &mut redraw).unwrap();
+        state.sync_nodes();
+        assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
+        let moved = state.spreadsheet_points[1];
+        let mid = state.row_marker_verts[one..].iter().chain(&state.row_marker_verts[..one]).fold([0.0f32; 3], |m, v| [m[0] + v.position[0], m[1] + v.position[1], m[2] + v.position[2]]);
+        let both = [moved, state.spreadsheet_points[0]];
+        let want = [both[0][0] + both[1][0], both[0][1] + both[1][1], both[0][2] + both[1][2]];
+        assert!((0..3).all(|k| (mid[k] / one as f32 - want[k]).abs() < 1e-2), "the markers followed the points");
+
+        // Another node's table is other points.
+        state.apply_action(McpAction::Select { slot: b }, &mut redraw).unwrap();
+        state.sync_nodes();
+        assert!(state.selected_spreadsheet_points().is_empty());
+        assert!(state.row_marker_verts.is_empty());
+    }
+
     /// The spreadsheet and the selected-group markers evaluate through the
     /// SHARED sim cache: with either reading something downstream of a
     /// simnet, a refresh costs no steps beyond the ones the frame itself

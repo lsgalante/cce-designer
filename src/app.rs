@@ -1937,6 +1937,8 @@ pub struct SceneMeshes {
     /// Selected-Group membership markers: while a Group node is selected, one
     /// marker per vertex it tags, so the selection SHOWS the group.
     pub group_points: cce_ui::vk::MeshId,
+    /// Markers on the points whose rows are selected in the spreadsheet.
+    pub row_points: cce_ui::vk::MeshId,
     /// The Show Point Markers overlay.
     pub overlay_points: cce_ui::vk::MeshId,
     /// The Show Point Normals overlay (LINE_LIST whiskers).
@@ -2366,6 +2368,15 @@ pub struct State {
     /// draw. The key — (node id, params, geometry version) — spares the
     /// re-evaluation on unrelated `sync_nodes` runs.
     pub group_point_verts: Vec<Vertex3D>,
+    /// The spreadsheet's selected rows, shown in the scene: a marker on the
+    /// point each row is. `spreadsheet_points` is where the rows' points
+    /// were when the table was last filled, kept so a selection stages its
+    /// markers without an evaluation; the markers are staged by
+    /// `rebuild_row_marker_verts` and flushed to `meshes.row_points`.
+    pub spreadsheet_points: Vec<[f32; 3]>,
+    pub row_marker_verts: Vec<Vertex3D>,
+    pub row_markers_dirty: bool,
+    pub row_marker_vertex_count: u32,
     pub group_points_dirty: bool,
     pub group_point_vertex_count: u32,
     pub last_group_points_key: Option<(String, Vec<(String, String)>, u64)>,
@@ -6084,6 +6095,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if self.show_spreadsheet && !cache_hit {
             let mut headers = Vec::new();
             let mut rows = Vec::new();
+            // Where each row's point is: a row is a point, by index.
+            let mut points: Vec<[f32; 3]> = Vec::new();
 
             if let Some(node) = selected_node {
                 let mut visited = Vec::new();
@@ -6093,9 +6106,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     let (h, r) = Self::geometry_to_spreadsheet_data(&geom);
                     headers = h;
                     rows = r;
+                    points = geom.positions().to_vec();
                 }
             }
-            spreadsheet_update = Some((headers, rows));
+            spreadsheet_update = Some((headers, rows, points));
         }
 
         // Selected-Group viewport markers: while the selection is a Group
@@ -6130,8 +6144,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // `selected_node` is not read past here.
         self.sim_cache = sim_cache;
 
-        if let Some((headers, rows)) = spreadsheet_update {
+        if let Some((headers, rows, points)) = spreadsheet_update {
+            // The selection is of rows by index, which are points of ONE
+            // node's output: it stands across a frame or an edit, and goes
+            // when the table becomes another node's.
+            if current_name != self.last_spreadsheet_node_name {
+                self.spreadsheet_mut().set_selected_rows(&[]);
+            }
             self.spreadsheet_mut().set_spreadsheet_data(headers, rows);
+            self.spreadsheet_points = points;
+            self.rebuild_row_marker_verts();
             self.last_spreadsheet_node_name = current_name;
             self.last_spreadsheet_node_params = current_params;
             self.last_spreadsheet_read_at = read_at;
@@ -6273,7 +6295,36 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.overlay_dirty = true;
     }
 
+    /// Stage a marker on the point of every row selected in the
+    /// spreadsheet, at the group markers' size and in the highlight colour
+    /// the rows themselves wear. From the positions the table was filled
+    /// from, so a press on a row evaluates nothing.
+    pub(crate) fn rebuild_row_marker_verts(&mut self) {
+        let _ = self.spreadsheet_mut().take_selection_change();
+        let rows = self.spreadsheet_mut().selected_rows();
+        let at: Vec<Vertex3D> = rows
+            .iter()
+            .filter_map(|&r| self.spreadsheet_points.get(r))
+            .map(|&position| Vertex3D { position, color: [0.0; 3] })
+            .collect();
+        let [r, g, b, _] = cce_ui::colors::highlight_primary_color();
+        self.row_marker_verts = if at.is_empty() {
+            Vec::new()
+        } else {
+            crate::geometry::points_vertices(&at, self.group_marker_size, cce_ui::colors::to_linear_rgb([r, g, b]))
+        };
+        self.row_markers_dirty = true;
+        self.viewport_dirty = true;
+    }
+
+    /// The points whose rows are selected in the spreadsheet, by index.
+    pub(crate) fn selected_spreadsheet_points(&mut self) -> Vec<usize> {
+        self.spreadsheet_mut().selected_rows()
+    }
+
     pub(crate) fn rebuild_group_marker_verts(&mut self) {
+        // One size for both kinds of selection feedback.
+        self.rebuild_row_marker_verts();
         let size = self.group_marker_size;
         self.group_point_verts = crate::geometry::points_vertices(
             &self.group_members,
@@ -6683,6 +6734,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             sorted_fill_key: None,
             scene_smooth_verts: Vec::new(),
             group_point_verts: Vec::new(),
+            spreadsheet_points: Vec::new(),
+            row_marker_verts: Vec::new(),
+            row_markers_dirty: false,
+            row_marker_vertex_count: 0,
             group_points_dirty: false,
             group_point_vertex_count: 0,
             last_group_points_key: None,
@@ -9580,6 +9635,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 if i == PARAM_IDX {
                                     self.sync_parameters_to_project();
                                 }
+                                // A press on a row selects it, and what is
+                                // selected is marked in the scene.
+                                if i == SPREADSHEET_IDX {
+                                    self.rebuild_row_marker_verts();
+                                }
 
                             }
                             if self.slots.draggable(i) {
@@ -10588,6 +10648,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.viewport_dirty = true;
         }
 
+        // The spreadsheet's selected rows, staged by their selection.
+        if self.row_markers_dirty {
+            self.row_markers_dirty = false;
+            renderer.update_mesh(meshes.row_points, bytemuck::cast_slice(&self.row_marker_verts));
+            self.row_marker_vertex_count = self.row_marker_verts.len() as u32;
+            self.viewport_dirty = true;
+        }
+
         // The point overlays, staged by rebuild_scene_geometry.
         if self.overlay_dirty {
             self.overlay_dirty = false;
@@ -10656,6 +10724,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             origin: renderer.create_mesh(bytemuck::cast_slice(&origin_verts)),
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
             group_points: renderer.create_mesh(&[]),
+            row_points: renderer.create_mesh(&[]),
             overlay_points: renderer.create_mesh(&[]),
             overlay_normals: renderer.create_mesh(&[]),
             // Seeded with what is staged: a replacement renderer gets the
@@ -10932,6 +11001,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     // deliberately outside the Render node's Opacity.
                     if self.group_point_vertex_count > 0 {
                         draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
+                    }
+                    // The spreadsheet's selected rows, while it is shown.
+                    if self.show_spreadsheet && self.row_marker_vertex_count > 0 {
+                        draws.push(SceneDraw { mesh: meshes.row_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     // Per-node meta "Point Markers", same full-opacity tier.
                     if self.overlay_point_count > 0 {

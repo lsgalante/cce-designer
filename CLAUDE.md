@@ -1506,6 +1506,32 @@ back over sixty frames from frame 120 went from a mean of 15 ms a frame
 to 1.3, and from frame 240 from 67 to 4. The disk cache (`Cache` on the
 simnet) is unchanged and still holds the one latest frame.
 
+### Selected spreadsheet rows are marked in the scene
+
+A row of the spreadsheet is a POINT of the node it shows, by index, and
+rows can be selected (since 2026-09-29; the selection itself is cce-ui's,
+see its CLAUDE.md, "A spreadsheet's rows can be selected"): a press
+selects one, ctrl toggles one, shift extends a run. Each selected row's
+point wears a marker in the viewport, in the highlight colour the row
+wears and at Group Marker Size.
+
+- **Nothing is evaluated by a selection.** `State::spreadsheet_points` is
+  where the rows' points were when the table was last filled, kept from
+  that evaluation; `rebuild_row_marker_verts` builds the markers from it,
+  and runs from the press, from every refill of the table and from a
+  change of Group Marker Size.
+- **The selection stands across a frame and an edit**, since the rows are
+  still the points they were, and the markers follow the points. It goes
+  when the table becomes ANOTHER node's (`sync_selection_readouts`
+  compares the node id), whose row 3 is some other point.
+- **The markers draw only while the spreadsheet is shown**, with the
+  group markers, before the geometry and at full opacity.
+- A detached spreadsheet window has no viewport, and the selection does
+  not ride the sync channel: rows selected there mark nothing in the main
+  window.
+
+`selected_spreadsheet_rows_are_marked_in_the_scene` drives it by pointer.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,
