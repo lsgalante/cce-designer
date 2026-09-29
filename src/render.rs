@@ -1151,7 +1151,9 @@ impl State {
                     cce_ui::vk::update_pixels(id, page.to_rgba8(), w, h, cce_ui::vk::PixelFormat::Rgba);
                     id
                 }
-                None => cce_ui::vk::upload_rgba(page.to_rgba8(), w, h),
+                // Mipmapped: a sheet composed at 300 DPI is drawn at a fifth
+                // of its size in an ordinary pane, and its hairlines crawl.
+                None => cce_ui::vk::upload_rgba_mipmapped(page.to_rgba8(), w, h),
             });
             self.update_status_text(&format!(
                 "Image: {} x {} {} at {} DPI ({}x{} px)",

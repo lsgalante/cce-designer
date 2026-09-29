@@ -1599,7 +1599,11 @@ when that is a millimetre (`PageShown::world_size`, the one place a length
 is converted INTO world units). It is staged after the furniture and the
 markers and before the geometry, whose fill may be translucent over it, and
 the shader discards a texel that shows nothing so a transparent page does
-not hide what is behind it. `State::page_shown` is what the stage pass
+not hide what is behind it. The image is uploaded MIPMAPPED
+(`cce_ui::vk::upload_rgba_mipmapped`, since 2026-09-29) and sampled with
+anisotropy where the device has it: a Letter sheet at 300 DPI is drawn at
+about a fifth of its size in an ordinary pane, and without a mip chain a
+ruled page was moiré head-on and worse at a slant. `State::page_shown` is what the stage pass
 places it by. Until then a pane of its own (`PAGE_IDX`, an `ImageView`)
 took the viewport's rect whenever the level held a page, so a picture and
 a model could not be seen together. The path tracer does not draw it.
