@@ -223,7 +223,7 @@ gone from cce-ui with the wgpu path).
   is editable — adding a source makes it appear in the menu without touching
   the menu.
 
-  Two implementations ship, deliberately different in shape, because an
+  Four implementations ship. The first two are deliberately different in shape, because an
   abstraction with a single implementation has not been shown to be one:
   `src/curve_tool.rs` (an open-ended list of world positions in the `curve`
   node's Points parameter, extensible) and `src/soft_transform_tool.rs` (a
@@ -234,6 +234,26 @@ gone from cce-ui with the wgpu path).
   rule like "keep the translation when the centre moves" would be right for the
   drag and would quietly discard half of every restored undo snapshot, since
   `write` is handed a full set of handles with no word about which moved.
+
+  **Three hooks were added for handles that are not world positions of
+  their own** (2026-09-29, for the image tools). `read` and `write` take a
+  `HandleCtx` — the `PageFrame` of the page the node draws on, and what a
+  world unit is — gathered by the framework ahead of the call, because
+  `write` holds the node mutably and can look nothing up. `drag(handles,
+  moved, to)` is what the whole set is after one handle moves: moving the
+  one is the default, and a source whose handles hang off one another
+  carries them there (a shape's corner goes with its middle), so `write`
+  is still handed a whole set that means one thing whether it came from a
+  drag or an undo snapshot — the objection the soft transform's pair
+  raises against "keep the translation when the centre moves" does not
+  arise, since the rule is applied to the handles and not inside `write`.
+  `plane` is the plane the handles live in: a drag then follows the
+  cursor's ray to it, where without one it goes to the camera-facing
+  plane at the grab depth, which leaves a flat thing's plane as soon as
+  the view is not square to it. Two more are for the overlay: `outline`,
+  a closed loop drawn under the handles, and `cage`, whether the handles
+  are joined in order. Handle labels draw on a dark tab, since a handle
+  can stand over a white image.
 
   The HUD draws one line ABOVE the scale readout, sharing its left margin — not
   at the top, because the viewport is full-bleed and the pane plates float over
@@ -1605,6 +1625,25 @@ selected; `add_image_rectangle` / `_ellipse` / `_line` / `_polygon` /
 the shown one, else a new image), placed at the image's middle and sized
 from it IN THE IMAGE'S UNIT, shown and selected. Added to the middle of a
 chain the node is inserted: what read the target reads the new node.
+
+**Shapes and text are placed by their handles** (`src/image_handles.rs`,
+since 2026-09-29): the third and fourth `HandleSource`s, entered by Edit
+Handles like the others and straight away by the `add_image_*` commands.
+A shape has three — **move** (its middle), **size** (a corner of its box,
+which grows about the middle) and **turn** (the middle of its right edge,
+whose direction from the middle is the Rotation) — a line two, its middle
+and an end that sets length and angle together; text has its anchor and a
+handle one Size under it. They needed three things of the framework,
+which the viewer-state section below describes: a `HandleCtx`, the
+`drag` hook and the `plane`. The rows are written in the image's unit
+through `PageFrame::row` — whole pixels, thousandths of anything longer.
+`page::resolve_frame` is what makes the handles affordable: the page
+WITHOUT its pixels, read off the `page` node up the chain, since the
+overlay asks on every frame it is drawn and composing a sheet to learn
+its size would be a sheet a frame. A drag still recomposes the image on
+every motion, as dragging a slider does; `rebuild_page` keeps the GPU
+image while the size holds (`update_pixels`), where it used to free and
+upload one per rebuild and wait on the device each time.
 
 The two contexts do not mix, and `is_page_node` is the one place that says so.
 A page node contributes nothing to the viewport's geometry and a geometry node

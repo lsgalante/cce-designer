@@ -324,6 +324,12 @@ impl State {
             }
         }
         self.show_and_select(slot);
+        // Straight into the node's viewer state: what was added is there to
+        // be placed, and its handles are how.
+        let node = &self.current_dir().children[slot];
+        if let Some(source) = crate::viewer_state::source_for(&node.node_type) {
+            self.viewer_tool = Some(crate::viewer_state::ViewerTool::new(node.id.clone(), source));
+        }
         self.update_status_text(&format!("Added {} to {}.", layer.label().to_lowercase(), new_name));
         Some(slot)
     }

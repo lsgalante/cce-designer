@@ -33,7 +33,7 @@
 
 use crate::app::FsNode;
 use crate::geometry::node_param_str;
-use crate::viewer_state::HandleSource;
+use crate::viewer_state::{HandleCtx, HandleSource};
 use glam::Vec3;
 
 pub struct SoftTransformHandles;
@@ -75,12 +75,12 @@ impl HandleSource for SoftTransformHandles {
         node_type.eq_ignore_ascii_case("soft_transform")
     }
 
-    fn read(&self, node: &FsNode) -> Vec<Vec3> {
+    fn read(&self, node: &FsNode, _ctx: &HandleCtx) -> Vec<Vec3> {
         let centre = triple(node, "Center");
         vec![centre, centre + triple(node, "Translation")]
     }
 
-    fn write(&self, node: &mut FsNode, handles: &[Vec3]) {
+    fn write(&self, node: &mut FsNode, handles: &[Vec3], _ctx: &HandleCtx) {
         let [centre, offset] = handles else { return };
         set_triple(node, "Center", *centre);
         set_triple(node, "Translation", *offset - *centre);

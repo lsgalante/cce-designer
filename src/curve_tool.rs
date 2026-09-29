@@ -23,7 +23,7 @@
 
 use crate::app::FsNode;
 use crate::geometry::{format_curve_points, node_param_str, parse_curve_points};
-use crate::viewer_state::HandleSource;
+use crate::viewer_state::{HandleCtx, HandleSource};
 use glam::Vec3;
 
 /// Re-exported for the call sites that predate the framework. The projection
@@ -43,11 +43,11 @@ impl HandleSource for CurveHandles {
         node_type.eq_ignore_ascii_case("curve")
     }
 
-    fn read(&self, node: &FsNode) -> Vec<Vec3> {
+    fn read(&self, node: &FsNode, _ctx: &HandleCtx) -> Vec<Vec3> {
         parse_curve_points(&node_param_str(node, "Points", ""))
     }
 
-    fn write(&self, node: &mut FsNode, handles: &[Vec3]) {
+    fn write(&self, node: &mut FsNode, handles: &[Vec3], _ctx: &HandleCtx) {
         let formatted = format_curve_points(handles);
         if let Some(p) = node.params.iter_mut().find(|p| p.name == "Points") {
             p.set_text(formatted);

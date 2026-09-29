@@ -1057,8 +1057,18 @@ impl State {
         if vw <= 0.0 || vh <= 0.0 {
             return;
         }
+        let outline = self.viewer_tool_outline();
+        let cage = tool.source.cage();
         pc.clip(rect(vx, vy, vw, vh), |pc| {
-            for pair in handles.windows(2) {
+            // What is being edited, under its handles: dark then light, so
+            // the line reads over a white sheet and over a black one.
+            for i in 0..outline.len() {
+                let (x0, y0) = outline[i];
+                let (x1, y1) = outline[(i + 1) % outline.len()];
+                pc.vector(x0, y0, x1, y1, 2.5, [0.0, 0.0, 0.0, 0.45], cce_ui::scene::paint::Cap::Round);
+                pc.vector(x0, y0, x1, y1, 1.0, [1.0, 0.78, 0.20, 0.9], cce_ui::scene::paint::Cap::Round);
+            }
+            for pair in handles.windows(2).filter(|_| cage) {
                 let (_, x0, y0, _) = pair[0];
                 let (_, x1, y1, _) = pair[1];
                 pc.vector(x0, y0, x1, y1, 1.0, [1.0, 1.0, 1.0, 0.25], cce_ui::scene::paint::Cap::Round);
@@ -1074,7 +1084,14 @@ impl State {
                     [1.0, 0.78, 0.20, 1.0]
                 };
                 pc.circle(*sx, *sy, r, col);
-                pc.text(tool.source.handle_label(*i), sx + 8.0, sy - 6.0, 10.0, [0xff, 0xe6, 0xa0]);
+                // On a dark tab of its own, as the HUD is: a handle can
+                // stand over a white image, where light text is no text.
+                let label = tool.source.handle_label(*i);
+                if !label.is_empty() {
+                    let width = label.chars().count() as f32 * 10.0 * 0.52 + 6.0;
+                    pc.quad(rect(sx + 5.0, sy - 8.0, width, 14.0), [0.0, 0.0, 0.0, 0.55]);
+                    pc.text(label, sx + 8.0, sy - 6.0, 10.0, [0xff, 0xe6, 0xa0]);
+                }
             }
         });
 
@@ -1114,13 +1131,28 @@ impl State {
         let level = self.viewport_editor_dir();
         let node_id = crate::page::displayed_page_node(level).map(|n| n.id.clone());
         let page = crate::page::displayed_page(&self.fs_root, level);
-        if let Some(old) = self.page_image.take() {
+        // The same picture with new contents keeps its image: a handle
+        // being dragged recomposes the page on every motion, and freeing an
+        // image waits for the device to go idle.
+        let before = self.page_shown.take();
+        let had_page = before.is_some();
+        let same_size = |page: &crate::page::Page| {
+            before.as_ref().is_some_and(|b| b.pixels == (page.width, page.height))
+        };
+        let old = self.page_image.take();
+        let kept = old.filter(|_| page.as_ref().is_some_and(same_size));
+        if let (Some(old), None) = (old, kept) {
             cce_ui::vk::free_image(old);
         }
-        let had_page = self.page_shown.take().is_some();
         if let (Some(page), Some(node_id)) = (page, node_id) {
             let (w, h) = (page.width, page.height);
-            self.page_image = Some(cce_ui::vk::upload_rgba(page.to_rgba8(), w, h));
+            self.page_image = Some(match kept {
+                Some(id) => {
+                    cce_ui::vk::update_pixels(id, page.to_rgba8(), w, h, cce_ui::vk::PixelFormat::Rgba);
+                    id
+                }
+                None => cce_ui::vk::upload_rgba(page.to_rgba8(), w, h),
+            });
             self.update_status_text(&format!(
                 "Image: {} x {} {} at {} DPI ({}x{} px)",
                 trim_number(page.in_unit(page.size[0])),

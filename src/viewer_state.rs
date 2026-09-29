@@ -44,6 +44,21 @@ pub const HANDLE_HIT_RADIUS: f32 = 10.0;
 /// world positions — a soft transform's translation is an offset — converts in
 /// [`read`](Self::read) and [`write`](Self::write), so the framework never has
 /// to know the difference and the drag maths stays one implementation.
+/// What a source may need to know beyond its own node.
+///
+/// A curve's points are world positions and need nothing. A shape on an
+/// image is written in the image's unit from the image's corner, so where it
+/// stands in the scene depends on a node further up its chain and on what a
+/// world unit is — neither of which `write` can look up, holding the node
+/// mutably as it does. The framework gathers both before it calls.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HandleCtx {
+    /// The page the node draws on, when it draws on one.
+    pub page: Option<crate::page::PageFrame>,
+    /// One world unit in millimetres.
+    pub world_unit_mm: f32,
+}
+
 pub trait HandleSource {
     /// Shown in the HUD, so it says what mode the viewport is in.
     fn name(&self) -> &'static str;
@@ -54,11 +69,43 @@ pub trait HandleSource {
     fn accepts(&self, node_type: &str) -> bool;
 
     /// The node's handles, in world space.
-    fn read(&self, node: &FsNode) -> Vec<Vec3>;
+    fn read(&self, node: &FsNode, ctx: &HandleCtx) -> Vec<Vec3>;
 
     /// Write handles back into the node's parameters. The framework runs the
     /// resync afterwards.
-    fn write(&self, node: &mut FsNode, handles: &[Vec3]);
+    fn write(&self, node: &mut FsNode, handles: &[Vec3], ctx: &HandleCtx);
+
+    /// Handle `moved` was dragged to `to`: what the whole set is now.
+    ///
+    /// Moving the one handle is the default, and is all a source of
+    /// independent handles wants. A source whose handles hang off one
+    /// another carries them here — a shape's corner goes with its centre —
+    /// so that `write` is still handed a whole set that means one thing,
+    /// whether it came from a drag or from an undo snapshot.
+    fn drag(&self, handles: &mut Vec<Vec3>, moved: usize, to: Vec3, _ctx: &HandleCtx) {
+        handles[moved] = to;
+    }
+
+    /// The plane the handles live in, as a point on it and its normal, for
+    /// a source that has one. A drag then follows the cursor's ray to that
+    /// plane, where without one it follows it to the camera-facing plane at
+    /// the depth the handle was grabbed — which leaves a flat thing's plane
+    /// as soon as the view is not square to it.
+    fn plane(&self, _ctx: &HandleCtx) -> Option<(Vec3, Vec3)> {
+        None
+    }
+
+    /// A closed outline to draw with the handles, in world space: what is
+    /// being edited, where the handles alone do not show it.
+    fn outline(&self, _node: &FsNode, _ctx: &HandleCtx) -> Vec<Vec3> {
+        Vec::new()
+    }
+
+    /// Whether the handles are joined in order by a faint line — a curve's
+    /// control cage. False for handles that are not a sequence.
+    fn cage(&self) -> bool {
+        true
+    }
 
     /// Whether a press on empty space appends a handle and a right press
     /// deletes one. False for a source with a fixed set — a soft transform has
@@ -202,9 +249,11 @@ pub fn find_node_by_id_mut<'a>(root: &'a mut FsNode, id: &str) -> Option<&'a mut
 /// One place that maps node types to tools, so the node context menu, the
 /// command and any future entry point agree about what is editable.
 pub fn source_for(node_type: &str) -> Option<Box<dyn HandleSource>> {
-    let sources: [Box<dyn HandleSource>; 2] = [
+    let sources: [Box<dyn HandleSource>; 4] = [
         Box::new(crate::curve_tool::CurveHandles),
         Box::new(crate::soft_transform_tool::SoftTransformHandles),
+        Box::new(crate::image_handles::ShapeHandles),
+        Box::new(crate::image_handles::TextHandles),
     ];
     sources.into_iter().find(|s| s.accepts(node_type))
 }
@@ -237,6 +286,15 @@ impl State {
         true
     }
 
+    /// What the source of the node's handles may need to know: gathered
+    /// here, once, ahead of every read and write.
+    fn viewer_handle_ctx(&self, node: &FsNode) -> HandleCtx {
+        let page = crate::page::is_page_node(&node.node_type)
+            .then(|| crate::page::resolve_frame(&self.fs_root, node))
+            .flatten();
+        HandleCtx { page, world_unit_mm: self.world_unit_mm() }
+    }
+
     /// The edited node's handles, or None if the node is gone or is no longer
     /// a type this source accepts.
     fn viewer_handles_of(&self, node_id: &str) -> Option<Vec<Vec3>> {
@@ -245,14 +303,63 @@ impl State {
         if !tool.source.accepts(&node.node_type) {
             return None;
         }
-        Some(tool.source.read(node))
+        Some(tool.source.read(node, &self.viewer_handle_ctx(node)))
+    }
+
+    /// The active tool's outline, projected: screen points of a closed
+    /// loop, empty for a source that draws none.
+    pub(crate) fn viewer_tool_outline(&self) -> Vec<(f32, f32)> {
+        let Some(tool) = &self.viewer_tool else { return Vec::new() };
+        let Some(mvp) = self.last_scene_mvp else { return Vec::new() };
+        let Some(node) = find_node_by_id(&self.fs_root, &tool.node_id) else { return Vec::new() };
+        if !tool.source.accepts(&node.node_type) {
+            return Vec::new();
+        }
+        let loop_ = tool.source.outline(node, &self.viewer_handle_ctx(node));
+        let projected: Vec<(f32, f32)> = loop_
+            .iter()
+            .filter_map(|p| project_point(&mvp, self.last_scene_view_rect, *p))
+            .map(|(x, y, _)| (x, y))
+            .collect();
+        // A corner behind the camera has no place on screen, and a loop
+        // missing one is another shape.
+        if projected.len() == loop_.len() { projected } else { Vec::new() }
+    }
+
+    /// Where a drag puts the grabbed handle: on the source's plane under
+    /// the cursor when it has one, else on the camera-facing plane at the
+    /// depth the handle was grabbed.
+    fn viewer_drag_target(&self, node_id: &str, ndc_z: f32) -> Option<Vec3> {
+        let mvp = self.last_scene_mvp?;
+        let view = self.last_scene_view_rect;
+        let (cx, cy) = (self.cursor_x, self.cursor_y);
+        let plane = self.viewer_tool.as_ref().and_then(|tool| {
+            let node = find_node_by_id(&self.fs_root, node_id)?;
+            tool.source.plane(&self.viewer_handle_ctx(node))
+        });
+        if let Some((point, normal)) = plane {
+            let near = unproject_point(&mvp, view, cx, cy, 0.0)?;
+            let far = unproject_point(&mvp, view, cx, cy, 1.0)?;
+            let ray = far - near;
+            let along = ray.dot(normal);
+            // A plane seen edge-on is met nowhere the cursor can name.
+            if along.abs() > 1e-6 * ray.length().max(1e-6) {
+                let t = (point - near).dot(normal) / along;
+                return Some(near + ray * t);
+            }
+        }
+        unproject_point(&mvp, view, cx, cy, ndc_z)
     }
 
     /// Write handles back and run the same resync sequence as SetParam.
     fn set_viewer_handles(&mut self, node_id: &str, handles: &[Vec3]) {
+        let ctx = match find_node_by_id(&self.fs_root, node_id) {
+            Some(node) => self.viewer_handle_ctx(node),
+            None => return,
+        };
         let Some(tool) = self.viewer_tool.take() else { return };
         if let Some(node) = find_node_by_id_mut(&mut self.fs_root, node_id) {
-            tool.source.write(node, handles);
+            tool.source.write(node, handles, &ctx);
         }
         self.viewer_tool = Some(tool);
         self.sync_nodes();
@@ -342,7 +449,9 @@ impl State {
     /// camera-facing plane at its grab depth.
     pub(crate) fn viewer_tool_drag_motion(&mut self) -> bool {
         let Some(drag) = self.viewer_tool.as_ref().and_then(|t| t.drag) else { return false };
-        let Some(mvp) = self.last_scene_mvp else { return false };
+        if self.last_scene_mvp.is_none() {
+            return false;
+        }
         let node_id = self.viewer_tool.as_ref().expect("drag implies tool").node_id.clone();
         let Some(mut pts) = self.viewer_handles_of(&node_id) else {
             self.viewer_tool = None;
@@ -351,17 +460,17 @@ impl State {
         if drag.handle >= pts.len() {
             return false;
         }
-        let Some(world) = unproject_point(
-            &mvp,
-            self.last_scene_view_rect,
-            self.cursor_x,
-            self.cursor_y,
-            drag.ndc_z,
-        ) else {
+        let Some(world) = self.viewer_drag_target(&node_id, drag.ndc_z) else {
             return false;
         };
         let snap = self.viewer_tool.as_ref().and_then(|t| t.snap);
-        pts[drag.handle] = snapped(world, snap);
+        let ctx = match find_node_by_id(&self.fs_root, &node_id) {
+            Some(node) => self.viewer_handle_ctx(node),
+            None => return false,
+        };
+        if let Some(tool) = self.viewer_tool.as_ref() {
+            tool.source.drag(&mut pts, drag.handle, snapped(world, snap), &ctx);
+        }
         if let Some(tool) = self.viewer_tool.as_mut() {
             tool.history.commit_gesture();
         }

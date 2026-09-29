@@ -122,19 +122,30 @@ impl PageUnit {
     }
 }
 
-/// The largest page anyone composes by accident: a 1000 DPI A0 sheet is about
-/// 1.4 gigapixels, and the honest failure is a clamped resolution rather than
-/// an allocation that takes the app down. Chosen as roughly 13 × 19 inches (a
-/// large-format print) at 1200 DPI.
-const MAX_PIXELS: u64 = 356_000_000;
+/// A page without its pixels: its size, its raster's size, its unit and
+/// where it stands. What placing something ON a page needs, at the cost of
+/// walking the chain to the `page` node and of nothing else — the viewport's
+/// handles ask for it on every frame they are drawn, and composing the
+/// raster to learn how big it is would be a sheet a frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PageFrame {
+    /// Physical size in inches.
+    pub size: [f32; 2],
+    pub dpi: u32,
+    pub width: u32,
+    pub height: u32,
+    pub unit: PageUnit,
+    /// The page's centre in the scene, world units.
+    pub origin: [f32; 3],
+}
 
-impl Page {
-    /// A blank sheet filled with `color`.
+impl PageFrame {
+    /// The frame of a sheet `size` inches at `dpi`, clamped as a page is.
     ///
     /// The size is clamped to something a printer could accept rather than
     /// rejected: a page node whose size parameter is being dragged passes
     /// through zero, and a context that returns an error there flickers.
-    pub fn new(size: [f32; 2], dpi: u32, color: [f32; 4]) -> Page {
+    pub fn new(size: [f32; 2], dpi: u32) -> PageFrame {
         let size = [size[0].max(0.01), size[1].max(0.01)];
         let dpi = dpi.clamp(1, 2400);
         let mut width = (size[0] * dpi as f32).round().max(1.0) as u32;
@@ -146,14 +157,77 @@ impl Page {
             width = ((width as f64 * scale) as u32).max(1);
             height = ((height as f64 * scale) as u32).max(1);
         }
+        PageFrame { size, dpi, width, height, unit: PageUnit::Inches, origin: [0.0; 3] }
+    }
+
+    /// Pixels per inch, measured from the raster.
+    pub fn scale(&self) -> f32 {
+        self.width as f32 / self.size[0]
+    }
+
+    /// World units to the inch, in a world of `world_unit_mm` millimetres.
+    fn world_per_inch(world_unit_mm: f32) -> f32 {
+        25.4 / world_unit_mm.max(1e-6)
+    }
+
+    /// A place on the page, in the page's unit from its top-left corner, as
+    /// a place in the scene. The page's y runs down and the world's up.
+    pub fn to_world(&self, at: [f32; 2], world_unit_mm: f32) -> glam::Vec3 {
+        let k = Self::world_per_inch(world_unit_mm);
+        let s = self.scale();
+        let x = self.unit.to_inches(at[0], s) - self.size[0] * 0.5;
+        let y = self.size[1] * 0.5 - self.unit.to_inches(at[1], s);
+        glam::Vec3::new(self.origin[0] + x * k, self.origin[1] + y * k, self.origin[2])
+    }
+
+    /// The other way. A place off the page's plane is the place on it
+    /// straight behind: the page faces +Z, and its depth says nothing.
+    pub fn from_world(&self, p: glam::Vec3, world_unit_mm: f32) -> [f32; 2] {
+        let k = Self::world_per_inch(world_unit_mm);
+        let s = self.scale();
+        let x = (p.x - self.origin[0]) / k + self.size[0] * 0.5;
+        let y = self.size[1] * 0.5 - (p.y - self.origin[1]) / k;
+        [self.unit.from_inches(x, s), self.unit.from_inches(y, s)]
+    }
+
+    /// A number for a row in the page's unit: whole pixels, and thousandths
+    /// of anything longer.
+    pub fn row(&self, value: f32) -> String {
+        if self.unit == PageUnit::Pixels {
+            format!("{}", value.round())
+        } else {
+            let s = format!("{value:.3}");
+            let s = s.trim_end_matches('0');
+            // Two decimals at the least, as the templates write them.
+            let decimals = s.len() - s.find('.').map_or(s.len(), |i| i + 1);
+            format!("{s}{}", "0".repeat(2usize.saturating_sub(decimals)))
+        }
+    }
+}
+
+/// The largest page anyone composes by accident: a 1000 DPI A0 sheet is about
+/// 1.4 gigapixels, and the honest failure is a clamped resolution rather than
+/// an allocation that takes the app down. Chosen as roughly 13 × 19 inches (a
+/// large-format print) at 1200 DPI.
+const MAX_PIXELS: u64 = 356_000_000;
+
+impl Page {
+    /// A blank sheet filled with `color`, clamped as [`PageFrame::new`]
+    /// clamps it.
+    pub fn new(size: [f32; 2], dpi: u32, color: [f32; 4]) -> Page {
+        Page::blank(PageFrame::new(size, dpi), color)
+    }
+
+    /// The blank sheet a frame describes.
+    pub fn blank(frame: PageFrame, color: [f32; 4]) -> Page {
         Page {
-            size,
-            dpi,
-            width,
-            height,
-            pixels: vec![color; (width * height) as usize],
-            unit: PageUnit::Inches,
-            origin: [0.0; 3],
+            size: frame.size,
+            dpi: frame.dpi,
+            width: frame.width,
+            height: frame.height,
+            pixels: vec![color; (frame.width * frame.height) as usize],
+            unit: frame.unit,
+            origin: frame.origin,
         }
     }
 
@@ -707,6 +781,55 @@ fn toggle_of(node: &FsNode, name: &str) -> bool {
     crate::geometry::node_param_bool(node, name, false)
 }
 
+/// The frame a `page` node describes.
+fn page_node_frame(target: &FsNode) -> PageFrame {
+    let preset = node_param_str(target, "Preset", "Letter");
+    let unit = PageUnit::parse(&node_param_str(target, "Units", "Inches"));
+    let dpi = node_param_f32(target, "Resolution", 300.0).round().clamp(1.0, 2400.0);
+    // A named size is what it is whatever the Units row says; the row
+    // is what Width and Height — and every node downstream — are in.
+    let size = preset_size(&preset)
+        .or_else(|| preset_pixels(&preset).map(|[w, h]| [w / dpi, h / dpi]))
+        .unwrap_or_else(|| {
+            [
+                unit.to_inches(node_param_f32(target, "Width", 8.5), dpi),
+                unit.to_inches(node_param_f32(target, "Height", 11.0), dpi),
+            ]
+        });
+    // Landscape is the same sheet turned, not a different sheet: swap the
+    // axes rather than asking for a second pair of numbers. A raster
+    // preset is named as it lies, and Custom says its own two numbers.
+    let turned = preset_size(&preset).is_some()
+        && node_param_str(target, "Orientation", "Portrait").eq_ignore_ascii_case("Landscape");
+    let size = if turned { [size[1], size[0]] } else { size };
+    let mut frame = PageFrame::new(size, dpi as u32);
+    frame.unit = unit;
+    frame.origin = node_param_vec3(target, "Position", Vec3::ZERO).to_array();
+    frame
+}
+
+/// The frame of the page `target` draws on: [`resolve_page`]'s walk up the
+/// chain, without the drawing. None where that would compose nothing — no
+/// page at the bottom, or a wire that comes back to itself.
+pub fn resolve_frame(root: &FsNode, target: &FsNode) -> Option<PageFrame> {
+    let mut visited: Vec<&str> = Vec::new();
+    let mut node = target;
+    loop {
+        if visited.contains(&node.id.as_str()) {
+            return None;
+        }
+        visited.push(&node.id);
+        let kind = node.node_type.to_ascii_lowercase();
+        if kind == "page" && !crate::geometry::is_bypassed(node) {
+            return Some(page_node_frame(node));
+        }
+        if !is_page_node(&kind) && kind != "export" {
+            return None;
+        }
+        node = crate::geometry::param_node(root, node, "Input")?;
+    }
+}
+
 /// Compose the page `target` describes, resolving its input chain.
 ///
 /// `visited` guards cycles by node id exactly as the geometry resolvers do —
@@ -726,29 +849,10 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
 
     let kind = target.node_type.to_ascii_lowercase();
     if kind == "page" {
-        let preset = node_param_str(target, "Preset", "Letter");
-        let unit = PageUnit::parse(&node_param_str(target, "Units", "Inches"));
-        let dpi = node_param_f32(target, "Resolution", 300.0).round().clamp(1.0, 2400.0);
-        // A named size is what it is whatever the Units row says; the row
-        // is what Width and Height — and every node downstream — are in.
-        let size = preset_size(&preset)
-            .or_else(|| preset_pixels(&preset).map(|[w, h]| [w / dpi, h / dpi]))
-            .unwrap_or_else(|| {
-                [
-                    unit.to_inches(node_param_f32(target, "Width", 8.5), dpi),
-                    unit.to_inches(node_param_f32(target, "Height", 11.0), dpi),
-                ]
-            });
-        // Landscape is the same sheet turned, not a different sheet: swap the
-        // axes rather than asking for a second pair of numbers. A raster
-        // preset is named as it lies, and Custom says its own two numbers.
-        let turned = preset_size(&preset).is_some()
-            && node_param_str(target, "Orientation", "Portrait").eq_ignore_ascii_case("Landscape");
-        let size = if turned { [size[1], size[0]] } else { size };
-        let mut page = Page::new(size, dpi as u32, color_with(target, "Color", Vec3::ONE, "Opacity"));
-        page.unit = unit;
-        page.origin = node_param_vec3(target, "Position", Vec3::ZERO).to_array();
-        return Some(page);
+        return Some(Page::blank(
+            page_node_frame(target),
+            color_with(target, "Color", Vec3::ONE, "Opacity"),
+        ));
     }
 
     // Everything else composites onto its input, so a chain with no page at
