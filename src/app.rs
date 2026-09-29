@@ -34,7 +34,7 @@ use wayland_client::{
     Connection, QueueHandle, Proxy,
 };
 
-use cce_ui::widget::{Adapted, Breadcrumb, ImageView, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Label, Dropdown};
+use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg, Splitter, Spreadsheet, StatusBar, TextLabel, WidgetHost, GraphNode, Graph, Button, Label, Dropdown};
 use cce_ui::widget::UiContext;
 use crate::playbar::Playbar;
 use crate::viewport_3d::Viewport3D;
@@ -179,13 +179,21 @@ impl FsNode {
     /// flag). Disabling touches only the named child. Every toggle route
     /// (keyboard `e`, the graph widgets' click toggles, MCP/context-menu
     /// ToggleGeometry) must go through here or the invariant silently rots.
+    ///
+    /// Exclusive within its CONTEXT, since 2026-09-29: the page nodes and the
+    /// geometry nodes each have a display flag of their own, so a level shows
+    /// one image and one geometry — a picture behind the model drawn over
+    /// it. Until then a page took the viewport's pane whole and one flag did.
     pub fn set_child_geometry_visible(&mut self, slot: usize, visible: bool) {
         if slot >= self.children.len() {
             return;
         }
         if visible {
+            let page = crate::page::is_page_node(&self.children[slot].node_type);
             for (i, child) in self.children.iter_mut().enumerate() {
-                child.geometry_visible = i == slot;
+                if crate::page::is_page_node(&child.node_type) == page {
+                    child.geometry_visible = i == slot;
+                }
             }
         } else {
             self.children[slot].geometry_visible = false;
@@ -2029,9 +2037,12 @@ pub struct State {
     /// Solved simulation states, kept across frames so playing forward costs one
     /// step per frame instead of re-solving from the start frame every redraw.
     pub sim_cache: crate::geometry::SimCache,
-    /// The GPU image behind the page pane. Owned here — `ImageView` only
-    /// borrows an id — so replacing a page frees the one it replaces.
+    /// The GPU image of the page the viewport shows. Owned here, so
+    /// replacing a page frees the one it replaces.
     pub page_image: Option<u32>,
+    /// The page that image is of: what the scene pass places it by and the
+    /// framing commands fit the camera to. None when the level shows none.
+    pub page_shown: Option<crate::page::PageShown>,
     /// Whether `renderer_init` has run before. There is no separate reconnect
     /// callback: the runner calls `renderer_init` once per renderer, so the
     /// first call is this process's own and every later one is a REPLACEMENT
@@ -4492,20 +4503,28 @@ impl State {
     /// 1 so the distance is authoritative. For the Default Camera (no node
     /// to write) only the zoom is fitted — its pivot is fixed at the origin.
     pub fn frame_all(&mut self) {
-        if self.rt_sphere_verts.is_empty() {
+        // The image the level shows is part of the scene, so it is part of
+        // what Frame All holds: its four corners, beside the geometry.
+        let image = self.image_world_corners().map(|c| c.map(Vec3::from_array));
+        let points = || {
+            self.rt_sphere_verts
+                .iter()
+                .map(|v| Vec3::from_array(v.position))
+                .chain(image.into_iter().flatten())
+        };
+        if points().next().is_none() {
             return;
         }
         let mut min = Vec3::splat(f32::MAX);
         let mut max = Vec3::splat(f32::MIN);
-        for v in &self.rt_sphere_verts {
-            let p = Vec3::from_array(v.position);
+        for p in points() {
             min = min.min(p);
             max = max.max(p);
         }
         let center = (min + max) * 0.5;
         let mut radius = 0.0f32;
-        for v in &self.rt_sphere_verts {
-            radius = radius.max((Vec3::from_array(v.position) - center).length());
+        for p in points() {
+            radius = radius.max((p - center).length());
         }
         let radius = radius.max(0.05);
 
@@ -5205,6 +5224,12 @@ impl State {
             actions.push(a);
         };
         let sep = ViewportMenuAction::Separator;
+
+        // The image's two camera rows, under the scene's, while one shows.
+        if self.page_shown.is_some() {
+            row(&mut options, &mut actions, label("frame_image", "Frame Image").to_string(), ViewportMenuAction::Command("frame_image"));
+            row(&mut options, &mut actions, label("view_image_pixels", "View Image Pixels 1:1").to_string(), ViewportMenuAction::Command("view_image_pixels"));
+        }
 
         // Guides: the scene furniture that is not the geometry.
         row(&mut options, &mut actions, "-".into(), sep);
@@ -6182,18 +6207,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 bc.set_raised(true);
                 bc
             },
-            page_view: {
-                // Contain, never crop: a page is a document, and a document
-                // shown with its margins cut off is a different document. No
-                // upscale past 1:1 either — a 72 DPI sheet blown up to fill
-                // the pane would look like the composition is soft when it is
-                // the preview that is.
-                let mut v = ImageView::new()
-                    .with_fit(cce_ui::scene::layout::FitMode::Contain { max_upscale: 1.0 })
-                    .with_bg([0.12, 0.12, 0.13, 1.0]);
-                v.set_visible(false);
-                v
-            },
             dialog: crate::dialog::Dialog::new(),
         });
 
@@ -6300,6 +6313,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             network_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
             page_image: None,
+            page_shown: None,
             seen_renderer: false,
             deselected_cell: None,
             orbit_drag: None,
@@ -7402,27 +7416,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
 
         self.apply_detached_panes();
-        // The 2D page context takes the viewport's rect whenever the displayed
-        // level holds a page, and the viewport stands down: one pane, one
-        // thing in it. Placed here, after every layout branch has run, rather
-        // than inside each of them — the rect it wants is always exactly the
-        // viewport's, so there is nothing per-branch to decide.
-        //
-        // The ImageView's own image is the flag. Composing a page is
-        // expensive and happens in rebuild_scene_geometry; layout runs on
-        // every resize, and a second copy of "is a page showing" would be a
-        // second thing to keep true.
-        let showing_page = self.slots.page_view.image.is_some();
-        self.positions[PAGE_IDX] = if showing_page {
-            self.positions[VIEWPORT_IDX]
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        };
-        self.slots.page_view.set_visible(showing_page && self.slots.viewport.visible());
-        if showing_page {
-            self.slots.viewport.set_visible(false);
-        }
-
         self.apply_collapsed_panes();
         // Last of all: the dialog floats over whatever the branches above
         // produced, so its rect depends on the window and nothing else.
@@ -8036,6 +8029,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::LayoutNodes => {
                 self.layout_current_level();
+            }
+            Action::FrameImage => {
+                self.frame_image();
+            }
+            Action::ViewImagePixels => {
+                self.view_image_pixels();
+            }
+            Action::NewImage => {
+                self.new_image();
+            }
+            Action::AddToImage(layer) => {
+                self.add_to_image(layer);
             }
             Action::FrameCursor => {
                 self.frame_cursor();
@@ -10434,9 +10439,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if let Some(old) = self.page_image.take() {
             cce_ui::vk::free_image(old);
         }
-        self.slots.page_view.set_image(None);
         // Re-uploaded on the next tick, not here: this runs before the frame
-        // has settled, and rebuild_page relays the panes.
+        // has settled.
         self.page_dirty = true;
         true
     }
@@ -10743,6 +10747,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     if self.overlay_point_count > 0 {
                         draws.push(SceneDraw { mesh: meshes.overlay_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
+                    // The page the level shows stands in the scene as an
+                    // image: after the furniture and the markers, which are
+                    // opaque and may show through it, and before the
+                    // geometry, whose fill may be translucent over it.
+                    let image_slot = draws.len() as u32;
                     if self.vertex_count_spheres > 0 {
                         // With wires coming, the fill is pushed back by its
                         // slope-scaled offset so the lattice reads solid.
@@ -10794,6 +10803,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         }
                     }
                     renderer.stage_scene((sx, sy, cw, ch), draws);
+                    if let (Some(image), Some(shown)) = (self.page_image, &self.page_shown) {
+                        renderer.stage_scene_images(vec![cce_ui::vk::SceneImage {
+                            image,
+                            corners: shown.world_corners(self.world_unit_mm()),
+                            mvp,
+                            opacity: 1.0,
+                            before: image_slot,
+                        }]);
+                    }
                     }
 
                     // Update viewport cache

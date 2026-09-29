@@ -9,7 +9,7 @@
 //! that assert each slot's concrete type are hand-written, below the macro.
 
 use cce_ui::widget::{
-    Adapted, Breadcrumb, Graph, ImageView, MenuBar, ParametersBg, Splitter, Spreadsheet,
+    Adapted, Breadcrumb, Graph, MenuBar, ParametersBg, Splitter, Spreadsheet,
     StatusBar, WidgetHost,
 };
 
@@ -113,10 +113,6 @@ widget_roster! {
     NETWORK_PANEL2_IDX:      network_panel2:      PassivePlate,
     CONTENT2_IDX:            content2:            Graph,
     BREADCRUMB2_IDX:         breadcrumb2:         Breadcrumb,
-    // The 2D page context's surface, sharing the viewport's rect and shown in
-    // its place when the displayed level holds a page. Appended, like the
-    // second network editor, so established slot indexes stay stable.
-    PAGE_IDX:                page_view:           ImageView,
     // The Alt+D dialog: plate, query line and the one list of commands and
     // settings, its controls painted from the toolkit's own stamps. Appended,
     // like every slot since the second network editor, so established

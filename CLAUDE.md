@@ -1540,11 +1540,71 @@ operands on ONE grid so the two fields line up sample for sample.
 ### The 2D page context
 
 `src/page.rs` is a second context, not a second kind of geometry node. Its
-currency is a `Page` — a printed sheet: inches, a DPI, and straight-alpha RGBA
-pixels — its origin is the top-left corner with y running DOWN, and nothing in
-it has a point id, an attribute or a normal. Four nodes compose one: `page`
-(the sheet: preset or custom size, orientation, resolution, colour),
-`page_grid`, `page_border` and `page_text`.
+currency is a `Page` — an image: a physical size, a DPI, and straight-alpha
+RGBA pixels — its origin is the top-left corner with y running DOWN, and
+nothing in it has a point id, an attribute or a normal. Five nodes compose
+one: `page` (the generator: preset or custom size, units, orientation,
+resolution, colour, opacity, position), `page_grid`, `page_border`,
+`page_text` and `page_shape`.
+
+**The generator's size is in pixels or in real units** (since 2026-09-29).
+The `page` node's `Units` row — Inches, Millimetres, Centimetres, Pixels —
+is what its Width and Height are written in, and what EVERY node downstream
+is written in: the page carries its `PageUnit`, and the resolver converts
+each length through `Page::len` before it draws. A property of the page
+and not of each node, because a chain whose text was placed in pixels and
+whose border was inset in inches is a chain nobody can read. Inside, a page
+is still inches (`Page::size`), and a pixel image's physical size is its
+pixels over its Resolution. A node with no Units row is in inches, which is
+every save from before it. The presets are the four paper sizes and three
+raster ones (`HD`, `4K`, `Square`), which are their pixels whatever Units
+says and are not turned by Orientation. The length rows are `float` — a
+number with no range — where they were sliders over a range in inches: a
+slider clamps, and no one range holds both 0.25 inches and 1920 pixels.
+
+**`page_shape`** draws a rectangle (with a corner radius), an ellipse, a
+line or a polygon of N sides, turned by Rotation, filled and stroked, each
+with an opacity. Coverage comes from the signed DISTANCE to the outline in
+pixels (`Page::shape`), so a turned edge and a circle's are clean lines; the
+stroke is centred on the outline. A line is its stroke: as long as its
+Width, as thick as its Stroke Width.
+
+**The viewport shows the image, standing in the scene** (since
+2026-09-29). The displayed page is uploaded as a texture and staged as a
+`cce_ui::vk::SceneImage` — a textured quad in the 3D pass, unlit, depth
+tested against the geometry, seen from both sides — in the XY plane about
+the page node's `Position`, facing +Z, at its PHYSICAL size: the World Unit
+says what one world unit is, and a sheet 215.9 mm wide is 215.9 of them
+when that is a millimetre (`PageShown::world_size`, the one place a length
+is converted INTO world units). It is staged after the furniture and the
+markers and before the geometry, whose fill may be translucent over it, and
+the shader discards a texel that shows nothing so a transparent page does
+not hide what is behind it. `State::page_shown` is what the stage pass
+places it by. Until then a pane of its own (`PAGE_IDX`, an `ImageView`)
+took the viewport's rect whenever the level held a page, so a picture and
+a model could not be seen together. The path tracer does not draw it.
+
+**The display flag is exclusive within its CONTEXT**
+(`set_child_geometry_visible`): the page nodes and the geometry nodes each
+have one, so a level shows one image and one geometry. One flag over both
+is what made showing a picture hide the model.
+
+**The image commands** (`src/image_tools.rs`, all registry rows):
+`frame_image` (Ctrl+Shift+F, and a viewport-menu row while an image shows)
+turns the active camera square to the image and fits it to the pane;
+`view_image_pixels` does the same at the distance where one image pixel
+covers one display pixel. A plane square to the view axis is scaled by a
+perspective and not distorted, so head-on the image is exact. The Default
+Camera is turned by setting its orbit to what cancels its base ray's own
+yaw and pitch; a camera node has Position, Pivot and Rotation rewritten,
+the Rotation taking up whatever orbit the viewport widget holds, which
+`get_matrices` applies to every camera. Frame All holds the image's
+corners beside the geometry. `new_image` adds a page node, shown and
+selected; `add_image_rectangle` / `_ellipse` / `_line` / `_polygon` /
+`_text` add a shape or text node wired after the selected image node (else
+the shown one, else a new image), placed at the image's middle and sized
+from it IN THE IMAGE'S UNIT, shown and selected. Added to the middle of a
+chain the node is inserted: what read the target reads the new node.
 
 The two contexts do not mix, and `is_page_node` is the one place that says so.
 A page node contributes nothing to the viewport's geometry and a geometry node
@@ -1560,9 +1620,7 @@ size × DPI, and `write_png` puts that in the pHYs chunk, so a printer lays the
 file out at the size it was composed at instead of guessing 96. pHYs is pixels
 per metre — the only unit PNG offers — so the DPI round-trips through a
 conversion and comes back a hair off (300 stores as 11811 px/m, reads as
-299.9994). Inches rather than millimetres because paper is specified in inches
-by the family this came from; the geometry graph's World Unit declaration does
-not reach here.
+299.9994).
 
 Rect coverage is exact area, not a test of the pixel centre. A printed grid is
 mostly hairlines, and a binary fill snaps every rule to whole pixels, so a
@@ -1573,32 +1631,15 @@ the cell size lands exactly on the first's, which is the only reason to draw
 two. Text shapes and rasterizes through cosmic-text, the toolkit's own font
 stack, with system fonts loaded because a page names its font by family.
 
-**The preview pane** (`PAGE_IDX`, an `ImageView`) takes the viewport's rect
-when the displayed level holds a page, and the viewport stands down — the same
-rule the viewport already follows about showing its editor's level. Three
-things were needed to make a new pane actually appear, and missing any one of
-them looks identical to the others:
-
-- A `PAGE_IDX` arm in `paint_widget`. The fall-through branch serves LEGACY
-  widgets — it emits a plate and the widget's legacy views — so a modern-paint
-  widget whose whole look lives in `Paint::paint` lands there and draws
-  nothing. The pane was visible, correctly placed and blank.
-- The viewport's key in the `draw_order` sort. The viewport is full-bleed and
-  the other panes float OVER it, so a pane taking its rect must take its depth;
-  drawn last, it covered the collapsed stubs and their labels ghosted through
-  from the later text pass.
-- An entry in `test_widget_roster_indices_are_dense`, which is hand-listed and
-  fails loudly — the one of the three that tells you itself.
-
-The GPU image is owned by `State::page_image` and freed when replaced;
-`ImageView` only borrows the id. **A replacement renderer invalidates that id.** There is no reconnect
+The GPU image is owned by `State::page_image` and freed when replaced.
+**A replacement renderer invalidates that id.** There is no reconnect
 callback: the runner calls `renderer_init` once per renderer, so the first call
 is this process's own and every later one is a replacement — remembering is the
 only way to tell them apart (`State::seen_renderer`, via
 `renderer_handed_over`, which is split out of the callback so it can be tested
 without a live `VkRenderer`). Images uploaded outside that callback are not
 replayed, so a cached id names nothing and its draws are skipped in SILENCE:
-the page pane just goes blank. The id is dropped and `page_dirty` asks the next
+the image just goes from the scene. The id is dropped and `page_dirty` asks the next
 tick to recompose and re-upload — the raster is cheap to rebuild from the node
 graph, and no id can be carried across renderers. Found by cce-1f's audit of
 clients caching vk image ids.
@@ -1613,13 +1654,13 @@ on 2026-09-19 — with the fix disabled the sheet vanishes at the fault, with it
 the sheet survives.
 
 `gem_graph`, the source family's
-everything-at-once node, is deliberately not ported: it is these four chained,
+everything-at-once node, is deliberately not ported: it is these nodes chained,
 and that collapse is the whole premise of "fifty operators, ten nodes".
 
 ### The pane plates: one material, one relief block
 
 Every plate the designer draws — the network panel, params, spreadsheet,
-playbar, page pane, and every collapsed stub — goes through
+playbar, and every collapsed stub — goes through
 `append_widget_plate_radii` in `render.rs`, and every one of those widgets
 answers `color()` with `cce_ui::colors::param_plate_fill`, which is
 `Material::pane()`: the toolkit's PANE rung. So there is ONE material for

@@ -1,21 +1,21 @@
-//! The 2D page context — a printed sheet, composited from layers.
+//! The 2D page context — an image, composited from layers.
 //!
 //! This is a SECOND context, deliberately not the geometry graph. Its currency
-//! is a [`Page`] rather than a `Detail`, its coordinates are inches rather than
-//! world units, its origin is the top-left corner with y running DOWN, and
-//! nothing in it has a point id, an attribute or a normal. The geometry graph
-//! describes a thing you will make; a page describes a thing you will print.
-//! Smuggling one into the other means a `Detail` that is secretly a raster and
-//! a viewport that has to guess which it is holding, so they stay apart: page
-//! nodes resolve through [`resolve_page`], never through
-//! `generate_single_node_geometry_with_errors`, and contribute no geometry to
-//! the viewport at all.
+//! is a [`Page`] rather than a `Detail`, its origin is the top-left corner
+//! with y running DOWN, and nothing in it has a point id, an attribute or a
+//! normal. Smuggling one into the other means a `Detail` that is secretly a
+//! raster, so they stay apart: page nodes resolve through [`resolve_page`],
+//! never through `generate_single_node_geometry_with_errors`, and contribute
+//! no geometry. What the viewport shows of a page is the page itself, as a
+//! textured quad standing in the scene ([`PageShown::world_corners`]).
 //!
-//! Inches, not millimetres, because the page's own reason for existing is
-//! paper, and paper is specified in inches by the sources this came from (8.5 ×
-//! 11 is the default everywhere in the family). The World Unit declaration that
-//! governs the geometry graph does not reach here — a sheet is a sheet at any
-//! model scale.
+//! A page is stored in inches, because its first reason for existing was
+//! paper. What its nodes are WRITTEN in is the page's [`PageUnit`] — inches,
+//! millimetres, centimetres or pixels — chosen on the `page` node and carried
+//! by the page to every node downstream, so a shape on a 1920 × 1080 image is
+//! placed in pixels and the same node on a Letter sheet in inches. In the
+//! scene a page is its physical size: the World Unit says what one world unit
+//! is, and a sheet 215.9 mm wide is 215.9 of them when that is a millimetre.
 //!
 //! **Resolution is a property of the page, not of the export.** A page carries
 //! its DPI, the raster is that many pixels per inch, and the PNG says so in its
@@ -61,6 +61,65 @@ pub struct Page {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<[f32; 4]>,
+    /// What the lengths on this page's nodes are written in.
+    pub unit: PageUnit,
+    /// Where the page's CENTRE stands in the scene, in world units.
+    pub origin: [f32; 3],
+}
+
+/// What a page's lengths are written in.
+///
+/// A property of the PAGE, set on the node that makes it, and not of each
+/// node drawing on it: a chain whose text was placed in pixels and whose
+/// border was inset in inches is a chain nobody can read.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PageUnit {
+    Inches,
+    Millimetres,
+    Centimetres,
+    Pixels,
+}
+
+impl PageUnit {
+    /// The unit a `Units` row names. Anything else is inches, which is what
+    /// a page saved before the row existed was written in.
+    pub fn parse(name: &str) -> PageUnit {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "millimetres" | "millimeters" | "mm" => PageUnit::Millimetres,
+            "centimetres" | "centimeters" | "cm" => PageUnit::Centimetres,
+            "pixels" | "px" => PageUnit::Pixels,
+            _ => PageUnit::Inches,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PageUnit::Inches => "in",
+            PageUnit::Millimetres => "mm",
+            PageUnit::Centimetres => "cm",
+            PageUnit::Pixels => "px",
+        }
+    }
+
+    /// A length in this unit as inches, on a raster of `px_per_inch`.
+    pub fn to_inches(self, value: f32, px_per_inch: f32) -> f32 {
+        match self {
+            PageUnit::Inches => value,
+            PageUnit::Millimetres => value / 25.4,
+            PageUnit::Centimetres => value / 2.54,
+            PageUnit::Pixels => value / px_per_inch.max(1e-6),
+        }
+    }
+
+    /// The other way: inches as a length in this unit.
+    pub fn from_inches(self, inches: f32, px_per_inch: f32) -> f32 {
+        match self {
+            PageUnit::Inches => inches,
+            PageUnit::Millimetres => inches * 25.4,
+            PageUnit::Centimetres => inches * 2.54,
+            PageUnit::Pixels => inches * px_per_inch,
+        }
+    }
 }
 
 /// The largest page anyone composes by accident: a 1000 DPI A0 sheet is about
@@ -87,7 +146,25 @@ impl Page {
             width = ((width as f64 * scale) as u32).max(1);
             height = ((height as f64 * scale) as u32).max(1);
         }
-        Page { size, dpi, width, height, pixels: vec![color; (width * height) as usize] }
+        Page {
+            size,
+            dpi,
+            width,
+            height,
+            pixels: vec![color; (width * height) as usize],
+            unit: PageUnit::Inches,
+            origin: [0.0; 3],
+        }
+    }
+
+    /// A length written in the page's unit, in inches.
+    pub fn len(&self, value: f32) -> f32 {
+        self.unit.to_inches(value, self.scale())
+    }
+
+    /// Inches as a length in the page's unit — what a node's row would say.
+    pub fn in_unit(&self, inches: f32) -> f32 {
+        self.unit.from_inches(inches, self.scale())
     }
 
     /// Pixels per inch as a float, measured from the raster rather than read
@@ -237,6 +314,198 @@ impl Page {
             .map_err(|e| format!("png write: {e}"))?;
         writer.finish().map_err(|e| format!("png finish: {e}"))?;
         Ok(())
+    }
+}
+
+/// The page the viewport is showing, without its pixels: enough to place
+/// the image in the scene and to fit a camera to it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct PageShown {
+    /// The displayed page node's id.
+    pub node_id: String,
+    /// Physical size in inches.
+    pub size: [f32; 2],
+    /// The raster's size in pixels.
+    pub pixels: (u32, u32),
+    /// The page's centre in the scene, world units.
+    pub origin: [f32; 3],
+}
+
+impl PageShown {
+    /// The image's size in the scene, in world units of `world_unit_mm`
+    /// millimetres each. The World Unit is a declaration, and a page is the
+    /// one thing in the scene that knows its own physical size, so this is
+    /// the one place a length is converted INTO world units.
+    pub fn world_size(&self, world_unit_mm: f32) -> [f32; 2] {
+        let k = 25.4 / world_unit_mm.max(1e-6);
+        [self.size[0] * k, self.size[1] * k]
+    }
+
+    /// The image's corners in the scene — top-left, top-right, bottom-right,
+    /// bottom-left — standing in the XY plane about its origin and facing
+    /// +Z. The image's y runs down and the world's up, so the top edge is +Y.
+    pub fn world_corners(&self, world_unit_mm: f32) -> [[f32; 3]; 4] {
+        let [w, h] = self.world_size(world_unit_mm);
+        let [x, y, z] = self.origin;
+        let (hw, hh) = (w * 0.5, h * 0.5);
+        [
+            [x - hw, y + hh, z],
+            [x + hw, y + hh, z],
+            [x + hw, y - hh, z],
+            [x - hw, y - hh, z],
+        ]
+    }
+}
+
+/// Which outline a shape is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ShapeKind {
+    Rectangle,
+    Ellipse,
+    /// A straight stroke `size[0]` long, drawn in the stroke colour at the
+    /// stroke width, through the centre.
+    Line,
+    /// A polygon of `sides` corners on the ellipse the box holds, the first
+    /// at the top.
+    Polygon,
+}
+
+impl ShapeKind {
+    pub fn parse(name: &str) -> ShapeKind {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "ellipse" => ShapeKind::Ellipse,
+            "line" => ShapeKind::Line,
+            "polygon" => ShapeKind::Polygon,
+            _ => ShapeKind::Rectangle,
+        }
+    }
+}
+
+/// One shape, in INCHES from the page's top-left corner, as every drawing
+/// operation here is; the node converts from the page's unit.
+pub struct ShapeSpec {
+    pub kind: ShapeKind,
+    pub center: [f32; 2],
+    /// The box the shape fills, before it is turned.
+    pub size: [f32; 2],
+    /// Degrees, clockwise as the page is looked at.
+    pub rotation: f32,
+    /// Rectangle only.
+    pub corner_radius: f32,
+    /// Polygon only.
+    pub sides: u32,
+    /// None draws no fill.
+    pub fill: Option<[f32; 4]>,
+    /// Colour and width; the stroke is centred on the outline, half of it
+    /// inside the shape and half out, as a drawing program's is.
+    pub stroke: Option<([f32; 4], f32)>,
+}
+
+/// Signed distance from `p` to a closed polygon, negative inside.
+fn polygon_distance(p: [f32; 2], corners: &[[f32; 2]]) -> f32 {
+    let n = corners.len();
+    let mut d = f32::MAX;
+    let mut inside = false;
+    for i in 0..n {
+        let (a, b) = (corners[i], corners[(i + 1) % n]);
+        let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+        let (wx, wy) = (p[0] - a[0], p[1] - a[1]);
+        let t = ((wx * ex + wy * ey) / (ex * ex + ey * ey).max(1e-12)).clamp(0.0, 1.0);
+        let (dx, dy) = (wx - ex * t, wy - ey * t);
+        d = d.min(dx * dx + dy * dy);
+        // Even-odd crossing of the ray to the right of `p`.
+        if (a[1] > p[1]) != (b[1] > p[1]) {
+            let x = a[0] + (p[1] - a[1]) / (b[1] - a[1]) * ex;
+            if x > p[0] {
+                inside = !inside;
+            }
+        }
+    }
+    if inside { -d.sqrt() } else { d.sqrt() }
+}
+
+impl Page {
+    /// Draw one shape onto the page.
+    ///
+    /// Coverage comes from the signed DISTANCE to the outline, in pixels: a
+    /// pixel whose centre is half a pixel inside is covered, half a pixel
+    /// outside is not, and between them it is covered in proportion. That is
+    /// what makes a turned rectangle's edge, and a circle's, a clean line
+    /// where a test of the pixel centre leaves a staircase.
+    pub fn shape(&mut self, spec: &ShapeSpec) {
+        let s = self.scale();
+        let (cx, cy) = (spec.center[0] * s, spec.center[1] * s);
+        let line = spec.kind == ShapeKind::Line;
+        // A line is its stroke: a box as long as the line and as thick as
+        // the stroke is wide, filled with the stroke's colour.
+        let (fill, stroke) = if line {
+            (spec.stroke.map(|(c, _)| c), None)
+        } else {
+            (spec.fill, spec.stroke.filter(|(_, w)| *w > 0.0))
+        };
+        let thickness = spec.stroke.map(|(_, w)| w).unwrap_or(0.0) * s;
+        let hw = (spec.size[0].abs() * s * 0.5).max(0.0);
+        let hh = if line { (thickness * 0.5).max(0.5) } else { spec.size[1].abs() * s * 0.5 };
+        if fill.is_none() && stroke.is_none() {
+            return;
+        }
+        let stroke_half = stroke.map(|(_, w)| w * s * 0.5).unwrap_or(0.0);
+
+        let corners: Vec<[f32; 2]> = if spec.kind == ShapeKind::Polygon {
+            let n = spec.sides.clamp(3, 64);
+            (0..n)
+                .map(|i| {
+                    let a = std::f32::consts::TAU * i as f32 / n as f32;
+                    [hw * a.sin(), -hh * a.cos()]
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let radius = spec.corner_radius.max(0.0).min(spec.size[0].abs().min(spec.size[1].abs()) * 0.5) * s;
+        let distance = |p: [f32; 2]| -> f32 {
+            match spec.kind {
+                ShapeKind::Rectangle | ShapeKind::Line => {
+                    let r = if line { 0.0 } else { radius };
+                    let (qx, qy) = (p[0].abs() - (hw - r), p[1].abs() - (hh - r));
+                    (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r
+                }
+                ShapeKind::Ellipse => {
+                    let (a, b) = (hw.max(1e-3), hh.max(1e-3));
+                    let k0 = ((p[0] / a).powi(2) + (p[1] / b).powi(2)).sqrt();
+                    let k1 = ((p[0] / (a * a)).powi(2) + (p[1] / (b * b)).powi(2)).sqrt();
+                    if k1 < 1e-9 { -a.min(b) } else { k0 * (k0 - 1.0) / k1 }
+                }
+                ShapeKind::Polygon => polygon_distance(p, &corners),
+            }
+        };
+
+        let (sin, cos) = spec.rotation.to_radians().sin_cos();
+        let reach = (hw * hw + hh * hh).sqrt() + stroke_half + 1.0;
+        let i0 = (cx - reach).floor().max(0.0) as i64;
+        let j0 = (cy - reach).floor().max(0.0) as i64;
+        let i1 = ((cx + reach).ceil() as i64).min(self.width as i64);
+        let j1 = ((cy + reach).ceil() as i64).min(self.height as i64);
+        for j in j0..j1 {
+            for i in i0..i1 {
+                let (dx, dy) = (i as f32 + 0.5 - cx, j as f32 + 0.5 - cy);
+                // Into the shape's own frame: the page turned back.
+                let p = [dx * cos + dy * sin, -dx * sin + dy * cos];
+                let d = distance(p);
+                if let Some(color) = fill {
+                    let c = (0.5 - d).clamp(0.0, 1.0);
+                    if c > 0.0 {
+                        self.blend(i as u32, j as u32, color, c);
+                    }
+                }
+                if let Some((color, _)) = stroke {
+                    let c = (0.5 - (d.abs() - stroke_half)).clamp(0.0, 1.0);
+                    if c > 0.0 {
+                        self.blend(i as u32, j as u32, color, c);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -393,7 +662,7 @@ use glam::Vec3;
 pub fn is_page_node(node_type: &str) -> bool {
     matches!(
         node_type.to_ascii_lowercase().as_str(),
-        "page" | "page_grid" | "page_border" | "page_text"
+        "page" | "page_grid" | "page_border" | "page_text" | "page_shape"
     )
 }
 
@@ -410,6 +679,23 @@ fn preset_size(name: &str) -> Option<[f32; 2]> {
         "tabloid" => Some([11.0, 17.0]),
         _ => None,
     }
+}
+
+/// Named raster sizes, in PIXELS, landscape as screens are. What such an
+/// image measures in inches is these over the page's Resolution.
+fn preset_pixels(name: &str) -> Option<[f32; 2]> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "hd" => Some([1920.0, 1080.0]),
+        "4k" => Some([3840.0, 2160.0]),
+        "square" => Some([1024.0, 1024.0]),
+        _ => None,
+    }
+}
+
+/// A colour row and an opacity row as one straight-alpha colour.
+fn color_with(node: &FsNode, name: &str, fallback: Vec3, opacity: &str) -> [f32; 4] {
+    let c = node_param_vec3(node, name, fallback);
+    [c.x, c.y, c.z, node_param_f32(node, opacity, 1.0).clamp(0.0, 1.0)]
 }
 
 fn color_of(node: &FsNode, name: &str, fallback: Vec3) -> [f32; 4] {
@@ -441,20 +727,28 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
     let kind = target.node_type.to_ascii_lowercase();
     if kind == "page" {
         let preset = node_param_str(target, "Preset", "Letter");
-        let size = preset_size(&preset).unwrap_or([
-            node_param_f32(target, "Width", 8.5),
-            node_param_f32(target, "Height", 11.0),
-        ]);
+        let unit = PageUnit::parse(&node_param_str(target, "Units", "Inches"));
+        let dpi = node_param_f32(target, "Resolution", 300.0).round().clamp(1.0, 2400.0);
+        // A named size is what it is whatever the Units row says; the row
+        // is what Width and Height — and every node downstream — are in.
+        let size = preset_size(&preset)
+            .or_else(|| preset_pixels(&preset).map(|[w, h]| [w / dpi, h / dpi]))
+            .unwrap_or_else(|| {
+                [
+                    unit.to_inches(node_param_f32(target, "Width", 8.5), dpi),
+                    unit.to_inches(node_param_f32(target, "Height", 11.0), dpi),
+                ]
+            });
         // Landscape is the same sheet turned, not a different sheet: swap the
-        // axes rather than asking for a second pair of numbers.
-        let size = if node_param_str(target, "Orientation", "Portrait").eq_ignore_ascii_case("Landscape")
-        {
-            [size[1], size[0]]
-        } else {
-            size
-        };
-        let dpi = node_param_f32(target, "Resolution", 300.0).round().max(1.0) as u32;
-        return Some(Page::new(size, dpi, color_of(target, "Color", Vec3::ONE)));
+        // axes rather than asking for a second pair of numbers. A raster
+        // preset is named as it lies, and Custom says its own two numbers.
+        let turned = preset_size(&preset).is_some()
+            && node_param_str(target, "Orientation", "Portrait").eq_ignore_ascii_case("Landscape");
+        let size = if turned { [size[1], size[0]] } else { size };
+        let mut page = Page::new(size, dpi as u32, color_with(target, "Color", Vec3::ONE, "Opacity"));
+        page.unit = unit;
+        page.origin = node_param_vec3(target, "Position", Vec3::ZERO).to_array();
+        return Some(page);
     }
 
     // Everything else composites onto its input, so a chain with no page at
@@ -479,26 +773,54 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
                 [0.0; 4]
             };
             page.grid(
-                node_param_f32(target, "Cell Size", 0.25),
-                node_param_f32(target, "Line Width", 0.01),
+                page.len(node_param_f32(target, "Cell Size", 0.25)),
+                page.len(node_param_f32(target, "Line Width", 0.01)),
                 cell_color,
                 color_of(target, "Line Color", Vec3::ZERO),
             );
         }
         "page_border" => page.border(
-            node_param_f32(target, "Width", 0.06),
-            node_param_f32(target, "Inset", 0.4),
+            page.len(node_param_f32(target, "Width", 0.06)),
+            page.len(node_param_f32(target, "Inset", 0.4)),
             color_of(target, "Color", Vec3::ZERO),
         ),
+        "page_shape" => {
+            let spec = ShapeSpec {
+                kind: ShapeKind::parse(&node_param_str(target, "Shape", "Rectangle")),
+                center: [
+                    page.len(node_param_f32(target, "X", 0.0)),
+                    page.len(node_param_f32(target, "Y", 0.0)),
+                ],
+                size: [
+                    page.len(node_param_f32(target, "Width", 1.0)),
+                    page.len(node_param_f32(target, "Height", 1.0)),
+                ],
+                rotation: node_param_f32(target, "Rotation", 0.0),
+                corner_radius: page.len(node_param_f32(target, "Corner Radius", 0.0)),
+                sides: node_param_f32(target, "Sides", 3.0).round().max(3.0) as u32,
+                fill: toggle_of(target, "Fill")
+                    .then(|| color_with(target, "Fill Color", Vec3::splat(0.5), "Fill Opacity")),
+                stroke: toggle_of(target, "Stroke").then(|| {
+                    (
+                        color_with(target, "Stroke Color", Vec3::ZERO, "Stroke Opacity"),
+                        page.len(node_param_f32(target, "Stroke Width", 0.02)),
+                    )
+                }),
+            };
+            page.shape(&spec);
+        }
         "page_text" => {
             let text = node_param_str(target, "Text", "");
             let font = node_param_str(target, "Font", "");
             let spec = TextSpec {
                 text: &text,
                 font: &font,
-                size: node_param_f32(target, "Size", 0.25),
+                size: page.len(node_param_f32(target, "Size", 0.25)),
                 color: color_of(target, "Color", Vec3::ZERO),
-                at: [node_param_f32(target, "X", 4.25), node_param_f32(target, "Y", 0.8)],
+                at: [
+                    page.len(node_param_f32(target, "X", 4.25)),
+                    page.len(node_param_f32(target, "Y", 0.8)),
+                ],
                 halign: match node_param_str(target, "Horizontal", "Center").as_str() {
                     "Left" => HAlign::Left,
                     "Right" => HAlign::Right,
@@ -549,12 +871,16 @@ fn with_fonts<R>(
 /// the LAST visible page node wins — the one furthest down the roster, which
 /// is the one most recently added.
 pub fn displayed_page(root: &FsNode, level: &FsNode) -> Option<Page> {
-    let target = level
+    resolve_page(root, displayed_page_node(level)?, &mut Vec::new())
+}
+
+/// The node [`displayed_page`] draws.
+pub fn displayed_page_node(level: &FsNode) -> Option<&FsNode> {
+    level
         .children
         .iter()
         .filter(|c| is_page_node(&c.node_type) && c.geometry_visible)
-        .next_back()?;
-    resolve_page(root, target, &mut Vec::new())
+        .next_back()
 }
 
 /// The font stack, for tests that draw text without a node behind them.

@@ -4,11 +4,14 @@
  "inputs": 0,
  "outputs": 1,
  "params": [
-  { "name": "Preset", "type": "choice:Letter,A4,Legal,Tabloid,Custom", "default": "Letter" },
-  { "name": "Width", "type": "slider", "default": "8.5", "min": 0.5, "max": 48.0, "step": 0.25, "show_when": "Preset == Custom" },
-  { "name": "Height", "type": "slider", "default": "11.0", "min": 0.5, "max": 48.0, "step": 0.25, "show_when": "Preset == Custom" },
-  { "name": "Orientation", "type": "choice:Portrait,Landscape", "default": "Portrait" },
+  { "name": "Preset", "type": "choice:Letter,A4,Legal,Tabloid,HD,4K,Square,Custom", "default": "Letter" },
+  { "name": "Units", "type": "choice:Inches,Millimetres,Centimetres,Pixels", "default": "Inches" },
+  { "name": "Width", "type": "float", "default": "8.5", "show_when": "Preset == Custom" },
+  { "name": "Height", "type": "float", "default": "11.0", "show_when": "Preset == Custom" },
+  { "name": "Orientation", "type": "choice:Portrait,Landscape", "default": "Portrait", "show_when": "Preset == Letter|A4|Legal|Tabloid" },
   { "name": "Resolution", "type": "spinbox", "default": "300", "min": 18, "max": 1200, "step": 6 },
-  { "name": "Color", "type": "float3", "default": "1.00:1.00:1.00", "min": 0.0, "max": 1.0 }
+  { "name": "Color", "type": "float3", "default": "1.00:1.00:1.00", "min": 0.0, "max": 1.0 },
+  { "name": "Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01 },
+  { "name": "Position", "type": "float3", "default": "0.00:0.00:0.00", "min": -1000.0, "max": 1000.0 }
  ]
 }

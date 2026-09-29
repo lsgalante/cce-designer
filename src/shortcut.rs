@@ -72,6 +72,14 @@ pub enum Action {
     ToggleNetworkPlate,
     /// Clear the node selection.
     Deselect,
+    /// Turn the camera square to the image the viewport shows and fit it.
+    FrameImage,
+    /// The same, at one image pixel to one display pixel.
+    ViewImagePixels,
+    /// A new image (a page node), shown and selected.
+    NewImage,
+    /// A shape or text node on the selected or shown image.
+    AddToImage(crate::image_tools::ImageLayer),
 }
 
 #[derive(Debug, Clone)]

@@ -1,0 +1,24 @@
+{
+ "name": "Page Shape",
+ "type": "page_shape",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  { "name": "Input", "type": "node", "default": "" },
+  { "name": "Shape", "type": "choice:Rectangle,Ellipse,Line,Polygon", "default": "Rectangle" },
+  { "name": "X", "type": "float", "default": "4.25" },
+  { "name": "Y", "type": "float", "default": "5.50" },
+  { "name": "Width", "type": "float", "default": "3.00" },
+  { "name": "Height", "type": "float", "default": "2.00", "show_when": "Shape != Line" },
+  { "name": "Rotation", "type": "slider", "default": "0", "min": -180.0, "max": 180.0, "step": 1.0 },
+  { "name": "Corner Radius", "type": "float", "default": "0.00", "show_when": "Shape == Rectangle" },
+  { "name": "Sides", "type": "spinbox", "default": "3", "min": 3, "max": 64, "step": 1, "show_when": "Shape == Polygon" },
+  { "name": "Fill", "type": "toggle", "default": "true", "show_when": "Shape != Line" },
+  { "name": "Fill Color", "type": "float3", "default": "0.20:0.45:0.85", "min": 0.0, "max": 1.0, "show_when": "Shape != Line && Fill == true" },
+  { "name": "Fill Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01, "show_when": "Shape != Line && Fill == true" },
+  { "name": "Stroke", "type": "toggle", "default": "true" },
+  { "name": "Stroke Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0, "show_when": "Stroke == true" },
+  { "name": "Stroke Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01, "show_when": "Stroke == true" },
+  { "name": "Stroke Width", "type": "float", "default": "0.02", "show_when": "Stroke == true" }
+ ]
+}

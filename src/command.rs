@@ -163,6 +163,18 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "layout_nodes", label: "Layout Nodes", context: Context::Network, run: Run::Key(Action::LayoutNodes), default_chord: Some("Ctrl+Shift+l") },
     Command { id: "frame_all", label: "Frame All", context: Context::Network, run: Run::Key(Action::FrameAll), default_chord: Some("Shift+f") },
 
+    // --- Images ---
+    // The 2D context's commands (`src/image_tools.rs`). The two camera rows
+    // are the viewport's; the rest make nodes, so they are the network's.
+    Command { id: "frame_image", label: "Frame Image", context: Context::Viewport, run: Run::Key(Action::FrameImage), default_chord: Some("Ctrl+Shift+f") },
+    Command { id: "view_image_pixels", label: "View Image Pixels 1:1", context: Context::Viewport, run: Run::Key(Action::ViewImagePixels), default_chord: None },
+    Command { id: "new_image", label: "New Image", context: Context::Network, run: Run::Key(Action::NewImage), default_chord: None },
+    Command { id: "add_image_rectangle", label: "Add Rectangle to Image", context: Context::Network, run: Run::Key(Action::AddToImage(crate::image_tools::ImageLayer::Rectangle)), default_chord: None },
+    Command { id: "add_image_ellipse", label: "Add Ellipse to Image", context: Context::Network, run: Run::Key(Action::AddToImage(crate::image_tools::ImageLayer::Ellipse)), default_chord: None },
+    Command { id: "add_image_line", label: "Add Line to Image", context: Context::Network, run: Run::Key(Action::AddToImage(crate::image_tools::ImageLayer::Line)), default_chord: None },
+    Command { id: "add_image_polygon", label: "Add Polygon to Image", context: Context::Network, run: Run::Key(Action::AddToImage(crate::image_tools::ImageLayer::Polygon)), default_chord: None },
+    Command { id: "add_image_text", label: "Add Text to Image", context: Context::Network, run: Run::Key(Action::AddToImage(crate::image_tools::ImageLayer::Text)), default_chord: None },
+
     // --- Network ---
     // The add-node palette. Tab opens it inline (like Escape's cascade, and
     // like `deselect` above, the row ships unbound rather than duplicating a
