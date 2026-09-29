@@ -13081,4 +13081,78 @@ mod tests {
         assert!(w[1] > 0.01, "a notch down turns it toward +Y: {w:?}");
         assert!((len(&w) - 0.06).abs() < 2e-3);
     }
+
+    /// The trackball is seen from the viewport's camera: the direction
+    /// from the scene toward the camera is the ball's toward-the-viewer
+    /// axis, the scene's up stays up on the ball, and orbiting the camera
+    /// moves the view. A vector pointing at the camera faces the viewer on
+    /// the ball, and rolling the ball to the right swings the node's
+    /// vector to the right of the SCREEN.
+    #[test]
+    fn the_trackball_follows_the_viewport_camera() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton, ParametersBg};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
+        let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
+        // A pull of length 0.6 straight at a camera out along (2.5, 1.8, 2.5).
+        let eye = Vec3::new(2.5, 1.8, 2.5);
+        let at_camera = eye.normalize() * 0.6;
+        let text = format!("{:.4}:{:.4}:{:.4}", at_camera.x, at_camera.y, at_camera.z);
+        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", text.as_str())] {
+            state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        state.graph_mut().set_selected_node(Some(pull));
+        state.sync_parameters_pane();
+        state.rebuild_positions();
+        state.apply_layout();
+
+        assert!(state.sync_trackball_view(eye, Vec3::ZERO, Vec3::ZERO), "the view moved off the identity");
+        assert!(!state.sync_trackball_view(eye, Vec3::ZERO, Vec3::ZERO), "the same camera again moves nothing");
+        let ball_view = |state: &State| {
+            let pane: &ParametersBg = state.slots.param.inner();
+            pane.float3s.iter().flatten().next().expect("the Value row").view()
+        };
+        let view = ball_view(&state);
+        let (right, up, toward) = (Vec3::from(view[0]), Vec3::from(view[1]), Vec3::from(view[2]));
+        assert!(toward.distance(eye.normalize()) < 1e-4, "toward the viewer is toward the camera: {toward:?}");
+        assert!(up.y > 0.5, "the scene's up is up on the ball: {up:?}");
+        assert!(right.dot(toward).abs() < 1e-4 && right.cross(up).distance(toward) < 1e-4, "a right-handed view");
+
+        // Roll the ball a quarter turn right: the pull, which pointed at
+        // the camera, now points along the camera's right.
+        let (cx, cy, r) = {
+            let pane: &ParametersBg = state.slots.param.inner();
+            pane.float3s.iter().flatten().next().unwrap().ball_circle().unwrap()
+        };
+        let at = |x: f32, y: f32| WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } };
+        state.handle_event(&at(cx, cy));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        for i in 1..=20 {
+            state.handle_event(&at(cx + r * std::f32::consts::FRAC_PI_2 * i as f32 / 20.0, cy));
+        }
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+            .text().split(':').map(|c| c.parse().unwrap()).collect();
+        let v = Vec3::new(v[0], v[1], v[2]);
+        assert!(v.distance(right * 0.6) < 5e-3, "the pull lies along screen right: {v:?} against {:?}", right * 0.6);
+
+        // Orbiting the camera moves the ball's view with it.
+        state.orbit_camera_by(120.0, 0.0);
+        let orbited = if state.active_camera == "Default Camera" {
+            state.sync_trackball_view(eye, Vec3::ZERO, Vec3::ZERO)
+        } else {
+            state.set_active_camera("Default Camera");
+            state.orbit_camera_by(120.0, 0.0);
+            state.sync_trackball_view(eye, Vec3::ZERO, Vec3::ZERO)
+        };
+        assert!(orbited, "an orbit moves the view");
+        assert!(Vec3::from(ball_view(&state)[2]).distance(toward) > 0.05);
+    }
 }

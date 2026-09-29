@@ -10379,9 +10379,31 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// the 3D scene / RT pane. Returns true while the path tracer is still
     /// refining, to keep frames coming. The renderer's window-corner clip is
     /// left at the engine default (0) — the compositor rounds the window.
+    /// See the params pane's trackballs from the camera the viewport is
+    /// looking through: the view matrix's rotation, as the camera's right,
+    /// its up and the direction toward it, in the scene's space — which is
+    /// the space a node's vector is in, the model matrix being the
+    /// identity. The vector on the ball then lies as the pull arrows do in
+    /// the viewport beside it, and rolling the ball to the right swings
+    /// the vector to the right of the screen. Returns whether the view
+    /// moved, so the stage pass can ask for the frame that shows it.
+    pub fn sync_trackball_view(&mut self, camera_pos: Vec3, rotation: Vec3, pivot: Vec3) -> bool {
+        let (_, view, model) = self.viewport().get_matrices(1.0, Some(camera_pos), Some(rotation), Some(pivot));
+        let m = view * model;
+        // Row i of the matrix is the view's axis i, as a direction of the
+        // scene: x right, y up, z back toward the camera (a right-handed
+        // view looks down its own -Z).
+        let row = |i: usize| [m.x_axis[i], m.y_axis[i], m.z_axis[i]];
+        self.slots.param.inner_mut().set_trackball_view([row(0), row(1), row(2)])
+    }
+
     pub fn stage_frame(&mut self, renderer: &mut cce_ui::vk::VkRenderer) -> bool {
         self.flush_pending_meshes(renderer);
         let meshes = self.meshes.expect("stage_frame before renderer_init");
+        // Whether the trackballs' view moved this pass. The pane may have
+        // been painted for this frame already, so a moved view asks for one
+        // more — the ball trails the camera by a frame, never by more.
+        let mut trackball_moved = false;
 
         // 3D canvas: stage the scene into the renderer's backdrop when the
         // viewport is visible and its inputs changed; unstaged frames reuse the
@@ -10461,6 +10483,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         camera_pos = Vec3::new(cx, cy, cz);
                     }
                 }
+
+                trackball_moved = self.sync_trackball_view(camera_pos, Vec3::new(rx, ry, rz), pivot);
 
                 let rt_mode = self.viewport().rt_mode;
                 let viewport_changed = self.viewport_dirty
@@ -10678,12 +10702,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
 
         // The engine draws the frame; keep frames coming while the path
-        // tracer is still refining.
-        !self.is_detached_network
-            && self.detached_pane.is_none()
-            && self.show_viewport
-            && self.viewport().rt_mode
-            && renderer.rt_accumulating()
+        // tracer is still refining, and for the one that shows a trackball
+        // its new view.
+        trackball_moved
+            || (!self.is_detached_network
+                && self.detached_pane.is_none()
+                && self.show_viewport
+                && self.viewport().rt_mode
+                && renderer.rt_accumulating())
     }
 }
 

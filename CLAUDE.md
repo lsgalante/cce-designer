@@ -595,7 +595,16 @@ old text Center a float3 from the load on. Tests build parameters with
   instance has not chosen, and it is serialized only when set, so a file
   that never used it is byte-identical. The row menu reads such a row as
   `Control: trackball and sliders`, `Type: float3`. With the ball on the
-  row writes three decimals.
+  row writes three decimals. **The ball is seen from the viewport's
+  camera** (`State::sync_trackball_view`, called from the stage pass once
+  the active camera's pose is resolved): the view matrix's rotation goes
+  to the pane as the camera's right, up and toward axes, so the vector on
+  the ball lies as the pull arrows do in the viewport beside it, and
+  rolling the ball right swings the vector to the right of the SCREEN. The
+  numbers stay the scene's. The pane may already be painted when the
+  stage pass runs, so a moved view returns true from `stage_frame` for one
+  more frame: the ball trails an orbit by a frame, never by more. A
+  detached params window has no viewport and keeps the identity view.
 - **`float` is a number with no range.** The pane's slider and float3 rows
   hold a FRACTION of their range and clamp to it, so a threshold, a scale
   factor or a manual ramp end cannot be a slider without losing values
