@@ -1173,6 +1173,8 @@ impl State {
         }
         if had_page || self.page_shown.is_some() {
             self.viewport_dirty = true;
+            // The path tracer's scene holds the image too.
+            self.page_version += 1;
         }
     }
 

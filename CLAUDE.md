@@ -1606,7 +1606,25 @@ about a fifth of its size in an ordinary pane, and without a mip chain a
 ruled page was moiré head-on and worse at a slant. `State::page_shown` is what the stage pass
 places it by. Until then a pane of its own (`PAGE_IDX`, an `ImageView`)
 took the viewport's rect whenever the level held a page, so a picture and
-a model could not be seen together. The path tracer does not draw it.
+a model could not be seen together.
+
+**The path tracer draws it too** (since 2026-09-29), in the viewport's
+traced mode and in `--thumbnail`. The stage pass hands the tracer the same
+upload at the same corners (`set_rt_scene_with_image`, a `cce_ui::vk::
+RtImage`), and cce-ui adds the quad to the traced scene as two triangles
+under a textured material — so both tiers meet it as any triangle, and a
+scene that is an image ALONE is not an empty one, which the tracer used to
+skip. Traced, the image is a SURFACE: its colour is the albedo, lit by the
+sky and shadowed by the geometry as the geometry is, where the raster pass
+draws it unlit; and where it is clear a ray goes through, by chance in
+proportion to the alpha. The traced scene's key is the geometry's version,
+the image's (`State::page_version`, moved by every recomposition) and the
+world unit, which sizes the image. The thumbnail has no 2D pass to share
+an upload with and hands over the pixels (`RtImagePixels`); an image alone
+is taken square on and fitted edge to edge (`thumbnail::view_of`), since
+from the diagonal a picture is a slanted sliver of itself, and one with
+geometry is inside the diagonal view's bounds. The denoiser softens fine
+text on the image until the samples have settled.
 
 **The display flag is exclusive within its CONTEXT**
 (`set_child_geometry_visible`): the page nodes and the geometry nodes each

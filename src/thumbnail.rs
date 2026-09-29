@@ -53,21 +53,38 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
     let verts = crate::geometry::detail_vertices(&geom);
     let (tris, mats) = rt_scene_from_verts(&verts);
 
-    // Frame the scene: bounding sphere fit into a 0.9 rad vertical FOV from a
-    // pleasant high-diagonal direction. An empty scene still renders (sky).
-    let (center, radius) = bounds(&tris);
-    let fov = 0.9f32;
-    let dist = (radius / (fov * 0.5).sin()).max(0.5) * 1.15;
-    let eye = center + Vec3::new(1.0, 0.65, 1.0).normalize() * dist;
-    let near = (dist - radius * 2.0).max(dist * 0.01);
-    let far = dist + radius * 4.0 + 1.0;
-    let proj_m = Mat4::perspective_rh(fov, 1.0, near, far);
+    // The image the top level shows stands in the scene as it does in the
+    // viewport, at its physical size in the project's world unit.
+    let page = crate::page::displayed_page(&proj.root, &proj.root);
+    let corners = page.as_ref().map(|page| {
+        crate::page::PageShown {
+            node_id: String::new(),
+            size: page.size,
+            pixels: (page.width, page.height),
+            origin: page.origin,
+        }
+        .world_corners(world_unit_mm(&proj))
+    });
+    let rgba = page.as_ref().map(|page| page.to_rgba8());
+
+    let (eye, center, near, far) = view_of(&tris, corners);
+    let proj_m = Mat4::perspective_rh(FOV, 1.0, near, far);
     let view_m = Mat4::look_at_rh(eye, center, Vec3::Y);
     let camera =
         cce_ui::vk::RtCamera { inv_mvp: (proj_m * view_m).inverse().to_cols_array_2d() };
 
     let mut off = cce_ui::vk::RtOffscreen::new();
-    off.set_scene(&tris, &mats);
+    let image = match (&page, &rgba, corners) {
+        (Some(page), Some(rgba), Some(corners)) => Some(cce_ui::vk::RtImagePixels {
+            pixels: rgba,
+            width: page.width,
+            height: page.height,
+            corners,
+            opacity: 1.0,
+        }),
+        _ => None,
+    };
+    off.set_scene_with_image(&tris, &mats, image);
     let pixels = off.render(camera, size, size, samples.unwrap_or(SAMPLES));
 
     let file = std::fs::File::create(out).map_err(|e| format!("create {}: {e}", out.display()))?;
@@ -81,18 +98,65 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
     Ok(())
 }
 
-fn bounds(tris: &[cce_ui::vk::RtTriangle]) -> (Vec3, f32) {
-    if tris.is_empty() {
-        return (Vec3::ZERO, 1.0);
+/// The thumbnail camera's vertical field of view.
+const FOV: f32 = 0.9;
+
+/// One world unit of the project in millimetres: the unit its display
+/// settings name, or the app's own default for a save from before it
+/// carried them.
+fn world_unit_mm(proj: &Project) -> f32 {
+    let name = proj
+        .view_state
+        .display
+        .as_ref()
+        .map(|d| d.viewport.world_unit.clone())
+        .unwrap_or_else(|| crate::app::ViewportSettings::default().world_unit);
+    let unit = cce_ui::units::Unit::parse(&name).unwrap_or(cce_ui::units::Unit::Mm);
+    let metric = cce_ui::units::metric();
+    cce_ui::units::Len::new(1.0, unit).convert(cce_ui::units::Unit::Mm, &metric).value
+}
+
+/// Where the thumbnail is taken from: the eye, what it looks at, and the
+/// near and far planes.
+///
+/// Geometry is seen from a pleasant high diagonal, its bounding sphere fitted
+/// to the view, and an image standing with it is inside that sphere. An
+/// image ALONE is seen square on and fitted edge to edge: from the diagonal
+/// a picture is a slanted sliver of itself, and the thumbnail of a picture
+/// is the picture. An empty scene still renders (sky).
+pub(crate) fn view_of(
+    tris: &[cce_ui::vk::RtTriangle],
+    image: Option<[[f32; 3]; 4]>,
+) -> (Vec3, Vec3, f32, f32) {
+    if let (true, Some(corners)) = (tris.is_empty(), image) {
+        let [tl, tr, br, _] = corners.map(Vec3::from_array);
+        let center = (tl + br) * 0.5;
+        let longest = (tr - tl).length().max((br - tr).length()).max(1e-3);
+        let dist = longest / (2.0 * (FOV * 0.5).tan()) * 1.05;
+        return (center + Vec3::Z * dist, center, dist * 0.01, dist * 4.0);
     }
+    let points = tris
+        .iter()
+        .flat_map(|t| [t.p0, t.p1, t.p2])
+        .chain(image.into_iter().flatten())
+        .map(Vec3::from_array);
+    let (center, radius) = bounds(points);
+    let dist = (radius / (FOV * 0.5).sin()).max(0.5) * 1.15;
+    let eye = center + Vec3::new(1.0, 0.65, 1.0).normalize() * dist;
+    let near = (dist - radius * 2.0).max(dist * 0.01);
+    let far = dist + radius * 4.0 + 1.0;
+    (eye, center, near, far)
+}
+
+fn bounds(points: impl Iterator<Item = Vec3>) -> (Vec3, f32) {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
-    for t in tris {
-        for p in [t.p0, t.p1, t.p2] {
-            let v = Vec3::from_array(p);
-            min = min.min(v);
-            max = max.max(v);
-        }
+    for v in points {
+        min = min.min(v);
+        max = max.max(v);
+    }
+    if !min.is_finite() {
+        return (Vec3::ZERO, 1.0);
     }
     let center = (min + max) * 0.5;
     let radius = (max - center).length().max(1e-3);

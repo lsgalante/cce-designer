@@ -2487,7 +2487,12 @@ pub struct State {
     /// Bumped by `rebuild_scene_geometry`; part of the RT-scene cache key.
     pub rt_geometry_version: u64,
     /// The `rt_geometry_version` the RT scene was last built from.
-    pub last_rt_scene_key: Option<u64>,
+    /// The traced scene as it was last handed over: the geometry's version,
+    /// the image's, and the world unit's bits, which size the image.
+    pub last_rt_scene_key: Option<(u64, u64, u32)>,
+    /// Counts the recompositions of the shown image, as
+    /// `rt_geometry_version` counts the geometry's.
+    pub page_version: u64,
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -6735,6 +6740,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
             last_rt_scene_key: None,
+            page_version: 0,
             ui_context: cce_ui::context::UiContext::new(),
         };
 
@@ -11086,10 +11092,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // the camera/pane changes, so camera drags stay interactive
                 // (1-spp noise) and stillness converges.
                 if rt_mode {
-                    let key = self.rt_geometry_version;
+                    let unit_mm = self.world_unit_mm();
+                    let key = (self.rt_geometry_version, self.page_version, unit_mm.to_bits());
                     if self.last_rt_scene_key != Some(key) {
                         let (rt_tris, rt_mats) = self.collect_rt_scene();
-                        renderer.set_rt_scene(&rt_tris, &rt_mats);
+                        // The image the raster pass draws, traced: the same
+                        // upload, at the same corners.
+                        let image = self.page_image.zip(self.page_shown.as_ref()).map(
+                            |(image, shown)| cce_ui::vk::RtImage {
+                                image,
+                                corners: shown.world_corners(unit_mm),
+                                opacity: 1.0,
+                            },
+                        );
+                        renderer.set_rt_scene_with_image(&rt_tris, &rt_mats, image);
                         self.last_rt_scene_key = Some(key);
                     }
                     let aspect = cw as f32 / ch as f32;
