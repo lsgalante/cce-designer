@@ -551,6 +551,16 @@ impl AttribStore {
         }
     }
 
+    /// Put one element in a group or take it out, creating the group if
+    /// needed. Out-of-range indices are ignored.
+    pub fn set_in_group(&mut self, name: &str, i: usize, member: bool) {
+        let len = self.len;
+        let members = self.groups.entry(name.to_string()).or_insert_with(|| vec![false; len]);
+        if let Some(slot) = members.get_mut(i) {
+            *slot = member;
+        }
+    }
+
     pub fn in_group(&self, name: &str, i: usize) -> bool {
         self.groups.get(name).and_then(|m| m.get(i)).copied().unwrap_or(false)
     }

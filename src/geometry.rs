@@ -1927,16 +1927,16 @@ pub fn resolve_relax_geometry_with_errors(
     if node_param_str(target, "Mode", "Springs").eq_ignore_ascii_case("repel") {
         let iterations = node_param_f32(target, "Iterations", 8.0).max(0.0) as usize;
         let radius = node_param_f32(target, "Radius", 0.05);
-        if iterations == 0 || radius <= 0.0 || geom.num_points() < 2 {
-            return Some(geom);
+        if iterations > 0 && radius > 0.0 && geom.num_points() >= 2 {
+            let in_3d = node_param_bool(target, "In 3D Space", false);
+            let normals = if in_3d { None } else { Some(point_normals(&geom)) };
+            let mut pts: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
+            crate::scatter::relax_points(&mut pts, normals.as_deref(), radius, iterations);
+            for (i, q) in pts.into_iter().enumerate() {
+                geom.set_pos(i, q);
+            }
         }
-        let in_3d = node_param_bool(target, "In 3D Space", false);
-        let normals = if in_3d { None } else { Some(point_normals(&geom)) };
-        let mut pts: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
-        crate::scatter::relax_points(&mut pts, normals.as_deref(), radius, iterations);
-        for (i, q) in pts.into_iter().enumerate() {
-            geom.set_pos(i, q);
-        }
+        relax_transfer(&mut geom, root, target, visited, ocl_error, sim);
         return Some(geom);
     }
 
@@ -1947,6 +1947,8 @@ pub fn resolve_relax_geometry_with_errors(
         return Some(geom);
     };
     if rest.num_points() != geom.num_points() || geom.is_empty() {
+        // Springs need the index correspondence; the transfer does not.
+        relax_transfer(&mut geom, root, target, visited, ocl_error, sim);
         return Some(geom);
     }
 
@@ -1984,7 +1986,44 @@ pub fn resolve_relax_geometry_with_errors(
     for (p, v) in pos.iter().enumerate() {
         geom.set_pos(p, *v);
     }
+    relax_transfer(&mut geom, root, target, visited, ocl_error, sim);
     Some(geom)
+}
+
+/// The Relax node's copy of the Transfer node, `Transfer From Rest`: once
+/// the points have moved, the Rest geometry's attributes and groups laid
+/// over them by nearest point (`transfer_onto`), in either mode. What it
+/// is for: a chain whose remesh renumbers, splits and collapses points
+/// can keep a group alive — the pull's — by reading it back off a rest
+/// shape that still carries it, at every step, without a Transfer node
+/// wired in beside the relax.
+fn relax_transfer(
+    geom: &mut Detail,
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) {
+    if !node_param_bool(target, "Transfer From Rest", false) {
+        return;
+    }
+    let Some(rest_node) = param_node(root, target, "Rest") else {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!("{}: Transfer From Rest needs a Rest", target.name));
+        }
+        return;
+    };
+    let Some(rest) = generate_single_node_geometry_with_errors(root, rest_node, visited, ocl_error, sim) else { return };
+    let groups = node_param_bool(target, "Transfer Groups", false).then(|| name_list(&node_param_str(target, "Groups", "")));
+    transfer_onto(
+        geom,
+        &rest,
+        &name_list(&node_param_str(target, "Attributes", "")),
+        groups.as_deref(),
+        node_param_f32(target, "Maximum Distance", 0.0),
+        "",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2700,30 +2739,74 @@ pub fn resolve_transfer_geometry_with_errors(
         return Some(geom);
     }
 
-    let wanted = node_param_str(target, "Attributes", "");
-    let wanted: Vec<String> = wanted
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    let names: Vec<String> = if wanted.is_empty() {
+    let groups = node_param_bool(target, "Transfer Groups", false).then(|| name_list(&node_param_str(target, "Groups", "")));
+    transfer_onto(
+        &mut geom,
+        &source,
+        &name_list(&node_param_str(target, "Attributes", "")),
+        groups.as_deref(),
+        node_param_f32(target, "Maximum Distance", 0.0),
+        node_param_str(target, "Group", "").trim(),
+    );
+    Some(geom)
+}
+
+/// A comma list of names, trimmed, the empty ones dropped.
+pub(crate) fn name_list(text: &str) -> Vec<String> {
+    text.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
+}
+
+/// The Transfer node's work, and the Relax node's copy of it: onto each
+/// point of `geom` (in `only`, when that names a group; within `limit` of
+/// its nearest source point, when that is above zero), the nearest point
+/// of `source`'s attributes and group memberships.
+///
+/// `attributes` names the point attributes, every one the source has when
+/// empty. `groups` names the point GROUPS — every one the source has when
+/// empty, and none at all when `None`, which is what a node from before
+/// groups could be transferred asks (2026-09-30). A membership is COPIED:
+/// a point whose nearest source point is in the group joins it, and one
+/// whose is not leaves it, so a group carried this way is the source's
+/// group laid over the target and not a union with what the target had.
+/// A group the target lacks is created, so it exists everywhere the
+/// attribute columns do.
+pub(crate) fn transfer_onto(
+    geom: &mut Detail,
+    source: &Detail,
+    attributes: &[String],
+    groups: Option<&[String]>,
+    limit: f32,
+    only: &str,
+) {
+    if source.num_points() == 0 || geom.num_points() == 0 {
+        return;
+    }
+    let names: Vec<String> = if attributes.is_empty() {
         source.points().names().iter().map(|s| s.to_string()).collect()
     } else {
-        wanted
-            .into_iter()
-            .filter(|n| source.points().has(n))
-            .collect()
+        attributes.iter().filter(|n| source.points().has(n)).cloned().collect()
     };
-    if names.is_empty() {
-        return Some(geom);
+    let group_names: Vec<String> = match groups {
+        None => Vec::new(),
+        Some(wanted) if wanted.is_empty() => source.points().group_names().iter().map(|s| s.to_string()).collect(),
+        Some(wanted) => wanted.iter().filter(|g| source.points().has_group(g)).cloned().collect(),
+    };
+    if names.is_empty() && group_names.is_empty() {
+        return;
     }
-
-    let limit = node_param_f32(target, "Maximum Distance", 0.0).max(0.0);
-    let group = node_param_str(target, "Group", "");
-    let group = group.trim().to_string();
-
+    let limit = limit.max(0.0);
     let src_pos: Vec<Vec3> = (0..source.num_points()).map(|p| source.pos(p)).collect();
     let grid = crate::spatial::PointGrid::build(&src_pos, limit.max(1e-3));
+    // Each target point's source, found once for every column.
+    let from: Vec<Option<usize>> = (0..geom.num_points())
+        .map(|p| {
+            if !only.is_empty() && !geom.points().in_group(only, p) {
+                return None;
+            }
+            let (q, dist) = grid.nearest(geom.pos(p))?;
+            (limit <= 0.0 || dist <= limit).then_some(q as usize)
+        })
+        .collect();
 
     for name in &names {
         let Some(ty) = source.points().get(name).map(|a| a.ty()) else { continue };
@@ -2733,21 +2816,22 @@ pub fn resolve_transfer_geometry_with_errors(
         geom.points_mut()
             .get_or_create(name, components_attrib(ty, &vec![0.0; ty.components()]));
         geom.points_mut().set_kind(name, source.points().kind(name));
-
-        for p in 0..geom.num_points() {
-            if !group.is_empty() && !geom.points().in_group(&group, p) {
-                continue;
-            }
-            let Some((q, dist)) = grid.nearest(geom.pos(p)) else { continue };
-            if limit > 0.0 && dist > limit {
-                continue;
-            }
-            if let Some(v) = source.points().value(name, q as usize) {
+        for (p, q) in from.iter().enumerate() {
+            let Some(q) = q else { continue };
+            if let Some(v) = source.points().value(name, *q) {
                 let _ = geom.points_mut().set_value(name, p, v);
             }
         }
     }
-    Some(geom)
+    for g in &group_names {
+        if !geom.points().has_group(g) {
+            geom.points_mut().create_group(g);
+        }
+        for (p, q) in from.iter().enumerate() {
+            let Some(q) = q else { continue };
+            geom.points_mut().set_in_group(g, p, source.points().in_group(g, *q));
+        }
+    }
 }
 
 /// The Valence node: how connected each point is, as data.

@@ -4788,7 +4788,7 @@ mod tests {
                 assert_eq!(p.kind(), K::Group, "{}'s Group", t.name);
             }
         }
-        for (ty, name) in [("attribute", "Value"), ("transfer", "Attributes"), ("simnet", "Start Frame"), ("bounds", "Prefix")] {
+        for (ty, name) in [("attribute", "Value"), ("transfer", "Attributes"), ("transfer", "Groups"), ("relax", "Attributes"), ("relax", "Groups"), ("simnet", "Start Frame"), ("bounds", "Prefix")] {
             assert_eq!(kind(ty, name), K::Text, "{ty}'s {name} stays text on purpose");
         }
         // Every template's Input is a wire, top level and composed children alike.
@@ -10389,6 +10389,105 @@ mod tests {
         );
         let (_, err) = eval_node(&broken, "transfer 1");
         assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+    }
+
+    /// Transfer carries GROUPS as it carries attributes: with Transfer
+    /// Groups on, each target point takes its nearest source point's
+    /// membership in the named groups — every group when none is named —
+    /// joining and leaving alike; off, or on a node from before the row,
+    /// no group moves. The Relax node has the same transfer inside it,
+    /// from its Rest, in either mode and whatever the rest's point count.
+    #[test]
+    fn transfer_carries_groups_and_relax_has_a_copy() {
+        use crate::detail::AttribValue;
+        // The rule itself, on hand-built points: four source points along
+        // x, the far two in `top`; four targets beside them, all put in
+        // `top` beforehand.
+        let mut source = Detail::new();
+        for x in 0..4 {
+            source.add_point(Vec3::new(x as f32, 0.0, 0.0));
+        }
+        source.points_mut().create("mass", AttribValue::Float(0.0));
+        source.points_mut().set_value("mass", 3, AttribValue::Float(7.0)).unwrap();
+        source.points_mut().create_group("top");
+        source.points_mut().add_to_group("top", 2);
+        source.points_mut().add_to_group("top", 3);
+        source.points_mut().create_group("other");
+        source.points_mut().add_to_group("other", 0);
+        let mut target = Detail::new();
+        for x in [0.1, 0.9, 2.1, 2.9] {
+            target.add_point(Vec3::new(x, 0.0, 0.0));
+        }
+        for p in 0..4 {
+            target.points_mut().add_to_group("top", p);
+        }
+        let member = |d: &Detail, g: &str| (0..d.num_points()).map(|p| d.points().in_group(g, p)).collect::<Vec<_>>();
+        let mut all = target.clone();
+        crate::geometry::transfer_onto(&mut all, &source, &[], Some(&[]), 0.0, "");
+        assert_eq!(member(&all, "top"), vec![false, false, true, true], "membership is the nearest source point's, joining and leaving");
+        assert_eq!(member(&all, "other"), vec![true, false, false, false], "every group, none named");
+        assert_eq!(all.points().value("mass", 3), Some(AttribValue::Float(7.0)));
+        let mut named = target.clone();
+        crate::geometry::transfer_onto(&mut named, &source, &[], Some(&["nope".to_string(), "top".to_string()]), 0.0, "");
+        assert_eq!(member(&named, "top"), vec![false, false, true, true]);
+        assert!(!named.points().has_group("other"), "only the named");
+        let mut none = target.clone();
+        crate::geometry::transfer_onto(&mut none, &source, &[], None, 0.0, "");
+        assert_eq!(member(&none, "top"), vec![true, true, true, true], "no groups asked, none touched");
+        assert!(none.points().has("mass"), "the attributes still are");
+        let mut near = target.clone();
+        crate::geometry::transfer_onto(&mut near, &source, &[], Some(&[]), 0.15, "");
+        assert_eq!(member(&near, "top"), vec![false, false, true, true], "within the limit");
+        near.points_mut().add_to_group("top", 1);
+        let mut far = target.clone();
+        crate::geometry::transfer_onto(&mut far, &source, &[], Some(&[]), 0.05, "");
+        assert_eq!(member(&far, "top"), vec![true, true, true, true], "nothing within 0.05: nothing moves");
+
+        // The nodes. A sphere with a group and an attribute is the source.
+        let up = phase3_node("group", &[("Input", "sphere 1"), ("Group Name", "top"), ("Mode", "Box"), ("Center", "-1.875:1.55:0.00"), ("Size", "4.00:2.00:4.00")]);
+        let tagged = phase3_node("attribute", &[("Input", "group 1"), ("Operation", "Create"), ("Attribute Name", "mass"), ("Type", "Float"), ("Value", "3")]);
+        let line = phase3_node("points", &[("Shape", "Line"), ("Points", "6"), ("Markers", "false")]);
+        let mut transfer = phase3_node("transfer", &[("Input", "points 1"), ("From", "attribute 1"), ("Attributes", "mass"), ("Transfer Groups", "true"), ("Groups", ""), ("Maximum Distance", "0.00")]);
+        let with = |t: FsNode| modelling_root("1.0", vec![up.clone(), tagged.clone(), line.clone(), t]);
+        let (src, err) = eval_node(&with(transfer.clone()), "attribute 1");
+        assert!(err.is_none(), "{err:?}");
+        let members = src.points().group_members("top").len();
+        assert!(members > 0 && members < src.num_points(), "a group of part of the sphere: {members}");
+        let (g, err) = eval_node(&with(transfer.clone()), "transfer 1");
+        assert!(err.is_none(), "{err:?}");
+        assert!(g.points().has_group("top") && g.points().has("mass"), "the group and the attribute were carried");
+
+        // Off, no group moves — and a node without the row is off.
+        transfer.params.iter_mut().find(|p| p.name == "Transfer Groups").unwrap().set_text("false");
+        let (g, _) = eval_node(&with(transfer.clone()), "transfer 1");
+        assert!(!g.points().has_group("top") && g.points().has("mass"), "nothing carried with the switch off");
+        transfer.params.retain(|p| p.name != "Transfer Groups" && p.name != "Groups");
+        let (g, _) = eval_node(&with(transfer.clone()), "transfer 1");
+        assert!(!g.points().has_group("top"), "a node from before the row carries none");
+
+        // Relax's copy: Repel mode with a rest of ANOTHER point count, the
+        // group and the attribute read off it by nearest point.
+        let relax = phase3_node("relax", &[("Input", "points 1"), ("Mode", "Repel"), ("Rest", "attribute 1"), ("Iterations", "0"), ("Transfer From Rest", "true"), ("Attributes", ""), ("Transfer Groups", "true"), ("Groups", "")]);
+        let (g, err) = eval_node(&with(relax.clone()), "relax 1");
+        assert!(err.is_none(), "{err:?}");
+        assert!(g.points().has_group("top") && g.points().has("mass"), "the relax carried the group and the attribute");
+        // Springs mode, same rest: the springs need the index correspondence
+        // and are skipped; the transfer is not.
+        let mut springs = relax.clone();
+        springs.params.iter_mut().find(|p| p.name == "Mode").unwrap().set_text("Springs");
+        let (g, err) = eval_node(&with(springs), "relax 1");
+        assert!(err.is_none(), "{err:?}");
+        assert!(g.points().has_group("top"));
+        // Off, the relax carries nothing, as it never did.
+        let mut off = relax.clone();
+        off.params.iter_mut().find(|p| p.name == "Transfer From Rest").unwrap().set_text("false");
+        let (g, _) = eval_node(&with(off), "relax 1");
+        assert!(!g.points().has_group("top") && !g.points().has("mass"));
+        // On with no Rest: said, not silent.
+        let mut bare = relax.clone();
+        bare.params.iter_mut().find(|p| p.name == "Rest").unwrap().set_text("");
+        let (_, err) = eval_node(&with(bare), "relax 1");
+        assert!(err.as_deref().unwrap_or("").contains("Rest"), "{err:?}");
     }
 
     #[test]
