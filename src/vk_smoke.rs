@@ -496,6 +496,7 @@ fn main() {
                 images: &image_quads,
                 plate_features: &[],
                 clear_color: [0.0; 4],
+                damage: None,
             });
         }
     }
