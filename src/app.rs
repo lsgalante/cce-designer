@@ -1135,6 +1135,14 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         }
     }
     fn merge_node(node: &mut FsNode, templates: &[NodeTemplate]) {
+        // Visualize's Mix blend was Set under another name (Opacity fades
+        // every blend alike) and is retired; a save holding it is Set, or
+        // it would load as a choice the row no longer offers.
+        if node.node_type == "visualize" {
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == "Blend" && p.text().trim().eq_ignore_ascii_case("mix")) {
+                p.set_text("Set".to_string());
+            }
+        }
         if let Some(t) = template_for(node, templates) {
             let owns_impl = t.node_type.eq_ignore_ascii_case("node") && !t.children.is_empty();
             let children_match = t.children.iter().all(|tc| {

@@ -4967,6 +4967,29 @@ mod tests {
             .expect("a known kind is added");
     }
 
+    /// Visualize's Blend has no Mix: it was Set under another name, Opacity
+    /// fading every blend alike. A save that chose it loads as Set, a
+    /// valid choice, rather than as a text the row no longer offers.
+    #[test]
+    fn visualize_mix_blend_loads_as_set() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let t = templates_root.children.iter().find(|t| t.node_type == "visualize").unwrap();
+        let blend = t.params.iter().find(|p| p.name == "Blend").unwrap();
+        assert_eq!(blend.choice_options(), vec!["Set", "Multiply", "Add"]);
+        let mut old = t.clone();
+        let p = old.params.iter_mut().find(|p| p.name == "Blend").unwrap();
+        p.set_type("choice:Set,Mix,Multiply,Add");
+        p.set_text("Mix".to_string());
+        assert!(p.invalid().is_none(), "the old row took Mix");
+        let mut root = templates_root.clone();
+        root.children = vec![old];
+        crate::app::merge_template_defs(&mut root, &templates);
+        let p = root.children[0].params.iter().find(|p| p.name == "Blend").unwrap();
+        assert_eq!(p.text(), "Set");
+        assert!(p.invalid().is_none(), "{:?}", p.invalid());
+    }
+
     #[test]
     fn test_loader_merges_new_template_params() {
         let templates_root = crate::app::load_fs_tree();

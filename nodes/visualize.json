@@ -52,10 +52,10 @@
     },
     {
       "name": "Blend",
-      "type": "choice:Set,Mix,Multiply,Add",
+      "type": "choice:Set,Multiply,Add",
       "default": "Set",
       "show_when": "Mode == Ramp",
-      "description": "How the ramp colour meets the existing colour: Set and Mix replace it, Multiply tints it, Add brightens it. Opacity then fades toward the result."
+      "description": "How the ramp colour meets the existing colour: Set replaces it, Multiply tints it, Add brightens it. Opacity then fades toward the result."
     },
     {
       "name": "Opacity",

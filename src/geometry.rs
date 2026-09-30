@@ -3869,8 +3869,9 @@ pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             _ => c,
         };
         // Opacity is applied the same way for every blend, so a stack of
-        // Visualize nodes fades uniformly and Mix is just Set at less than
-        // full strength.
+        // Visualize nodes fades uniformly. (A Mix blend was Set by another
+        // name, this fade being all it did; it is retired, and a save
+        // holding it loads as Set.)
         let out = [
             old[0] + (mixed[0] - old[0]) * opacity,
             old[1] + (mixed[1] - old[1]) * opacity,
