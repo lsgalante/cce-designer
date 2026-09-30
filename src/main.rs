@@ -14122,6 +14122,54 @@ mod tests {
     /// ranked with the commands, so a query finds a colour the way it finds
     /// a command. There is no second half: Tab in this mode does nothing,
     /// and nothing draws a strip.
+    /// A choice row's value stands between two arrows, and they are
+    /// cce-icons' chevrons — not the text triangles they were, which the
+    /// font has no glyph for — in square boxes sized from the row's font.
+    #[test]
+    fn a_choice_rows_arrows_are_cce_icons_the_size_of_its_text() {
+        use cce_ui::scene::paint::Prim;
+        use crate::slots::DIALOG_IDX;
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.run_command("command_palette");
+        for c in ["w", "o", "r", "l", "d"] {
+            state.dialog_key_input(&typed(c));
+        }
+        let (dx, dy, dw, dh) = state.positions[DIALOG_IDX];
+        let list = state.collect_display_list();
+        let inside = |x: f32, y: f32| x >= dx && x <= dx + dw && y >= dy && y <= dy + dh;
+        let value = list
+            .items
+            .iter()
+            .find_map(|item| match &item.prim {
+                Prim::Text { text, x, y, font_size, .. } if text == "mm" && inside(*x, *y) => Some((*x, *y, *font_size)),
+                _ => None,
+            })
+            .expect("the World Unit row shows its value");
+        assert!(
+            !list.items.iter().any(|item| matches!(&item.prim, Prim::Text { text, .. } if text.contains('\u{25c2}') || text.contains('\u{25b8}'))),
+            "no text triangles: the font has no glyph for them"
+        );
+        let arrows: Vec<_> = list
+            .items
+            .iter()
+            .filter_map(|item| match &item.prim {
+                Prim::Image { rect, .. } if inside(rect.x, rect.y) => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        let (vx, _, font) = value;
+        let left = arrows.iter().find(|r| r.x + r.width <= vx).expect("an arrow ahead of the value");
+        let right = arrows.iter().find(|r| r.x > vx).expect("an arrow after the value");
+        for r in [left, right] {
+            assert_eq!(r.width, r.height, "square");
+            assert_eq!(r.width, (font * 0.8).round(), "sized from the row's font");
+        }
+        assert_eq!(left.y, right.y, "on one line");
+    }
+
     /// A control in the palette lifts under the pointer: the row whose
     /// switch, slider or colour well the pointer is over is the hovered
     /// control, and the label beside it is not.

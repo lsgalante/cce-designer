@@ -3188,7 +3188,15 @@ selection stays where it was:
   about the cursor cell and re-reads the row, since `zoom` clamps.
 - `Choice` — a fixed set (World Unit). The current option reads in the
   chord column between two arrows; Enter or a click steps to the next,
-  Left/Right either way.
+  Left/Right either way. The arrows are cce-icons' `chevron-left` /
+  `chevron-right` (`choice_arrows`), in square boxes 0.8 of the row's font
+  size — the triangle then stands about a capital high — rasterized at
+  twice that. Until 2026-09-30 they were the text triangles `◂` `▸`, which
+  the dialog's font has no glyph for, so they drew as boxes. The right
+  column (values and chords alike) is measured by SHAPING
+  (`shaped_width`, as `Button::label_width` does): `measure_text_width`
+  resolves the family through usvg and measured a value 8 px wider than it
+  drew, which left the right arrow twice as far from it as the left.
 - `Color` — a hex colour. Behind each colour row the
   dialog keeps one toolkit `ColorSelector` (`Dialog::colors`, by row id,
   kept across re-rankings so a query that drops the row does not kill its

@@ -719,6 +719,48 @@ impl Layout for Dialog {
     }
 }
 
+/// How wide `text` draws: shaped by the frame's own font system, as
+/// `Button::label_width` measures. `measure_text_width` resolves the family
+/// through usvg's font database and measured a choice's value some 8 px
+/// wider than it drew, which put the right arrow twice as far from it as
+/// the left; it is the fallback for a font system that shapes nothing.
+fn shaped_width(text: &str, family: &str, font_size: f32) -> f32 {
+    cce_ui::geometry_font_system()
+        .lock()
+        .ok()
+        .and_then(|mut fs| {
+            cce_ui::backend::window_runner::shaped_cluster_offsets(&mut fs, text, font_size, Some(family))
+                .last()
+                .map(|&(_, total)| total)
+        })
+        .filter(|&w| w > 0.0)
+        .unwrap_or_else(|| display::measure_text_width(text, family, font_size))
+}
+
+/// A choice row's two arrows: cce-icons' `chevron-left` / `chevron-right`,
+/// as image ids, drawn in a square box of `size` logical px with `gap` px
+/// between each and the value.
+#[derive(Clone, Copy)]
+struct ChoiceArrows {
+    left: u32,
+    right: u32,
+    size: f32,
+    gap: f32,
+}
+
+/// The arrows for a row set in `font_size`: the chevron's triangle is three
+/// quarters of its box, so a box of 0.8 of the font size makes the triangle
+/// about as tall as a capital. Rasterized at twice the box, so a scale-2
+/// output draws it at its own pixels and scale 1 minifies it cleanly.
+/// `None` when the icon set is missing.
+fn choice_arrows(font_size: f32) -> Option<ChoiceArrows> {
+    let size = (font_size * 0.8).round().max(6.0);
+    let px = (size * 2.0).ceil() as u32;
+    let (left, _, _) = cce_ui::upload_icon("chevron-left", px)?;
+    let (right, _, _) = cce_ui::upload_icon("chevron-right", px)?;
+    Some(ChoiceArrows { left, right, size, gap: (font_size * 0.3).round().max(3.0) })
+}
+
 impl Paint for Dialog {
     /// `paint` authors geometry AND text, so the Text prims pass through
     /// `paint_self` verbatim instead of the single-font own-labels bridge —
@@ -896,18 +938,25 @@ impl Paint for Dialog {
             let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
             // What the chord column shows: the chord, or a choice row's
             // current option between its two arrows — a value, so it wears
-            // the label's colour rather than the chord's grey.
+            // the label's colour rather than the chord's grey. The arrows
+            // are cce-icons' chevrons, text triangles only if the icon set
+            // is missing (the font has no glyph for those, and drew boxes).
+            let arrows = match &row.control {
+                Some(Control::Choice { .. }) => choice_arrows(font_size),
+                _ => None,
+            };
             let (right_text, right_color) = match &row.control {
                 Some(Control::Choice { options, index }) => {
-                    (format!("\u{25c2} {} \u{25b8}", options.get(*index).map(String::as_str).unwrap_or("")), label_color)
+                    let value = options.get(*index).map(String::as_str).unwrap_or("");
+                    let text = if arrows.is_some() { value.to_string() } else { format!("\u{25c2} {value} \u{25b8}") };
+                    (text, label_color)
                 }
                 _ => (row.chord.clone(), [0x85, 0x85, 0x92]),
             };
-            let right_w = if right_text.is_empty() {
-                0.0
-            } else {
-                display::measure_text_width(&right_text, &family, font_size)
-            };
+            let text_w = if right_text.is_empty() { 0.0 } else { shaped_width(&right_text, &family, font_size) };
+            // An arrow's box, and the gap between it and the value.
+            let arrow_w = arrows.map_or(0.0, |a| a.size + a.gap);
+            let right_w = text_w + 2.0 * arrow_w;
             // The label's clip stops short of the chord column so a long
             // label is cut by it rather than running under it.
             let chord_right = r.x + r.width - 8.0 - ctl_col;
@@ -926,16 +975,24 @@ impl Paint for Dialog {
                 Some(family.clone()),
                 own,
             );
-            if right_w > 0.0 {
+            if text_w > 0.0 {
                 ctx.text_with(
                     right_text,
-                    chord_right - right_w,
+                    chord_right - right_w + arrow_w,
                     ty,
                     font_size,
                     right_color,
                     Some(family.clone()),
                     own,
                 );
+            }
+            if let Some(a) = arrows {
+                // White glyphs, dimmed to the value's own brightness.
+                let alpha = right_color[0] as f32 / 255.0;
+                let y = r.y + (r.height - a.size) * 0.5;
+                let at = |x: f32| Rect { x, y, width: a.size, height: a.size };
+                ctx.image(a.left, at(chord_right - right_w), alpha);
+                ctx.image(a.right, at(chord_right - a.size), alpha);
             }
             match &row.control {
                 Some(Control::Toggle(on)) => {
