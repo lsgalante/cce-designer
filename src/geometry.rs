@@ -1069,6 +1069,11 @@ struct SimSolve {
     /// from the nearest one behind it instead of the seed. See
     /// [`Checkpoint`].
     checkpoints: Checkpoints,
+    /// Whether the solve went on across an edit (a key change) from the
+    /// frame then in hand, so its earlier frames are of the chain as it
+    /// was: a scrub back does not keep the frame it leaves, and the solve
+    /// begins again from the seed.
+    mixed: bool,
 }
 
 /// A frame of a solve, kept in memory: its state and what its last substep
@@ -6753,9 +6758,31 @@ pub fn resolve_simnet_geometry_with_errors(
     // somewhere earlier. Memory first, then disk, then the seed.
     //
     // The entry is taken out while the solve runs and put back at its end.
-    // One of another key (the chain or the seed was edited) is dropped
-    // here, its checkpoints with it.
-    let prior = sim.cache.entries.remove(&target.id).filter(|e| e.key == key);
+    //
+    // One of another key — the chain or the seed was edited — is NOT
+    // dropped (since 2026-09-30): the solve goes on from the state in hand
+    // under the new key, so an edit takes effect from the next frame
+    // forward and the frames already solved are not solved again. Its
+    // checkpoints go, being frames of the solve as it was, so a scrub
+    // BACK after an edit resumes from nothing nearer than the seed —
+    // which is the restart, and at the start frame is the seed itself.
+    // Until then an edit restarted the solve from the seed wherever the
+    // playhead stood: an edit at frame 120 was 120 steps, and a slider
+    // dragged inside a simnet was a re-solve of the whole run per pixel.
+    let prior = sim.cache.entries.remove(&target.id).and_then(|e| {
+        if e.key == key {
+            // A solve that mixes frames from before an edit with frames
+            // after it is not resumed from by a scrub BACK: the frame it
+            // leaves is not kept, so what was solved before the edit is
+            // gone and the solve begins again from the seed.
+            if e.mixed && e.frame > due { None } else { Some(e) }
+        } else if e.frame > 0 && e.frame <= due {
+            Some(SimSolve { key, frame: e.frame, state: e.state, prev: e.prev, checkpoints: Checkpoints::default(), mixed: true })
+        } else {
+            None
+        }
+    });
+    let mixed = prior.as_ref().is_some_and(|e| e.mixed);
     let mut checkpoints = Checkpoints::default();
     let mut cached: Option<(Detail, Detail, i32)> = None;
     if let Some(prior) = prior {
@@ -6862,7 +6889,7 @@ pub fn resolve_simnet_geometry_with_errors(
     }
     sim.cache.entries.insert(
         target.id.clone(),
-        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame, checkpoints },
+        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame, checkpoints, mixed },
     );
     Some(state)
 }
@@ -8631,31 +8658,41 @@ mod simnet_tests {
     /// old chain is not a state of the new one.
     #[test]
     fn test_editing_the_chain_invalidates_the_cache() {
+        // An edit takes effect from the NEXT frame forward: the frames
+        // already solved stand, and the solve goes on from the state in
+        // hand under the new parameters. Going back to the start is the
+        // restart, and the frames are solved again with the edit in from
+        // the first. Until 2026-09-30 an edit re-solved from the seed
+        // wherever the playhead stood.
         let mut root = stepping_graph();
+        let base = min_x(&solve_at(&root, 1));
         let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap().clone();
         let mut cache = SimCache::default();
-        {
-            let mut sim = EvalSim::new(5, 1, &mut cache);
-            let mut visited = Vec::new();
-            let mut err = None;
-            resolve_simnet_geometry_with_errors(&root, &sim_node, &mut visited, &mut err, &mut sim).unwrap();
-        }
+        let at = |root: &FsNode, sim_node: &FsNode, cache: &mut SimCache, frame: i32| -> f32 {
+            let mut sim = EvalSim::new(frame, 1, cache);
+            let (mut visited, mut err) = (Vec::new(), None);
+            let g = resolve_simnet_geometry_with_errors(root, sim_node, &mut visited, &mut err, &mut sim).unwrap();
+            min_x(&g) - base
+        };
+        assert!((at(&root, &sim_node, &mut cache, 5) - 4.0).abs() < 1e-4, "four steps of +1");
+        let steps = cache.steps_run();
 
-        // Double the step size; frame 5 (4 steps) must now read 8, not 4.
+        // Double the step size at frame 5.
         {
             let sim_mut = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
             let step = sim_mut.children.iter_mut().find(|c| c.name == "step1").unwrap();
             step.params.iter_mut().find(|p| p.name == "Translation").unwrap().set_text("2.00:0.00:0.00".to_string());
         }
         let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap().clone();
-        let base = min_x(&solve_at(&root, 1));
-        let mut sim = EvalSim::new(5, 1, &mut cache);
-        let mut visited = Vec::new();
-        let mut err = None;
-        let g = resolve_simnet_geometry_with_errors(&root, &sim_node, &mut visited, &mut err, &mut sim).unwrap();
-        let moved = min_x(&g) - base;
-        assert!((moved - 8.0).abs() < 1e-4,
-            "stale cache: expected 4 steps of +2.0 = 8, got {moved}");
+        // Frame 5 is as it was: no step is run for it.
+        assert!((at(&root, &sim_node, &mut cache, 5) - 4.0).abs() < 1e-4, "the frame in hand stands");
+        assert_eq!(cache.steps_run(), steps, "and nothing was solved again");
+        // Frame 6 is one step of +2 on from it.
+        assert!((at(&root, &sim_node, &mut cache, 6) - 6.0).abs() < 1e-4, "the edit is in from the next frame");
+        assert_eq!(cache.steps_run(), steps + 1);
+        // Back to the start: the restart. Frame 5 is then four steps of +2.
+        assert!((at(&root, &sim_node, &mut cache, 1) - 0.0).abs() < 1e-4, "the start frame is the seed");
+        assert!((at(&root, &sim_node, &mut cache, 5) - 8.0).abs() < 1e-4, "solved again with the edit in from the first");
     }
 
     /// Dived INTO a simnet the walk draws the solved state — its children are
@@ -9514,15 +9551,26 @@ mod simnet_tests {
         let (state, _, cost) = at(&mut cache, 24);
         assert_eq!((cost, state.positions() == fresh(24).0.positions()), (3 * 2, true));
 
-        // An edit is another solve: nothing of the old one is resumed from.
+        // An edit goes on from the frame in hand (24): the frames before
+        // it stand, and none of the old solve's checkpoints are resumed
+        // from — the new solve keeps its own as it passes them.
         let edited = sim_of("1.02:0.99:1.02", "2");
         let mut sim = EvalSim::new(51, 1, &mut cache);
         let mut err = None;
         let before = sim.cache.steps_run();
         let state = resolve_simnet_geometry_with_errors(&edited, &edited.children[1], &mut Vec::new(), &mut err, &mut sim).unwrap();
-        assert_eq!(sim.cache.steps_run() - before, 100, "fifty frames from the seed");
+        assert_eq!(sim.cache.steps_run() - before, 27 * 2, "twenty-seven frames on from the one in hand");
         assert_ne!(state.positions(), fresh(51).0.positions());
-        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![10, 20, 30, 40], "and its own checkpoints");
+        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![30, 40], "and its own checkpoints, kept as it passed them");
+        // Back to the start it is the seed, and the edit is in from the
+        // first frame: frame 51 is then the edited chain's own fifty.
+        let mut sim = EvalSim::new(1, 1, &mut cache);
+        let seed = resolve_simnet_geometry_with_errors(&edited, &edited.children[1], &mut Vec::new(), &mut None, &mut sim).unwrap();
+        assert_eq!(seed.positions(), fresh(1).0.positions());
+        let mut sim = EvalSim::new(51, 1, &mut cache);
+        let before = sim.cache.steps_run();
+        resolve_simnet_geometry_with_errors(&edited, &edited.children[1], &mut Vec::new(), &mut None, &mut sim).unwrap();
+        assert_eq!(sim.cache.steps_run() - before, 100, "fifty frames from the seed");
 
         // However long it runs, the count is bounded, and what is kept
         // stays spread over the whole of it.

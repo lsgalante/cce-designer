@@ -273,7 +273,9 @@ gone from cce-ui with the wgpu path).
   `input` node reads off the feedback stack instead of jumping to the outer
   graph. Solves run up to the playbar frame and cache per node id on `State::
   sim_cache` (playing forward = one step per frame); the cache key hashes the
-  simnet subtree + seed, so edits restart the sim, and backward scrubs resume
+  simnet subtree + seed; an edit goes on from the frame in hand under the
+  new key (since 2026-09-30 — see "An edit is in from the next frame"
+  below), and backward scrubs resume
   from the nearest CHECKPOINT behind them (steps are not invertible; until
   2026-09-29 they restarted from the seed — see "Simulation checkpoints"
   below). The scene walk does NOT recurse
@@ -1669,8 +1671,8 @@ need.
   for**, the latest state included, so a scrub either way inside what
   has been solved steps fewer than an interval's frames.
 - **They belong to one key.** An edit to the chain or the seed changes
-  the key and they go with the solve they were frames of. An edit at
-  frame 120 is still 120 steps: nothing earlier than an edit survives it.
+  the key and they go with the solve they were frames of; the frame in
+  hand does not (the next section).
 - **Within a count and a budget** (`CHECKPOINTS_MAX` 48,
   `CHECKPOINT_BUDGET` 512 MB by an estimate of a state's size). With no
   room the SPACING doubles and stays doubled — what is off the wider
@@ -1753,6 +1755,35 @@ bare, so inside a simnet `input` read the seed and the rows, and a
 selected row's marker, stood at the first frame while the scene beside
 them played. `rows_selected_inside_a_simnet_follow_the_simulation` is the
 test.
+
+### An edit is in from the next frame
+
+An edit inside a simnet's chain, or to its seed, does not restart the
+solve (since 2026-09-30; until then the key change dropped the cache
+entry, so an edit at frame 120 was a re-solve of 120 frames, and a slider
+dragged inside a simnet re-solved the whole run per pixel). In
+`resolve_simnet_geometry_with_errors` an entry of another key whose
+frame is at or behind the one asked for is kept under the NEW key — its
+state and what its last substep consumed — and its checkpoints dropped,
+being frames of the solve as it was. So:
+
+- the frame in hand stands as it is, and the edit shows from the next
+  frame forward, the solve going on from the state in hand;
+- such a solve is MIXED (`SimSolve::mixed`): its earlier frames are of
+  the chain as it was. A scrub BACK from it has no checkpoint to resume
+  from and does not keep the frame it leaves (which a scrub back from a
+  clean solve does), so it re-solves from the seed with the edit in from
+  the first frame — at the start frame the seed itself: going back to
+  frame 1 is what clears the frames solved before the edit, and the solve
+  that begins there is clean;
+- a solve at the start frame (frame 0 of the sim) is always the seed, so
+  an edit made there restarts at once.
+
+The disk cache (Cache on) is by key, so a continued solve is written
+under the new key and read back by it.
+`test_editing_the_chain_invalidates_the_cache` and the edit half of
+`a_scrub_resumes_from_a_checkpoint_and_arrives_at_the_same_state` are
+the tests.
 
 ### The volume representation
 
