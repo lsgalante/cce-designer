@@ -8114,7 +8114,9 @@ mod tests {
     /// Every wire a node has is drawn, into its own port: the Remesh's
     /// switch reads the loop on its Input and the transfer on its Input 2,
     /// and both are lines on the network now, where only the Input was. An
-    /// expression wire (the transfer's From) keeps its port and draws none.
+    /// expression wire (the transfer's From) is drawn to what it evaluates
+    /// to — input1 while the Remesh's own From is empty; a node beside the
+    /// subnet when it names one, which is not on this level to draw from.
     /// A connection dropped on a port sets THAT wire, and auto-layout puts
     /// a node below everything it reads.
     #[test]
@@ -8133,7 +8135,17 @@ mod tests {
         assert_eq!(node_wires(&switch), ["repeat1", "transfer1", "", ""]);
         assert_eq!(switch.inputs, 4);
         let transfer = get("transfer1");
-        assert_eq!(node_wires(&transfer), ["repeat1", ""], "From is an expression: a port, no line");
+        assert_eq!(node_wires(&transfer), ["repeat1", "input1"], "From is an expression, drawn to what it evaluates to");
+
+        // The Remesh's From naming a node outside: not on this level, no line.
+        state.apply_action(McpAction::Up, &mut redraw).unwrap();
+        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "From").unwrap().set_text("elsewhere");
+        state.apply_action(McpAction::Enter { slot }, &mut redraw).unwrap();
+        state.sync_nodes();
+        let level = state.graph().get_nodes();
+        let transfer = level.iter().find(|g| g.name == "transfer1").unwrap();
+        assert_eq!(node_wires(transfer), ["repeat1", "elsewhere"], "it names the outer node…");
+        assert!(!level.iter().any(|g| g.name == "elsewhere"), "…which is not on this level, so no line is drawn");
 
         // Dropped on the switch's third port: Input 3.
         let path = state.current_path.clone();

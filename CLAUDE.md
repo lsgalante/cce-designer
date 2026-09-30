@@ -1067,9 +1067,11 @@ way — both in `src/geometry.rs`:
   rule: every `node` parameter, in order, the k-th into port k, handed to
   the graph typed `node` (cce-ui's `wire_pairs`); a node gets as many input
   ports as it has wires where its template declared fewer (Relax's Rest,
-  Collision's Collider, the Remesh's From). A wire whose row is hidden, or
-  that is an expression (the Remesh subnet's transfer reads its From
-  through one), keeps its port and draws no line. A connection dropped on
+  Collision's Collider, the Remesh's From). A wire whose row is hidden
+  keeps its port and draws no line. An expression wire is drawn to what it
+  evaluates to at the current frame (`node_wires_at`) — the Remesh subnet's
+  transfer reads its From through `if(chs("../From"), …, "input1")` and is
+  drawn from input1 — and to nothing when that fails. A connection dropped on
   port k sets the k-th wire (`State::connect_port`).
   `every_wire_is_drawn_into_its_own_port` is the test.
 

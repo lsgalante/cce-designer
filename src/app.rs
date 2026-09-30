@@ -711,10 +711,24 @@ pub fn float3_row(min: f32, max: f32, trackball: bool) -> String {
 
 /// A node's wires as the network draws them: every parameter of the `node`
 /// kind, in order — the k-th is input port k — as (name, the node it names).
-/// A wire whose row is hidden (`show_when`) or that is an expression names
-/// nothing here: it keeps its port and draws no line, since what is not on
-/// screen should not be, and an expression is not a name until evaluated.
+/// A wire whose row is hidden (`show_when`) names nothing here: it keeps its
+/// port and draws no line, since what is not on screen should not be. An
+/// expression wire names what it EVALUATES to at `frame` — the Remesh
+/// subnet's transfer reads its From through `if(chs("../From"), …,
+/// "input1")`, and is drawn from input1 — and nothing when it fails.
 /// Auto-layout reads the same wires.
+pub fn node_wires_at(root: &FsNode, node: &FsNode, frame: i32) -> Vec<(String, String)> {
+    if !node.params.iter().any(|p| p.kind() == ParamKind::Node && p.is_expr()) {
+        return node_wires(node);
+    }
+    match crate::geometry::resolve_param_refs(root, node, frame, &mut None) {
+        Some(resolved) => node_wires(&resolved),
+        None => node_wires(node),
+    }
+}
+
+/// [`node_wires_at`] with nothing evaluated: an expression wire names
+/// nothing.
 pub fn node_wires(node: &FsNode) -> Vec<(String, String)> {
     node.params
         .iter()
@@ -6656,11 +6670,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// is what it is handed, and a node has as many input ports as it has
     /// wires where its template declared fewer (Relax's Rest, Collision's
     /// Collider, the Remesh's From).
-    fn graph_nodes_of(dir: &FsNode) -> Vec<GraphNode> {
+    fn graph_nodes_of(root: &FsNode, dir: &FsNode, frame: i32) -> Vec<GraphNode> {
         dir.children
             .iter()
             .map(|c| {
-                let wires = node_wires(c);
+                let wires = node_wires_at(root, c, frame);
                 GraphNode {
                     id: c.id.clone(),
                     name: c.name.clone(),
@@ -6694,12 +6708,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     }
 
     pub fn sync_nodes(&mut self) {
-        let graph_nodes = Self::graph_nodes_of(self.current_dir());
+        let frame = self.sim_frame();
+        let graph_nodes = Self::graph_nodes_of(&self.fs_root, self.current_dir(), frame);
         self.graph_mut().set_nodes(&graph_nodes);
 
         // The second network editor views ITS OWN level.
         self.clamp_path2();
-        let nodes2 = Self::graph_nodes_of(self.dir_at(&self.current_path2.clone()));
+        let nodes2 = Self::graph_nodes_of(&self.fs_root, self.dir_at(&self.current_path2.clone()), frame);
         use cce_ui::widget::GraphController as _;
         self.slots.content2.set_nodes(&nodes2);
         let names2 = self.path_names_at(&self.current_path2.clone());
@@ -8566,6 +8581,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if self.focused_pane != LEFT_MENUBAR_IDX {
             return false;
         }
+        let frame = self.sim_frame();
         let nodes: Vec<crate::layout::LayoutNode> = self
             .current_dir()
             .children
@@ -8578,7 +8594,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     .find(|p| p.name.eq_ignore_ascii_case("input"))
                     .map(|p| p.text().to_string()),
                 // The rest of the wires the network draws.
-                reads: node_wires(c).into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case("input")).map(|(_, src)| src).collect(),
+                reads: node_wires_at(&self.fs_root, c, frame).into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case("input")).map(|(_, src)| src).collect(),
                 position: c.position,
                 // Utility trees stay where they were put; see the module doc.
                 pinned: false,
