@@ -37,22 +37,34 @@ pub struct Viewport3D {
     shift_pressed: bool,
     alt_pressed: bool,
 
-    // Drag & scroll state tracking
-    is_rotating: bool,
-    is_zooming: bool,
+    /// The scroll orbit as cce-ui's `ScrollMotion`, in wheel px — x turns
+    /// the yaw, y the pitch — the model the network pane's pan runs on: a
+    /// finger tracks 1:1, the lift coasts on the velocity of the finger's
+    /// own events, a wheel notch glides. The positions are accumulators;
+    /// what moves the camera is how far they moved (`orbit_by_px`).
+    orbit: ScrollMotion,
+    /// Ctrl-scroll zoom, the same way, on its y axis.
+    zoom_motion: ScrollMotion,
+    /// A trackpad orbit keeps to one axis once it clearly favours it:
+    /// 0 undecided, 1 yaw only, 2 pitch only. Decided per gesture.
     scroll_lock: u8,
-    rotate_accum_yaw: f32,
-    rotate_accum_pitch: f32,
-    zoom_accum: f32,
-    rotate_velocity_yaw: f32,
-    rotate_velocity_pitch: f32,
-    zoom_velocity: f32,
-    last_rotate_time: std::time::Instant,
-    last_zoom_time: std::time::Instant,
+    lock_accum: (f32, f32),
     pub scroll_speed: f32,
+    /// `input.inertial.inertial_scroll` in config.kdl: off, a lift stops
+    /// the orbit dead. How long a coast runs is cce-ui's `scroll_friction`
+    /// in input.kdl, as it is for every pane that coasts.
     pub inertial_scroll: bool,
-    pub scroll_friction: f32,
 }
+
+/// Radians of orbit per wheel px, and px per wheel notch (a notch turns
+/// 0.05 rad, as it always did).
+const ORBIT_RAD_PER_PX: f32 = 0.005;
+const ORBIT_PX_PER_LINE: f32 = 10.0;
+/// Log-zoom per wheel px, and px per notch (0.15 a notch).
+const ZOOM_PER_PX: f32 = 0.005;
+const ZOOM_PX_PER_LINE: f32 = 30.0;
+/// How far a trackpad orbit runs before its axis lock is decided, in px.
+const LOCK_DECIDE_PX: f32 = 0.4;
 
 impl Viewport3D {
     /// Hard pitch limit for the orbit: just short of the poles. Past ±90° the
@@ -91,20 +103,12 @@ impl Viewport3D {
             ctrl_pressed: false,
             shift_pressed: false,
             alt_pressed: false,
-            is_rotating: false,
-            is_zooming: false,
+            orbit: ScrollMotion::new(),
+            zoom_motion: ScrollMotion::new(),
             scroll_lock: 0,
-            rotate_accum_yaw: 0.0,
-            rotate_accum_pitch: 0.0,
-            zoom_accum: 0.0,
-            rotate_velocity_yaw: 0.0,
-            rotate_velocity_pitch: 0.0,
-            zoom_velocity: 0.0,
-            last_rotate_time: std::time::Instant::now(),
-            last_zoom_time: std::time::Instant::now(),
+            lock_accum: (0.0, 0.0),
             scroll_speed: 1.0,
             inertial_scroll: true,
-            scroll_friction: 0.90,
         })
     }
 
@@ -118,38 +122,60 @@ impl Viewport3D {
         self
     }
 
-    pub fn with_scroll_friction(mut self, friction: f32) -> Self {
-        self.scroll_friction = friction;
-        self
-    }
-
+    /// Stop every scroll motion in flight: a coast, a notch's glide. What
+    /// takes the camera over (a drag, Frame All, a load) calls this.
     pub fn reset_velocity(&mut self) {
-        self.rotate_velocity_yaw = 0.0;
-        self.rotate_velocity_pitch = 0.0;
-        self.zoom_velocity = 0.0;
-        self.is_rotating = false;
-        self.is_zooming = false;
+        self.orbit = ScrollMotion::new();
+        self.zoom_motion = ScrollMotion::new();
         self.scroll_lock = 0;
+        self.lock_accum = (0.0, 0.0);
     }
 
-    /// Trackpad pinch: direct-manipulation camera zoom. `factor` is the
-    /// scale change since the last gesture update (engine `handle_pinch`
-    /// semantics), applied 1:1 — spreading fingers 2x halves the camera
-    /// distance. Feeds the same accumulator as the ctrl-wheel zoom so the
-    /// release inertia matches.
+    /// Whether a scroll is still moving the camera on its own — a coast
+    /// after the lift, or a wheel notch's glide.
+    pub fn is_coasting(&self) -> bool {
+        self.orbit.is_animating() || self.zoom_motion.is_animating()
+    }
+
     /// The zoom range. The top is generous because `View 1:1` on a small
     /// world unit needs the camera far out; the far plane follows it.
     pub const MAX_ZOOM: f32 = 400.0;
 
+    /// Trackpad pinch: direct-manipulation camera zoom. `factor` is the
+    /// scale change since the last gesture update (engine `handle_pinch`
+    /// semantics), applied 1:1 — spreading fingers 2x halves the camera
+    /// distance. It does not coast: the runner keeps a pinch's end to
+    /// itself. It does stop a ctrl-scroll zoom that is.
     pub fn pinch_zoom(&mut self, factor: f32) {
         if factor <= 0.0 {
             return;
         }
-        let dy = factor.ln();
-        self.zoom = (self.zoom * (-dy).exp()).clamp(0.05, Self::MAX_ZOOM);
-        self.is_zooming = true;
-        self.last_zoom_time = std::time::Instant::now();
-        self.zoom_accum += dy;
+        self.zoom_motion = ScrollMotion::new();
+        self.zoom = (self.zoom / factor).clamp(0.05, Self::MAX_ZOOM);
+    }
+
+    /// Turn the camera by a scroll's worth of wheel px: the Default Camera's
+    /// own orbit, or a camera node's pending one for `tick_frame` to write.
+    fn orbit_by_px(&mut self, dx: f32, dy: f32) {
+        let (yaw, pitch) = (dx * ORBIT_RAD_PER_PX, dy * ORBIT_RAD_PER_PX);
+        if yaw == 0.0 && pitch == 0.0 {
+            return;
+        }
+        if self.active_camera != "Default Camera" {
+            self.pending_yaw += yaw;
+            self.pending_pitch -= pitch;
+        } else {
+            self.rotation_y += yaw;
+            self.rotation_x -= pitch;
+            self.clamp_orbit_pitch();
+        }
+    }
+
+    /// Zoom by a scroll's worth of wheel px.
+    fn zoom_by_px(&mut self, dy: f32) {
+        if dy != 0.0 {
+            self.zoom = (self.zoom * (-dy * ZOOM_PER_PX).exp()).clamp(0.05, Self::MAX_ZOOM);
+        }
     }
 
     pub fn get_matrices(&self, aspect: f32, custom_camera_pos: Option<Vec3>, custom_camera_rot: Option<Vec3>, custom_pivot: Option<Vec3>) -> (Mat4, Mat4, Mat4) {
@@ -210,167 +236,99 @@ impl cce_ui::widget::Input for Viewport3D {
     }
 
     fn on_event(&mut self, event: &Event, _ectx: &mut cce_ui::widget::EventCtx) -> bool {
-        // Wheel arrives hit-gated to the pane rect (the adapter's gate replaces the old
-        // leading self.hit_test); the rotate/zoom handling is the legacy body verbatim.
+        // Wheel arrives hit-gated to the pane rect. Every wheel goes through
+        // a ScrollMotion, whose phase (published by the runner from the
+        // Wayland axis source and stop) decides what it is: a finger's
+        // motion, the finger's lift, or a notch. The lift is a zero delta
+        // and must reach `apply_px` as one — the hand-rolled coast this
+        // replaced read it as more motion and killed its own velocity on
+        // every lift, so the viewport never coasted.
         let Event::MouseWheel { delta, .. } = event else { return false };
-
-        let scale = cce_ui::scale::scale_factor();
-        if self.ctrl_pressed {
-            match delta {
-                MouseScrollDelta::LineDelta(_x, y) => {
-                    let dy = *y * 0.15 * self.scroll_speed;
-                    self.zoom *= (-dy).exp();
-                    self.zoom = self.zoom.clamp(0.05, Self::MAX_ZOOM);
-                    self.is_zooming = false;
-                    
-                    let dt = 0.016;
-                    self.zoom_velocity = self.zoom_velocity * 0.4 + (dy / dt) * 0.6;
-                    true
-                }
-                MouseScrollDelta::PixelDelta(pos) => {
-                    let dy = (pos.y as f32 / scale) * 0.005 * self.scroll_speed;
-                    self.zoom *= (-dy).exp();
-                    self.zoom = self.zoom.clamp(0.05, Self::MAX_ZOOM);
-                    self.is_zooming = true;
-                    self.last_zoom_time = std::time::Instant::now();
-                    self.zoom_accum += dy;
-                    true
-                }
-            }
-        } else {
-            match delta {
-                MouseScrollDelta::LineDelta(x, y) => {
-                    self.scroll_lock = 0;
-                    let dx = *x * 0.05 * self.scroll_speed;
-                    let dy = *y * 0.05 * self.scroll_speed;
-                    
-                    if self.active_camera != "Default Camera" {
-                        self.pending_yaw += dx;
-                        self.pending_pitch += -dy;
-                    } else {
-                        self.rotation_y += dx;
-                        self.rotation_x -= dy;
-                        self.clamp_orbit_pitch();
-                    }
-
-                    self.is_rotating = false;
-                    let dt = 0.016;
-                    self.rotate_velocity_yaw = self.rotate_velocity_yaw * 0.4 + (dx / dt) * 0.6;
-                    self.rotate_velocity_pitch = self.rotate_velocity_pitch * 0.4 + (-dy / dt) * 0.6;
-                    true
-                }
-                MouseScrollDelta::PixelDelta(pos) => {
-                    let mut dx = (pos.x as f32 / scale) * 0.005 * self.scroll_speed;
-                    let mut dy = (pos.y as f32 / scale) * 0.005 * self.scroll_speed;
-
-                    self.rotate_accum_yaw += dx;
-                    self.rotate_accum_pitch -= dy;
-                    if self.scroll_lock == 0 {
-                        if self.rotate_accum_yaw.abs() > 0.002 || self.rotate_accum_pitch.abs() > 0.002 {
-                            if self.rotate_accum_pitch.abs() > 1.2 * self.rotate_accum_yaw.abs() {
-                                self.scroll_lock = 2;
-                            } else if self.rotate_accum_yaw.abs() > 1.2 * self.rotate_accum_pitch.abs() {
-                                self.scroll_lock = 1;
-                            }
-                        }
-                    } else {
-                        if self.scroll_lock == 1 {
-                            dy = 0.0;
-                        } else {
-                            dx = 0.0;
-                        }
-                    }
-
-                    if self.active_camera != "Default Camera" {
-                        self.pending_yaw += dx;
-                        self.pending_pitch += -dy;
-                    } else {
-                        self.rotation_y += dx;
-                        self.rotation_x -= dy;
-                        self.clamp_orbit_pitch();
-                    }
-
-                    self.is_rotating = true;
-                    self.last_rotate_time = std::time::Instant::now();
-                    true
-                }
-            }
-        }
-    
+        self.wheel(delta, cce_ui::widget::scroll_motion::current_scroll_phase())
     }
 
+    /// Advance a coast or a notch's glide. True while either still moves,
+    /// which keeps the frames coming.
     fn tick(&mut self, dt: f32, _rect: cce_ui::scene::layout::Rect) -> bool {
-
-        let now = std::time::Instant::now();
-        let mut changed = false;
-
-        if self.is_rotating {
-            if now.duration_since(self.last_rotate_time).as_secs_f32() > 0.05 {
-                self.is_rotating = false;
-                self.scroll_lock = 0;
-            } else if dt > 1e-5 {
-                let vel_yaw = self.rotate_accum_yaw / dt;
-                let vel_pitch = self.rotate_accum_pitch / dt;
-                self.rotate_velocity_yaw = self.rotate_velocity_yaw * 0.4 + vel_yaw * 0.6;
-                self.rotate_velocity_pitch = self.rotate_velocity_pitch * 0.4 + vel_pitch * 0.6;
-            }
-            self.rotate_accum_yaw = 0.0;
-            self.rotate_accum_pitch = 0.0;
+        let free = Bounds::UNBOUNDED;
+        let (ox, oy) = (self.orbit.x.pos(), self.orbit.y.pos());
+        let mut changed = self.orbit.tick(dt, free, free);
+        if changed {
+            self.orbit_by_px(self.orbit.x.pos() - ox, self.orbit.y.pos() - oy);
         }
-
-        if self.is_zooming {
-            if now.duration_since(self.last_zoom_time).as_secs_f32() > 0.05 {
-                self.is_zooming = false;
-            } else if dt > 1e-5 {
-                let vel_zoom = self.zoom_accum / dt;
-                self.zoom_velocity = self.zoom_velocity * 0.4 + vel_zoom * 0.6;
-            }
-            self.zoom_accum = 0.0;
+        let z = self.zoom_motion.y.pos();
+        if self.zoom_motion.tick(dt, free, free) {
+            self.zoom_by_px(self.zoom_motion.y.pos() - z);
+            changed = true;
         }
+        changed || self.is_coasting()
+    }
+}
 
-        if !self.is_rotating && (self.rotate_velocity_yaw.abs() > 0.001 || self.rotate_velocity_pitch.abs() > 0.001) {
-            if !self.inertial_scroll {
-                self.rotate_velocity_yaw = 0.0;
-                self.rotate_velocity_pitch = 0.0;
-            } else {
-                let dx = self.rotate_velocity_yaw * dt;
-                let dy = self.rotate_velocity_pitch * dt;
-                
-                if self.active_camera != "Default Camera" {
-                    self.pending_yaw += dx;
-                    self.pending_pitch += dy;
-                } else {
-                    self.rotation_y += dx;
-                    self.rotation_x += dy;
-                    self.clamp_orbit_pitch();
+impl Viewport3D {
+    /// One wheel event in the gesture phase `phase` (the runner's, for a
+    /// real event — see `on_event`): ctrl zooms, otherwise it orbits. A
+    /// notch is always `Wheel`, whatever the phase says.
+    pub fn wheel(&mut self, delta: &MouseScrollDelta, phase: ScrollPhase) -> bool {
+        let scale = cce_ui::scale::scale_factor().max(0.001);
+        let discrete = matches!(delta, MouseScrollDelta::LineDelta(..));
+        let phase = if discrete { ScrollPhase::Wheel } else { phase };
+        let free = Bounds::UNBOUNDED;
+        let speed = self.scroll_speed;
+        if self.ctrl_pressed {
+            let dy = match delta {
+                MouseScrollDelta::LineDelta(_x, y) => *y * ZOOM_PX_PER_LINE,
+                MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / scale,
+            } * speed;
+            let before = self.zoom_motion.y.pos();
+            self.zoom_motion.apply_phase(phase, 0.0, dy, discrete, free, free);
+            if phase == ScrollPhase::FingerEnd && !self.inertial_scroll {
+                self.zoom_motion = ScrollMotion::new();
+                return true;
+            }
+            self.zoom_by_px(self.zoom_motion.y.pos() - before);
+            return true;
+        }
+        let (mut dx, mut dy) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (*x * ORBIT_PX_PER_LINE, *y * ORBIT_PX_PER_LINE),
+            MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / scale, pos.y as f32 / scale),
+        };
+        dx *= speed;
+        dy *= speed;
+        match phase {
+            ScrollPhase::Finger => {
+                // Once a trackpad orbit clearly favours one axis it keeps to
+                // it, so a vertical swipe does not wander in yaw.
+                if self.scroll_lock == 0 {
+                    self.lock_accum.0 += dx;
+                    self.lock_accum.1 += dy;
+                    let (ax, ay) = (self.lock_accum.0.abs(), self.lock_accum.1.abs());
+                    if ax > LOCK_DECIDE_PX || ay > LOCK_DECIDE_PX {
+                        if ay > 1.2 * ax {
+                            self.scroll_lock = 2;
+                        } else if ax > 1.2 * ay {
+                            self.scroll_lock = 1;
+                        }
+                    }
                 }
-
-                let decay = self.scroll_friction.powf(dt * 60.0);
-                self.rotate_velocity_yaw *= decay;
-                self.rotate_velocity_pitch *= decay;
-
-                if self.rotate_velocity_yaw.abs() < 0.01 { self.rotate_velocity_yaw = 0.0; }
-                if self.rotate_velocity_pitch.abs() < 0.01 { self.rotate_velocity_pitch = 0.0; }
-                changed = true;
+                match self.scroll_lock {
+                    1 => dy = 0.0,
+                    2 => dx = 0.0,
+                    _ => {}
+                }
+            }
+            ScrollPhase::FingerEnd | ScrollPhase::Wheel => {
+                self.scroll_lock = 0;
+                self.lock_accum = (0.0, 0.0);
             }
         }
-
-        if !self.is_zooming && self.zoom_velocity.abs() > 0.001 {
-            if !self.inertial_scroll {
-                self.zoom_velocity = 0.0;
-            } else {
-                let d_zoom = self.zoom_velocity * dt;
-                self.zoom *= (-d_zoom).exp();
-                self.zoom = self.zoom.clamp(0.05, Self::MAX_ZOOM);
-
-                let decay = self.scroll_friction.powf(dt * 60.0);
-                self.zoom_velocity *= decay;
-                if self.zoom_velocity.abs() < 0.01 { self.zoom_velocity = 0.0; }
-                changed = true;
-            }
+        let before = (self.orbit.x.pos(), self.orbit.y.pos());
+        self.orbit.apply_phase(phase, dx, dy, discrete, free, free);
+        if phase == ScrollPhase::FingerEnd && !self.inertial_scroll {
+            self.orbit = ScrollMotion::new();
+            return true;
         }
-
-        changed
-    
+        self.orbit_by_px(self.orbit.x.pos() - before.0, self.orbit.y.pos() - before.1);
+        true
     }
 }

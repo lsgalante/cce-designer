@@ -7907,12 +7907,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // Graph-side these shape the drag-release fling and the unrouted
         // wheel fallback; the routed wheel/trackpad pan is the Graph widget's
         // ScrollMotion, tuned by cce-ui's smooth-scroll keys in input.kdl.
+        // The viewport's orbit and zoom are ScrollMotions too: they take the
+        // speed and the on/off switch from here, and how long a coast runs
+        // from input.kdl's `scroll_friction`, as the network pan does.
         self.graph_scroll_speed = speed;
         self.graph_inertial_scroll = enabled;
         self.graph_scroll_friction = friction;
         self.viewport_mut().scroll_speed = speed;
         self.viewport_mut().inertial_scroll = enabled;
-        self.viewport_mut().scroll_friction = friction;
     }
 
     pub fn update_graph_settings_from_config(&mut self) {

@@ -2971,6 +2971,92 @@ mod tests {
         assert_eq!(proj.root.children[1].position, (4.0, 2.0));
     }
 
+    /// A trackpad flick over the viewport coasts: the orbit follows the
+    /// fingers 1:1, and after the lift — a zero delta in the FingerEnd
+    /// phase — it carries on the way it was going, slowing, and stops. The
+    /// hand-rolled coast this replaced read the lift as more motion and
+    /// blended its velocity to nothing, so the viewport never coasted.
+    /// Ctrl-scroll zoom coasts the same way; with `inertial_scroll` off in
+    /// config.kdl a lift stops dead; and a drag, or anything else that takes
+    /// the camera over, stops a coast (`reset_velocity`).
+    #[test]
+    fn a_trackpad_flick_coasts_the_viewport_after_the_lift() {
+        use crate::viewport_3d::Viewport3D;
+        use cce_ui::widget::{Input, MouseScrollDelta, Position, ScrollPhase, ScrollSettings};
+        cce_ui::widget::scroll_motion::force_scroll_settings(Some(ScrollSettings {
+            smooth: true,
+            ease_rate: 12.0,
+            kinetic: true,
+            friction: 6.0,
+        }));
+        let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let frame = 1.0 / 60.0;
+        let px = |x: f64, y: f64| MouseScrollDelta::PixelDelta(Position { x, y });
+        let flick = |vp: &mut Viewport3D, d: MouseScrollDelta| {
+            for _ in 0..6 {
+                vp.wheel(&d, ScrollPhase::Finger);
+                std::thread::sleep(std::time::Duration::from_millis(8));
+            }
+        };
+
+        // A sideways flick: yaw only, the axis lock keeping pitch out.
+        let mut a = Viewport3D::new();
+        let vp = a.inner_mut();
+        flick(vp, px(12.0, 0.5));
+        let at_lift = vp.rotation_y;
+        assert!(at_lift > 0.0, "the fingers turned the camera");
+        let pitch = vp.rotation_x;
+        vp.wheel(&px(0.0, 0.0), ScrollPhase::FingerEnd);
+        assert_eq!(vp.rotation_y, at_lift, "the lift itself moves nothing");
+        assert!(vp.is_coasting(), "the lift starts a coast");
+        let mut steps = Vec::new();
+        let mut last = vp.rotation_y;
+        let mut frames = 0;
+        while Input::tick(vp, frame, rect) && frames < 600 {
+            steps.push(vp.rotation_y - last);
+            last = vp.rotation_y;
+            frames += 1;
+        }
+        assert!(frames < 600, "the coast stops");
+        assert!(vp.rotation_y > at_lift + 0.05, "it carried on well past the lift: {} -> {}", at_lift, vp.rotation_y);
+        assert!(steps[0] > 0.0 && steps.windows(2).all(|w| w[1] <= w[0] + 1e-6), "the same way, slowing: {steps:?}");
+        assert_eq!(vp.rotation_x, pitch, "the locked axis stays put");
+        assert!(!vp.is_coasting());
+
+        // Ctrl-scroll zoom coasts too.
+        let mut a = Viewport3D::new();
+        let vp = a.inner_mut();
+        Input::set_modifiers(vp, true, false, false);
+        flick(vp, px(0.0, 10.0));
+        let zoom_at_lift = vp.zoom;
+        assert!(zoom_at_lift < 1.0, "the fingers zoomed in");
+        vp.wheel(&px(0.0, 0.0), ScrollPhase::FingerEnd);
+        for _ in 0..30 {
+            Input::tick(vp, frame, rect);
+        }
+        assert!(vp.zoom < zoom_at_lift * 0.95, "and it carries on zooming after the lift");
+
+        // inertial_scroll off: the lift stops the orbit dead.
+        let mut a = Viewport3D::new();
+        let vp = a.inner_mut();
+        vp.inertial_scroll = false;
+        flick(vp, px(12.0, 0.0));
+        vp.wheel(&px(0.0, 0.0), ScrollPhase::FingerEnd);
+        let stopped = vp.rotation_y;
+        assert!(!Input::tick(vp, frame, rect) && vp.rotation_y == stopped, "no coast with inertial_scroll off");
+
+        // Anything that takes the camera over stops a coast.
+        let mut a = Viewport3D::new();
+        let vp = a.inner_mut();
+        flick(vp, px(12.0, 0.0));
+        vp.wheel(&px(0.0, 0.0), ScrollPhase::FingerEnd);
+        vp.reset_velocity();
+        let stopped = vp.rotation_y;
+        assert!(!Input::tick(vp, frame, rect) && vp.rotation_y == stopped, "reset_velocity ends the coast");
+
+        cce_ui::widget::scroll_motion::force_scroll_settings(None);
+    }
+
     /// A wheel over the viewport orbits whichever camera is active AFTER the
     /// active camera has changed. The viewport widget routes its wheel by a
     /// copy of the camera name, and that copy used to be written once, at

@@ -2989,6 +2989,27 @@ scroll path makes, so a dragged camera and a scrolled one mean the same thing.
 A drag stops when the pointer does (`reset_velocity`), unlike a flicked scroll,
 which coasts.
 
+**The scroll orbit and ctrl-scroll zoom coast** (since 2026-09-30):
+`Viewport3D` runs them on cce-ui's `ScrollMotion`, the model the network
+pan uses — a finger tracks 1:1, the lift coasts on the velocity of the
+finger's own events, a wheel notch glides. Until then it had a coast of
+its own that never ran: the runner delivers the lift as a ZERO delta in
+the `FingerEnd` phase, the viewport read that as more motion, and its
+per-frame velocity estimate blended zeros for the 50 ms it waited before
+calling the gesture over, so a flick stopped dead at the lift (measured in
+a shadow: 0.01 degree after the lift, against some 46 now). The motion's
+positions are accumulators in wheel px; what turns the camera is how far
+they moved (`orbit_by_px`, `zoom_by_px`), so the pitch clamp and a camera
+node's pending orbit work as before. `inertial_scroll` in config.kdl's
+`input.inertial` still switches the coast off; how long it runs is
+input.kdl's `scroll_friction`, as for every pane that coasts (the old
+`scroll_friction` field is gone). A trackpad orbit still locks to the axis
+it clearly favours, per gesture. A pinch does NOT coast — the runner keeps
+a pinch's end to itself — and stops a zoom that is coasting.
+`Viewport3D::wheel` takes the phase as an argument, so
+`a_trackpad_flick_coasts_the_viewport_after_the_lift` drives a flick
+without the runner's global.
+
 Precedence matters and is load-bearing. The press arms AFTER the viewer state's
 own press hook, so dragging a curve handle still edits it, and after the node
 hit tests, so a press on a node still moves the node. "Empty" means the scene
