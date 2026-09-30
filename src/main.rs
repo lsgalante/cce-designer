@@ -11855,6 +11855,77 @@ mod tests {
         }
     }
 
+    /// Where a project's simulation spends its time: `simnet1` of the
+    /// project `CCE_SIM_PROJECT` names played forward to `CCE_SIM_FRAMES`
+    /// (60) as saved, and again with each node of its chain bypassed in
+    /// turn, so what a node costs is what the solve saves without it. The
+    /// file is read and never written. Run in release with `--ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore]
+    fn sim_profile_on_a_project() {
+        let Ok(path) = std::env::var("CCE_SIM_PROJECT") else {
+            println!("CCE_SIM_PROJECT is not set");
+            return;
+        };
+        let frames: i32 = std::env::var("CCE_SIM_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(60);
+        let path = std::path::PathBuf::from(path);
+        let file = if path.is_dir() { path.join("state.json") } else { path };
+        let mut proj: crate::app::Project = serde_json::from_str(&std::fs::read_to_string(&file).expect("reads")).expect("parses");
+        let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
+        proj.sanitize_node_names();
+        proj.migrate_param_refs();
+        crate::app::merge_template_defs(&mut proj.root, &templates);
+        fn simnet(n: &mut FsNode) -> Option<&mut FsNode> {
+            if n.node_type == "simnet" {
+                return Some(n);
+            }
+            n.children.iter_mut().find_map(simnet)
+        }
+        let sim_node = simnet(&mut proj.root).expect("a simnet");
+        // Never the disk: this measures the solve.
+        if let Some(p) = sim_node.params.iter_mut().find(|p| p.name == "Cache") {
+            p.set_text("false");
+        }
+        let sim_name = sim_node.name.clone();
+        let chain: Vec<String> = sim_node
+            .children
+            .iter()
+            .filter(|c| !matches!(c.node_type.as_str(), "input" | "output") && !c.bypassed)
+            .map(|c| c.name.clone())
+            .collect();
+        let mut ways: Vec<Option<String>> = vec![None];
+        ways.extend(chain.into_iter().map(Some));
+        for way in ways {
+            let mut proj = proj.clone();
+            if let Some(name) = &way {
+                simnet(&mut proj.root).unwrap().children.iter_mut().find(|c| &c.name == name).unwrap().bypassed = true;
+            }
+            let root = &proj.root;
+            let node = crate::geometry::find_node_by_name(root, &sim_name).expect("the simnet");
+            let mut cache = crate::geometry::SimCache::default();
+            let mut times = Vec::new();
+            let mut points = Vec::new();
+            for frame in 1..=frames {
+                let mut sim = crate::geometry::EvalSim::new(frame, 1, &mut cache);
+                let mut err = None;
+                let t = std::time::Instant::now();
+                let d = crate::geometry::generate_single_node_geometry_with_errors(root, node, &mut Vec::new(), &mut err, &mut sim);
+                times.push(t.elapsed().as_secs_f64() * 1000.0);
+                points.push(d.map_or(0, |d| d.num_points()));
+            }
+            let mean = times.iter().sum::<f64>() / times.len() as f64;
+            let worst = times.iter().cloned().fold(0.0, f64::max);
+            let at = |f: usize| times.get(f - 1).copied().unwrap_or(0.0);
+            println!(
+                "{:>22}: {mean:7.2} ms a frame, worst {worst:7.2}; frame 2 {:.2}, 10 {:.2}, 30 {:.2}, last {:.2}; points {} -> {}",
+                way.map_or("as saved".to_string(), |n| format!("without {n}")),
+                at(2), at(10), at(30), at(frames as usize),
+                points.first().unwrap(), points.last().unwrap(),
+            );
+        }
+    }
+
     /// What the whole of the Surface method costs where most of a mesh is
     /// in contact: the sphere test's workload with every row on,
     /// at a fifth of an edge a step. The sum is of every position at every

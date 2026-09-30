@@ -1547,6 +1547,23 @@ What still costs is the solver's, not the node's: an edit inside a simnet
 re-solves from the seed, so a change at frame 120 is 120 steps. A
 backward scrub no longer does — the next section.
 
+### Where a simulation's time goes
+
+`sim_profile_on_a_project` (ignored; release, `--ignored --nocapture`,
+with `CCE_SIM_PROJECT` naming a project directory or its state.json and
+`CCE_SIM_FRAMES` how far to play, 60) plays the project's simnet forward
+as saved and again with each node of its chain bypassed in turn, so what
+a node costs is what the solve saves without it. The file is read and
+never written, and the disk cache is off for the run. On the project it
+was written for (2026-09-29; a pull, a Surface detangle with every row on
+and a remesh, 162 points growing to 525): 46 ms a frame as saved, 24
+without the detangle, 6 without the remesh. The remesh is most of it
+twice over: its own passes are some 20 ms at 525 points — the flip pass
+asks a point's valence eight times an edge, each a list built and sorted,
+and the projection's closest-point query is 6 µs — and it splits and
+collapses the same 93 edges at every step of a mesh that has stopped
+moving, so the topology the detangle keeps its lists by is new each step.
+
 ### Simulation checkpoints
 
 A step is not invertible, so going back means going forward from
