@@ -451,8 +451,10 @@ impl State {
                 let mut seen_node = false;
                 // The grid lines (flat, gap colour at the network opacity)
                 // and the origin axes, under the wires and nodes; the cells
-                // are the pane plate itself.
+                // are the pane plate itself. Then the wires, which are
+                // strokes in the node wire style and not among the quads.
                 g.paint_grid(clip, pc);
+                g.paint_wires(clip, pc);
                 for (qx, qy, qw, qh, qc, cell) in g.geometry_quads_tagged(clip) {
                     if g.is_node_rect(qx, qy, qw, qh) {
                         seen_node = true;

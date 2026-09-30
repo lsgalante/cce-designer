@@ -1331,6 +1331,11 @@ pub struct ViewportSettings {
     /// the project, but whether its surface is drawn is how you like to work.
     #[serde(default = "default_network_plate")]
     pub network_plate: bool,
+    /// How the network's node wires run (`cce_ui::widget::display::WireStyle`
+    /// by name). Empty follows `style.surface.graph.node.wire_style` in
+    /// config.kdl, which is every file from before the row.
+    #[serde(default)]
+    pub node_wire_style: String,
     /// The three point overlays. Display settings like the guide toggles
     /// above, and persisted in the same place: they were per-node `meta`
     /// child preferences until 2026-09-23, which made a view choice into a
@@ -1551,6 +1556,7 @@ impl Default for ViewportSettings {
             show_grid_enabled: true,
             show_origin_enabled: true,
             network_plate: true,
+            node_wire_style: String::new(),
             show_point_markers: false,
             show_point_numbers: false,
             show_point_normals: false,
@@ -2760,6 +2766,7 @@ impl State {
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
                 network_plate: self.network_plate,
+                node_wire_style: self.slots.content.inner().chosen_wire_style().map(|w| w.name().to_string()).unwrap_or_default(),
                 show_point_markers: self.show_point_markers,
                 show_point_numbers: self.show_point_numbers,
                 show_point_normals: self.show_point_normals,
@@ -2838,6 +2845,7 @@ impl State {
         self.origin_size = v.origin_size;
         self.grid_thickness = v.grid_thickness;
         self.network_plate = v.network_plate;
+        self.set_node_wire_style(cce_ui::widget::display::WireStyle::parse(&v.node_wire_style));
         self.circular_network_pane = self.is_detached_network || v.circular_pane;
         self.show_point_markers = v.show_point_markers;
         self.show_point_numbers = v.show_point_numbers;
@@ -7157,6 +7165,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         });
 
         slots.playbar.inner_mut().repeat = settings.playbar_repeat;
+        let wire_style = cce_ui::widget::display::WireStyle::parse(&settings.viewport.node_wire_style);
+        slots.content.inner_mut().set_wire_style(wire_style);
+        slots.content2.inner_mut().set_wire_style(wire_style);
         slots.playbar.inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
             viewport.show_grid = settings.viewport.show_grid_enabled;
@@ -11154,6 +11165,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // closed window cannot strand the pane as a stub nothing can revive.
         let reclaimed = self.poll_detached_children();
 
+        // A config.kdl edit repaints: until 2026-09-30 it waited for whatever
+        // drew next, so an edit to the wire style showed on the next hover.
+        let mut config_changed = false;
         if now.duration_since(self.last_config_read).as_secs_f32() > 2.0 {
             self.last_config_read = now;
             let config_paths = [
@@ -11171,6 +11185,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             if current_mod_time != self.last_config_mod_time {
                 self.last_config_mod_time = current_mod_time;
+                config_changed = true;
                 cce_ui::layout::reload_config();
                 self.update_inertial_settings();
                 self.update_graph_settings_from_config();
@@ -11409,7 +11424,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.read_panel_offsets();
         }
 
-        tick_changed || panned || reclaimed || glow_animating || frame_moved
+        tick_changed || panned || reclaimed || glow_animating || frame_moved || config_changed
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.

@@ -2408,6 +2408,26 @@ cell-and-gap setters (`set_grid_sizes` / `set_skipped_sizes`) survive as a
 description of the same lattice for cce-files and cce-graph, which still
 speak it; this app sets the pitch.
 
+### Node wires have a style
+
+The network's wires are drawn by cce-ui's `Graph::paint_wires` (see its
+CLAUDE.md, "A graph's wires are strokes in a style"), called in
+`render.rs` right after `paint_grid`, and come in four styles: Orthogonal,
+Rounded, Bezier, Straight. **Node Wire Style** is a dialog Settings row
+(Alt+D, "wire"), a `Ctl::Choice` whose value lives on the two Graph widgets
+themselves (`State::set_node_wire_style` sets both); it persists as
+`ViewportSettings::node_wire_style`, so in state.kdl and with the project's
+display block. Empty — every file from before the row — hands the choice
+to config.kdl's `style.surface.graph.node.wire_style`, and the row then
+reads what the config says. Not to be confused with the wireframe's
+"Wire" rows beside it, which are the 3D edges.
+
+**A config.kdl edit repaints** (the same day): `tick_frame`'s config poll
+reloaded the style registry and returned nothing, so a changed key showed
+only when something else drew — a wire style set in the config appeared on
+the next hover. `the_node_wire_style_is_a_setting_the_project_keeps` is the
+test for the row.
+
 ### The cursor is a region, and dragging the grid grows it
 
 A left press on EMPTY grid puts the cursor on the pressed cell — on the press,

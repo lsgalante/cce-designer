@@ -1686,6 +1686,40 @@ mod tests {
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// The node wires' style is a Settings row: choosing one sets it on both
+    /// network editors, the project file carries it, and a file that names
+    /// none — every one from before the row — follows the config.
+    #[test]
+    fn the_node_wire_style_is_a_setting_the_project_keeps() {
+        use cce_ui::widget::display::WireStyle;
+        let dir = std::env::temp_dir()
+            .join(format!("cce-designer-wires-{}", std::process::id()))
+            .join("look");
+        let _ = fs::remove_dir_all(&dir);
+        let mut state = State::new(false);
+        state.apply_setting("Node Wire Style", "Bezier");
+        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::Bezier);
+        assert_eq!(state.slots.content2.inner().wire_style(), WireStyle::Bezier, "both editors");
+        assert_eq!(state.display_settings().viewport.node_wire_style, "bezier");
+        state.save_to_file(&dir).expect("save");
+
+        state.apply_setting("Node Wire Style", "Straight");
+        assert!(state.has_unsaved_changes(), "a wire style is an edit to the file");
+        state.load_from_file(&dir).expect("load");
+        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::Bezier, "the file's style comes back");
+
+        // A file that names no style hands the choice back to the config.
+        let state_json = dir.join("state.json");
+        let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_json).unwrap()).unwrap();
+        v["view_state"]["display"]["viewport"].as_object_mut().unwrap().remove("node_wire_style");
+        fs::write(&state_json, serde_json::to_string(&v).unwrap()).unwrap();
+        state.load_from_file(&dir).expect("load an older save");
+        assert_eq!(state.slots.content.inner().chosen_wire_style(), None);
+        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::configured());
+
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
     /// A number under a plate is not drawn: the engine lays text out after
     /// all geometry, so it would stand sharp over a plate that frosts
     /// everything else behind it.
