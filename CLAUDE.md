@@ -2870,6 +2870,25 @@ rather than two:
   `rename_node` share; a sibling's name is refused in both, since wires
   are by name. `State::rename_target` holds the node by id.
   `a_node_is_renamed_from_its_menu` is the test.
+- `Mode::Groups` (the `group_markers` command, **Group Markers** in the
+  palette — the palette TRANSFORMS into this list, since 2026-09-29) —
+  the scene's point groups, one row each with a switch and the member
+  count in the chord column, filtered by name. A row's switch marks the
+  group's members in the viewport: a sphere at Group Marker Size in the
+  selected group's amber, on every member, staying on whatever is
+  selected. Enter or a click flips it in place and the list stays up, as
+  the palette's toggles do. `State::marked_groups` is the set, persisted
+  in the viewport block (one comma-joined string — a KDL list of one
+  reads back as a bare string, which a `Vec` refuses, and a settings file
+  that fails to parse reads as the defaults), so it rides the project
+  file too. `State::scene_groups` is every point group of the scene as
+  last built with its members' positions, kept by `rebuild_scene_geometry`
+  so the list and the markers (`rebuild_marked_group_verts`,
+  `meshes.marked_points`) come from what is on screen and a switch
+  evaluates nothing; the markers follow the geometry through a rebuild.
+  A marked name the scene has no group for marks nothing and is kept, so
+  a group that comes and goes with a frame does not lose its switch.
+  `the_group_markers_dialog_marks_a_groups_points` is the test.
 - `Mode::AddNode` (**Tab**, in the network pane) — one list of node
   templates, and a pick that instantiates at the grid cursor. Tab is what
   opened it, so Tab closes it again. The query hint names the mode; there

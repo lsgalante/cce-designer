@@ -1290,6 +1290,15 @@ pub struct ViewportSettings {
     pub show_vertex_markers: bool,
     #[serde(default)]
     pub show_vertex_normals: bool,
+    /// The point groups whose members wear a marker in the scene — the
+    /// Group Markers dialog's switches, by group name, joined by commas.
+    /// One string rather than a list: the KDL writer puts a list of one
+    /// back as a bare string, which a `Vec` refuses, and a settings file
+    /// that fails to parse is read as the DEFAULTS. Absent from older
+    /// files — none. `State::marked_groups_of` / `join_marked_groups` are
+    /// the two ends.
+    #[serde(default)]
+    pub marked_groups: String,
     /// World-unit radius and colour of the Show Point Markers overlay.
     #[serde(default = "default_point_marker_size")]
     pub point_marker_size: f32,
@@ -1486,6 +1495,7 @@ impl Default for ViewportSettings {
             show_vertex_numbers: false,
             show_vertex_markers: false,
             show_vertex_normals: false,
+            marked_groups: String::new(),
             point_marker_size: default_point_marker_size(),
             point_marker_color: default_point_marker_color(),
             world_unit: default_world_unit(),
@@ -1941,6 +1951,8 @@ pub struct SceneMeshes {
     pub group_points: cce_ui::vk::MeshId,
     /// Markers on the points whose rows are selected in the spreadsheet.
     pub row_points: cce_ui::vk::MeshId,
+    /// Markers on the members of the marked groups (the Group Markers dialog).
+    pub marked_points: cce_ui::vk::MeshId,
     /// The Show Point Markers overlay.
     pub overlay_points: cce_ui::vk::MeshId,
     /// The Show Point Normals overlay (LINE_LIST whiskers).
@@ -2473,6 +2485,21 @@ pub struct State {
     pub show_vertex_numbers: bool,
     pub show_vertex_markers: bool,
     pub show_vertex_normals: bool,
+    /// The point groups whose members wear a marker in the scene, by name
+    /// — the Group Markers dialog's switches (`group_markers`), persisted
+    /// in the viewport block. A name the scene has no group for stays on
+    /// the list and marks nothing, so a switch set for a group that comes
+    /// and goes with a frame or an edit is not lost with it.
+    pub marked_groups: Vec<String>,
+    /// Every point group of the scene as last built, with its members'
+    /// positions: what the dialog lists and what the markers are built
+    /// from, so a switch flipped evaluates nothing.
+    pub scene_groups: Vec<(String, Vec<[f32; 3]>)>,
+    /// The marked groups' markers, staged by `rebuild_marked_group_verts`,
+    /// flushed to `meshes.marked_points`.
+    pub marked_group_verts: Vec<Vertex3D>,
+    pub marked_groups_dirty: bool,
+    pub marked_group_vertex_count: u32,
     /// The visible scene's own edges for the wire pass (LINE_LIST pairs),
     /// rebuilt with the scene while Show Wireframe is on and empty while it
     /// is off. Topological — see `render::scene_edge_verts`.
@@ -2664,6 +2691,7 @@ impl State {
                 show_vertex_numbers: self.show_vertex_numbers,
                 show_vertex_markers: self.show_vertex_markers,
                 show_vertex_normals: self.show_vertex_normals,
+                marked_groups: Self::join_marked_groups(&self.marked_groups),
                 point_marker_size: self.point_marker_size,
                 point_marker_color: self.point_marker_color,
                 world_unit: self.world_unit.suffix().to_string(),
@@ -2741,6 +2769,7 @@ impl State {
         self.show_vertex_numbers = v.show_vertex_numbers;
         self.show_vertex_markers = v.show_vertex_markers;
         self.show_vertex_normals = v.show_vertex_normals;
+        self.marked_groups = Self::marked_groups_of(&v.marked_groups);
         self.point_marker_size = v.point_marker_size;
         self.point_marker_color = v.point_marker_color;
         if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
@@ -4083,6 +4112,7 @@ impl State {
             "Reset Parameters" => {
                 self.reset_parameters();
             }
+            "Group Markers" => self.open_group_markers_dialog(),
             "Rename Node" => match self.selected_slots().first().copied() {
                 Some(slot) => self.open_rename_dialog(slot),
                 None => self.update_status_text("Select a node to rename."),
@@ -6692,9 +6722,64 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.spreadsheet_mut().selected_rows()
     }
 
+    /// Stage a marker on every member of every marked group, at Group
+    /// Marker Size in the group markers' amber, from the positions the
+    /// last scene rebuild kept — a switch flipped evaluates nothing.
+    pub(crate) fn rebuild_marked_group_verts(&mut self) {
+        let at: Vec<Vertex3D> = self
+            .scene_groups
+            .iter()
+            .filter(|(name, _)| self.marked_groups.contains(name))
+            .flat_map(|(_, members)| members.iter().map(|&position| Vertex3D { position, color: [0.0; 3] }))
+            .collect();
+        self.marked_group_verts = if at.is_empty() {
+            Vec::new()
+        } else {
+            crate::geometry::points_vertices(&at, self.group_marker_size, cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]))
+        };
+        self.marked_groups_dirty = true;
+        self.viewport_dirty = true;
+    }
+
+    /// The marked groups as the settings hold them: names joined by commas.
+    pub fn join_marked_groups(groups: &[String]) -> String {
+        groups.join(",")
+    }
+
+    /// The marked groups out of the settings' one string.
+    pub fn marked_groups_of(joined: &str) -> Vec<String> {
+        let mut out: Vec<String> = joined.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Whether `group` is marked.
+    pub fn group_marked(&self, group: &str) -> bool {
+        self.marked_groups.iter().any(|g| g == group)
+    }
+
+    /// Mark or unmark a point group: the Group Markers dialog's switch.
+    /// Persisted with the display settings, which the project file carries
+    /// too.
+    pub fn set_group_marked(&mut self, group: &str, on: bool) {
+        let was = self.group_marked(group);
+        if on && !was {
+            self.marked_groups.push(group.to_string());
+            self.marked_groups.sort();
+        } else if !on && was {
+            self.marked_groups.retain(|g| g != group);
+        }
+        if on != was {
+            self.rebuild_marked_group_verts();
+            self.save_settings();
+        }
+    }
+
     pub(crate) fn rebuild_group_marker_verts(&mut self) {
-        // One size for both kinds of selection feedback.
+        // One size for every kind of marker on a group's members.
         self.rebuild_row_marker_verts();
+        self.rebuild_marked_group_verts();
         let size = self.group_marker_size;
         self.group_point_verts = crate::geometry::points_vertices(
             &self.group_members,
@@ -7143,6 +7228,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             show_vertex_numbers: settings.viewport.show_vertex_numbers,
             show_vertex_markers: settings.viewport.show_vertex_markers,
             show_vertex_normals: settings.viewport.show_vertex_normals,
+            marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
+            scene_groups: Vec::new(),
+            marked_group_verts: Vec::new(),
+            marked_groups_dirty: false,
+            marked_group_vertex_count: 0,
             scene_edge_verts: Vec::new(),
             point_marker_size: settings.viewport.point_marker_size,
             point_marker_color: settings.viewport.point_marker_color,
@@ -11089,6 +11179,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.viewport_dirty = true;
         }
 
+        // The marked groups' markers, staged by the dialog's switches and
+        // by every scene rebuild.
+        if self.marked_groups_dirty {
+            self.marked_groups_dirty = false;
+            renderer.update_mesh(meshes.marked_points, bytemuck::cast_slice(&self.marked_group_verts));
+            self.marked_group_vertex_count = self.marked_group_verts.len() as u32;
+            self.viewport_dirty = true;
+        }
+
         // The spreadsheet's selected rows, staged by their selection.
         if self.row_markers_dirty {
             self.row_markers_dirty = false;
@@ -11166,6 +11265,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             pivot: renderer.create_mesh(bytemuck::cast_slice(&pivot_verts)),
             group_points: renderer.create_mesh(&[]),
             row_points: renderer.create_mesh(&[]),
+            marked_points: renderer.create_mesh(&[]),
             overlay_points: renderer.create_mesh(&[]),
             overlay_normals: renderer.create_mesh(&[]),
             // Seeded with what is staged: a replacement renderer gets the
@@ -11443,6 +11543,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     // deliberately outside the Render node's Opacity.
                     if self.group_point_vertex_count > 0 {
                         draws.push(SceneDraw { mesh: meshes.group_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
+                    }
+                    // The marked groups: the same amber as a selected
+                    // group's markers, and the same tier.
+                    if self.marked_group_vertex_count > 0 {
+                        draws.push(SceneDraw { mesh: meshes.marked_points, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false });
                     }
                     // The spreadsheet's selected rows, while it is shown.
                     if self.show_spreadsheet && self.row_marker_vertex_count > 0 {

@@ -49,6 +49,11 @@ pub enum Mode {
     /// line is the NAME, opened holding the one the node has, and the one
     /// row says what Enter will do with it.
     Rename,
+    /// The `group_markers` command: the scene's point groups, a switch
+    /// each, marking the group's members in the viewport while it is on.
+    /// The palette TURNS INTO this list, the way it turns into the node
+    /// list — one plate, one filter.
+    Groups,
 }
 
 /// The control a row carries, drawn over its right end and worked in place —
@@ -790,6 +795,7 @@ impl Paint for Dialog {
                     Mode::Commands => "Type to filter commands and settings",
                     Mode::AddNode => "Add Node: type to filter nodes",
                     Mode::Rename => "Rename: type the node's name",
+                    Mode::Groups => "Group Markers: type to filter groups",
                 },
                 q_w,
             );
@@ -825,6 +831,7 @@ impl Paint for Dialog {
                 Mode::Commands => "No matching command or setting",
                 Mode::AddNode => "No matching node",
                 Mode::Rename => "No node to rename",
+                Mode::Groups => "No point group in the scene",
             };
             ctx.text_with(empty, list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
             return;
@@ -1190,6 +1197,9 @@ pub const RENAME_ROW_ID: &str = "rename:";
 /// (`default_camera`), there being always exactly one.
 pub const CAMERA_ROW_PREFIX: &str = "camera:";
 
+/// A row of [`Mode::Groups`]: the prefix, then the group's name.
+pub const GROUP_ROW_PREFIX: &str = "group:";
+
 /// How many recent projects the list offers. `recent_files` keeps ten; five
 /// is what fits above the commands without the palette reading as a file
 /// manager, and a query narrows the rest.
@@ -1371,6 +1381,13 @@ impl State {
         self.refresh_dialog_rows();
     }
 
+    /// The Group Markers list: the `group_markers` command. From the
+    /// palette this is the palette transformed — the same plate, with the
+    /// groups where the commands were.
+    pub fn open_group_markers_dialog(&mut self) {
+        self.open_dialog_in(Mode::Groups);
+    }
+
     /// What renaming the dialog's node to `typed` would do: the name it
     /// has and the one it would get, or why not. None when the node is
     /// gone.
@@ -1396,6 +1413,7 @@ impl State {
             Mode::Commands => "Dialog: type to filter commands and settings, Escape closes.",
             Mode::AddNode => "Add Node: type to filter, Enter adds at the cursor, Escape closes.",
             Mode::Rename => "Rename: type the name, Enter renames, Escape closes.",
+            Mode::Groups => "Group Markers: Enter or a click marks a group's points in the scene, Escape closes.",
         });
     }
 
@@ -1548,6 +1566,24 @@ impl State {
                 }
                 rows
             }
+            // The scene's point groups, ranked by name, a switch each and the
+            // member count in the chord column.
+            Mode::Groups => {
+                let names: Vec<&str> = self.scene_groups.iter().map(|(n, _)| n.as_str()).collect();
+                crate::command::fuzzy_rank(&query, &names)
+                    .into_iter()
+                    .map(|i| {
+                        let (name, members) = &self.scene_groups[i];
+                        Row {
+                            id: format!("{GROUP_ROW_PREFIX}{name}"),
+                            label: name.clone(),
+                            chord: format!("{} point{}", members.len(), if members.len() == 1 { "" } else { "s" }),
+                            control: Some(Control::Toggle(self.group_marked(name))),
+                            truncate_head: false,
+                        }
+                    })
+                    .collect()
+            }
             Mode::AddNode => {
                 // Every template, everywhere. The settings directories that
                 // refused geometry were the root meta node's utility subnets,
@@ -1693,6 +1729,16 @@ impl State {
     /// moved, and re-ranking would throw the selection back to the top of a
     /// list the user is still working down.
     pub(crate) fn refresh_dialog_controls(&mut self) {
+        if self.slots.dialog.mode == Mode::Groups {
+            let ids: Vec<String> = self.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+            for id in ids {
+                if let Some(name) = id.strip_prefix(GROUP_ROW_PREFIX) {
+                    let on = self.group_marked(name);
+                    self.slots.dialog.set_control(&id, Some(Control::Toggle(on)));
+                }
+            }
+            return;
+        }
         if self.slots.dialog.mode != Mode::Commands {
             return;
         }
@@ -2205,6 +2251,16 @@ impl State {
         if mode == Mode::Commands && id == ZOOM_ROW_ID {
             return;
         }
+        // A group's row is its switch: flipped in place, the list stays up.
+        if mode == Mode::Groups {
+            if let Some(name) = id.strip_prefix(GROUP_ROW_PREFIX) {
+                let name = name.to_string();
+                let on = !self.group_marked(&name);
+                self.set_group_marked(&name, on);
+                self.refresh_dialog_controls();
+            }
+            return;
+        }
         if mode == Mode::Commands {
             if let Some(s) = setting_of_row(&id) {
                 let control = self.slots.dialog.rows.iter().find(|r| r.id == id).and_then(|r| r.control.clone());
@@ -2273,6 +2329,7 @@ impl State {
                     Ok(said) | Err(said) => self.update_status_text(&said),
                 }
             }
+            Mode::Groups => {}
             Mode::AddNode => {
                 let mut redraw = false;
                 let action = crate::app::McpAction::AddNode {

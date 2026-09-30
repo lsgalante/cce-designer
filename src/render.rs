@@ -1261,6 +1261,17 @@ impl State {
         self.rt_geometry_version += 1;
         self.viewport_dirty = true;
 
+        // The scene's point groups, with where their members are: what the
+        // Group Markers dialog lists, and what the marked ones' markers are
+        // built from.
+        self.scene_groups = geom
+            .points()
+            .group_names()
+            .iter()
+            .map(|g| (g.to_string(), geom.points().group_members(g).iter().map(|&p| geom.positions()[p as usize]).collect()))
+            .collect();
+        self.rebuild_marked_group_verts();
+
         // The point overlays ride the same rebuild, off the same `geom`:
         // they annotate what is on screen, and what is on screen is exactly
         // this Detail.

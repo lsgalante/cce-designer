@@ -7323,6 +7323,82 @@ mod tests {
     /// Rename is a row of the node's menu and a command: the dialog opens
     /// holding the node's name, the row says what Enter will do, and a name
     /// that cannot be written is refused there and not on the way in.
+    /// The Group Markers dialog: the palette turned into a list of the
+    /// scene's point groups, a switch each. Enter or a click flips the
+    /// switch in place and the list stays up; a marked group's members
+    /// wear a marker in the scene, built from what the last rebuild kept,
+    /// following the geometry through a rebuild and persisted with the
+    /// display settings.
+    #[test]
+    fn the_group_markers_dialog_marks_a_groups_points() {
+        use crate::dialog::{Mode, GROUP_ROW_PREFIX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        // A group of five points on the sphere, shown.
+        state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("tagged".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
+        let tagged = state.current_dir().children.iter().position(|c| c.name == "tagged").unwrap();
+        for (name, value) in [("Input", "sphere1"), ("Group Name", "five"), ("Mode", "Random"), ("Count", "5")] {
+            state.apply_action(McpAction::SetParam { slot: tagged, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+        }
+        state.current_dir_mut().set_child_geometry_visible(tagged, true);
+        state.rebuild_scene_geometry();
+        assert!(state.scene_groups.iter().any(|(n, m)| n == "five" && m.len() == 5), "{:?}", state.scene_groups.iter().map(|(n, m)| (n.clone(), m.len())).collect::<Vec<_>>());
+        assert!(state.marked_group_verts.is_empty(), "nothing is marked yet");
+
+        // From the palette: the command turns it into the groups list.
+        state.run_command("command_palette");
+        assert_eq!(state.slots.dialog.mode, Mode::Commands);
+        assert!(state.run_command("group_markers"));
+        assert!(state.dialog_visible());
+        assert_eq!(state.slots.dialog.mode, Mode::Groups);
+        let row = state.slots.dialog.rows.iter().position(|r| r.id == format!("{GROUP_ROW_PREFIX}five")).expect("a row for the group");
+        assert_eq!(state.slots.dialog.rows[row].chord, "5 points");
+        assert_eq!(state.slots.dialog.rows[row].toggle(), Some(false));
+
+        // Enter on the row marks the group, and the list stays up.
+        state.slots.dialog.selected = row;
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(state.dialog_visible(), "a switch is worked in place");
+        assert_eq!(state.slots.dialog.rows[row].toggle(), Some(true));
+        assert!(state.group_marked("five"));
+        assert!(!state.marked_group_verts.is_empty() && state.marked_groups_dirty, "the markers are staged");
+        let one = state.marked_group_verts.len();
+        // On the group's points, at Group Marker Size.
+        let members: Vec<[f32; 3]> = state.scene_groups.iter().find(|(n, _)| n == "five").unwrap().1.clone();
+        for m in &members {
+            assert!(state.marked_group_verts.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.group_marker_size + 1e-4)), "a marker at {m:?}");
+        }
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert_eq!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.marked_groups, "five", "persisted");
+        assert_eq!(State::marked_groups_of("b, a,,a"), vec!["a".to_string(), "b".to_string()]);
+
+        // The markers follow the geometry: a bigger sphere, farther points.
+        let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
+        let far = |state: &State| state.marked_group_verts.iter().map(|v| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt()).fold(0.0f32, f32::max);
+        let before = far(&state);
+        state.apply_action(McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "2.0".into() }, &mut redraw).unwrap();
+        assert!(far(&state) > before * 1.5, "{} against {before}", far(&state));
+        assert_eq!(state.marked_group_verts.len(), one);
+
+        // Enter again unmarks; Escape closes; a query filters the names.
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(!state.group_marked("five"));
+        assert!(state.marked_group_verts.is_empty());
+        state.dialog_key_input(&typed("z"));
+        assert!(state.slots.dialog.rows.is_empty(), "no group matches");
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
+        assert!(!state.dialog_visible());
+
+        // A marked name the scene has no group for marks nothing and is kept.
+        state.set_group_marked("gone", true);
+        assert!(state.marked_group_verts.is_empty());
+        assert!(state.group_marked("gone"));
+    }
+
     #[test]
     fn a_node_is_renamed_from_its_menu() {
         use crate::dialog::{Mode, RENAME_ROW_ID};
