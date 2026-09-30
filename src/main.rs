@@ -4578,6 +4578,8 @@ mod tests {
                 o.entry(k).or_insert(Value::Null);
             }
             o.entry("show_when").or_insert("".into());
+            // A template's description is read and never written.
+            o.remove("description");
             if o.get("expr") == Some(&Value::Bool(false)) {
                 o.remove("expr");
             }
@@ -8956,6 +8958,88 @@ mod tests {
         assert!(!rename_node_in_tree(&mut root, "zzz", "x"), "and so is one of a node that is not there");
     }
 
+    /// Every parameter a template ships says what it does, and the row
+    /// menu shows it: under the name, wrapped so the menu stays narrow,
+    /// ahead of the readouts. The description is the TEMPLATE's: an
+    /// instance loaded from a save carries none and is handed it by the
+    /// merge, a child of a subnet template takes its base template's, and
+    /// a save never writes one.
+    #[test]
+    fn the_row_menu_says_what_a_parameter_does() {
+        use crate::app::{wrap_words, McpAction, PARAM_DESCRIPTION_WIDTH};
+        // Every shipped template's own parameters, read off the RAW files
+        // so a description the loader dropped would not pass for one.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("nodes");
+        let mut missing = Vec::new();
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            for p in v["params"].as_array().into_iter().flatten() {
+                let d = p["description"].as_str().unwrap_or("").trim();
+                if d.is_empty() {
+                    missing.push(format!("{}: {}", path.file_name().unwrap().to_string_lossy(), p["name"]));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "parameters with no description: {missing:#?}");
+
+        // A wrap keeps every word, in order, and no line is wider than
+        // the width unless one word is.
+        let text = "Radius of the sphere in world units; larger values make a bigger ball.";
+        let lines = wrap_words(text, 20);
+        assert_eq!(lines.join(" "), text);
+        assert!(lines.iter().all(|l| l.chars().count() <= 20), "{lines:?}");
+        assert_eq!(wrap_words("antidisestablishmentarianism is long", 10), vec!["antidisestablishmentarianism", "is long"]);
+        assert!(wrap_words("", 10).is_empty());
+
+        let mut state = State::new(false);
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        // sphere1 comes from the bundled project, whose file has no
+        // descriptions: the merge hands it the template's.
+        let sphere = slot_of(&state, "sphere1");
+        let templates = state.node_templates.clone();
+        let template = |name: &str, pname: &str| -> String {
+            templates.iter().find(|t| t.node.name == name).unwrap().node.params.iter()
+                .find(|p| p.name == pname).unwrap().description.clone()
+        };
+        let radius = template("Sphere", "Radius");
+        let want = wrap_words(&radius, PARAM_DESCRIPTION_WIDTH);
+        assert!(want.len() > 1, "a sentence spans rows: {want:?}");
+        let (rows, _, headers) = state.param_menu_rows(sphere, "Radius");
+        assert_eq!(rows[0], "Name: Radius");
+        assert_eq!(&rows[1..1 + want.len()], &want[..], "the description sits under the name");
+        assert_eq!(rows[1 + want.len()], "Control: slider");
+        assert!(1 + want.len() < headers, "the description rows are headers, and run nothing");
+
+        // A child inside a subnet template takes its base template's.
+        state.apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: Some("embryo1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
+        let embryo = slot_of(&state, "embryo1");
+        let (rows, _, _) = state.param_menu_rows(embryo, "Radius");
+        let own = wrap_words(&template("Embryo", "Radius"), PARAM_DESCRIPTION_WIDTH);
+        assert_ne!(own, want, "the Embryo's Radius is described as the Embryo's");
+        assert_eq!(&rows[1..1 + own.len()], &own[..]);
+        state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
+        let inner = slot_of(&state, "sphere1");
+        let (rows, _, _) = state.param_menu_rows(inner, "Radius");
+        assert_eq!(&rows[1..1 + want.len()], &want[..], "the Embryo's sphere1 says what a Sphere's Radius does");
+        state.apply_action(McpAction::Up, &mut redraw).unwrap();
+
+        // A parameter no template names says nothing, and the menu goes
+        // straight from the name to the readouts.
+        state.apply_action(McpAction::AddParam { slot: sphere, name: "Extra".into(), param_type: "float".into(), default: "3".into() }, &mut redraw).unwrap();
+        let (rows, _, _) = state.param_menu_rows(sphere, "Extra");
+        assert_eq!(rows[1], "Control: text box");
+
+        // A save never carries one, so the file is what it was.
+        let saved = serde_json::to_string(&state.current_dir().children[sphere]).unwrap();
+        assert!(!saved.contains("description"), "{saved}");
+    }
+
     /// The parameter row menu, end to end: a right press on a row in the
     /// params pane opens it (and nothing else claims the press), Copy
     /// Parameter then Paste Relative Reference on another node's row writes
@@ -8996,6 +9080,19 @@ mod tests {
             let (x, y, w, h) = rects[i];
             (x + w * 0.5, y + h * 0.5)
         };
+        // A parameter's description, as the menu wraps it, and the menu's
+        // rows with it taken out: the readouts the rest of this test is
+        // about. `the_row_menu_says_what_a_parameter_does` covers the
+        // description itself.
+        let described = |state: &State, slot: usize, pname: &str| -> Vec<String> {
+            let p = state.current_dir().children[slot].params.iter().find(|p| p.name == pname).expect(pname);
+            crate::app::wrap_words(&p.description, crate::app::PARAM_DESCRIPTION_WIDTH)
+        };
+        let fields = |state: &State, slot: usize, pname: &str| -> (Vec<String>, usize) {
+            let (rows, _, h) = state.param_menu_rows(slot, pname);
+            let d = described(state, slot, pname);
+            (rows.into_iter().filter(|r| !d.contains(r)).collect(), h - d.len())
+        };
         show(&mut state, sphere);
         let (x, y) = row_center(&state, "Radius");
         assert_eq!(state.param_row_at(x, y), Some((sphere, "Radius".to_string())));
@@ -9005,9 +9102,10 @@ mod tests {
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
         assert!(state.param_menu_open(), "a right press on a row opens its menu");
         assert!(!state.viewport_menu_open());
+        let radius_desc = described(&state, sphere, "Radius");
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info; 9].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
+            vec![ParamMenuAction::Info; 9 + radius_desc.len()].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
             "nothing copied yet, and the row holds a value"
         );
         // The header rows read the parameter out: its name, the control
@@ -9017,7 +9115,8 @@ mod tests {
         // default 0..2 since the template declares no range; it has no
         // label and no condition, so neither row appears. There is no
         // Value row: the Type row is the value's type.
-        let shown = cce_ui::widget::context_menu::options();
+        let shown: Vec<String> =
+            cce_ui::widget::context_menu::options().into_iter().filter(|r| !radius_desc.contains(r)).collect();
         assert_eq!(
             &shown[..10],
             &[
@@ -9027,12 +9126,12 @@ mod tests {
             ]
         );
         assert!(shown.iter().all(|r| !r.starts_with("Value:")), "{shown:?}");
-        let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
+        let (_, headers) = fields(&state, sphere, "Radius");
         assert_eq!(headers, 9);
         // The headers are the rows before the separator; each one is
         // looked up by its readout, not its position.
         let headers_of = |state: &State, pname: &str| -> Vec<String> {
-            let (rows, _, h) = state.param_menu_rows(sphere, pname);
+            let (rows, h) = fields(state, sphere, pname);
             assert_eq!(rows[h], "-");
             rows[..h].to_vec()
         };
@@ -9064,7 +9163,7 @@ mod tests {
         let embryo = slot_of(&state, "embryo1");
         state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
         let inner = slot_of(&state, "sphere1");
-        let (rows, _, h) = state.param_menu_rows(inner, "Radius");
+        let (rows, h) = fields(&state, inner, "Radius");
         assert!(rows[..h].contains(&"Default: chf(\"../Radius\")".to_string()), "{rows:?}");
         state.apply_action(McpAction::Up, &mut redraw).unwrap();
         // A click on a header runs nothing.
@@ -9110,11 +9209,11 @@ mod tests {
         // text box, and still sets the float its slider would. Method is a
         // dropdown setting an enum, Rows a spinbox setting an integer.
         show(&mut state, ball);
-        let (rows, _, _) = state.param_menu_rows(ball, "Radius");
+        let (rows, _) = fields(&state, ball, "Radius");
         assert_eq!(&rows[1..4], &["Control: text box".to_string(), "Type: float".to_string(), "Expression: true".to_string()]);
-        let (rows, _, _) = state.param_menu_rows(ball, "Method");
+        let (rows, _) = fields(&state, ball, "Method");
         assert_eq!((&rows[1], &rows[2]), (&"Control: dropdown".to_string(), &"Type: enum".to_string()));
-        let (rows, _, _) = state.param_menu_rows(ball, "Rows");
+        let (rows, _) = fields(&state, ball, "Rows");
         assert_eq!((&rows[1], &rows[2]), (&"Control: spinbox".to_string(), &"Type: integer".to_string()));
 
         // The pull node: a text parameter the pane presents as sliders
@@ -9127,14 +9226,14 @@ mod tests {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         show(&mut state, pull);
-        let (rows, _, h) = state.param_menu_rows(pull, "Value");
+        let (rows, h) = fields(&state, pull, "Value");
         let want: Vec<String> = ["Name: Value", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
         assert_eq!(&rows[..4], &want[..], "{rows:?}");
         assert!(rows[..h].contains(&"Range: -1000..1000".to_string()), "{rows:?}");
         assert!(rows[..h].iter().all(|r| !r.starts_with("Value:")), "{rows:?}");
         state.apply_action(McpAction::SetParam { slot: pull, name: "Value".into(), value: "0.06".into() }, &mut redraw).unwrap();
         show(&mut state, pull);
-        let (rows, _, _) = state.param_menu_rows(pull, "Value");
+        let (rows, _) = fields(&state, pull, "Value");
         assert_eq!((&rows[1], &rows[2]), (&"Control: text box".to_string(), &"Type: string".to_string()), "a broadcast number stays a text box");
 
         // And a reference typed straight into a row (or scripted) becomes one.

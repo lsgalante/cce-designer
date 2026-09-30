@@ -4,11 +4,11 @@
  "inputs": 2,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "To", "type": "node", "default": "" },
-  { "name": "Orient", "type": "choice:None,Normal", "default": "None" },
-  { "name": "Scale", "type": "float", "default": "1.00" },
-  { "name": "Scale Attribute", "type": "attribute", "default": "" },
-  { "name": "Group", "type": "group", "default": "" }
+  { "name": "Input", "type": "node", "default": "", "description": "The node whose geometry is copied; one copy is placed at each target point." },
+  { "name": "To", "type": "node", "default": "", "description": "The node whose points receive a copy of the Input geometry each. Unresolved, the Input passes through uncopied." },
+  { "name": "Orient", "type": "choice:None,Normal", "default": "None", "description": "None keeps every copy upright. Normal turns each copy so its +Y axis follows the target surface's normal at that point." },
+  { "name": "Scale", "type": "float", "default": "1.00", "description": "Uniform scale applied to every copy about its own origin before it is placed." },
+  { "name": "Scale Attribute", "type": "attribute", "default": "", "description": "Name of a point attribute on the target whose value multiplies Scale per copy, so a field can drive their size. Empty uses Scale alone." },
+  { "name": "Group", "type": "group", "default": "", "description": "Point group on the target that receives copies; other points get none. Empty copies onto every target point." }
  ]
 }

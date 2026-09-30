@@ -10,17 +10,20 @@
       "default": "100",
       "min": 10.0,
       "max": 5000.0,
-      "step": 10.0
+      "step": 10.0,
+      "description": "Number of points to generate along the chosen Shape. With Markers on, each one also gets a small marker sphere."
     },
     {
       "name": "Shape",
       "type": "choice:None,Spiral,Line,Circle,Grid",
-      "default": "None"
+      "default": "None",
+      "description": "Pattern the points are laid out in: Spiral, Line, Circle or a square Grid. None puts every point at the same spot. Placed automatically by the node's order in the network."
     },
     {
       "name": "Markers",
       "type": "choice:true,false",
-      "default": "true"
+      "default": "true",
+      "description": "true draws a small sphere at each point so they can be seen; false outputs bare points only, which is what Copy and other nodes should read."
     }
   ]
 }

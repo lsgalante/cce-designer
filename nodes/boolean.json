@@ -4,9 +4,9 @@
  "inputs": 2,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "With", "type": "node", "default": "" },
-  { "name": "Operation", "type": "choice:Union,Intersect,Subtract", "default": "Union" },
-  { "name": "Voxel Size", "type": "slider", "default": "0.05", "min": 0.005, "max": 1.0, "step": 0.005 }
+  { "name": "Input", "type": "node", "default": "", "description": "The node whose geometry is the first operand, the shape the second is combined with or cut from." },
+  { "name": "With", "type": "node", "default": "", "description": "The node whose geometry is the second operand: joined for Union, kept in common for Intersect, or cut away for Subtract." },
+  { "name": "Operation", "type": "choice:Union,Intersect,Subtract", "default": "Union", "description": "Union joins both shapes, Intersect keeps only where they overlap, and Subtract removes the With shape from the Input." },
+  { "name": "Voxel Size", "type": "slider", "default": "0.05", "min": 0.005, "max": 1.0, "step": 0.005, "description": "Grid spacing in world units of the distance fields both shapes are sampled on. Smaller gives finer, cleaner edges but costs more." }
  ]
 }

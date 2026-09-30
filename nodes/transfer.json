@@ -7,28 +7,33 @@
   {
    "name": "Input",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The geometry that receives values: each of its points takes them from the nearest point of the From geometry."
   },
   {
    "name": "From",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The geometry to copy point attributes and groups from, by nearest point. Nothing is copied if it is unconnected or has no points."
   },
   {
    "name": "Attributes",
    "type": "text",
-   "default": ""
+   "default": "",
+   "description": "Comma-separated names of the point attributes to copy. Empty copies every point attribute the source has."
   },
   {
    "name": "Transfer Groups",
    "type": "toggle",
-   "default": "false"
+   "default": "false",
+   "description": "Also copies point group membership from the nearest source point, so points join or leave each group to match the source."
   },
   {
    "name": "Groups",
    "type": "text",
    "default": "",
-   "show_when": "Transfer Groups == true"
+   "show_when": "Transfer Groups == true",
+   "description": "Comma-separated names of the point groups to copy. Empty copies every point group the source has."
   },
   {
    "name": "Maximum Distance",
@@ -36,12 +41,14 @@
    "default": "0.00",
    "min": 0.0,
    "max": 10.0,
-   "step": 0.01
+   "step": 0.01,
+   "description": "Points further than this from any source point, in world units, receive nothing. 0 means no limit."
   },
   {
    "name": "Group",
    "type": "group",
-   "default": ""
+   "default": "",
+   "description": "Only points of the input in this group receive values. Empty lets every point receive."
   }
  ]
 }

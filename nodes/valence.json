@@ -4,8 +4,8 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "Attribute", "type": "attribute", "default": "valence" },
-  { "name": "Measure", "type": "choice:Neighbours,Primitives", "default": "Neighbours" }
+  { "name": "Input", "type": "node", "default": "", "description": "The node whose geometry is measured; each point's valence is written as a point attribute and the geometry passed on." },
+  { "name": "Attribute", "type": "attribute", "default": "valence", "description": "The name of the integer point attribute the count is written to. Empty writes nothing." },
+  { "name": "Measure", "type": "choice:Neighbours,Primitives", "default": "Neighbours", "description": "What is counted per point: its neighbouring points along edges, or the primitives that use it." }
  ]
 }

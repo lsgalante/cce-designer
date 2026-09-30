@@ -7,47 +7,55 @@
     {
       "name": "Input",
       "type": "node",
-      "default": ""
+      "default": "",
+      "description": "The node whose geometry this reads; its point colours are set, or vector lines added, and the geometry passed on."
     },
     {
       "name": "Attribute",
       "type": "attribute",
-      "default": "mass"
+      "default": "mass",
+      "description": "The point attribute shown. Ramp colours points by its value (first component); Vector draws it as a line from each point."
     },
     {
       "name": "Mode",
       "type": "choice:Ramp,Vector",
-      "default": "Ramp"
+      "default": "Ramp",
+      "description": "Ramp colours each point by the attribute's value; Vector draws a line from each point along the attribute as a direction."
     },
     {
       "name": "Ramp",
       "type": "choice:Grayscale,Heat,Spectrum,Viridis",
       "default": "Viridis",
-      "show_when": "Mode == Ramp"
+      "show_when": "Mode == Ramp",
+      "description": "The colour scale values are mapped through, from the low end to the high end."
     },
     {
       "name": "Range",
       "type": "choice:Auto,Manual",
       "default": "Auto",
-      "show_when": "Mode == Ramp"
+      "show_when": "Mode == Ramp",
+      "description": "Auto spreads the ramp from the attribute's lowest to highest value over all points; Manual uses From and To."
     },
     {
       "name": "From",
       "type": "float",
       "default": "0.00",
-      "show_when": "Mode == Ramp && Range == Manual"
+      "show_when": "Mode == Ramp && Range == Manual",
+      "description": "The value shown at the low end of the ramp. Values below it are clamped to that end."
     },
     {
       "name": "To",
       "type": "float",
       "default": "1.00",
-      "show_when": "Mode == Ramp && Range == Manual"
+      "show_when": "Mode == Ramp && Range == Manual",
+      "description": "The value shown at the high end of the ramp. Values above it are clamped to that end."
     },
     {
       "name": "Blend",
       "type": "choice:Set,Mix,Multiply,Add",
       "default": "Set",
-      "show_when": "Mode == Ramp"
+      "show_when": "Mode == Ramp",
+      "description": "How the ramp colour meets the existing colour: Set and Mix replace it, Multiply tints it, Add brightens it. Opacity then fades toward the result."
     },
     {
       "name": "Opacity",
@@ -56,7 +64,8 @@
       "min": 0.0,
       "max": 1.0,
       "step": 0.01,
-      "show_when": "Mode == Ramp"
+      "show_when": "Mode == Ramp",
+      "description": "How far each point's colour moves from its old colour toward the blended ramp colour: 1 is fully, 0 not at all."
     },
     {
       "name": "Scale",
@@ -65,12 +74,14 @@
       "min": 0.0,
       "max": 2.0,
       "step": 0.01,
-      "show_when": "Mode == Vector"
+      "show_when": "Mode == Vector",
+      "description": "Multiplies the attribute's vector to get the drawn line's length, in world units per unit of the attribute."
     },
     {
       "name": "Group",
       "type": "group",
-      "default": ""
+      "default": "",
+      "description": "A point group limiting which points are coloured or get a line. Empty means every point; Auto range still measures all points."
     }
   ]
 }

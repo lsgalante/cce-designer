@@ -7,7 +7,8 @@
     {
       "name": "Input",
       "default": "",
-      "type": "node"
+      "type": "node",
+      "description": "The node whose surface is extruded as a whole: its points move along their normals and walls rise from its open edges."
     },
     {
       "name": "Distance",
@@ -15,12 +16,14 @@
       "type": "slider",
       "min": -1.0,
       "max": 1.0,
-      "step": 0.01
+      "step": 0.01,
+      "description": "How far, in world units, each point moves along its point normal to form the top. Negative extrudes inward, against the normals."
     },
     {
       "name": "Keep Base",
       "default": "true",
-      "type": "toggle"
+      "type": "toggle",
+      "description": "Keep the original faces, reversed, as the bottom so a sheet becomes a closed slab. Off leaves only the top and the side walls."
     }
   ]
 }

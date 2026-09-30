@@ -666,6 +666,31 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
     (control, ty)
 }
 
+/// How wide a line of a parameter's description is in its row menu, in
+/// characters. The menu is as wide as its widest row, so an unwrapped
+/// sentence would stretch it across the window.
+pub const PARAM_DESCRIPTION_WIDTH: usize = 44;
+
+/// `text` broken into lines of at most `width` characters, at spaces; a
+/// word longer than a line has one to itself.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// The range a presented row carries in its display type (`slider:lo:hi`,
 /// `float3:lo:hi`), for a row whose parameter declares none of its own.
 fn shown_row_range(shown: &str) -> Option<(f32, f32, Option<f32>)> {
@@ -5186,7 +5211,11 @@ impl State {
     /// parameter's name, which is what a `ch()` path and a wire spell —
     /// with `Label:` after it only when the template gives one (the pane
     /// shows the name otherwise, and a Label row repeating it would say
-    /// there is one), and `Shown when:` closes it with the row's
+    /// there is one) and the parameter's DESCRIPTION under them, ahead of
+    /// `Control:` — what it does, from the template
+    /// (`ParamDef::description`), wrapped to `PARAM_DESCRIPTION_WIDTH` over
+    /// as many rows as it takes and unprefixed, since it reads as prose and
+    /// not as a field — and `Shown when:` closes the list with the row's
     /// `show_when` condition when it has one.
     pub fn param_menu_rows(&self, slot: usize, pname: &str) -> (Vec<String>, Vec<ParamMenuAction>, usize) {
         let dir = self.param_editor_dir();
@@ -5200,6 +5229,9 @@ impl State {
         let mut options = vec![format!("Name: {pname}")];
         if let Some(label) = param.map(|p| p.label.as_str()).filter(|l| !l.is_empty()) {
             options.push(format!("Label: {label}"));
+        }
+        if let Some(p) = param {
+            options.extend(wrap_words(&p.description, PARAM_DESCRIPTION_WIDTH));
         }
         options.push(format!("Control: {control}"));
         options.push(format!("Type: {ty}"));

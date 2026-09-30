@@ -4,7 +4,7 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "Attribute", "type": "attribute", "default": "piece" }
+  { "name": "Input", "type": "node", "default": "", "description": "The node whose geometry is split into connected pieces; the piece number is written per point and the geometry passed on." },
+  { "name": "Attribute", "type": "attribute", "default": "piece", "description": "The integer point attribute holding each point's piece number: 0 is the largest piece, 1 the next, and so on. Empty writes nothing." }
  ]
 }

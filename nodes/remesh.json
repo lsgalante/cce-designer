@@ -7,7 +7,8 @@
   {
    "name": "Input",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The node whose surface is remeshed. Its triangles are rebuilt toward an even edge length; point attributes ride through splits and collapses."
   },
   {
    "name": "Target Length",
@@ -15,7 +16,8 @@
    "default": "0.10",
    "min": 0.001,
    "max": 1.0,
-   "step": 0.005
+   "step": 0.005,
+   "description": "Edge length, in world units, the mesh is steered toward. Edges over 4/3 of it are split and edges under 4/5 collapsed; smaller means denser."
   },
   {
    "name": "Iterations",
@@ -23,7 +25,8 @@
    "default": "3",
    "min": 1.0,
    "max": 20.0,
-   "step": 1.0
+   "step": 1.0,
+   "description": "How many times the split, collapse, flip and relax passes repeat. More rounds settle the mesh closer to the target; it stops early once nothing changes."
   },
   {
    "name": "Relax",
@@ -31,56 +34,66 @@
    "default": "0.50",
    "min": 0.0,
    "max": 1.0,
-   "step": 0.01
+   "step": 0.01,
+   "description": "Strength of the tangential smoothing that slides points to even out triangles without moving the surface. 0 turns it off; 1 is full strength."
   },
   {
    "name": "Split",
    "type": "choice:true,false",
-   "default": "true"
+   "default": "true",
+   "description": "Whether edges longer than 4/3 of the Target Length are split at their midpoint, adding points where the mesh is too coarse."
   },
   {
    "name": "Collapse",
    "type": "choice:true,false",
-   "default": "true"
+   "default": "true",
+   "description": "Whether edges shorter than 4/5 of the Target Length are collapsed, removing points where the mesh is too dense. The surviving point keeps its values."
   },
   {
    "name": "Flip",
    "type": "choice:true,false",
-   "default": "true"
+   "default": "true",
+   "description": "Whether edges are flipped to bring points closer to six neighbours each, which evens out the shape of the triangles."
   },
   {
    "name": "Project",
    "type": "choice:true,false",
-   "default": "true"
+   "default": "true",
+   "description": "Whether relaxed points are pulled back onto the input surface after each round, so repeated remeshing does not shrink or drift the shape."
   },
   {
    "name": "Transfer",
    "type": "toggle",
-   "default": "false"
+   "default": "false",
+   "description": "After remeshing, copy point attributes (and optionally groups) onto the new points from the nearest point of a source mesh, so they survive the rebuild."
   },
   {
    "name": "From",
    "type": "node",
    "default": "",
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "The node whose point attributes and groups are copied onto the remeshed points. Empty uses this node's own input as it was before the remesh."
   },
   {
    "name": "Attributes",
    "type": "text",
    "default": "",
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "Comma-separated names of the point attributes to copy from the source. Empty copies every point attribute the source has."
   },
   {
    "name": "Transfer Groups",
    "type": "toggle",
    "default": "false",
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "Also copy point group membership from the nearest source point, joining and leaving groups to match the source."
   },
   {
    "name": "Groups",
    "type": "text",
    "default": "",
-   "show_when": "Transfer == true && Transfer Groups == true"
+   "show_when": "Transfer == true && Transfer Groups == true",
+   "description": "Comma-separated names of the point groups to copy. Empty copies every point group the source has."
   },
   {
    "name": "Maximum Distance",
@@ -89,7 +102,8 @@
    "min": 0.0,
    "max": 10.0,
    "step": 0.01,
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "Only points within this many world units of a source point receive values; farther points keep their own. 0 means no limit."
   }
  ]
 }

@@ -7,24 +7,28 @@
     {
       "name": "Input",
       "default": "",
-      "type": "node"
+      "type": "node",
+      "description": "The geometry to relax. Its points are moved and everything else passes through."
     },
     {
       "name": "Mode",
       "type": "choice:Springs,Repel",
-      "default": "Springs"
+      "default": "Springs",
+      "description": "Springs pulls edge lengths back toward those of the Rest geometry. Repel pushes points apart until spheres of Radius around them stop overlapping."
     },
     {
       "name": "Rest",
       "default": "",
       "type": "node",
-      "show_when": "Mode == Springs"
+      "show_when": "Mode == Springs",
+      "description": "The geometry whose edge lengths the springs restore; inside a simnet usually its input node. Must have the same point count as Input, or nothing moves."
     },
     {
       "name": "Pin Group",
       "default": "",
       "type": "group",
-      "show_when": "Mode == Springs"
+      "show_when": "Mode == Springs",
+      "description": "Points in this group keep their input position and push the others instead, so a displacement applied to them spreads through the surface. Empty pins nothing."
     },
     {
       "name": "Stiffness",
@@ -33,7 +37,8 @@
       "min": 0.0,
       "max": 1.0,
       "step": 0.05,
-      "show_when": "Mode == Springs"
+      "show_when": "Mode == Springs",
+      "description": "Fraction of each edge's length error corrected per pass. Higher values relax faster and stiffer; 0 leaves the points where they are."
     },
     {
       "name": "Iterations",
@@ -41,7 +46,8 @@
       "default": "8",
       "min": 0.0,
       "max": 50.0,
-      "step": 1.0
+      "step": 1.0,
+      "description": "Number of relaxation passes. More passes settle further. In Repel mode 0 turns the node off; Springs always runs at least one."
     },
     {
       "name": "Radius",
@@ -50,13 +56,15 @@
       "min": 0.001,
       "max": 1.0,
       "step": 0.001,
-      "show_when": "Mode == Repel"
+      "show_when": "Mode == Repel",
+      "description": "Radius of the sphere around each point, in world units; points are pushed apart until these spheres stop overlapping. Larger spaces points further apart."
     },
     {
       "name": "In 3D Space",
       "type": "toggle",
       "default": "false",
-      "show_when": "Mode == Repel"
+      "show_when": "Mode == Repel",
+      "description": "When off, points slide only along the surface (in their tangent plane) as they repel. When on, they may move freely in 3D and leave the surface."
     }
   ]
 }

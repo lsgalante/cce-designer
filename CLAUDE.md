@@ -940,7 +940,17 @@ and paste still pastes the right path. **Header rows read the
 parameter out** (since 2026-09-28, `param_menu_rows`): `Name:` is the
 parameter's name, what a `ch()` path spells, with `Label:` under it only
 when the template gives one (the pane shows the name otherwise, and a
-Label row repeating it would claim there is one); `Control:` is the
+Label row repeating it would claim there is one), then **what the
+parameter does** (since 2026-09-30): the template's `description`, a
+sentence or two in prose, wrapped to `PARAM_DESCRIPTION_WIDTH` (44)
+characters over as many unprefixed rows as it takes, since the menu is as
+wide as its widest row. It is the TEMPLATE's, like the label: the merge
+hands it to every instance (`adopt_ui_from`), a subnet template's child
+takes its base template's, and it is read from a template file and never
+written, so a save carries none and `sim_solve_key` does not see it.
+Every parameter a template ships has one —
+`the_row_menu_says_what_a_parameter_does` reads the raw files — so a new
+parameter needs its description written with it. `Control:` is the
 control the pane DRAWS for the row (slider, spinbox, dropdown, toggle,
 text box, text box with picker, code editor, button) and `Type:` the type
 of value that control SETS, in a programmer's terms (float, float3,
