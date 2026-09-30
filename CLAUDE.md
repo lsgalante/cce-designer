@@ -3065,6 +3065,19 @@ dispatch into the dialog and puts it back, invalidating the coverage memo on bot
 edges (the engine queries it on every left press, so lowering the flag alone
 leaves a stale cached answer).
 
+**A control in the dialog lifts under the pointer** (`Dialog::hover_ctl`,
+since 2026-09-29): the row whose switch, slider (readout lane included)
+or colour well the pointer is over, found by `control_rect` on every
+move. The toggle and slider stamps serve every row, so each is told the
+hover as its row is painted (`Toggle::set_hovered`, `Slider::set_hovered`
+— the two setters cce-ui grew for it, since a stamp is never routed a
+`MouseEnter`); a colour row's selector is a widget of its own and is
+told by `MouseEnter` / `MouseLeave` through `color_event` as the pointer
+crosses its band. The hover clears with the row's when the pointer
+leaves the plate, since `broadcast_pointer` hands the dialog an
+off-screen position then. `a_palette_control_lifts_under_the_pointer`
+is the test.
+
 **A captured pointer hovers no pane.** `State::broadcast_pointer` hands
 every slot the pointer's position, or an off-screen one while
 `pointer_captured` says a gesture or the dialog owns it — a widget or app

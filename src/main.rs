@@ -13569,6 +13569,75 @@ mod tests {
     /// ranked with the commands, so a query finds a colour the way it finds
     /// a command. There is no second half: Tab in this mode does nothing,
     /// and nothing draws a strip.
+    /// A control in the palette lifts under the pointer: the row whose
+    /// switch, slider or colour well the pointer is over is the hovered
+    /// control, and the label beside it is not.
+    #[test]
+    fn a_palette_control_lifts_under_the_pointer() {
+        use crate::dialog::{setting_row_id, Control, TOGGLE_W};
+        use crate::slots::DIALOG_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.run_command("command_palette");
+        // The Show Grid switch is a toggle row, Geometry Opacity a slider.
+        for c in ["s", "h", "o", "w", "g", "r", "i"] {
+            state.dialog_key_input(&typed(c));
+        }
+        let rows = &state.slots.dialog.rows;
+        let toggle = rows.iter().position(|r| r.id == "toggle_grid").expect("a Show Grid row");
+        assert!(matches!(rows[toggle].control, Some(Control::Toggle(_))));
+        let (dx, dy, dw, dh) = state.positions[DIALOG_IDX];
+        assert!(dw > 0.0 && dh > 0.0);
+        let at = |state: &mut State, x: f32, y: f32| {
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+            state.slots.dialog.hovered_control()
+        };
+        // Walk down the switch column until the pointer is over the row's
+        // switch.
+        let switch_x = dx + dw - 8.0 - TOGGLE_W * 0.5;
+        let mut found = None;
+        let mut y = dy;
+        while y < dy + dh {
+            if at(&mut state, switch_x, y) == Some(toggle) {
+                found = Some(y);
+                break;
+            }
+            y += 4.0;
+        }
+        let y = found.expect("the switch is under the pointer somewhere down its column");
+        // The label beside it is not the control.
+        assert_eq!(at(&mut state, dx + 24.0, y), None);
+        assert_eq!(at(&mut state, switch_x, y), Some(toggle));
+        // Off the plate, nothing is hovered.
+        assert_eq!(at(&mut state, dx - 50.0, y), None);
+
+        // A slider row: its whole control, readout lane included.
+        while !state.slots.dialog.query.is_empty() {
+            state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
+        }
+        for c in ["g", "e", "o", "m", "e", "t", "r", "y"] {
+            state.dialog_key_input(&typed(c));
+        }
+        let slider = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("Geometry Opacity")).expect("a slider row");
+        let mut found = None;
+        let mut y = dy;
+        while y < dy + dh {
+            if at(&mut state, dx + dw - 40.0, y) == Some(slider) {
+                found = Some(y);
+                break;
+            }
+            y += 4.0;
+        }
+        let y = found.expect("the slider is under the pointer somewhere down its column");
+        assert_eq!(at(&mut state, dx + 24.0, y), None, "the label is not the control");
+        // Painting with the control hovered lifts the stamp, and paints.
+        let _ = at(&mut state, dx + dw - 40.0, y);
+        let _ = state.collect_display_list();
+    }
+
     #[test]
     fn the_palette_lists_the_settings_as_control_rows() {
         use crate::dialog::{setting_row_id, Control, SETTINGS};

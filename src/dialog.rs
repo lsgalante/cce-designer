@@ -258,6 +258,13 @@ pub struct Dialog {
     /// app's key handling both need it and neither has the rect to hand.
     page: usize,
     hover_row: Option<usize>,
+    /// The row whose CONTROL the pointer is over — its switch, its slider
+    /// (readout lane included), its colour well — so the control lifts
+    /// under the pointer as the same control does in the params pane. The
+    /// toggle and slider stamps are set from it as each row is painted; a
+    /// colour row's selector is a widget of its own and is told by
+    /// `MouseEnter` / `MouseLeave` as the pointer crosses its band.
+    hover_ctl: Option<usize>,
     /// A row the pointer activated, drained by the app.
     activated: Option<String>,
     /// Whether the dialog is currently claiming its rect as an occluder — see
@@ -270,7 +277,7 @@ pub struct Dialog {
     /// the switch in the params pane. Two stamps rather than one set per row
     /// because `paint` takes `&self`, and building a widget per row per
     /// frame would be silly.
-    toggle_stamps: [Adapted<Toggle>; 2],
+    toggle_stamps: RefCell<[Adapted<Toggle>; 2]>,
     /// The slider every slider row draws — the toolkit's own `Slider`, so a
     /// slider in the dialog IS the slider in the params pane. One stamp for
     /// all of them, set to each row's range and value as it is painted;
@@ -315,9 +322,10 @@ impl Dialog {
             sb_drag_offset: 0.0,
             page: 1,
             hover_row: None,
+            hover_ctl: None,
             activated: None,
             occluding: true,
-            toggle_stamps: [off, on],
+            toggle_stamps: RefCell::new([off, on]),
             slider_stamp: RefCell::new(slider_stamp),
             slider_drag: None,
             slider_track: (0.0, 1.0),
@@ -601,6 +609,28 @@ impl Dialog {
         let x = r.x + r.width - 8.0 - SLIDER_W;
         let right = r.x + r.width - 8.0 - self.toggle_col();
         Rect { x, y: r.y + 2.0, width: (right - x).max(10.0), height: ROW_H - 4.0 }
+    }
+
+    /// Where a row's control is, for the hover: the switch, the whole
+    /// slider (readout lane included), the colour band. None for a row
+    /// with no control the pointer can lift.
+    fn control_rect(&self, r: Rect, row: &Row) -> Option<Rect> {
+        match &row.control {
+            Some(Control::Toggle(_)) => Some(Rect {
+                x: r.x + r.width - 8.0 - TOGGLE_W,
+                y: r.y + (r.height - TOGGLE_H) * 0.5,
+                width: TOGGLE_W,
+                height: TOGGLE_H,
+            }),
+            Some(Control::Slider { .. }) => Some(self.slider_rect(r)),
+            Some(Control::Color { .. }) => Some(self.slider_band_rect(r)),
+            Some(Control::Choice { .. }) | None => None,
+        }
+    }
+
+    /// The row whose control is under the pointer.
+    pub fn hovered_control(&self) -> Option<usize> {
+        self.hover_ctl
     }
 
     /// The whole slider control: the band plus the readout lane ahead of it.
@@ -915,7 +945,9 @@ impl Paint for Dialog {
                         width: TOGGLE_W,
                         height: TOGGLE_H,
                     };
-                    Paint::paint(&*self.toggle_stamps[*on as usize], tr, ctx);
+                    let mut stamps = self.toggle_stamps.borrow_mut();
+                    stamps[*on as usize].set_hovered(self.hover_ctl == Some(i));
+                    Paint::paint(&*stamps[*on as usize], tr, ctx);
                 }
                 Some(Control::Slider { value, min, max, dec, suffix, .. }) => {
                     let band = self.slider_band_rect(r);
@@ -923,6 +955,7 @@ impl Paint for Dialog {
                         let mut stamp = self.slider_stamp.borrow_mut();
                         stamp.set_range(*min, *max);
                         stamp.set_scaled_value(*value);
+                        stamp.set_hovered(self.hover_ctl == Some(i));
                         Paint::paint(&**stamp, band, ctx);
                     }
                     // The readout, right-aligned in its lane ahead of the
@@ -1098,8 +1131,27 @@ impl Input for Dialog {
                 }
                 self.sb_activity.set_hover(self.over_scrollbar(rect, *x, *y));
                 let row = self.row_at(rect, *x, *y);
-                let changed = row != self.hover_row;
+                let ctl = row.filter(|&i| {
+                    self.row_rect(rect, i)
+                        .and_then(|r| self.control_rect(r, &self.rows[i]))
+                        .is_some_and(|c| *x >= c.x && *x < c.x + c.width && *y >= c.y && *y < c.y + c.height)
+                });
+                let changed = row != self.hover_row || ctl != self.hover_ctl;
                 self.hover_row = row;
+                if ctl != self.hover_ctl {
+                    // A colour well is a widget of its own: told the way
+                    // the runner tells any widget.
+                    for (i, entering) in [(self.hover_ctl, false), (ctl, true)] {
+                        let Some(i) = i else { continue };
+                        if self.rows.get(i).is_some_and(Row::is_color) {
+                            if let Some(band) = self.row_rect(rect, i).map(|r| self.slider_band_rect(r)) {
+                                let ev = if entering { Event::MouseEnter } else { Event::MouseLeave };
+                                self.color_event(i, band, &ev, ectx);
+                            }
+                        }
+                    }
+                    self.hover_ctl = ctl;
+                }
                 changed
             }
             Event::MouseWheel { delta, x, y, .. } => {
