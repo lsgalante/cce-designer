@@ -27,18 +27,6 @@
       "min": -10.0,
       "max": 10.0,
       "description": "The point in world units the camera looks at and orbits around. Panning and framing move it."
-    },
-    {
-      "name": "Square Aspect",
-      "type": "toggle",
-      "default": "false",
-      "description": "Records the viewport's Square Aspect setting (a 1:1 view) for this camera; it is updated when that toggle is flipped while this camera is active."
-    },
-    {
-      "name": "Show Camera Pivot",
-      "type": "toggle",
-      "default": "false",
-      "description": "Records the viewport's Show Camera Pivot setting for this camera; it is updated when that toggle is flipped while this camera is active."
     }
   ]
 }

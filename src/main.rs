@@ -4967,6 +4967,26 @@ mod tests {
             .expect("a known kind is added");
     }
 
+    /// A camera node has no Square Aspect or Show Camera Pivot: they were
+    /// written when the viewport's toggles flipped under it and read by
+    /// nothing. A save that has them loads without them.
+    #[test]
+    fn a_camera_carries_no_viewport_toggles() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let t = templates_root.children.iter().find(|t| t.node_type == "camera").unwrap();
+        let names: Vec<&str> = t.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Position", "Rotation", "Pivot"]);
+        let mut old = t.clone();
+        old.params.push(crate::app::ParamDef::new("Square Aspect", "toggle", "true"));
+        old.params.push(crate::app::ParamDef::new("Show Camera Pivot", "toggle", "true"));
+        let mut root = templates_root.clone();
+        root.children = vec![old];
+        crate::app::merge_template_defs(&mut root, &templates);
+        let names: Vec<&str> = root.children[0].params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Position", "Rotation", "Pivot"]);
+    }
+
     /// Visualize's Blend has no Mix: it was Set under another name, Opacity
     /// fading every blend alike. A save that chose it loads as Set, a
     /// valid choice, rather than as a text the row no longer offers.
@@ -6744,8 +6764,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut a = State::new(false);
-        // The Default Camera is active: a camera NODE's own Square Aspect and
-        // pivot params would override the saved view's, by design.
+        // The Default Camera is active: a camera NODE's own Pivot would
+        // override the saved view's, by design.
         a.active_camera = "Default Camera".to_string();
         a.square_viewport = true;
         a.viewport_mut().show_camera_pivot = true;

@@ -532,8 +532,7 @@ save writes `ProjectViewState::display` — a `DisplaySettings`, the viewport
 and render blocks of `DesignSettings` without the startup pointer, taken by
 `State::display_settings` (which `save_settings` builds from as well) — and
 both `load_from_file` paths apply it through `apply_display_settings`, before
-the Default Camera view so a camera node's own Square Aspect and pivot
-still win. The apply sets every field, regenerates the baked meshes, relays
+the Default Camera view so a camera node's own Pivot still wins. The apply sets every field, regenerates the baked meshes, relays
 the two pane-shaped ones (network plate, circular pane), re-checks the
 menubar marks, and saves state.kdl, so state.kdl holds the LAST-USED look:
 what New and an older save (no block, which changes nothing) open with.

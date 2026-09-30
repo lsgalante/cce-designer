@@ -1135,6 +1135,13 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         }
     }
     fn merge_node(node: &mut FsNode, templates: &[NodeTemplate]) {
+        // A camera's Square Aspect and Show Camera Pivot were written when
+        // the viewport's toggles flipped under it and read by nothing: the
+        // settings are the viewport's, and ride the project's view state.
+        // Retired, and dropped from a save that still has them.
+        if node.node_type == "camera" {
+            node.params.retain(|p| p.name != "Square Aspect" && p.name != "Show Camera Pivot");
+        }
         // Visualize's Mix blend was Set under another name (Opacity fades
         // every blend alike) and is retired; a save holding it is Set, or
         // it would load as a choice the row no longer offers.
@@ -4427,34 +4434,6 @@ impl State {
         }
         true
     }
-
-    /// Rewrite the Main node's setting toggles from live app state, so the
-    /// switches show the real value even after panes/settings were changed
-    /// through the menus or keyboard while another node was selected.
-    /// Write a per-camera display toggle (Square Aspect / Show Camera Pivot)
-    /// back to the ACTIVE camera node — the setting's home — so the next
-    /// settings apply doesn't revert a menu/shortcut flip. No-op under
-    /// Default Camera, which has no node: the live value stands alone.
-    fn write_active_camera_toggle(&mut self, name: &str, val: bool) {
-        if self.active_camera == "Default Camera" {
-            return;
-        }
-        let active = self.active_camera.clone();
-        if let Some(cam) = self
-            .current_dir_mut()
-            .children
-            .iter_mut()
-            .find(|c| c.node_type == "camera" && c.name == active)
-        {
-            if let Some(p) = cam.params.iter_mut().find(|p| p.name == name) {
-                p.set_value(crate::app::ParamValue::Bool(val));
-            }
-        }
-    }
-
-
-
-
 
     pub fn sync_parameters_pane(&mut self) {
         // Selection reads through the param-editor accessors: whichever
@@ -9054,7 +9033,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleCameraPivot => {
                 let val = !self.viewport().show_camera_pivot;
                 self.viewport_mut().show_camera_pivot = val;
-                self.write_active_camera_toggle("Show Camera Pivot", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_CAMERA_PIVOT, val);
                 settings_changed = true;
             }
@@ -9141,8 +9119,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::ToggleSquareViewport => {
                 self.square_viewport = !self.square_viewport;
-                let val = self.square_viewport;
-                self.write_active_camera_toggle("Square Aspect", val);
                 settings_changed = true;
             }
             Action::ToggleConfigure => {
