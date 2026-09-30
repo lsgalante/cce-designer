@@ -152,7 +152,11 @@ impl Mesh {
         }
 
         let n = d.num_points();
-        let max_id = d.ids().iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        // The counter the detail carries, not one past the highest identity
+        // left: a point a collapse removed is not handed its identity back
+        // by the next split, which a remesh run as separate passes — the
+        // Remesh subnet — would otherwise do between every two of them.
+        let max_id = d.ids().iter().copied().max().map(|m| m + 1).unwrap_or(0).max(d.next_id());
         let mut p2t: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (t, tri) in tris.iter().enumerate() {
             for &q in tri {
@@ -765,6 +769,114 @@ pub fn subdivide(input: &Detail, depth: usize) -> Detail {
     m.into_detail()
 }
 
+/// One pass of a kind, run on its own — what the Remesh subnet's pass
+/// nodes are. A pass that changes nothing hands its input back as it came,
+/// its primitives and every attribute untouched, as a remesh that changes
+/// nothing does; one that changes something gives what a remesh would
+/// after that pass, the same mesh bit for bit (which
+/// `the_remesh_subnet_is_the_remesh` holds it to).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pass {
+    Split,
+    Collapse,
+    Flip,
+}
+
+/// Run one [`Pass`] toward `target` edge length.
+pub fn edge_pass(input: &Detail, pass: Pass, target: f32) -> Detail {
+    if input.num_prims() == 0 || target <= 0.0 {
+        return input.clone();
+    }
+    let mut m = Mesh::from_detail(input);
+    let done = match pass {
+        Pass::Split => split_pass(&mut m, target),
+        Pass::Collapse => collapse_pass(&mut m, target),
+        Pass::Flip => flip_pass(&mut m, target),
+    };
+    EDGE_CHANGES.with(|c| c.set(c.get() + done));
+    if done == 0 {
+        return input.clone();
+    }
+    m.into_detail()
+}
+
+/// The remesh's relaxation, `iterations` times: each point toward the
+/// centroid of its neighbours by `amount`, less the part along its normal.
+/// Only positions move, so everything else the input carries — polygons,
+/// primitive and vertex attributes — comes through untouched.
+pub fn relax_tangential(input: &Detail, amount: f32, iterations: usize) -> Detail {
+    let amount = amount.clamp(0.0, 1.0);
+    if input.num_prims() == 0 || amount <= 0.0 || iterations == 0 {
+        return input.clone();
+    }
+    let mut m = Mesh::from_detail(input);
+    for _ in 0..iterations {
+        relax_pass(&mut m, amount);
+    }
+    let mut out = input.clone();
+    for (p, q) in m.pos.iter().enumerate() {
+        out.set_pos(p, *q);
+    }
+    out
+}
+
+thread_local! {
+    /// The last surface projected onto, by a hash of it: a Remesh subnet
+    /// projects onto one surface every iteration, and the native remesh
+    /// built the grid once for all of them.
+    static PROJECT_GRID: std::cell::RefCell<Option<(u64, std::rc::Rc<crate::spatial::TriGrid>)>> = const { std::cell::RefCell::new(None) };
+}
+
+fn surface_hash(d: &Detail) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    d.num_points().hash(&mut h);
+    for p in d.positions() {
+        for c in p {
+            c.to_bits().hash(&mut h);
+        }
+    }
+    d.num_prims().hash(&mut h);
+    for prim in 0..d.num_prims() {
+        d.prim_points(prim).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Every point of `input` moved to the nearest place on `surface`: the
+/// remesh's projection, which keeps a relaxed mesh from creeping off the
+/// shape it started as. A mesh that IS the surface is handed back as it
+/// came, since projecting a surface onto itself moves nothing — which is
+/// what lets a Remesh subnet that finds nothing to do return its input
+/// untouched, as the native remesh does.
+pub fn project_onto(input: &Detail, surface: &Detail) -> Detail {
+    if surface.num_prims() == 0 || input.num_points() == 0 || input == surface {
+        return input.clone();
+    }
+    let key = surface_hash(surface);
+    let grid = PROJECT_GRID.with(|g| {
+        let mut g = g.borrow_mut();
+        match g.as_ref() {
+            Some((k, grid)) if *k == key => grid.clone(),
+            _ => {
+                let grid = std::rc::Rc::new(crate::spatial::TriGrid::build(surface));
+                *g = Some((key, grid.clone()));
+                grid
+            }
+        }
+    });
+    let mut out = input.clone();
+    if grid.is_empty() {
+        return out;
+    }
+    for p in 0..out.num_points() {
+        if let Some(hit) = grid.closest(out.pos(p)) {
+            out.set_pos(p, hit.point);
+        }
+    }
+    out
+}
+
 /// Remesh toward `settings.target` edge length.
 pub fn remesh(input: &Detail, settings: Settings) -> Detail {
     remesh_by(input, settings, false)
@@ -786,6 +898,19 @@ thread_local! {
 /// The edges the last [`remesh`] on this thread split, collapsed or flipped.
 pub fn last_changes() -> usize {
     LAST_CHANGES.with(|c| c.get())
+}
+
+thread_local! {
+    /// Every edge split, collapsed or flipped on this thread since the last
+    /// [`take_edge_changes`], by a remesh or a pass node: what a profile
+    /// reads per frame, the Remesh subnet running as several passes where
+    /// [`last_changes`] sees one remesh.
+    static EDGE_CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The edges changed on this thread since the last call, and start again.
+pub fn take_edge_changes() -> usize {
+    EDGE_CHANGES.with(|c| c.replace(0))
 }
 
 fn remesh_by(input: &Detail, settings: Settings, reference: bool) -> Detail {
@@ -842,5 +967,6 @@ fn remesh_by(input: &Detail, settings: Settings, reference: bool) -> Detail {
         }
     }
     LAST_CHANGES.with(|c| c.set(changed));
+    EDGE_CHANGES.with(|c| c.set(c.get() + changed));
     m.into_detail()
 }

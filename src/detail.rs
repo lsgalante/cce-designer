@@ -356,7 +356,7 @@ impl AttribData {
 
 /// Every attribute and group belonging to one element class, plus the element
 /// count they are all kept in step with.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AttribStore {
     len: usize,
     attribs: HashMap<String, AttribData>,
@@ -1017,6 +1017,24 @@ impl Default for Detail {
     }
 }
 
+/// Two details are equal when everything a reader can see of them is: the
+/// points and their identities, the counter new points draw from, the
+/// primitives, and every attribute and group. The derived topology is not
+/// compared, being derived.
+impl PartialEq for Detail {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos
+            && self.ids == other.ids
+            && self.next_id == other.next_id
+            && self.vert_point == other.vert_point
+            && self.prim_start == other.prim_start
+            && self.points == other.points
+            && self.verts == other.verts
+            && self.prims == other.prims
+            && self.detail == other.detail
+    }
+}
+
 impl Clone for Detail {
     /// The topology cache is deliberately *not* cloned. It is derived, the
     /// clone exists to be modified, and rebuilding is cheaper than reasoning
@@ -1155,6 +1173,11 @@ impl Detail {
 
     pub fn ids(&self) -> &[PointId] {
         &self.ids
+    }
+
+    /// The identity the next new point will get.
+    pub fn next_id(&self) -> PointId {
+        self.next_id
     }
 
     /// Where the point carrying `id` currently sits, or `None` if it is gone.

@@ -4827,7 +4827,8 @@ mod tests {
         use crate::app::ParamKind as K;
         let root = crate::app::load_fs_tree();
         let kind = |ty: &str, name: &str| {
-            root.children.iter().find(|t| t.node_type == ty)
+            // By type, or by name for a subnet (the Remesh is a `node`).
+            root.children.iter().find(|t| t.node_type == ty || (t.node_type == "node" && t.name.eq_ignore_ascii_case(ty)))
                 .and_then(|t| t.params.iter().find(|p| p.name == name))
                 .unwrap_or_else(|| panic!("{ty} has no {name}"))
                 .kind()
@@ -4835,7 +4836,7 @@ mod tests {
         for (ty, name) in [
             ("switch", "Input 2"), ("switch", "Input 3"), ("switch", "Input 4"),
             ("boolean", "With"), ("collision", "Collider"), ("relax", "Rest"),
-            ("suture", "Against"), ("copy", "To"), ("distance", "To"), ("transfer", "From"), ("remesh", "From"),
+            ("suture", "Against"), ("copy", "To"), ("distance", "To"), ("transfer", "From"), ("remesh", "From"), ("project", "Surface"),
         ] {
             assert_eq!(kind(ty, name), K::Node, "{ty}'s {name}");
         }
@@ -10556,7 +10557,18 @@ mod tests {
 
         // Remesh's copy: a sphere remeshed coarse, its group read back off
         // its own input — no From, no wire — so the new points carry it.
-        let remesh = phase3_node("remesh", &[("Input", "attribute 1"), ("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0.0"), ("Transfer", "true"), ("From", ""), ("Attributes", ""), ("Transfer Groups", "true"), ("Groups", "")]);
+        // Both ways a remesh is: the native node, and the subnet whose
+        // Transfer node reads From through an expression and finds a node
+        // beside the subnet, not inside it.
+        let rows = [("Input", "attribute 1"), ("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0.0"), ("Transfer", "true"), ("From", ""), ("Attributes", ""), ("Transfer Groups", "true"), ("Groups", "")];
+        let templates = crate::app::load_fs_tree();
+        let mut composed = templates.children.iter().find(|t| t.name == "Remesh").unwrap().clone();
+        crate::app::regenerate_node_ids(&mut composed);
+        composed.name = "remesh 1".into();
+        for (k, v) in rows {
+            composed.params.iter_mut().find(|p| p.name == k).unwrap().set_text(v.to_string());
+        }
+        for remesh in [phase3_node("remesh", &rows), composed] {
         let (g, err) = eval_node(&with(remesh.clone()), "remesh 1");
         assert!(err.is_none(), "{err:?}");
         assert_ne!(g.num_points(), src.num_points(), "the remesh changed the points");
@@ -10589,6 +10601,7 @@ mod tests {
         broken.params.iter_mut().find(|p| p.name == "From").unwrap().set_text("nope");
         let (_, err) = eval_node(&with(broken), "remesh 1");
         assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
+        }
     }
 
     #[test]
@@ -11014,6 +11027,213 @@ mod tests {
             && (0..a.num_prims()).all(|p| a.prim_points(p) == b.prim_points(p))
             && a.points().names() == b.points().names()
             && a.points().names().iter().all(|n| (0..a.num_points()).all(|p| a.points().value(n, p) == b.points().value(n, p)))
+    }
+
+    /// The Remesh is a subnet of nodes (since 2026-09-30) — a Repeat of
+    /// Split Edges, Collapse Edges, Flip Edges, a Tangential Relax and a
+    /// Project, then a Transfer — and it makes the mesh the native remesh
+    /// makes, bit for bit: points, identities, the counter new points draw
+    /// from, primitives, attributes and groups. Twice over, the second
+    /// remesh eating the first as a simulation's next step does, so an
+    /// identity a collapse took out is not handed back. With no relaxation
+    /// asked and nothing to do, the input comes back as it came.
+    #[test]
+    fn the_remesh_subnet_is_the_remesh() {
+        let templates = crate::app::load_fs_tree();
+        let t = templates.children.iter().find(|t| t.name == "Remesh").expect("the Remesh template");
+        assert_eq!(t.node_type, "node", "the Remesh is a subnet");
+        let names: Vec<&str> = t.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["input1", "repeat1", "transfer1", "result1", "output1"]);
+        let repeat = &t.children[1];
+        assert_eq!(repeat.node_type, "repeat");
+        let passes: Vec<(&str, &str)> = repeat.children.iter().map(|c| (c.name.as_str(), c.node_type.as_str())).collect();
+        assert_eq!(passes, [("input1", "input"), ("seed1", "seed"), ("split1", "split_edges"), ("collapse1", "collapse_edges"),
+            ("flip1", "flip_edges"), ("relax1", "relax"), ("project1", "project"), ("output1", "output")]);
+        for c in &t.children {
+            assert_eq!(c.geometry_visible, c.name == "result1", "only result1 draws: {}", c.name);
+        }
+
+        let tagged = [
+            phase3_node("group", &[("Input", "sphere 1"), ("Group Name", "top"), ("Mode", "Box"), ("Center", "-1.875:1.55:0.00"), ("Size", "4.00:2.00:4.00")]),
+            phase3_node("attribute", &[("Input", "group 1"), ("Operation", "Create"), ("Attribute Name", "mass"), ("Type", "Float"), ("Value", "3")]),
+        ];
+        let native = |name: &str, input: &str, s: &[(&str, &str)]| {
+            let mut n = phase3_node("remesh", &[("Input", input)]);
+            n.id = format!("id-{name}");
+            n.name = name.into();
+            for (k, v) in s.iter().chain([("Split", "true"), ("Collapse", "true"), ("Flip", "true"), ("Project", "true")].iter()) {
+                n.params.push(crate::app::ParamDef::new(*k, "text", *v));
+            }
+            n
+        };
+        let subnet = |name: &str, input: &str, s: &[(&str, &str)]| {
+            let mut n = t.clone();
+            crate::app::regenerate_node_ids(&mut n);
+            n.name = name.into();
+            n.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text(input.to_string());
+            for (k, v) in s {
+                n.params.iter_mut().find(|p| p.name == *k).unwrap_or_else(|| panic!("the subnet has {k}")).set_text(v.to_string());
+            }
+            n
+        };
+        let same = |a: &Detail, b: &Detail, what: &str| {
+            assert_eq!((a.num_points(), a.num_prims()), (b.num_points(), b.num_prims()), "{what}: counts");
+            assert_eq!(a.positions(), b.positions(), "{what}: positions");
+            assert_eq!(a.ids(), b.ids(), "{what}: identities");
+            assert!(a == b, "{what}: attributes, groups or the id counter");
+        };
+        for settings in [
+            vec![("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0.5"), ("Transfer", "false")],
+            vec![("Target Length", "0.25"), ("Iterations", "4"), ("Relax", "0.04"), ("Transfer", "true")],
+            vec![("Target Length", "0.8"), ("Iterations", "2"), ("Relax", "1.0"), ("Transfer", "true"), ("Transfer Groups", "true")],
+        ] {
+            let mut children = tagged.to_vec();
+            children.push(native("native1", "attribute 1", &settings));
+            children.push(native("native2", "native1", &settings));
+            children.push(subnet("remesh1", "attribute 1", &settings));
+            children.push(subnet("remesh2", "remesh1", &settings));
+            let root = modelling_root("1.0", children);
+            for (n, s) in [("native1", "remesh1"), ("native2", "remesh2")] {
+                let (a, err) = eval_node(&root, n);
+                assert!(err.is_none(), "{err:?}");
+                let (b, err) = eval_node(&root, s);
+                assert!(err.is_none(), "{err:?}");
+                assert!(b.num_points() > 0 && b.points().has("mass"), "{settings:?}");
+                same(&a, &b, &format!("{s} {settings:?}"));
+            }
+        }
+
+        // No relaxation, and a mesh already at its length: the input back.
+        let settings = [("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0"), ("Transfer", "false")];
+        let root = modelling_root("1.0", vec![
+            subnet("remesh1", "sphere 1", &settings),
+            subnet("remesh2", "remesh1", &settings),
+            native("native1", "sphere 1", &settings),
+        ]);
+        let (first, _) = eval_node(&root, "remesh1");
+        let (native_first, _) = eval_node(&root, "native1");
+        same(&native_first, &first, "relax 0");
+        let (again, _) = eval_node(&root, "remesh2");
+        let settled = crate::remesh::remesh(&first, crate::remesh::Settings { target: 0.5, iterations: 3, relax: 0.0, ..Default::default() });
+        assert!(settled == first, "the fixture has settled: a native remesh of it is itself");
+        assert!(again == first, "a remesh with nothing to do hands its input back");
+    }
+
+    /// A native remesh from before 2026-09-30 loads as the Remesh subnet —
+    /// wherever it stands, a simnet's chain included — with its values and
+    /// its identity, and a pass it had switched off BYPASSED inside, since
+    /// the switches are the nodes now. It makes the mesh it made.
+    #[test]
+    fn a_native_remesh_recomposes_on_load() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let mut old = phase3_node("remesh", &[("Input", "sphere 1"), ("Target Length", "0.3"), ("Iterations", "2"), ("Relax", "0.04"),
+            ("Split", "false"), ("Collapse", "true"), ("Flip", "true"), ("Project", "true"), ("Transfer", "true"), ("From", "")]);
+        old.id = "old-id".into();
+        old.name = "remesh1".into();
+        old.position = (2.0, 5.0);
+        let mut root = modelling_root("1.0", vec![ref_node("sub", "sub1", "node", vec![], vec![]), old.clone()]);
+        root.children[1].children.push({ let mut inner = old.clone(); inner.id = "inner-id".into(); inner });
+        crate::app::merge_template_defs(&mut root, &templates);
+        for r in [&root.children[2], &root.children[1].children[0]] {
+            assert_eq!(r.node_type, "node", "recomposed as a subnet, nested ones too");
+            assert!(r.is_enterable());
+            let get = |n: &str| r.params.iter().find(|p| p.name == n).map(|p| p.text().to_string());
+            assert_eq!(get("Target Length").as_deref(), Some("0.3"));
+            assert_eq!(get("Relax").as_deref(), Some("0.04"));
+            assert_eq!(get("Transfer").as_deref(), Some("true"));
+            assert_eq!(get("Split"), None, "the pass switches are nodes now");
+            let repeat = r.children.iter().find(|c| c.name == "repeat1").unwrap();
+            let bypassed: Vec<&str> = repeat.children.iter().filter(|c| c.bypassed).map(|c| c.name.as_str()).collect();
+            assert_eq!(bypassed, ["split1"], "Split was off");
+        }
+        let r = &root.children[2];
+        assert_eq!((r.id.as_str(), r.name.as_str(), r.position), ("old-id", "remesh1", (2.0, 5.0)));
+        // The native node, beside it after the load (which gives the bare
+        // sphere its template's Center too), is what it has to match.
+        let mut native = old.clone();
+        native.id = "native-id".into();
+        native.name = "native1".into();
+        root.children.push(native);
+        let (made, err) = eval_node(&root, "native1");
+        assert!(err.is_none(), "{err:?}");
+        let (g, err) = eval_node(&root, "remesh1");
+        assert!(err.is_none(), "{err:?}");
+        assert!(g.num_points() > 0 && g == made, "the recomposed remesh makes the mesh the native one made");
+    }
+
+    /// A Repeat runs its chain Iterations times, each pass on the last one's
+    /// result; a Seed inside reads what the loop began from. Dived in, its
+    /// chain is shown as the LAST pass saw it, as a simnet's is shown as its
+    /// last substep saw it — and a level inside a loop (a subnet in a
+    /// simnet) is walked with the loop's feedback pushed, so it shows this
+    /// frame and not the seed.
+    #[test]
+    fn a_repeat_loops_its_chain_and_shows_its_last_pass() {
+        let templates_root = crate::app::load_fs_tree();
+        let t = templates_root.children.iter().find(|t| t.name == "Repeat").expect("the Repeat template");
+        assert!(t.is_enterable());
+        let mut repeat = t.clone();
+        crate::app::regenerate_node_ids(&mut repeat);
+        repeat.name = "repeat1".into();
+        repeat.geometry_visible = true;
+        repeat.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("sphere 1");
+        repeat.params.iter_mut().find(|p| p.name == "Iterations").unwrap().set_text("3");
+        let mut step = ref_node("step", "step1", "transform", vec![("Input", "node", "input1"), ("Translation", "float3", "1:0:0")], vec![]);
+        step.geometry_visible = false;
+        repeat.children.push(step);
+        repeat.children.iter_mut().find(|c| c.name == "output1").unwrap().params[0].set_text("step1");
+        let root = modelling_root("1.0", vec![repeat]);
+        let (sphere, _) = eval_node(&root, "sphere 1");
+        let min_x = |g: &Detail| g.positions().iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+        let x0 = min_x(&sphere);
+        let (g, err) = eval_node(&root, "repeat1");
+        assert!(err.is_none(), "{err:?}");
+        assert!((min_x(&g) - (x0 + 3.0)).abs() < 1e-4, "three passes of +1: {}", min_x(&g) - x0);
+
+        // Dived in: the output draws the result, the step as the last pass
+        // saw it (+2 in, +3 out), and the seed what the loop began from.
+        let mut root = root;
+        let r = root.children.iter_mut().find(|c| c.name == "repeat1").unwrap();
+        r.children.iter_mut().find(|c| c.name == "output1").unwrap().geometry_visible = false;
+        r.children.iter_mut().find(|c| c.name == "input1").unwrap().geometry_visible = false;
+        r.children.iter_mut().find(|c| c.name == "step1").unwrap().geometry_visible = true;
+        r.children.iter_mut().find(|c| c.name == "seed1").unwrap().geometry_visible = true;
+        let level = root.children.iter().find(|c| c.name == "repeat1").unwrap();
+        let mut cache = crate::geometry::SimCache::default();
+        let mut sim = crate::geometry::EvalSim::new(0, 0, &mut cache);
+        let mut err = None;
+        let shown = crate::geometry::network_sphere_vertices_with_errors(&root, level, &mut err, &mut sim);
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(shown.num_points(), 2 * sphere.num_points(), "the step and the seed");
+        let mut xs: Vec<f32> = shown.positions().iter().map(|p| p[0]).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((xs[0] - x0).abs() < 1e-4, "the seed is the sphere");
+        assert!((xs[sphere.num_points()] - (x0 + 3.0)).abs() < 1e-4, "the step as its last pass made it: {}", xs[sphere.num_points()] - x0);
+
+        // A subnet inside a simnet, dived into, shows the frame.
+        let sub = ref_node("sub", "sub1", "node", vec![("Input", "node", "input1")], vec![
+            ref_node("sub-in", "input1", "input", vec![], vec![]),
+            { let mut n = ref_node("sub-step", "step1", "transform", vec![("Input", "node", "input1"), ("Translation", "float3", "1:0:0")], vec![]); n.geometry_visible = true; n },
+            { let mut n = ref_node("sub-out", "output1", "output", vec![("Input", "node", "step1")], vec![]); n.geometry_visible = false; n },
+        ]);
+        let simnet = ref_node("sim", "simnet1", "simnet", vec![("Input", "node", "sphere 1"), ("Substeps", "spinbox", "1")], vec![
+            ref_node("sim-in", "input1", "input", vec![], vec![]),
+            sub,
+            ref_node("sim-out", "output1", "output", vec![("Input", "node", "sub1")], vec![]),
+        ]);
+        let root = modelling_root("1.0", vec![simnet]);
+        let level = &root.children[1].children[1];
+        let mut cache = crate::geometry::SimCache::default();
+        let mut sim = crate::geometry::EvalSim::new(3, 0, &mut cache);
+        let shown = crate::geometry::network_sphere_vertices_with_errors(&root, level, &mut err, &mut sim);
+        assert!(err.is_none(), "{err:?}");
+        // Its input shows what the frame's step read (+2), its step what it
+        // made (+3); read off the seed, they were +0 and +1.
+        let max_x = |g: &Detail| g.positions().iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!(shown.num_points(), 2 * sphere.num_points());
+        assert!((min_x(&shown) - (x0 + 2.0)).abs() < 1e-4, "the input at frame 3: {}", min_x(&shown) - x0);
+        assert!((max_x(&shown) - (max_x(&sphere) + 3.0)).abs() < 1e-4, "the step at frame 3: {}", max_x(&shown) - max_x(&sphere));
     }
 
     /// The faster flip pass and the faster closest-point search are HOW a
@@ -12508,11 +12728,12 @@ mod tests {
             for frame in 1..=frames {
                 let mut sim = crate::geometry::EvalSim::new(frame, 1, &mut cache);
                 let mut err = None;
+                crate::remesh::take_edge_changes();
                 let t = std::time::Instant::now();
                 let d = crate::geometry::generate_single_node_geometry_with_errors(root, node, &mut Vec::new(), &mut err, &mut sim);
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
                 points.push(d.map_or(0, |d| d.num_points()));
-                remeshed.push(crate::remesh::last_changes());
+                remeshed.push(crate::remesh::take_edge_changes());
             }
             let mean = times.iter().sum::<f64>() / times.len() as f64;
             let worst = times.iter().cloned().fold(0.0, f64::max);

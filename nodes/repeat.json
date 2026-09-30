@@ -1,0 +1,61 @@
+{
+ "name": "Repeat",
+ "type": "repeat",
+ "inputs": 1,
+ "outputs": 1,
+ "params": [
+  {
+   "name": "Input",
+   "type": "node",
+   "default": ""
+  },
+  {
+   "name": "Iterations",
+   "type": "spinbox",
+   "default": "4",
+   "min": 0.0,
+   "max": 100.0,
+   "step": 1.0
+  },
+  {
+   "name": "Stop When Unchanged",
+   "type": "toggle",
+   "default": "false"
+  }
+ ],
+ "children": [
+  {
+   "name": "input1",
+   "type": "input",
+   "params": [],
+   "position": [
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "name": "seed1",
+   "type": "seed",
+   "params": [],
+   "position": [
+    2.0,
+    0.0
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "output1",
+   "type": "output",
+   "params": [
+    {
+     "name": "Input",
+     "default": "input1"
+    }
+   ],
+   "position": [
+    0.0,
+    2.0
+   ]
+  }
+ ]
+}
