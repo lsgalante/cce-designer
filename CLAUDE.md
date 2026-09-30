@@ -2451,7 +2451,10 @@ that (percent by 5, `State::wire_opacity` — the wires' own, apart from the
 polygons' Opacity; until 2026-09-25 it was the Wire Color's ALPHA, and
 `StoredRenderSettings` moves an old alpha, from state.kdl's `#rrggbbaa` or
 a project's four-component array, into it on load), a
-**Point Marker Size** slider (the palette row's 0.005–0.1, no suffix since
+**Point Marker Size** slider (0.005–0.1 world units, the palette row's
+since 2026-09-29 — until then that row was a spin in THOUSANDTHS, so the
+two marker sizes read as different numbers for one radius, and 0.025
+typed into it landed on the spin's floor; no suffix since
 the World Unit names the units), a **Group
 Marker Size** slider (0–0.2 world units by 0.005), and the
 polygon **Opacity** as a
@@ -2934,8 +2937,8 @@ selection stays where it was:
   params pane's pickers), a path-tracer restart and a synchronous file
   write, per pointer event, for six values the graph never reads — which
   is what made the dialog's sliders drag behind the pointer while the
-  menu's did not. The spin rows (Grid Thickness, Origin Size, Point
-  Marker Size, Camera Pivot Size) land the same way, their whole number
+  menu's did not. The spin rows (Grid Thickness, Origin Size, Camera
+  Pivot Size) land the same way, their whole number
   over the row's unit, each re-baking only the guide mesh that reads it;
   `a_dialog_slider_drag_lands_without_re_evaluating_the_graph` pins all
   of it. The **zoom row**

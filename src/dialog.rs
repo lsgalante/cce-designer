@@ -1324,7 +1324,11 @@ pub const SETTINGS: &[Setting] = &[
     // The pull arrows' length over the true displacement; 1 is the vector
     // as it is.
     Setting::field("Pull Arrow Scale", "pull_arrow_scale", Ctl::Slider { min: 0.25, max: 10.0, dec: 2 }),
-    Setting::field("Point Marker Size", "point_marker_size", Ctl::Spin { min: 5.0, max: 100.0, unit: 1000.0 }),
+    // In world units, as Group Marker Size is, and as the viewport menu's
+    // slider always read it: until 2026-09-29 this row was a spin in
+    // THOUSANDTHS (5..100), so the two sizes read as different numbers for
+    // one radius, and 0.025 typed here landed on the spin's floor.
+    Setting::field("Point Marker Size", "point_marker_size", Ctl::Slider { min: 0.005, max: 0.1, dec: 3 }),
     Setting::field("Point Marker Color", "point_marker_color", Ctl::Color),
     Setting::field("Grid Color", "grid_color", Ctl::Color),
     Setting::field("Grid Thickness", "grid_thickness", Ctl::Spin { min: 2.0, max: 200.0, unit: 1000.0 }),
@@ -1932,7 +1936,6 @@ impl State {
                 match key {
                     "grid_thickness" => self.grid_thickness = v,
                     "origin_size" => self.origin_size = v,
-                    "point_marker_size" => self.point_marker_size = v,
                     _ => {}
                 }
             }
@@ -1944,6 +1947,7 @@ impl State {
                     "geo_opacity" => self.geo_opacity = v,
                     "wire_opacity" => self.wire_opacity = v,
                     "group_marker_size" => self.group_marker_size = v,
+                    "point_marker_size" => self.point_marker_size = v,
                     "pull_arrow_scale" => {
                         self.pull_arrow_scale = v;
                         self.rebuild_pull_arrow_verts();

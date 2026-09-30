@@ -13476,8 +13476,13 @@ mod tests {
         state.land_dialog_slider(&setting_row_id("Origin Size"), 25.0);
         assert!((state.origin_size - 2.5).abs() < 1e-6, "{}", state.origin_size);
         assert!(state.pending_origin.is_some(), "the origin re-baked");
-        state.land_dialog_slider(&setting_row_id("Point Marker Size"), 50.0);
+        // Point Marker Size reads in world units, as Group Marker Size does
+        // — one radius, one number in both rows.
+        state.land_dialog_slider(&setting_row_id("Point Marker Size"), 0.05);
         assert!((state.point_marker_size - 0.05).abs() < 1e-6, "{}", state.point_marker_size);
+        state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
+        assert!((state.group_marker_size - state.point_marker_size).abs() < 1e-6);
+        assert_eq!(state.settings_row_value("Point Marker Size"), state.settings_row_value("Group Marker Size"));
         state.land_dialog_slider(&setting_row_id("Camera Pivot Size"), 20.0);
         assert!((state.camera_pivot_size - 2.0).abs() < 1e-6, "{}", state.camera_pivot_size);
         assert!(state.pending_pivot.is_some(), "the pivot re-baked");
