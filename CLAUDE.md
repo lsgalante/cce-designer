@@ -1682,6 +1682,15 @@ wears and at Group Marker Size.
 
 `selected_spreadsheet_rows_are_marked_in_the_scene` drives it by pointer.
 
+**The point groups are the spreadsheet's first columns** after the
+point's number (`geometry_to_spreadsheet_data`, since 2026-09-29):
+`group:<name>`, 1 for a member and 0 for the rest. They were `g:` columns
+after every attribute, the thirteenth column of a sphere's table and off
+the right of any pane, and blank for a point outside the group — so a
+group of one point among five hundred was a column that looked empty.
+Sorting the column descending brings the members to the top. Only POINT
+groups: a row is a point, and the table has no primitive rows.
+
 **What reads a selected node for display reads it as the scene shows it**
 (`geometry::node_geometry_as_shown`, the same day): the spreadsheet's
 rows, the markers on them and the selected group's. A node inside a

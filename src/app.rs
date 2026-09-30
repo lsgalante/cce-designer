@@ -5883,15 +5883,24 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     // 362 places — and the row number meant nothing a user could point at.
     // It is now the point index, which is also what the Point Numbers overlay
     // draws.
-    let mut headers = vec![
-        "Point".to_string(),
+    // The groups stand FIRST after the point's number, a column each,
+    // `group:<name>`, 1 for a member and 0 for the rest. Until 2026-09-29
+    // they were `g:` columns after every attribute — the thirteenth column
+    // of a sphere's table, off the right of any pane — and blank for a
+    // point not in the group, so a group of one point among five hundred
+    // was a column that looked empty. Sorting the column, descending,
+    // brings the members to the top.
+    let groups = geom.points().group_names();
+    let mut headers = vec!["Point".to_string()];
+    headers.extend(groups.iter().map(|g| format!("group:{}", g)));
+    headers.extend([
         "Pos.x".to_string(),
         "Pos.y".to_string(),
         "Pos.z".to_string(),
         "Col.r".to_string(),
         "Col.g".to_string(),
         "Col.b".to_string(),
-    ];
+    ]);
 
     // Columnar storage means the columns are known up front, from the store
     // rather than from a scan of every element's map. `names()` is sorted, so
@@ -5926,11 +5935,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
     }
 
-    let groups = geom.points().group_names();
-    for g in &groups {
-        headers.push(format!("g:{}", g));
-    }
-
     // Detail attributes ride along as `d:` columns, constant down the table —
     // which is what a detail attribute IS. Without this the Analysis node
     // would write its answers somewhere nothing could show them.
@@ -5956,15 +5960,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     for p in 0..geom.num_points() {
         let pos = geom.positions()[p];
         let col = geom.color(p);
-        let mut row = vec![
-            p.to_string(),
+        let mut row = vec![p.to_string()];
+        row.extend(groups.iter().map(|g| if geom.points().in_group(g, p) { "1" } else { "0" }.to_string()));
+        row.extend([
             format!("{:.4}", pos[0]),
             format!("{:.4}", pos[1]),
             format!("{:.4}", pos[2]),
             format!("{:.4}", col[0]),
             format!("{:.4}", col[1]),
             format!("{:.4}", col[2]),
-        ];
+        ]);
 
         for (name, ty) in &attribs {
             // A column covers its whole class, so there is no "this element
@@ -5983,10 +5988,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 }
                 None => row.extend(std::iter::repeat("-".to_string()).take(ty.components())),
             }
-        }
-
-        for g in &groups {
-            row.push(if geom.points().in_group(g, p) { "1".to_string() } else { String::new() });
         }
 
         for (name, ty) in &detail {

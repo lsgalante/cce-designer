@@ -5248,24 +5248,27 @@ mod tests {
         assert_eq!(
             headers,
             vec![
-                "Point", "Pos.x", "Pos.y", "Pos.z", "Col.r", "Col.g", "Col.b",
-                "ID", "UV.x", "UV.y", "g:pinned", "d:mass_max~",
+                "Point", "group:pinned", "Pos.x", "Pos.y", "Pos.z", "Col.r", "Col.g", "Col.b",
+                "ID", "UV.x", "UV.y", "d:mass_max~",
             ]
         );
 
         assert_eq!(rows.len(), 2, "one row per point");
+        assert!(rows.iter().all(|r| r.len() == headers.len()), "a cell a column");
         assert_eq!(rows[0][0], "0");
-        assert_eq!(rows[0][1], "1.0000"); // Pos.x
-        assert_eq!(rows[0][4], "1.0000"); // Col.r
-        assert_eq!(rows[0][7], "42"); // ID, an integer and printed as one
-        assert_eq!(rows[0][8], "0.1000"); // UV.x
-        assert_eq!(rows[0][10], "", "point 0 is not in the group");
+        // The groups stand beside the point's number, where they are seen
+        // without scrolling, and say 0 as plainly as 1.
+        assert_eq!(rows[0][1], "0", "point 0 is not in the group");
+        assert_eq!(rows[0][2], "1.0000"); // Pos.x
+        assert_eq!(rows[0][5], "1.0000"); // Col.r
+        assert_eq!(rows[0][8], "42"); // ID, an integer and printed as one
+        assert_eq!(rows[0][9], "0.1000"); // UV.x
 
         assert_eq!(rows[1][0], "1");
-        assert_eq!(rows[1][1], "4.0000");
-        assert_eq!(rows[1][7], "0", "unwritten is the type's zero, not a dash");
-        assert_eq!(rows[1][9], "0.4000"); // UV.y
-        assert_eq!(rows[1][10], "1", "point 1 is in the group");
+        assert_eq!(rows[1][1], "1", "point 1 is in the group");
+        assert_eq!(rows[1][2], "4.0000");
+        assert_eq!(rows[1][8], "0", "unwritten is the type's zero, not a dash");
+        assert_eq!(rows[1][10], "0.4000"); // UV.y
         assert_eq!(rows[0][11], "9.5000");
         assert_eq!(rows[1][11], "9.5000", "a detail value repeats down the column");
         // The trailing ~ says this one resets at every step boundary.
