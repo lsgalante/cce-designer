@@ -6312,10 +6312,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             let mut points: Vec<[f32; 3]> = Vec::new();
 
             if let Some(node) = selected_node {
-                let mut visited = Vec::new();
                 let mut ocl_error = None;
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
-                if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
+                if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.fs_root, node, &mut ocl_error, &mut sim) {
                     let (h, r) = Self::geometry_to_spreadsheet_data(&geom);
                     headers = h;
                     rows = r;
@@ -6345,10 +6344,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             let mut member_verts = Vec::new();
             if let Some(node) = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")) {
                 let group_name = node_param_str(node, "Group Name", "group1");
-                let mut visited = Vec::new();
                 let mut ocl_error = None;
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
-                if let Some(geom) = generate_single_node_geometry_with_errors(&self.fs_root, node, &mut visited, &mut ocl_error, &mut sim) {
+                if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.fs_root, node, &mut ocl_error, &mut sim) {
                     member_verts = crate::geometry::group_member_positions(&geom, &group_name);
                 }
             }

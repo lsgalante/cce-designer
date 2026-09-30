@@ -15263,6 +15263,60 @@ mod tests {
         assert!(state.row_marker_verts.is_empty());
     }
 
+    /// A node INSIDE a simnet is read as the scene draws it there: as the
+    /// frame's last substep saw it, not from the seed. The spreadsheet's
+    /// rows, and the markers on the rows selected, follow the simulation.
+    #[test]
+    fn rows_selected_inside_a_simnet_follow_the_simulation() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = LEFT_MENUBAR_IDX;
+        state.param_editor = crate::slots::CONTENT_IDX;
+        state.show_spreadsheet = true;
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        let sim = state.current_dir().children.iter().position(|c| c.name == "sim").unwrap();
+        state.apply_action(McpAction::SetParam { slot: sim, name: "Input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
+        {
+            let simnet = &mut state.current_dir_mut().children[sim];
+            let mut pull = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
+            pull.id = "pull-in-sim".into();
+            pull.name = "pull1".into();
+            for (name, value) in [("Input", "input1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.05:0.00:0.00"), ("Combine", "Add")] {
+                pull.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
+            }
+            simnet.children.push(pull);
+            let output = simnet.children.iter_mut().find(|c| c.node_type == "output").unwrap();
+            output.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("pull1".to_string());
+        }
+        // Dive in and select the pull.
+        state.current_path.push(sim);
+        state.sync_nodes();
+        let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
+        state.apply_action(McpAction::Select { slot: pull }, &mut redraw).unwrap();
+        state.slots.playbar.inner_mut().current_frame = 5.0;
+        state.tick_frame(1.0 / 60.0);
+        state.sync_nodes();
+        assert!(!state.spreadsheet_points.is_empty());
+        state.spreadsheet_mut().set_selected_rows(&[3]);
+        state.rebuild_row_marker_verts();
+        let middle = |state: &State| {
+            let n = state.row_marker_verts.len() as f32;
+            state.row_marker_verts.iter().fold(0.0f32, |m, v| m + v.position[0] / n)
+        };
+        let (row_at, marker_at) = (state.spreadsheet_points[3][0], middle(&state));
+        assert!((row_at - marker_at).abs() < 1e-3);
+
+        state.slots.playbar.inner_mut().current_frame = 15.0;
+        state.tick_frame(1.0 / 60.0);
+        let moved = state.spreadsheet_points[3][0] - row_at;
+        assert!(moved > 0.3, "ten frames of the pull moved the row's point {moved}");
+        assert!((middle(&state) - state.spreadsheet_points[3][0]).abs() < 1e-3, "and its marker with it");
+        assert_eq!(state.selected_spreadsheet_points(), vec![3]);
+    }
+
     /// The spreadsheet and the selected-group markers evaluate through the
     /// SHARED sim cache: with either reading something downstream of a
     /// simnet, a refresh costs no steps beyond the ones the frame itself

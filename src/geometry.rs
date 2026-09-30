@@ -3507,6 +3507,46 @@ pub fn moves_points(node: &FsNode) -> bool {
         && node_param_str(node, "Attribute Name", "").trim().eq_ignore_ascii_case("Pos")
 }
 
+/// `target`'s geometry as the scene SHOWS it: a node inside a simnet as the
+/// current frame's last substep saw it, with the feedback stack holding the
+/// state that substep consumed, and any other node as it evaluates.
+///
+/// What reads a selected node for display goes through here — the
+/// spreadsheet's rows, the markers on them, the selected group's. Until
+/// 2026-09-29 they evaluated the node bare, so inside a simnet the `input`
+/// child read the simnet's seed and the rows showed the first frame at
+/// every frame, while the scene beside them played. The simnet is the
+/// nearest one above the node, so a node in a subnet inside a simnet is
+/// read the same way.
+pub fn node_geometry_as_shown(
+    root: &FsNode,
+    target: &FsNode,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let mut simnet = None;
+    let mut at = target;
+    while let Some(parent) = find_parent_node(root, &at.id) {
+        if parent.node_type.eq_ignore_ascii_case("simnet") {
+            simnet = Some(parent);
+            break;
+        }
+        at = parent;
+    }
+    let mut pushed = false;
+    if let Some(simnet) = simnet {
+        if let Some(fed) = simnet_step_feedback(root, simnet, &mut Vec::new(), ocl_error, sim) {
+            sim.feedback.push((simnet.id.clone(), fed));
+            pushed = true;
+        }
+    }
+    let geom = generate_single_node_geometry_with_errors(root, target, &mut Vec::new(), ocl_error, sim);
+    if pushed {
+        sim.feedback.pop();
+    }
+    geom
+}
+
 /// Where `target` moves each point it moves, as `(before, after)` positions:
 /// its input's `P` against its own. Measured rather than read off Value, so
 /// Set and Multiply — whose vector differs point to point — and an

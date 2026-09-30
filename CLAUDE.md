@@ -1634,6 +1634,17 @@ wears and at Group Marker Size.
 
 `selected_spreadsheet_rows_are_marked_in_the_scene` drives it by pointer.
 
+**What reads a selected node for display reads it as the scene shows it**
+(`geometry::node_geometry_as_shown`, the same day): the spreadsheet's
+rows, the markers on them and the selected group's. A node inside a
+simnet is evaluated as the frame's last substep saw it, the feedback of
+the nearest simnet above it pushed — the rule the dived-in scene walk and
+the pull arrows already drew by. Until then these evaluated the node
+bare, so inside a simnet `input` read the seed and the rows, and a
+selected row's marker, stood at the first frame while the scene beside
+them played. `rows_selected_inside_a_simnet_follow_the_simulation` is the
+test.
+
 ### The volume representation
 
 `src/volume.rs` is a dense signed distance field — `Volume { origin, voxel,
