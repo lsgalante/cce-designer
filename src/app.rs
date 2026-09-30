@@ -2486,6 +2486,10 @@ pub struct State {
     /// The raster scene's model-view-projection and the viewport pane rect in
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
+    /// The eye the scene was last staged for, in mesh space, beside the
+    /// matrix: what a scene rebuild dims the numbers by until the stage
+    /// pass has staged the new geometry.
+    pub last_scene_eye: Vec3,
     pub last_scene_view_rect: (f32, f32, f32, f32),
     /// The active curve viewer state (viewport point editing), if any.
     pub viewer_tool: Option<crate::viewer_state::ViewerTool>,
@@ -6989,6 +6993,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 .unwrap_or(cce_ui::units::Unit::Mm),
             pick_cache: None,
             last_scene_mvp: None,
+            last_scene_eye: Vec3::ZERO,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             viewer_tool: None,
             last_viewport_rt_mode: false,
@@ -11178,7 +11183,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     self.last_scene_mvp = Some(mvp_mat);
                     self.last_scene_view_rect =
                         (sx as f32 / s, sy as f32 / s, cw as f32 / s, ch as f32 / s);
-                    self.sync_point_number_alpha(mvp_mat, (view_mat * model).inverse().transform_point3(Vec3::ZERO));
+                    self.last_scene_eye = (view_mat * model).inverse().transform_point3(Vec3::ZERO);
+                    self.sync_point_number_alpha(mvp_mat, self.last_scene_eye);
 
                     // The camera-pivot marker is WORLD-FIXED at the pivot point, like
                     // the origin gizmo. Its old yaw rotation existed to keep it glued

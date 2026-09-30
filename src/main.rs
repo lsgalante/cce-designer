@@ -1686,6 +1686,30 @@ mod tests {
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// A scene rebuild leaves the numbers dimmed as they were: the 2D frame
+    /// is painted before the stage pass, so a rebuild that cleared the
+    /// dimming drew one frame of every number at full strength, and a
+    /// playing simulation rebuilds at every frame.
+    #[test]
+    fn a_scene_rebuild_keeps_the_point_numbers_dimmed() {
+        let mut state = State::new(false);
+        state.show_point_numbers = true;
+        state.rebuild_scene_geometry();
+        assert!(!state.overlay_number_labels.is_empty());
+        // The view the stage pass last staged: from +z, looking at the origin.
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, Vec3::Y);
+        let proj = Mat4::perspective_rh(0.9, 1.5, 0.1, 100.0);
+        state.last_scene_mvp = Some(proj * view);
+        state.last_scene_eye = Vec3::new(0.0, 0.0, 6.0);
+        state.sync_point_number_alpha(proj * view, state.last_scene_eye);
+        let staged = state.overlay_number_alpha.clone();
+        assert!(staged.iter().any(|a| *a < 0.02), "the far side's numbers are hidden: {staged:?}");
+        assert!(staged.iter().any(|a| *a > 0.98), "the near side's are shown");
+
+        state.rebuild_scene_geometry();
+        assert_eq!(state.overlay_number_alpha, staged, "the rebuild left the dimming as the view has it");
+    }
+
     /// A point number is dimmed by the fill in front of its point, as a
     /// marker drawn under that fill is: whole on the near side, one layer
     /// down on the far side of a closed mesh (the faces that meet AT the

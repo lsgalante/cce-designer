@@ -1280,6 +1280,15 @@ impl State {
             cce_ui::colors::to_linear_rgb,
         ));
         self.overlay_dirty = true;
+        // The numbers' dimming, for the view the scene was last staged
+        // from. The 2D frame is painted BEFORE the stage pass, which works
+        // the dimming out: left cleared, the first frame after every
+        // rebuild drew each number at full strength, those behind the
+        // surface too, and a playing simulation rebuilds every frame — the
+        // numbers flickered between shown and dimmed.
+        if let Some(mvp) = self.last_scene_mvp {
+            self.sync_point_number_alpha(mvp, self.last_scene_eye);
+        }
         // The pull arrows measure the selected node against this new
         // geometry version; a playing simnet reaches here every frame.
         self.sync_selection_readouts();

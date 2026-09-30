@@ -2513,7 +2513,13 @@ stage pass, for the eye being staged; a label under 2% is not drawn, so
 behind an OPAQUE face a number is hidden, where until then every number
 showed through everything. The wires are not counted against a number: a
 line a pixel wide is not in front of a label in any way one alpha could
-show. `a_point_number_is_dimmed_by_the_fill_in_front_of_it` is the test;
+show. **A scene rebuild works the dimming out itself**, for the view the
+scene was last staged from (`last_scene_mvp`, `last_scene_eye`). The 2D
+frame is painted BEFORE the stage pass, so a rebuild that only cleared
+the alphas drew one frame of every number at full strength; a playing
+simulation rebuilds at every frame, and the numbers flickered
+(`a_scene_rebuild_keeps_the_point_numbers_dimmed`).
+`a_point_number_is_dimmed_by_the_fill_in_front_of_it` is the test;
 the whiskers' order has none, being a draw list only a renderer reads, and
 was checked in a shadow session before and after.
 
