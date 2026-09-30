@@ -666,6 +666,31 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
     (control, ty)
 }
 
+/// How wide a line of a parameter's description is in its row menu, in
+/// characters. The menu is as wide as its widest row, so an unwrapped
+/// sentence would stretch it across the window.
+pub const PARAM_DESCRIPTION_WIDTH: usize = 44;
+
+/// `text` broken into lines of at most `width` characters, at spaces; a
+/// word longer than a line has one to itself.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// The range a presented row carries in its display type (`slider:lo:hi`,
 /// `float3:lo:hi`), for a row whose parameter declares none of its own.
 fn shown_row_range(shown: &str) -> Option<(f32, f32, Option<f32>)> {
@@ -1201,6 +1226,28 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         }
     }
     fn merge_node(node: &mut FsNode, templates: &[NodeTemplate]) {
+        // A camera's Square Aspect and Show Camera Pivot were written when
+        // the viewport's toggles flipped under it and read by nothing: the
+        // settings are the viewport's, and ride the project's view state.
+        // Retired, and dropped from a save that still has them.
+        if node.node_type == "camera" {
+            node.params.retain(|p| p.name != "Square Aspect" && p.name != "Show Camera Pivot");
+        }
+        // A page's size is its Width and Height now, Preset has no Custom
+        // and there is no Orientation row: a save from before is carried
+        // over once, ahead of the merge that would take the old rows'
+        // conditions away.
+        if node.node_type == "page" {
+            crate::page::migrate_preset_rows(node);
+        }
+        // Visualize's Mix blend was Set under another name (Opacity fades
+        // every blend alike) and is retired; a save holding it is Set, or
+        // it would load as a choice the row no longer offers.
+        if node.node_type == "visualize" {
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == "Blend" && p.text().trim().eq_ignore_ascii_case("mix")) {
+                p.set_text("Set".to_string());
+            }
+        }
         if let Some(t) = template_for(node, templates) {
             let owns_impl = t.node_type.eq_ignore_ascii_case("node") && !t.children.is_empty();
             let children_match = t.children.iter().all(|tc| {
@@ -4082,6 +4129,21 @@ impl State {
                         }
                     }
 
+                    // A page's Preset and Units set its Width
+                    // and Height; what they overwrite is part of the step.
+                    let mut followed = false;
+                    if child.node_type == "page" {
+                        let setters: Vec<ParamDef> = was.iter().filter(|w| matches!(w.name.as_str(), "Preset" | "Units")).cloned().collect();
+                        for w in setters {
+                            for r in crate::page::follow_page_rows(child, &w) {
+                                followed = true;
+                                if !was.iter().any(|x| x.name == r.name) {
+                                    was.push(r);
+                                }
+                            }
+                        }
+                    }
+
                     // One step per gesture: a drag writes back on every
                     // motion. A button or the Open dropdown ends as it
                     // began, and is no edit.
@@ -4119,6 +4181,10 @@ impl State {
                         self.sync_grid_settings();
                         self.rebuild_scene_geometry();
                         self.sync_nodes();
+                        // Width and Height moved under the pane's feet.
+                        if followed {
+                            self.sync_parameters_pane();
+                        }
 
                         for btn_name in triggered_buttons {
                             self.execute_menu_action(&btn_name);
@@ -4500,34 +4566,6 @@ impl State {
         }
         true
     }
-
-    /// Rewrite the Main node's setting toggles from live app state, so the
-    /// switches show the real value even after panes/settings were changed
-    /// through the menus or keyboard while another node was selected.
-    /// Write a per-camera display toggle (Square Aspect / Show Camera Pivot)
-    /// back to the ACTIVE camera node — the setting's home — so the next
-    /// settings apply doesn't revert a menu/shortcut flip. No-op under
-    /// Default Camera, which has no node: the live value stands alone.
-    fn write_active_camera_toggle(&mut self, name: &str, val: bool) {
-        if self.active_camera == "Default Camera" {
-            return;
-        }
-        let active = self.active_camera.clone();
-        if let Some(cam) = self
-            .current_dir_mut()
-            .children
-            .iter_mut()
-            .find(|c| c.node_type == "camera" && c.name == active)
-        {
-            if let Some(p) = cam.params.iter_mut().find(|p| p.name == name) {
-                p.set_value(crate::app::ParamValue::Bool(val));
-            }
-        }
-    }
-
-
-
-
 
     pub fn sync_parameters_pane(&mut self) {
         // Selection reads through the param-editor accessors: whichever
@@ -5292,7 +5330,11 @@ impl State {
     /// parameter's name, which is what a `ch()` path and a wire spell —
     /// with `Label:` after it only when the template gives one (the pane
     /// shows the name otherwise, and a Label row repeating it would say
-    /// there is one), and `Shown when:` closes it with the row's
+    /// there is one) and the parameter's DESCRIPTION under them, ahead of
+    /// `Control:` — what it does, from the template
+    /// (`ParamDef::description`), wrapped to `PARAM_DESCRIPTION_WIDTH` over
+    /// as many rows as it takes and unprefixed, since it reads as prose and
+    /// not as a field — and `Shown when:` closes the list with the row's
     /// `show_when` condition when it has one.
     pub fn param_menu_rows(&self, slot: usize, pname: &str) -> (Vec<String>, Vec<ParamMenuAction>, usize) {
         let dir = self.param_editor_dir();
@@ -5306,6 +5348,9 @@ impl State {
         let mut options = vec![format!("Name: {pname}")];
         if let Some(label) = param.map(|p| p.label.as_str()).filter(|l| !l.is_empty()) {
             options.push(format!("Label: {label}"));
+        }
+        if let Some(p) = param {
+            options.extend(wrap_words(&p.description, PARAM_DESCRIPTION_WIDTH));
         }
         options.push(format!("Control: {control}"));
         options.push(format!("Type: {ty}"));
@@ -9153,7 +9198,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleCameraPivot => {
                 let val = !self.viewport().show_camera_pivot;
                 self.viewport_mut().show_camera_pivot = val;
-                self.write_active_camera_toggle("Show Camera Pivot", val);
                 self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(GUIDES_MENU, GUIDE_CAMERA_PIVOT, val);
                 settings_changed = true;
             }
@@ -9240,8 +9284,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::ToggleSquareViewport => {
                 self.square_viewport = !self.square_viewport;
-                let val = self.square_viewport;
-                self.write_active_camera_toggle("Square Aspect", val);
                 settings_changed = true;
             }
             Action::ToggleConfigure => {

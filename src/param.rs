@@ -196,6 +196,13 @@ pub struct ParamDef {
     /// Serialized only when set, so a file that never used it is
     /// byte-identical to what it was.
     pub view: String,
+    /// What the parameter does, in a sentence or two, shown in its row's
+    /// right-click menu. The TEMPLATE's: `adopt_ui_from` hands it to every
+    /// instance with the rest of the UI metadata, and it is read from a
+    /// template file and never written — a save carries values, and a
+    /// description kept there would go stale the day the template's
+    /// wording changed (and move `sim_solve_key` the day it did).
+    pub description: String,
 }
 
 /// The file shape of a [`ParamDef`] — the struct as it was before the value
@@ -231,6 +238,9 @@ struct ParamDefRepr {
     /// [`ParamDef::view`]; absent unless one was chosen.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     view: String,
+    /// [`ParamDef::description`]; read, never written.
+    #[serde(default, skip_serializing)]
+    description: String,
 }
 
 fn default_param_type() -> String {
@@ -252,6 +262,7 @@ impl<'de> Deserialize<'de> for ParamDef {
             step: r.step,
             show_when: r.show_when,
             view: r.view,
+            description: r.description,
         };
         if !r.expr {
             p.reparse();
@@ -274,6 +285,7 @@ impl Serialize for ParamDef {
             show_when: self.show_when.clone(),
             expr: self.is_expr(),
             view: self.view.clone(),
+            description: String::new(),
         }
         .serialize(s)
     }
@@ -342,6 +354,7 @@ impl ParamDef {
             step: None,
             show_when: String::new(),
             view: String::new(),
+            description: String::new(),
         };
         p.reparse();
         p
@@ -560,6 +573,7 @@ impl ParamDef {
         self.max = template.max;
         self.step = template.step;
         self.show_when = template.show_when.clone();
+        self.description = template.description.clone();
         // The view is the instance's to choose; the template's is what it
         // starts from.
         if self.view.is_empty() {

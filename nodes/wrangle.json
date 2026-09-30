@@ -4,13 +4,14 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "node" },
-    { "name": "Class", "type": "choice:Points,Primitives,Detail", "default": "Points" },
-    { "name": "Group", "default": "", "type": "group" },
+    { "name": "Input", "default": "", "type": "node", "description": "The node whose geometry the script runs over. With nothing connected the script runs on empty geometry and can build its own." },
+    { "name": "Class", "type": "choice:Points,Primitives,Detail", "default": "Points", "description": "What the script runs once for: each point, each primitive, or once for the whole geometry (Detail). Sets what @P and @name refer to." },
+    { "name": "Group", "default": "", "type": "group", "description": "A group of the chosen class limiting which elements the script runs on. Empty means all; ignored in Detail class." },
     {
       "name": "Code",
       "type": "code",
-      "default": "// Runs once per point. @P is the position, @name any attribute;\n// ch(\"Name\") reads a parameter, neighbours(@ptnum) the topology.\n@P.y += sin(@P.x * 4.0) * 0.15;\n"
+      "default": "// Runs once per point. @P is the position, @name any attribute;\n// ch(\"Name\") reads a parameter, neighbours(@ptnum) the topology.\n@P.y += sin(@P.x * 4.0) * 0.15;\n",
+      "description": "The Rhai script run per element. @name reads or writes an attribute, ch(\"path\") reads a parameter. Applies on ctrl+enter or when leaving the editor; an error leaves the input unchanged."
     }
   ]
 }

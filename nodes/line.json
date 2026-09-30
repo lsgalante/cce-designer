@@ -4,7 +4,7 @@
   "inputs": 0,
   "outputs": 1,
   "params": [
-    { "name": "Length", "default": "1.0", "type": "slider" },
-    { "name": "Thickness", "default": "0.02", "type": "slider" }
+    { "name": "Length", "default": "1.0", "type": "slider", "description": "Height of the vertical bar in world units, measured up the Y axis from its start. The start is placed automatically by the node's order in the network." },
+    { "name": "Thickness", "default": "0.02", "type": "slider", "description": "Width of the bar's square cross-section in world units." }
   ]
 }

@@ -4,10 +4,10 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "Class", "type": "choice:Points,Vertices", "default": "Points" },
-  { "name": "Attribute", "type": "attribute", "default": "N" },
-  { "name": "Cusp Angle", "type": "slider", "default": "60", "min": 0.0, "max": 180.0, "step": 1.0, "show_when": "Class == Vertices" },
-  { "name": "Flip", "type": "choice:false,true", "default": "false" }
+  { "name": "Input", "type": "node", "default": "", "description": "The node whose normals are computed from its faces." },
+  { "name": "Class", "type": "choice:Points,Vertices", "default": "Points", "description": "Points writes one averaged normal per point. Vertices writes one per face corner, so edges sharper than the Cusp Angle stay hard." },
+  { "name": "Attribute", "type": "attribute", "default": "N", "description": "Name of the attribute the normals are written to. Empty leaves the geometry unchanged." },
+  { "name": "Cusp Angle", "type": "slider", "default": "60", "min": 0.0, "max": 180.0, "step": 1.0, "show_when": "Class == Vertices", "description": "In degrees: faces meeting at less than this angle are averaged and read smooth, sharper ones keep their own normal. 180 is fully smooth." },
+  { "name": "Flip", "type": "choice:false,true", "default": "false", "description": "Reverse the computed normals so they point the other way." }
  ]
 }

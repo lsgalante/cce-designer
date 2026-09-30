@@ -4,7 +4,7 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "Depth", "type": "spinbox", "default": "1", "min": 0.0, "max": 6.0, "step": 1.0 }
+  { "name": "Input", "type": "node", "default": "", "description": "The node whose triangles are subdivided." },
+  { "name": "Depth", "type": "spinbox", "default": "1", "min": 0.0, "max": 6.0, "step": 1.0, "description": "How many times each triangle is split into four at its edge midpoints. Each level quadruples the count; points do not move. 0 passes the input through." }
  ]
 }

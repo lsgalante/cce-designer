@@ -413,7 +413,7 @@ Where it all went:
   `DesignSettings` into `state.kdl` (`viewport` and the new `render` block),
   and edited as rows of the dialog's one list — `SETTINGS` in
   `src/dialog.rs`, whose rows are `Owner::Field` (a live field, with a `Ctl`
-  saying what control draws it) or `Owner::ActiveCamera`; the toggles are
+  saying what control draws it); the toggles are
   registry commands whose palette rows carry a switch, read through
   `command_toggle_state`. The table plus the toggle commands are the app's
   whole display configuration, so a value left out of both is GONE, not
@@ -532,8 +532,7 @@ save writes `ProjectViewState::display` — a `DisplaySettings`, the viewport
 and render blocks of `DesignSettings` without the startup pointer, taken by
 `State::display_settings` (which `save_settings` builds from as well) — and
 both `load_from_file` paths apply it through `apply_display_settings`, before
-the Default Camera view so a camera node's own Square Aspect and pivot
-still win. The apply sets every field, regenerates the baked meshes, relays
+the Default Camera view so a camera node's own Pivot still wins. The apply sets every field, regenerates the baked meshes, relays
 the two pane-shaped ones (network plate, circular pane), re-checks the
 menubar marks, and saves state.kdl, so state.kdl holds the LAST-USED look:
 what New and an older save (no block, which changes nothing) open with.
@@ -944,7 +943,17 @@ and paste still pastes the right path. **Header rows read the
 parameter out** (since 2026-09-28, `param_menu_rows`): `Name:` is the
 parameter's name, what a `ch()` path spells, with `Label:` under it only
 when the template gives one (the pane shows the name otherwise, and a
-Label row repeating it would claim there is one); `Control:` is the
+Label row repeating it would claim there is one), then **what the
+parameter does** (since 2026-09-30): the template's `description`, a
+sentence or two in prose, wrapped to `PARAM_DESCRIPTION_WIDTH` (44)
+characters over as many unprefixed rows as it takes, since the menu is as
+wide as its widest row. It is the TEMPLATE's, like the label: the merge
+hands it to every instance (`adopt_ui_from`), a subnet template's child
+takes its base template's, and it is read from a template file and never
+written, so a save carries none and `sim_solve_key` does not see it.
+Every parameter a template ships has one —
+`the_row_menu_says_what_a_parameter_does` reads the raw files — so a new
+parameter needs its description written with it. `Control:` is the
 control the pane DRAWS for the row (slider, spinbox, dropdown, toggle,
 text box, text box with picker, code editor, button) and `Type:` the type
 of value that control SETS, in a programmer's terms (float, float3,
@@ -1971,11 +1980,29 @@ and not of each node, because a chain whose text was placed in pixels and
 whose border was inset in inches is a chain nobody can read. Inside, a page
 is still inches (`Page::size`), and a pixel image's physical size is its
 pixels over its Resolution. A node with no Units row is in inches, which is
-every save from before it. The presets are the four paper sizes and three
-raster ones (`HD`, `4K`, `Square`), which are their pixels whatever Units
-says and are not turned by Orientation. The length rows are `float` — a
+every save from before it. The length rows are `float` — a
 number with no range — where they were sliders over a range in inches: a
 slider clamps, and no one range holds both 0.25 inches and 1920 pixels.
+
+**The size IS Width and Height, and a preset writes them** (since
+2026-09-30). `page_node_frame` reads Width by Height in Units and nothing
+else; Preset and Units are rows that SET those two when they are picked
+(`page::follow_page_rows`, called by the params pane's write-back and
+MCP's `set_param`, and what it overwrites is part of the undo step).
+Preset writes its size in the page's Units — the four paper sizes
+portrait, the three raster ones (`HD`, `4K`, `Square`) as they lie; Units
+converts them, so the sheet keeps its size. There is no `Custom` preset
+(until then Width and Height were read only under it, a second way to say
+the size that the presets could not share) and no Orientation row: a
+landscape sheet is Width and Height typed the other way round. Preset
+names what was last picked, and a size typed in afterwards is the size. A
+save from before is carried over ONCE in the template merge
+(`page::migrate_preset_rows`), recognised by the Width row's `show_when`
+still reading `Preset == Custom`, which the merge then replaces: a named
+preset is written into Width and Height, a sheet turned as its old
+Orientation row said, and a Custom page keeps its size and names Letter.
+The Orientation row is dropped from every page. `picking_a_page_preset_writes_its_size`
+is the test.
 
 **`page_shape`** draws a rectangle (with a corner radius), an ellipse, a
 line or a polygon of N sides, turned by Rotation, filled and stroked, each
@@ -3223,11 +3250,13 @@ selection stays where it was:
 
 **A setting row edits the live field** — see "There are no meta nodes"
 above, which is where these values used to live and why a direct write did
-not stick. `SETTINGS` is the table of which row belongs to which owner:
+not stick. `SETTINGS` is the table of rows and their owners, each an
 `Owner::Field` (a live field, with a `Ctl` saying what control draws it,
-since a bare Rust field carries no type or range the way a param did) or
-`Owner::ActiveCamera` (an active-camera param with the live field as its
-fallback — the Default Camera has no node). The toggles the retired
+since a bare Rust field carries no type or range the way a param did).
+There was a second kind, `Owner::ActiveCamera` — an active-camera param
+with the live field as its fallback — whose one row, Camera Pivot Size,
+went on 2026-09-30: no camera node has that param, so the row only ever
+wrote the field, which the viewport menu's slider sets. The toggles the retired
 subnets held are NOT rows of the table: each is a registry command with a
 switch on its own row, and a second row per toggle would have listed every
 switch twice. A row's id is its label under `SETTING_ROW_PREFIX`

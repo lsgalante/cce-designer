@@ -4,11 +4,11 @@
  "inputs": 2,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "To", "type": "node", "default": "" },
-  { "name": "Attribute", "type": "attribute", "default": "dist" },
-  { "name": "Direction", "type": "attribute", "default": "" },
-  { "name": "Signed", "type": "choice:false,true", "default": "false" },
-  { "name": "Maximum", "type": "slider", "default": "0.00", "min": 0.0, "max": 10.0, "step": 0.05 }
+  { "name": "Input", "type": "node", "default": "", "description": "The geometry whose points are measured; each point gets its distance to the nearest point on the To surface." },
+  { "name": "To", "type": "node", "default": "", "description": "The geometry to measure to, read as a surface. If it cannot be found, the input passes through and an error is reported." },
+  { "name": "Attribute", "type": "attribute", "default": "dist", "description": "Name of the float point attribute written with each point's distance. Empty skips writing it." },
+  { "name": "Direction", "type": "attribute", "default": "", "description": "If set, a vector point attribute of this name is written with the unit direction from each point toward its nearest surface point. Empty skips it." },
+  { "name": "Signed", "type": "choice:false,true", "default": "false", "description": "When true, points behind the nearest face (inside the surface) get negative distances. Judged by that face's normal, so it can misread in concave creases." },
+  { "name": "Maximum", "type": "slider", "default": "0.00", "min": 0.0, "max": 10.0, "step": 0.05, "description": "Clamps the distance to at most this many world units, keeping a falloff bounded. 0 means no clamp." }
  ]
 }

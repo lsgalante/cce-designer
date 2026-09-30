@@ -4,12 +4,13 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "node" },
-    { "name": "Collider", "default": "", "type": "node" },
+    { "name": "Input", "default": "", "type": "node", "description": "The geometry whose points or primitives are tested against the collider and grouped." },
+    { "name": "Collider", "default": "", "type": "node", "description": "The geometry to test against, read as triangles. With nothing connected, or a collider without faces, the input passes through unchanged." },
     {
       "name": "Method",
       "type": "choice:Inside,Proximity",
-      "default": "Inside"
+      "default": "Inside",
+      "description": "Inside marks elements enclosed by the collider, so it needs a closed collider. Proximity marks elements within Distance of the collider's surface."
     },
     {
       "name": "Distance",
@@ -17,23 +18,27 @@
       "default": "0.05",
       "min": 0.0,
       "max": 1.0,
-      "step": 0.005
+      "step": 0.005,
+      "description": "For Proximity, how near the collider's surface an element must be to count, in world units. Unused by Inside."
     },
     {
       "name": "Element Type",
       "type": "choice:Points,Primitives",
-      "default": "Points"
+      "default": "Points",
+      "description": "Points tests each point. Primitives tests each primitive's centroid and groups the hit primitives and their points."
     },
-    { "name": "Group Name", "default": "collisions", "type": "group" },
+    { "name": "Group Name", "default": "collisions", "type": "group", "description": "Name of the group written with the elements that hit. Also written as a primitive group when primitives are tested." },
     {
       "name": "Invert",
       "type": "toggle",
-      "default": "false"
+      "default": "false",
+      "description": "Groups the elements that did NOT hit the collider instead of those that did."
     },
     {
       "name": "Highlight",
       "type": "toggle",
-      "default": "true"
+      "default": "true",
+      "description": "Tints the grouped points red so the contact shows in the viewport. Off leaves colours untouched."
     }
   ]
 }

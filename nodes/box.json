@@ -7,17 +7,20 @@
     {
       "name": "Scale",
       "default": "1.0",
-      "type": "slider"
+      "type": "slider",
+      "description": "Edge length of the cube in world units; the box extends half this distance from Center on every axis."
     },
     {
       "name": "Wireframe",
       "default": "false",
-      "type": "toggle"
+      "type": "toggle",
+      "description": "When on, builds only the twelve edges as thin bars and the eight corners as small cubes instead of a solid box, useful as a reference frame."
     },
     {
       "name": "Center",
       "type": "float3",
-      "default": "0.00:0.55:0.00"
+      "default": "0.00:0.55:0.00",
+      "description": "Position of the box's center in world units."
     }
   ]
 }

@@ -7,7 +7,8 @@
   {
    "name": "Input",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The node whose mesh is coarsened. The surviving point of each collapsed edge keeps its values and joins the other end's groups."
   },
   {
    "name": "Target Length",
@@ -15,7 +16,8 @@
    "default": "0.10",
    "min": 0.001,
    "max": 1.0,
-   "step": 0.005
+   "step": 0.005,
+   "description": "Edge length, in world units, the pass steers toward: edges shorter than 4/5 of it are collapsed, unless that would make an edge longer than 4/3 of it."
   }
  ]
 }

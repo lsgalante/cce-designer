@@ -7,7 +7,8 @@
   {
    "name": "Input",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The node whose surface is remeshed. Its triangles are rebuilt toward an even edge length; point attributes ride through splits and collapses."
   },
   {
    "name": "Target Length",
@@ -15,7 +16,8 @@
    "default": "0.10",
    "min": 0.001,
    "max": 1.0,
-   "step": 0.005
+   "step": 0.005,
+   "description": "Edge length, in world units, the mesh is steered toward. Edges over 4/3 of it are split and edges under 4/5 collapsed; smaller means denser."
   },
   {
    "name": "Iterations",
@@ -23,7 +25,8 @@
    "default": "3",
    "min": 1.0,
    "max": 20.0,
-   "step": 1.0
+   "step": 1.0,
+   "description": "How many times the split, collapse, flip, relax and project passes repeat. More rounds settle the mesh closer to the target; it stops early once a round changes nothing."
   },
   {
    "name": "Relax",
@@ -31,36 +34,42 @@
    "default": "0.50",
    "min": 0.0,
    "max": 1.0,
-   "step": 0.01
+   "step": 0.01,
+   "description": "How far each point slides toward its neighbours' centroid along the surface in every round, evening out the triangles. 0 turns the relaxation off; 1 is full strength."
   },
   {
    "name": "Transfer",
    "type": "toggle",
-   "default": "false"
+   "default": "false",
+   "description": "After remeshing, copy point attributes (and optionally groups) onto the new points from the nearest point of a source mesh, so they survive the rebuild."
   },
   {
    "name": "From",
    "type": "node",
    "default": "",
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "The node whose point attributes and groups are copied onto the remeshed points. Empty uses the remesh's own input, as it was before remeshing."
   },
   {
    "name": "Attributes",
    "type": "text",
    "default": "",
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "Comma-separated names of the point attributes to copy from the source. Empty copies every point attribute the source has."
   },
   {
    "name": "Transfer Groups",
    "type": "toggle",
    "default": "false",
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "Also copy point group membership from the nearest source point, joining and leaving groups to match the source."
   },
   {
    "name": "Groups",
    "type": "text",
    "default": "",
-   "show_when": "Transfer == true && Transfer Groups == true"
+   "show_when": "Transfer == true && Transfer Groups == true",
+   "description": "Comma-separated names of the point groups to copy. Empty copies every point group the source has."
   },
   {
    "name": "Maximum Distance",
@@ -69,7 +78,8 @@
    "min": 0.0,
    "max": 10.0,
    "step": 0.01,
-   "show_when": "Transfer == true"
+   "show_when": "Transfer == true",
+   "description": "Only points within this many world units of a source point receive values; farther points keep their own. 0 means no limit."
   }
  ],
  "children": [

@@ -7,12 +7,14 @@
     {
       "name": "Method",
       "default": "UV",
-      "type": "choice:UV,Icosphere,Cube"
+      "type": "choice:UV,Icosphere,Cube",
+      "description": "How the sphere is tessellated: UV uses latitude rows and longitude columns, Icosphere subdivides an icosahedron into even triangles, Cube projects a gridded cube into quads."
     },
     {
       "name": "Radius",
       "default": "0.5",
-      "type": "slider"
+      "type": "slider",
+      "description": "Radius of the sphere in world units, the distance from Center to every point on its surface."
     },
     {
       "name": "Rows",
@@ -21,7 +23,8 @@
       "min": 2,
       "max": 128,
       "step": 1,
-      "show_when": "Method == UV"
+      "show_when": "Method == UV",
+      "description": "Number of latitude bands from pole to pole for the UV method. More rows give a smoother profile and more points."
     },
     {
       "name": "Columns",
@@ -30,7 +33,8 @@
       "min": 3,
       "max": 128,
       "step": 1,
-      "show_when": "Method == UV"
+      "show_when": "Method == UV",
+      "description": "Number of longitude segments around the UV sphere. More columns give a rounder silhouette and more points."
     },
     {
       "name": "Frequency",
@@ -39,7 +43,8 @@
       "min": 1,
       "max": 16,
       "step": 1,
-      "show_when": "Method == Icosphere"
+      "show_when": "Method == Icosphere",
+      "description": "How many times each icosahedron edge is divided for the Icosphere method; each of the 20 faces becomes Frequency squared triangles."
     },
     {
       "name": "Resolution",
@@ -48,27 +53,32 @@
       "min": 1,
       "max": 64,
       "step": 1,
-      "show_when": "Method == Cube"
+      "show_when": "Method == Cube",
+      "description": "Grid divisions along each edge of every cube face for the Cube method; each face gets Resolution squared quads."
     },
     {
       "name": "Center X",
       "default": "0.0",
-      "type": "slider:-2:2"
+      "type": "slider:-2:2",
+      "description": "X position of the sphere's center in world units."
     },
     {
       "name": "Center Y",
       "default": "0.55",
-      "type": "slider:-2:2"
+      "type": "slider:-2:2",
+      "description": "Y (height) position of the sphere's center in world units."
     },
     {
       "name": "Center Z",
       "default": "0.0",
-      "type": "slider:-2:2"
+      "type": "slider:-2:2",
+      "description": "Z position of the sphere's center in world units."
     },
     {
       "name": "Color",
       "default": "true",
-      "type": "toggle"
+      "type": "toggle",
+      "description": "When on, colors each point by its surface direction (normal mapped to RGB); when off, the sphere uses the plain default color."
     }
   ]
 }

@@ -4612,6 +4612,8 @@ mod tests {
                 o.entry(k).or_insert(Value::Null);
             }
             o.entry("show_when").or_insert("".into());
+            // A template's description is read and never written.
+            o.remove("description");
             if o.get("expr") == Some(&Value::Bool(false)) {
                 o.remove("expr");
             }
@@ -4998,6 +5000,49 @@ mod tests {
         state
             .apply_action(crate::app::McpAction::AddParam { slot: 0, name: "N".into(), param_type: "spinbox".into(), default: "1".into() }, &mut redraw)
             .expect("a known kind is added");
+    }
+
+    /// A camera node has no Square Aspect or Show Camera Pivot: they were
+    /// written when the viewport's toggles flipped under it and read by
+    /// nothing. A save that has them loads without them.
+    #[test]
+    fn a_camera_carries_no_viewport_toggles() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let t = templates_root.children.iter().find(|t| t.node_type == "camera").unwrap();
+        let names: Vec<&str> = t.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Position", "Rotation", "Pivot"]);
+        let mut old = t.clone();
+        old.params.push(crate::app::ParamDef::new("Square Aspect", "toggle", "true"));
+        old.params.push(crate::app::ParamDef::new("Show Camera Pivot", "toggle", "true"));
+        let mut root = templates_root.clone();
+        root.children = vec![old];
+        crate::app::merge_template_defs(&mut root, &templates);
+        let names: Vec<&str> = root.children[0].params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Position", "Rotation", "Pivot"]);
+    }
+
+    /// Visualize's Blend has no Mix: it was Set under another name, Opacity
+    /// fading every blend alike. A save that chose it loads as Set, a
+    /// valid choice, rather than as a text the row no longer offers.
+    #[test]
+    fn visualize_mix_blend_loads_as_set() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let t = templates_root.children.iter().find(|t| t.node_type == "visualize").unwrap();
+        let blend = t.params.iter().find(|p| p.name == "Blend").unwrap();
+        assert_eq!(blend.choice_options(), vec!["Set", "Multiply", "Add"]);
+        let mut old = t.clone();
+        let p = old.params.iter_mut().find(|p| p.name == "Blend").unwrap();
+        p.set_type("choice:Set,Mix,Multiply,Add");
+        p.set_text("Mix".to_string());
+        assert!(p.invalid().is_none(), "the old row took Mix");
+        let mut root = templates_root.clone();
+        root.children = vec![old];
+        crate::app::merge_template_defs(&mut root, &templates);
+        let p = root.children[0].params.iter().find(|p| p.name == "Blend").unwrap();
+        assert_eq!(p.text(), "Set");
+        assert!(p.invalid().is_none(), "{:?}", p.invalid());
     }
 
     #[test]
@@ -6508,7 +6553,6 @@ mod tests {
                 "page",
                 &[
                     ("Preset", "Letter"),
-                    ("Orientation", "Portrait"),
                     ("Resolution", "72"),
                     ("Color", "1.00:1.00:1.00"),
                 ],
@@ -6754,8 +6798,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut a = State::new(false);
-        // The Default Camera is active: a camera NODE's own Square Aspect and
-        // pivot params would override the saved view's, by design.
+        // The Default Camera is active: a camera NODE's own Pivot would
+        // override the saved view's, by design.
         a.active_camera = "Default Camera".to_string();
         a.square_viewport = true;
         a.viewport_mut().show_camera_pivot = true;
@@ -9058,6 +9102,88 @@ mod tests {
         assert!(!rename_node_in_tree(&mut root, "zzz", "x"), "and so is one of a node that is not there");
     }
 
+    /// Every parameter a template ships says what it does, and the row
+    /// menu shows it: under the name, wrapped so the menu stays narrow,
+    /// ahead of the readouts. The description is the TEMPLATE's: an
+    /// instance loaded from a save carries none and is handed it by the
+    /// merge, a child of a subnet template takes its base template's, and
+    /// a save never writes one.
+    #[test]
+    fn the_row_menu_says_what_a_parameter_does() {
+        use crate::app::{wrap_words, McpAction, PARAM_DESCRIPTION_WIDTH};
+        // Every shipped template's own parameters, read off the RAW files
+        // so a description the loader dropped would not pass for one.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("nodes");
+        let mut missing = Vec::new();
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            for p in v["params"].as_array().into_iter().flatten() {
+                let d = p["description"].as_str().unwrap_or("").trim();
+                if d.is_empty() {
+                    missing.push(format!("{}: {}", path.file_name().unwrap().to_string_lossy(), p["name"]));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "parameters with no description: {missing:#?}");
+
+        // A wrap keeps every word, in order, and no line is wider than
+        // the width unless one word is.
+        let text = "Radius of the sphere in world units; larger values make a bigger ball.";
+        let lines = wrap_words(text, 20);
+        assert_eq!(lines.join(" "), text);
+        assert!(lines.iter().all(|l| l.chars().count() <= 20), "{lines:?}");
+        assert_eq!(wrap_words("antidisestablishmentarianism is long", 10), vec!["antidisestablishmentarianism", "is long"]);
+        assert!(wrap_words("", 10).is_empty());
+
+        let mut state = State::new(false);
+        state.param_editor = crate::slots::CONTENT_IDX;
+        let mut redraw = false;
+        let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        // sphere1 comes from the bundled project, whose file has no
+        // descriptions: the merge hands it the template's.
+        let sphere = slot_of(&state, "sphere1");
+        let templates = state.node_templates.clone();
+        let template = |name: &str, pname: &str| -> String {
+            templates.iter().find(|t| t.node.name == name).unwrap().node.params.iter()
+                .find(|p| p.name == pname).unwrap().description.clone()
+        };
+        let radius = template("Sphere", "Radius");
+        let want = wrap_words(&radius, PARAM_DESCRIPTION_WIDTH);
+        assert!(want.len() > 1, "a sentence spans rows: {want:?}");
+        let (rows, _, headers) = state.param_menu_rows(sphere, "Radius");
+        assert_eq!(rows[0], "Name: Radius");
+        assert_eq!(&rows[1..1 + want.len()], &want[..], "the description sits under the name");
+        assert_eq!(rows[1 + want.len()], "Control: slider");
+        assert!(1 + want.len() < headers, "the description rows are headers, and run nothing");
+
+        // A child inside a subnet template takes its base template's.
+        state.apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: Some("embryo1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
+        let embryo = slot_of(&state, "embryo1");
+        let (rows, _, _) = state.param_menu_rows(embryo, "Radius");
+        let own = wrap_words(&template("Embryo", "Radius"), PARAM_DESCRIPTION_WIDTH);
+        assert_ne!(own, want, "the Embryo's Radius is described as the Embryo's");
+        assert_eq!(&rows[1..1 + own.len()], &own[..]);
+        state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
+        let inner = slot_of(&state, "sphere1");
+        let (rows, _, _) = state.param_menu_rows(inner, "Radius");
+        assert_eq!(&rows[1..1 + want.len()], &want[..], "the Embryo's sphere1 says what a Sphere's Radius does");
+        state.apply_action(McpAction::Up, &mut redraw).unwrap();
+
+        // A parameter no template names says nothing, and the menu goes
+        // straight from the name to the readouts.
+        state.apply_action(McpAction::AddParam { slot: sphere, name: "Extra".into(), param_type: "float".into(), default: "3".into() }, &mut redraw).unwrap();
+        let (rows, _, _) = state.param_menu_rows(sphere, "Extra");
+        assert_eq!(rows[1], "Control: text box");
+
+        // A save never carries one, so the file is what it was.
+        let saved = serde_json::to_string(&state.current_dir().children[sphere]).unwrap();
+        assert!(!saved.contains("description"), "{saved}");
+    }
+
     /// The parameter row menu, end to end: a right press on a row in the
     /// params pane opens it (and nothing else claims the press), Copy
     /// Parameter then Paste Relative Reference on another node's row writes
@@ -9098,6 +9224,19 @@ mod tests {
             let (x, y, w, h) = rects[i];
             (x + w * 0.5, y + h * 0.5)
         };
+        // A parameter's description, as the menu wraps it, and the menu's
+        // rows with it taken out: the readouts the rest of this test is
+        // about. `the_row_menu_says_what_a_parameter_does` covers the
+        // description itself.
+        let described = |state: &State, slot: usize, pname: &str| -> Vec<String> {
+            let p = state.current_dir().children[slot].params.iter().find(|p| p.name == pname).expect(pname);
+            crate::app::wrap_words(&p.description, crate::app::PARAM_DESCRIPTION_WIDTH)
+        };
+        let fields = |state: &State, slot: usize, pname: &str| -> (Vec<String>, usize) {
+            let (rows, _, h) = state.param_menu_rows(slot, pname);
+            let d = described(state, slot, pname);
+            (rows.into_iter().filter(|r| !d.contains(r)).collect(), h - d.len())
+        };
         show(&mut state, sphere);
         let (x, y) = row_center(&state, "Radius");
         assert_eq!(state.param_row_at(x, y), Some((sphere, "Radius".to_string())));
@@ -9107,9 +9246,10 @@ mod tests {
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
         assert!(state.param_menu_open(), "a right press on a row opens its menu");
         assert!(!state.viewport_menu_open());
+        let radius_desc = described(&state, sphere, "Radius");
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info; 9].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
+            vec![ParamMenuAction::Info; 9 + radius_desc.len()].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
             "nothing copied yet, and the row holds a value"
         );
         // The header rows read the parameter out: its name, the control
@@ -9119,7 +9259,8 @@ mod tests {
         // default 0..2 since the template declares no range; it has no
         // label and no condition, so neither row appears. There is no
         // Value row: the Type row is the value's type.
-        let shown = cce_ui::widget::context_menu::options();
+        let shown: Vec<String> =
+            cce_ui::widget::context_menu::options().into_iter().filter(|r| !radius_desc.contains(r)).collect();
         assert_eq!(
             &shown[..10],
             &[
@@ -9129,12 +9270,12 @@ mod tests {
             ]
         );
         assert!(shown.iter().all(|r| !r.starts_with("Value:")), "{shown:?}");
-        let (_, _, headers) = state.param_menu_rows(sphere, "Radius");
+        let (_, headers) = fields(&state, sphere, "Radius");
         assert_eq!(headers, 9);
         // The headers are the rows before the separator; each one is
         // looked up by its readout, not its position.
         let headers_of = |state: &State, pname: &str| -> Vec<String> {
-            let (rows, _, h) = state.param_menu_rows(sphere, pname);
+            let (rows, h) = fields(state, sphere, pname);
             assert_eq!(rows[h], "-");
             rows[..h].to_vec()
         };
@@ -9166,7 +9307,7 @@ mod tests {
         let embryo = slot_of(&state, "embryo1");
         state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
         let inner = slot_of(&state, "sphere1");
-        let (rows, _, h) = state.param_menu_rows(inner, "Radius");
+        let (rows, h) = fields(&state, inner, "Radius");
         assert!(rows[..h].contains(&"Default: chf(\"../Radius\")".to_string()), "{rows:?}");
         state.apply_action(McpAction::Up, &mut redraw).unwrap();
         // A click on a header runs nothing.
@@ -9212,11 +9353,11 @@ mod tests {
         // text box, and still sets the float its slider would. Method is a
         // dropdown setting an enum, Rows a spinbox setting an integer.
         show(&mut state, ball);
-        let (rows, _, _) = state.param_menu_rows(ball, "Radius");
+        let (rows, _) = fields(&state, ball, "Radius");
         assert_eq!(&rows[1..4], &["Control: text box".to_string(), "Type: float".to_string(), "Expression: true".to_string()]);
-        let (rows, _, _) = state.param_menu_rows(ball, "Method");
+        let (rows, _) = fields(&state, ball, "Method");
         assert_eq!((&rows[1], &rows[2]), (&"Control: dropdown".to_string(), &"Type: enum".to_string()));
-        let (rows, _, _) = state.param_menu_rows(ball, "Rows");
+        let (rows, _) = fields(&state, ball, "Rows");
         assert_eq!((&rows[1], &rows[2]), (&"Control: spinbox".to_string(), &"Type: integer".to_string()));
 
         // The pull node: a text parameter the pane presents as sliders
@@ -9229,14 +9370,14 @@ mod tests {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         show(&mut state, pull);
-        let (rows, _, h) = state.param_menu_rows(pull, "Value");
+        let (rows, h) = fields(&state, pull, "Value");
         let want: Vec<String> = ["Name: Value", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
         assert_eq!(&rows[..4], &want[..], "{rows:?}");
         assert!(rows[..h].contains(&"Range: -1000..1000".to_string()), "{rows:?}");
         assert!(rows[..h].iter().all(|r| !r.starts_with("Value:")), "{rows:?}");
         state.apply_action(McpAction::SetParam { slot: pull, name: "Value".into(), value: "0.06".into() }, &mut redraw).unwrap();
         show(&mut state, pull);
-        let (rows, _, _) = state.param_menu_rows(pull, "Value");
+        let (rows, _) = fields(&state, pull, "Value");
         assert_eq!((&rows[1], &rows[2]), (&"Control: text box".to_string(), &"Type: string".to_string()), "a broadcast number stays a text box");
 
         // And a reference typed straight into a row (or scripted) becomes one.
@@ -12561,7 +12702,7 @@ mod tests {
         };
         let chain = |bypassed: &[&str]| {
             let mut nodes = vec![
-                node("p", "page1", "page", &[("Preset", "Letter"), ("Orientation", "Portrait"), ("Resolution", "72"), ("Color", "1.00:1.00:1.00")]),
+                node("p", "page1", "page", &[("Preset", "Letter"), ("Resolution", "72"), ("Color", "1.00:1.00:1.00")]),
                 node("g", "grid1", "page_grid", &[("Input", "page1"), ("Cell Size", "0.5"), ("Line Width", "0.02"), ("Line Color", "0.00:0.00:0.00"), ("Fill Cells", "false")]),
                 node("b", "border1", "page_border", &[("Input", "grid1"), ("Width", "0.1"), ("Inset", "0.25"), ("Color", "1.00:0.00:0.00")]),
                 node("e", "export1", "export", &[("Input", "border1")]),
@@ -13651,9 +13792,6 @@ mod tests {
                         }
                     }
                 }
-                // The active camera's params exist only once a camera node
-                // does; the Default Camera branch is exercised below.
-                Owner::ActiveCamera(_) => {}
             }
         }
     }
@@ -14103,9 +14241,6 @@ mod tests {
         state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
         assert!((state.group_marker_size - state.point_marker_size).abs() < 1e-6);
         assert_eq!(state.settings_row_value("Point Marker Size"), state.settings_row_value("Group Marker Size"));
-        state.land_dialog_slider(&setting_row_id("Camera Pivot Size"), 20.0);
-        assert!((state.camera_pivot_size - 2.0).abs() < 1e-6, "{}", state.camera_pivot_size);
-        assert!(state.pending_pivot.is_some(), "the pivot re-baked");
         assert_eq!(state.rt_geometry_version, version, "a spin row re-evaluated the graph");
         assert!((saved(&path) - 1.0).abs() < 1e-3, "the file follows every single landing");
         let kdl = fs::read_to_string(&path).expect("a settings file");
@@ -14462,12 +14597,17 @@ mod tests {
             "Wireframe Color", "Wire Opacity", "Wire Thickness", "Geometry Opacity",
             // main
             "Background Color",
-            // camera
-            "Camera Pivot Size",
         ] {
             assert!(labels.contains(&label), "'{label}' has no Settings row and no other way in");
         }
+        // The camera subnet's Camera Pivot Size is the viewport menu's
+        // slider, under Show Camera Pivot; its palette row is gone.
+        assert!(!labels.contains(&"Camera Pivot Size"), "the palette's pivot size row is retired");
         let mut state = State::new(false);
+        assert!(
+            state.viewport_menu_rows_of(None).1.contains(&crate::app::ViewportMenuAction::CameraPivotSizeSlider),
+            "Camera Pivot Size has no way in"
+        );
         for id in [
             "toggle_grid", "toggle_origin", "toggle_wireframe",
             "toggle_wire_single_color", "toggle_ray_traced_preview",
@@ -16724,8 +16864,8 @@ mod tests {
     }
 
     /// The generator's size is in the unit its Units row names: pixels are
-    /// pixels exactly, a metric sheet is its millimetres, and a named raster
-    /// size is that many pixels whatever the row says.
+    /// pixels exactly, and a metric sheet is its millimetres. (What a
+    /// preset writes is `picking_a_page_preset_writes_its_size`.)
     #[test]
     fn an_image_is_sized_in_pixels_or_in_real_units() {
         use crate::page::{resolve_page, PageUnit};
@@ -16734,29 +16874,126 @@ mod tests {
             resolve_page(&root, &root.children[0], &mut Vec::new()).expect("no page")
         };
 
-        let px = make(&[("Preset", "Custom"), ("Units", "Pixels"), ("Width", "640"), ("Height", "360"), ("Resolution", "96")]);
+        let px = make(&[("Units", "Pixels"), ("Width", "640"), ("Height", "360"), ("Resolution", "96")]);
         assert_eq!((px.width, px.height), (640, 360), "a pixel size is that many pixels");
         assert_eq!(px.unit, PageUnit::Pixels);
         assert!((px.size[0] - 640.0 / 96.0).abs() < 1e-4, "its physical size is its pixels over its resolution");
 
-        let mm = make(&[("Preset", "Custom"), ("Units", "Millimetres"), ("Width", "210"), ("Height", "297"), ("Resolution", "100")]);
+        let mm = make(&[("Units", "Millimetres"), ("Width", "210"), ("Height", "297"), ("Resolution", "100")]);
         assert!((mm.size[0] - 210.0 / 25.4).abs() < 1e-4 && (mm.size[1] - 297.0 / 25.4).abs() < 1e-4);
         assert_eq!((mm.width, mm.height), (827, 1169), "A4 in millimetres at 100 DPI");
 
-        let cm = make(&[("Preset", "Custom"), ("Units", "Centimetres"), ("Width", "2.54"), ("Height", "5.08"), ("Resolution", "50")]);
+        let cm = make(&[("Units", "Centimetres"), ("Width", "2.54"), ("Height", "5.08"), ("Resolution", "50")]);
         assert_eq!((cm.width, cm.height), (50, 100));
 
-        let hd = make(&[("Preset", "HD"), ("Units", "Inches"), ("Orientation", "Landscape"), ("Resolution", "72")]);
-        assert_eq!((hd.width, hd.height), (1920, 1080), "a raster preset is its pixels, and is not turned");
-
         // A page from before the Units row is in inches, as it was.
-        let old = make(&[("Preset", "Custom"), ("Width", "2"), ("Height", "1"), ("Resolution", "50")]);
+        let old = make(&[("Width", "2"), ("Height", "1"), ("Resolution", "50")]);
         assert_eq!((old.width, old.height, old.unit), (100, 50, PageUnit::Inches));
 
         // Opacity is the sheet's alpha, and Position where it stands.
-        let clear = make(&[("Preset", "Custom"), ("Width", "1"), ("Height", "1"), ("Resolution", "10"), ("Opacity", "0.25"), ("Position", "1.00:2.00:3.00")]);
+        let clear = make(&[("Width", "1"), ("Height", "1"), ("Resolution", "10"), ("Opacity", "0.25"), ("Position", "1.00:2.00:3.00")]);
         assert!((clear.pixels[0][3] - 0.25).abs() < 1e-6);
         assert_eq!(clear.origin, [1.0, 2.0, 3.0]);
+    }
+
+    /// A page's size is its Width and Height, always: Preset has no Custom
+    /// and there is no Orientation row. Picking a preset WRITES its size
+    /// there, in the page's Units (a sheet portrait, a raster size as it
+    /// lies), Units converts them, and a save from before carries over once,
+    /// a landscape sheet as it was drawn.
+    #[test]
+    fn picking_a_page_preset_writes_its_size() {
+        use crate::page::{follow_page_rows, migrate_preset_rows, resolve_page};
+        let size = |node: &FsNode| {
+            let row = |n: &str| node.params.iter().find(|p| p.name == n).unwrap().text().to_string();
+            (row("Width"), row("Height"))
+        };
+        let pick = |node: &mut FsNode, row: &str, value: &str| -> Vec<String> {
+            let p = node.params.iter_mut().find(|p| p.name == row).unwrap();
+            let was = p.clone();
+            p.set_text(value);
+            follow_page_rows(node, &was).into_iter().map(|p| p.name).collect()
+        };
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let template = templates_root.children.iter().find(|t| t.node_type == "page").unwrap().clone();
+        let preset = template.params.iter().find(|p| p.name == "Preset").unwrap();
+        assert!(!preset.choice_options().iter().any(|o| o == "Custom"), "{:?}", preset.choice_options());
+        assert!(template.params.iter().all(|p| p.name != "Orientation"));
+        for row in ["Width", "Height"] {
+            assert!(template.params.iter().find(|p| p.name == row).unwrap().show_when.is_empty(), "{row} is always shown");
+        }
+
+        let mut page = template.clone();
+        assert_eq!(pick(&mut page, "Preset", "A4"), ["Width", "Height"], "what a pick overwrites is handed back, for undo");
+        assert_eq!(size(&page), ("8.268".into(), "11.693".into()));
+        pick(&mut page, "Preset", "Tabloid");
+        assert_eq!(size(&page), ("11.00".into(), "17.00".into()), "a sheet is written portrait");
+        // Units converts: the sheet keeps its size.
+        pick(&mut page, "Units", "Millimetres");
+        assert_eq!(size(&page), ("279.40".into(), "431.80".into()));
+        // A raster size is written as it lies, in the page's unit.
+        pick(&mut page, "Units", "Pixels");
+        pick(&mut page, "Preset", "HD");
+        assert_eq!(size(&page), ("1920".into(), "1080".into()));
+        let root = image_root(vec![page.clone()]);
+        let img = resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap();
+        assert_eq!((img.width, img.height), (1920, 1080));
+        // Another row changes nothing.
+        assert!(pick(&mut page, "Resolution", "72").is_empty());
+        // A size typed in is the size, whatever Preset still names.
+        pick(&mut page, "Width", "640");
+        let root = image_root(vec![page.clone()]);
+        assert_eq!(resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap().width, 640);
+
+        // A save from before: its rows carry the old conditions and an
+        // Orientation row. A named preset is written into Width and Height,
+        // turned as it was drawn; a Custom one keeps its size and names
+        // Letter; the Orientation row goes.
+        let old = |preset: &str, w: &str, h: &str, orientation: &str| {
+            let mut n = template.clone();
+            n.params.push(crate::app::ParamDef::new("Orientation", "choice:Portrait,Landscape", orientation));
+            for (row, v) in [("Preset", preset), ("Width", w), ("Height", h)] {
+                let p = n.params.iter_mut().find(|p| p.name == row).unwrap();
+                p.set_type("text");
+                p.set_text(v);
+            }
+            for row in ["Width", "Height"] {
+                n.params.iter_mut().find(|p| p.name == row).unwrap().show_when = "Preset == Custom".into();
+            }
+            n
+        };
+        let mut tabloid = old("Tabloid", "8.5", "11.0", "Landscape");
+        migrate_preset_rows(&mut tabloid);
+        assert_eq!(size(&tabloid), ("17.00".into(), "11.00".into()));
+        assert!(tabloid.params.iter().all(|p| p.name != "Orientation"));
+        let mut custom = old("Custom", "3", "2", "Portrait");
+        migrate_preset_rows(&mut custom);
+        assert_eq!(size(&custom), ("3".into(), "2".into()));
+        assert_eq!(custom.params.iter().find(|p| p.name == "Preset").unwrap().text(), "Letter");
+        // Once: the merge takes the old conditions away, so a page loaded
+        // a second time is left as it is.
+        let mut loaded = image_root(vec![old("Custom", "3", "2", "Portrait")]);
+        crate::app::merge_template_defs(&mut loaded, &templates);
+        assert_eq!(size(&loaded.children[0]), size(&custom));
+        crate::app::merge_template_defs(&mut loaded, &templates);
+        assert_eq!(size(&loaded.children[0]), size(&custom), "a second load wrote Letter over a typed size");
+        let mut merged = image_root(vec![old("A4", "8.5", "11.0", "Portrait")]);
+        crate::app::merge_template_defs(&mut merged, &templates);
+        assert_eq!(size(&merged.children[0]), ("8.268".into(), "11.693".into()));
+        assert!(merged.children[0].params.iter().all(|p| p.invalid().is_none() && p.name != "Orientation"));
+
+        // Through MCP, and undone as one step.
+        let mut state = State::new(false);
+        let mut redraw = false;
+        let slot = state.new_image().expect("the Page template is missing");
+        let before = size(&state.current_dir().children[slot]);
+        state
+            .apply_action(crate::app::McpAction::SetParam { slot, name: "Preset".into(), value: "Tabloid".into() }, &mut redraw)
+            .unwrap();
+        assert_eq!(size(&state.current_dir().children[slot]), ("11.00".into(), "17.00".into()));
+        state.run_command("undo");
+        assert_eq!(size(&state.current_dir().children[slot]), before, "the pick and what it wrote are one step");
     }
 
     /// A node drawing on an image is written in the image's unit: the same
@@ -16767,7 +17004,7 @@ mod tests {
         use crate::page::resolve_page;
         let chain = |units: &str, w: &str, h: &str, dpi: &str| {
             let root = image_root(vec![
-                image_node("page1", "page", &[("Preset", "Custom"), ("Units", units), ("Width", w), ("Height", h), ("Resolution", dpi), ("Color", "1.00:1.00:1.00")]),
+                image_node("page1", "page", &[("Units", units), ("Width", w), ("Height", h), ("Resolution", dpi), ("Color", "1.00:1.00:1.00")]),
                 image_node(
                     "shape1",
                     "page_shape",
@@ -16906,7 +17143,6 @@ mod tests {
         let slot = state.new_image().expect("the Page template is missing");
         let node = &mut state.current_dir_mut().children[slot];
         for (name, value) in [
-            ("Preset", "Custom".to_string()),
             ("Units", "Pixels".to_string()),
             ("Width", w.to_string()),
             ("Height", h.to_string()),
@@ -17107,7 +17343,7 @@ mod tests {
         let page_slot = state.current_dir().children.iter().position(|c| c.name == "page1").unwrap();
         {
             let node = &mut state.current_dir_mut().children[page_slot];
-            for (row, v) in [("Preset", "Custom"), ("Units", "Pixels"), ("Width", "300"), ("Height", "200"), ("Resolution", "96")] {
+            for (row, v) in [("Units", "Pixels"), ("Width", "300"), ("Height", "200"), ("Resolution", "96")] {
                 node.params.iter_mut().find(|p| p.name == row).unwrap().set_text(v);
             }
         }
@@ -17144,7 +17380,7 @@ mod tests {
     fn a_page_frame_is_the_page_without_its_pixels() {
         use crate::page::{resolve_frame, resolve_page};
         let root = image_root(vec![
-            image_node("page1", "page", &[("Preset", "Custom"), ("Units", "Millimetres"), ("Width", "120"), ("Height", "80"), ("Resolution", "127"), ("Position", "1.00:2.00:3.00")]),
+            image_node("page1", "page", &[("Units", "Millimetres"), ("Width", "120"), ("Height", "80"), ("Resolution", "127"), ("Position", "1.00:2.00:3.00")]),
             image_node("shape1", "page_shape", &[("Input", "page1")]),
             image_node("text1", "page_text", &[("Input", "shape1")]),
             image_node("lost1", "page_text", &[("Input", "nothing")]),

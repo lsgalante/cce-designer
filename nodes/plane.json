@@ -7,12 +7,14 @@
     {
       "name": "Width",
       "default": "1.0",
-      "type": "slider:0:4"
+      "type": "slider:0:4",
+      "description": "Size of the sheet along X in world units."
     },
     {
       "name": "Length",
       "default": "1.0",
-      "type": "slider:0:4"
+      "type": "slider:0:4",
+      "description": "Size of the sheet along Z in world units."
     },
     {
       "name": "Columns",
@@ -20,7 +22,8 @@
       "type": "spinbox",
       "min": 1,
       "max": 128,
-      "step": 1
+      "step": 1,
+      "description": "Number of quad divisions across the width (X). More columns give a finer sheet."
     },
     {
       "name": "Rows",
@@ -28,27 +31,32 @@
       "type": "spinbox",
       "min": 1,
       "max": 128,
-      "step": 1
+      "step": 1,
+      "description": "Number of quad divisions along the length (Z). More rows give a finer sheet."
     },
     {
       "name": "Center X",
       "default": "0.0",
-      "type": "slider:-2:2"
+      "type": "slider:-2:2",
+      "description": "X position of the sheet's center in world units."
     },
     {
       "name": "Center Y",
       "default": "0.0",
-      "type": "slider:-2:2"
+      "type": "slider:-2:2",
+      "description": "Height of the flat sheet in world units; the plane lies level in XZ at this Y."
     },
     {
       "name": "Center Z",
       "default": "0.0",
-      "type": "slider:-2:2"
+      "type": "slider:-2:2",
+      "description": "Z position of the sheet's center in world units."
     },
     {
       "name": "Color",
       "default": "true",
-      "type": "toggle"
+      "type": "toggle",
+      "description": "When on, colors the points with a gradient across the sheet; when off, the plane uses the plain default color."
     }
   ]
 }

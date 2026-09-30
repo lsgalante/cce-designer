@@ -7,12 +7,14 @@
   {
    "name": "Input",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The node whose points are moved onto the Surface."
   },
   {
    "name": "Surface",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The node whose surface each point is moved to, at the nearest place on it. Unconnected, the input passes through unchanged."
   }
  ]
 }

@@ -4,11 +4,11 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "" },
-  { "name": "Group", "type": "group", "default": "" },
-  { "name": "Attribute", "type": "attribute", "default": "" },
-  { "name": "Comparison", "type": "choice:Below,Above", "default": "Below" },
-  { "name": "Threshold", "type": "float", "default": "0.50" },
-  { "name": "Invert", "type": "choice:false,true", "default": "false" }
+  { "name": "Input", "type": "node", "default": "", "description": "The node whose points are culled; faces using a removed point go with it." },
+  { "name": "Group", "type": "group", "default": "", "description": "Point group to cull from; points outside it are kept. Empty considers every point. With Attribute also empty, nothing is removed." },
+  { "name": "Attribute", "type": "attribute", "default": "", "description": "Name of a point attribute compared against Threshold to choose which points are removed. Empty removes the whole Group." },
+  { "name": "Comparison", "type": "choice:Below,Above", "default": "Below", "description": "Below removes points whose attribute value is less than Threshold; Above removes those whose value is greater." },
+  { "name": "Threshold", "type": "float", "default": "0.50", "description": "The value the Attribute is compared against to decide which points are removed." },
+  { "name": "Invert", "type": "choice:false,true", "default": "false", "description": "Reverse the selection: keep the points that would have been removed and remove all the others." }
  ]
 }

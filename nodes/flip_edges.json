@@ -7,7 +7,8 @@
   {
    "name": "Input",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The node whose mesh has its edges flipped to even out the triangles."
   },
   {
    "name": "Target Length",
@@ -15,7 +16,8 @@
    "default": "0.10",
    "min": 0.001,
    "max": 1.0,
-   "step": 0.005
+   "step": 0.005,
+   "description": "Edge length, in world units, of the remesh this pass belongs to: a flip is refused if its new edge is longer than 4/3 of it, which the next split would cut."
   }
  ]
 }

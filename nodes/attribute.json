@@ -7,35 +7,41 @@
     {
       "name": "Input",
       "type": "node",
-      "default": ""
+      "default": "",
+      "description": "The node whose geometry this reads; its point attributes are created, changed or deleted and the result passed on."
     },
     {
       "name": "Operation",
       "type": "choice:Create,Modify,Delete,Remap,Clip,Normalize,Composite,Promote",
-      "default": "Create"
+      "default": "Create",
+      "description": "What is done to the named point attribute: create it, modify it by Value, delete it, remap or clip its range, normalize it, combine it with Source B, or promote it between point and detail."
     },
     {
       "name": "Attribute Name",
       "type": "attribute",
-      "default": "attr1"
+      "default": "attr1",
+      "description": "The point attribute to work on. Pos and Col are the built-in position and colour; they can be modified but not created or deleted."
     },
     {
       "name": "Type",
       "type": "choice:Float,Float2,Float3,Float4",
       "default": "Float",
-      "show_when": "Operation == Create"
+      "show_when": "Operation == Create",
+      "description": "How many components the new attribute has: one number, or a vector of two, three or four."
     },
     {
       "name": "Value",
       "type": "text",
       "default": "1.00",
-      "show_when": "Operation == Create|Modify"
+      "show_when": "Operation == Create|Modify",
+      "description": "The number or numbers written, separated by spaces, commas or colons. One number fills every component; otherwise the count must match the attribute's width."
     },
     {
       "name": "Combine",
       "type": "choice:Set,Add,Multiply",
       "default": "Set",
-      "show_when": "Operation == Modify"
+      "show_when": "Operation == Modify",
+      "description": "How Value meets the current value: Set replaces it, Add adds to it, Multiply multiplies it, componentwise."
     },
     {
       "name": "Strength",
@@ -44,85 +50,99 @@
       "min": 0.0,
       "max": 2.0,
       "step": 0.05,
-      "show_when": "Operation == Modify"
+      "show_when": "Operation == Modify",
+      "description": "How much of the change lands: 1 is the full change, 0 none, 2 twice as much. Scales the difference the node makes under every Combine."
     },
     {
       "name": "Scale By",
       "type": "attribute",
       "default": "",
-      "show_when": "Operation == Modify"
+      "show_when": "Operation == Modify",
+      "description": "A point attribute whose value weights the change per point, multiplied with Strength. Empty weights every point equally; a name that is not an attribute is an error."
     },
     {
       "name": "Per Frame",
       "type": "toggle",
       "default": "true",
-      "show_when": "Operation == Modify && Combine != Set"
+      "show_when": "Operation == Modify && Combine != Set",
+      "description": "Inside a simulation, makes Add and Multiply a rate per frame, so the substep count does not change how far a frame moves. Off lands the full amount every substep."
     },
     {
       "name": "Group",
       "type": "group",
       "default": "",
-      "show_when": "Operation != Promote"
+      "show_when": "Operation != Promote",
+      "description": "A point group limiting which points are changed or measured. Empty means every point."
     },
     {
       "name": "From Min",
       "type": "float",
       "default": "0.00",
-      "show_when": "Operation == Remap|Clip"
+      "show_when": "Operation == Remap|Clip",
+      "description": "Remap: the input value that maps to To Min. Clip: the lower bound values are clamped to."
     },
     {
       "name": "From Max",
       "type": "float",
       "default": "1.00",
-      "show_when": "Operation == Remap|Clip"
+      "show_when": "Operation == Remap|Clip",
+      "description": "Remap: the input value that maps to To Max. Clip: the upper bound values are clamped to. Must differ from From Min for a remap."
     },
     {
       "name": "To Min",
       "type": "float",
       "default": "0.00",
-      "show_when": "Operation == Remap"
+      "show_when": "Operation == Remap",
+      "description": "The value that From Min maps to; values between map linearly, and values outside the From range extend past it."
     },
     {
       "name": "To Max",
       "type": "float",
       "default": "1.00",
-      "show_when": "Operation == Remap|Normalize"
+      "show_when": "Operation == Remap|Normalize",
+      "description": "Remap: the value that From Max maps to. Normalize: the value the chosen measure (sum, maximum or range) is scaled to hit."
     },
     {
       "name": "Source B",
       "type": "attribute",
       "default": "",
-      "show_when": "Operation == Composite"
+      "show_when": "Operation == Composite",
+      "description": "The second point attribute combined into this one, point by point. A single-number Source B applies to every component."
     },
     {
       "name": "Combine Op",
       "type": "choice:Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
       "default": "Add",
-      "show_when": "Operation == Composite"
+      "show_when": "Operation == Composite",
+      "description": "How Source B is folded in, componentwise. Dot, Distance and Length produce one number written into every component."
     },
     {
       "name": "To Class",
       "type": "choice:Detail,Point",
       "default": "Detail",
-      "show_when": "Operation == Promote"
+      "show_when": "Operation == Promote",
+      "description": "Where the attribute is moved: Detail reduces the per-point values to one number for the whole geometry; Point copies a detail value onto every point."
     },
     {
       "name": "Method",
       "type": "choice:Average,Sum,Minimum,Maximum,First",
       "default": "Average",
-      "show_when": "Operation == Promote"
+      "show_when": "Operation == Promote",
+      "description": "How point values are reduced to one detail value when promoting to Detail: their average, sum, minimum, maximum or the first point's."
     },
     {
       "name": "Target",
       "type": "choice:Sum,Maximum,Range",
       "default": "Maximum",
-      "show_when": "Operation == Normalize"
+      "show_when": "Operation == Normalize",
+      "description": "What is measured before scaling: the values' sum, their maximum, or their range (max minus min). Every value is scaled so this measure equals To Max."
     },
     {
       "name": "Kind",
       "type": "choice:Live,Derivative",
       "default": "Live",
-      "show_when": "Operation == Create"
+      "show_when": "Operation == Create",
+      "description": "Live keeps the attribute's values from one simulation step to the next; Derivative zeroes it at the start of every step, for values the chain rebuilds each step."
     }
   ]
 }

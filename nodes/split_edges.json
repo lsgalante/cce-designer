@@ -7,7 +7,8 @@
   {
    "name": "Input",
    "type": "node",
-   "default": ""
+   "default": "",
+   "description": "The node whose mesh is refined. Point values ride to the new midpoints by interpolation."
   },
   {
    "name": "Target Length",
@@ -15,7 +16,8 @@
    "default": "0.10",
    "min": 0.001,
    "max": 1.0,
-   "step": 0.005
+   "step": 0.005,
+   "description": "Edge length, in world units, the pass steers toward: every edge longer than 4/3 of it is split at its midpoint. Smaller means denser."
   }
  ]
 }
