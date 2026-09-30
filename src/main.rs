@@ -6553,7 +6553,6 @@ mod tests {
                 "page",
                 &[
                     ("Preset", "Letter"),
-                    ("Orientation", "Portrait"),
                     ("Resolution", "72"),
                     ("Color", "1.00:1.00:1.00"),
                 ],
@@ -12636,7 +12635,7 @@ mod tests {
         };
         let chain = |bypassed: &[&str]| {
             let mut nodes = vec![
-                node("p", "page1", "page", &[("Preset", "Letter"), ("Orientation", "Portrait"), ("Resolution", "72"), ("Color", "1.00:1.00:1.00")]),
+                node("p", "page1", "page", &[("Preset", "Letter"), ("Resolution", "72"), ("Color", "1.00:1.00:1.00")]),
                 node("g", "grid1", "page_grid", &[("Input", "page1"), ("Cell Size", "0.5"), ("Line Width", "0.02"), ("Line Color", "0.00:0.00:0.00"), ("Fill Cells", "false")]),
                 node("b", "border1", "page_border", &[("Input", "grid1"), ("Width", "0.1"), ("Inset", "0.25"), ("Color", "1.00:0.00:0.00")]),
                 node("e", "export1", "export", &[("Input", "border1")]),
@@ -16782,17 +16781,17 @@ mod tests {
         assert_eq!(clear.origin, [1.0, 2.0, 3.0]);
     }
 
-    /// A page's size is its Width and Height, always: Preset has no Custom,
-    /// and picking a preset WRITES its size there, in the page's Units — a
-    /// sheet turned by Orientation, a raster size as it lies, with
-    /// Orientation set to say which way. Orientation swaps the two, Units
-    /// converts them, and a save from before carries over once.
+    /// A page's size is its Width and Height, always: Preset has no Custom
+    /// and there is no Orientation row. Picking a preset WRITES its size
+    /// there, in the page's Units (a sheet portrait, a raster size as it
+    /// lies), Units converts them, and a save from before carries over once,
+    /// a landscape sheet as it was drawn.
     #[test]
     fn picking_a_page_preset_writes_its_size() {
         use crate::page::{follow_page_rows, migrate_preset_rows, resolve_page};
         let size = |node: &FsNode| {
             let row = |n: &str| node.params.iter().find(|p| p.name == n).unwrap().text().to_string();
-            (row("Width"), row("Height"), row("Orientation"))
+            (row("Width"), row("Height"))
         };
         let pick = |node: &mut FsNode, row: &str, value: &str| -> Vec<String> {
             let p = node.params.iter_mut().find(|p| p.name == row).unwrap();
@@ -16801,47 +16800,45 @@ mod tests {
             follow_page_rows(node, &was).into_iter().map(|p| p.name).collect()
         };
         let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
         let template = templates_root.children.iter().find(|t| t.node_type == "page").unwrap().clone();
         let preset = template.params.iter().find(|p| p.name == "Preset").unwrap();
         assert!(!preset.choice_options().iter().any(|o| o == "Custom"), "{:?}", preset.choice_options());
-        for row in ["Width", "Height", "Orientation"] {
+        assert!(template.params.iter().all(|p| p.name != "Orientation"));
+        for row in ["Width", "Height"] {
             assert!(template.params.iter().find(|p| p.name == row).unwrap().show_when.is_empty(), "{row} is always shown");
         }
 
         let mut page = template.clone();
         assert_eq!(pick(&mut page, "Preset", "A4"), ["Width", "Height"], "what a pick overwrites is handed back, for undo");
-        assert_eq!(size(&page), ("8.268".into(), "11.693".into(), "Portrait".into()));
-        assert_eq!(pick(&mut page, "Orientation", "Landscape"), ["Width", "Height"]);
-        assert_eq!(size(&page), ("11.693".into(), "8.268".into(), "Landscape".into()));
-        // A sheet is picked in the orientation the row names.
-        pick(&mut page, "Preset", "Letter");
-        assert_eq!(size(&page), ("11.00".into(), "8.50".into(), "Landscape".into()));
+        assert_eq!(size(&page), ("8.268".into(), "11.693".into()));
+        pick(&mut page, "Preset", "Tabloid");
+        assert_eq!(size(&page), ("11.00".into(), "17.00".into()), "a sheet is written portrait");
         // Units converts: the sheet keeps its size.
         pick(&mut page, "Units", "Millimetres");
-        assert_eq!(size(&page), ("279.40".into(), "215.90".into(), "Landscape".into()));
-        // A raster size is written as it lies, in the page's unit, and
-        // Orientation follows it.
-        pick(&mut page, "Orientation", "Portrait");
+        assert_eq!(size(&page), ("279.40".into(), "431.80".into()));
+        // A raster size is written as it lies, in the page's unit.
         pick(&mut page, "Units", "Pixels");
         pick(&mut page, "Preset", "HD");
-        assert_eq!(size(&page), ("1920".into(), "1080".into(), "Landscape".into()));
+        assert_eq!(size(&page), ("1920".into(), "1080".into()));
         let root = image_root(vec![page.clone()]);
         let img = resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap();
         assert_eq!((img.width, img.height), (1920, 1080));
-        // Another row changes nothing; nor does turning a page already turned.
+        // Another row changes nothing.
         assert!(pick(&mut page, "Resolution", "72").is_empty());
-        assert!(pick(&mut page, "Orientation", "Landscape").is_empty());
         // A size typed in is the size, whatever Preset still names.
         pick(&mut page, "Width", "640");
         let root = image_root(vec![page.clone()]);
         assert_eq!(resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap().width, 640);
 
-        // A save from before: its rows carry the old conditions. A named
-        // preset is written into Width and Height, turned as it was drawn;
-        // a Custom one keeps its size and names Letter.
+        // A save from before: its rows carry the old conditions and an
+        // Orientation row. A named preset is written into Width and Height,
+        // turned as it was drawn; a Custom one keeps its size and names
+        // Letter; the Orientation row goes.
         let old = |preset: &str, w: &str, h: &str, orientation: &str| {
             let mut n = template.clone();
-            for (row, v) in [("Preset", preset), ("Width", w), ("Height", h), ("Orientation", orientation)] {
+            n.params.push(crate::app::ParamDef::new("Orientation", "choice:Portrait,Landscape", orientation));
+            for (row, v) in [("Preset", preset), ("Width", w), ("Height", h)] {
                 let p = n.params.iter_mut().find(|p| p.name == row).unwrap();
                 p.set_type("text");
                 p.set_text(v);
@@ -16853,14 +16850,14 @@ mod tests {
         };
         let mut tabloid = old("Tabloid", "8.5", "11.0", "Landscape");
         migrate_preset_rows(&mut tabloid);
-        assert_eq!(size(&tabloid), ("17.00".into(), "11.00".into(), "Landscape".into()));
+        assert_eq!(size(&tabloid), ("17.00".into(), "11.00".into()));
+        assert!(tabloid.params.iter().all(|p| p.name != "Orientation"));
         let mut custom = old("Custom", "3", "2", "Portrait");
         migrate_preset_rows(&mut custom);
-        assert_eq!(size(&custom), ("3".into(), "2".into(), "Portrait".into()));
+        assert_eq!(size(&custom), ("3".into(), "2".into()));
         assert_eq!(custom.params.iter().find(|p| p.name == "Preset").unwrap().text(), "Letter");
         // Once: the merge takes the old conditions away, so a page loaded
         // a second time is left as it is.
-        let templates = crate::app::flatten_node_templates(&templates_root);
         let mut loaded = image_root(vec![old("Custom", "3", "2", "Portrait")]);
         crate::app::merge_template_defs(&mut loaded, &templates);
         assert_eq!(size(&loaded.children[0]), size(&custom));
@@ -16868,8 +16865,8 @@ mod tests {
         assert_eq!(size(&loaded.children[0]), size(&custom), "a second load wrote Letter over a typed size");
         let mut merged = image_root(vec![old("A4", "8.5", "11.0", "Portrait")]);
         crate::app::merge_template_defs(&mut merged, &templates);
-        assert_eq!(size(&merged.children[0]), ("8.268".into(), "11.693".into(), "Portrait".into()));
-        assert!(merged.children[0].params.iter().all(|p| p.invalid().is_none()));
+        assert_eq!(size(&merged.children[0]), ("8.268".into(), "11.693".into()));
+        assert!(merged.children[0].params.iter().all(|p| p.invalid().is_none() && p.name != "Orientation"));
 
         // Through MCP, and undone as one step.
         let mut state = State::new(false);
@@ -16879,7 +16876,7 @@ mod tests {
         state
             .apply_action(crate::app::McpAction::SetParam { slot, name: "Preset".into(), value: "Tabloid".into() }, &mut redraw)
             .unwrap();
-        assert_eq!(size(&state.current_dir().children[slot]), ("11.00".into(), "17.00".into(), "Portrait".into()));
+        assert_eq!(size(&state.current_dir().children[slot]), ("11.00".into(), "17.00".into()));
         state.run_command("undo");
         assert_eq!(size(&state.current_dir().children[slot]), before, "the pick and what it wrote are one step");
     }

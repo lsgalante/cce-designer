@@ -788,8 +788,8 @@ fn toggle_of(node: &FsNode, name: &str) -> bool {
 }
 
 /// The frame a `page` node describes: Width by Height in its Units. The
-/// Preset, Orientation and Units rows do not enter into it — they set
-/// Width and Height when they are picked ([`follow_page_rows`]).
+/// Preset and Units rows do not enter into it — they set Width and Height
+/// when they are picked ([`follow_page_rows`]).
 fn page_node_frame(target: &FsNode) -> PageFrame {
     let unit = PageUnit::parse(&node_param_str(target, "Units", "Inches"));
     let dpi = page_dpi(target);
@@ -807,8 +807,9 @@ fn page_dpi(node: &FsNode) -> f32 {
     node_param_f32(node, "Resolution", 300.0).round().clamp(1.0, 2400.0)
 }
 
-/// A preset's size in inches: a sheet turned by `landscape`, a raster
-/// size as it lies, at `dpi`.
+/// A preset's size in inches: a sheet portrait, or turned by `landscape`
+/// (which only a save from before carries), a raster size as it lies, at
+/// `dpi`.
 fn preset_inches(name: &str, dpi: f32, landscape: bool) -> Option<[f32; 2]> {
     if let Some([w, h]) = preset_size(name) {
         return Some(if landscape { [h, w] } else { [w, h] });
@@ -819,33 +820,31 @@ fn preset_inches(name: &str, dpi: f32, landscape: bool) -> Option<[f32; 2]> {
 /// What a `page` node's Width and Height become when one of the rows that
 /// SET them was just changed, `was` being that row as it stood before:
 ///
-/// - **Preset** writes the preset's size, in the node's Units. A sheet is
-///   turned by Orientation; a raster size (HD, 4K, Square) is written as
-///   it lies, and Orientation is set to say which way that is.
-/// - **Orientation** swaps Width and Height when they lie the other way.
+/// - **Preset** writes the preset's size, in the node's Units: a sheet
+///   portrait, a raster size (HD, 4K, Square) as it lies. A landscape
+///   sheet is its Width and Height typed the other way round; there is no
+///   Orientation row.
 /// - **Units** converts them from the old unit, so the sheet keeps its
 ///   size and only the numbers change.
 ///
 /// A Width or Height that is an expression is left to it. Returns the rows
-/// rewritten, as they were, for undo; empty when `was` is none of the
-/// three or nothing moved. There is no Custom preset: a size typed into
-/// Width and Height is the size, and Preset names what was last picked.
+/// rewritten, as they were, for undo; empty when `was` is neither or
+/// nothing moved. There is no Custom preset: a size typed into Width and
+/// Height is the size, and Preset names what was last picked.
 pub fn follow_page_rows(node: &mut FsNode, was: &crate::app::ParamDef) -> Vec<crate::app::ParamDef> {
+    follow(node, was, false)
+}
+
+fn follow(node: &mut FsNode, was: &crate::app::ParamDef, landscape: bool) -> Vec<crate::app::ParamDef> {
     let unit = PageUnit::parse(&node_param_str(node, "Units", "Inches"));
     let dpi = page_dpi(node);
     let (w, h) = (node_param_f32(node, "Width", 8.5), node_param_f32(node, "Height", 11.0));
-    let landscape = node_param_str(node, "Orientation", "Portrait").eq_ignore_ascii_case("Landscape");
-    let mut orientation = None;
     let (nw, nh) = match was.name.as_str() {
         "Preset" => {
             let preset = node_param_str(node, "Preset", "Letter");
             let Some([iw, ih]) = preset_inches(&preset, dpi, landscape) else { return Vec::new() };
-            if preset_size(&preset).is_none() && iw != ih {
-                orientation = Some(if iw > ih { "Landscape" } else { "Portrait" });
-            }
             (unit.from_inches(iw, dpi), unit.from_inches(ih, dpi))
         }
-        "Orientation" if w != h && landscape != (w > h) => (h, w),
         "Units" => {
             let old = PageUnit::parse(was.text());
             (unit.from_inches(old.to_inches(w, dpi), dpi), unit.from_inches(old.to_inches(h, dpi), dpi))
@@ -853,29 +852,29 @@ pub fn follow_page_rows(node: &mut FsNode, was: &crate::app::ParamDef) -> Vec<cr
         _ => return Vec::new(),
     };
     let mut rewritten = Vec::new();
-    let mut set = |name: &str, text: String| {
+    for (name, value) in [("Width", nw), ("Height", nh)] {
+        let text = row_text(unit, value);
         if let Some(p) = node.params.iter_mut().find(|p| p.name == name) {
             if !p.is_expr() && p.text() != text {
                 rewritten.push(p.clone());
                 p.set_text(text);
             }
         }
-    };
-    set("Width", row_text(unit, nw));
-    set("Height", row_text(unit, nh));
-    if let Some(o) = orientation {
-        set("Orientation", o.to_string());
     }
     rewritten
 }
 
 /// A `page` node from before Width and Height were always the size: its
-/// named preset is written into them once, and a Custom one — whose Width
-/// and Height already were the size — names Letter. Told apart by the
-/// Width row's `show_when`, which such a save carries as `Preset ==
-/// Custom` until the template merge replaces it.
+/// named preset is written into them once, a sheet turned as its
+/// Orientation row said, and a Custom one — whose Width and Height already
+/// were the size — names Letter. Told apart by the Width row's
+/// `show_when`, which such a save carries as `Preset == Custom` until the
+/// template merge replaces it. The Orientation row itself goes, from this
+/// save and any other: a page's orientation is its Width and Height.
 pub fn migrate_preset_rows(node: &mut FsNode) {
     let old = node.params.iter().any(|p| p.name == "Width" && p.show_when.contains("Custom"));
+    let landscape = node_param_str(node, "Orientation", "Portrait").eq_ignore_ascii_case("Landscape");
+    node.params.retain(|p| p.name != "Orientation");
     if !old {
         return;
     }
@@ -885,7 +884,7 @@ pub fn migrate_preset_rows(node: &mut FsNode) {
             p.set_text("Letter".to_string());
         }
     } else {
-        follow_page_rows(node, &preset);
+        follow(node, &preset, landscape);
     }
 }
 

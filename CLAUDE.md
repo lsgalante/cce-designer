@@ -1974,21 +1974,22 @@ slider clamps, and no one range holds both 0.25 inches and 1920 pixels.
 
 **The size IS Width and Height, and a preset writes them** (since
 2026-09-30). `page_node_frame` reads Width by Height in Units and nothing
-else; Preset, Orientation and Units are rows that SET those two when they
-are picked (`page::follow_page_rows`, called by the params pane's
-write-back and MCP's `set_param`, and what it overwrites is part of the
-undo step). Preset writes its size in the page's Units — the four paper
-sizes turned by Orientation, the three raster ones (`HD`, `4K`, `Square`)
-as they lie, Orientation set to say which way; Orientation swaps the two
-when they lie the other way; Units converts them, so the sheet keeps its
-size. There is no `Custom` preset: until then Width and Height were read
-only under it, a second way to say the size that the presets could not
-share. Preset names what was last picked, and a size typed in afterwards
-is the size. A save from before is carried over ONCE in the template merge
+else; Preset and Units are rows that SET those two when they are picked
+(`page::follow_page_rows`, called by the params pane's write-back and
+MCP's `set_param`, and what it overwrites is part of the undo step).
+Preset writes its size in the page's Units — the four paper sizes
+portrait, the three raster ones (`HD`, `4K`, `Square`) as they lie; Units
+converts them, so the sheet keeps its size. There is no `Custom` preset
+(until then Width and Height were read only under it, a second way to say
+the size that the presets could not share) and no Orientation row: a
+landscape sheet is Width and Height typed the other way round. Preset
+names what was last picked, and a size typed in afterwards is the size. A
+save from before is carried over ONCE in the template merge
 (`page::migrate_preset_rows`), recognised by the Width row's `show_when`
 still reading `Preset == Custom`, which the merge then replaces: a named
-preset is written into Width and Height as it was drawn, and a Custom page
-keeps its size and names Letter. `picking_a_page_preset_writes_its_size`
+preset is written into Width and Height, a sheet turned as its old
+Orientation row said, and a Custom page keeps its size and names Letter.
+The Orientation row is dropped from every page. `picking_a_page_preset_writes_its_size`
 is the test.
 
 **`page_shape`** draws a rectangle (with a corner radius), an ellipse, a

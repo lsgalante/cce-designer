@@ -367,7 +367,7 @@ impl State {
                         if as_expr {
                             p.set_expr(true);
                         }
-                        // A page's Preset, Orientation and Units set its
+                        // A page's Preset and Units set its
                         // Width and Height, and the step holds all of it.
                         let followed = if child.node_type == "page" {
                             crate::page::follow_page_rows(child, &before)

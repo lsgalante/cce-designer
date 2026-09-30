@@ -1202,9 +1202,10 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         if node.node_type == "camera" {
             node.params.retain(|p| p.name != "Square Aspect" && p.name != "Show Camera Pivot");
         }
-        // A page's size is its Width and Height now, and Preset has no
-        // Custom: a save from before is carried over once, ahead of the
-        // merge that would take the old rows' conditions away.
+        // A page's size is its Width and Height now, Preset has no Custom
+        // and there is no Orientation row: a save from before is carried
+        // over once, ahead of the merge that would take the old rows'
+        // conditions away.
         if node.node_type == "page" {
             crate::page::migrate_preset_rows(node);
         }
@@ -4097,11 +4098,11 @@ impl State {
                         }
                     }
 
-                    // A page's Preset, Orientation and Units set its Width
+                    // A page's Preset and Units set its Width
                     // and Height; what they overwrite is part of the step.
                     let mut followed = false;
                     if child.node_type == "page" {
-                        let setters: Vec<ParamDef> = was.iter().filter(|w| matches!(w.name.as_str(), "Preset" | "Orientation" | "Units")).cloned().collect();
+                        let setters: Vec<ParamDef> = was.iter().filter(|w| matches!(w.name.as_str(), "Preset" | "Units")).cloned().collect();
                         for w in setters {
                             for r in crate::page::follow_page_rows(child, &w) {
                                 followed = true;
