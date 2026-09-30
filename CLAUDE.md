@@ -2711,6 +2711,31 @@ hit tests, so a press on a node still moves the node. "Empty" means the scene
 really is what is under the cursor — which, with the network overlaying the
 window, is exactly what `in_network_pane`'s node test decides.
 
+**The camera PANS as well** (`State::pan_camera_by`, since 2026-09-29;
+until then the view only turned and zoomed about its pivot, and the
+pivot moved by Frame All alone). A pan slides the pivot and the eye
+together across the plane of the screen, so the view turns nowhere and
+what is on the PIVOT's plane follows the pointer px for px — the
+projection is a perspective, so what is nearer moves further. Three
+gestures, `pan_drag` beside `orbit_drag`:
+
+- **the middle button, dragged** over the scene. Armed after the
+  network's own pan, which the middle button is wherever the network is
+  laid out — with its plate off that is the whole window — and AHEAD of
+  the press cascade's `button != Left && != Right` return, which is where
+  the first cut put it and where it never ran;
+- **shift and the left button**, in the orbit's own arm, so a viewer
+  state's handle and a node still take the press first;
+- **shift and a scroll**, at the top of the wheel arm, a notch being
+  `PAN_PX_PER_LINE` px.
+
+The Default Camera's eye hangs off its pivot, so `Viewport3D::pivot` is
+all that moves. A camera node has its Pivot and Position rewritten, to
+four decimals; a pan is hundreds of small moves and each read back from
+the text would lose what the text could not hold, so `State::pan_exact`
+keeps what the last pan wrote in full and is used while the node still
+says it. `the_camera_pans_with_the_pointer` is the test.
+
 **The active camera's name lives in two places, and `State::set_active_camera`
 is the only writer of either.** The viewport widget keeps its own copy because
 its wheel handler routes by it — the Default Camera's orbit lands on the

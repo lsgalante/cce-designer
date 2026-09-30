@@ -2103,6 +2103,15 @@ pub struct State {
     /// An in-flight camera orbit drag: the cursor position the last motion was
     /// measured from. `None` when no orbit drag is running.
     pub orbit_drag: Option<(f32, f32)>,
+    /// An in-flight camera PAN drag (middle button, or shift and the left):
+    /// the cursor position the last motion was measured from.
+    pub pan_drag: Option<(f32, f32)>,
+    /// The camera node a pan last wrote, with the Pivot and Position it
+    /// wrote IN FULL. The node holds them as text, to four decimals; a pan
+    /// is hundreds of small moves, and each read back from the text would
+    /// lose what the text could not hold. Used while the node still says
+    /// what was written.
+    pub pan_exact: Option<(String, Vec3, Vec3)>,
     /// Set when the page raster must be re-uploaded — after a replacement
     /// renderer drops the old id. Consumed on the next tick rather than acted
     /// on in `renderer_init`, which runs before the frame has settled and
@@ -2876,6 +2885,9 @@ impl State {
 
     pub fn param_w(&self) -> f32 { self.get_col_geometries().5 }
     
+    /// How far a wheel notch slides the camera under shift, in logical px.
+    pub(crate) const PAN_PX_PER_LINE: f32 = 40.0;
+
     /// Radians of camera rotation per logical pixel of drag.
     ///
     /// The same constant the trackpad's pixel-delta orbit uses, so a drag and a
@@ -2899,6 +2911,7 @@ impl State {
         self.drag_widget.is_some()
             || self.app_drag.is_some()
             || self.orbit_drag.is_some()
+            || self.pan_drag.is_some()
             || self.is_panning
             || self.grid_cursor_drag.is_some()
             || self.viewer_tool.as_ref().map_or(false, |t| t.drag.is_some())
@@ -2956,6 +2969,59 @@ impl State {
             }
         }
         changed
+    }
+
+    /// Slide the camera across its own view by a pointer delta, in logical
+    /// px: the pivot and the eye move together, in the plane of the screen,
+    /// so the view turns nowhere and the scene follows the pointer. What is
+    /// on the PIVOT's plane moves exactly as far as the pointer did — the
+    /// projection is a perspective, so what is nearer moves further and
+    /// what is beyond it less.
+    ///
+    /// The Default Camera's eye hangs off its pivot, so its pivot is all
+    /// that moves. A camera node has its Pivot and Position rewritten, as
+    /// Frame All rewrites them.
+    pub(crate) fn pan_camera_by(&mut self, dx_px: f32, dy_px: f32) {
+        let (pos, rot, pivot) = self.active_camera_pose();
+        let (_, view, _) = self.viewport().get_matrices(1.0, Some(pos), Some(rot), Some(pivot));
+        let inv = view.inverse();
+        let (right, up, eye) = (inv.x_axis.truncate(), inv.y_axis.truncate(), inv.w_axis.truncate());
+        let pane_h = self.last_scene_view_rect.3.max(1.0);
+        // World units a logical px covers on the pivot's plane: the
+        // projection's vertical field of view is 0.9 rad.
+        let per_px = 2.0 * (eye - pivot).length() * (0.45f32).tan() / pane_h;
+        let by = (up * dy_px - right * dx_px) * per_px;
+        if by.length_squared() == 0.0 || !by.is_finite() {
+            return;
+        }
+        let active = self.active_camera.clone();
+        let fmt3 = |v: Vec3| format!("{:.4}:{:.4}:{:.4}", v.x, v.y, v.z);
+        let exact = self.pan_exact.take();
+        let node = (active != "Default Camera")
+            .then(|| self.current_dir_mut().children.iter_mut().find(|c| c.node_type == "camera" && c.name == active))
+            .flatten();
+        match node {
+            Some(node) => {
+                let text = |node: &FsNode, name: &str| node.params.iter().find(|p| p.name == name).map(|p| p.text().to_string());
+                // From what the last pan wrote in full, while the node
+                // still says it; from the node otherwise.
+                let (from_pivot, from_pos) = match exact {
+                    Some((name, p, e)) if name == active && text(node, "Pivot") == Some(fmt3(p)) && text(node, "Position") == Some(fmt3(e)) => (p, e),
+                    _ => (pivot, pos),
+                };
+                let (to_pivot, to_pos) = (from_pivot + by, from_pos + by);
+                for (name, v) in [("Pivot", to_pivot), ("Position", to_pos)] {
+                    if let Some(p) = node.params.iter_mut().find(|p| p.name == name) {
+                        p.set_text(fmt3(v));
+                    }
+                }
+                self.pan_exact = Some((active, to_pivot, to_pos));
+                self.sync_parameters_pane();
+            }
+            None => self.viewport_mut().pivot = pivot + by,
+        }
+        self.viewport_mut().reset_velocity();
+        self.viewport_dirty = true;
     }
 
     pub(crate) fn orbit_camera_by(&mut self, dx_px: f32, dy_px: f32) {
@@ -6805,6 +6871,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             seen_renderer: false,
             deselected_cell: None,
             orbit_drag: None,
+            pan_drag: None,
+            pan_exact: None,
             page_dirty: false,
             last_sim_frame: i32::MIN,
             plate_menu_slot: None,
@@ -8992,6 +9060,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     }
                     return true;
                 }
+                // Shift and a scroll over the scene slide the camera, as the
+                // drag does: the scene follows the fingers.
+                if self.modifiers.shift_key() && !self.modifiers.control_key() && self.cursor_in_viewport() && !self.in_network_pane() {
+                    let (dx, dy) = match delta {
+                        MouseScrollDelta::PixelDelta(p) => {
+                            let s = (self.scale as f32).max(0.001);
+                            (p.x as f32 / s, p.y as f32 / s)
+                        }
+                        MouseScrollDelta::LineDelta(x, y) => (*x * Self::PAN_PX_PER_LINE, *y * Self::PAN_PX_PER_LINE),
+                    };
+                    if dx != 0.0 || dy != 0.0 {
+                        self.pan_camera_by(dx, dy);
+                    }
+                    return true;
+                }
                 let in_network_pane = self.in_network_pane();
                 // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
@@ -9197,6 +9280,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 // An in-flight camera orbit, likewise — it was armed by a press
                 // on empty scene, so nothing else is competing for the motion.
+                if let Some((lx, ly)) = self.pan_drag {
+                    let (dx, dy) = (self.cursor_x - lx, self.cursor_y - ly);
+                    self.pan_drag = Some((self.cursor_x, self.cursor_y));
+                    if dx != 0.0 || dy != 0.0 {
+                        self.pan_camera_by(dx, dy);
+                    }
+                    return true;
+                }
                 if let Some((lx, ly)) = self.orbit_drag {
                     let (dx, dy) = (self.cursor_x - lx, self.cursor_y - ly);
                     self.orbit_drag = Some((self.cursor_x, self.cursor_y));
@@ -9452,6 +9543,27 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     self.is_panning = false;
                     self.sync_layout();
                     self.read_panel_offsets();
+                    return true;
+                }
+
+                // A middle press on the scene slides the camera. After the
+                // network's own pan above, which the middle button is
+                // wherever the network is laid out — with its plate off,
+                // the whole window, where shift and the left button pan
+                // the camera instead.
+                if *button == MouseButton::Middle
+                    && *btn_state == ElementState::Pressed
+                    && self.cursor_in_viewport()
+                    && !(self.circular_network_pane && self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, BREADCRUMB_H))
+                    && self.app_drag.is_none()
+                {
+                    self.pan_drag = Some((self.cursor_x, self.cursor_y));
+                    self.focused_pane = RIGHT_MENUBAR_IDX;
+                    self.sync_pane_focus();
+                    return true;
+                }
+                if *button == MouseButton::Middle && *btn_state == ElementState::Released && self.pan_drag.take().is_some() {
+                    self.broadcast_pointer();
                     return true;
                 }
 
@@ -9711,7 +9823,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             && !in_circle_network_pane
                             && self.app_drag.is_none()
                         {
-                            self.orbit_drag = Some((self.cursor_x, self.cursor_y));
+                            // With shift the drag slides the camera
+                            // where without it the drag turns it.
+                            if self.modifiers.shift_key() {
+                                self.pan_drag = Some((self.cursor_x, self.cursor_y));
+                            } else {
+                                self.orbit_drag = Some((self.cursor_x, self.cursor_y));
+                            }
                             self.focused_pane = RIGHT_MENUBAR_IDX;
                             if let Some(old) = self.focused_widget {
                                 self.slots.get_dyn_mut(old).unfocus();
@@ -10004,7 +10122,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         if self.grid_cursor_drag.take().is_some() && self.settle_cursor_expansion() {
                             changed = true;
                         }
-                        if self.orbit_drag.take().is_some() {
+                        if self.orbit_drag.take().is_some() || self.pan_drag.take().is_some() {
                             self.broadcast_pointer();
                             return true;
                         }

@@ -2911,6 +2911,117 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A pan slides the camera across its own view: what is at the pivot
+    /// follows the pointer px for px, the view turns nowhere, and a camera
+    /// node's Pivot and Position move together. Middle-drag, shift and the
+    /// left button, and shift with a scroll all pan; the plain left drag
+    /// and the plain scroll still orbit.
+    #[test]
+    fn the_camera_pans_with_the_pointer() {
+        use crate::slots::VIEWPORT_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, Position};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        let rect = (0.0f32, 0.0f32, 1600.0f32, 900.0f32);
+        state.last_scene_view_rect = rect;
+        // Where a world point is on screen, in logical px.
+        let on_screen = |state: &State, at: Vec3| {
+            let (pos, rot, pivot) = state.active_camera_pose();
+            let (proj, view, model) = state.viewport().get_matrices(rect.2 / rect.3, Some(pos), Some(rot), Some(pivot));
+            let c = proj * view * model * at.extend(1.0);
+            (rect.0 + (c.x / c.w * 0.5 + 0.5) * rect.2, rect.1 + (0.5 - c.y / c.w * 0.5) * rect.3)
+        };
+        let view_of = |state: &State| {
+            let (pos, rot, pivot) = state.active_camera_pose();
+            state.viewport().get_matrices(1.0, Some(pos), Some(rot), Some(pivot)).1
+        };
+
+        // The Default Camera, turned a little first so the axes are not the world's.
+        state.set_active_camera("Default Camera");
+        state.orbit_camera_by(120.0, -40.0);
+        let mark = state.viewport().pivot;
+        let (before, turned) = (on_screen(&state, mark), view_of(&state));
+        state.pan_camera_by(50.0, -30.0);
+        let after = on_screen(&state, mark);
+        assert!((after.0 - before.0 - 50.0).abs() < 0.05 && (after.1 - before.1 + 30.0).abs() < 0.05, "{before:?} -> {after:?}");
+        assert_ne!(state.viewport().pivot, mark, "the pivot moved");
+        let (a, b) = (turned.to_cols_array(), view_of(&state).to_cols_array());
+        assert!((0..12).all(|i| (a[i] - b[i]).abs() < 1e-5), "the view turned");
+
+        // A camera node: Pivot and Position move as one, Rotation stays, and
+        // a hundred small moves come to what one large one does.
+        state.set_active_camera("camera1");
+        let read = |state: &State, name: &str| {
+            let node = state.current_dir().children.iter().find(|c| c.name == "camera1").unwrap();
+            crate::geometry::node_param_vec3(node, name, Vec3::ZERO)
+        };
+        let (pivot0, pos0, rot0) = (read(&state, "Pivot"), read(&state, "Position"), read(&state, "Rotation"));
+        let mark = pivot0;
+        let before = on_screen(&state, mark);
+        for _ in 0..100 {
+            state.pan_camera_by(0.7, 0.3);
+        }
+        let after = on_screen(&state, mark);
+        assert!((after.0 - before.0 - 70.0).abs() < 0.5 && (after.1 - before.1 - 30.0).abs() < 0.5, "{before:?} -> {after:?}");
+        let (moved_pivot, moved_pos) = (read(&state, "Pivot") - pivot0, read(&state, "Position") - pos0);
+        assert!(moved_pivot.length() > 0.01 && (moved_pivot - moved_pos).length() < 1e-3, "{moved_pivot:?} against {moved_pos:?}");
+        assert_eq!(read(&state, "Rotation"), rot0);
+
+        // The three ways of asking, by pointer.
+        state.set_active_camera("Default Camera");
+        let (vx, vy, vw, vh) = state.positions[VIEWPORT_IDX];
+        let (cx, cy) = (vx + vw * 0.5, vy + vh * 0.5);
+        let at = |state: &mut State, x: f32, y: f32| {
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        };
+        let press = |state: &mut State, b: MouseButton, s: ElementState| {
+            state.handle_event(&WindowEvent::MouseInput { state: s, button: b });
+        };
+        at(&mut state, cx, cy);
+        assert!(state.cursor_in_viewport());
+        let orbit = |state: &State| (state.viewport().rotation_x, state.viewport().rotation_y);
+
+        let (pivot, turned) = (state.viewport().pivot, orbit(&state));
+        press(&mut state, MouseButton::Middle, ElementState::Pressed);
+        assert!(state.pan_drag.is_some() && state.pointer_captured(), "a middle press arms the pan");
+        at(&mut state, cx + 40.0, cy + 10.0);
+        press(&mut state, MouseButton::Middle, ElementState::Released);
+        assert!(state.pan_drag.is_none());
+        assert_ne!(state.viewport().pivot, pivot, "the middle drag panned");
+        assert_eq!(orbit(&state), turned, "and did not turn the camera");
+
+        at(&mut state, cx, cy);
+        let pivot = state.viewport().pivot;
+        state.modifiers.shift = true;
+        press(&mut state, MouseButton::Left, ElementState::Pressed);
+        assert!(state.pan_drag.is_some() && state.orbit_drag.is_none(), "shift and the left button pan");
+        at(&mut state, cx - 25.0, cy + 5.0);
+        press(&mut state, MouseButton::Left, ElementState::Released);
+        assert_ne!(state.viewport().pivot, pivot);
+        assert_eq!(orbit(&state), turned);
+
+        let pivot = state.viewport().pivot;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 12.0, y: -8.0 }) });
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 1.0) });
+        assert_ne!(state.viewport().pivot, pivot, "shift and a scroll pan");
+        assert_eq!(orbit(&state), turned);
+        state.modifiers.shift = false;
+
+        // Without shift they are the orbit's, as they were.
+        at(&mut state, cx, cy);
+        let pivot = state.viewport().pivot;
+        press(&mut state, MouseButton::Left, ElementState::Pressed);
+        assert!(state.orbit_drag.is_some() && state.pan_drag.is_none());
+        at(&mut state, cx + 30.0, cy);
+        press(&mut state, MouseButton::Left, ElementState::Released);
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
+        assert_eq!(state.viewport().pivot, pivot);
+        assert_ne!(orbit(&state), turned);
+    }
+
     #[test]
     fn test_default_camera_orbit_moves_camera_not_geometry() {
         use cce_ui::widget::WidgetHost;
