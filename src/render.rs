@@ -93,6 +93,9 @@ impl State {
     /// cache are gone). Draw order is the hand-maintained slot order the vertex path
     /// used; the circular network pane rides `PaintItem::clip_circle`.
     pub(crate) fn collect_display_list(&mut self) -> DisplayList {
+        // What is drawn over the scene is placed by the camera as it is
+        // NOW, not as the stage pass last saw it.
+        self.refresh_scene_view();
         // Refresh popover registration: the engine's text-occlusion clamp
         // reads `ui_context.active_popovers` to keep underlying text from
         // bleeding through an open popup's plate. The legacy render_widget

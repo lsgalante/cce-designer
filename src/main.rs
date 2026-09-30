@@ -2911,6 +2911,48 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// What the 2D frame draws over the scene is placed by the camera as
+    /// it is when the frame is painted. The paint comes BEFORE the stage
+    /// pass, which was the one place the projection was kept: the numbers
+    /// trailed their points by a frame while the camera moved, and stood a
+    /// frame's move off them when it stopped.
+    #[test]
+    fn the_point_numbers_are_placed_by_the_camera_as_it_is() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.set_active_camera("Default Camera");
+        state.show_point_numbers = true;
+        state.geo_opacity = 0.35;
+        state.show_occluded = true;
+        state.rebuild_scene_geometry();
+        let _ = state.collect_display_list();
+        let placed = |state: &State| -> Vec<(String, f32, f32)> {
+            state.point_number_labels().into_iter().map(|(t, x, y, ..)| (t, x, y)).collect()
+        };
+        let before = placed(&state);
+        assert!(!before.is_empty());
+
+        // The camera moves, and the next frame is painted — no stage pass
+        // between.
+        state.orbit_camera_by(90.0, 20.0);
+        state.pan_camera_by(30.0, -10.0);
+        let _ = state.collect_display_list();
+        let after = placed(&state);
+        assert_ne!(before, after, "the numbers stood where the last frame had them");
+        // And they stand where the scene will be drawn: by the view the
+        // stage pass is about to stage.
+        let (_, proj, view) = state.scene_view().expect("a scene");
+        assert_eq!(state.last_scene_mvp, Some(proj * view));
+        let alphas = state.overlay_number_alpha.clone();
+        assert_eq!(alphas.len(), state.overlay_number_labels.len(), "and are dimmed for that view");
+        // Asked again for the same view, the dimming is not worked out again.
+        let key = state.number_alpha_key;
+        state.sync_point_number_alpha(proj * view, state.last_scene_eye);
+        assert_eq!((state.number_alpha_key, &state.overlay_number_alpha), (key, &alphas));
+    }
+
     /// A pan slides the camera across its own view: what is at the pivot
     /// follows the pointer px for px, the view turns nowhere, and a camera
     /// node's Pivot and Position move together. Middle-drag, shift and the

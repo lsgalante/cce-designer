@@ -2579,6 +2579,21 @@ the scene needs a text layer drawn ahead of the plates, which cce-ui does
 not have; under the pane tint a blurred 10 px number would not be read in
 any case. `a_point_number_under_a_plate_is_not_drawn` is the test.
 
+**What the 2D frame draws over the scene is placed by the camera as it
+is when the frame is painted** (`State::refresh_scene_view`, at the top of
+`collect_display_list`, since 2026-09-29). The runner paints the 2D frame
+and THEN stages the scene, and the stage pass was the one place
+`last_scene_mvp`, the pane's rect and the eye were set — so the numbers,
+a viewer state's handles and the scale readout were placed by the camera
+of the frame before. They trailed the geometry and its markers, which
+are meshes drawn by the frame's own matrix, by a frame whenever the
+camera moved, and stood a frame's move off their points once it stopped.
+`State::scene_view` is the pane and the view as they are now, for both.
+The dimming is asked for twice a frame that way and worked out once
+(`number_alpha_key`). Not in the traced mode, which keeps the view the
+raster pass last staged. `the_point_numbers_are_placed_by_the_camera_as_it_is`
+is the test.
+
 **A scene rebuild works the dimming out itself**, for the view the
 scene was last staged from (`last_scene_mvp`, `last_scene_eye`). The 2D
 frame is painted BEFORE the stage pass, so a rebuild that only cleared

@@ -2495,6 +2495,9 @@ pub struct State {
     /// The raster scene's model-view-projection and the viewport pane rect in
     /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
     pub last_scene_mvp: Option<Mat4>,
+    /// What the numbers' dimming was last worked out for: the view, the
+    /// geometry, the opacity, whether the fill is seen through, how many.
+    pub number_alpha_key: Option<([u32; 16], u64, u32, bool, usize)>,
     /// The eye the scene was last staged for, in mesh space, beside the
     /// matrix: what a scene rebuild dims the numbers by until the stage
     /// pass has staged the new geometry.
@@ -2981,6 +2984,56 @@ impl State {
     /// The Default Camera's eye hangs off its pivot, so its pivot is all
     /// that moves. A camera node has its Pivot and Position rewritten, as
     /// Frame All rewrites them.
+    /// The scene's pane and the view through it AS THEY ARE NOW: the pane's
+    /// rect in physical px, the projection and the view. What the stage
+    /// pass stages the scene by, and `None` where there is no scene to
+    /// stage — a detached window, a hidden viewport, a pane of no size.
+    pub(crate) fn scene_view(&self) -> Option<((u32, u32, u32, u32), Mat4, Mat4)> {
+        if self.is_detached_network || self.detached_pane.is_some() || !self.show_viewport {
+            return None;
+        }
+        let s = self.scale as f32;
+        let (mut sx, mut sy) = (0u32, (HEADER_H * s) as u32);
+        let (mut cw, mut ch) = ((self.width * s) as u32, (self.body_h() * s) as u32);
+        if self.square_viewport {
+            let side = cw.min(ch);
+            sx += (cw - side) / 2;
+            sy += (ch - side) / 2;
+            (cw, ch) = (side, side);
+        }
+        if cw == 0 || ch == 0 {
+            return None;
+        }
+        let (pos, rot, pivot) = self.active_camera_pose();
+        let (proj, view, model) = self.viewport().get_matrices(cw as f32 / ch as f32, Some(pos), Some(rot), Some(pivot));
+        Some(((sx, sy, cw, ch), proj, view * model))
+    }
+
+    /// Bring what the 2D frame projects by — `last_scene_mvp`, the pane's
+    /// rect, the eye — up to the camera as it is now, ahead of painting.
+    ///
+    /// The 2D frame is painted BEFORE the stage pass stages the scene, and
+    /// until 2026-09-29 the stage pass was the one place these were set: so
+    /// everything the 2D frame draws over the scene — the point, primitive
+    /// and vertex numbers, a viewer state's handles, the scale readout —
+    /// was placed by the camera of the frame BEFORE, and trailed the
+    /// geometry and its markers by a frame whenever the camera moved. When
+    /// it stopped they stood a frame's move off their points until
+    /// something else drew. Not in the traced mode, which keeps the view
+    /// the raster pass last staged, as it did.
+    pub(crate) fn refresh_scene_view(&mut self) {
+        if self.viewport().rt_mode {
+            return;
+        }
+        let Some(((sx, sy, cw, ch), proj, view)) = self.scene_view() else { return };
+        let s = (self.scale as f32).max(0.001);
+        let mvp = proj * view;
+        self.last_scene_mvp = Some(mvp);
+        self.last_scene_view_rect = (sx as f32 / s, sy as f32 / s, cw as f32 / s, ch as f32 / s);
+        self.last_scene_eye = view.inverse().transform_point3(Vec3::ZERO);
+        self.sync_point_number_alpha(mvp, self.last_scene_eye);
+    }
+
     pub(crate) fn pan_camera_by(&mut self, dx_px: f32, dy_px: f32) {
         let (pos, rot, pivot) = self.active_camera_pose();
         let (_, view, _) = self.viewport().get_matrices(1.0, Some(pos), Some(rot), Some(pivot));
@@ -6544,6 +6597,22 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// the eye the stage pass is staging (`eye` in mesh space, the space of
     /// the labels and the triangles).
     pub(crate) fn sync_point_number_alpha(&mut self, mvp: Mat4, eye: Vec3) {
+        // Asked for the same view of the same scene twice in a frame — by
+        // the 2D paint and again by the stage pass — and worked out once.
+        let key = (
+            mvp.to_cols_array().map(f32::to_bits),
+            self.rt_geometry_version,
+            self.geo_opacity.to_bits(),
+            self.see_through_active(),
+            self.overlay_number_labels.len() + self.overlay_prim_labels.len() + self.overlay_vertex_labels.len(),
+        );
+        let worked_out = self.overlay_number_alpha.len() == self.overlay_number_labels.len()
+            && self.overlay_prim_alpha.len() == self.overlay_prim_labels.len()
+            && self.overlay_vertex_alpha.len() == self.overlay_vertex_labels.len();
+        if self.number_alpha_key == Some(key) && worked_out {
+            return;
+        }
+        self.number_alpha_key = Some(key);
         // One pass over the three lists, so the mesh is binned once.
         let (points_n, prims_n) = (self.overlay_number_labels.len(), self.overlay_prim_labels.len());
         let at: Vec<[f32; 3]> = self
@@ -7081,6 +7150,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 .unwrap_or(cce_ui::units::Unit::Mm),
             pick_cache: None,
             last_scene_mvp: None,
+            number_alpha_key: None,
             last_scene_eye: Vec3::ZERO,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             viewer_tool: None,
