@@ -11,7 +11,8 @@
 //!
 //! 1. **Split** every edge longer than 4/3 of the target length.
 //! 2. **Collapse** every edge shorter than 4/5 of it.
-//! 3. **Flip** edges that would bring their four points closer to valence 6.
+//! 3. **Flip** edges that would bring their four points closer to valence 6,
+//!    unless the new edge would be one the next split cuts.
 //! 4. **Relax** each point toward the centroid of its neighbours, with the
 //!    normal component removed so the pass smooths the triangulation without
 //!    moving the surface.
@@ -472,7 +473,75 @@ fn face_normal(m: &Mesh, tri: [u32; 3]) -> Vec3 {
 /// "Better" is total deviation from valence 6, which is the valence a regular
 /// triangulation of a plane has — the measure the paper uses, and the one that
 /// drives a mesh toward equilateral triangles.
-fn flip_pass(m: &mut Mesh) -> usize {
+fn flip_pass(m: &mut Mesh, target: f32) -> usize {
+    let long = target * 4.0 / 3.0;
+    // Each point's valence, counted once and kept in step with the flips.
+    // The first version asked `tris_of` for it — a list gathered, sorted
+    // and counted — eight times an edge, which at 525 points was nine
+    // milliseconds of a remesh that changed nothing.
+    let mut valence = vec![0i32; m.pos.len()];
+    for (t, tri) in m.tris.iter().enumerate() {
+        if m.dead_tri[t] {
+            continue;
+        }
+        for (i, &q) in tri.iter().enumerate() {
+            if !tri[..i].contains(&q) {
+                valence[q as usize] += 1;
+            }
+        }
+    }
+    let mut done = 0;
+    for (e, _) in m.edges() {
+        let tris = m.tris_on_edge(e[0], e[1]);
+        if tris.len() != 2 {
+            continue; // a boundary edge has nothing to flip into
+        }
+        let (t0, t1) = (tris[0], tris[1]);
+        let Some(&o0) = m.tris[t0].iter().find(|q| !e.contains(q)) else { continue };
+        let Some(&o1) = m.tris[t1].iter().find(|q| !e.contains(q)) else { continue };
+        if o0 == o1 {
+            continue;
+        }
+        let val = |p: u32| valence[p as usize];
+        let dev = |v: i32| (v - 6).abs();
+        let before = dev(val(e[0])) + dev(val(e[1])) + dev(val(o0)) + dev(val(o1));
+        let after = dev(val(e[0]) - 1) + dev(val(e[1]) - 1) + dev(val(o0) + 1) + dev(val(o1) + 1);
+        if after >= before {
+            continue;
+        }
+        // Refuse a flip whose new edge the next split would cut. A long edge
+        // between two thin triangles is split, and the midpoint collapsed
+        // into a corner — which is that edge turned to its short diagonal —
+        // and until 2026-09-29 this pass, judging by valence alone, turned
+        // it back: three passes undoing one another on the same edges at
+        // every step of a mesh that had stopped moving.
+        if (m.pos[o1 as usize] - m.pos[o0 as usize]).length() > long {
+            continue;
+        }
+        let n0 = face_normal(m, m.tris[t0]);
+        let (new0, new1) = ([o0, e[0], o1], [o1, e[1], o0]);
+        if face_normal(m, new0).dot(n0) <= 0.0 || face_normal(m, new1).dot(n0) <= 0.0 {
+            continue;
+        }
+        m.tris[t0] = new0;
+        m.tris[t1] = new1;
+        for &q in new0.iter().chain(new1.iter()) {
+            m.p2t[q as usize].push(t0);
+            m.p2t[q as usize].push(t1);
+        }
+        valence[e[0] as usize] -= 1;
+        valence[e[1] as usize] -= 1;
+        valence[o0 as usize] += 1;
+        valence[o1 as usize] += 1;
+        done += 1;
+    }
+    done
+}
+
+/// [`flip_pass`] as it was first written, kept to hold the faster one to.
+#[cfg(test)]
+fn flip_pass_reference(m: &mut Mesh, target: f32) -> usize {
+    let long = target * 4.0 / 3.0;
     let mut done = 0;
     for (e, _) in m.edges() {
         // Looked up now rather than taken from the snapshot, for the same
@@ -495,6 +564,15 @@ fn flip_pass(m: &mut Mesh) -> usize {
         // corner.
         let after = dev(val(e[0]) - 1) + dev(val(e[1]) - 1) + dev(val(o0) + 1) + dev(val(o1) + 1);
         if after >= before {
+            continue;
+        }
+        // Refuse a flip whose new edge the next split would cut. A long edge
+        // between two thin triangles is split, and the midpoint collapsed
+        // into a corner — which is that edge turned to its short diagonal —
+        // and until 2026-09-29 this pass, judging by valence alone, turned
+        // it back: three passes undoing one another on the same edges at
+        // every step of a mesh that had stopped moving.
+        if (m.pos[o1 as usize] - m.pos[o0 as usize]).length() > long {
             continue;
         }
         // Refuse a flip that would fold either new triangle against the
@@ -575,15 +653,20 @@ fn relax_pass(m: &mut Mesh, amount: f32) {
 /// first order: on anything curved the slide leaves the surface slightly, and
 /// the error compounds. Without this a sphere remeshed for fifty iterations is
 /// visibly smaller than the one it started as.
-fn project_pass(m: &mut Mesh, rest: &crate::spatial::TriGrid) {
+fn project_pass(m: &mut Mesh, rest: &crate::spatial::TriGrid, reference: bool) {
     if rest.is_empty() {
         return;
     }
+    let _ = reference;
     for p in 0..m.pos.len() {
         if m.dead_point[p] {
             continue;
         }
-        if let Some(hit) = rest.closest(m.pos[p]) {
+        #[cfg(test)]
+        let hit = if reference { rest.closest_reference(m.pos[p]) } else { rest.closest(m.pos[p]) };
+        #[cfg(not(test))]
+        let hit = rest.closest(m.pos[p]);
+        if let Some(hit) = hit {
             m.pos[p] = hit.point;
         }
     }
@@ -647,6 +730,28 @@ pub fn subdivide(input: &Detail, depth: usize) -> Detail {
 
 /// Remesh toward `settings.target` edge length.
 pub fn remesh(input: &Detail, settings: Settings) -> Detail {
+    remesh_by(input, settings, false)
+}
+
+/// [`remesh`] by the passes as they were first written: the same mesh, bit
+/// for bit, which is what makes the faster ones optimizations.
+#[cfg(test)]
+pub fn remesh_reference(input: &Detail, settings: Settings) -> Detail {
+    remesh_by(input, settings, true)
+}
+
+thread_local! {
+    /// How many edges the last remesh on this thread split, collapsed or
+    /// flipped: what a test and the profile read to see a mesh settle.
+    static LAST_CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The edges the last [`remesh`] on this thread split, collapsed or flipped.
+pub fn last_changes() -> usize {
+    LAST_CHANGES.with(|c| c.get())
+}
+
+fn remesh_by(input: &Detail, settings: Settings, reference: bool) -> Detail {
     if input.num_prims() == 0 || settings.target <= 0.0 {
         return input.clone();
     }
@@ -654,22 +759,51 @@ pub fn remesh(input: &Detail, settings: Settings) -> Detail {
     // the previous iteration's surface would chase the creep rather than
     // correct it, since each iteration's drift would become the next one's
     // idea of where the surface is.
-    let rest = settings.project.then(|| crate::spatial::TriGrid::build(input));
+    let mut rest: Option<crate::spatial::TriGrid> = None;
     let mut m = Mesh::from_detail(input);
-    for _ in 0..settings.iterations.min(20) {
+    let mut changed = 0;
+    LAST_CHANGES.with(|c| c.set(0));
+    for iteration in 0..settings.iterations.min(20) {
+        let mut done = 0;
         if settings.split {
-            split_pass(&mut m, settings.target);
+            done += split_pass(&mut m, settings.target);
         }
         if settings.collapse {
-            collapse_pass(&mut m, settings.target);
+            done += collapse_pass(&mut m, settings.target);
         }
         if settings.flip {
-            flip_pass(&mut m);
+            #[cfg(test)]
+            if reference {
+                done += flip_pass_reference(&mut m, settings.target);
+            } else {
+                done += flip_pass(&mut m, settings.target);
+            }
+            #[cfg(not(test))]
+            {
+                done += flip_pass(&mut m, settings.target);
+            }
         }
+        // Nothing to split, collapse or flip, and nothing relaxed: the mesh
+        // is as this iteration found it, and every later one would find it
+        // the same. On the FIRST that is the input itself, handed back as it
+        // came — its primitives, their order and its polygons untouched, so
+        // what is kept by a mesh's topology downstream (the detangle's
+        // lists) is kept across a step that remeshed nothing.
+        if done == 0 && settings.relax <= 0.0 {
+            if iteration == 0 {
+                return input.clone();
+            }
+            break;
+        }
+        changed += done;
         relax_pass(&mut m, settings.relax.clamp(0.0, 1.0));
-        if let Some(rest) = &rest {
-            project_pass(&mut m, rest);
+        if settings.project {
+            // Built when first wanted: a remesh that finds nothing to do
+            // never asks.
+            let rest = rest.get_or_insert_with(|| crate::spatial::TriGrid::build(input));
+            project_pass(&mut m, rest, reference);
         }
     }
+    LAST_CHANGES.with(|c| c.set(changed));
     m.into_detail()
 }

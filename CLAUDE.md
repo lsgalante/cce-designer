@@ -1557,12 +1557,43 @@ a node costs is what the solve saves without it. The file is read and
 never written, and the disk cache is off for the run. On the project it
 was written for (2026-09-29; a pull, a Surface detangle with every row on
 and a remesh, 162 points growing to 525): 46 ms a frame as saved, 24
-without the detangle, 6 without the remesh. The remesh is most of it
-twice over: its own passes are some 20 ms at 525 points — the flip pass
-asks a point's valence eight times an edge, each a list built and sorted,
-and the projection's closest-point query is 6 µs — and it splits and
-collapses the same 93 edges at every step of a mesh that has stopped
-moving, so the topology the detangle keeps its lists by is new each step.
+without the detangle, 6 without the remesh. The remesh was most of it
+twice over, and three changes the same day brought the solve to 15 ms a
+frame, 11 once the mesh is at rest, where what is left is the detangle's
+own work at 524 points:
+
+- **The flip pass keeps a valence table** (`remesh::flip_pass`), counted
+  once and kept in step with the flips. It had asked `tris_of` for a
+  point's valence eight times an edge, each a list gathered, sorted and
+  counted: 9 ms of a remesh at 525 points.
+- **The closest-point search begins at a quarter of a cell**
+  (`TriGrid::closest`) and works a normal out for the winner alone. A
+  query on the surface, which is what a remesh's projection asks, is
+  answered from the cell it is in; it was 6 µs a query from the
+  twenty-seven cells about it, 12 ms a remesh. Where a search begins does
+  not change what it finds, since it ends only on a hit nearer than the
+  box searched is wide.
+- **A remesh settles.** The flip pass refuses a flip whose new edge the
+  next split would cut, as the collapse pass always refused its own.
+  Without the rule a long edge between two thin triangles was split and
+  its midpoint collapsed into a corner — the edge turned to its short
+  diagonal — and the flip pass, judging by valence alone, turned it back:
+  93 edges split, collapsed and flipped at every step of a mesh that had
+  stopped moving. And an iteration that finds nothing to split, collapse
+  or flip, with no relaxation asked, ends the remesh; on the first the
+  INPUT is handed back as it came, primitives and their order untouched,
+  so the topology the detangle keeps its lists by is the same from one
+  step to the next. The projection's grid is built when first wanted.
+
+The first two are how a remesh is run and not what it does: the passes as
+first written are kept under `cfg(test)` (`flip_pass_reference`,
+`TriGrid::closest_reference`, `remesh_reference`) and
+`the_remesh_matches_its_reference` holds the mesh to them bit for bit,
+step after step. The third changes what a remesh makes, where a flip
+would have made an overlong edge; `a_remesh_settles_and_then_leaves_the_mesh_alone`
+is its test, and fails without the rule ("still changing 162 edges after
+20 rounds"). `remesh::last_changes` is the count the test and the profile
+read.
 
 ### Simulation checkpoints
 

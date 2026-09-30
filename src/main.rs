@@ -10573,6 +10573,105 @@ mod tests {
         assert!(coarsened.num_points() < dense.num_points());
     }
 
+    /// The same mesh in every particular: points, identities, primitives,
+    /// attributes.
+    fn same_mesh(a: &Detail, b: &Detail) -> bool {
+        a.positions() == b.positions()
+            && a.ids() == b.ids()
+            && a.num_prims() == b.num_prims()
+            && (0..a.num_prims()).all(|p| a.prim_points(p) == b.prim_points(p))
+            && a.points().names() == b.points().names()
+            && a.points().names().iter().all(|n| (0..a.num_points()).all(|p| a.points().value(n, p) == b.points().value(n, p)))
+    }
+
+    /// The faster flip pass and the faster closest-point search are HOW a
+    /// remesh is run and not what it does: against the passes as they were
+    /// first written, the same mesh bit for bit, step after step of a
+    /// surface being pulled about — and the same hit for a query on the
+    /// surface, off it and far from it.
+    #[test]
+    fn the_remesh_matches_its_reference() {
+        use crate::remesh::remesh_reference;
+        let fixtures = [
+            (sphere_detail(Vec3::ZERO, 1.0, 6, 8), 0.2),
+            (sphere_detail(Vec3::ZERO, 1.0, 24, 32), 0.5),
+            (sphere_detail(Vec3::new(0.3, -0.2, 1.0), 0.5, 10, 14), 0.1),
+        ];
+        for (start, target) in fixtures {
+            for relax in [0.0, 0.5] {
+                let settings = Settings { target, iterations: 3, relax, ..Default::default() };
+                let (mut a, mut b) = (start.clone(), start.clone());
+                for step in 0..6 {
+                    // A pull between remeshes, as a simulation makes one.
+                    for d in [&mut a, &mut b] {
+                        for p in 0..d.num_points() {
+                            let at = d.pos(p);
+                            let pull = Vec3::new(0.03, 0.0, 0.0) * (at.y * 3.0 + step as f32).sin();
+                            d.set_pos(p, at + pull);
+                        }
+                    }
+                    a = remesh(&a, settings);
+                    b = remesh_reference(&b, settings);
+                    assert!(same_mesh(&a, &b), "target {target}, relax {relax}, step {step}: {} points against {}", a.num_points(), b.num_points());
+                }
+                assert!(a.num_points() != start.num_points() || target == 0.1, "the fixture remeshes");
+            }
+        }
+
+        let sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
+        let grid = crate::spatial::TriGrid::build(&sphere);
+        let mut asked = 0;
+        for i in 0..4000 {
+            // On the surface, near it, inside it, far outside it.
+            let f = i as f32;
+            let dir = Vec3::new((f * 0.37).sin(), (f * 0.73).cos(), (f * 1.31).sin()).normalize_or_zero();
+            let p = dir * [1.0, 0.98, 1.05, 0.3, 0.0, 4.0, 40.0][i % 7];
+            let (new, old) = (grid.closest(p).unwrap(), grid.closest_reference(p).unwrap());
+            assert_eq!((new.point, new.distance, new.normal), (old.point, old.distance, old.normal), "query {p:?}");
+            asked += 1;
+        }
+        for p in 0..sphere.num_points() {
+            let (new, old) = (grid.closest(sphere.pos(p)).unwrap(), grid.closest_reference(sphere.pos(p)).unwrap());
+            assert_eq!((new.point, new.distance, new.normal), (old.point, old.distance, old.normal), "point {p}");
+        }
+        assert_eq!(asked, 4000);
+    }
+
+    /// A remesh SETTLES: run again on what it made, it comes to a mesh it
+    /// finds nothing to do to, and hands that back as it was given — the
+    /// primitives and their order untouched, which is what lets a step of
+    /// a simulation at rest keep what it knows of the topology. Until
+    /// 2026-09-29 the flip pass, judging by valence alone, turned back the
+    /// long edges the split and collapse had just turned, and the three
+    /// went round on the same edges for ever.
+    #[test]
+    fn a_remesh_settles_and_then_leaves_the_mesh_alone() {
+        for (start, target) in [
+            (sphere_detail(Vec3::ZERO, 1.0, 6, 8), 0.2),
+            (sphere_detail(Vec3::ZERO, 1.0, 24, 32), 0.5),
+            (sphere_detail(Vec3::ZERO, 0.5, 10, 14), 0.1),
+        ] {
+            let settings = Settings { target, iterations: 3, relax: 0.0, ..Default::default() };
+            let mut d = remesh(&start, settings);
+            assert!(crate::remesh::last_changes() > 0, "the fixture remeshes");
+            let mut rounds = 0;
+            loop {
+                let next = remesh(&d, settings);
+                if crate::remesh::last_changes() == 0 {
+                    assert!(same_mesh(&next, &d), "a remesh with nothing to do changed the mesh");
+                    break;
+                }
+                d = next;
+                rounds += 1;
+                assert!(rounds < 20, "target {target}: still changing {} edges after {rounds} rounds", crate::remesh::last_changes());
+            }
+            // What it settled on is still the mesh that was asked for.
+            let mean = mean_edge(&d);
+            assert!((mean - target).abs() < target * 0.5, "settled at {mean}, wanted about {target}");
+            assert!(d.is_closed(), "and still a closed surface");
+        }
+    }
+
     #[test]
     fn test_remesh_converges_rather_than_oscillating() {
         // The 4/3 and 4/5 thresholds exist so a split cannot produce edges the
@@ -11906,6 +12005,7 @@ mod tests {
             let mut cache = crate::geometry::SimCache::default();
             let mut times = Vec::new();
             let mut points = Vec::new();
+            let mut remeshed = Vec::new();
             for frame in 1..=frames {
                 let mut sim = crate::geometry::EvalSim::new(frame, 1, &mut cache);
                 let mut err = None;
@@ -11913,15 +12013,17 @@ mod tests {
                 let d = crate::geometry::generate_single_node_geometry_with_errors(root, node, &mut Vec::new(), &mut err, &mut sim);
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
                 points.push(d.map_or(0, |d| d.num_points()));
+                remeshed.push(crate::remesh::last_changes());
             }
             let mean = times.iter().sum::<f64>() / times.len() as f64;
             let worst = times.iter().cloned().fold(0.0, f64::max);
             let at = |f: usize| times.get(f - 1).copied().unwrap_or(0.0);
             println!(
-                "{:>22}: {mean:7.2} ms a frame, worst {worst:7.2}; frame 2 {:.2}, 10 {:.2}, 30 {:.2}, last {:.2}; points {} -> {}",
+                "{:>22}: {mean:7.2} ms a frame, worst {worst:7.2}; frame 2 {:.2}, 10 {:.2}, 30 {:.2}, last {:.2}; points {} -> {}; edges remeshed at frame 2 {}, 30 {}, last {}",
                 way.map_or("as saved".to_string(), |n| format!("without {n}")),
                 at(2), at(10), at(30), at(frames as usize),
                 points.first().unwrap(), points.last().unwrap(),
+                remeshed.get(1).copied().unwrap_or(0), remeshed.get(29).copied().unwrap_or(0), remeshed.last().copied().unwrap_or(0),
             );
         }
     }

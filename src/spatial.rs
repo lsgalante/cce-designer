@@ -337,6 +337,70 @@ impl TriGrid {
                 })
                 .filter(|h| h.distance <= limit);
         }
+        // The nearest of the triangles named, and of those equally near the
+        // one with the lowest index — which is what the first version's
+        // `min_by` over a sorted list chose. Only the winner's normal is
+        // worked out: it was a cross product and a square root for every
+        // candidate, and a candidate is a triangle for every cell it is
+        // filed in.
+        let nearest = |among: &mut dyn Iterator<Item = u32>| -> Option<(f32, u32, Vec3)> {
+            let mut best: Option<(f32, u32, Vec3)> = None;
+            for i in among {
+                if best.is_some_and(|b| b.1 == i) {
+                    continue;
+                }
+                let t = self.tris[i as usize];
+                let q = closest_point_on_triangle(p, t[0], t[1], t[2]);
+                let d = (q - p).length();
+                let better = match best {
+                    None => true,
+                    Some((bd, bi, _)) => match d.partial_cmp(&bd) {
+                        Some(std::cmp::Ordering::Less) => true,
+                        Some(std::cmp::Ordering::Greater) => false,
+                        _ => i < bi,
+                    },
+                };
+                if better {
+                    best = Some((d, i, q));
+                }
+            }
+            best
+        };
+        let hit = |(distance, i, point): (f32, u32, Vec3)| {
+            let t = self.tris[i as usize];
+            Hit { point, distance, normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero() }
+        };
+
+        // From a quarter of a cell, where the first version began at a
+        // whole one: a query ON the surface — a remesh projecting its
+        // points, which is most of what is asked — is answered from the
+        // cell it is in and not from the twenty-seven about it. Where the
+        // search begins does not change what it finds: it ends only with a
+        // hit nearer than the box searched is wide, which nothing outside
+        // the box can beat or tie.
+        let mut reach = self.grid.cell * 0.25;
+        for _ in 0..14 {
+            let (a, b) = (self.grid.coord(p - Vec3::splat(reach)), self.grid.coord(p + Vec3::splat(reach)));
+            let mut among = (a[2]..=b[2]).flat_map(|z| (a[1]..=b[1]).map(move |y| (y, z))).flat_map(|(y, z)| {
+                (a[0]..=b[0]).flat_map(move |x| self.grid.buckets[self.grid.index([x, y, z])].iter().copied())
+            });
+            match nearest(&mut among) {
+                Some(h) if h.0 <= reach => return Some(hit(h)),
+                _ => reach *= 2.0,
+            }
+        }
+        // The grid is clamped to the geometry's bounds, so the doublings
+        // have gathered everything; whatever it found is the answer.
+        nearest(&mut (0..self.tris.len() as u32)).map(hit)
+    }
+
+    /// [`TriGrid::closest`] as it was first written, kept to hold the
+    /// faster one to: the same hit, bit for bit.
+    #[cfg(test)]
+    pub fn closest_reference(&self, p: Vec3) -> Option<Hit> {
+        if self.tris.is_empty() {
+            return None;
+        }
         let hit = |i: usize| {
             let t = self.tris[i];
             let q = closest_point_on_triangle(p, t[0], t[1], t[2]);
@@ -349,7 +413,6 @@ impl TriGrid {
         let nearer = |a: &Hit, b: &Hit| {
             a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal)
         };
-
         let mut reach = self.grid.cell;
         let mut scratch = Vec::new();
         for _ in 0..12 {
@@ -361,8 +424,6 @@ impl TriGrid {
                 _ => reach *= 2.0,
             }
         }
-        // The grid is clamped to the geometry's bounds, so twelve doublings
-        // have gathered everything; whatever it found is the answer.
         (0..self.tris.len()).map(hit).min_by(nearer)
     }
 }
