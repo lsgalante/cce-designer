@@ -2999,6 +2999,25 @@ impl State {
         })
     }
 
+    /// Whether (px, py) is under a plate drawn over the scene: a floating
+    /// pane, or the network's while it has one.
+    pub fn under_a_plate(&self, px: f32, py: f32) -> bool {
+        if self.over_floating_pane_at(px, py) {
+            return true;
+        }
+        if !self.show_network || self.is_detached_network {
+            return false;
+        }
+        if self.circular_network_pane {
+            return self.circular_network_layout.hit_test_content(px, py, 0.0, BREADCRUMB_H);
+        }
+        self.network_plate
+            && [NETWORK_PANEL_IDX, crate::slots::NETWORK_PANEL2_IDX].iter().any(|&idx| {
+                let (x, y, w, h) = self.positions[idx];
+                w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h
+            })
+    }
+
     fn over_floating_pane(&self) -> bool {
         self.over_floating_pane_at(self.cursor_x, self.cursor_y)
     }

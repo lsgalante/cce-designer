@@ -1686,6 +1686,43 @@ mod tests {
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// A number under a plate is not drawn: the engine lays text out after
+    /// all geometry, so it would stand sharp over a plate that frosts
+    /// everything else behind it.
+    #[test]
+    fn a_point_number_under_a_plate_is_not_drawn() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.show_point_numbers = true;
+        state.geo_opacity = 0.2;
+        state.show_occluded = true;
+        state.rebuild_scene_geometry();
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, Vec3::Y);
+        let proj = Mat4::perspective_rh(0.9, 1600.0 / 900.0, 0.1, 100.0);
+        state.last_scene_mvp = Some(proj * view);
+        state.last_scene_eye = Vec3::new(0.0, 0.0, 6.0);
+        state.last_scene_view_rect = (0.0, 0.0, 1600.0, 900.0);
+        state.sync_point_number_alpha(proj * view, state.last_scene_eye);
+
+        let (px, py, pw, ph) = state.positions[crate::slots::PARAM_IDX];
+        assert!(pw > 0.0 && ph > 0.0, "the params plate is laid out");
+        let all = state.point_number_labels();
+        assert!(!all.is_empty());
+        assert!(all.iter().all(|(_, x, y, ..)| !state.under_a_plate(*x, *y + 6.0)), "none stands under a plate");
+
+        // Put the params plate over the middle of the scene: the numbers
+        // there go, the rest stay.
+        state.positions[crate::slots::PARAM_IDX] = (700.0, 350.0, 200.0, 200.0);
+        let fewer = state.point_number_labels();
+        assert!(fewer.len() < all.len(), "{} of {} are left", fewer.len(), all.len());
+        assert!(!fewer.is_empty());
+        assert!(fewer.iter().all(|(_, x, y, ..)| !(*x >= 700.0 && *x < 900.0 && *y + 6.0 >= 350.0 && *y + 6.0 < 550.0)));
+        state.positions[crate::slots::PARAM_IDX] = (px, py, pw, ph);
+        assert_eq!(state.point_number_labels().len(), all.len());
+    }
+
     /// A scene rebuild leaves the numbers dimmed as they were: the 2D frame
     /// is painted before the stage pass, so a rebuild that cleared the
     /// dimming drew one frame of every number at full strength, and a

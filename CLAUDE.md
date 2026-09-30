@@ -2513,7 +2513,16 @@ stage pass, for the eye being staged; a label under 2% is not drawn, so
 behind an OPAQUE face a number is hidden, where until then every number
 showed through everything. The wires are not counted against a number: a
 line a pixel wide is not in front of a label in any way one alpha could
-show. **A scene rebuild works the dimming out itself**, for the view the
+show. **A number under a plate is not drawn** (`State::under_a_plate`,
+`point_number_labels`, since 2026-09-29). A blur-behind plate samples the
+frame so far, which is geometry; the renderer draws ALL text in one pass
+after every batch, so a number under a plate stood over it, sharp, where
+the markers and wires beside it showed through frosted. Blurring it with
+the scene needs a text layer drawn ahead of the plates, which cce-ui does
+not have; under the pane tint a blurred 10 px number would not be read in
+any case. `a_point_number_under_a_plate_is_not_drawn` is the test.
+
+**A scene rebuild works the dimming out itself**, for the view the
 scene was last staged from (`last_scene_mvp`, `last_scene_eye`). The 2D
 frame is painted BEFORE the stage pass, so a rebuild that only cleared
 the alphas drew one frame of every number at full strength; a playing

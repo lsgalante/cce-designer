@@ -35,6 +35,10 @@ fn merge_bounds(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
 /// this colour, and nothing else in the pane is.
 const BYPASS_TINT: [f32; 3] = [1.0, 0.74, 0.18];
 
+/// The point numbers' font size, logical px.
+const POINT_NUMBER_PX: f32 = 10.0;
+
+
 impl State {
     /// Per-corner plate radii for a pane rect: a corner that sits ON a window
     /// corner is this pane's share of the window silhouette — the compositor
@@ -964,8 +968,31 @@ impl State {
     /// camera or pane changes (`stage_frame`), so the labels track orbits;
     /// a frame staged before the first scene staging simply draws none.
     fn append_point_numbers(&self, pc: &mut PaintCtx) {
-        if !self.show_viewport {
+        let labels = self.point_number_labels();
+        if labels.is_empty() {
             return;
+        }
+        let (vx, vy, vw, vh) = self.last_scene_view_rect;
+        pc.clip(rect(vx, vy, vw, vh), |pc| {
+            for (text, x, y, color, alpha) in labels {
+                pc.text_faded(text, x, y, POINT_NUMBER_PX, color, alpha, None, None);
+            }
+        });
+    }
+
+    /// The numbers as they are drawn: text, where, colour and strength.
+    ///
+    /// **A number under a plate is not drawn.** A plate frosts what is
+    /// behind it, and the scene's markers and wires show through one
+    /// blurred; but the engine lays ALL text out after all geometry, so a
+    /// number under a plate would be drawn over it, sharp, where everything
+    /// beside it is frosted. It cannot be blurred with the scene from here,
+    /// and under the pane tint a blurred 10 px number would not be read
+    /// anyway.
+    pub(crate) fn point_number_labels(&self) -> Vec<(String, f32, f32, [u8; 3], f32)> {
+        let mut out = Vec::new();
+        if !self.show_viewport {
+            return out;
         }
         // Points, primitives, vertices: each its own colour, and its own
         // nudge off the place it names — a point's number beside its
@@ -976,14 +1003,14 @@ impl State {
             (&self.overlay_vertex_labels, &self.overlay_vertex_alpha, VERTEX_LABEL_COLOR, (-3.0, -5.0)),
         ];
         if lists.iter().all(|(labels, ..)| labels.is_empty()) {
-            return;
+            return out;
         }
-        let Some(mvp) = self.last_scene_mvp else { return };
+        let Some(mvp) = self.last_scene_mvp else { return out };
         let (vx, vy, vw, vh) = self.last_scene_view_rect;
         if vw <= 0.0 || vh <= 0.0 {
-            return;
+            return out;
         }
-        pc.clip(rect(vx, vy, vw, vh), |pc| {
+        {
             for (labels, alphas, color, (dx, dy)) in lists {
                 for (i, (pos, idx)) in labels.iter().enumerate() {
                     // What the fill in front of the place lets through; a
@@ -1002,10 +1029,19 @@ impl State {
                     }
                     let sx = vx + (ndc.x * 0.5 + 0.5) * vw;
                     let sy = vy + (0.5 - ndc.y * 0.5) * vh;
-                    pc.text_faded(idx.to_string(), sx + dx, sy + dy, 10.0, color, alpha, None, None);
+                    let text = idx.to_string();
+                    // Both ends of the label, at about its middle height.
+                    let (lx, ly) = (sx + dx, sy + dy);
+                    let wide = text.len() as f32 * POINT_NUMBER_PX * 0.62;
+                    let mid = ly + POINT_NUMBER_PX * 0.6;
+                    if self.under_a_plate(lx, mid) || self.under_a_plate(lx + wide, mid) {
+                        continue;
+                    }
+                    out.push((text, lx, ly, color, alpha));
                 }
             }
-        });
+        }
+        out
     }
 
     /// The view's scale on the pivot plane, bottom-left of the pane: `1:2.3`
