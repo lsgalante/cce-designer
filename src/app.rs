@@ -1082,6 +1082,33 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     }
     recompose_native_embryo(root, templates);
 
+    // The Remesh subnet's switch was `result1` for its first day
+    // (2026-09-30), and is `transfer_switch1`: a saved Remesh is renamed to
+    // match, its output's wire with it, or it would stop matching the
+    // template by its children's names and take no template change again.
+    fn rename_remesh_switch(node: &mut FsNode) {
+        for c in &mut node.children {
+            if c.node_type == "node"
+                && c.children.iter().any(|k| k.name == "result1" && k.node_type == "switch")
+                && c.children.iter().any(|k| k.name == "repeat1" && k.node_type == "repeat")
+                && !c.children.iter().any(|k| k.name == "transfer_switch1")
+            {
+                for k in &mut c.children {
+                    if k.name == "result1" {
+                        k.name = "transfer_switch1".into();
+                    }
+                    for p in &mut k.params {
+                        if p.kind() == ParamKind::Node && p.text().trim() == "result1" {
+                            p.set_text("transfer_switch1".to_string());
+                        }
+                    }
+                }
+            }
+            rename_remesh_switch(c);
+        }
+    }
+    rename_remesh_switch(root);
+
     // A KERNEL SUBNET — a Sphere, Box, Plane or Extrude instance saved while
     // those templates were `input → opencl → output` subnets (until
     // 2026-09-24) — becomes the native node of that type: id, name,

@@ -11077,14 +11077,14 @@ mod tests {
         let t = templates.children.iter().find(|t| t.name == "Remesh").expect("the Remesh template");
         assert_eq!(t.node_type, "node", "the Remesh is a subnet");
         let names: Vec<&str> = t.children.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["input1", "repeat1", "transfer1", "result1", "output1"]);
+        assert_eq!(names, ["input1", "repeat1", "transfer1", "transfer_switch1", "output1"]);
         let repeat = &t.children[1];
         assert_eq!(repeat.node_type, "repeat");
         let passes: Vec<(&str, &str)> = repeat.children.iter().map(|c| (c.name.as_str(), c.node_type.as_str())).collect();
         assert_eq!(passes, [("input1", "input"), ("seed1", "seed"), ("split1", "split_edges"), ("collapse1", "collapse_edges"),
             ("flip1", "flip_edges"), ("relax1", "relax"), ("project1", "project"), ("output1", "output")]);
         for c in &t.children {
-            assert_eq!(c.geometry_visible, c.name == "result1", "only result1 draws: {}", c.name);
+            assert_eq!(c.geometry_visible, c.name == "transfer_switch1", "only transfer_switch1 draws: {}", c.name);
         }
 
         let tagged = [
@@ -11194,6 +11194,37 @@ mod tests {
         let (g, err) = eval_node(&root, "remesh1");
         assert!(err.is_none(), "{err:?}");
         assert!(g.num_points() > 0 && g == made, "the recomposed remesh makes the mesh the native one made");
+    }
+
+    /// The Remesh subnet's switch was `result1` for a day; a Remesh saved
+    /// then loads with it renamed, and its output wired to the new name.
+    #[test]
+    fn a_remesh_saved_with_result1_is_renamed_on_load() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let mut old = templates_root.children.iter().find(|t| t.name == "Remesh").unwrap().clone();
+        crate::app::regenerate_node_ids(&mut old);
+        old.name = "remesh1".into();
+        for k in &mut old.children {
+            if k.name == "transfer_switch1" {
+                k.name = "result1".into();
+            }
+            for p in &mut k.params {
+                if p.text() == "transfer_switch1" {
+                    p.set_text("result1");
+                }
+            }
+        }
+        let mut root = modelling_root("1.0", vec![old]);
+        root.children[1].params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("sphere 1");
+        crate::app::merge_template_defs(&mut root, &templates);
+        let r = &root.children[1];
+        let names: Vec<&str> = r.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["input1", "repeat1", "transfer1", "transfer_switch1", "output1"]);
+        let out = r.children.iter().find(|c| c.name == "output1").unwrap();
+        assert_eq!(out.params.iter().find(|p| p.name == "Input").unwrap().text(), "transfer_switch1");
+        let (g, err) = eval_node(&root, "remesh1");
+        assert!(err.is_none() && g.num_points() > 0, "{err:?}");
     }
 
     /// A Repeat runs its chain Iterations times, each pass on the last one's

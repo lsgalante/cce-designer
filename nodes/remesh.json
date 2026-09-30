@@ -292,7 +292,7 @@
    "geometry_visible": false
   },
   {
-   "name": "result1",
+   "name": "transfer_switch1",
    "type": "switch",
    "position": [
     0.0,
@@ -324,7 +324,7 @@
    "params": [
     {
      "name": "Input",
-     "default": "result1"
+     "default": "transfer_switch1"
     }
    ],
    "geometry_visible": false

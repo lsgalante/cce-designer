@@ -1185,7 +1185,7 @@ into and its passes read, bypassed and rewired. `nodes/remesh.json`:
 
 ```
 remesh1 (node)  input1 → repeat1 → transfer1 ─┐
-                               └──────────── result1 (switch on Transfer) → output1
+                               └──────────── transfer_switch1 (on Transfer) → output1
 repeat1 (repeat, Iterations = chi("../Iterations"), Stop When Unchanged on)
                 input1 → split1 → collapse1 → flip1 → relax1 → project1 → output1
                 seed1 ───────────────────────────────────────┘ (Surface)
@@ -1241,7 +1241,9 @@ position, flags and values (`recompose_native_embryo`, which does both
 now). The native node's **Split / Collapse / Flip / Project** switches are
 not rows of the subnet — the passes are nodes — so one that was off
 BYPASSES its node inside (`REMESH_PASS_SWITCHES`).
-`a_native_remesh_recomposes_on_load` is the test. A saved simnet holding a
+`a_native_remesh_recomposes_on_load` is the test. The switch was
+`result1` for its first day; a Remesh saved then is renamed on load
+(`rename_remesh_switch`, `a_remesh_saved_with_result1_is_renamed_on_load`). A saved simnet holding a
 remesh changes its JSON by this, so its solve goes on from the frame in
 hand under a new key ("An edit is in from the next frame").
 
