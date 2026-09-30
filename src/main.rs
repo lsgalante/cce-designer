@@ -4746,7 +4746,7 @@ mod tests {
         for (ty, name) in [
             ("switch", "Input 2"), ("switch", "Input 3"), ("switch", "Input 4"),
             ("boolean", "With"), ("collision", "Collider"), ("relax", "Rest"),
-            ("suture", "Against"), ("copy", "To"), ("distance", "To"), ("transfer", "From"),
+            ("suture", "Against"), ("copy", "To"), ("distance", "To"), ("transfer", "From"), ("remesh", "From"),
         ] {
             assert_eq!(kind(ty, name), K::Node, "{ty}'s {name}");
         }
@@ -4788,7 +4788,7 @@ mod tests {
                 assert_eq!(p.kind(), K::Group, "{}'s Group", t.name);
             }
         }
-        for (ty, name) in [("attribute", "Value"), ("transfer", "Attributes"), ("transfer", "Groups"), ("relax", "Attributes"), ("relax", "Groups"), ("simnet", "Start Frame"), ("bounds", "Prefix")] {
+        for (ty, name) in [("attribute", "Value"), ("transfer", "Attributes"), ("transfer", "Groups"), ("remesh", "Attributes"), ("remesh", "Groups"), ("simnet", "Start Frame"), ("bounds", "Prefix")] {
             assert_eq!(kind(ty, name), K::Text, "{ty}'s {name} stays text on purpose");
         }
         // Every template's Input is a wire, top level and composed children alike.
@@ -10395,10 +10395,10 @@ mod tests {
     /// Groups on, each target point takes its nearest source point's
     /// membership in the named groups — every group when none is named —
     /// joining and leaving alike; off, or on a node from before the row,
-    /// no group moves. The Relax node has the same transfer inside it,
-    /// from its Rest, in either mode and whatever the rest's point count.
+    /// no group moves. The Remesh node has the same transfer inside it:
+    /// from its own input when From names nothing, else the node named.
     #[test]
-    fn transfer_carries_groups_and_relax_has_a_copy() {
+    fn transfer_carries_groups_and_remesh_has_a_copy() {
         use crate::detail::AttribValue;
         // The rule itself, on hand-built points: four source points along
         // x, the far two in `top`; four targets beside them, all put in
@@ -10465,29 +10465,41 @@ mod tests {
         let (g, _) = eval_node(&with(transfer.clone()), "transfer 1");
         assert!(!g.points().has_group("top"), "a node from before the row carries none");
 
-        // Relax's copy: Repel mode with a rest of ANOTHER point count, the
-        // group and the attribute read off it by nearest point.
-        let relax = phase3_node("relax", &[("Input", "points 1"), ("Mode", "Repel"), ("Rest", "attribute 1"), ("Iterations", "0"), ("Transfer From Rest", "true"), ("Attributes", ""), ("Transfer Groups", "true"), ("Groups", "")]);
-        let (g, err) = eval_node(&with(relax.clone()), "relax 1");
+        // Remesh's copy: a sphere remeshed coarse, its group read back off
+        // its own input — no From, no wire — so the new points carry it.
+        let remesh = phase3_node("remesh", &[("Input", "attribute 1"), ("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0.0"), ("Transfer", "true"), ("From", ""), ("Attributes", ""), ("Transfer Groups", "true"), ("Groups", "")]);
+        let (g, err) = eval_node(&with(remesh.clone()), "remesh 1");
         assert!(err.is_none(), "{err:?}");
-        assert!(g.points().has_group("top") && g.points().has("mass"), "the relax carried the group and the attribute");
-        // Springs mode, same rest: the springs need the index correspondence
-        // and are skipped; the transfer is not.
-        let mut springs = relax.clone();
-        springs.params.iter_mut().find(|p| p.name == "Mode").unwrap().set_text("Springs");
-        let (g, err) = eval_node(&with(springs), "relax 1");
+        assert_ne!(g.num_points(), src.num_points(), "the remesh changed the points");
+        assert!(g.points().has_group("top") && g.points().has("mass"), "the remesh carried the group and the attribute");
+        let carried = g.points().group_members("top").len();
+        assert!(carried > 0 && carried < g.num_points(), "the top half, on the new points: {carried} of {}", g.num_points());
+        for p in 0..g.num_points() {
+            // The group is the top half of the sphere by its box; each new
+            // point's membership is its nearest old point's.
+            let nearest = (0..src.num_points()).min_by(|&a, &b| src.pos(a).distance(g.pos(p)).partial_cmp(&src.pos(b).distance(g.pos(p))).unwrap()).unwrap();
+            assert_eq!(g.points().in_group("top", p), src.points().in_group("top", nearest), "point {p}");
+        }
+        // Off, the remesh carries what a remesh carries: the group through
+        // its splits and collapses, as before this row.
+        let mut off = remesh.clone();
+        off.params.iter_mut().find(|p| p.name == "Transfer").unwrap().set_text("false");
+        let (plain, err) = eval_node(&with(off), "remesh 1");
         assert!(err.is_none(), "{err:?}");
-        assert!(g.points().has_group("top"));
-        // Off, the relax carries nothing, as it never did.
-        let mut off = relax.clone();
-        off.params.iter_mut().find(|p| p.name == "Transfer From Rest").unwrap().set_text("false");
-        let (g, _) = eval_node(&with(off), "relax 1");
-        assert!(!g.points().has_group("top") && !g.points().has("mass"));
-        // On with no Rest: said, not silent.
-        let mut bare = relax.clone();
-        bare.params.iter_mut().find(|p| p.name == "Rest").unwrap().set_text("");
-        let (_, err) = eval_node(&with(bare), "relax 1");
-        assert!(err.as_deref().unwrap_or("").contains("Rest"), "{err:?}");
+        assert!(plain.points().has_group("top"));
+        // From another node: the line's points carry no group and no mass,
+        // so there is nothing to lay over the remeshed sphere and it is as
+        // the remesh left it.
+        let mut from_line = remesh.clone();
+        from_line.params.iter_mut().find(|p| p.name == "From").unwrap().set_text("points 1");
+        let (g, err) = eval_node(&with(from_line), "remesh 1");
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(g.points().group_members("top"), plain.points().group_members("top"), "a source without the group leaves it as it was");
+        // A From it cannot resolve is said.
+        let mut broken = remesh.clone();
+        broken.params.iter_mut().find(|p| p.name == "From").unwrap().set_text("nope");
+        let (_, err) = eval_node(&with(broken), "remesh 1");
+        assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
     }
 
     #[test]

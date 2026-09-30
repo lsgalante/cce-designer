@@ -1927,16 +1927,16 @@ pub fn resolve_relax_geometry_with_errors(
     if node_param_str(target, "Mode", "Springs").eq_ignore_ascii_case("repel") {
         let iterations = node_param_f32(target, "Iterations", 8.0).max(0.0) as usize;
         let radius = node_param_f32(target, "Radius", 0.05);
-        if iterations > 0 && radius > 0.0 && geom.num_points() >= 2 {
-            let in_3d = node_param_bool(target, "In 3D Space", false);
-            let normals = if in_3d { None } else { Some(point_normals(&geom)) };
-            let mut pts: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
-            crate::scatter::relax_points(&mut pts, normals.as_deref(), radius, iterations);
-            for (i, q) in pts.into_iter().enumerate() {
-                geom.set_pos(i, q);
-            }
+        if iterations == 0 || radius <= 0.0 || geom.num_points() < 2 {
+            return Some(geom);
         }
-        relax_transfer(&mut geom, root, target, visited, ocl_error, sim);
+        let in_3d = node_param_bool(target, "In 3D Space", false);
+        let normals = if in_3d { None } else { Some(point_normals(&geom)) };
+        let mut pts: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
+        crate::scatter::relax_points(&mut pts, normals.as_deref(), radius, iterations);
+        for (i, q) in pts.into_iter().enumerate() {
+            geom.set_pos(i, q);
+        }
         return Some(geom);
     }
 
@@ -1947,8 +1947,6 @@ pub fn resolve_relax_geometry_with_errors(
         return Some(geom);
     };
     if rest.num_points() != geom.num_points() || geom.is_empty() {
-        // Springs need the index correspondence; the transfer does not.
-        relax_transfer(&mut geom, root, target, visited, ocl_error, sim);
         return Some(geom);
     }
 
@@ -1986,44 +1984,7 @@ pub fn resolve_relax_geometry_with_errors(
     for (p, v) in pos.iter().enumerate() {
         geom.set_pos(p, *v);
     }
-    relax_transfer(&mut geom, root, target, visited, ocl_error, sim);
     Some(geom)
-}
-
-/// The Relax node's copy of the Transfer node, `Transfer From Rest`: once
-/// the points have moved, the Rest geometry's attributes and groups laid
-/// over them by nearest point (`transfer_onto`), in either mode. What it
-/// is for: a chain whose remesh renumbers, splits and collapses points
-/// can keep a group alive — the pull's — by reading it back off a rest
-/// shape that still carries it, at every step, without a Transfer node
-/// wired in beside the relax.
-fn relax_transfer(
-    geom: &mut Detail,
-    root: &FsNode,
-    target: &FsNode,
-    visited: &mut Vec<String>,
-    ocl_error: &mut Option<String>,
-    sim: &mut EvalSim,
-) {
-    if !node_param_bool(target, "Transfer From Rest", false) {
-        return;
-    }
-    let Some(rest_node) = param_node(root, target, "Rest") else {
-        if ocl_error.is_none() {
-            *ocl_error = Some(format!("{}: Transfer From Rest needs a Rest", target.name));
-        }
-        return;
-    };
-    let Some(rest) = generate_single_node_geometry_with_errors(root, rest_node, visited, ocl_error, sim) else { return };
-    let groups = node_param_bool(target, "Transfer Groups", false).then(|| name_list(&node_param_str(target, "Groups", "")));
-    transfer_onto(
-        geom,
-        &rest,
-        &name_list(&node_param_str(target, "Attributes", "")),
-        groups.as_deref(),
-        node_param_f32(target, "Maximum Distance", 0.0),
-        "",
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3414,7 +3375,57 @@ pub fn resolve_remesh_geometry_with_errors(
 ) -> Option<Detail> {
     let input_node = param_node(root, target, "Input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    Some(crate::remesh::remesh(&geom, remesh_settings(target)))
+    let mut out = crate::remesh::remesh(&geom, remesh_settings(target));
+    remesh_transfer(&mut out, &geom, root, target, visited, ocl_error, sim);
+    Some(out)
+}
+
+/// The Remesh node's copy of the Transfer node, `Transfer` (2026-09-30):
+/// once the mesh is remeshed, a source's attributes and groups laid over
+/// the new points by nearest point (`transfer_onto`) — the node's own
+/// INPUT when `From` names nothing, which needs no wire, else the node
+/// it names. What it is for: a remesh splits, collapses and renumbers
+/// points, and what a point was — a group's member, an attribute's value
+/// — rides through a split by interpolation and through a collapse by
+/// the survivor, but not through everything; read back off the mesh as
+/// it was before, or off a shape that still carries it, a group is kept
+/// at every step of a solve with no Transfer node wired in after.
+fn remesh_transfer(
+    out: &mut Detail,
+    input: &Detail,
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) {
+    if !node_param_bool(target, "Transfer", false) {
+        return;
+    }
+    let from_name = node_param_node(target, "From").unwrap_or_default();
+    let named = if from_name.is_empty() {
+        None
+    } else {
+        match find_input_node(root, target, &from_name).and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim)) {
+            Some(d) => Some(d),
+            None => {
+                if ocl_error.is_none() {
+                    *ocl_error = Some(format!("{}: cannot resolve Transfer From '{}'", target.name, from_name));
+                }
+                return;
+            }
+        }
+    };
+    let source = named.as_ref().unwrap_or(input);
+    let groups = node_param_bool(target, "Transfer Groups", false).then(|| name_list(&node_param_str(target, "Groups", "")));
+    transfer_onto(
+        out,
+        source,
+        &name_list(&node_param_str(target, "Attributes", "")),
+        groups.as_deref(),
+        node_param_f32(target, "Maximum Distance", 0.0),
+        "",
+    );
 }
 
 pub(crate) fn remesh_settings(target: &FsNode) -> crate::remesh::Settings {

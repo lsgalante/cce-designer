@@ -815,7 +815,7 @@ Buttons dispatch through `execute_menu_action` by LABEL, which carries no node
 — `run_export` resolves the node from the current selection, which is sound
 because the pressed button can only be on the node the pane is showing.
 
-### Transfer carries groups, and Relax has a copy of it
+### Transfer carries groups, and Remesh has a copy of it
 
 `geometry::transfer_onto` is the one transfer (2026-09-30): onto each
 point of the target (in the node's Group, when that names one; within
@@ -825,22 +825,23 @@ its membership in the named **Groups** — every group the source has when
 none is named. A membership is COPIED, joining and leaving alike: a
 group carried this way is the source's group laid over the target, not a
 union with what the target had, and a group the target lacks is created
-so it exists everywhere the attribute columns do. The switch is off by
-default and a node from before the row is off, so a saved Transfer
-carries what it carried.
+so it exists everywhere the attribute columns do. A group the SOURCE
+lacks is not touched. The switch is off by default and a node from
+before the row is off, so a saved Transfer carries what it carried.
 
-**Relax has the same transfer inside it**, `Transfer From Rest` (off by
-default), with its own Attributes, Transfer Groups, Groups and Maximum
-Distance rows shown while it is on: once the points have moved, the Rest
-geometry's attributes and groups laid over them by nearest point, in
-EITHER mode and whatever the rest's point count — the springs need the
-index correspondence, the transfer does not, so the Rest row shows in
-both modes now. What it is for: a chain whose remesh renumbers, splits
-and collapses points keeps a group alive — the pull's — by reading it
-back off a rest shape that still carries it, at every step, with no
-Transfer node wired in beside the relax. On with no Rest is an error on
-the node. `transfer_carries_groups_and_relax_has_a_copy` is the test,
-the rule on hand-built points and both nodes through their rows.
+**Remesh has the same transfer inside it**, its `Transfer` toggle (off
+by default) with From, Attributes, Transfer Groups, Groups and Maximum
+Distance rows shown while it is on (`remesh_transfer`): once the mesh is
+remeshed, a source's attributes and groups laid over the NEW points by
+nearest point — the node's own input when From names nothing, which
+needs no wire, else the node it names. What a point was rides a split by
+interpolation and a collapse by the survivor, but not everything; read
+back off the mesh as it was before, or off a shape that still carries
+it, a group is kept at every step of a solve with no Transfer node wired
+in after. A From it cannot resolve is an error on the node. (It was on
+the Relax node for an hour, from its Rest — the user's slip, taken back
+the same day.) `transfer_carries_groups_and_remesh_has_a_copy` is the
+test, the rule on hand-built points and both nodes through their rows.
 
 ### Mold tooling
 
