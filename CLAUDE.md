@@ -1060,8 +1060,18 @@ way — both in `src/geometry.rs`:
   Which rows GET a picker is the parameter's kind — `attribute` / `group`,
   see "Parameter kinds" — not a table of row names.
 - **`switch`** passes one of `Input`, `Input 2` … `Input 4` by `Index`,
-  clamped; an empty slot passes nothing. Only `Input` draws a wire, the
-  limit every second operand has (Boolean's With, Copy's target).
+  clamped; an empty slot passes nothing. Every one of them draws a wire,
+  into its own port, as every second operand does (Boolean's With, Copy's
+  To, Transfer's From) — since 2026-09-30; until then only `Input` did, so
+  a second operand was a connection with no line. `app::node_wires` is the
+  rule: every `node` parameter, in order, the k-th into port k, handed to
+  the graph typed `node` (cce-ui's `wire_pairs`); a node gets as many input
+  ports as it has wires where its template declared fewer (Relax's Rest,
+  Collision's Collider, the Remesh's From). A wire whose row is hidden, or
+  that is an expression (the Remesh subnet's transfer reads its From
+  through one), keeps its port and draws no line. A connection dropped on
+  port k sets the k-th wire (`State::connect_port`).
+  `every_wire_is_drawn_into_its_own_port` is the test.
 
 ### Sphere, Box, Plane and Extrude are native (2026-09-24)
 
@@ -2542,13 +2552,13 @@ by cell — so this is a layered assignment on cells, not a force-directed
 sprawl: a node's ROW is how far downstream it is, its COLUMN is chosen to sit
 under what it reads from.
 
-**Edges come from the same rule the wires do** — a node's `Input` parameter
-naming another node, which is the widget's `wire_pairs` derivation. Matching it
+**Edges come from the same rule the wires do** — every wire the network draws
+(`app::node_wires`), which is the widget's `wire_pairs` derivation. Matching it
 is the point: a layout computed from relationships you cannot see would move
-nodes for reasons that are not on screen. It also means a second operand (a
-Boolean's `With`, a Copy's target) does not pull on the layout, because it does
-not draw a wire either. When those become wires they should become edges here
-in the same change.
+nodes for reasons that are not on screen. Since second operands became wires
+(2026-09-30) they are edges too, but only for the ROW (`LayoutNode::reads`): a
+node sits below everything it reads, and under its `Input` alone, so a chain
+stays vertical and a Boolean's `With` does not drag it sideways.
 
 Flow is downward, matching every project in the repo (a Sphere at (4, 2)
 feeding an output at (4, 3)). Row is the LONGEST path from a root, not the

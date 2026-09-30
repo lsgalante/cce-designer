@@ -8070,6 +8070,7 @@ mod tests {
         let node = |name: &str, input: Option<&str>, pos: (f32, f32)| LayoutNode {
             name: name.to_string(),
             input: input.map(|s| s.to_string()),
+            reads: Vec::new(),
             position: pos,
             pinned: false,
         };
@@ -8110,6 +8111,59 @@ mod tests {
         assert_eq!(at(3).1, 1.0);
     }
 
+    /// Every wire a node has is drawn, into its own port: the Remesh's
+    /// switch reads the loop on its Input and the transfer on its Input 2,
+    /// and both are lines on the network now, where only the Input was. An
+    /// expression wire (the transfer's From) keeps its port and draws none.
+    /// A connection dropped on a port sets THAT wire, and auto-layout puts
+    /// a node below everything it reads.
+    #[test]
+    fn every_wire_is_drawn_into_its_own_port() {
+        use cce_ui::widget::node_wires;
+        let mut state = State::new(false);
+        state.current_path.clear();
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Remesh".into(), name: Some("remesh1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
+        let slot = state.current_dir().children.iter().position(|c| c.name == "remesh1").unwrap();
+        state.apply_action(McpAction::Enter { slot }, &mut redraw).unwrap();
+        state.sync_nodes();
+        let nodes = state.graph().get_nodes();
+        let get = |n: &str| nodes.iter().find(|g| g.name == n).unwrap().clone();
+        let switch = get("transfer_switch1");
+        assert_eq!(node_wires(&switch), ["repeat1", "transfer1", "", ""]);
+        assert_eq!(switch.inputs, 4);
+        let transfer = get("transfer1");
+        assert_eq!(node_wires(&transfer), ["repeat1", ""], "From is an expression: a port, no line");
+
+        // Dropped on the switch's third port: Input 3.
+        let path = state.current_path.clone();
+        let id = switch.id.clone();
+        assert!(state.connect_port(&path, &id, "input1".into(), 2));
+        let sw = state.current_dir().children.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(sw.params.iter().find(|p| p.name == "Input 3").unwrap().text(), "input1");
+        assert_eq!(sw.params.iter().find(|p| p.name == "Input").unwrap().text(), "repeat1", "the Input is untouched");
+
+        // A second operand sets the row, not the column.
+        use crate::layout::{arrange, LayoutNode};
+        let node = |name: &str, input: Option<&str>, reads: &[&str], pos: (f32, f32)| LayoutNode {
+            name: name.into(),
+            input: input.map(String::from),
+            reads: reads.iter().map(|s| s.to_string()).collect(),
+            position: pos,
+            pinned: false,
+        };
+        let nodes = vec![
+            node("a", None, &[], (0.0, 0.0)),
+            node("b", Some("a"), &[], (4.0, 0.0)),
+            node("c", Some("b"), &[], (4.0, 0.0)),
+            node("join", Some("a"), &["c"], (0.0, 0.0)),
+        ];
+        let moved: std::collections::HashMap<usize, (f32, f32)> = arrange(&nodes).into_iter().collect();
+        let at = |i: usize| moved.get(&i).copied().unwrap_or(nodes[i].position);
+        assert_eq!(at(3).1, 3.0, "below c, which it reads through its second wire");
+        assert_eq!(at(3).0, at(0).0, "under a, which its Input reads");
+    }
+
     /// The cases that would otherwise hang or overwrite: cycles, self
     /// reference, dangling names, and pinned cells.
     #[test]
@@ -8118,6 +8172,7 @@ mod tests {
         let node = |name: &str, input: Option<&str>, pos: (f32, f32), pinned: bool| LayoutNode {
             name: name.to_string(),
             input: input.map(|s| s.to_string()),
+            reads: Vec::new(),
             position: pos,
             pinned,
         };

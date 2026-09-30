@@ -6,13 +6,14 @@
 //! how far it is downstream, and its COLUMN is chosen to sit under the node it
 //! reads from.
 //!
-//! **Edges come from the same rule the wires do**: a node's `Input` parameter
-//! naming another node. That is the widget's `wire_pairs` derivation, and
-//! matching it is the point — a layout computed from relationships you cannot
-//! see would move nodes for reasons that are not on screen. It also means a
-//! second operand (a Boolean's `With`, a Copy's target) does not pull on the
-//! layout, because it does not draw a wire either. When those become wires,
-//! they should become edges here in the same change.
+//! **Edges come from the same rule the wires do**: every wire the network
+//! draws (`app::node_wires`, the widget's `wire_pairs`) — a node's `Input`,
+//! and since 2026-09-30 its second operands too (a Boolean's `With`, a
+//! Switch's `Input 2`, a Transfer's `From`). Matching the wires is the point:
+//! a layout computed from relationships you cannot see would move nodes for
+//! reasons that are not on screen. Every wire pushes a node below what it
+//! reads; the `Input` alone decides its column, so a chain stays vertical and
+//! a second operand does not drag the node sideways.
 //!
 //! **Flow is downward**, matching every project in the repo: a Sphere at
 //! (4, 2) feeds an output at (4, 3). Row is the LONGEST path from a root, not
@@ -30,6 +31,9 @@ pub struct LayoutNode {
     pub name: String,
     /// The value of its `Input` parameter, if it has one.
     pub input: Option<String>,
+    /// What its other wires read — second operands. They set its row, not
+    /// its column.
+    pub reads: Vec<String>,
     pub position: (f32, f32),
     pub pinned: bool,
 }
@@ -56,6 +60,17 @@ pub fn arrange(nodes: &[LayoutNode]) -> Vec<(usize, (f32, f32))> {
         })
         .collect();
 
+    // Every node read, the Input's included: what sets the row.
+    let find = |want: &str| {
+        let want = want.trim();
+        (!want.is_empty()).then(|| nodes.iter().position(|other| other.name == want)).flatten()
+    };
+    let reads: Vec<Vec<usize>> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| parent[i].into_iter().chain(node.reads.iter().filter_map(|r| find(r))).collect())
+        .collect();
+
     // Depth by longest path, iteratively. A name-wired graph can contain a
     // cycle (A reads B reads A), and the fixed point below simply stops
     // improving instead of recursing forever — the cycle's members end up at
@@ -65,7 +80,7 @@ pub fn arrange(nodes: &[LayoutNode]) -> Vec<(usize, (f32, f32))> {
     for _ in 0..n {
         let mut changed = false;
         for i in 0..n {
-            if let Some(p) = parent[i] {
+            for &p in &reads[i] {
                 if p != i && depth[p] + 1 > depth[i] {
                     depth[i] = depth[p] + 1;
                     changed = true;

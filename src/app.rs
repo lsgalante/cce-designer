@@ -709,6 +709,23 @@ pub fn float3_row(min: f32, max: f32, trackball: bool) -> String {
     format!("float3:{}:{}{}", min, max, if trackball { ":trackball" } else { "" })
 }
 
+/// A node's wires as the network draws them: every parameter of the `node`
+/// kind, in order — the k-th is input port k — as (name, the node it names).
+/// A wire whose row is hidden (`show_when`) or that is an expression names
+/// nothing here: it keeps its port and draws no line, since what is not on
+/// screen should not be, and an expression is not a name until evaluated.
+/// Auto-layout reads the same wires.
+pub fn node_wires(node: &FsNode) -> Vec<(String, String)> {
+    node.params
+        .iter()
+        .filter(|p| p.kind() == ParamKind::Node)
+        .map(|p| {
+            let shown = param_visible(&node.params, &p.show_when) && !p.is_expr();
+            (p.name.clone(), if shown { p.text().trim().to_string() } else { String::new() })
+        })
+        .collect()
+}
+
 pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
     // Rows whose condition does not hold are not shown. Write-back resolves a
     // row by its display key rather than by position, so a hidden parameter
@@ -6633,21 +6650,47 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         changed.len()
     }
 
-    /// One level's children as the graph widget's rows.
+    /// One level's children as the graph widget's rows. What the widget
+    /// reads of a row's parameters is its WIRES — every `node` parameter,
+    /// typed `node`, the k-th into input port k ([`node_wires`]) — so that
+    /// is what it is handed, and a node has as many input ports as it has
+    /// wires where its template declared fewer (Relax's Rest, Collision's
+    /// Collider, the Remesh's From).
     fn graph_nodes_of(dir: &FsNode) -> Vec<GraphNode> {
         dir.children
             .iter()
-            .map(|c| GraphNode {
-                id: c.id.clone(),
-                name: c.name.clone(),
-                position: c.position,
-                parameters: param_display(&c.params),
-                geom_visible: c.geometry_visible,
-                node_type: c.node_type.clone(),
-                inputs: c.inputs,
-                outputs: c.outputs,
+            .map(|c| {
+                let wires = node_wires(c);
+                GraphNode {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    position: c.position,
+                    inputs: c.inputs.max(wires.len()),
+                    parameters: wires.into_iter().map(|(name, source)| (name, source, "node".to_string())).collect(),
+                    geom_visible: c.geometry_visible,
+                    node_type: c.node_type.clone(),
+                    outputs: c.outputs,
+                }
             })
             .collect()
+    }
+
+    /// The pointer connected `output` into input port `port` of the node
+    /// `input_id` on the level at `path`: the port's wire is set. False when
+    /// the node or the port is not there.
+    pub(crate) fn connect_port(&mut self, path: &[usize], input_id: &str, output: String, port: usize) -> bool {
+        let dir = self.dir_at_mut(path);
+        let Some(child) = dir.children.iter_mut().find(|c| c.id == input_id) else { return false };
+        // A node with no wire parameter at all (none that says so) takes
+        // it as its Input, as a connection always did.
+        let slot = child.params.iter().enumerate().filter(|(_, p)| p.kind() == ParamKind::Node).map(|(i, _)| i).nth(port)
+            .or_else(|| child.params.iter().position(|p| p.name == "Input"));
+        let Some(slot) = slot else { return false };
+        child.params[slot].set_text(output);
+        self.sync_nodes();
+        self.rebuild_scene_geometry();
+        self.sync_parameters_pane();
+        true
     }
 
     pub fn sync_nodes(&mut self) {
@@ -8534,6 +8577,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     .iter()
                     .find(|p| p.name.eq_ignore_ascii_case("input"))
                     .map(|p| p.text().to_string()),
+                // The rest of the wires the network draws.
+                reads: node_wires(c).into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case("input")).map(|(_, src)| src).collect(),
                 position: c.position,
                 // Utility trees stay where they were put; see the module doc.
                 pinned: false,
@@ -10750,17 +10795,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     changed = true;
                 }
 
-                if let Some((input_node_id, output_node_name)) = self.graph_mut().take_pending_connection() {
-                    let dir = self.current_dir_mut();
-                    if let Some(child) = dir.children.iter_mut().find(|c| c.id == input_node_id) {
-                        if let Some(p) = child.params.iter_mut().find(|p| p.name == "Input") {
-                            p.set_text(output_node_name);
-                            self.sync_nodes();
-                            self.rebuild_scene_geometry();
-                            self.sync_parameters_pane();
-                            changed = true;
-                        }
-                    }
+                if let Some((input_node_id, output_node_name, port)) = self.graph_mut().take_pending_connection_to_port() {
+                    let path = self.current_path.clone();
+                    changed |= self.connect_port(&path, &input_node_id, output_node_name, port);
                 }
 
                 // A node dropped onto a wire splices in between its ends:
@@ -10816,20 +10853,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             changed = true;
                         }
                     }
-                    if let Some((input_node_id, output_node_name)) =
-                        self.slots.content2.take_pending_connection()
+                    if let Some((input_node_id, output_node_name, port)) =
+                        self.slots.content2.take_pending_connection_to_port()
                     {
                         let p2 = self.current_path2.clone();
-                        let dir = self.dir_at_mut(&p2);
-                        if let Some(child) = dir.children.iter_mut().find(|c| c.id == input_node_id) {
-                            if let Some(p) = child.params.iter_mut().find(|p| p.name == "Input") {
-                                p.set_text(output_node_name);
-                                self.sync_nodes();
-                                self.rebuild_scene_geometry();
-                                self.sync_parameters_pane();
-                                changed = true;
-                            }
-                        }
+                        changed |= self.connect_port(&p2, &input_node_id, output_node_name, port);
                     }
                     if let Some((mid_id, src_name, dest_id)) =
                         self.slots.content2.take_pending_splice()
