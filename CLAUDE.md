@@ -413,7 +413,7 @@ Where it all went:
   `DesignSettings` into `state.kdl` (`viewport` and the new `render` block),
   and edited as rows of the dialog's one list — `SETTINGS` in
   `src/dialog.rs`, whose rows are `Owner::Field` (a live field, with a `Ctl`
-  saying what control draws it) or `Owner::ActiveCamera`; the toggles are
+  saying what control draws it); the toggles are
   registry commands whose palette rows carry a switch, read through
   `command_toggle_state`. The table plus the toggle commands are the app's
   whole display configuration, so a value left out of both is GONE, not
@@ -3089,11 +3089,13 @@ selection stays where it was:
 
 **A setting row edits the live field** — see "There are no meta nodes"
 above, which is where these values used to live and why a direct write did
-not stick. `SETTINGS` is the table of which row belongs to which owner:
+not stick. `SETTINGS` is the table of rows and their owners, each an
 `Owner::Field` (a live field, with a `Ctl` saying what control draws it,
-since a bare Rust field carries no type or range the way a param did) or
-`Owner::ActiveCamera` (an active-camera param with the live field as its
-fallback — the Default Camera has no node). The toggles the retired
+since a bare Rust field carries no type or range the way a param did).
+There was a second kind, `Owner::ActiveCamera` — an active-camera param
+with the live field as its fallback — whose one row, Camera Pivot Size,
+went on 2026-09-30: no camera node has that param, so the row only ever
+wrote the field, which the viewport menu's slider sets. The toggles the retired
 subnets held are NOT rows of the table: each is a registry command with a
 switch on its own row, and a second row per toggle would have listed every
 switch twice. A row's id is its label under `SETTING_ROW_PREFIX`

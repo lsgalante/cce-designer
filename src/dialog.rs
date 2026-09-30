@@ -1279,21 +1279,19 @@ pub fn setting_of_row(id: &str) -> Option<&'static Setting> {
 /// were DOWNSTREAM of the root meta node, whose utility subnets were copied
 /// over live state on every param change, so a write straight to
 /// `State::grid_thickness` survived exactly until the next one. With that
-/// node retired the live field IS the value; this enum says which of the two
-/// remaining kinds of owner each row has. (A third kind — a toggle the
-/// command registry owns — went when the settings joined the commands list:
-/// those toggles ARE command rows there, and a second row for each would
-/// have listed every switch twice.)
+/// node retired the live field IS the value, and it is the one kind of owner
+/// left. (A toggle the command registry owns went when the settings joined
+/// the commands list: those toggles ARE command rows there, and a second row
+/// for each would have listed every switch twice. A param on the ACTIVE
+/// camera, the Camera Pivot Size row's, went on 2026-09-30: no camera node
+/// has the param, so the row only ever wrote the live field, which the
+/// viewport menu's slider sets.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
     /// A display setting the app owns outright: a live field on `State`,
     /// persisted by `DesignSettings` into `state.kdl`. Named by the key
     /// `settings_field_*` dispatch on.
     Field(&'static str),
-    /// A param on the ACTIVE camera node, with the live field as the
-    /// fallback: the Default Camera has no node, so there is nothing to write
-    /// but the field.
-    ActiveCamera(&'static str),
 }
 
 /// The control a [`Setting`] row draws.
@@ -1331,12 +1329,6 @@ impl Setting {
     /// A row over a live field.
     const fn field(label: &'static str, key: &'static str, ctl: Ctl) -> Self {
         Setting { label, owner: Owner::Field(key), ctl }
-    }
-
-    /// A row over the active camera's param of that name, a whole number
-    /// in tenths as the camera template's own spinbox is.
-    const fn camera(label: &'static str, name: &'static str) -> Self {
-        Setting { label, owner: Owner::ActiveCamera(name), ctl: Ctl::Spin { min: 1.0, max: 50.0, unit: 10.0 } }
     }
 }
 
@@ -1387,7 +1379,6 @@ pub const SETTINGS: &[Setting] = &[
     Setting::field("Grid Color", "grid_color", Ctl::Color),
     Setting::field("Grid Thickness", "grid_thickness", Ctl::Spin { min: 2.0, max: 200.0, unit: 1000.0 }),
     Setting::field("Origin Size", "origin_size", Ctl::Spin { min: 1.0, max: 50.0, unit: 10.0 }),
-    Setting::camera("Camera Pivot Size", "Camera Pivot Size"),
 ];
 
 impl State {
@@ -1872,23 +1863,6 @@ impl State {
                 Ctl::Slider { dec, .. } => format!("{:.*}", dec, self.settings_field_f32(key)),
                 Ctl::Choice(_) => self.settings_field_text(key),
             },
-            Owner::ActiveCamera(name) => {
-                let node_value = (self.active_camera != "Default Camera")
-                    .then(|| {
-                        self.current_dir()
-                            .children
-                            .iter()
-                            .find(|c| c.node_type == "camera" && c.name == self.active_camera)?
-                            .params
-                            .iter()
-                            .find(|p| p.name == name)
-                            .map(|p| p.text().to_string())
-                    })
-                    .flatten();
-                // No camera node behind the Default Camera: the live field
-                // is the value, in the same tenths the camera param uses.
-                node_value.unwrap_or_else(|| ((self.camera_pivot_size * 10.0).round() as i32).to_string())
-            }
         }
     }
 
@@ -2029,29 +2003,6 @@ impl State {
     fn setting_write(&mut self, s: &Setting, value: &str) {
         match s.owner {
             Owner::Field(key) => self.settings_field_write(key, s.ctl, value),
-            Owner::ActiveCamera(name) => {
-                let active = self.active_camera.clone();
-                let wrote = {
-                    let dir = self.current_dir_mut();
-                    match dir
-                        .children
-                        .iter_mut()
-                        .find(|c| c.node_type == "camera" && c.name == active)
-                        .and_then(|c| c.params.iter_mut().find(|p| p.name == name))
-                    {
-                        Some(p) => {
-                            p.set_text(value.to_string());
-                            true
-                        }
-                        None => false,
-                    }
-                };
-                if !wrote {
-                    if let Ok(v) = value.parse::<f32>() {
-                        self.camera_pivot_size = v / 10.0;
-                    }
-                }
-            }
         }
     }
 
@@ -2251,9 +2202,7 @@ impl State {
     /// drag this runs on every motion, so state.kdl is written on the
     /// RELEASE (`dialog_mouse_input`) rather than here; a wheel notch or an
     /// arrow key is a single landing and saves at once, as the menu's wheel
-    /// does. A spin row lands its whole number over the row's unit; the
-    /// Camera Pivot Size row, whose owner is the active camera, writes as
-    /// `setting_write` always has and re-bakes the pivot. A row the landing
+    /// does. A spin row lands its whole number over the row's unit. A row the landing
     /// does not know falls through to `apply_setting`.
     pub(crate) fn land_dialog_slider(&mut self, id: &str, v: f32) {
         if id == ZOOM_ROW_ID {
@@ -2268,11 +2217,6 @@ impl State {
                     self.land_draw_time_setting(key, shown)
                 }
                 (Owner::Field(key), Ctl::Spin { unit, .. }) => self.land_draw_time_setting(key, v.round() / unit),
-                (Owner::ActiveCamera(_), Ctl::Spin { .. }) => {
-                    self.setting_write(s, &(v.round() as i64).to_string());
-                    self.update_pivot_geometry();
-                    true
-                }
                 _ => false,
             };
             if landed {

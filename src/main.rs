@@ -13440,9 +13440,6 @@ mod tests {
                         }
                     }
                 }
-                // The active camera's params exist only once a camera node
-                // does; the Default Camera branch is exercised below.
-                Owner::ActiveCamera(_) => {}
             }
         }
     }
@@ -13892,9 +13889,6 @@ mod tests {
         state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
         assert!((state.group_marker_size - state.point_marker_size).abs() < 1e-6);
         assert_eq!(state.settings_row_value("Point Marker Size"), state.settings_row_value("Group Marker Size"));
-        state.land_dialog_slider(&setting_row_id("Camera Pivot Size"), 20.0);
-        assert!((state.camera_pivot_size - 2.0).abs() < 1e-6, "{}", state.camera_pivot_size);
-        assert!(state.pending_pivot.is_some(), "the pivot re-baked");
         assert_eq!(state.rt_geometry_version, version, "a spin row re-evaluated the graph");
         assert!((saved(&path) - 1.0).abs() < 1e-3, "the file follows every single landing");
         let kdl = fs::read_to_string(&path).expect("a settings file");
@@ -14203,12 +14197,17 @@ mod tests {
             "Wireframe Color", "Wire Opacity", "Wire Thickness", "Geometry Opacity",
             // main
             "Background Color",
-            // camera
-            "Camera Pivot Size",
         ] {
             assert!(labels.contains(&label), "'{label}' has no Settings row and no other way in");
         }
+        // The camera subnet's Camera Pivot Size is the viewport menu's
+        // slider, under Show Camera Pivot; its palette row is gone.
+        assert!(!labels.contains(&"Camera Pivot Size"), "the palette's pivot size row is retired");
         let mut state = State::new(false);
+        assert!(
+            state.viewport_menu_rows_of(None).1.contains(&crate::app::ViewportMenuAction::CameraPivotSizeSlider),
+            "Camera Pivot Size has no way in"
+        );
         for id in [
             "toggle_grid", "toggle_origin", "toggle_wireframe",
             "toggle_wire_single_color", "toggle_ray_traced_preview",
