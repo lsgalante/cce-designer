@@ -12067,6 +12067,38 @@ mod tests {
         assert_eq!(still.positions(), moved.positions());
     }
 
+    /// MCP's `enter` dives into exactly what the keyboard does: a simnet
+    /// with no children yet is a container, a native node is not.
+    #[test]
+    fn mcp_enter_agrees_with_the_keyboard_about_what_is_enterable() {
+        let mut state = State::new(false);
+        let node = |name: &str, ty: &str| crate::app::FsNode {
+            id: format!("{name}-id"),
+            name: name.to_string(),
+            node_type: ty.to_string(),
+            children: vec![],
+            params: vec![],
+            geometry_visible: false,
+            bypassed: false,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        state.current_path.clear();
+        state.fs_root.children.push(node("sim_empty", "simnet"));
+        state.fs_root.children.push(node("remesh_leaf", "remesh"));
+        let mut redraw = false;
+        for (i, child) in state.fs_root.children.clone().iter().enumerate() {
+            let entered = state.apply_action(McpAction::Enter { slot: i }, &mut redraw).is_ok();
+            assert_eq!(entered, child.is_enterable(), "{} ({})", child.name, child.node_type);
+            if entered {
+                state.apply_action(McpAction::Up, &mut redraw).unwrap();
+            }
+        }
+        let names: Vec<_> = state.fs_root.children.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"sim_empty") && names.contains(&"remesh_leaf"));
+    }
+
     /// A bypassed node is in the graph and does nothing: what reads it gets
     /// what it reads. A generator, which reads nothing, gives nothing; a
     /// subnet passes its Input and its children are not run; and a node

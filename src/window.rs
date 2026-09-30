@@ -322,7 +322,7 @@ impl State {
             }
             McpAction::Enter { slot } => {
                 let dir = state.current_dir();
-                if slot < dir.children.len() && (dir.children[slot].node_type == "node" || !dir.children[slot].children.is_empty()) {
+                if slot < dir.children.len() && dir.children[slot].is_enterable() {
                     state.current_path.push(slot);
                     state.on_path_changed();
                     state.sync_parameters_pane();
