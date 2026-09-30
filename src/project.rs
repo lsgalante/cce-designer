@@ -167,6 +167,10 @@ impl State {
             params_pin: Self::pin_name(self.params_pin),
             spreadsheet_pin: Self::pin_name(self.spreadsheet_pin),
             plates,
+            frame_range: {
+                let pb = self.slots.playbar.inner();
+                Some((pb.start_frame.round() as i32, pb.end_frame.round() as i32))
+            },
             default_view: Some(crate::app::DefaultCameraView {
                 square: self.square_viewport,
                 show_pivot: self.viewport().show_camera_pivot,
@@ -325,6 +329,14 @@ impl State {
         // Absent (an older save, or one written before pane state moved off
         // the meta node) keeps the live layout — the same rule the collapse
         // list and the splitters follow.
+        if let Some((start, end)) = vs.frame_range {
+            if start >= 1 && end > start {
+                let pb = self.slots.playbar.inner_mut();
+                pb.start_frame = start as f32;
+                pb.end_frame = end as f32;
+                pb.current_frame = pb.current_frame.clamp(pb.start_frame, pb.end_frame);
+            }
+        }
         if let Some(open) = &vs.visible_panes {
             for (name, get, action) in Self::PANE_FLAGS {
                 let desired = open.iter().any(|n| n == name);

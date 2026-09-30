@@ -2438,6 +2438,95 @@ mod tests {
         assert!(extent(0.25, 1) > 0.0);
     }
 
+    /// The playbar has a right-click menu: the transport's commands, the
+    /// Repeat switch with its mark, and the timeline's settings as slider
+    /// rows — Playback Rate, saved with the settings, and the frame range,
+    /// which is the project's, saved in its file and dirtying it.
+    #[test]
+    fn the_playbar_menu_sets_the_rate_and_the_range() {
+        use crate::app::PlaybarMenuAction as A;
+        use crate::slots::PLAYBAR_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta};
+        let dir = std::env::temp_dir().join(format!("cce-designer-playbar-menu-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.execute_menu_action("Show Playbar Pane");
+        state.rebuild_positions();
+        state.apply_layout();
+        state.save_to_file(&dir).expect("save");
+        assert!(!state.has_unsaved_changes());
+
+        let (options, actions) = state.playbar_menu_rows();
+        let groups: Vec<Vec<A>> = actions.split(|a| *a == A::Separator).map(|g| g.to_vec()).collect();
+        assert_eq!(
+            groups,
+            vec![
+                vec![A::Command("play_pause"), A::Command("play_pause_reverse"), A::Command("frame_start")],
+                vec![A::Command("toggle_playbar_repeat")],
+                vec![A::FpsSlider, A::StartFrameSlider, A::EndFrameSlider],
+            ]
+        );
+        let repeat = actions.iter().position(|a| *a == A::Command("toggle_playbar_repeat")).unwrap();
+        assert!(options[repeat].starts_with("● "), "{}", options[repeat]);
+
+        // A right press on the plate opens it.
+        let (px, py, pw, ph) = state.positions[PLAYBAR_IDX];
+        assert!(pw > 0.0 && ph > 0.0, "the playbar is laid out");
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (px + pw * 0.5) as f64, y: (py + ph * 0.5) as f64 } });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
+        assert!(state.playbar_menu_open(), "a right press on the playbar opens its menu");
+        assert!(!state.viewport_menu_open());
+
+        // The rate: a wheel notch over its row is a frame a second, saved.
+        let i = actions.iter().position(|a| *a == A::FpsSlider).unwrap();
+        let sl = context_menu::slider(i).expect("a slider");
+        assert_eq!((sl.min, sl.max, sl.step, sl.suffix), (1.0, 120.0, 1.0, " fps"));
+        assert_eq!(sl.value, 24.0);
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 6.0) });
+        assert_eq!(state.slots.playbar.inner().fps, 30.0);
+        assert!(state.playbar_menu_open(), "a slider row keeps the menu up");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert_eq!(crate::app::DesignSettings::from_kdl_str(&kdl).playbar_fps, 30.0, "persisted");
+        assert!(!state.has_unsaved_changes(), "the rate is a setting, not the project's");
+
+        // The range: an end moved past the other carries it along, and the
+        // playhead stays inside.
+        state.slots.playbar.inner_mut().current_frame = 200.0;
+        let i = actions.iter().position(|a| *a == A::EndFrameSlider).unwrap();
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -100.0) });
+        let pb = state.slots.playbar.inner();
+        assert_eq!(pb.end_frame, 140.0, "{}", pb.end_frame);
+        assert_eq!(pb.current_frame, 140.0, "the playhead is kept inside");
+        assert!(state.has_unsaved_changes(), "the range is the project's");
+        let i = actions.iter().position(|a| *a == A::StartFrameSlider).unwrap();
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 150.0) });
+        let pb = state.slots.playbar.inner();
+        assert_eq!((pb.start_frame, pb.end_frame), (151.0, 152.0), "the far end is carried a frame ahead of the near");
+
+        // A command row runs and closes.
+        let i = actions.iter().position(|a| *a == A::Command("toggle_playbar_repeat")).unwrap();
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(!state.playbar_menu_open());
+        assert!(!state.slots.playbar.inner().repeat, "Repeat was flipped");
+
+        // The range rides the project file.
+        state.save_to_file(&dir).expect("save");
+        assert!(!state.has_unsaved_changes());
+        let mut again = State::new(false);
+        again.resize(1600.0, 900.0, 1.0);
+        again.load_from_file(&dir).expect("load");
+        let pb = again.slots.playbar.inner();
+        assert_eq!((pb.start_frame, pb.end_frame), (151.0, 152.0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Camera Pivot Size is a slider under Show Camera Pivot, over 0–1:
     /// the wheel steps a twentieth, re-bakes the marker and nothing else,
     /// and saves.

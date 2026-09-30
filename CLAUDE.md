@@ -223,7 +223,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~10.8k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~11.9k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
@@ -2422,6 +2422,27 @@ The command is `layout_nodes` on `Ctrl+Shift+L` rather than the bare `L`
 Houdini uses: bare hjkl is the cursor, and shift+hjkl is reserved for the
 select family this app cannot implement until the Graph widget has
 multi-selection, so taking `Shift+L` now would have to be given back later.
+
+### The playbar's right-click menu
+
+A right press on the playbar's plate (`over_playbar`) opens the sixth
+`context_menu` consumer (2026-09-30), the viewport menu's shape:
+`playbar_menu_rows` / `handle_playbar_menu_click` /
+`run_playbar_menu_action`, `PlaybarMenuAction`. Rows: the transport's
+commands by id (Play / Pause, Play / Pause Reverse, Go To Start Frame),
+the **Repeat Playback** switch with its mark, then three slider rows —
+**Playback Rate** (1–120 fps by one), **Start Frame** (1–999) and **End
+Frame** (2–1000). An end moved past the other carries it a frame ahead,
+and the playhead is kept inside the range. The rate is a setting,
+`playbar_fps` in state.kdl beside `playbar_repeat`, saved on a wheel
+notch or a drag's release; the range is the PROJECT's —
+`ProjectViewState::frame_range`, keyed into `pane_layout_json` so it
+dirties the title, absent in an older save which keeps the live range.
+The four slider hooks in `handle_event` ask `slider_menu_open` and drain
+through `drain_menu_slider`, so the viewport's and the playbar's sliders
+share them without either being named there. `get_state` reports `fps`
+in its `playbar` block. `the_playbar_menu_sets_the_rate_and_the_range`
+drives it by pointer.
 
 ### Display mode: the viewport menu, and smooth shading
 

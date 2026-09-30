@@ -309,6 +309,12 @@ pub struct ProjectViewState {
     /// last-used look: what a new project and an older save open with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<DisplaySettings>,
+    /// The playbar's frame range, `(start, end)` — project state, since a
+    /// simulation is made for a length; absent in an older save, which
+    /// keeps the live range. Set from the playbar menu's Start Frame and
+    /// End Frame sliders (2026-09-30).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_range: Option<(i32, i32)>,
 }
 
 /// The display half of `DesignSettings` — see [`ProjectViewState::display`].
@@ -490,6 +496,24 @@ pub enum ViewportMenuAction {
     Separator,
 }
 
+
+/// The playbar's right-click menu (2026-09-30): the transport's commands,
+/// its Repeat switch, and the settings that are the timeline's — the
+/// playback rate and the frame range — as slider rows, the viewport menu's
+/// shape. Rows dispatch as the network menu's do, by command id.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlaybarMenuAction {
+    /// Run `command::by_id(id)`; a toggle command's row carries its mark.
+    Command(&'static str),
+    /// Playback Rate, in frames a second: 1–120 by one.
+    FpsSlider,
+    /// The frame range's near end, 1–999 by one; kept below the far end.
+    StartFrameSlider,
+    /// The frame range's far end, 2–1000 by one; kept above the near end.
+    EndFrameSlider,
+    /// A "-" row: engraved, inert.
+    Separator,
+}
 
 /// The network editor's right-click context menu (on empty space — a press on
 /// a node still opens that node's menu). Every row but the separator names a
@@ -1602,6 +1626,14 @@ pub struct DesignSettings {
     /// property of a scene, so it does not ride the project file.
     #[serde(default = "default_true")]
     pub playbar_repeat: bool,
+    /// The playback rate in frames a second — the playbar menu's Playback
+    /// Rate. Top-level like `playbar_repeat`, and for the same reason.
+    #[serde(default = "default_playbar_fps")]
+    pub playbar_fps: f32,
+}
+
+fn default_playbar_fps() -> f32 {
+    24.0
 }
 
 impl Default for DesignSettings {
@@ -1612,6 +1644,7 @@ impl Default for DesignSettings {
             default_project: None,
             gpu: default_gpu(),
             playbar_repeat: true,
+            playbar_fps: default_playbar_fps(),
         }
     }
 }
@@ -2069,6 +2102,9 @@ pub struct State {
     /// it holds across a re-layout of the pane.
     pub param_menu_active: bool,
     pub param_menu_actions: Vec<ParamMenuAction>,
+    /// The playbar's right-click menu, the same contract.
+    pub playbar_menu_active: bool,
+    pub playbar_menu_actions: Vec<PlaybarMenuAction>,
     pub param_menu_target: Option<(String, String)>,
     /// Copy Parameter's clipboard: (node id, parameter name). An id, so a
     /// rename between the copy and the paste still pastes the right path.
@@ -2640,6 +2676,7 @@ impl State {
             vs.collapsed_panes,
             splitters,
             vs.dock_tabs,
+            vs.frame_range,
             vs.viewport_pin,
             vs.params_pin,
             vs.spreadsheet_pin,
@@ -2721,6 +2758,7 @@ impl State {
             default_project: self.default_project_setting.clone(),
             gpu: self.gpu_preference.clone(),
             playbar_repeat: self.slots.playbar.inner().repeat,
+            playbar_fps: self.slots.playbar.inner().fps,
         };
         settings.save();
         self.last_design_mod_time = {
@@ -2947,7 +2985,7 @@ impl State {
             || self.is_panning
             || self.grid_cursor_drag.is_some()
             || self.viewer_tool.as_ref().map_or(false, |t| t.drag.is_some())
-            || (self.viewport_menu_open() && cce_ui::widget::context_menu::slider_dragging())
+            || (self.slider_menu_open() && cce_ui::widget::context_menu::slider_dragging())
             || self.dialog_visible()
     }
 
@@ -5282,6 +5320,168 @@ impl State {
         false
     }
 
+    /// The playbar menu's rows and what each does: the transport (Play /
+    /// Pause, Play / Pause Reverse, Go To Start Frame); the Repeat switch,
+    /// marked from the live flag; then the timeline's settings as slider
+    /// rows — Playback Rate, Start Frame, End Frame. Split from the open so
+    /// a test can read it, as the viewport menu's is.
+    pub(crate) fn playbar_menu_rows(&self) -> (Vec<String>, Vec<PlaybarMenuAction>) {
+        let mut options = Vec::new();
+        let mut actions = Vec::new();
+        let mark = |on: bool| if on { "●" } else { "○" };
+        let mut command = |options: &mut Vec<String>, actions: &mut Vec<PlaybarMenuAction>, id: &'static str| {
+            let Some(c) = crate::command::by_id(id) else { return };
+            let label = match self.command_toggle_state(id) {
+                Some(on) => format!("{} {}", mark(on), c.label),
+                None => c.label.to_string(),
+            };
+            options.push(label);
+            actions.push(PlaybarMenuAction::Command(id));
+        };
+        let mut row = |options: &mut Vec<String>, actions: &mut Vec<PlaybarMenuAction>, text: &str, a: PlaybarMenuAction| {
+            options.push(text.to_string());
+            actions.push(a);
+        };
+        command(&mut options, &mut actions, "play_pause");
+        command(&mut options, &mut actions, "play_pause_reverse");
+        command(&mut options, &mut actions, "frame_start");
+        row(&mut options, &mut actions, "-", PlaybarMenuAction::Separator);
+        command(&mut options, &mut actions, "toggle_playbar_repeat");
+        row(&mut options, &mut actions, "-", PlaybarMenuAction::Separator);
+        row(&mut options, &mut actions, "Playback Rate", PlaybarMenuAction::FpsSlider);
+        row(&mut options, &mut actions, "Start Frame", PlaybarMenuAction::StartFrameSlider);
+        row(&mut options, &mut actions, "End Frame", PlaybarMenuAction::EndFrameSlider);
+        (options, actions)
+    }
+
+    /// The slider a playbar menu row carries, from the live value.
+    pub(crate) fn playbar_menu_slider(&self, action: PlaybarMenuAction) -> Option<cce_ui::widget::context_menu::MenuSlider> {
+        use cce_ui::widget::context_menu::MenuSlider;
+        let pb = self.slots.playbar.inner();
+        Some(match action {
+            PlaybarMenuAction::FpsSlider => MenuSlider { value: pb.fps.clamp(1.0, 120.0).round(), min: 1.0, max: 120.0, step: 1.0, decimals: 0, suffix: " fps" },
+            PlaybarMenuAction::StartFrameSlider => MenuSlider { value: pb.start_frame.round().clamp(1.0, 999.0), min: 1.0, max: 999.0, step: 1.0, decimals: 0, suffix: "" },
+            PlaybarMenuAction::EndFrameSlider => MenuSlider { value: pb.end_frame.round().clamp(2.0, 1000.0), min: 2.0, max: 1000.0, step: 1.0, decimals: 0, suffix: "" },
+            _ => return None,
+        })
+    }
+
+    /// Land a playbar slider: the rate, or an end of the range, the other
+    /// end kept a frame clear of it and the playhead kept inside. The rate
+    /// is a setting and saved with them; the range is the project's and
+    /// dirties it.
+    fn land_playbar_menu_slider(&mut self, action: PlaybarMenuAction, v: f32) {
+        let pb = self.slots.playbar.inner_mut();
+        match action {
+            PlaybarMenuAction::FpsSlider => pb.fps = v.round().clamp(1.0, 120.0),
+            PlaybarMenuAction::StartFrameSlider => {
+                pb.start_frame = v.round().clamp(1.0, 999.0);
+                pb.end_frame = pb.end_frame.max(pb.start_frame + 1.0);
+            }
+            PlaybarMenuAction::EndFrameSlider => {
+                pb.end_frame = v.round().clamp(2.0, 1000.0);
+                pb.start_frame = pb.start_frame.min(pb.end_frame - 1.0);
+            }
+            _ => return,
+        }
+        pb.current_frame = pb.current_frame.clamp(pb.start_frame, pb.end_frame);
+        self.viewport_dirty = true;
+        self.update_window_title();
+    }
+
+    pub(crate) fn open_playbar_context_menu(&mut self) {
+        let (options, actions) = self.playbar_menu_rows();
+        let target = self.slots.get_dyn(PLAYBAR_IDX).base().id();
+        cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
+        for (i, a) in actions.iter().enumerate() {
+            if let Some(slider) = self.playbar_menu_slider(*a) {
+                cce_ui::widget::context_menu::set_row_slider(i, slider);
+            }
+        }
+        self.playbar_menu_actions = actions;
+        self.playbar_menu_active = true;
+    }
+
+    pub fn playbar_menu_open(&self) -> bool {
+        cce_ui::widget::context_menu::is_visible() && self.playbar_menu_active
+    }
+
+    fn close_playbar_menu(&mut self) {
+        cce_ui::widget::context_menu::hide();
+        self.playbar_menu_active = false;
+        self.playbar_menu_actions.clear();
+    }
+
+    /// Whether the pointer is over the playbar's plate.
+    pub fn over_playbar(&self, px: f32, py: f32) -> bool {
+        let (x, y, w, h) = self.positions[PLAYBAR_IDX];
+        self.show_playbar && w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h
+    }
+
+    /// Route a left press while the playbar menu is open — the viewport
+    /// menu's contract: a slider row is worked and keeps the menu up, any
+    /// other row runs and closes it.
+    fn handle_playbar_menu_click(&mut self) -> bool {
+        if !self.playbar_menu_open() {
+            return false;
+        }
+        if cce_ui::widget::context_menu::slider_press(self.cursor_x, self.cursor_y) {
+            self.drain_playbar_menu_slider(false);
+            return true;
+        }
+        if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
+            let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
+            let picked = idx.and_then(|i| self.playbar_menu_actions.get(i).copied());
+            self.close_playbar_menu();
+            if let Some(action) = picked {
+                self.run_playbar_menu_action(action);
+            }
+            return true;
+        }
+        self.close_playbar_menu();
+        false
+    }
+
+    pub(crate) fn run_playbar_menu_action(&mut self, action: PlaybarMenuAction) {
+        if let PlaybarMenuAction::Command(id) = action {
+            self.run_command(id);
+        }
+    }
+
+    /// Land what a playbar menu slider did; `persist` saves the rate with
+    /// the settings, as the viewport menu's drain does.
+    pub(crate) fn drain_playbar_menu_slider(&mut self, persist: bool) -> bool {
+        let Some((idx, v)) = cce_ui::widget::context_menu::take_slider_change() else {
+            if persist {
+                self.save_settings();
+            }
+            return false;
+        };
+        if let Some(action) = self.playbar_menu_actions.get(idx).copied() {
+            self.land_playbar_menu_slider(action, v);
+            if persist {
+                self.save_settings();
+            }
+        }
+        true
+    }
+
+    /// Whichever menu with slider rows is open — the viewport's or the
+    /// playbar's — drained: the four slider hooks in `handle_event` ask
+    /// this so neither menu has to be named there.
+    fn drain_menu_slider(&mut self, persist: bool) -> bool {
+        if self.playbar_menu_open() {
+            self.drain_playbar_menu_slider(persist)
+        } else {
+            self.drain_viewport_menu_slider(persist)
+        }
+    }
+
+    /// A menu whose rows carry sliders is open.
+    fn slider_menu_open(&self) -> bool {
+        self.viewport_menu_open() || self.playbar_menu_open()
+    }
+
     /// One row-menu action on one parameter, by node id and name — the
     /// entry the menu, a test and any future command share.
     pub fn run_param_action(&mut self, node_id: &str, pname: &str, action: ParamMenuAction) {
@@ -6917,6 +7117,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         });
 
         slots.playbar.inner_mut().repeat = settings.playbar_repeat;
+        slots.playbar.inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
             viewport.show_grid = settings.viewport.show_grid_enabled;
             viewport.show_origin = settings.viewport.show_origin_enabled;
@@ -7012,6 +7213,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             viewport_menu_actions: Vec::new(),
             param_menu_active: false,
             param_menu_actions: Vec::new(),
+            playbar_menu_active: false,
+            playbar_menu_actions: Vec::new(),
             param_menu_target: None,
             copied_param: None,
             rename_target: None,
@@ -9212,11 +9415,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 }
                 // Over an open viewport menu the wheel is the menu's: a
                 // slider row steps, and nothing scrolls or orbits beneath.
-                if self.viewport_menu_open()
+                if self.slider_menu_open()
                     && cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y)
                 {
                     if cce_ui::widget::context_menu::mouse_wheel(delta, self.cursor_x, self.cursor_y) {
-                        self.drain_viewport_menu_slider(true);
+                        self.drain_menu_slider(true);
                     }
                     return true;
                 }
@@ -9419,7 +9622,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 // Track hover on the node/viewport/network context menus so
                 // the highlight follows.
-                if (self.node_menu_open() || self.viewport_menu_open() || self.network_menu_open())
+                if (self.node_menu_open() || self.viewport_menu_open() || self.network_menu_open() || self.playbar_menu_open())
                     && cce_ui::widget::context_menu::cursor_moved(self.cursor_x, self.cursor_y)
                 {
                     changed = true;
@@ -9427,8 +9630,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // A held menu slider follows the pointer (cursor_moved moved
                 // it); land the value, and let nothing else read this motion
                 // as a drag of its own.
-                if self.viewport_menu_open() && cce_ui::widget::context_menu::slider_dragging() {
-                    self.drain_viewport_menu_slider(false);
+                if self.slider_menu_open() && cce_ui::widget::context_menu::slider_dragging() {
+                    self.drain_menu_slider(false);
                     return true;
                 }
 
@@ -9645,7 +9848,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     && *button == MouseButton::Left
                     && cce_ui::widget::context_menu::slider_release()
                 {
-                    self.drain_viewport_menu_slider(true);
+                    self.drain_menu_slider(true);
                     return true;
                 }
                 if *btn_state == ElementState::Pressed {
@@ -9822,6 +10025,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 return true;
                             }
                         }
+                        // The playbar's menu, same contract.
+                        if self.playbar_menu_open() {
+                            if *button == MouseButton::Left && self.handle_playbar_menu_click() {
+                                return true;
+                            }
+                            self.close_playbar_menu();
+                            if *button == MouseButton::Left {
+                                return true;
+                            }
+                        }
                         // The parameter row menu, same contract again.
                         if self.param_menu_open() {
                             if *button == MouseButton::Left && self.handle_param_menu_click() {
@@ -9842,6 +10055,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 self.close_viewport_menu();
                                 self.close_network_menu();
                                 self.open_param_context_menu(slot, pname);
+                                return true;
+                            }
+                            // A right press on the playbar opens its menu.
+                            if self.over_playbar(self.cursor_x, self.cursor_y) {
+                                self.close_node_menu();
+                                self.close_viewport_menu();
+                                self.close_network_menu();
+                                self.open_playbar_context_menu();
                                 return true;
                             }
                         }
@@ -10653,6 +10874,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             self.close_viewport_menu();
                         } else if self.param_menu_open() {
                             self.close_param_menu();
+                        } else if self.playbar_menu_open() {
+                            self.close_playbar_menu();
                         } else if self.network_menu_open() {
                             self.close_network_menu();
                         } else {
@@ -10925,6 +11148,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                          self.default_project_setting = settings.default_project.clone();
                          self.gpu_preference = settings.gpu.clone();
                          self.slots.playbar.inner_mut().repeat = settings.playbar_repeat;
+                         self.slots.playbar.inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
                          self.square_viewport = settings.viewport.square;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;

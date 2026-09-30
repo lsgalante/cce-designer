@@ -264,6 +264,7 @@ impl State {
                 "playing": pb.playing,
                 "reversed": pb.reversed,
                 "repeat": pb.repeat,
+                "fps": pb.fps,
                 "start_frame": pb.start_frame.round() as i64,
                 "end_frame": pb.end_frame.round() as i64,
             });
