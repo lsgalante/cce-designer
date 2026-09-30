@@ -832,7 +832,10 @@ before the row is off, so a saved Transfer carries what it carried.
 
 **Remesh has the same transfer inside it**, its `Transfer` toggle (off
 by default) with From, Attributes, Transfer Groups, Groups and Maximum
-Distance rows shown while it is on (`remesh_transfer`): once the mesh is
+Distance rows shown while it is on — since the Remesh became a subnet
+(below) that is its `transfer1` child, an ordinary Transfer node whose
+rows are expressions on the subnet's, behind a switch on `chi("../Transfer")`;
+the native node's copy is `remesh_transfer`: once the mesh is
 remeshed, a source's attributes and groups laid over the NEW points by
 nearest point — the node's own input when From names nothing, which
 needs no wire, else the node it names. What a point was rides a split by
@@ -842,7 +845,8 @@ it, a group is kept at every step of a solve with no Transfer node wired
 in after. A From it cannot resolve is an error on the node. (It was on
 the Relax node for an hour, from its Rest — the user's slip, taken back
 the same day.) `transfer_carries_groups_and_remesh_has_a_copy` is the
-test, the rule on hand-built points and both nodes through their rows.
+test, the rule on hand-built points and both nodes through their rows —
+the Remesh both ways, native and subnet.
 
 ### Mold tooling
 
@@ -1049,7 +1053,10 @@ the way a Houdini HDA is — the Embryo is the first to be recomposed that
 way — both in `src/geometry.rs`:
 
 - **`find_input_node(root, target, name)` looks for a SIBLING first, then
-  anywhere.** Every resolver used to search the whole tree from the top, so
+  on each level around the node, nearest first (since 2026-09-30), then
+  anywhere.** The middle step is what lets a child of a subnet name a node
+  BESIDE the subnet — the Remesh subnet's Transfer reading its From —
+  and find that one, not the first of the name in the tree. Every resolver used to search the whole tree from the top, so
   inside the second instance of a subnet a child wired to "input1" found the
   first instance's; the opencl and output resolvers had each grown a
   sibling-first lookup of their own to dodge exactly that. Every wire goes
@@ -1179,6 +1186,98 @@ a base that is itself a subnet brings raw children of its own, and those
 resolve the same way, or the nested sphere's kernel node arrived with only
 the params its override named. Depth-bounded, so a template that contained
 itself would fail rather than recurse forever.
+
+### The Remesh node is a subnet, and Repeat is a loop (2026-09-30)
+
+The Remesh is a template of nodes now, as the Embryo is, so it can be dived
+into and its passes read, bypassed and rewired. `nodes/remesh.json`:
+
+```
+remesh1 (node)  input1 → repeat1 → transfer1 ─┐
+                               └──────────── result1 (switch on Transfer) → output1
+repeat1 (repeat, Iterations = chi("../Iterations"), Stop When Unchanged on)
+                input1 → split1 → collapse1 → flip1 → relax1 → project1 → output1
+                seed1 ───────────────────────────────────────┘ (Surface)
+```
+
+The subnet makes the mesh the native remesh makes, BIT FOR BIT — points,
+identities, the id counter, primitives, attributes, groups, transfer
+included — and `the_remesh_subnet_is_the_remesh` holds it there, twice in
+a row as a solve's steps are. That rests on three things: a pass that
+changes nothing hands its input back as it came; one that changes
+something converts to the remesher's `Mesh` and back, and the conversion
+keeps point and triangle ORDER (compaction is monotone, so the edge list
+every pass sorts by index comes out the same); and `Mesh::from_detail`
+takes the id counter the detail carries, not one past the highest id left
+— otherwise a point a collapse removed had its id handed out again by the
+next pass's split (which the native remesh, holding one `Mesh` throughout,
+never did — and which, across the frames of a solve, it DID do, so the
+change is a fix for the native node too). With no relaxation and nothing to
+do the input comes back untouched, as the native node's does: every pass
+returns its input, and Project hands back a mesh that IS its Surface.
+
+The pieces, all reusable on their own:
+
+- **Repeat** (`repeat`, `nodes/repeat.json`) — a loop: its chain run
+  Iterations times (at most `REPEAT_MAX`), each pass on the last one's
+  result, through the feedback stack the simnet uses — the `input` child
+  reads the pass before. **Stop When Unchanged** ends it at a pass that
+  changes nothing (`Detail`'s `PartialEq`, every value a reader can see).
+  No frames, and nothing kept between evaluations. It is enterable, the
+  scene walk does not recurse into it (one pass drawn beside the result
+  would be wrong, as for a simnet), and dived in its chain is shown as its
+  LAST pass saw it.
+- **Seed** (`seed`) — inside a loop, what the loop BEGAN from: a repeat's
+  Input, a simnet's seed (the rest shape, which Relax's Rest and the
+  remesh's projection want). Elsewhere, the subnet's Input. Plumbing, so it
+  ignores bypass as `input` and `output` do.
+- **Split Edges / Collapse Edges / Flip Edges** (`split_edges`,
+  `collapse_edges`, `flip_edges`) — one remesh pass each toward a Target
+  Length (`remesh::edge_pass`).
+- **Relax's Tangential mode** — the remesh's relaxation: toward the
+  neighbours' centroid by Amount, less the normal part, Iterations times
+  (`remesh::relax_tangential`). Positions only, so polygons and primitive
+  attributes come through.
+- **Project** (`project`) — every point to the nearest place on a Surface
+  (`remesh::project_onto`; the grid is kept per thread by a hash of the
+  surface, since the subnet projects onto one surface every pass).
+
+**The native `remesh` type still evaluates** (`resolve_remesh_geometry_with_errors`):
+it is what an older save holds until the load recomposes it, it is what
+`mold` calls, and it is what the subnet is held to. `merge_template_defs`
+turns every native `remesh` into the subnet on load, keeping id, name,
+position, flags and values (`recompose_native_embryo`, which does both
+now). The native node's **Split / Collapse / Flip / Project** switches are
+not rows of the subnet — the passes are nodes — so one that was off
+BYPASSES its node inside (`REMESH_PASS_SWITCHES`).
+`a_native_remesh_recomposes_on_load` is the test. A saved simnet holding a
+remesh changes its JSON by this, so its solve goes on from the frame in
+hand under a new key ("An edit is in from the next frame").
+
+Four changes elsewhere came with it:
+
+- **A subnet evaluates its Input once per evaluation** (`EvalSim::seeds`,
+  `level_input`): the first child that reads it fills the slot and the
+  rest read the slot. Without it the subnet's transfer, reading `input1`
+  beside the repeat, evaluated everything upstream of a remesh twice — in
+  a simnet, the detangle. A loop fills the slot as it begins.
+- **An `input` resolves its subnet's wire from the subnet's level**, not
+  from inside: a child that shares the wire's name (the Embryo's `sphere1`
+  beside an outer `sphere1`) is not what the wire names.
+- **A level inside a loop is shown as the loop's last pass saw it**
+  (`push_loop_feedback`, outermost loop first): the scene walk dived into
+  a subnet inside a simnet, the spreadsheet and markers
+  (`node_geometry_as_shown`) and the pull arrows. Until then, dived into a
+  subnet inside a simnet, its `input` read the simnet's seed and the level
+  showed one run of the chain from frame 1 while the simnet beside it
+  played. A visible subnet child of a simnet draws in the simnet's
+  interior too, as its output.
+- **A template child that lists children brings them** (`load_fs_tree`),
+  rather than its base template's — `repeat1` is a Repeat holding the
+  passes, not the Repeat template's empty loop.
+
+`a_repeat_loops_its_chain_and_shows_its_last_pass` covers the loop, the
+seed and both interior views.
 
 ### The wrangle node
 
@@ -1631,8 +1730,10 @@ first written are kept under `cfg(test)` (`flip_pass_reference`,
 step after step. The third changes what a remesh makes, where a flip
 would have made an overlong edge; `a_remesh_settles_and_then_leaves_the_mesh_alone`
 is its test, and fails without the rule ("still changing 162 edges after
-20 rounds"). `remesh::last_changes` is the count the test and the profile
-read.
+20 rounds"). `remesh::last_changes` is the count the test reads, and
+`remesh::take_edge_changes` the profile's: every edge changed since it was
+last taken, by a native remesh or a pass node, since the Remesh subnet is
+several passes where `last_changes` sees one remesh.
 
 ### A grouped point survives a remesh
 

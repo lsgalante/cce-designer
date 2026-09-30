@@ -12,9 +12,9 @@
     },
     {
       "name": "Mode",
-      "type": "choice:Springs,Repel",
+      "type": "choice:Springs,Repel,Tangential",
       "default": "Springs",
-      "description": "Springs pulls edge lengths back toward those of the Rest geometry. Repel pushes points apart until spheres of Radius around them stop overlapping."
+      "description": "Springs pulls edge lengths back toward those of the Rest geometry. Repel pushes points apart until spheres of Radius stop overlapping. Tangential evens out triangles along the surface."
     },
     {
       "name": "Rest",
@@ -47,7 +47,7 @@
       "min": 0.0,
       "max": 50.0,
       "step": 1.0,
-      "description": "Number of relaxation passes. More passes settle further. In Repel mode 0 turns the node off; Springs always runs at least one."
+      "description": "Number of relaxation passes. More passes settle further. In Repel and Tangential modes 0 turns the node off; Springs always runs at least one."
     },
     {
       "name": "Radius",
@@ -65,6 +65,16 @@
       "default": "false",
       "show_when": "Mode == Repel",
       "description": "When off, points slide only along the surface (in their tangent plane) as they repel. When on, they may move freely in 3D and leave the surface."
+    },
+    {
+      "name": "Amount",
+      "type": "slider",
+      "default": "0.50",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01,
+      "show_when": "Mode == Tangential",
+      "description": "How far each point moves toward the centroid of its neighbours per pass, 0 to 1, less the part along its normal, so triangles even out while the shape stays. 0 turns it off."
     }
   ]
 }

@@ -641,8 +641,8 @@ pub fn find_parent_node<'a>(root: &'a FsNode, child_id: &str) -> Option<&'a FsNo
     visit(root, child_id)
 }
 
-/// The node `name` refers to from `target`: a SIBLING first, then anywhere
-/// under `root`.
+/// The node `name` refers to from `target`: a SIBLING first, then a node on
+/// each level around it, nearest first, then anywhere under `root`.
 ///
 /// Every resolver used to search the whole tree from the top, so inside the
 /// second instance of a subnet a child wired to "input1" found the FIRST
@@ -656,9 +656,19 @@ pub fn find_input_node<'a>(root: &'a FsNode, target: &FsNode, name: &str) -> Opt
     if name.is_empty() {
         return None;
     }
-    find_parent_node(root, &target.id)
-        .and_then(|p| p.children.iter().find(|c| c.name == name || c.id == name))
-        .or_else(|| find_node_by_name(root, name))
+    // The level the node stands on, then each level around it, then
+    // anywhere: a wire out of a subnet's child to a node beside the subnet
+    // (the Remesh subnet's Transfer reading its From) finds THAT node, not
+    // the first of the name in the tree, which in a second copy of the
+    // enclosing level is the first copy's.
+    let mut at = target.id.as_str();
+    while let Some(level) = find_parent_node(root, at) {
+        if let Some(found) = level.children.iter().find(|c| c.name == name || c.id == name) {
+            return Some(found);
+        }
+        at = level.id.as_str();
+    }
+    find_node_by_name(root, name)
 }
 
 pub use crate::expr::{ChKind, Value};
@@ -1205,11 +1215,41 @@ pub struct EvalSim<'a> {
     pub start_frame: i32,
     pub cache: &'a mut SimCache,
     feedback: Vec<(String, Detail)>,
+    /// What each container being evaluated now takes in, by its id: a
+    /// simnet's seed and a repeat's Input, filled as the loop begins, and a
+    /// subnet's Input, filled the first time a child asks. An `input` or
+    /// `seed` child reads it here rather than evaluating the Input again —
+    /// every pass of a loop, and every child of a subnet that reads it (the
+    /// Remesh subnet's repeat and its transfer both do, and what is upstream
+    /// of a remesh in a simnet is most of the step).
+    seeds: Vec<(String, Option<Detail>)>,
 }
 
 impl<'a> EvalSim<'a> {
     pub fn new(frame: i32, start_frame: i32, cache: &'a mut SimCache) -> Self {
-        Self { frame, start_frame, cache, feedback: Vec::new() }
+        Self { frame, start_frame, cache, feedback: Vec::new(), seeds: Vec::new() }
+    }
+
+    /// What the container `id` takes in, while it is being evaluated — kept
+    /// once asked for. `None` when `id` is not being evaluated (a node inside
+    /// it evaluated on its own, as the scene walk and the spreadsheet do):
+    /// the caller evaluates the Input itself then.
+    fn level_input(
+        &mut self,
+        id: &str,
+        evaluate: impl FnOnce(&mut Self) -> Option<Detail>,
+    ) -> Option<Option<Detail>> {
+        let at = self.seeds.iter().rposition(|(k, _)| k == id)?;
+        if let Some(kept) = &self.seeds[at].1 {
+            return Some(Some(kept.clone()));
+        }
+        // Pushes made while evaluating are popped again before it returns,
+        // so `at` still names this entry.
+        let got = evaluate(self);
+        if let Some(g) = &got {
+            self.seeds[at].1 = Some(g.clone());
+        }
+        Some(got)
     }
 
     /// The state an `input` node should yield, if its parent simnet is mid-solve.
@@ -1261,7 +1301,7 @@ pub fn generate_single_node_geometry(root: &FsNode, target: &FsNode, visited: &m
 /// `input` and `output` are a subnet's plumbing and a camera is not
 /// geometry: the flag on any of them says nothing.
 pub fn is_bypassed(node: &FsNode) -> bool {
-    node.bypassed && !["input", "output", "camera"].iter().any(|ty| node.node_type.eq_ignore_ascii_case(ty))
+    node.bypassed && !["input", "output", "seed", "camera"].iter().any(|ty| node.node_type.eq_ignore_ascii_case(ty))
 }
 
 pub fn generate_single_node_geometry_with_errors(
@@ -1381,6 +1421,16 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_suture_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("remesh") {
         resolve_remesh_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("split_edges") {
+        resolve_edge_pass_geometry_with_errors(root, target, crate::remesh::Pass::Split, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("collapse_edges") {
+        resolve_edge_pass_geometry_with_errors(root, target, crate::remesh::Pass::Collapse, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("flip_edges") {
+        resolve_edge_pass_geometry_with_errors(root, target, crate::remesh::Pass::Flip, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("project") {
+        resolve_project_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("repeat") {
+        resolve_repeat_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("develop") {
         resolve_develop_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("visualize") {
@@ -1395,7 +1445,10 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_simnet_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("node") {
         if let Some(output_node) = target.children.iter().find(|c| c.node_type.eq_ignore_ascii_case("output")) {
-            generate_single_node_geometry_with_errors(root, output_node, visited, ocl_error, sim)
+            sim.seeds.push((target.id.clone(), None));
+            let res = generate_single_node_geometry_with_errors(root, output_node, visited, ocl_error, sim);
+            sim.seeds.pop();
+            res
         } else {
             None
         }
@@ -1404,6 +1457,11 @@ pub fn generate_single_node_geometry_with_errors(
         // which this arm spelled out by hand before that function existed.
         param_node(root, target, "Input")
             .and_then(|node| generate_single_node_geometry_with_errors(root, node, visited, ocl_error, sim))
+    } else if target.node_type.eq_ignore_ascii_case("seed") {
+        // What the enclosing loop began from, whichever pass it is on: a
+        // repeat's Input, a simnet's seed. Outside a loop, the subnet's
+        // Input, as `input` reads it.
+        find_parent_node(root, &target.id).and_then(|parent| level_input(root, parent, visited, ocl_error, sim))
     } else if target.node_type.eq_ignore_ascii_case("input") {
         if let Some(parent) = find_parent_node(root, &target.id) {
             // Inside a simnet that is mid-solve, the input IS the previous
@@ -1414,13 +1472,7 @@ pub fn generate_single_node_geometry_with_errors(
                 visited.pop();
                 return Some(fed);
             }
-            // Resolved, like the kernel's parent read above: a subnet's
-            // Input may itself be a reference.
-            let resolved_parent = resolve_param_refs(root, parent, sim.frame, ocl_error);
-            let parent = resolved_parent.as_ref().unwrap_or(parent);
-            node_param_node(parent, "Input")
-                .and_then(|name| find_input_node(root, target, &name))
-                .and_then(|input_node| generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim))
+            level_input(root, parent, visited, ocl_error, sim)
         } else {
             None
         }
@@ -1925,6 +1977,15 @@ pub fn resolve_relax_geometry_with_errors(
 ) -> Option<Detail> {
     let input_node = param_node(root, target, "Input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+
+    // Tangential mode: the remesh's relaxation — each point toward the
+    // centroid of its neighbours by Amount, less the part along its normal,
+    // so the triangles even out and the shape stays. Zero iterations or a
+    // zero Amount is off.
+    if node_param_str(target, "Mode", "Springs").eq_ignore_ascii_case("tangential") {
+        let iterations = node_param_f32(target, "Iterations", 1.0).max(0.0) as usize;
+        return Some(crate::remesh::relax_tangential(&geom, node_param_f32(target, "Amount", 0.5), iterations));
+    }
 
     // Repel mode: the Relax SOP — spheres of Radius pushed apart until they
     // stop overlapping, each point sliding in its tangent plane unless In 3D
@@ -3433,6 +3494,12 @@ fn remesh_transfer(
     );
 }
 
+/// A native remesh's pass switches and the node inside the Remesh subnet's
+/// repeat that each one is: what the load bypasses when it recomposes a
+/// native remesh whose switch was off.
+pub const REMESH_PASS_SWITCHES: [(&str, &str); 4] =
+    [("Split", "split1"), ("Collapse", "collapse1"), ("Flip", "flip1"), ("Project", "project1")];
+
 pub(crate) fn remesh_settings(target: &FsNode) -> crate::remesh::Settings {
     crate::remesh::Settings {
         target: node_param_f32(target, "Target Length", 0.1).max(1e-4),
@@ -3442,6 +3509,199 @@ pub(crate) fn remesh_settings(target: &FsNode) -> crate::remesh::Settings {
         collapse: node_param_bool(target, "Collapse", true),
         flip: node_param_bool(target, "Flip", true),
         project: node_param_bool(target, "Project", true),
+    }
+}
+
+/// What the container `parent` takes in: its Input, evaluated once per
+/// evaluation of the container and kept on [`EvalSim`] for the rest of it,
+/// or evaluated here when the container is not being evaluated.
+fn level_input(
+    root: &FsNode,
+    parent: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let evaluate = |sim: &mut EvalSim, visited: &mut Vec<String>, ocl_error: &mut Option<String>| {
+        // Resolved: a subnet's Input may itself be a reference.
+        let resolved_parent = resolve_param_refs(root, parent, sim.frame, ocl_error);
+        let parent = resolved_parent.as_ref().unwrap_or(parent);
+        // Looked up from the SUBNET's level, not from inside it: the name is
+        // the subnet's wire, and a child that happens to share it (the
+        // Embryo's sphere1 beside an outer sphere1) is not what it names.
+        node_param_node(parent, "Input")
+            .and_then(|name| find_input_node(root, parent, &name))
+            .and_then(|input_node| generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim))
+    };
+    match sim.level_input(&parent.id, |sim| evaluate(sim, visited, ocl_error)) {
+        Some(kept) => kept,
+        None => evaluate(sim, visited, ocl_error),
+    }
+}
+
+/// The Split Edges, Collapse Edges and Flip Edges nodes: one of the
+/// remesh's passes on its own ([`crate::remesh::edge_pass`]), toward the
+/// node's Target Length. They are what the Remesh subnet is built from.
+pub fn resolve_edge_pass_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    pass: crate::remesh::Pass,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = param_node(root, target, "Input")?;
+    let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    Some(crate::remesh::edge_pass(&geom, pass, node_param_f32(target, "Target Length", 0.1).max(1e-4)))
+}
+
+/// The Project node: every point of the Input moved to the nearest place on
+/// the Surface ([`crate::remesh::project_onto`]). No Surface, or one that
+/// does not resolve, passes the input through; the second is an error on
+/// the node.
+pub fn resolve_project_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    let input_node = param_node(root, target, "Input")?;
+    let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
+    let Some(surface_name) = node_param_node(target, "Surface") else { return Some(geom) };
+    let Some(surface) = find_input_node(root, target, &surface_name)
+        .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+    else {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!("{}: cannot resolve Surface '{}'", target.name, surface_name));
+        }
+        return Some(geom);
+    };
+    Some(crate::remesh::project_onto(&geom, &surface))
+}
+
+/// How many passes a Repeat runs at most, whatever its Iterations says: a
+/// hand-edited file reaches here too, and a loop of a million passes is
+/// indistinguishable from a hang.
+pub const REPEAT_MAX: usize = 1000;
+
+/// The Repeat node: its chain run Iterations times, each pass on what the
+/// last one made — a loop, as a simnet is one over frames, with no frames
+/// and nothing kept between evaluations. The `input` child reads the pass
+/// before (the Input on the first), a `seed` child what the loop began
+/// from. Stop When Unchanged ends it at a pass that changes nothing, since
+/// every later one would find the same. A pass that yields nothing (an
+/// unwired chain) keeps what the pass before made.
+pub fn resolve_repeat_geometry_with_errors(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    run_repeat(root, target, visited, ocl_error, sim).map(|(state, _)| state)
+}
+
+/// A repeat's result and the state its LAST pass began from — what its
+/// chain's nodes are shown as, dived in, as a simnet's are shown as its
+/// last substep saw them. Both are the Input when no pass runs.
+fn run_repeat(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<(Detail, Detail)> {
+    let output_node = target.children.iter().find(|c| c.node_type.eq_ignore_ascii_case("output"))?;
+    let seed = param_node(root, target, "Input")
+        .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
+        .unwrap_or_default();
+    let iterations = (node_param_f32(target, "Iterations", 1.0).round().max(0.0) as usize).min(REPEAT_MAX);
+    let stop = node_param_bool(target, "Stop When Unchanged", false);
+    sim.seeds.push((target.id.clone(), Some(seed.clone())));
+    let mut state = seed.clone();
+    let mut prev = seed;
+    for _ in 0..iterations {
+        sim.feedback.push((target.id.clone(), state));
+        let passed = generate_single_node_geometry_with_errors(root, output_node, visited, ocl_error, sim);
+        let before = sim.feedback.pop().map(|(_, g)| g).unwrap_or_default();
+        let after = passed.unwrap_or_else(|| before.clone());
+        let unchanged = stop && after == before;
+        prev = before;
+        state = after;
+        if unchanged {
+            break;
+        }
+    }
+    sim.seeds.pop();
+    Some((state, prev))
+}
+
+/// Whether `node` runs its chain as a loop — a simnet over frames, a repeat
+/// over passes — so that what is inside is one pass of it, read through the
+/// feedback stack.
+pub fn is_loop(node: &FsNode) -> bool {
+    node.node_type.eq_ignore_ascii_case("simnet") || node.node_type.eq_ignore_ascii_case("repeat")
+}
+
+/// The state a loop's LAST pass began from: a simnet's last substep of the
+/// current frame ([`simnet_step_feedback`]), a repeat's last iteration.
+pub fn loop_step_feedback(
+    root: &FsNode,
+    target: &FsNode,
+    visited: &mut Vec<String>,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> Option<Detail> {
+    if target.node_type.eq_ignore_ascii_case("simnet") {
+        simnet_step_feedback(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("repeat") {
+        run_repeat(root, target, visited, ocl_error, sim).map(|(_, prev)| prev)
+    } else {
+        None
+    }
+}
+
+/// Push the feedback of every loop around `target` — and `target` itself
+/// when `include_self` and it is one — OUTERMOST first, each worked out with
+/// the ones outside it already pushed, so a node inside a repeat inside a
+/// simnet reads the repeat's last pass of the simnet's last substep. How
+/// many were pushed is returned, for [`pop_loop_feedback`].
+///
+/// This is how anything that shows a node inside a loop shows it: the scene
+/// walk dived in, the spreadsheet, the markers, the pull arrows.
+pub fn push_loop_feedback(
+    root: &FsNode,
+    target: &FsNode,
+    include_self: bool,
+    ocl_error: &mut Option<String>,
+    sim: &mut EvalSim,
+) -> usize {
+    let mut loops: Vec<&FsNode> = Vec::new();
+    if include_self && is_loop(target) {
+        loops.push(target);
+    }
+    let mut at = target;
+    while let Some(parent) = find_parent_node(root, &at.id) {
+        if is_loop(parent) {
+            loops.push(parent);
+        }
+        at = parent;
+    }
+    let mut pushed = 0;
+    for l in loops.into_iter().rev() {
+        if let Some(fed) = loop_step_feedback(root, l, &mut Vec::new(), ocl_error, sim) {
+            sim.feedback.push((l.id.clone(), fed));
+            pushed += 1;
+        }
+    }
+    pushed
+}
+
+/// Undo a [`push_loop_feedback`].
+pub fn pop_loop_feedback(sim: &mut EvalSim, pushed: usize) {
+    for _ in 0..pushed {
+        sim.feedback.pop();
     }
 }
 
@@ -3617,33 +3877,17 @@ pub fn moves_points(node: &FsNode) -> bool {
 /// child read the simnet's seed and the rows showed the first frame at
 /// every frame, while the scene beside them played. The simnet is the
 /// nearest one above the node, so a node in a subnet inside a simnet is
-/// read the same way.
+/// read the same way. Every loop around it is, in fact — a repeat's last
+/// pass as well as a simnet's last substep ([`push_loop_feedback`]).
 pub fn node_geometry_as_shown(
     root: &FsNode,
     target: &FsNode,
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let mut simnet = None;
-    let mut at = target;
-    while let Some(parent) = find_parent_node(root, &at.id) {
-        if parent.node_type.eq_ignore_ascii_case("simnet") {
-            simnet = Some(parent);
-            break;
-        }
-        at = parent;
-    }
-    let mut pushed = false;
-    if let Some(simnet) = simnet {
-        if let Some(fed) = simnet_step_feedback(root, simnet, &mut Vec::new(), ocl_error, sim) {
-            sim.feedback.push((simnet.id.clone(), fed));
-            pushed = true;
-        }
-    }
+    let pushed = push_loop_feedback(root, target, false, ocl_error, sim);
     let geom = generate_single_node_geometry_with_errors(root, target, &mut Vec::new(), ocl_error, sim);
-    if pushed {
-        sim.feedback.pop();
-    }
+    pop_loop_feedback(sim, pushed);
     geom
 }
 
@@ -3666,23 +3910,10 @@ pub fn point_displacements(root: &FsNode, target: &FsNode, sim: &mut EvalSim) ->
         return Vec::new();
     };
     let mut ocl_error = None;
-    let simnet = find_parent_node(root, &target.id).filter(|p| p.node_type.eq_ignore_ascii_case("simnet"));
-    let mut pushed = false;
-    if let Some(simnet) = simnet {
-        let mut visited = Vec::new();
-        match simnet_step_feedback(root, simnet, &mut visited, &mut ocl_error, sim) {
-            Some(fed) => {
-                sim.feedback.push((simnet.id.clone(), fed));
-                pushed = true;
-            }
-            None => return Vec::new(),
-        }
-    }
+    let pushed = push_loop_feedback(root, target, false, &mut ocl_error, sim);
     let before = generate_single_node_geometry_with_errors(root, input_node, &mut Vec::new(), &mut ocl_error, sim);
     let after = generate_single_node_geometry_with_errors(root, target, &mut Vec::new(), &mut ocl_error, sim);
-    if pushed {
-        sim.feedback.pop();
-    }
+    pop_loop_feedback(sim, pushed);
     let (Some(before), Some(after)) = (before, after) else { return Vec::new() };
     if before.num_points() != after.num_points() {
         return Vec::new();
@@ -5255,6 +5486,12 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "normal"
         || nt == "attribute"
         || nt == "simnet"
+        || nt == "repeat"
+        || nt == "seed"
+        || nt == "split_edges"
+        || nt == "collapse_edges"
+        || nt == "flip_edges"
+        || nt == "project"
 }
 
 /// The scene at the timeline's start frame, with a throwaway sim cache — every
@@ -5295,7 +5532,14 @@ pub fn network_sphere_vertices_with_errors(
     // wired into the chain at all (a seed being built beside it) simply
     // draws. Before 2026-09-21 only the output flag drew anything, and a
     // visible node inside a simnet was a node you could not see.
-    if start.node_type.eq_ignore_ascii_case("simnet") {
+    //
+    // A repeat is shown the same way (since 2026-09-30), its chain as its
+    // last pass saw it. And a level INSIDE a loop — a subnet in a simnet,
+    // the Remesh subnet's repeat — is walked with every loop around it
+    // pushed, outermost first, so what it draws is this frame's and this
+    // pass's rather than one run of each chain from its seed.
+    let around = push_loop_feedback(root, start, false, ocl_error, sim);
+    let out = if is_loop(start) {
         let mut out = Detail::new();
         let display_on = start
             .children
@@ -5305,22 +5549,24 @@ pub fn network_sphere_vertices_with_errors(
             .unwrap_or(true);
         if display_on {
             let mut visited = Vec::new();
-            if let Some(geom) = resolve_simnet_geometry_with_errors(root, start, &mut visited, ocl_error, sim) {
+            if let Some(geom) = generate_single_node_geometry_with_errors(root, start, &mut visited, ocl_error, sim) {
                 out.merge(&geom);
             }
         }
+        // A subnet inside draws too, as its output: the Remesh subnet in a
+        // simnet is a step's node like any other.
         let shown: Vec<&FsNode> = start
             .children
             .iter()
             .filter(|c| {
                 c.geometry_visible
                     && !c.node_type.eq_ignore_ascii_case("output")
-                    && is_geometry_node_type(&c.node_type)
+                    && (is_geometry_node_type(&c.node_type) || c.node_type.eq_ignore_ascii_case("node"))
             })
             .collect();
         if !shown.is_empty() {
             let mut visited = Vec::new();
-            if let Some(fed) = simnet_step_feedback(root, start, &mut visited, ocl_error, sim) {
+            if let Some(fed) = loop_step_feedback(root, start, &mut visited, ocl_error, sim) {
                 sim.feedback.push((start.id.clone(), fed));
                 for child in shown {
                     let mut visited = Vec::new();
@@ -5331,8 +5577,17 @@ pub fn network_sphere_vertices_with_errors(
                 sim.feedback.pop();
             }
         }
-        return out;
-    }
+        out
+    } else {
+        walk_level(root, start, ocl_error, sim)
+    };
+    pop_loop_feedback(sim, around);
+    out
+}
+
+/// The scene walk over a level that is not a loop: each child by its flag,
+/// a subnet's children by theirs.
+fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim: &mut EvalSim) -> Detail {
     fn visit(root: &FsNode, node: &FsNode, parent_visible: bool, top: bool, count: &mut usize, out: &mut Detail, ocl_error: &mut Option<String>, sim: &mut EvalSim) {
         // The walk hands nodes to their resolvers directly, so it resolves
         // references itself — dived into a composed subnet, its children are
@@ -5715,20 +5970,33 @@ pub fn network_sphere_vertices_with_errors(
                     out.merge(&geom);
                 }
             }
-        } else if node.node_type.eq_ignore_ascii_case("simnet") {
+        } else if is_loop(node) {
             let _idx = *count;
             *count += 1;
             if is_visible {
                 let mut visited = Vec::new();
-                if let Some(geom) = resolve_simnet_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
                     out.merge(&geom);
                 }
             }
-            // The chain inside a simnet is the simulation STEP, not scene
-            // content. Recursing into it the way a subnet is recursed into
-            // would merge one un-iterated pass of the chain alongside the
-            // solved result — the sim would draw itself twice, once wrong.
+            // The chain inside a simnet is the simulation STEP, and inside a
+            // repeat one PASS, not scene content. Recursing into it the way
+            // a subnet is recursed into would merge one un-iterated pass of
+            // the chain alongside the result — the loop would draw itself
+            // twice, once wrong.
             return;
+        } else if ["seed", "split_edges", "collapse_edges", "flip_edges", "project"]
+            .iter()
+            .any(|ty| node.node_type.eq_ignore_ascii_case(ty))
+        {
+            let _idx = *count;
+            *count += 1;
+            if is_visible {
+                let mut visited = Vec::new();
+                if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
+                    out.merge(&geom);
+                }
+            }
         } else if top
             && (node.node_type.eq_ignore_ascii_case("input")
                 || node.node_type.eq_ignore_ascii_case("output"))
@@ -6822,7 +7090,7 @@ pub fn resolve_simnet_geometry_with_errors(
     let (mut state, mut prev_frame, mut done) = match (cached, disk) {
         (Some(hit), _) => hit,
         (None, Some(hit)) => hit,
-        (None, None) => (seed.clone(), seed, 0),
+        (None, None) => (seed.clone(), seed.clone(), 0),
     };
 
     // Substeps run the chain more than once per frame. A step's size is what
@@ -6860,7 +7128,9 @@ pub fn resolve_simnet_geometry_with_errors(
             let prev = state.clone();
 
             sim.feedback.push((target.id.clone(), state));
+            sim.seeds.push((target.id.clone(), Some(seed.clone())));
             let stepped = generate_single_node_geometry_with_errors(root, &output_node, visited, ocl_error, sim);
+            sim.seeds.pop();
             let fed_back = sim.feedback.pop().map(|(_, g)| g);
             // A step that yields nothing (an unwired chain, a failed kernel)
             // holds the previous state rather than collapsing the sim to empty

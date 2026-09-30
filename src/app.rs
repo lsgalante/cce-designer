@@ -169,7 +169,7 @@ impl FsNode {
     /// of them learned about new container types: subnet-like types by name,
     /// otherwise anything that actually has children.
     pub fn is_enterable(&self) -> bool {
-        matches!(self.node_type.as_str(), "node" | "simnet")
+        matches!(self.node_type.as_str(), "node" | "simnet" | "repeat")
             || !self.children.is_empty()
     }
 
@@ -1050,8 +1050,41 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
     // network: id, name, position, display flag and every parameter value
     // carry over by name, and the template's children arrive with fresh ids. Wholesale rather than through the
     // merge below, which never injects children.
+    //
+    // The Remesh the same way (since 2026-09-30): a native `remesh` becomes
+    // the Remesh subnet. Its Split, Collapse, Flip and Project switches are
+    // not rows of the subnet — the passes are nodes inside it — so one that
+    // was off BYPASSES its node there, which is what it meant.
     fn recompose_native_embryo(node: &mut FsNode, templates: &[NodeTemplate]) {
         for c in &mut node.children {
+            if c.node_type.eq_ignore_ascii_case("remesh") {
+                if let Some(t) = templates.iter().find(|t| t.node.name == "Remesh" && t.node.node_type == "node") {
+                    let mut fresh = t.node.clone();
+                    regenerate_node_ids(&mut fresh);
+                    fresh.id = c.id.clone();
+                    fresh.name = c.name.clone();
+                    fresh.position = c.position;
+                    fresh.geometry_visible = c.geometry_visible;
+                    fresh.bypassed = c.bypassed;
+                    for p in &c.params {
+                        if let Some(fp) = fresh.params.iter_mut().find(|fp| fp.name == p.name) {
+                            fp.set_text(p.text().to_string());
+                            fp.set_expr(p.is_expr());
+                        }
+                    }
+                    for (switch, pass) in crate::geometry::REMESH_PASS_SWITCHES {
+                        let on = c.params.iter().find(|p| p.name == *switch).map_or(true, |p| {
+                            !["false", "0", "off"].contains(&p.text().trim().to_ascii_lowercase().as_str())
+                        });
+                        if !on {
+                            if let Some(n) = fresh.children.iter_mut().find(|k| k.node_type == "repeat").and_then(|r| r.children.iter_mut().find(|k| k.name == *pass)) {
+                                n.bypassed = true;
+                            }
+                        }
+                    }
+                    *c = fresh;
+                }
+            }
             if c.node_type.eq_ignore_ascii_case("embryo") {
                 if let Some(t) = templates.iter().find(|t| t.node.name == "Embryo") {
                     let mut fresh = t.node.clone();
@@ -1270,6 +1303,13 @@ pub fn load_fs_tree() -> FsNode {
                             // reading `chf("../Radius")`) stays one.
                             base_p.set_expr(override_p.is_expr());
                         }
+                    }
+                    // A child that lists children of its own brings THOSE
+                    // rather than its base's: the Remesh subnet's repeat1
+                    // is a Repeat holding the remesh's passes, not the
+                    // empty input-to-output loop the Repeat template ships.
+                    if !child.children.is_empty() {
+                        resolved_child.children = child.children.clone();
                     }
                     if depth < 8 {
                         resolve_children(&mut resolved_child, raw_nodes, depth + 1, owner);

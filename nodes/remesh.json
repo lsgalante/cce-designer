@@ -1,6 +1,6 @@
 {
  "name": "Remesh",
- "type": "remesh",
+ "type": "node",
  "inputs": 1,
  "outputs": 1,
  "params": [
@@ -26,7 +26,7 @@
    "min": 1.0,
    "max": 20.0,
    "step": 1.0,
-   "description": "How many times the split, collapse, flip and relax passes repeat. More rounds settle the mesh closer to the target; it stops early once nothing changes."
+   "description": "How many times the split, collapse, flip, relax and project passes repeat. More rounds settle the mesh closer to the target; it stops early once a round changes nothing."
   },
   {
    "name": "Relax",
@@ -35,31 +35,7 @@
    "min": 0.0,
    "max": 1.0,
    "step": 0.01,
-   "description": "Strength of the tangential smoothing that slides points to even out triangles without moving the surface. 0 turns it off; 1 is full strength."
-  },
-  {
-   "name": "Split",
-   "type": "choice:true,false",
-   "default": "true",
-   "description": "Whether edges longer than 4/3 of the Target Length are split at their midpoint, adding points where the mesh is too coarse."
-  },
-  {
-   "name": "Collapse",
-   "type": "choice:true,false",
-   "default": "true",
-   "description": "Whether edges shorter than 4/5 of the Target Length are collapsed, removing points where the mesh is too dense. The surviving point keeps its values."
-  },
-  {
-   "name": "Flip",
-   "type": "choice:true,false",
-   "default": "true",
-   "description": "Whether edges are flipped to bring points closer to six neighbours each, which evens out the shape of the triangles."
-  },
-  {
-   "name": "Project",
-   "type": "choice:true,false",
-   "default": "true",
-   "description": "Whether relaxed points are pulled back onto the input surface after each round, so repeated remeshing does not shrink or drift the shape."
+   "description": "How far each point slides toward its neighbours' centroid along the surface in every round, evening out the triangles. 0 turns the relaxation off; 1 is full strength."
   },
   {
    "name": "Transfer",
@@ -72,7 +48,7 @@
    "type": "node",
    "default": "",
    "show_when": "Transfer == true",
-   "description": "The node whose point attributes and groups are copied onto the remeshed points. Empty uses this node's own input as it was before the remesh."
+   "description": "The node whose point attributes and groups are copied onto the remeshed points. Empty uses the remesh's own input, as it was before remeshing."
   },
   {
    "name": "Attributes",
@@ -104,6 +80,264 @@
    "step": 0.01,
    "show_when": "Transfer == true",
    "description": "Only points within this many world units of a source point receive values; farther points keep their own. 0 means no limit."
+  }
+ ],
+ "children": [
+  {
+   "name": "input1",
+   "type": "input",
+   "params": [],
+   "position": [
+    0.0,
+    0.0
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "repeat1",
+   "type": "repeat",
+   "position": [
+    0.0,
+    1.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "input1"
+    },
+    {
+     "name": "Iterations",
+     "default": "chi(\"../Iterations\")",
+     "expr": true
+    },
+    {
+     "name": "Stop When Unchanged",
+     "default": "true"
+    }
+   ],
+   "children": [
+    {
+     "name": "input1",
+     "type": "input",
+     "params": [],
+     "position": [
+      0.0,
+      0.0
+     ],
+     "geometry_visible": false
+    },
+    {
+     "name": "seed1",
+     "type": "seed",
+     "params": [],
+     "position": [
+      2.0,
+      0.0
+     ],
+     "geometry_visible": false
+    },
+    {
+     "name": "split1",
+     "type": "split_edges",
+     "position": [
+      0.0,
+      1.0
+     ],
+     "params": [
+      {
+       "name": "Input",
+       "default": "input1"
+      },
+      {
+       "name": "Target Length",
+       "default": "chf(\"../../Target Length\")",
+       "expr": true
+      }
+     ],
+     "geometry_visible": false
+    },
+    {
+     "name": "collapse1",
+     "type": "collapse_edges",
+     "position": [
+      0.0,
+      2.0
+     ],
+     "params": [
+      {
+       "name": "Input",
+       "default": "split1"
+      },
+      {
+       "name": "Target Length",
+       "default": "chf(\"../../Target Length\")",
+       "expr": true
+      }
+     ],
+     "geometry_visible": false
+    },
+    {
+     "name": "flip1",
+     "type": "flip_edges",
+     "position": [
+      0.0,
+      3.0
+     ],
+     "params": [
+      {
+       "name": "Input",
+       "default": "collapse1"
+      },
+      {
+       "name": "Target Length",
+       "default": "chf(\"../../Target Length\")",
+       "expr": true
+      }
+     ],
+     "geometry_visible": false
+    },
+    {
+     "name": "relax1",
+     "type": "relax",
+     "position": [
+      0.0,
+      4.0
+     ],
+     "params": [
+      {
+       "name": "Input",
+       "default": "flip1"
+      },
+      {
+       "name": "Mode",
+       "default": "Tangential"
+      },
+      {
+       "name": "Iterations",
+       "default": "1"
+      },
+      {
+       "name": "Amount",
+       "default": "chf(\"../../Relax\")",
+       "expr": true
+      }
+     ],
+     "geometry_visible": false
+    },
+    {
+     "name": "project1",
+     "type": "project",
+     "position": [
+      1.0,
+      5.0
+     ],
+     "params": [
+      {
+       "name": "Input",
+       "default": "relax1"
+      },
+      {
+       "name": "Surface",
+       "default": "seed1"
+      }
+     ],
+     "geometry_visible": false
+    },
+    {
+     "name": "output1",
+     "type": "output",
+     "position": [
+      1.0,
+      6.0
+     ],
+     "params": [
+      {
+       "name": "Input",
+       "default": "project1"
+      }
+     ],
+     "geometry_visible": false
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "transfer1",
+   "type": "transfer",
+   "position": [
+    1.0,
+    2.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "repeat1"
+    },
+    {
+     "name": "From",
+     "default": "if(chs(\"../From\"), chs(\"../From\"), \"input1\")",
+     "expr": true
+    },
+    {
+     "name": "Attributes",
+     "default": "chs(\"../Attributes\")",
+     "expr": true
+    },
+    {
+     "name": "Transfer Groups",
+     "default": "chb(\"../Transfer Groups\")",
+     "expr": true
+    },
+    {
+     "name": "Groups",
+     "default": "chs(\"../Groups\")",
+     "expr": true
+    },
+    {
+     "name": "Maximum Distance",
+     "default": "chf(\"../Maximum Distance\")",
+     "expr": true
+    }
+   ],
+   "geometry_visible": false
+  },
+  {
+   "name": "result1",
+   "type": "switch",
+   "position": [
+    0.0,
+    3.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "repeat1"
+    },
+    {
+     "name": "Input 2",
+     "default": "transfer1"
+    },
+    {
+     "name": "Index",
+     "default": "chi(\"../Transfer\")",
+     "expr": true
+    }
+   ]
+  },
+  {
+   "name": "output1",
+   "type": "output",
+   "position": [
+    0.0,
+    4.0
+   ],
+   "params": [
+    {
+     "name": "Input",
+     "default": "result1"
+    }
+   ],
+   "geometry_visible": false
   }
  ]
 }
