@@ -15453,6 +15453,10 @@ mod tests {
         let before = value(&state);
 
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (x + w * 0.3) as f64, y: (y + h * 0.5) as f64 } });
+        // The designer's test binary links cce-ui without cfg(test), so the
+        // natural-scroll setting would be the MACHINE's: pinned here, both
+        // ways in turn.
+        cce_ui::input::force_natural_scroll(Some(false));
         set_scroll_phase(ScrollPhase::Finger);
         state.ui_context.scroll_gesture_new = true;
         state.ui_context.scroll_initiate_widget_id = None;
@@ -15463,6 +15467,20 @@ mod tests {
         // A mouse notch on the same row, as before.
         assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -1.0) }));
         assert_eq!(value(&state), before);
+
+        // With natural scrolling on, the fingers going UP is more: the
+        // same travel, the other sign of delta.
+        cce_ui::input::force_natural_scroll(Some(true));
+        set_scroll_phase(ScrollPhase::Finger);
+        state.ui_context.scroll_gesture_new = true;
+        state.ui_context.scroll_initiate_widget_id = None;
+        assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: -60.0 }) }));
+        set_scroll_phase(ScrollPhase::Wheel);
+        assert_eq!(value(&state), before + 1.0, "natural: fingers up is a step up");
+        // And a wheel notch up is still more.
+        assert!(state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 1.0) }));
+        assert_eq!(value(&state), before + 2.0);
+        cce_ui::input::force_natural_scroll(None);
     }
 
     /// During playback the scene is built for the frame the playbar shows,

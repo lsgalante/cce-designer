@@ -2945,6 +2945,19 @@ the alternative is calling every command to see whether it is handled, and
 argues for: a label kept in two places drifts, and a renamed one fails silently
 — the dispatch falls through its match and the command does nothing.
 
+### Scrolling a value: up is more, wheel or natural finger
+
+Every slider and spinbox the designer shows — the params pane's, the
+viewport and playbar menus', the palette's — turns by cce-ui's
+`value_notches_y` (2026-09-30; see its CLAUDE.md, "A value control reads
+the wheel as up is more"): a wheel notch up is more, and with natural
+scrolling on, the fingers going up is more too. The palette's
+`scroll_slider` reads it as the toolkit controls do. The suite pins the
+setting per test thread with `cce_ui::input::force_natural_scroll`, since
+this test binary links cce-ui without `cfg(test)` and would read the
+machine's input.kdl: `a_trackpad_swipe_over_a_spinbox_row_steps_it` drives
+a spinbox with a finger both ways.
+
 ### The dialog (Alt+D, Ctrl+P, Tab)
 
 `src/dialog.rs` is the app's one modal overlay, and **every filterable list

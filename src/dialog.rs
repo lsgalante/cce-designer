@@ -1165,7 +1165,9 @@ impl Input for Dialog {
                         if let Some(r) = self.row_rect(rect, i) {
                             let s = self.slider_rect(r);
                             if *x >= s.x && *x < s.x + s.width {
-                                return self.scroll_slider(i, delta.notches_y());
+                                // Up is more, for a wheel and for a
+                                // finger alike (`value_notches_y`).
+                                return self.scroll_slider(i, delta.value_notches_y());
                             }
                         }
                     }
