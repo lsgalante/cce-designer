@@ -400,7 +400,8 @@ fn split_pass(m: &mut Mesh, target: f32) -> usize {
 
 /// Collapse every edge shorter than 4/5 of the target.
 ///
-/// The survivor keeps its identity and values; the other endpoint is
+/// The survivor — the end in more groups, else the lower index — keeps its
+/// identity and values and joins the other end's groups; the other end is
 /// tombstoned and every triangle referencing it is rewired. Collapses that
 /// would leave a neighbour edge too long are refused, which is what stops the
 /// pass from undoing the splits that just ran.
@@ -409,10 +410,18 @@ fn collapse_pass(m: &mut Mesh, target: f32) -> usize {
     let long = target * 4.0 / 3.0;
     let mut done = 0;
     for (e, _) in m.edges() {
-        let (a, b) = (e[0], e[1]);
-        if m.dead_point[a as usize] || m.dead_point[b as usize] || m.len_of(e) >= short {
+        if m.dead_point[e[0] as usize] || m.dead_point[e[1] as usize] || m.len_of(e) >= short {
             continue;
         }
+        // Which end survives. The one in more groups: a point in a group is
+        // a point something downstream names — the pull's, a pin's — and
+        // the other end is not. Until 2026-09-29 the lower index always
+        // survived, so a pulled point was collapsed into the neighbour it
+        // had been pulled towards, its identity, its values and its
+        // membership gone with it, and the pull went on with nothing to
+        // pull. The lower index still survives a tie, as it always did.
+        let in_groups = |p: u32| m.groups.iter().filter(|(_, members)| members.get(p as usize).copied().unwrap_or(false)).count();
+        let (a, b) = if in_groups(e[1]) > in_groups(e[0]) { (e[1], e[0]) } else { (e[0], e[1]) };
         // Would the survivor end up with an edge that the next split pass
         // would just cut again? Then leave it: two passes undoing each other
         // is how a remesh oscillates instead of converging.
@@ -441,8 +450,36 @@ fn collapse_pass(m: &mut Mesh, target: f32) -> usize {
         if folds {
             continue;
         }
+        // Refuse a collapse that would strand a corner. The triangles on
+        // the edge fold to nothing, and each takes one triangle from its
+        // third corner: a corner left with fewer than three has no fan
+        // left to stand in — at two it is a fold, at none it is a point on
+        // no triangle, which `into_detail` drops. Until 2026-09-29 a point
+        // could be dropped that way with its identity, values and groups:
+        // a pulled point at the tip of a spike, its neighbours collapsing
+        // around it, went from the pull group with nothing to say so.
+        let strands = m.tris_of(b).iter().any(|&t| {
+            let tri = m.tris[t];
+            if !tri.contains(&a) {
+                return false;
+            }
+            tri.iter().any(|&q| q != a && q != b && m.tris_of(q).len() < 4)
+        });
+        if strands {
+            continue;
+        }
 
         m.dead_point[b as usize] = true;
+        // The survivor stands for both: what the other end was in, it is
+        // in. A group is a set of places named downstream, and a collapse
+        // that dropped one lost what named it.
+        for (_, members) in m.groups.iter_mut() {
+            if members.get(b as usize).copied().unwrap_or(false) {
+                if let Some(slot) = members.get_mut(a as usize) {
+                    *slot = true;
+                }
+            }
+        }
         for t in m.tris_of(b) {
             if m.dead_tri[t] {
                 continue;

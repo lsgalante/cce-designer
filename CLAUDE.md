@@ -1595,6 +1595,30 @@ is its test, and fails without the rule ("still changing 162 edges after
 20 rounds"). `remesh::last_changes` is the count the test and the profile
 read.
 
+### A grouped point survives a remesh
+
+Two rules in `remesh::collapse_pass` (2026-09-29), found on the project
+above: its pull group lost its one member at frame 16 and the pull went
+on with nothing to pull, which is why the simulation "stopped moving by
+frame 30" — the remeshed point count held at 524 for the rest of the run.
+
+- **A collapse that would strand a corner is refused.** The two
+  triangles on a collapsed edge fold to nothing, and each takes one
+  triangle from its third corner; a corner left with fewer than three
+  has no fan to stand in, and one left with none is a point on no
+  triangle, which `into_detail` drops — identity, values, groups and all.
+  That is how the pulled point went: at the tip of a spike, its
+  neighbours collapsing around it, it was never one end of a collapsed
+  edge itself. (The other rule, `too_long`, is what stops a collapse
+  undoing a split; this one is the link condition remeshers carry.)
+- **The survivor of a collapse is the end in more groups**, the lower
+  index on a tie as it always was, and it joins the other end's groups:
+  a point in a group is a point something downstream names.
+
+`a_grouped_point_survives_a_remesh` pulls a sphere's point out a spike
+over forty remeshes and fails without the first rule; the second is not
+what the fixture exercises and is kept for the case it describes.
+
 ### Simulation checkpoints
 
 A step is not invertible, so going back means going forward from

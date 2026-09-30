@@ -10869,6 +10869,41 @@ mod tests {
         assert_eq!(asked, 4000);
     }
 
+    /// A point in a group survives a remesh: a pulled point at the tip of
+    /// a spike keeps its identity, its values and its membership while the
+    /// mesh around it is split and collapsed. A collapse that would leave a
+    /// corner with fewer than three triangles is refused — it stranded the
+    /// pulled point, which `into_detail` then dropped with everything it
+    /// was — and where the pulled point is one end of a collapsed edge it
+    /// is the end that survives, joining the other end's groups.
+    #[test]
+    fn a_grouped_point_survives_a_remesh() {
+        let mut d = sphere_detail(Vec3::ZERO, 1.0, 10, 14);
+        let tip = 37usize;
+        let id = d.ids()[tip];
+        d.points_mut().create_group("pull");
+        d.points_mut().add_to_group("pull", tip);
+        d.points_mut().create("mass", crate::detail::AttribValue::Float(0.0));
+        d.points_mut().set_value("mass", tip, crate::detail::AttribValue::Float(7.5)).unwrap();
+        let settings = Settings { target: 0.25, iterations: 3, relax: 0.0, ..Default::default() };
+        let mut outward = d.pos(tip).normalize();
+        for step in 0..40 {
+            // The pull: the tip out along its ray, a little each step, so
+            // the edges around it stretch and the remesh works there.
+            let p = d.points().group_members("pull");
+            assert_eq!(p.len(), 1, "step {step}: the group has one member, not {}", p.len());
+            let at = p[0] as usize;
+            assert_eq!(d.ids()[at], id, "step {step}: the member is the point it was");
+            assert_eq!(d.points().value("mass", at), Some(crate::detail::AttribValue::Float(7.5)), "step {step}: with its values");
+            let pos = d.pos(at);
+            outward = if pos.length() > 1e-3 { pos.normalize() } else { outward };
+            d.set_pos(at, pos + outward * 0.08);
+            d = remesh(&d, settings);
+            assert!(d.is_closed(), "step {step}: still a closed surface");
+        }
+        assert!(d.pos(d.points().group_members("pull")[0] as usize).length() > 3.0, "the tip went out with the pull");
+    }
+
     /// A remesh SETTLES: run again on what it made, it comes to a mesh it
     /// finds nothing to do to, and hands that back as it was given — the
     /// primitives and their order untouched, which is what lets a step of
