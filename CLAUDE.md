@@ -1966,11 +1966,28 @@ and not of each node, because a chain whose text was placed in pixels and
 whose border was inset in inches is a chain nobody can read. Inside, a page
 is still inches (`Page::size`), and a pixel image's physical size is its
 pixels over its Resolution. A node with no Units row is in inches, which is
-every save from before it. The presets are the four paper sizes and three
-raster ones (`HD`, `4K`, `Square`), which are their pixels whatever Units
-says and are not turned by Orientation. The length rows are `float` — a
+every save from before it. The length rows are `float` — a
 number with no range — where they were sliders over a range in inches: a
 slider clamps, and no one range holds both 0.25 inches and 1920 pixels.
+
+**The size IS Width and Height, and a preset writes them** (since
+2026-09-30). `page_node_frame` reads Width by Height in Units and nothing
+else; Preset, Orientation and Units are rows that SET those two when they
+are picked (`page::follow_page_rows`, called by the params pane's
+write-back and MCP's `set_param`, and what it overwrites is part of the
+undo step). Preset writes its size in the page's Units — the four paper
+sizes turned by Orientation, the three raster ones (`HD`, `4K`, `Square`)
+as they lie, Orientation set to say which way; Orientation swaps the two
+when they lie the other way; Units converts them, so the sheet keeps its
+size. There is no `Custom` preset: until then Width and Height were read
+only under it, a second way to say the size that the presets could not
+share. Preset names what was last picked, and a size typed in afterwards
+is the size. A save from before is carried over ONCE in the template merge
+(`page::migrate_preset_rows`), recognised by the Width row's `show_when`
+still reading `Preset == Custom`, which the merge then replaces: a named
+preset is written into Width and Height as it was drawn, and a Custom page
+keeps its size and names Letter. `picking_a_page_preset_writes_its_size`
+is the test.
 
 **`page_shape`** draws a rectangle (with a corner radius), an ellipse, a
 line or a polygon of N sides, turned by Rotation, filled and stroked, each

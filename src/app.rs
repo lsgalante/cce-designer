@@ -1175,6 +1175,12 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         if node.node_type == "camera" {
             node.params.retain(|p| p.name != "Square Aspect" && p.name != "Show Camera Pivot");
         }
+        // A page's size is its Width and Height now, and Preset has no
+        // Custom: a save from before is carried over once, ahead of the
+        // merge that would take the old rows' conditions away.
+        if node.node_type == "page" {
+            crate::page::migrate_preset_rows(node);
+        }
         // Visualize's Mix blend was Set under another name (Opacity fades
         // every blend alike) and is retired; a save holding it is Set, or
         // it would load as a choice the row no longer offers.
@@ -4056,6 +4062,21 @@ impl State {
                         }
                     }
 
+                    // A page's Preset, Orientation and Units set its Width
+                    // and Height; what they overwrite is part of the step.
+                    let mut followed = false;
+                    if child.node_type == "page" {
+                        let setters: Vec<ParamDef> = was.iter().filter(|w| matches!(w.name.as_str(), "Preset" | "Orientation" | "Units")).cloned().collect();
+                        for w in setters {
+                            for r in crate::page::follow_page_rows(child, &w) {
+                                followed = true;
+                                if !was.iter().any(|x| x.name == r.name) {
+                                    was.push(r);
+                                }
+                            }
+                        }
+                    }
+
                     // One step per gesture: a drag writes back on every
                     // motion. A button or the Open dropdown ends as it
                     // began, and is no edit.
@@ -4093,6 +4114,10 @@ impl State {
                         self.sync_grid_settings();
                         self.rebuild_scene_geometry();
                         self.sync_nodes();
+                        // Width and Height moved under the pane's feet.
+                        if followed {
+                            self.sync_parameters_pane();
+                        }
 
                         for btn_name in triggered_buttons {
                             self.execute_menu_action(&btn_name);

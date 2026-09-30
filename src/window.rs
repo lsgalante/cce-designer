@@ -367,7 +367,20 @@ impl State {
                         if as_expr {
                             p.set_expr(true);
                         }
-                        state.record_param_edit(&node_id, before);
+                        // A page's Preset, Orientation and Units set its
+                        // Width and Height, and the step holds all of it.
+                        let followed = if child.node_type == "page" {
+                            crate::page::follow_page_rows(child, &before)
+                        } else {
+                            Vec::new()
+                        };
+                        if followed.is_empty() {
+                            state.record_param_edit(&node_id, before);
+                        } else {
+                            let what = before.name.clone();
+                            let params = std::iter::once(before).chain(followed).collect();
+                            state.record_params(crate::edit_history::ParamSnapshot { node_id, what, params }, false);
+                        }
                         // Same sequence as the interactive param-pane
                         // path, so settings params (viewport flags,
                         // grid) actually take effect via automation.

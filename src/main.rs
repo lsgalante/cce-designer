@@ -16685,8 +16685,8 @@ mod tests {
     }
 
     /// The generator's size is in the unit its Units row names: pixels are
-    /// pixels exactly, a metric sheet is its millimetres, and a named raster
-    /// size is that many pixels whatever the row says.
+    /// pixels exactly, and a metric sheet is its millimetres. (What a
+    /// preset writes is `picking_a_page_preset_writes_its_size`.)
     #[test]
     fn an_image_is_sized_in_pixels_or_in_real_units() {
         use crate::page::{resolve_page, PageUnit};
@@ -16695,29 +16695,128 @@ mod tests {
             resolve_page(&root, &root.children[0], &mut Vec::new()).expect("no page")
         };
 
-        let px = make(&[("Preset", "Custom"), ("Units", "Pixels"), ("Width", "640"), ("Height", "360"), ("Resolution", "96")]);
+        let px = make(&[("Units", "Pixels"), ("Width", "640"), ("Height", "360"), ("Resolution", "96")]);
         assert_eq!((px.width, px.height), (640, 360), "a pixel size is that many pixels");
         assert_eq!(px.unit, PageUnit::Pixels);
         assert!((px.size[0] - 640.0 / 96.0).abs() < 1e-4, "its physical size is its pixels over its resolution");
 
-        let mm = make(&[("Preset", "Custom"), ("Units", "Millimetres"), ("Width", "210"), ("Height", "297"), ("Resolution", "100")]);
+        let mm = make(&[("Units", "Millimetres"), ("Width", "210"), ("Height", "297"), ("Resolution", "100")]);
         assert!((mm.size[0] - 210.0 / 25.4).abs() < 1e-4 && (mm.size[1] - 297.0 / 25.4).abs() < 1e-4);
         assert_eq!((mm.width, mm.height), (827, 1169), "A4 in millimetres at 100 DPI");
 
-        let cm = make(&[("Preset", "Custom"), ("Units", "Centimetres"), ("Width", "2.54"), ("Height", "5.08"), ("Resolution", "50")]);
+        let cm = make(&[("Units", "Centimetres"), ("Width", "2.54"), ("Height", "5.08"), ("Resolution", "50")]);
         assert_eq!((cm.width, cm.height), (50, 100));
 
-        let hd = make(&[("Preset", "HD"), ("Units", "Inches"), ("Orientation", "Landscape"), ("Resolution", "72")]);
-        assert_eq!((hd.width, hd.height), (1920, 1080), "a raster preset is its pixels, and is not turned");
-
         // A page from before the Units row is in inches, as it was.
-        let old = make(&[("Preset", "Custom"), ("Width", "2"), ("Height", "1"), ("Resolution", "50")]);
+        let old = make(&[("Width", "2"), ("Height", "1"), ("Resolution", "50")]);
         assert_eq!((old.width, old.height, old.unit), (100, 50, PageUnit::Inches));
 
         // Opacity is the sheet's alpha, and Position where it stands.
-        let clear = make(&[("Preset", "Custom"), ("Width", "1"), ("Height", "1"), ("Resolution", "10"), ("Opacity", "0.25"), ("Position", "1.00:2.00:3.00")]);
+        let clear = make(&[("Width", "1"), ("Height", "1"), ("Resolution", "10"), ("Opacity", "0.25"), ("Position", "1.00:2.00:3.00")]);
         assert!((clear.pixels[0][3] - 0.25).abs() < 1e-6);
         assert_eq!(clear.origin, [1.0, 2.0, 3.0]);
+    }
+
+    /// A page's size is its Width and Height, always: Preset has no Custom,
+    /// and picking a preset WRITES its size there, in the page's Units — a
+    /// sheet turned by Orientation, a raster size as it lies, with
+    /// Orientation set to say which way. Orientation swaps the two, Units
+    /// converts them, and a save from before carries over once.
+    #[test]
+    fn picking_a_page_preset_writes_its_size() {
+        use crate::page::{follow_page_rows, migrate_preset_rows, resolve_page};
+        let size = |node: &FsNode| {
+            let row = |n: &str| node.params.iter().find(|p| p.name == n).unwrap().text().to_string();
+            (row("Width"), row("Height"), row("Orientation"))
+        };
+        let pick = |node: &mut FsNode, row: &str, value: &str| -> Vec<String> {
+            let p = node.params.iter_mut().find(|p| p.name == row).unwrap();
+            let was = p.clone();
+            p.set_text(value);
+            follow_page_rows(node, &was).into_iter().map(|p| p.name).collect()
+        };
+        let templates_root = crate::app::load_fs_tree();
+        let template = templates_root.children.iter().find(|t| t.node_type == "page").unwrap().clone();
+        let preset = template.params.iter().find(|p| p.name == "Preset").unwrap();
+        assert!(!preset.choice_options().iter().any(|o| o == "Custom"), "{:?}", preset.choice_options());
+        for row in ["Width", "Height", "Orientation"] {
+            assert!(template.params.iter().find(|p| p.name == row).unwrap().show_when.is_empty(), "{row} is always shown");
+        }
+
+        let mut page = template.clone();
+        assert_eq!(pick(&mut page, "Preset", "A4"), ["Width", "Height"], "what a pick overwrites is handed back, for undo");
+        assert_eq!(size(&page), ("8.268".into(), "11.693".into(), "Portrait".into()));
+        assert_eq!(pick(&mut page, "Orientation", "Landscape"), ["Width", "Height"]);
+        assert_eq!(size(&page), ("11.693".into(), "8.268".into(), "Landscape".into()));
+        // A sheet is picked in the orientation the row names.
+        pick(&mut page, "Preset", "Letter");
+        assert_eq!(size(&page), ("11.00".into(), "8.50".into(), "Landscape".into()));
+        // Units converts: the sheet keeps its size.
+        pick(&mut page, "Units", "Millimetres");
+        assert_eq!(size(&page), ("279.40".into(), "215.90".into(), "Landscape".into()));
+        // A raster size is written as it lies, in the page's unit, and
+        // Orientation follows it.
+        pick(&mut page, "Orientation", "Portrait");
+        pick(&mut page, "Units", "Pixels");
+        pick(&mut page, "Preset", "HD");
+        assert_eq!(size(&page), ("1920".into(), "1080".into(), "Landscape".into()));
+        let root = image_root(vec![page.clone()]);
+        let img = resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap();
+        assert_eq!((img.width, img.height), (1920, 1080));
+        // Another row changes nothing; nor does turning a page already turned.
+        assert!(pick(&mut page, "Resolution", "72").is_empty());
+        assert!(pick(&mut page, "Orientation", "Landscape").is_empty());
+        // A size typed in is the size, whatever Preset still names.
+        pick(&mut page, "Width", "640");
+        let root = image_root(vec![page.clone()]);
+        assert_eq!(resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap().width, 640);
+
+        // A save from before: its rows carry the old conditions. A named
+        // preset is written into Width and Height, turned as it was drawn;
+        // a Custom one keeps its size and names Letter.
+        let old = |preset: &str, w: &str, h: &str, orientation: &str| {
+            let mut n = template.clone();
+            for (row, v) in [("Preset", preset), ("Width", w), ("Height", h), ("Orientation", orientation)] {
+                let p = n.params.iter_mut().find(|p| p.name == row).unwrap();
+                p.set_type("text");
+                p.set_text(v);
+            }
+            for row in ["Width", "Height"] {
+                n.params.iter_mut().find(|p| p.name == row).unwrap().show_when = "Preset == Custom".into();
+            }
+            n
+        };
+        let mut tabloid = old("Tabloid", "8.5", "11.0", "Landscape");
+        migrate_preset_rows(&mut tabloid);
+        assert_eq!(size(&tabloid), ("17.00".into(), "11.00".into(), "Landscape".into()));
+        let mut custom = old("Custom", "3", "2", "Portrait");
+        migrate_preset_rows(&mut custom);
+        assert_eq!(size(&custom), ("3".into(), "2".into(), "Portrait".into()));
+        assert_eq!(custom.params.iter().find(|p| p.name == "Preset").unwrap().text(), "Letter");
+        // Once: the merge takes the old conditions away, so a page loaded
+        // a second time is left as it is.
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let mut loaded = image_root(vec![old("Custom", "3", "2", "Portrait")]);
+        crate::app::merge_template_defs(&mut loaded, &templates);
+        assert_eq!(size(&loaded.children[0]), size(&custom));
+        crate::app::merge_template_defs(&mut loaded, &templates);
+        assert_eq!(size(&loaded.children[0]), size(&custom), "a second load wrote Letter over a typed size");
+        let mut merged = image_root(vec![old("A4", "8.5", "11.0", "Portrait")]);
+        crate::app::merge_template_defs(&mut merged, &templates);
+        assert_eq!(size(&merged.children[0]), ("8.268".into(), "11.693".into(), "Portrait".into()));
+        assert!(merged.children[0].params.iter().all(|p| p.invalid().is_none()));
+
+        // Through MCP, and undone as one step.
+        let mut state = State::new(false);
+        let mut redraw = false;
+        let slot = state.new_image().expect("the Page template is missing");
+        let before = size(&state.current_dir().children[slot]);
+        state
+            .apply_action(crate::app::McpAction::SetParam { slot, name: "Preset".into(), value: "Tabloid".into() }, &mut redraw)
+            .unwrap();
+        assert_eq!(size(&state.current_dir().children[slot]), ("11.00".into(), "17.00".into(), "Portrait".into()));
+        state.run_command("undo");
+        assert_eq!(size(&state.current_dir().children[slot]), before, "the pick and what it wrote are one step");
     }
 
     /// A node drawing on an image is written in the image's unit: the same
@@ -16728,7 +16827,7 @@ mod tests {
         use crate::page::resolve_page;
         let chain = |units: &str, w: &str, h: &str, dpi: &str| {
             let root = image_root(vec![
-                image_node("page1", "page", &[("Preset", "Custom"), ("Units", units), ("Width", w), ("Height", h), ("Resolution", dpi), ("Color", "1.00:1.00:1.00")]),
+                image_node("page1", "page", &[("Units", units), ("Width", w), ("Height", h), ("Resolution", dpi), ("Color", "1.00:1.00:1.00")]),
                 image_node(
                     "shape1",
                     "page_shape",
@@ -16867,7 +16966,6 @@ mod tests {
         let slot = state.new_image().expect("the Page template is missing");
         let node = &mut state.current_dir_mut().children[slot];
         for (name, value) in [
-            ("Preset", "Custom".to_string()),
             ("Units", "Pixels".to_string()),
             ("Width", w.to_string()),
             ("Height", h.to_string()),
@@ -17068,7 +17166,7 @@ mod tests {
         let page_slot = state.current_dir().children.iter().position(|c| c.name == "page1").unwrap();
         {
             let node = &mut state.current_dir_mut().children[page_slot];
-            for (row, v) in [("Preset", "Custom"), ("Units", "Pixels"), ("Width", "300"), ("Height", "200"), ("Resolution", "96")] {
+            for (row, v) in [("Units", "Pixels"), ("Width", "300"), ("Height", "200"), ("Resolution", "96")] {
                 node.params.iter_mut().find(|p| p.name == row).unwrap().set_text(v);
             }
         }
@@ -17105,7 +17203,7 @@ mod tests {
     fn a_page_frame_is_the_page_without_its_pixels() {
         use crate::page::{resolve_frame, resolve_page};
         let root = image_root(vec![
-            image_node("page1", "page", &[("Preset", "Custom"), ("Units", "Millimetres"), ("Width", "120"), ("Height", "80"), ("Resolution", "127"), ("Position", "1.00:2.00:3.00")]),
+            image_node("page1", "page", &[("Units", "Millimetres"), ("Width", "120"), ("Height", "80"), ("Resolution", "127"), ("Position", "1.00:2.00:3.00")]),
             image_node("shape1", "page_shape", &[("Input", "page1")]),
             image_node("text1", "page_text", &[("Input", "shape1")]),
             image_node("lost1", "page_text", &[("Input", "nothing")]),
