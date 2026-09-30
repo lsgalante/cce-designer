@@ -1686,6 +1686,40 @@ mod tests {
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
+    /// The node wires' style is a Settings row: choosing one sets it on both
+    /// network editors, the project file carries it, and a file that names
+    /// none — every one from before the row — follows the config.
+    #[test]
+    fn the_node_wire_style_is_a_setting_the_project_keeps() {
+        use cce_ui::widget::display::WireStyle;
+        let dir = std::env::temp_dir()
+            .join(format!("cce-designer-wires-{}", std::process::id()))
+            .join("look");
+        let _ = fs::remove_dir_all(&dir);
+        let mut state = State::new(false);
+        state.apply_setting("Node Wire Style", "Bezier");
+        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::Bezier);
+        assert_eq!(state.slots.content2.inner().wire_style(), WireStyle::Bezier, "both editors");
+        assert_eq!(state.display_settings().viewport.node_wire_style, "bezier");
+        state.save_to_file(&dir).expect("save");
+
+        state.apply_setting("Node Wire Style", "Straight");
+        assert!(state.has_unsaved_changes(), "a wire style is an edit to the file");
+        state.load_from_file(&dir).expect("load");
+        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::Bezier, "the file's style comes back");
+
+        // A file that names no style hands the choice back to the config.
+        let state_json = dir.join("state.json");
+        let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_json).unwrap()).unwrap();
+        v["view_state"]["display"]["viewport"].as_object_mut().unwrap().remove("node_wire_style");
+        fs::write(&state_json, serde_json::to_string(&v).unwrap()).unwrap();
+        state.load_from_file(&dir).expect("load an older save");
+        assert_eq!(state.slots.content.inner().chosen_wire_style(), None);
+        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::configured());
+
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
     /// A number under a plate is not drawn: the engine lays text out after
     /// all geometry, so it would stand sharp over a plate that frosts
     /// everything else behind it.
@@ -11185,14 +11219,14 @@ mod tests {
         let t = templates.children.iter().find(|t| t.name == "Remesh").expect("the Remesh template");
         assert_eq!(t.node_type, "node", "the Remesh is a subnet");
         let names: Vec<&str> = t.children.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["input1", "repeat1", "transfer1", "result1", "output1"]);
+        assert_eq!(names, ["input1", "repeat1", "transfer1", "transfer_switch1", "output1"]);
         let repeat = &t.children[1];
         assert_eq!(repeat.node_type, "repeat");
         let passes: Vec<(&str, &str)> = repeat.children.iter().map(|c| (c.name.as_str(), c.node_type.as_str())).collect();
         assert_eq!(passes, [("input1", "input"), ("seed1", "seed"), ("split1", "split_edges"), ("collapse1", "collapse_edges"),
             ("flip1", "flip_edges"), ("relax1", "relax"), ("project1", "project"), ("output1", "output")]);
         for c in &t.children {
-            assert_eq!(c.geometry_visible, c.name == "result1", "only result1 draws: {}", c.name);
+            assert_eq!(c.geometry_visible, c.name == "transfer_switch1", "only transfer_switch1 draws: {}", c.name);
         }
 
         let tagged = [
@@ -11302,6 +11336,37 @@ mod tests {
         let (g, err) = eval_node(&root, "remesh1");
         assert!(err.is_none(), "{err:?}");
         assert!(g.num_points() > 0 && g == made, "the recomposed remesh makes the mesh the native one made");
+    }
+
+    /// The Remesh subnet's switch was `result1` for a day; a Remesh saved
+    /// then loads with it renamed, and its output wired to the new name.
+    #[test]
+    fn a_remesh_saved_with_result1_is_renamed_on_load() {
+        let templates_root = crate::app::load_fs_tree();
+        let templates = crate::app::flatten_node_templates(&templates_root);
+        let mut old = templates_root.children.iter().find(|t| t.name == "Remesh").unwrap().clone();
+        crate::app::regenerate_node_ids(&mut old);
+        old.name = "remesh1".into();
+        for k in &mut old.children {
+            if k.name == "transfer_switch1" {
+                k.name = "result1".into();
+            }
+            for p in &mut k.params {
+                if p.text() == "transfer_switch1" {
+                    p.set_text("result1");
+                }
+            }
+        }
+        let mut root = modelling_root("1.0", vec![old]);
+        root.children[1].params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("sphere 1");
+        crate::app::merge_template_defs(&mut root, &templates);
+        let r = &root.children[1];
+        let names: Vec<&str> = r.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["input1", "repeat1", "transfer1", "transfer_switch1", "output1"]);
+        let out = r.children.iter().find(|c| c.name == "output1").unwrap();
+        assert_eq!(out.params.iter().find(|p| p.name == "Input").unwrap().text(), "transfer_switch1");
+        let (g, err) = eval_node(&root, "remesh1");
+        assert!(err.is_none() && g.num_points() > 0, "{err:?}");
     }
 
     /// A Repeat runs its chain Iterations times, each pass on the last one's

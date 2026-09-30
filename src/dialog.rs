@@ -1353,6 +1353,8 @@ impl Setting {
 pub const SETTINGS: &[Setting] = &[
     Setting::field("Background Color", "bg_color", Ctl::Color),
     Setting::field("World Unit", "world_unit", Ctl::Choice(&["mm", "cm", "m", "in"])),
+    // How the network's node wires run — not the wireframe's wires below.
+    Setting::field("Node Wire Style", "node_wire_style", Ctl::Choice(&["Orthogonal", "Rounded", "Bezier", "Straight"])),
     // Takes effect at the next launch — the renderer's device is chosen
     // once, when it is created (`app::apply_gpu_preference`).
     Setting::field("GPU", "gpu", Ctl::Choice(crate::app::GPU_CHOICES)),
@@ -1919,6 +1921,7 @@ impl State {
         match key {
             "world_unit" => self.world_unit.suffix().to_string(),
             "gpu" => self.gpu_preference.clone(),
+            "node_wire_style" => self.slots.content.inner().wire_style().label().to_string(),
             _ => String::new(),
         }
     }
@@ -1994,9 +1997,22 @@ impl State {
                     let Some(v) = options.iter().find(|o| o.eq_ignore_ascii_case(value)) else { return };
                     self.gpu_preference = v.to_string();
                 }
+                "node_wire_style" => {
+                    if let Some(w) = cce_ui::widget::display::WireStyle::parse(value) {
+                        self.set_node_wire_style(Some(w));
+                    }
+                }
                 _ => {}
             },
         }
+    }
+
+    /// The node wires' style on both network editors — `None` follows the
+    /// config's `wire_style`. The widgets hold it; the save reads it back
+    /// off the first.
+    pub(crate) fn set_node_wire_style(&mut self, style: Option<cce_ui::widget::display::WireStyle>) {
+        self.slots.content.inner_mut().set_wire_style(style);
+        self.slots.content2.inner_mut().set_wire_style(style);
     }
 
     /// Write one setting's value to whatever owns it.

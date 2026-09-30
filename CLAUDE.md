@@ -1194,7 +1194,7 @@ into and its passes read, bypassed and rewired. `nodes/remesh.json`:
 
 ```
 remesh1 (node)  input1 → repeat1 → transfer1 ─┐
-                               └──────────── result1 (switch on Transfer) → output1
+                               └──────────── transfer_switch1 (on Transfer) → output1
 repeat1 (repeat, Iterations = chi("../Iterations"), Stop When Unchanged on)
                 input1 → split1 → collapse1 → flip1 → relax1 → project1 → output1
                 seed1 ───────────────────────────────────────┘ (Surface)
@@ -1250,7 +1250,9 @@ position, flags and values (`recompose_native_embryo`, which does both
 now). The native node's **Split / Collapse / Flip / Project** switches are
 not rows of the subnet — the passes are nodes — so one that was off
 BYPASSES its node inside (`REMESH_PASS_SWITCHES`).
-`a_native_remesh_recomposes_on_load` is the test. A saved simnet holding a
+`a_native_remesh_recomposes_on_load` is the test. The switch was
+`result1` for its first day; a Remesh saved then is renamed on load
+(`rename_remesh_switch`, `a_remesh_saved_with_result1_is_renamed_on_load`). A saved simnet holding a
 remesh changes its JSON by this, so its solve goes on from the frame in
 hand under a new key ("An edit is in from the next frame").
 
@@ -2433,6 +2435,26 @@ two lines through the (0, 0) crossing heavier as the origin axes. Its
 cell-and-gap setters (`set_grid_sizes` / `set_skipped_sizes`) survive as a
 description of the same lattice for cce-files and cce-graph, which still
 speak it; this app sets the pitch.
+
+### Node wires have a style
+
+The network's wires are drawn by cce-ui's `Graph::paint_wires` (see its
+CLAUDE.md, "A graph's wires are strokes in a style"), called in
+`render.rs` right after `paint_grid`, and come in four styles: Orthogonal,
+Rounded, Bezier, Straight. **Node Wire Style** is a dialog Settings row
+(Alt+D, "wire"), a `Ctl::Choice` whose value lives on the two Graph widgets
+themselves (`State::set_node_wire_style` sets both); it persists as
+`ViewportSettings::node_wire_style`, so in state.kdl and with the project's
+display block. Empty — every file from before the row — hands the choice
+to config.kdl's `style.surface.graph.node.wire_style`, and the row then
+reads what the config says. Not to be confused with the wireframe's
+"Wire" rows beside it, which are the 3D edges.
+
+**A config.kdl edit repaints** (the same day): `tick_frame`'s config poll
+reloaded the style registry and returned nothing, so a changed key showed
+only when something else drew — a wire style set in the config appeared on
+the next hover. `the_node_wire_style_is_a_setting_the_project_keeps` is the
+test for the row.
 
 ### The cursor is a region, and dragging the grid grows it
 
