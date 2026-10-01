@@ -152,11 +152,44 @@ impl ParamValue {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParamSlot {
     Value(ParamValue),
-    /// An expression (`ch("../sphere1/Radius") * 2`), evaluated wherever the
+    /// An expression (`ch("../sphere1/radius") * 2`), evaluated wherever the
     /// node is — the text is the expression. See `expr.rs`.
     Expr,
     /// A text that does not fit the kind, and why. Kept, never coerced.
     Invalid(String),
+}
+
+/// Whether `s` is a parameter NAME: lowercase ASCII letters, digits and
+/// underscores, not empty — `base_resolution`, `input_2`. The name is what
+/// a `ch()` path, a `show_when` condition, MCP and the code spell; the
+/// params pane never shows it, showing the LABEL (`Base Resolution`)
+/// instead. Node names follow the same convention, so a path reads as one
+/// thing: `../sphere1/radius`.
+pub fn is_param_name(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The parameter name a label or an older name becomes: lowercased, every
+/// run of anything but a letter or digit one underscore, none at either
+/// end — `Base Resolution` → `base_resolution`, `Relax in 3D Space` →
+/// `relax_in_3d_space`. What format 4's load step renames a save's
+/// parameters by (`Project::migrate_format`), and what MCP's `set_param`
+/// tries last for a name it does not find.
+pub fn param_name_of(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut gap = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            if gap && !out.is_empty() {
+                out.push('_');
+            }
+            gap = false;
+            out.push(c.to_ascii_lowercase());
+        } else {
+            gap = true;
+        }
+    }
+    out
 }
 
 /// One node parameter: the template-owned UI metadata (label, type, range,
@@ -382,6 +415,17 @@ impl ParamDef {
         }
     }
 
+    /// What the params pane shows for the row, and keys it by: the label,
+    /// or the name where there is none (a parameter added by hand or over
+    /// MCP).
+    pub fn shown_name(&self) -> &str {
+        if self.label.is_empty() {
+            &self.name
+        } else {
+            &self.label
+        }
+    }
+
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
@@ -519,10 +563,10 @@ impl ParamDef {
     /// Whether a value that READS as a reference should become an
     /// expression here. Not for a code parameter: a kernel or a wrangle
     /// script is a program, and one whose whole text happens to be
-    /// `ch("../a/Radius")` is a one-line program, not a channel — flagging
+    /// `ch("../a/radius")` is a one-line program, not a channel — flagging
     /// it would evaluate the script to a number before it ever ran.
     pub fn takes_expressions(&self) -> bool {
-        !(self.kind() == ParamKind::Code || self.name == "Code")
+        !(self.kind() == ParamKind::Code || self.name == "code")
     }
 
     /// Whether `text` would be a valid VALUE here — what an entry point a
@@ -648,13 +692,33 @@ pub fn unknown_param_kinds(node: &FsNode) -> Vec<(String, String, String)> {
     out
 }
 
+/// Every parameter in `node`'s tree whose name is not a parameter name
+/// ([`is_param_name`]), as `(path, name)` — what refuses a template.
+pub fn misnamed_params(node: &FsNode) -> Vec<(String, String)> {
+    fn walk(node: &FsNode, path: &str, out: &mut Vec<(String, String)>) {
+        for p in &node.params {
+            if !is_param_name(&p.name) {
+                out.push((path.to_string(), p.name.clone()));
+            }
+        }
+        for c in &node.children {
+            walk(c, &format!("{path}/{}", c.name), out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(node, &node.name, &mut out);
+    out
+}
+
 /// Every parameter in `node`'s tree whose text does not fit its kind, as
 /// `(path, parameter, why)` — what a load reports on the status line.
 pub fn invalid_params(node: &FsNode) -> Vec<(String, String, String)> {
     fn walk(node: &FsNode, path: &str, out: &mut Vec<(String, String, String)>) {
         for p in &node.params {
             if let Some(why) = p.invalid() {
-                out.push((path.to_string(), p.name.clone(), why.to_string()));
+                // The label: this is read off the status line, by a
+                // person, beside the pane that shows it.
+                out.push((path.to_string(), p.shown_name().to_string(), why.to_string()));
             }
         }
         for c in &node.children {

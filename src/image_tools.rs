@@ -112,11 +112,11 @@ impl State {
                 dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name)
             {
                 let fmt3 = |v: Vec3| format!("{:.3}:{:.3}:{:.3}", v.x, v.y, v.z);
-                set_param(node, "Pivot", fmt3(center));
-                set_param(node, "Position", fmt3(center + Vec3::Z * dist));
+                set_param(node, "pivot", fmt3(center));
+                set_param(node, "position", fmt3(center + Vec3::Z * dist));
                 set_param(
                     node,
-                    "Rotation",
+                    "rotation",
                     format!("{:.3}:{:.3}:0.000", orbit_x.to_degrees(), orbit_y.to_degrees()),
                 );
                 reached = Some(dist);
@@ -285,7 +285,7 @@ impl State {
                 continue;
             }
             for p in sibling.params.iter_mut() {
-                if p.name == "Input" && p.text().trim() == target_name {
+                if p.name == "input" && p.text().trim() == target_name {
                     p.set_text(new_name.clone());
                 }
             }
@@ -297,20 +297,20 @@ impl State {
         let (w, h) = (page.in_unit(page.size[0]), page.in_unit(page.size[1]));
         let num = |v: f32| row_number(v, unit);
         let node = &mut self.current_dir_mut().children[slot];
-        set_param(node, "Input", target_name);
-        set_param(node, "X", num(w * 0.5));
-        set_param(node, "Y", num(h * 0.5));
+        set_param(node, "input", target_name);
+        set_param(node, "x", num(w * 0.5));
+        set_param(node, "y", num(h * 0.5));
         match layer {
             ImageLayer::Text => {
-                set_param(node, "Text", "Text".to_string());
-                set_param(node, "Size", num((h * 0.05).max(page.in_unit(1.0 / page.scale()))));
-                set_param(node, "Vertical", "Middle".to_string());
+                set_param(node, "text", "Text".to_string());
+                set_param(node, "size", num((h * 0.05).max(page.in_unit(1.0 / page.scale()))));
+                set_param(node, "vertical", "Middle".to_string());
             }
             shape => {
                 let side = w.min(h) / 3.0;
-                set_param(node, "Shape", shape.label().to_string());
-                set_param(node, "Width", num(if shape == ImageLayer::Line { w / 3.0 } else { side }));
-                set_param(node, "Height", num(side));
+                set_param(node, "shape", shape.label().to_string());
+                set_param(node, "width", num(if shape == ImageLayer::Line { w / 3.0 } else { side }));
+                set_param(node, "height", num(side));
                 // A hairline that survives the raster: a four-hundredth of
                 // the short side, and never under a pixel and a half.
                 let stroke = (page.size[0].min(page.size[1]) / 400.0).max(1.5 / page.scale());
@@ -320,7 +320,7 @@ impl State {
                 } else {
                     format!("{stroke:.3}")
                 };
-                set_param(node, "Stroke Width", stroke);
+                set_param(node, "stroke_width", stroke);
             }
         }
         self.show_and_select(slot);

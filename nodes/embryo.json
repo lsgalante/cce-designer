@@ -5,118 +5,131 @@
  "outputs": 1,
  "params": [
   {
-   "name": "Input",
+   "name": "input",
+   "label": "Input",
    "type": "node",
    "default": "",
    "description": "Node whose geometry is used as the seed shape when Source is set to Input."
   },
   {
-   "name": "Source",
+   "name": "source",
+   "label": "Source",
    "type": "choice:Internal,Input",
    "default": "Internal",
    "description": "Starting shape: Internal builds a UV sphere from Radius and Base Resolution; Input uses the geometry wired into Input."
   },
   {
-   "name": "Method",
+   "name": "method",
+   "label": "Method",
    "type": "choice:Basic,Scatter",
    "default": "Basic",
    "description": "Basic passes the source shape on as it is; Scatter scatters points over its surface and wraps them in a convex hull, giving an evenly spaced mesh."
   },
   {
-   "name": "Base Resolution",
+   "name": "base_resolution",
+   "label": "Base Resolution",
    "type": "spinbox",
    "default": "50",
    "min": 3,
    "max": 100,
    "step": 1,
-   "show_when": "Source == Internal",
+   "show_when": "source == Internal",
    "description": "Rows and columns of the internal UV sphere. Higher values give a smoother, denser seed.",
    "group": "source"
   },
   {
-   "name": "Radius",
+   "name": "radius",
+   "label": "Radius",
    "type": "slider",
    "default": "0.5",
    "min": 0.01,
    "max": 10.0,
    "step": 0.01,
-   "show_when": "Source == Internal",
+   "show_when": "source == Internal",
    "description": "Radius of the internal sphere in world units, centered at the origin.",
    "group": "source"
   },
   {
-   "name": "Scatter Count",
+   "name": "scatter_count",
+   "label": "Scatter Count",
    "type": "spinbox",
    "default": "1000",
    "min": 10,
    "max": 10000,
    "step": 10,
-   "show_when": "Method == Scatter",
+   "show_when": "method == Scatter",
    "description": "Number of points scattered over the source surface before the hull is built. More points give a finer hull mesh.",
    "group": "scatter"
   },
   {
-   "name": "Scatter Seed",
+   "name": "scatter_seed",
+   "label": "Scatter Seed",
    "type": "slider",
    "default": "1.1",
    "min": 0.0,
    "max": 10.0,
    "step": 0.1,
-   "show_when": "Method == Scatter",
+   "show_when": "method == Scatter",
    "description": "Random seed for the scatter. Change it for a different but equally spaced point layout.",
    "group": "scatter"
   },
   {
-   "name": "Relax Points",
+   "name": "relax_points",
+   "label": "Relax Points",
    "type": "toggle",
    "default": "true",
-   "show_when": "Method == Scatter",
+   "show_when": "method == Scatter",
    "description": "When on, pushes the scattered points apart across the surface so they are evenly spaced before the hull is built.",
    "group": "scatter"
   },
   {
-   "name": "Scatter Relax Iterations",
+   "name": "scatter_relax_iterations",
+   "label": "Scatter Relax Iterations",
    "type": "spinbox",
    "default": "50",
    "min": 0,
    "max": 100,
    "step": 1,
-   "show_when": "Method == Scatter && Relax Points == true",
+   "show_when": "method == Scatter && relax_points == true",
    "description": "How many push-apart passes the scattered points get. More passes give a more even spacing; 0 does none.",
    "group": "scatter"
   },
   {
-   "name": "Scale Radii By",
+   "name": "scale_radii_by",
+   "label": "Scale Radii By",
    "type": "slider",
    "default": "1.248",
    "min": 0.0,
    "max": 2.0,
    "step": 0.001,
-   "show_when": "Method == Scatter && Relax Points == true",
+   "show_when": "method == Scatter && relax_points == true",
    "description": "Multiplier on each scattered point's push radius, which is derived from the surface area per point. Larger values spread points more forcefully.",
    "group": "scatter"
   },
   {
-   "name": "Use Max Relax Radius",
+   "name": "use_max_relax_radius",
+   "label": "Use Max Relax Radius",
    "type": "toggle",
    "default": "true",
-   "show_when": "Method == Scatter && Relax Points == true",
+   "show_when": "method == Scatter && relax_points == true",
    "description": "When on, the scattered points' push radius is capped at Scatter Relax Radius.",
    "group": "scatter"
   },
   {
-   "name": "Scatter Relax Radius",
+   "name": "scatter_relax_radius",
+   "label": "Scatter Relax Radius",
    "type": "slider",
    "default": "10",
    "min": 0.0,
    "max": 100.0,
    "step": 0.1,
-   "show_when": "Method == Scatter && Relax Points == true && Use Max Relax Radius == true",
+   "show_when": "method == Scatter && relax_points == true && use_max_relax_radius == true",
    "description": "Upper limit on the scattered points' push radius in world units, used when Use Max Relax Radius is on.",
    "group": "scatter"
   },
   {
-   "name": "Relax Iterations",
+   "name": "relax_iterations",
+   "label": "Relax Iterations",
    "type": "spinbox",
    "default": "0",
    "min": 0,
@@ -126,7 +139,8 @@
    "group": "relax"
   },
   {
-   "name": "Relax Radius",
+   "name": "relax_radius",
+   "label": "Relax Radius",
    "type": "slider",
    "default": "1",
    "min": 0.001,
@@ -136,14 +150,16 @@
    "group": "relax"
   },
   {
-   "name": "Relax in 3D Space",
+   "name": "relax_in_3d_space",
+   "label": "Relax in 3D Space",
    "type": "toggle",
    "default": "false",
    "description": "When off, the final relax slides points along the surface to keep its shape; when on, points may move freely in 3D.",
    "group": "relax"
   },
   {
-   "name": "Subdivision Depth",
+   "name": "subdivision_depth",
+   "label": "Subdivision Depth",
    "type": "spinbox",
    "default": "0",
    "min": 0,
@@ -173,22 +189,22 @@
    ],
    "params": [
     {
-     "name": "Radius",
-     "default": "chf(\"../Radius\")",
+     "name": "radius",
+     "default": "chf(\"../radius\")",
      "expr": true
     },
     {
-     "name": "Rows",
-     "default": "chi(\"../Base Resolution\")",
+     "name": "rows",
+     "default": "chi(\"../base_resolution\")",
      "expr": true
     },
     {
-     "name": "Columns",
-     "default": "chi(\"../Base Resolution\")",
+     "name": "columns",
+     "default": "chi(\"../base_resolution\")",
      "expr": true
     },
     {
-     "name": "Center Y",
+     "name": "center_y",
      "default": "0.0"
     }
    ],
@@ -203,16 +219,16 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "sphere1"
     },
     {
-     "name": "Input 2",
+     "name": "input_2",
      "default": "input1"
     },
     {
-     "name": "Index",
-     "default": "chi(\"../Source\")",
+     "name": "index",
+     "default": "chi(\"../source\")",
      "expr": true
     }
    ],
@@ -227,50 +243,50 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "source1"
     },
     {
-     "name": "Mode",
+     "name": "mode",
      "default": "Surface"
     },
     {
-     "name": "Points",
-     "default": "chi(\"../Scatter Count\")",
+     "name": "points",
+     "default": "chi(\"../scatter_count\")",
      "expr": true
     },
     {
-     "name": "Seed",
-     "default": "chf(\"../Scatter Seed\")",
+     "name": "seed",
+     "default": "chf(\"../scatter_seed\")",
      "expr": true
     },
     {
-     "name": "Relax Points",
-     "default": "chb(\"../Relax Points\")",
+     "name": "relax_points",
+     "default": "chb(\"../relax_points\")",
      "expr": true
     },
     {
-     "name": "Relax Iterations",
-     "default": "chi(\"../Scatter Relax Iterations\")",
+     "name": "relax_iterations",
+     "default": "chi(\"../scatter_relax_iterations\")",
      "expr": true
     },
     {
-     "name": "Scale Radii By",
-     "default": "chf(\"../Scale Radii By\")",
+     "name": "scale_radii_by",
+     "default": "chf(\"../scale_radii_by\")",
      "expr": true
     },
     {
-     "name": "Use Max Relax Radius",
-     "default": "chb(\"../Use Max Relax Radius\")",
+     "name": "use_max_relax_radius",
+     "default": "chb(\"../use_max_relax_radius\")",
      "expr": true
     },
     {
-     "name": "Max Relax Radius",
-     "default": "chf(\"../Scatter Relax Radius\")",
+     "name": "max_relax_radius",
+     "default": "chf(\"../scatter_relax_radius\")",
      "expr": true
     },
     {
-     "name": "Markers",
+     "name": "markers",
      "default": "false"
     }
    ],
@@ -285,7 +301,7 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "scatter1"
     }
    ],
@@ -300,16 +316,16 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "source1"
     },
     {
-     "name": "Input 2",
+     "name": "input_2",
      "default": "hull1"
     },
     {
-     "name": "Index",
-     "default": "chi(\"../Method\")",
+     "name": "index",
+     "default": "chi(\"../method\")",
      "expr": true
     }
    ],
@@ -324,26 +340,26 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "method1"
     },
     {
-     "name": "Mode",
+     "name": "mode",
      "default": "Repel"
     },
     {
-     "name": "Iterations",
-     "default": "chi(\"../Relax Iterations\")",
+     "name": "iterations",
+     "default": "chi(\"../relax_iterations\")",
      "expr": true
     },
     {
-     "name": "Radius",
-     "default": "chf(\"../Relax Radius\")",
+     "name": "radius",
+     "default": "chf(\"../relax_radius\")",
      "expr": true
     },
     {
-     "name": "In 3D Space",
-     "default": "chb(\"../Relax in 3D Space\")",
+     "name": "in_3d_space",
+     "default": "chb(\"../relax_in_3d_space\")",
      "expr": true
     }
    ],
@@ -358,12 +374,12 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "relax1"
     },
     {
-     "name": "Depth",
-     "default": "chi(\"../Subdivision Depth\")",
+     "name": "depth",
+     "default": "chi(\"../subdivision_depth\")",
      "expr": true
     }
    ],
@@ -378,7 +394,7 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "subdivide1"
     }
    ],
@@ -393,7 +409,7 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "normal1"
     }
    ],

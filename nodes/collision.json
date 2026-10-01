@@ -4,16 +4,18 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "node", "description": "The geometry whose points or primitives are tested against the collider and grouped." },
-    { "name": "Collider", "default": "", "type": "node", "description": "The geometry to test against, read as triangles. With nothing connected, or a collider without faces, the input passes through unchanged." },
+    { "name": "input", "label": "Input", "default": "", "type": "node", "description": "The geometry whose points or primitives are tested against the collider and grouped." },
+    { "name": "collider", "label": "Collider", "default": "", "type": "node", "description": "The geometry to test against, read as triangles. With nothing connected, or a collider without faces, the input passes through unchanged." },
     {
-      "name": "Method",
+      "name": "method",
+      "label": "Method",
       "type": "choice:Inside,Proximity",
       "default": "Inside",
       "description": "Inside marks elements enclosed by the collider, so it needs a closed collider. Proximity marks elements within Distance of the collider's surface."
     },
     {
-      "name": "Distance",
+      "name": "distance",
+      "label": "Distance",
       "type": "slider",
       "default": "0.05",
       "min": 0.0,
@@ -22,22 +24,25 @@
       "description": "For Proximity, how near the collider's surface an element must be to count, in world units. Unused by Inside."
     },
     {
-      "name": "Element Type",
+      "name": "element_type",
+      "label": "Element Type",
       "type": "choice:Points,Primitives",
       "default": "Points",
       "description": "Points tests each point. Primitives tests each primitive's centroid and groups the hit primitives and their points.",
       "group": "output"
     },
-    { "name": "Group Name", "default": "collisions", "type": "group", "description": "Name of the group written with the elements that hit. Also written as a primitive group when primitives are tested.", "group": "output" },
+    { "name": "group_name", "label": "Group Name", "default": "collisions", "type": "group", "description": "Name of the group written with the elements that hit. Also written as a primitive group when primitives are tested.", "group": "output" },
     {
-      "name": "Invert",
+      "name": "invert",
+      "label": "Invert",
       "type": "toggle",
       "default": "false",
       "description": "Groups the elements that did NOT hit the collider instead of those that did.",
       "group": "output"
     },
     {
-      "name": "Highlight",
+      "name": "highlight",
+      "label": "Highlight",
       "type": "toggle",
       "default": "true",
       "description": "Tints the grouped points red so the contact shows in the viewport. Off leaves colours untouched.",

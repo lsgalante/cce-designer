@@ -5,13 +5,15 @@
  "outputs": 1,
  "params": [
   {
-   "name": "Input",
+   "name": "input",
+   "label": "Input",
    "type": "node",
    "default": "",
    "description": "The node whose geometry the first pass of the loop reads, through the input node inside."
   },
   {
-   "name": "Iterations",
+   "name": "iterations",
+   "label": "Iterations",
    "type": "spinbox",
    "default": "4",
    "min": 0.0,
@@ -20,7 +22,8 @@
    "description": "How many times the chain inside runs, each pass reading the last one's result. 0 passes the input through; at most 1000."
   },
   {
-   "name": "Stop When Unchanged",
+   "name": "stop_when_unchanged",
+   "label": "Stop When Unchanged",
    "type": "toggle",
    "default": "false",
    "description": "Ends the loop early at a pass that changes nothing, since every later pass would find the same."
@@ -51,7 +54,7 @@
    "type": "output",
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "input1"
     }
    ],

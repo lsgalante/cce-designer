@@ -71,15 +71,15 @@ fn set(node: &mut FsNode, name: &str, value: String) {
 }
 
 fn is_line(node: &FsNode) -> bool {
-    node_param_str(node, "Shape", "Rectangle").eq_ignore_ascii_case("Line")
+    node_param_str(node, "shape", "Rectangle").eq_ignore_ascii_case("Line")
 }
 
 /// The shape's centre, box and turn, as its rows have them.
 fn shape_rows(node: &FsNode) -> ([f32; 2], [f32; 2], f32) {
     (
-        [node_param_f32(node, "X", 0.0), node_param_f32(node, "Y", 0.0)],
-        [node_param_f32(node, "Width", 1.0).abs(), node_param_f32(node, "Height", 1.0).abs()],
-        node_param_f32(node, "Rotation", 0.0),
+        [node_param_f32(node, "x", 0.0), node_param_f32(node, "y", 0.0)],
+        [node_param_f32(node, "width", 1.0).abs(), node_param_f32(node, "height", 1.0).abs()],
+        node_param_f32(node, "rotation", 0.0),
     )
 }
 
@@ -109,12 +109,12 @@ impl HandleSource for ShapeHandles {
         let Some(frame) = ctx.page else { return };
         let page = |p: &Vec3| frame.from_world(*p, ctx.world_unit_mm);
         let least = one_pixel(&frame);
-        let kept = node_param_f32(node, "Rotation", 0.0);
+        let kept = node_param_f32(node, "rotation", 0.0);
         let (c, size, turn) = match handles {
             [c, end] => {
                 let (c, along) = (page(c), sub(page(end), page(c)));
                 let turn = angle_of(along, &frame).unwrap_or(kept);
-                (c, [length(along) * 2.0, node_param_f32(node, "Height", 1.0)], turn)
+                (c, [length(along) * 2.0, node_param_f32(node, "height", 1.0)], turn)
             }
             [c, corner, edge] => {
                 let c = page(c);
@@ -125,13 +125,13 @@ impl HandleSource for ShapeHandles {
             }
             _ => return,
         };
-        set(node, "X", frame.row(c[0]));
-        set(node, "Y", frame.row(c[1]));
-        set(node, "Width", frame.row(size[0].max(least)));
+        set(node, "x", frame.row(c[0]));
+        set(node, "y", frame.row(c[1]));
+        set(node, "width", frame.row(size[0].max(least)));
         if handles.len() == 3 {
-            set(node, "Height", frame.row(size[1].max(least)));
+            set(node, "height", frame.row(size[1].max(least)));
         }
-        set(node, "Rotation", format!("{turn:.1}"));
+        set(node, "rotation", format!("{turn:.1}"));
     }
 
     fn drag(&self, handles: &mut Vec<Vec3>, moved: usize, to: Vec3, ctx: &HandleCtx) {
@@ -222,8 +222,8 @@ impl HandleSource for TextHandles {
     /// Size below it, so the type's size is a length that can be seen.
     fn read(&self, node: &FsNode, ctx: &HandleCtx) -> Vec<Vec3> {
         let Some(frame) = ctx.page else { return Vec::new() };
-        let at = [node_param_f32(node, "X", 0.0), node_param_f32(node, "Y", 0.0)];
-        let size = node_param_f32(node, "Size", 0.25).abs();
+        let at = [node_param_f32(node, "x", 0.0), node_param_f32(node, "y", 0.0)];
+        let size = node_param_f32(node, "size", 0.25).abs();
         vec![
             frame.to_world(at, ctx.world_unit_mm),
             frame.to_world(add(at, [0.0, size]), ctx.world_unit_mm),
@@ -235,9 +235,9 @@ impl HandleSource for TextHandles {
         let [at, below] = handles else { return };
         let at = frame.from_world(*at, ctx.world_unit_mm);
         let size = length(sub(frame.from_world(*below, ctx.world_unit_mm), at));
-        set(node, "X", frame.row(at[0]));
-        set(node, "Y", frame.row(at[1]));
-        set(node, "Size", frame.row(size.max(one_pixel(&frame))));
+        set(node, "x", frame.row(at[0]));
+        set(node, "y", frame.row(at[1]));
+        set(node, "size", frame.row(size.max(one_pixel(&frame))));
     }
 
     fn drag(&self, handles: &mut Vec<Vec3>, moved: usize, to: Vec3, _ctx: &HandleCtx) {

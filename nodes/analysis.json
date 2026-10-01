@@ -5,29 +5,33 @@
   "outputs": 1,
   "params": [
     {
-      "name": "Input",
+      "name": "input",
+      "label": "Input",
       "type": "node",
       "default": "",
       "description": "The node whose geometry is measured; the results are added as detail attributes and the geometry passed on."
     },
     {
-      "name": "Source",
+      "name": "source",
+      "label": "Source",
       "type": "choice:Attribute,Edge Lengths",
       "default": "Attribute",
       "description": "What is measured: a point attribute's values, or the lengths of every mesh edge."
     },
     {
-      "name": "Attribute",
+      "name": "attribute",
+      "label": "Attribute",
       "type": "attribute",
       "default": "mass",
-      "show_when": "Source == Attribute",
+      "show_when": "source == Attribute",
       "description": "The point attribute measured. Results go to detail attributes named after it with _min, _max, _sum, _average, _spread and _count."
     },
     {
-      "name": "Group",
+      "name": "group",
+      "label": "Group",
       "type": "group",
       "default": "",
-      "show_when": "Source == Attribute",
+      "show_when": "source == Attribute",
       "description": "A point group limiting which points are measured. Empty means every point.",
       "group": "where"
     }

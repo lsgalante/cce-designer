@@ -5,46 +5,52 @@
   "outputs": 1,
   "params": [
     {
-      "name": "Input",
+      "name": "input",
+      "label": "Input",
       "default": "",
       "type": "node",
       "description": "The geometry to relax. Its points are moved and everything else passes through."
     },
     {
-      "name": "Mode",
+      "name": "mode",
+      "label": "Mode",
       "type": "choice:Springs,Repel,Tangential",
       "default": "Springs",
       "description": "Springs pulls edge lengths back toward those of the Rest geometry. Repel pushes points apart until spheres of Radius stop overlapping. Tangential evens out triangles along the surface."
     },
     {
-      "name": "Rest",
+      "name": "rest",
+      "label": "Rest",
       "default": "",
       "type": "node",
-      "show_when": "Mode == Springs",
+      "show_when": "mode == Springs",
       "description": "The geometry whose edge lengths the springs restore; inside a simnet usually its input node. Must have the same point count as Input, or nothing moves.",
       "group": "springs"
     },
     {
-      "name": "Pin Group",
+      "name": "pin_group",
+      "label": "Pin Group",
       "default": "",
       "type": "group",
-      "show_when": "Mode == Springs",
+      "show_when": "mode == Springs",
       "description": "Points in this group keep their input position and push the others instead, so a displacement applied to them spreads through the surface. Empty pins nothing.",
       "group": "springs"
     },
     {
-      "name": "Stiffness",
+      "name": "stiffness",
+      "label": "Stiffness",
       "type": "slider",
       "default": "0.50",
       "min": 0.0,
       "max": 1.0,
       "step": 0.05,
-      "show_when": "Mode == Springs",
+      "show_when": "mode == Springs",
       "description": "Fraction of each edge's length error corrected per pass. Higher values relax faster and stiffer; 0 leaves the points where they are.",
       "group": "springs"
     },
     {
-      "name": "Iterations",
+      "name": "iterations",
+      "label": "Iterations",
       "type": "spinbox",
       "default": "8",
       "min": 0.0,
@@ -54,32 +60,35 @@
       "group": "solve"
     },
     {
-      "name": "Radius",
+      "name": "radius",
+      "label": "Radius",
       "type": "slider",
       "default": "0.05",
       "min": 0.001,
       "max": 1.0,
       "step": 0.001,
-      "show_when": "Mode == Repel",
+      "show_when": "mode == Repel",
       "description": "Radius of the sphere around each point, in world units; points are pushed apart until these spheres stop overlapping. Larger spaces points further apart.",
       "group": "repel"
     },
     {
-      "name": "In 3D Space",
+      "name": "in_3d_space",
+      "label": "In 3D Space",
       "type": "toggle",
       "default": "false",
-      "show_when": "Mode == Repel",
+      "show_when": "mode == Repel",
       "description": "When off, points slide only along the surface (in their tangent plane) as they repel. When on, they may move freely in 3D and leave the surface.",
       "group": "repel"
     },
     {
-      "name": "Amount",
+      "name": "amount",
+      "label": "Amount",
       "type": "slider",
       "default": "0.50",
       "min": 0.0,
       "max": 1.0,
       "step": 0.01,
-      "show_when": "Mode == Tangential",
+      "show_when": "mode == Tangential",
       "description": "How far each point moves toward the centroid of its neighbours per pass, 0 to 1, less the part along its normal, so triangles even out while the shape stays. 0 turns it off.",
       "group": "tangential"
     }

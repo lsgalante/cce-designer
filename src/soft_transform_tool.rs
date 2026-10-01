@@ -76,14 +76,14 @@ impl HandleSource for SoftTransformHandles {
     }
 
     fn read(&self, node: &FsNode, _ctx: &HandleCtx) -> Vec<Vec3> {
-        let centre = triple(node, "Center");
-        vec![centre, centre + triple(node, "Translation")]
+        let centre = triple(node, "center");
+        vec![centre, centre + triple(node, "translation")]
     }
 
     fn write(&self, node: &mut FsNode, handles: &[Vec3], _ctx: &HandleCtx) {
         let [centre, offset] = handles else { return };
-        set_triple(node, "Center", *centre);
-        set_triple(node, "Translation", *offset - *centre);
+        set_triple(node, "center", *centre);
+        set_triple(node, "translation", *offset - *centre);
     }
 
     fn extensible(&self) -> bool {

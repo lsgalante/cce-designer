@@ -352,7 +352,8 @@ impl State {
                 let dir = state.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot) {
                     let node_id = child.id.clone();
-                    if let Some(p) = child.params.iter_mut().find(|p| p.name == name) {
+                    if let Some(p) = crate::app::param_by_name_or_label(&mut child.params, &name) {
+                        let name = p.name.clone();
                         let before = p.clone();
                         // A value that reads as a reference becomes an
                         // expression, as one typed into the pane does; an
@@ -531,9 +532,16 @@ impl State {
                     Err("Slot out of bounds".to_string())
                 }
             }
-            McpAction::AddParam { slot, name, param_type, default } => {
+            McpAction::AddParam { slot, name, param_type, default, label } => {
                 let len = state.current_dir().children.len();
-                if crate::app::ParamKind::parse(&param_type).is_none() {
+                if !crate::app::is_param_name(&name) {
+                    Err(format!(
+                        "'{name}' is not a parameter name: lowercase letters, digits and underscores, as in '{}' — the pane shows the label, which may say anything",
+                        crate::app::param_name_of(&name)
+                    ))
+                } else if state.current_dir().children.get(slot).is_some_and(|c| c.params.iter().any(|p| p.name == name)) {
+                    Err(format!("{name}: the node already has a parameter of that name"))
+                } else if crate::app::ParamKind::parse(&param_type).is_none() {
                     Err(format!(
                         "Unknown param_type '{param_type}'; expected one of: {}",
                         crate::app::ParamKind::NAMES.join(", ")
@@ -541,7 +549,7 @@ impl State {
                 } else if let Some(why) = ParamDef::new(name.clone(), param_type.clone(), default.clone()).invalid() {
                     Err(format!("{name}: {why}"))
                 } else if slot < len {
-                    let param = ParamDef::new(name, param_type, default);
+                    let param = ParamDef::new(name, param_type, default).with_label(label);
                     state.current_dir_mut().children[slot].params.push(param);
                     state.sync_nodes();
                     // Params feed kernel evaluation and the param pane shows
@@ -558,7 +566,8 @@ impl State {
                 let len = state.current_dir().children.len();
                 if slot < len {
                     let params = &mut state.current_dir_mut().children[slot].params;
-                    if let Some(pos) = params.iter().position(|p| p.name == name) {
+                    let found = crate::app::param_by_name_or_label(params, &name).map(|p| p.name.clone());
+                    if let Some(pos) = found.and_then(|n| params.iter().position(|p| p.name == n)) {
                         params.remove(pos);
                         state.sync_nodes();
                         state.rebuild_scene_geometry();
@@ -611,7 +620,7 @@ impl State {
                 }
                 let pts: Vec<glam::Vec3> =
                     points.iter().map(|p| glam::Vec3::new(p[0], p[1], p[2])).collect();
-                let Some(p) = child.params.iter_mut().find(|p| p.name == "Points") else {
+                let Some(p) = child.params.iter_mut().find(|p| p.name == "points") else {
                     return Err("Curve node has no Points param".to_string());
                 };
                 p.set_text(crate::geometry::format_curve_points(&pts));

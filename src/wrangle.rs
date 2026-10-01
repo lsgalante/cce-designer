@@ -158,7 +158,7 @@ pub fn desugar(code: &str) -> String {
     out
 }
 
-/// The channel paths a script names as string literals — `ch("../Radius")`,
+/// The channel paths a script names as string literals — `ch("../radius")`,
 /// `chs`, `chv`, `chi`, `chf`, `chb` — so the caller can resolve them before
 /// the run. A path built at runtime is not found here and errors when read.
 pub fn channel_refs(code: &str) -> Vec<String> {

@@ -5,7 +5,8 @@
   "outputs": 1,
   "params": [
     {
-      "name": "Points",
+      "name": "points",
+      "label": "Points",
       "type": "spinbox",
       "default": "100",
       "min": 10.0,
@@ -14,14 +15,16 @@
       "description": "Number of points to generate along the chosen Shape. With Markers on, each one also gets a small marker sphere."
     },
     {
-      "name": "Shape",
+      "name": "shape",
+      "label": "Shape",
       "type": "choice:None,Spiral,Line,Circle,Grid",
       "default": "None",
       "description": "Pattern the points are laid out in: Spiral, Line, Circle or a square Grid. None puts every point at the same spot. Placed automatically by the node's order in the network.",
       "group": "display"
     },
     {
-      "name": "Markers",
+      "name": "markers",
+      "label": "Markers",
       "type": "choice:true,false",
       "default": "true",
       "description": "true draws a small sphere at each point so they can be seen; false outputs bare points only, which is what Copy and other nodes should read.",

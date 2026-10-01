@@ -4,7 +4,7 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "node", "description": "The node whose geometry is moved by the Translation." },
-    { "name": "Translation", "default": "0.00:0.00:0.00", "type": "float3", "min": -10.0, "max": 10.0, "description": "Offset in world units added to every point's position." }
+    { "name": "input", "label": "Input", "default": "", "type": "node", "description": "The node whose geometry is moved by the Translation." },
+    { "name": "translation", "label": "Translation", "default": "0.00:0.00:0.00", "type": "float3", "min": -10.0, "max": 10.0, "description": "Offset in world units added to every point's position." }
   ]
 }

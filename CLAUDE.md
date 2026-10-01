@@ -648,6 +648,55 @@ diagnosis is in the git history of this section (commit `8fd0c29`) if the
 pattern ever recurs with another driver: a `read` returning EBADF on a file
 nothing is wrong with, in a process that has loaded a vendor ICD.
 
+### A parameter has a name and a label (since 2026-10-01)
+
+A parameter's **name** is an identifier — lowercase letters, digits and
+underscores (`param::is_param_name`): `base_resolution`, `input_2`,
+`attribute_name`. It is what a `ch()` path spells (`../sphere1/radius`),
+what `show_when` conditions name (`operation == Create`), what MCP and
+the code use, and it is NEVER shown in the params pane. The pane shows
+the **label** (`Base Resolution`; the Attribute node's `attribute_name`
+is labelled just `Name`), which may say anything. The label is the
+template's UI metadata like the description: `adopt_ui_from` hands it to
+every instance. Node names follow the same convention, so a path reads
+as one thing.
+
+- **Every template parameter carries both**, and a template whose
+  parameter name is not one is refused at load (`misnamed_params`, beside
+  the unknown-kind refusal). Until this, no template set a label: the
+  name WAS the pane's text, Title Case with spaces, and every `ch()` path
+  had to spell it that way.
+- **`ParamDef::shown_name`** is the one reading of what the pane shows —
+  the label, or the name where there is none (a parameter added by hand
+  or over MCP). The pane's rows are keyed by it, so the write-back,
+  `param_row_at` and the expression tint resolve a row through it;
+  `param_row_at` hands back the NAME. Messages a person reads beside the
+  pane say the label (the refused-value status line, the load's invalid
+  values); an expression's error says the name it was written with.
+- **Format 4** (`Project::migrate_param_names`) renames a save's
+  parameters by `param_name_of` (`Relax in 3D Space` →
+  `relax_in_3d_space`) and every channel path in an expression and in a
+  wrangle's Code with them — the last segment, less a `.x` component.
+  `show_when` is left alone (the merge replaces it, and
+  `page::migrate_preset_rows` recognises an old page by its condition),
+  and so are the retired `meta` / `session` / `utility` nodes, which the
+  meta migration reads by their saved names after it. Format-1–3 steps
+  run before it and so still spell the old names (`rename_attribute`'s
+  `Attributes`). Checked on the user's project and both bundled ones:
+  the old build and the new export the same mesh at frames 1, 30 and 120.
+- **MCP**: `set_param` / `delete_param` take the name, else the label
+  (any case), else `param_name_of` of what was given — so a script
+  written against `Base Resolution` still lands
+  (`param_by_name_or_label`). `add_param` refuses a name that is not one,
+  suggesting the form, and takes an optional `label`.
+- **Under test, `find_param` asserts the name it is asked for is one**,
+  and matches exactly (it was case-insensitive). A reader still spelling
+  a label finds nothing and reads its fallback — a node quietly deaf to
+  a row — so the suite fails it loudly instead. `param_visible` matches
+  names exactly too.
+
+`parameters_have_a_name_and_a_label` is the test.
+
 ### Parameter kinds and typed values
 
 `src/param.rs` owns `ParamDef`, `ParamKind`, `ParamValue` and `ParamSlot`
@@ -904,7 +953,7 @@ before the row is off, so a saved Transfer carries what it carried.
 by default) with From, Attributes, Transfer Groups, Groups and Maximum
 Distance rows shown while it is on — since the Remesh became a subnet
 (below) that is its `transfer1` child, an ordinary Transfer node whose
-rows are expressions on the subnet's, behind a switch on `chi("../Transfer")`;
+rows are expressions on the subnet's, behind a switch on `chi("../transfer")`;
 the native node's copy is `remesh_transfer`: once the mesh is
 remeshed, a source's attributes and groups laid over the NEW points by
 nearest point — the node's own input when From names nothing, which
@@ -973,16 +1022,16 @@ error)` hands back a clone whose `expr` params are VALUES, at the top of
 the kernel path's parent read.
 
 **Paths are Houdini's.** Relative to the node holding the expression: a bare
-name is the node's OWN parameter, `..` its parent, `../sphere1/Radius` a
+name is the node's OWN parameter, `..` its parent, `../sphere1/radius` a
 sibling's, a leading `/` the root. `.x` / `.y` / `.z` reads a float3
 component. `ch()` / `chf()` read a number (a toggle 1 or 0, a choice its
-option INDEX — `chi("../Method")` is what lets a subnet's dropdown drive a
+option INDEX — `chi("../method")` is what lets a subnet's dropdown drive a
 child switch's Index), `chi()` truncates, `chb()` is 1 or 0, `chs()` the
 string (a choice's option text). The rest is `+ - * / % ^`, comparisons,
 `&& || !`, `$F` (the evaluation's frame), strings with `+`, and a fixed
 function set (`if(c, a, b)`, `clamp`, `fit`, `lerp`, `min`/`max`, `rand(seed)`,
 the usual math). No ternary — `:` separates a float3's components, which
-are three expressions each (`chf("../a/Size.x"):0:0`). An expression that
+are three expressions each (`chf("../a/size.x"):0:0`). An expression that
 reads an expression follows the chain; a circle is an error on the node,
 never a stack overflow. The written-back value is formatted for the
 TARGET row (`format_for_param`): a number into a toggle is `true`/`false`,
@@ -1005,9 +1054,11 @@ in an older save: an attribute row, a name in a comma list of attributes
 (`Attributes`), `@old` in a wrangle's Code as a whole name (not `@Normal`,
 not `@UVW`) — and never a choice row, so the Sphere's Method keeps its
 `UV` option. Once, by the version, so an attribute someone names `Norm` or
-`UV` afterwards is theirs (`a_save_naming_norm_or_uv_names_n_or_uv`). Templates go through
+`UV` afterwards is theirs (`a_save_naming_norm_or_uv_names_n_or_uv`).
+**Format 4** (the same day): parameter names are identifiers — see "A
+parameter has a name and a label". Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
-(`embryo.json` says `chf("../Radius")` now). The same inference applies to a
+(`embryo.json` says `chf("../radius")` now). The same inference applies to a
 value typed into a plain row or scripted through `set_param`: a reference
 becomes an expression; bare arithmetic does not, and is asked for through
 the row menu.
@@ -1022,9 +1073,10 @@ the latter bakes the CURRENT value back as a value, as Delete Channels
 does. `copied_param` holds a node ID, not a path, so a rename between copy
 and paste still pastes the right path. **Header rows read the
 parameter out** (since 2026-09-28, `param_menu_rows`): `Name:` is the
-parameter's name, what a `ch()` path spells, with `Label:` under it only
-when the template gives one (the pane shows the name otherwise, and a
-Label row repeating it would claim there is one), then **what the
+parameter's name, what a `ch()` path spells, with `Label:` under it — what
+the pane shows — when there is one (every template parameter, since the
+names became identifiers; a parameter added without one shows its name),
+then **what the
 parameter does** (since 2026-09-30): the template's `description`, a
 sentence or two in prose, wrapped to `PARAM_DESCRIPTION_WIDTH` (44)
 characters over as many unprefixed rows as it takes, since the menu is as
@@ -1053,7 +1105,7 @@ not fit its kind, shown only then, `Default:`
 the template's value as written there
 (`State::template_default`, which takes a subnet template's override for
 a child inside an instance — the Embryo's `sphere1` defaults its Radius to
-`chf("../Radius")` — and is absent for a parameter no template names),
+`chf("../radius")` — and is absent for a parameter no template names),
 then for a slider, float3 or spinbox `Min:` / `Max:` / `Step:` as the
 template DECLARES them (`ParamDef::declared_range`, an inline
 `slider:-2:2` included, `none` where it says nothing) followed by
@@ -1201,7 +1253,7 @@ way — both in `src/geometry.rs`:
   Collision's Collider, the Remesh's From). A wire whose row is hidden
   keeps its port and draws no line. An expression wire is drawn to what it
   evaluates to at the current frame (`node_wires_at`) — the Remesh subnet's
-  transfer reads its From through `if(chs("../From"), …, "input1")` and is
+  transfer reads its From through `if(chs("../from"), …, "input1")` and is
   drawn from input1 — and to nothing when that fails. A connection dropped on
   port k sets the k-th wire (`State::connect_port`).
   `every_wire_is_drawn_into_its_own_port` is the test.
@@ -1274,10 +1326,10 @@ family's first Pre-Simulation operator — "the seed geometry a simulation
 starts from" — as a SUBNET of ten ordinary nodes wired the way the HDA's
 network is, its controls reaching the children through parameter references
 (above). Dive in and the pipeline is there to read, break and reuse: `input1`
-and a `sphere1` (Radius `chf("../Radius")`, Rows and Columns
-`chi("../Base Resolution")`) behind `source1`, a `switch` whose Index is
-`chi("../Source")`; `scatter1` in Surface mode reading the Scatter folder's
-controls, `hull1` behind it, and `method1`, a switch on `chi("../Method")`
+and a `sphere1` (Radius `chf("../radius")`, Rows and Columns
+`chi("../base_resolution")`) behind `source1`, a `switch` whose Index is
+`chi("../source")`; `scatter1` in Surface mode reading the Scatter folder's
+controls, `hull1` behind it, and `method1`, a switch on `chi("../method")`
 between the source and the hull; then `relax1` in Repel mode, `subdivide1`,
 `normal1`, `output1`. The defaults are the HDA's, and
 `embryo_template_builds_a_sphere_a_hull_or_the_input` drives the template
@@ -1329,7 +1381,7 @@ into and its passes read, bypassed and rewired. `nodes/remesh.json`:
 ```
 remesh1 (node)  input1 → repeat1 → transfer1 ─┐
                                └──────────── transfer_switch1 (on Transfer) → output1
-repeat1 (repeat, Iterations = chi("../Iterations"), Stop When Unchanged on)
+repeat1 (repeat, Iterations = chi("../iterations"), Stop When Unchanged on)
                 input1 → split1 → collapse1 → flip1 → relax1 → project1 → output1
                 seed1 ───────────────────────────────────────┘ (Surface)
 ```

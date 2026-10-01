@@ -44,12 +44,12 @@ impl HandleSource for CurveHandles {
     }
 
     fn read(&self, node: &FsNode, _ctx: &HandleCtx) -> Vec<Vec3> {
-        parse_curve_points(&node_param_str(node, "Points", ""))
+        parse_curve_points(&node_param_str(node, "points", ""))
     }
 
     fn write(&self, node: &mut FsNode, handles: &[Vec3], _ctx: &HandleCtx) {
         let formatted = format_curve_points(handles);
-        if let Some(p) = node.params.iter_mut().find(|p| p.name == "Points") {
+        if let Some(p) = node.params.iter_mut().find(|p| p.name == "points") {
             p.set_text(formatted);
         }
     }

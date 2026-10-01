@@ -4,10 +4,10 @@
  "inputs": 4,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 0." },
-  { "name": "Input 2", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 1." },
-  { "name": "Input 3", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 2." },
-  { "name": "Input 4", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 3." },
-  { "name": "Index", "type": "spinbox", "default": "0", "min": 0, "max": 3, "step": 1, "description": "Which input to pass on: 0 is Input, 1 is Input 2, and so on. Values past the range are clamped; an empty slot passes nothing." }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 0." },
+  { "name": "input_2", "label": "Input 2", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 1." },
+  { "name": "input_3", "label": "Input 3", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 2." },
+  { "name": "input_4", "label": "Input 4", "type": "node", "default": "", "description": "Node whose geometry is passed through unchanged when Index is 3." },
+  { "name": "index", "label": "Index", "type": "spinbox", "default": "0", "min": 0, "max": 3, "step": 1, "description": "Which input to pass on: 0 is Input, 1 is Input 2, and so on. Values past the range are clamped; an empty slot passes nothing." }
  ]
 }

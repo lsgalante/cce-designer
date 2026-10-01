@@ -5,13 +5,15 @@
   "outputs": 1,
   "params": [
     {
-      "name": "Input",
+      "name": "input",
+      "label": "Input",
       "default": "",
       "type": "node",
       "description": "The seed geometry the simulation starts from. It is what the simnet shows at its start frame and what the first step reads."
     },
     {
-      "name": "Substeps",
+      "name": "substeps",
+      "label": "Substeps",
       "type": "spinbox",
       "default": "1",
       "min": 1.0,
@@ -20,13 +22,15 @@
       "description": "How many times the chain inside runs per frame. A dt detail attribute of 1/substeps is set each run, so rates scaled by it stay steady rather than speeding up."
     },
     {
-      "name": "Start Frame",
+      "name": "start_frame",
+      "label": "Start Frame",
       "type": "text",
       "default": "",
       "description": "The frame at which the simulation shows its seed; earlier frames also show the seed. Empty follows the timeline's start frame."
     },
     {
-      "name": "Cache",
+      "name": "cache",
+      "label": "Cache",
       "type": "choice:false,true",
       "default": "false",
       "description": "When true, the latest solved frame is saved to disk so a later session can resume from it instead of solving from the seed.",
@@ -48,7 +52,7 @@
       "type": "output",
       "params": [
         {
-          "name": "Input",
+          "name": "input",
           "default": "input1"
         }
       ],

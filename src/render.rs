@@ -613,7 +613,7 @@ impl State {
                 let rows = crate::app::param_display(&child.params);
                 let is_expr = |key: &str| {
                     child.params.iter().any(|p| {
-                        let k = if p.label.is_empty() { &p.name } else { &p.label };
+                        let k = p.shown_name();
                         k == key && p.is_expr()
                     })
                 };

@@ -74,7 +74,7 @@ impl Welder {
 /// index, the way Line and Points still are; every node that came through a
 /// template or a load does.
 pub fn sphere_has_center(target: &FsNode) -> bool {
-    target.params.iter().any(|p| p.name == "Center X")
+    target.params.iter().any(|p| p.name == "center_x")
 }
 
 /// The Sphere node, by Method: UV (Rows x Columns), Icosphere (20 faces
@@ -83,22 +83,22 @@ pub fn sphere_has_center(target: &FsNode) -> bool {
 /// point counts are the closed forms: `2 + (rows - 1) * cols`,
 /// `10 f^2 + 2` and `6 r^2 + 2`. Cube builds QUADS — the kernel fanned them.
 pub fn sphere_node_detail(target: &FsNode, legacy_center: Option<Vec3>) -> Detail {
-    let method = node_param_str(target, "Method", "UV").to_lowercase();
-    let radius = node_param_f32(target, "Radius", 0.5).max(1e-4);
+    let method = node_param_str(target, "method", "UV").to_lowercase();
+    let radius = node_param_f32(target, "radius", 0.5).max(1e-4);
     let center = legacy_center.unwrap_or_else(|| {
         Vec3::new(
-            node_param_f32(target, "Center X", 0.0),
-            node_param_f32(target, "Center Y", 0.55),
-            node_param_f32(target, "Center Z", 0.0),
+            node_param_f32(target, "center_x", 0.0),
+            node_param_f32(target, "center_y", 0.55),
+            node_param_f32(target, "center_z", 0.0),
         )
     });
-    let colored = node_param_bool(target, "Color", true);
+    let colored = node_param_bool(target, "color", true);
     let unit = match method.as_str() {
-        "icosphere" => icosphere_unit(node_param_f32(target, "Frequency", 4.0).round().clamp(1.0, 16.0) as usize),
-        "cube" => cube_sphere_unit(node_param_f32(target, "Resolution", 8.0).round().clamp(1.0, 64.0) as usize),
+        "icosphere" => icosphere_unit(node_param_f32(target, "frequency", 4.0).round().clamp(1.0, 16.0) as usize),
+        "cube" => cube_sphere_unit(node_param_f32(target, "resolution", 8.0).round().clamp(1.0, 64.0) as usize),
         _ => {
-            let rows = node_param_f32(target, "Rows", 16.0).round().clamp(2.0, 128.0) as usize;
-            let cols = node_param_f32(target, "Columns", 24.0).round().clamp(3.0, 128.0) as usize;
+            let rows = node_param_f32(target, "rows", 16.0).round().clamp(2.0, 128.0) as usize;
+            let cols = node_param_f32(target, "columns", 24.0).round().clamp(3.0, 128.0) as usize;
             let mut d = sphere_detail(center, radius, rows, cols);
             finish_sphere(&mut d, center, colored);
             return d;
@@ -261,9 +261,9 @@ pub fn cuboid_detail(center: Vec3, half: Vec3, color: [f32; 3]) -> Detail {
 /// twelve edges as thin bars and its eight corners as small cubes, which is
 /// what the kernel drew and what a reference frame wants.
 pub fn box_node_detail(target: &FsNode) -> Detail {
-    let scale = node_param_f32(target, "Scale", 1.0).max(1e-4);
-    let wireframe = node_param_bool(target, "Wireframe", false);
-    let center = node_param_vec3(target, "Center", Vec3::new(0.0, 0.55, 0.0));
+    let scale = node_param_f32(target, "scale", 1.0).max(1e-4);
+    let wireframe = node_param_bool(target, "wireframe", false);
+    let center = node_param_vec3(target, "center", Vec3::new(0.0, 0.55, 0.0));
     let color = [0.8, 0.2, 0.2];
     let h = 0.5 * scale;
     if !wireframe {
@@ -295,16 +295,16 @@ pub fn box_node_detail(target: &FsNode) -> Detail {
 /// Grid is the same sheet with a float3 Center and no gradient; two nodes
 /// for history's sake, and this one is the older.
 pub fn plane_node_detail(target: &FsNode) -> Detail {
-    let width = node_param_f32(target, "Width", 1.0).max(1e-4);
-    let length = node_param_f32(target, "Length", 1.0).max(1e-4);
-    let cols = node_param_f32(target, "Columns", 16.0).round().clamp(1.0, 500.0) as usize;
-    let rows = node_param_f32(target, "Rows", 16.0).round().clamp(1.0, 500.0) as usize;
+    let width = node_param_f32(target, "width", 1.0).max(1e-4);
+    let length = node_param_f32(target, "length", 1.0).max(1e-4);
+    let cols = node_param_f32(target, "columns", 16.0).round().clamp(1.0, 500.0) as usize;
+    let rows = node_param_f32(target, "rows", 16.0).round().clamp(1.0, 500.0) as usize;
     let center = Vec3::new(
-        node_param_f32(target, "Center X", 0.0),
-        node_param_f32(target, "Center Y", 0.0),
-        node_param_f32(target, "Center Z", 0.0),
+        node_param_f32(target, "center_x", 0.0),
+        node_param_f32(target, "center_y", 0.0),
+        node_param_f32(target, "center_z", 0.0),
     );
-    let colored = node_param_bool(target, "Color", true);
+    let colored = node_param_bool(target, "color", true);
 
     let mut d = Detail::new();
     let mut cds = Vec::with_capacity((rows + 1) * (cols + 1));

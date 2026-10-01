@@ -4,6 +4,6 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "Node whose points are wrapped in a convex hull. Input points that are flat or in a line cannot enclose a volume and pass through unchanged." }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "Node whose points are wrapped in a convex hull. Input points that are flat or in a line cannot enclose a volume and pass through unchanged." }
  ]
 }

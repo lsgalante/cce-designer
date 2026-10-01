@@ -5,7 +5,8 @@
   "outputs": 0,
   "params": [
     {
-      "name": "Position",
+      "name": "position",
+      "label": "Position",
       "type": "float3",
       "default": "2.50:1.80:2.50",
       "min": -10.0,
@@ -13,7 +14,8 @@
       "description": "Where the camera sits in world units. Its direction and distance from Pivot set the starting view; panning the view rewrites it."
     },
     {
-      "name": "Rotation",
+      "name": "rotation",
+      "label": "Rotation",
       "type": "float3",
       "default": "0.00:0.00:0.00",
       "min": -180.0,
@@ -21,7 +23,8 @@
       "description": "Extra orbit around the Pivot in degrees: X tilts up or down, Y turns around the vertical axis, Z rolls the view. Dragging the viewport writes it."
     },
     {
-      "name": "Pivot",
+      "name": "pivot",
+      "label": "Pivot",
       "type": "float3",
       "default": "0.00:0.00:0.00",
       "min": -10.0,

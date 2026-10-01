@@ -379,13 +379,13 @@ pub fn apply_from(geom: &mut Detail, before: Option<&Detail>, target: &FsNode) -
     if n == 0 || geom.num_prims() == 0 {
         return work;
     }
-    let rings = node_param_f32(target, "Rings", 2.0).clamp(0.0, 6.0) as usize;
+    let rings = node_param_f32(target, "rings", 2.0).clamp(0.0, 6.0) as usize;
     let topo = topo_for(geom, rings);
     if topo.edges.is_empty() {
         return work;
     }
     // A node without the row is one from before it, and solves as it did.
-    if node_param_str(target, "Method", "Points").trim().eq_ignore_ascii_case("Surface") {
+    if node_param_str(target, "method", "Points").trim().eq_ignore_ascii_case("Surface") {
         let before: Option<Vec<Vec3>> = before
             .filter(|b| b.num_points() == n && b.num_prims() == geom.num_prims() && topology_key(b) == topo.key)
             .map(|b| (0..n).map(|p| b.pos(p)).collect());
@@ -395,7 +395,7 @@ pub fn apply_from(geom: &mut Detail, before: Option<&Detail>, target: &FsNode) -
     }
     // What is STILL crossed once the solve is done, which is the part worth
     // looking at. Only when asked for: it is a second search of the mesh.
-    let mark = node_param_str(target, "Tangled Group", "");
+    let mark = node_param_str(target, "tangled_group", "");
     let mark = mark.trim();
     if !mark.is_empty() {
         let found = intersections_of(geom, &topo, false);
@@ -412,7 +412,7 @@ pub fn apply_from(geom: &mut Detail, before: Option<&Detail>, target: &FsNode) -
 /// means the same thing before and after a remesh.
 fn thickness_of(geom: &Detail, target: &FsNode, topo: &Topo) -> f32 {
     let mean_edge = mean_edge(geom, topo);
-    node_param_f32(target, "Thickness", 1.0).max(0.0) * mean_edge
+    node_param_f32(target, "thickness", 1.0).max(0.0) * mean_edge
 }
 
 fn mean_edge(geom: &Detail, topo: &Topo) -> f32 {
@@ -430,8 +430,8 @@ fn solve_points(geom: &mut Detail, target: &FsNode, topo: &Topo, work: &mut Work
     if thickness <= 0.0 {
         return;
     }
-    let iterations = node_param_f32(target, "Iterations", 4.0).clamp(1.0, 32.0) as usize;
-    let group = node_param_str(target, "Group", "");
+    let iterations = node_param_f32(target, "iterations", 4.0).clamp(1.0, 32.0) as usize;
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let movable: Vec<bool> = (0..n).map(|p| group.is_empty() || geom.points().in_group(&group, p)).collect();
 
@@ -657,10 +657,10 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     if thickness <= 0.0 || topo.tris.is_empty() {
         return;
     }
-    let iterations = node_param_f32(target, "Iterations", 4.0).clamp(1.0, 32.0) as usize;
+    let iterations = node_param_f32(target, "iterations", 4.0).clamp(1.0, 32.0) as usize;
     // A node without the row is one from before it: points and triangles.
-    let edges_too = crate::geometry::node_param_bool(target, "Edge Contact", false);
-    let group = node_param_str(target, "Group", "");
+    let edges_too = crate::geometry::node_param_bool(target, "edge_contact", false);
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let movable: Vec<bool> = (0..n).map(|p| group.is_empty() || geom.points().in_group(&group, p)).collect();
     let free = |p: usize| if movable[p] { 1.0f32 } else { 0.0 };
@@ -668,7 +668,7 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     let mut pos: Vec<Vec3> = (0..n).map(|p| geom.pos(p)).collect();
     let mut moved_at_all = false;
     // A node without the row is one from before it, and is not limited.
-    let limit = node_param_f32(target, "Step Limit", 0.0).max(0.0) * thickness;
+    let limit = node_param_f32(target, "step_limit", 0.0).max(0.0) * thickness;
     if let (Some(before), true) = (before, limit > 0.0) {
         for p in (0..n).filter(|&p| movable[p]) {
             let d = pos[p] - before[p];
@@ -687,7 +687,7 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
     work.edges_searched += near.sides_looked_at;
     // What has folded through its own neighbourhood since the step began.
     // A node without the row is one from before it.
-    let folds_too = before.is_some() && crate::geometry::node_param_bool(target, "Fold Contact", false);
+    let folds_too = before.is_some() && crate::geometry::node_param_bool(target, "fold_contact", false);
     let mut folds: Vec<Fold> = Vec::new();
     if let (Some(was), true) = (before, folds_too) {
         folded(topo, was, &pos, edges_too, 0.0, None, &mut folds);

@@ -5,13 +5,15 @@
  "outputs": 1,
  "params": [
   {
-   "name": "Input",
+   "name": "input",
+   "label": "Input",
    "type": "node",
    "default": "",
    "description": "The node whose points are moved onto the Surface."
   },
   {
-   "name": "Surface",
+   "name": "surface",
+   "label": "Surface",
    "type": "node",
    "default": "",
    "description": "The node whose surface each point is moved to, at the nearest place on it. Unconnected, the input passes through unchanged."

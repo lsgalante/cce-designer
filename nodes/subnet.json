@@ -4,6 +4,6 @@
   "inputs": 1,
   "outputs": 1,
   "params": [
-    { "name": "Input", "default": "", "type": "node", "description": "Node whose geometry is handed into this subnet; the input node inside reads it." }
+    { "name": "input", "label": "Input", "default": "", "type": "node", "description": "Node whose geometry is handed into this subnet; the input node inside reads it." }
   ]
 }

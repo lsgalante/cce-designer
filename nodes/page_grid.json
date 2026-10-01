@@ -4,11 +4,11 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "The page node (or page chain) whose image this grid is drawn onto. Without one the node produces nothing." },
-  { "name": "Cell Size", "type": "float", "default": "0.25", "description": "Spacing between grid lines, in the page's Units. Lines start at the top-left corner; smaller values give a denser grid, never finer than one pixel." },
-  { "name": "Line Width", "type": "float", "default": "0.01", "description": "Thickness of each grid line, in the page's Units, centred on its coordinate. Very small values are drawn as a hairline at least half a pixel wide." },
-  { "name": "Line Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0, "description": "Colour of the grid lines, drawn fully opaque over the page." },
-  { "name": "Fill Cells", "type": "toggle", "default": "false", "description": "When on, fills the whole page with Cell Color before ruling the lines, covering what the input had drawn. When off, lines are drawn over the input as is.", "group": "fill" },
-  { "name": "Cell Color", "type": "float3", "default": "1.00:1.00:1.00", "min": 0.0, "max": 1.0, "show_when": "Fill Cells == true", "description": "Colour the page is filled with under the grid lines when Fill Cells is on.", "group": "fill" }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "The page node (or page chain) whose image this grid is drawn onto. Without one the node produces nothing." },
+  { "name": "cell_size", "label": "Cell Size", "type": "float", "default": "0.25", "description": "Spacing between grid lines, in the page's Units. Lines start at the top-left corner; smaller values give a denser grid, never finer than one pixel." },
+  { "name": "line_width", "label": "Line Width", "type": "float", "default": "0.01", "description": "Thickness of each grid line, in the page's Units, centred on its coordinate. Very small values are drawn as a hairline at least half a pixel wide." },
+  { "name": "line_color", "label": "Line Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0, "description": "Colour of the grid lines, drawn fully opaque over the page." },
+  { "name": "fill_cells", "label": "Fill Cells", "type": "toggle", "default": "false", "description": "When on, fills the whole page with Cell Color before ruling the lines, covering what the input had drawn. When off, lines are drawn over the input as is.", "group": "fill" },
+  { "name": "cell_color", "label": "Cell Color", "type": "float3", "default": "1.00:1.00:1.00", "min": 0.0, "max": 1.0, "show_when": "fill_cells == true", "description": "Colour the page is filled with under the grid lines when Fill Cells is on.", "group": "fill" }
  ]
 }

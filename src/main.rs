@@ -318,7 +318,7 @@ mod tests {
     fn test_add_node_migrates_to_points() {
         let legacy: FsNode = serde_json::from_str(
             r#"{"name":"Add 3","type":"add","params":[
-                {"name":"Points","type":"spinbox","default":"250"}
+                {"name":"points","type":"spinbox","default":"250"}
             ]}"#,
         )
         .unwrap();
@@ -334,9 +334,9 @@ mod tests {
         let node = &root.children[0];
         assert_eq!(node.node_type, "points");
         assert_eq!(node.name, "Add 3", "instance name is the wire identity — never rewritten");
-        let points = node.params.iter().find(|p| p.name == "Points").unwrap();
+        let points = node.params.iter().find(|p| p.name == "points").unwrap();
         assert_eq!(points.text(), "250", "instance owns its values");
-        let shape = node.params.iter().find(|p| p.name == "Shape").expect("Shape appended");
+        let shape = node.params.iter().find(|p| p.name == "shape").expect("Shape appended");
         assert_eq!(shape.text(), "None");
     }
 
@@ -655,7 +655,7 @@ mod tests {
         group.name = "My Region".into();
         group.node_type = "group".into();
         group.children.clear();
-        group.params = vec![crate::app::ParamDef::new("Input", "text", "Sphere 1").with_label("Input")];
+        group.params = vec![crate::app::ParamDef::new("input", "text", "Sphere 1").with_label("Input")];
         let mut clash = group.clone();
         clash.id = "c".into();
         clash.name = "sphere1".into();
@@ -685,6 +685,87 @@ mod tests {
         proj.migrate_format();
         assert_eq!(serde_json::to_string(&proj).unwrap(), before);
     }
+    /// A parameter has a NAME — an identifier a path spells, never shown —
+    /// and a LABEL, what the pane shows. Every template carries both, an
+    /// older save is renamed on load with what spells its names, MCP finds
+    /// a parameter by either, and a name that is not one is refused.
+    #[test]
+    fn parameters_have_a_name_and_a_label() {
+        use crate::app::{is_param_name, misnamed_params, param_name_of, FsNode, McpAction, ParamDef, Project};
+        assert_eq!(param_name_of("Base Resolution"), "base_resolution");
+        assert_eq!(param_name_of("Relax in 3D Space"), "relax_in_3d_space");
+        assert_eq!(param_name_of("Input 2"), "input_2");
+        assert_eq!(param_name_of("  Odd -- Spacing! "), "odd_spacing");
+        assert!(is_param_name("input_2") && !is_param_name("Input 2") && !is_param_name("Radius") && !is_param_name(""));
+
+        // Every shipped template: a name, and a label for the pane.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nodes");
+        let mut n = 0;
+        for f in fs::read_dir(&dir).unwrap().flatten() {
+            let t: FsNode = serde_json::from_str(&fs::read_to_string(f.path()).unwrap()).unwrap();
+            assert!(misnamed_params(&t).is_empty(), "{}: {:?}", f.path().display(), misnamed_params(&t));
+            for p in &t.params {
+                assert!(!p.label.is_empty(), "{}: {} has no label", f.path().display(), p.name);
+                n += 1;
+            }
+        }
+        assert!(n > 300, "walked {n}");
+        let mut bad = ref_node("t", "Bad", "node", vec![("Some Row", "float", "1")], vec![]);
+        assert_eq!(misnamed_params(&bad), vec![("Bad".to_string(), "Some Row".to_string())]);
+        bad.params[0].name = "some_row".into();
+        assert!(misnamed_params(&bad).is_empty());
+
+        // The pane shows labels.
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: Some("embryo1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
+        let slot = state.current_dir().children.iter().position(|c| c.name == "embryo1").unwrap();
+        let rows = crate::app::param_display(&state.current_dir().children[slot].params);
+        assert!(rows.iter().any(|r| r.0 == "Base Resolution"), "{rows:?}");
+        assert!(rows.iter().all(|r| !r.0.contains('_')), "no name in the pane: {rows:?}");
+
+        // MCP: by name, by label, by the old name.
+        for (asked, value) in [("base_resolution", "20"), ("Base Resolution", "21"), ("base resolution", "22")] {
+            state.apply_action(McpAction::SetParam { slot, name: asked.into(), value: value.into() }, &mut redraw).unwrap();
+            assert_eq!(crate::geometry::node_param_str(&state.current_dir().children[slot], "base_resolution", ""), value, "{asked}");
+        }
+        let err = state
+            .apply_action(McpAction::AddParam { slot, name: "My Row".into(), param_type: "float".into(), default: "1".into(), label: String::new() }, &mut redraw)
+            .unwrap_err();
+        assert!(err.contains("my_row"), "the refusal says the form: {err}");
+        state
+            .apply_action(McpAction::AddParam { slot, name: "my_row".into(), param_type: "float".into(), default: "1".into(), label: "My Row".into() }, &mut redraw)
+            .unwrap();
+        let rows = crate::app::param_display(&state.current_dir().children[slot].params);
+        assert!(rows.iter().any(|r| r.0 == "My Row"));
+        assert!(state
+            .apply_action(McpAction::AddParam { slot, name: "my_row".into(), param_type: "float".into(), default: "1".into(), label: String::new() }, &mut redraw)
+            .is_err(), "a name the node has is refused");
+
+        // Format 3 → 4: names and what spells them.
+        let mut meta = ref_node("m", "view", "utility", vec![("Show Grid", "toggle", "true")], vec![]);
+        meta.params[0].label.clear();
+        let mut root = ref_node("root", "root", "node", vec![], vec![
+            ref_node("a", "ball", "sphere", vec![("Base Resolution", "spinbox", "12"), ("Center", "float3", "0:1:0")], vec![]),
+            ref_node("b", "box1", "box", vec![("Size X", "slider", "ch(\"../ball/Base Resolution\") * 2 + chf(\"../ball/Center.y\")")], vec![]),
+            ref_node("w", "wrangle1", "wrangle", vec![("Code", "code", "@P.y += chv(\"../ball/Center\").y; // ch(\"Base Resolution\")")], vec![]),
+            meta,
+        ]);
+        root.children[1].params[0].set_expr(true);
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 3 };
+        proj.migrate_format();
+        let names = |n: &FsNode| n.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&proj.root.children[0]), ["base_resolution", "center"]);
+        assert_eq!(proj.root.children[1].params[0].name, "size_x");
+        assert_eq!(proj.root.children[1].params[0].text(), "ch(\"../ball/base_resolution\") * 2 + chf(\"../ball/center.y\")");
+        assert!(proj.root.children[1].params[0].is_expr());
+        assert_eq!(proj.root.children[2].params[0].text(), "@P.y += chv(\"../ball/center\").y; // ch(\"base_resolution\")");
+        assert_eq!(names(&proj.root.children[3]), ["Show Grid"], "a retired settings node keeps what its own migration reads");
+        let p = ParamDef::new("radius", "slider", "1").with_label("Radius");
+        assert_eq!((p.shown_name(), p.name.as_str()), ("Radius", "radius"));
+    }
+
+
 
     /// Format 1 → 2 and 2 → 3: the generators' normal attribute is `N`
     /// and their texture coordinates `uv`, and what names `Norm` / `UV` in
@@ -709,6 +790,7 @@ mod tests {
         };
         let mut root = node("root", "subnet", vec![]);
         root.children = vec![
+            // A format-1 file's names are what the pane showed.
             node("vis", "visualize", vec![ParamDef::new("Attribute", "attribute", "Norm")]),
             node("xfer", "transfer", vec![ParamDef::new("Attributes", "text", "Cd, Norm,UV")]),
             node("w", "wrangle", vec![ParamDef::new("Code", "code", "@P += @Norm * 0.1; @Normal = 1;")]),
@@ -722,6 +804,8 @@ mod tests {
         assert_eq!(text(&proj, 1), "Cd, N,uv", "every step a file is behind: N, then uv");
         assert_eq!(text(&proj, 2), "@P += @N * 0.1; @Normal = 1;");
         assert_eq!(text(&proj, 3), "Normx", "only the whole name");
+        let names: Vec<&str> = proj.root.children.iter().map(|c| c.params[0].name.as_str()).collect();
+        assert_eq!(names, ["attribute", "attributes", "code", "attribute"], "and then every name is one (format 4)");
 
         // Once: a format-2 file's Norm is its own attribute.
         let mut again = proj.clone();
@@ -737,10 +821,10 @@ mod tests {
         // (the Sphere's Method), and a format-2 file takes only this step.
         let mut root = node("root", "subnet", vec![]);
         root.children = vec![
-            node("vis", "visualize", vec![ParamDef::new("Attribute", "attribute", "UV")]),
-            node("w", "wrangle", vec![ParamDef::new("Code", "code", "@P.y = @UV.x; @UVW = 1;")]),
-            node("ball", "sphere", vec![ParamDef::new("Method", "choice:UV,Icosphere,Cube", "UV")]),
-            node("n", "visualize", vec![ParamDef::new("Attribute", "attribute", "Norm")]),
+            node("vis", "visualize", vec![ParamDef::new("attribute", "attribute", "UV")]),
+            node("w", "wrangle", vec![ParamDef::new("code", "code", "@P.y = @UV.x; @UVW = 1;")]),
+            node("ball", "sphere", vec![ParamDef::new("method", "choice:UV,Icosphere,Cube", "UV")]),
+            node("n", "visualize", vec![ParamDef::new("attribute", "attribute", "Norm")]),
         ];
         let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 2 };
         proj.migrate_format();
@@ -3386,7 +3470,7 @@ mod tests {
             let node = state.current_dir().children.iter().find(|c| c.name == "camera1").unwrap();
             crate::geometry::node_param_vec3(node, name, Vec3::ZERO)
         };
-        let (pivot0, pos0, rot0) = (read(&state, "Pivot"), read(&state, "Position"), read(&state, "Rotation"));
+        let (pivot0, pos0, rot0) = (read(&state, "pivot"), read(&state, "position"), read(&state, "rotation"));
         let mark = pivot0;
         let before = on_screen(&state, mark);
         for _ in 0..100 {
@@ -3394,9 +3478,9 @@ mod tests {
         }
         let after = on_screen(&state, mark);
         assert!((after.0 - before.0 - 70.0).abs() < 0.5 && (after.1 - before.1 - 30.0).abs() < 0.5, "{before:?} -> {after:?}");
-        let (moved_pivot, moved_pos) = (read(&state, "Pivot") - pivot0, read(&state, "Position") - pos0);
+        let (moved_pivot, moved_pos) = (read(&state, "pivot") - pivot0, read(&state, "position") - pos0);
         assert!(moved_pivot.length() > 0.01 && (moved_pivot - moved_pos).length() < 1e-3, "{moved_pivot:?} against {moved_pos:?}");
-        assert_eq!(read(&state, "Rotation"), rot0);
+        assert_eq!(read(&state, "rotation"), rot0);
 
         // The three ways of asking, by pointer.
         state.set_active_camera("Default Camera");
@@ -3542,14 +3626,14 @@ mod tests {
         let sphere1 = embryo.children.iter().find(|c| c.name == "sphere1").unwrap();
         assert_eq!(sphere1.node_type, "sphere");
         assert!(sphere1.children.is_empty(), "a native node has no children");
-        assert!(sphere1.params.iter().any(|p| p.name == "Method"), "the base template's params arrive");
-        let radius = sphere1.params.iter().find(|p| p.name == "Radius").unwrap();
-        assert!(radius.is_expr() && radius.text().contains("Radius"), "the override is the reference: {} (expr {})", radius.text(), radius.is_expr());
-        assert_eq!(sphere1.params.iter().find(|p| p.name == "Center Y").unwrap().text(), "0.0");
+        assert!(sphere1.params.iter().any(|p| p.name == "method"), "the base template's params arrive");
+        let radius = sphere1.params.iter().find(|p| p.name == "radius").unwrap();
+        assert!(radius.is_expr() && radius.text().contains("radius"), "the override is the reference: {} (expr {})", radius.text(), radius.is_expr());
+        assert_eq!(sphere1.params.iter().find(|p| p.name == "center_y").unwrap().text(), "0.0");
 
         let output1 = embryo.children.iter().find(|c| c.name == "output1").unwrap();
         assert_eq!(output1.node_type, "output");
-        let output_input = output1.params.iter().find(|p| p.name == "Input").unwrap();
+        let output_input = output1.params.iter().find(|p| p.name == "input").unwrap();
         assert_eq!(output_input.text(), "normal1");
     }
 
@@ -3680,7 +3764,7 @@ mod tests {
             .iter()
             .find(|t| t.name == template_name)
             .unwrap_or_else(|| panic!("{template_name} template should be loaded"));
-        let color = template.params.iter().find(|p| p.name == "Color").expect("a Color param");
+        let color = template.params.iter().find(|p| p.name == "color").expect("a Color param");
         assert_eq!(color.ty(), "toggle");
         assert_eq!(color.text(), "true", "coloured by default, as it always was");
 
@@ -3690,7 +3774,7 @@ mod tests {
             for child in &mut inst.children {
                 child.id = format!("{}_{}", inst.id, child.name);
             }
-            inst.params.iter_mut().find(|p| p.name == "Color").unwrap().set_text(on.to_string());
+            inst.params.iter_mut().find(|p| p.name == "color").unwrap().set_text(on.to_string());
             let root = FsNode {
                 id: "root".to_string(),
                 name: "root".to_string(),
@@ -3839,7 +3923,7 @@ mod tests {
 
         // Two points: one span, 8 boxes. The scene walk agrees with the
         // single-node path.
-        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().set_text("0 0 0; 1 0 0".to_string());
+        instance.params.iter_mut().find(|p| p.name == "points").unwrap().set_text("0 0 0; 1 0 0".to_string());
         let root = make_root(instance.clone());
         assert_eq!(eval(&root).num_points(), 8 * 8);
         assert_eq!(
@@ -3849,7 +3933,7 @@ mod tests {
         );
 
         // No parseable points: empty geometry, not a panic.
-        instance.params.iter_mut().find(|p| p.name == "Points").unwrap().set_text("not points".to_string());
+        instance.params.iter_mut().find(|p| p.name == "points").unwrap().set_text("not points".to_string());
         assert_eq!(eval(&make_root(instance)).num_points(), 0);
     }
 
@@ -3910,7 +3994,7 @@ mod tests {
             .expect("set curve points");
         let pts = crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
             &state.current_dir().children[slot],
-            "Points",
+            "points",
             "",
         ));
         assert_eq!(
@@ -3935,7 +4019,7 @@ mod tests {
         assert_eq!(
             crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
                 &state.current_dir().children[slot],
-                "Points",
+                "points",
                 "",
             ))
             .len(),
@@ -3987,7 +4071,7 @@ mod tests {
         let points_of = |state: &State, slot: usize| {
             crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
                 &state.current_dir().children[slot],
-                "Points",
+                "points",
                 "",
             ))
         };
@@ -4054,7 +4138,7 @@ mod tests {
         let points_of = |state: &State| {
             crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
                 &state.current_dir().children[slot],
-                "Points",
+                "points",
                 "",
             ))
         };
@@ -4165,9 +4249,9 @@ mod tests {
         assert!(extrude_template.children.is_empty());
         assert_eq!(extrude_template.inputs, 1);
 
-        let plane = ref_node("p", "plane1", "plane", vec![("Rows", "spinbox", "2"), ("Columns", "spinbox", "2"), ("Width", "slider", "1"), ("Length", "slider", "1")], vec![]);
+        let plane = ref_node("p", "plane1", "plane", vec![("rows", "spinbox", "2"), ("columns", "spinbox", "2"), ("width", "slider", "1"), ("length", "slider", "1")], vec![]);
         let extrude = |keep: &str| {
-            ref_node("e", "extrude1", "extrude", vec![("Input", "text", "plane1"), ("Distance", "slider", "0.2"), ("Keep Base", "toggle", keep)], vec![])
+            ref_node("e", "extrude1", "extrude", vec![("input", "text", "plane1"), ("distance", "slider", "0.2"), ("keep_base", "toggle", keep)], vec![])
         };
         let root = ref_node("root", "root", "node", vec![], vec![plane.clone(), extrude("true")]);
         let (g, err) = eval(&root, &root.children[1]);
@@ -4198,8 +4282,8 @@ mod tests {
 
         // A closed input: no boundary, so no walls — an outer and an inner
         // skin, the farthest points Distance beyond the sphere.
-        let sphere = ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "0.5"), ("Center X", "slider", "0"), ("Center Y", "slider", "0.55"), ("Center Z", "slider", "0")], vec![]);
-        let ext = ref_node("e", "extrude1", "extrude", vec![("Input", "text", "sphere1"), ("Distance", "slider", "0.2"), ("Keep Base", "toggle", "true")], vec![]);
+        let sphere = ref_node("s", "sphere1", "sphere", vec![("radius", "slider", "0.5"), ("center_x", "slider", "0"), ("center_y", "slider", "0.55"), ("center_z", "slider", "0")], vec![]);
+        let ext = ref_node("e", "extrude1", "extrude", vec![("input", "text", "sphere1"), ("distance", "slider", "0.2"), ("keep_base", "toggle", "true")], vec![]);
         let root3 = ref_node("root", "root", "node", vec![], vec![sphere, ext]);
         let g3 = eval(&root3, &root3.children[1]).0.unwrap();
         let base = crate::geometry::sphere_point_len(16, 24);
@@ -4241,9 +4325,9 @@ mod tests {
         let set = |inst: &mut FsNode, name: &str, val: &str| {
             inst.params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
         };
-        set(&mut group_instance, "Input", "Sphere 1");
-        set(&mut group_instance, "Center", "0.00:0.80:0.00");
-        set(&mut group_instance, "Size", "2.00:0.50:2.00");
+        set(&mut group_instance, "input", "Sphere 1");
+        set(&mut group_instance, "center", "0.00:0.80:0.00");
+        set(&mut group_instance, "size", "2.00:0.50:2.00");
 
         let root = FsNode {
             id: "root".to_string(),
@@ -4399,23 +4483,23 @@ mod tests {
         let root = root_with(vec![
             instance(sphere_t, "s", "Sphere 1", &[]),
             instance(attr_t, "a1", "Attr 1", &[
-                ("Input", "Sphere 1"),
-                ("Operation", "Create"),
-                ("Attribute Name", "mass"),
-                ("Type", "Float"),
-                ("Value", "2.50"),
+                ("input", "Sphere 1"),
+                ("operation", "Create"),
+                ("attribute_name", "mass"),
+                ("type", "Float"),
+                ("value", "2.50"),
             ]),
             instance(attr_t, "a2", "Attr 2", &[
-                ("Input", "Attr 1"),
-                ("Operation", "Modify"),
-                ("Attribute Name", "mass"),
-                ("Combine", "Multiply"),
-                ("Value", "2.00"),
+                ("input", "Attr 1"),
+                ("operation", "Modify"),
+                ("attribute_name", "mass"),
+                ("combine", "Multiply"),
+                ("value", "2.00"),
             ]),
             instance(attr_t, "a3", "Attr 3", &[
-                ("Input", "Attr 2"),
-                ("Operation", "Delete"),
-                ("Attribute Name", "mass"),
+                ("input", "Attr 2"),
+                ("operation", "Delete"),
+                ("attribute_name", "mass"),
             ]),
         ]);
         let (geom, err) = eval(&root, 1);
@@ -4443,11 +4527,11 @@ mod tests {
         let root = root_with(vec![
             instance(sphere_t, "s", "Sphere 1", &[]),
             instance(attr_t, "a1", "Tint", &[
-                ("Input", "Sphere 1"),
-                ("Operation", "Modify"),
-                ("Attribute Name", "Col"),
-                ("Combine", "Multiply"),
-                ("Value", "0.50"),
+                ("input", "Sphere 1"),
+                ("operation", "Modify"),
+                ("attribute_name", "Col"),
+                ("combine", "Multiply"),
+                ("value", "0.50"),
             ]),
         ]);
         let (geom, err) = eval(&root, 1);
@@ -4463,11 +4547,11 @@ mod tests {
         let root = root_with(vec![
             instance(sphere_t, "s", "Sphere 1", &[]),
             instance(attr_t, "a1", "Lift", &[
-                ("Input", "Sphere 1"),
-                ("Operation", "Modify"),
-                ("Attribute Name", "Pos"),
-                ("Combine", "Add"),
-                ("Value", "0.00:0.10:0.00"),
+                ("input", "Sphere 1"),
+                ("operation", "Modify"),
+                ("attribute_name", "Pos"),
+                ("combine", "Add"),
+                ("value", "0.00:0.10:0.00"),
             ]),
         ]);
         let (geom, err) = eval(&root, 1);
@@ -4481,16 +4565,16 @@ mod tests {
         let root = root_with(vec![
             instance(sphere_t, "s", "Sphere 1", &[]),
             instance(group_t, "g", "Group 1", &[
-                ("Input", "Sphere 1"),
-                ("Center", "0.00:0.80:0.00"),
-                ("Size", "2.00:0.50:2.00"),
+                ("input", "Sphere 1"),
+                ("center", "0.00:0.80:0.00"),
+                ("size", "2.00:0.50:2.00"),
             ]),
             instance(attr_t, "a1", "Attr 1", &[
-                ("Input", "Group 1"),
-                ("Operation", "Create"),
-                ("Attribute Name", "mass"),
-                ("Value", "1.00"),
-                ("Group", "group1"),
+                ("input", "Group 1"),
+                ("operation", "Create"),
+                ("attribute_name", "mass"),
+                ("value", "1.00"),
+                ("group", "group1"),
             ]),
         ]);
         let (geom, err) = eval(&root, 2);
@@ -4515,10 +4599,10 @@ mod tests {
         let root = root_with(vec![
             instance(sphere_t, "s", "Sphere 1", &[]),
             instance(attr_t, "a1", "Attr 1", &[
-                ("Input", "Sphere 1"),
-                ("Operation", "Create"),
-                ("Attribute Name", "mass"),
-                ("Value", "abc"),
+                ("input", "Sphere 1"),
+                ("operation", "Create"),
+                ("attribute_name", "mass"),
+                ("value", "abc"),
             ]),
         ]);
         let (geom, err) = eval(&root, 1);
@@ -4558,12 +4642,12 @@ mod tests {
         state.fs_root.children = vec![
             instance(find("Sphere"), "s", "Sphere 1", &[]),
             instance(find("Group"), "g", "Group 1", &[
-                ("Input", "Sphere 1"),
-                ("Center", "0.00:0.80:0.00"),
-                ("Size", "2.00:0.50:2.00"),
+                ("input", "Sphere 1"),
+                ("center", "0.00:0.80:0.00"),
+                ("size", "2.00:0.50:2.00"),
             ]),
-            instance(find("Attribute"), "a", "Attr 1", &[("Input", "Group 1")]),
-            instance(find("Visualize"), "v", "Vis 1", &[("Input", "Group 1"), ("Range", "Manual")]),
+            instance(find("Attribute"), "a", "Attr 1", &[("input", "Group 1")]),
+            instance(find("Visualize"), "v", "Vis 1", &[("input", "Group 1"), ("range", "Manual")]),
         ];
         state.sync_nodes();
 
@@ -4588,7 +4672,7 @@ mod tests {
         state.param_mut().set_display_params(&edited);
         state.sync_parameters_to_project();
         let attr = &state.fs_root.children[2];
-        assert_eq!(attr.params.iter().find(|p| p.name == "Attribute Name").unwrap().text(), "weight");
+        assert_eq!(attr.params.iter().find(|p| p.name == "attribute_name").unwrap().text(), "weight");
         state.sync_parameters_pane();
         let rows = state.param_mut().node_params();
         // The Input row stays plain text.
@@ -4817,10 +4901,10 @@ mod tests {
         assert!(base.positions().iter().all(|p| p[1].abs() < 1e-6));
 
         // Resolution: 3 columns x 2 rows.
-        assert_eq!(build(&[("Rows", "2"), ("Columns", "3")]).num_points(), 4 * 3);
+        assert_eq!(build(&[("rows", "2"), ("columns", "3")]).num_points(), 4 * 3);
 
         // Center: lifts to y = 0.3 and shifts x by 1 (span [0.5, 1.5]).
-        let moved = build(&[("Center X", "1.0"), ("Center Y", "0.3")]);
+        let moved = build(&[("center_x", "1.0"), ("center_y", "0.3")]);
         let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
         for pos in moved.positions() {
             assert!((pos[1] - 0.3).abs() < 1e-5);
@@ -4843,9 +4927,9 @@ mod tests {
     #[test]
     fn a_value_parses_by_its_kind_and_keeps_its_text() {
         use crate::app::{ParamDef, ParamSlot, ParamValue as V};
-        let v = |ty: &str, text: &str| ParamDef::new("P", ty, text).slot().clone();
+        let v = |ty: &str, text: &str| ParamDef::new("p", ty, text).slot().clone();
         assert_eq!(v("slider", "0.50"), ParamSlot::Value(V::Number(0.5)));
-        assert_eq!(ParamDef::new("P", "slider", "0.50").text(), "0.50");
+        assert_eq!(ParamDef::new("p", "slider", "0.50").text(), "0.50");
         assert_eq!(v("float", " -3 "), ParamSlot::Value(V::Number(-3.0)));
         assert_eq!(v("spinbox", "16"), ParamSlot::Value(V::Int(16)));
         assert_eq!(v("float3", "0.00:0.20:-1"), ParamSlot::Value(V::Vec3([0.0, 0.2, -1.0])));
@@ -4854,16 +4938,16 @@ mod tests {
         assert_eq!(v("choice:UV,Icosphere,Cube", ""), ParamSlot::Value(V::Choice("UV".into())), "empty is the first option");
         assert_eq!(v("node", "sphere1"), ParamSlot::Value(V::Text("sphere1".into())));
         for (ty, text) in [("slider", "abc"), ("float", ""), ("spinbox", "4.5"), ("float3", "1:2"), ("toggle", "maybe"), ("choice:UV,Cube", "Torus")] {
-            let p = ParamDef::new("P", ty, text);
+            let p = ParamDef::new("p", ty, text);
             assert!(p.invalid().is_some(), "{ty} {text:?} should not fit");
             assert_eq!(p.text(), text, "an invalid text is kept verbatim");
             assert!(p.check(text).is_err());
         }
         // An invalid value reads as it always did: `4.5` in a spinbox is still 4.5.
-        let node = FsNode { params: vec![ParamDef::new("Count", "spinbox", "4.5")], ..crate::app::load_fs_tree() };
-        assert_eq!(crate::geometry::node_param_f32(&node, "Count", 0.0), 4.5);
+        let node = FsNode { params: vec![ParamDef::new("count", "spinbox", "4.5")], ..crate::app::load_fs_tree() };
+        assert_eq!(crate::geometry::node_param_f32(&node, "count", 0.0), 4.5);
         // An expression is not parsed as a value, and is not flagged.
-        let e = ParamDef::new("P", "slider", "ch(\"../a/Radius\") * 2").as_expr();
+        let e = ParamDef::new("p", "slider", "ch(\"../a/radius\") * 2").as_expr();
         assert!(e.is_expr() && e.invalid().is_none());
     }
 
@@ -4930,10 +5014,10 @@ mod tests {
             });
         }
         assert!(n > 300, "walked {n} parameters");
-        let written = serde_json::to_string(&crate::app::ParamDef::new("N", "slider", "0.50").as_expr()).unwrap();
+        let written = serde_json::to_string(&crate::app::ParamDef::new("n", "slider", "0.50").as_expr()).unwrap();
         assert_eq!(
             written,
-            r#"{"name":"N","label":"","type":"slider","default":"0.50","options":[],"min":null,"max":null,"step":null,"show_when":"","expr":true}"#
+            r#"{"name":"n","label":"","type":"slider","default":"0.50","options":[],"min":null,"max":null,"step":null,"show_when":"","expr":true}"#
         );
     }
 
@@ -4942,9 +5026,9 @@ mod tests {
     #[test]
     fn the_template_kind_reparses_an_old_value() {
         use crate::app::{ParamDef, ParamValue};
-        let mut old = ParamDef::new("Center", "text", "0.00:1.50:0.00");
+        let mut old = ParamDef::new("center", "text", "0.00:1.50:0.00");
         assert_eq!(old.value(), Some(&ParamValue::Text("0.00:1.50:0.00".into())));
-        old.adopt_ui_from(&ParamDef::new("Center", "float3", "0:0:0"));
+        old.adopt_ui_from(&ParamDef::new("center", "float3", "0:0:0"));
         assert_eq!(old.value(), Some(&ParamValue::Vec3([0.0, 1.5, 0.0])));
         assert_eq!(old.text(), "0.00:1.50:0.00", "the instance keeps its value");
     }
@@ -4958,7 +5042,7 @@ mod tests {
     fn an_expression_result_takes_the_rows_kind() {
         use crate::app::{ParamDef, ParamValue as V};
         use crate::expr::Value;
-        let p = |ty: &str| ParamDef::new("P", ty, "");
+        let p = |ty: &str| ParamDef::new("p", ty, "");
         assert_eq!(p("toggle").value_from_expr(&Value::Num(2.0)), Some(V::Bool(true)));
         assert_eq!(p("choice:UV,Icosphere,Cube").value_from_expr(&Value::Num(1.0)), Some(V::Choice("Icosphere".into())));
         assert_eq!(p("choice:UV,Icosphere,Cube").value_from_expr(&Value::Str("cube".into())), Some(V::Choice("Cube".into())));
@@ -4969,12 +5053,12 @@ mod tests {
 
         // Through the resolver: the clone's parameter holds the typed value.
         let mut node = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "cull").unwrap();
-        node.params.retain(|q| q.name != "Invert");
-        node.params.push(ParamDef::new("Invert", "toggle", "1 + 1").as_expr());
+        node.params.retain(|q| q.name != "invert");
+        node.params.push(ParamDef::new("invert", "toggle", "1 + 1").as_expr());
         let root = FsNode { children: vec![node.clone()], ..crate::app::load_fs_tree() };
         let mut err = None;
         let resolved = crate::geometry::resolve_param_refs(&root, &root.children[0], 1, &mut err).unwrap();
-        let inv = resolved.params.iter().find(|q| q.name == "Invert").unwrap();
+        let inv = resolved.params.iter().find(|q| q.name == "invert").unwrap();
         assert_eq!((inv.value(), inv.text(), inv.is_expr()), (Some(&V::Bool(true)), "true", false));
         assert!(err.is_none(), "{err:?}");
     }
@@ -4989,20 +5073,20 @@ mod tests {
         let mut redraw = false;
         s.apply_action(crate::app::McpAction::AddNode { template_name: "Cull".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw).unwrap();
         let slot = s.current_dir().children.iter().position(|c| c.node_type == "cull").unwrap();
-        let threshold = |s: &State| crate::geometry::node_param_str(&s.current_dir().children[slot], "Threshold", "");
+        let threshold = |s: &State| crate::geometry::node_param_str(&s.current_dir().children[slot], "threshold", "");
         let before = threshold(&s);
         let set = |s: &mut State, v: &str| {
-            s.apply_action(crate::app::McpAction::SetParam { slot, name: "Threshold".into(), value: v.into() }, &mut false)
+            s.apply_action(crate::app::McpAction::SetParam { slot, name: "threshold".into(), value: v.into() }, &mut false)
         };
         let err = set(&mut s, "abc").unwrap_err();
-        assert!(err.contains("Threshold") && err.contains("not a number"), "{err}");
+        assert!(err.contains("threshold") && err.contains("not a number"), "{err}");
         assert_eq!(threshold(&s), before, "nothing was written");
         set(&mut s, "0.7").unwrap();
         assert_eq!(threshold(&s), "0.7");
-        set(&mut s, "ch(\"../x/Radius\")").expect("an expression is not checked as a value");
-        assert!(s.current_dir().children[slot].params.iter().find(|p| p.name == "Threshold").unwrap().is_expr());
+        set(&mut s, "ch(\"../x/radius\")").expect("an expression is not checked as a value");
+        assert!(s.current_dir().children[slot].params.iter().find(|p| p.name == "threshold").unwrap().is_expr());
         set(&mut s, "0.7").unwrap();
-        s.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Threshold").unwrap().set_expr(false);
+        s.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "threshold").unwrap().set_expr(false);
 
         // The pane.
         s.apply_action(crate::app::McpAction::Select { slot }, &mut redraw).unwrap();
@@ -5063,14 +5147,14 @@ mod tests {
         let mut redraw = false;
         a.apply_action(crate::app::McpAction::AddNode { template_name: "Cull".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw).unwrap();
         let slot = a.current_dir().children.iter().position(|c| c.node_type == "cull").unwrap();
-        a.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Threshold").unwrap().set_text("half");
+        a.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "threshold").unwrap().set_text("half");
         a.save_to_file(&dir).expect("save");
 
         let mut b = State::new(false);
         b.load_from_file(&dir).expect("load");
         assert!(b.last_status_text.contains("Threshold") && b.last_status_text.contains("not a number"), "{}", b.last_status_text);
         let kept = b.current_dir().children.iter().find(|c| c.node_type == "cull").unwrap();
-        assert_eq!(crate::geometry::node_param_str(kept, "Threshold", ""), "half", "kept verbatim");
+        assert_eq!(crate::geometry::node_param_str(kept, "threshold", ""), "half", "kept verbatim");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -5097,10 +5181,10 @@ mod tests {
         // Found anywhere in a template's tree, children included.
         let mut t = crate::app::load_fs_tree().children.into_iter().find(|t| t.name == "Embryo").unwrap();
         assert!(crate::app::unknown_param_kinds(&t).is_empty());
-        t.children[0].params.push(crate::app::ParamDef::new("Count", "int", "1"));
+        t.children[0].params.push(crate::app::ParamDef::new("count", "int", "1"));
         let bad = crate::app::unknown_param_kinds(&t);
         assert_eq!(bad.len(), 1);
-        assert_eq!((bad[0].1.as_str(), bad[0].2.as_str()), ("Count", "int"));
+        assert_eq!((bad[0].1.as_str(), bad[0].2.as_str()), ("count", "int"));
     }
 
     /// Every shipped template's every parameter names a kind — walked from
@@ -5144,56 +5228,56 @@ mod tests {
                 .kind()
         };
         for (ty, name) in [
-            ("switch", "Input 2"), ("switch", "Input 3"), ("switch", "Input 4"),
-            ("boolean", "With"), ("collision", "Collider"), ("relax", "Rest"),
-            ("suture", "Against"), ("copy", "To"), ("distance", "To"), ("transfer", "From"), ("remesh", "From"), ("project", "Surface"),
+            ("switch", "input_2"), ("switch", "input_3"), ("switch", "input_4"),
+            ("boolean", "with"), ("collision", "collider"), ("relax", "rest"),
+            ("suture", "against"), ("copy", "to"), ("distance", "to"), ("transfer", "from"), ("remesh", "from"), ("project", "surface"),
         ] {
             assert_eq!(kind(ty, name), K::Node, "{ty}'s {name}");
         }
-        for (ty, name) in [("grid", "Center"), ("polygon", "Center"), ("soft_transform", "Center"), ("soft_transform", "Translation")] {
+        for (ty, name) in [("grid", "center"), ("polygon", "center"), ("soft_transform", "center"), ("soft_transform", "translation")] {
             assert_eq!(kind(ty, name), K::Float3, "{ty}'s {name}");
         }
         for (ty, name) in [
-            ("cull", "Threshold"), ("group", "Threshold"), ("copy", "Scale"), ("visualize", "From"), ("visualize", "To"),
-            ("attribute", "From Min"), ("attribute", "From Max"), ("attribute", "To Min"), ("attribute", "To Max"),
+            ("cull", "threshold"), ("group", "threshold"), ("copy", "scale"), ("visualize", "from"), ("visualize", "to"),
+            ("attribute", "from_min"), ("attribute", "from_max"), ("attribute", "to_min"), ("attribute", "to_max"),
         ] {
             assert_eq!(kind(ty, name), K::Float, "{ty}'s {name}");
         }
-        assert_eq!(kind("neighbour", "Constant"), K::Float3);
+        assert_eq!(kind("neighbour", "constant"), K::Float3);
         // The pull's Strength is a slider over none-to-double, one in the
         // middle: a number set by hand and by eye, where the `float` it
         // was for a day is a box to type into. It still takes an
         // expression, shown as text like any other.
         let strength = root.children.iter().find(|t| t.node_type == "attribute").unwrap()
-            .params.iter().find(|p| p.name == "Strength").expect("attribute has a Strength");
+            .params.iter().find(|p| p.name == "strength").expect("attribute has a Strength");
         assert_eq!(strength.kind(), K::Slider);
         assert_eq!(strength.range().map(|(lo, hi, _)| (lo, hi)), Some((0.0, 2.0)));
         assert_eq!(strength.text(), "1.00");
         for (ty, name) in [
-            ("attribute", "Attribute Name"), ("attribute", "Source B"), ("visualize", "Attribute"), ("neighbour", "Attribute"),
-            ("neighbour", "Direction"), ("neighbour", "Source"), ("distance", "Direction"), ("develop", "Source"),
-            ("copy", "Scale Attribute"), ("normal", "Attribute"), ("suture", "Counter"), ("time", "Attribute"),
+            ("attribute", "attribute_name"), ("attribute", "source_b"), ("visualize", "attribute"), ("neighbour", "attribute"),
+            ("neighbour", "direction"), ("neighbour", "source"), ("distance", "direction"), ("develop", "source"),
+            ("copy", "scale_attribute"), ("normal", "attribute"), ("suture", "counter"), ("time", "attribute"),
         ] {
             assert_eq!(kind(ty, name), K::Attribute, "{ty}'s {name}");
         }
         for (ty, name) in [
-            ("attribute", "Group"), ("group", "Group Name"), ("group", "Source Group"), ("relax", "Pin Group"),
-            ("collision", "Group Name"), ("wrangle", "Group"), ("visualize", "Group"), ("cull", "Group"),
+            ("attribute", "group"), ("group", "group_name"), ("group", "source_group"), ("relax", "pin_group"),
+            ("collision", "group_name"), ("wrangle", "group"), ("visualize", "group"), ("cull", "group"),
         ] {
             assert_eq!(kind(ty, name), K::Group, "{ty}'s {name}");
         }
         // Every row called Group, on every template, names a group.
         for t in &root.children {
-            for p in t.params.iter().filter(|p| p.name == "Group") {
+            for p in t.params.iter().filter(|p| p.name == "group") {
                 assert_eq!(p.kind(), K::Group, "{}'s Group", t.name);
             }
         }
-        for (ty, name) in [("attribute", "Value"), ("transfer", "Attributes"), ("transfer", "Groups"), ("remesh", "Attributes"), ("remesh", "Groups"), ("simnet", "Start Frame"), ("bounds", "Prefix")] {
+        for (ty, name) in [("attribute", "value"), ("transfer", "attributes"), ("transfer", "groups"), ("remesh", "attributes"), ("remesh", "groups"), ("simnet", "start_frame"), ("bounds", "prefix")] {
             assert_eq!(kind(ty, name), K::Text, "{ty}'s {name} stays text on purpose");
         }
         // Every template's Input is a wire, top level and composed children alike.
         fn inputs(n: &FsNode, out: &mut Vec<(String, crate::app::ParamKind)>) {
-            for p in n.params.iter().filter(|p| p.name == "Input") {
+            for p in n.params.iter().filter(|p| p.name == "input") {
                 out.push((n.name.clone(), p.kind()));
             }
             n.children.iter().for_each(|c| inputs(c, out));
@@ -5213,13 +5297,13 @@ mod tests {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
         let mut relax = templates_root.children.iter().find(|t| t.node_type == "relax").unwrap().clone();
-        for p in relax.params.iter_mut().filter(|p| p.name == "Input" || p.name == "Rest") {
+        for p in relax.params.iter_mut().filter(|p| p.name == "input" || p.name == "rest") {
             p.set_type("text");
             p.set_text("sphere1");
         }
         let mut root = FsNode { children: vec![relax], ..templates_root.clone() };
         crate::app::merge_template_defs(&mut root, &templates);
-        for name in ["Input", "Rest"] {
+        for name in ["input", "rest"] {
             let p = root.children[0].params.iter().find(|p| p.name == name).unwrap();
             assert_eq!(p.kind(), crate::app::ParamKind::Node, "{name}");
             assert_eq!(p.text(), "sphere1", "the value is the instance's");
@@ -5232,7 +5316,7 @@ mod tests {
     /// `add_pick_lists` has candidates to offer.
     #[test]
     fn node_and_float_rows_show_as_text() {
-        let row = |ty: &str| crate::app::ParamDef::new("X", ty, "1");
+        let row = |ty: &str| crate::app::ParamDef::new("x", ty, "1");
         let shown = crate::app::param_display(&[row("node"), row("float"), row("string"), row("attribute"), row("group"), row("toggle")]);
         let types: Vec<&str> = shown.iter().map(|r| r.2.as_str()).collect();
         // The leading wire is the inputs, a separator under it.
@@ -5257,22 +5341,22 @@ mod tests {
             crate::app::param_display(ps).into_iter().map(|r| if r.2 == "separator" { "|".to_string() } else { r.0 }).collect()
         };
         let params = vec![
-            p("Input", "node", "", ""),
-            p("With", "node", "", ""),
-            p("Mode", "choice:A,B", "", ""),
-            p("Rest", "node", "", ""),
-            p("Size", "float", "shape", ""),
-            p("Sides", "float", "shape", "Mode == B"),
-            p("Hidden", "float", "extra", "Mode == B"),
-            p("Group", "group", "where", ""),
+            p("input", "node", "", ""),
+            p("with", "node", "", ""),
+            p("mode", "choice:A,B", "", ""),
+            p("rest", "node", "", ""),
+            p("size", "float", "shape", ""),
+            p("sides", "float", "shape", "mode == B"),
+            p("Hidden", "float", "extra", "mode == B"),
+            p("group", "group", "where", ""),
         ];
-        assert_eq!(rows(&params), ["Input", "With", "|", "Mode", "Rest", "|", "Size", "|", "Group"]);
+        assert_eq!(rows(&params), ["input", "with", "|", "mode", "rest", "|", "size", "|", "group"]);
         // A node with no wires and no groups has no line at all.
         assert_eq!(rows(&[p("A", "float", "", ""), p("B", "float", "", "")]), ["A", "B"]);
         // A template-named group on a wire takes it out of the inputs.
-        assert_eq!(rows(&[p("Input", "node", "", ""), p("Surface", "node", "x", ""), p("Size", "float", "x", "")]), ["Input", "|", "Surface", "Size"]);
+        assert_eq!(rows(&[p("input", "node", "", ""), p("surface", "node", "x", ""), p("size", "float", "x", "")]), ["input", "|", "surface", "size"]);
         // The group is the template's: it rides the merge, never the file.
-        let mut inst = crate::app::ParamDef::new("Size", "float", "2");
+        let mut inst = crate::app::ParamDef::new("size", "float", "2");
         inst.adopt_ui_from(&params[4]);
         assert_eq!(inst.group, "shape");
         assert!(!serde_json::to_string(&inst).unwrap().contains("shape"), "not written");
@@ -5285,19 +5369,19 @@ mod tests {
     fn node_param_bool_reads_a_toggle_and_falls_back_on_anything_else() {
         use crate::geometry::node_param_bool;
         let node = |v: &str| FsNode {
-            params: vec![crate::app::ParamDef::new("On", "toggle", v)],
+            params: vec![crate::app::ParamDef::new("on", "toggle", v)],
             ..crate::app::load_fs_tree()
         };
         for v in ["true", "TRUE", " True ", "1", "on"] {
-            assert!(node_param_bool(&node(v), "On", false), "{v:?}");
+            assert!(node_param_bool(&node(v), "on", false), "{v:?}");
         }
         for v in ["false", "False", "0", "off"] {
-            assert!(!node_param_bool(&node(v), "On", true), "{v:?}");
+            assert!(!node_param_bool(&node(v), "on", true), "{v:?}");
         }
         for v in ["", "yes please", "2"] {
-            assert!(node_param_bool(&node(v), "On", true) && !node_param_bool(&node(v), "On", false), "{v:?}");
+            assert!(node_param_bool(&node(v), "on", true) && !node_param_bool(&node(v), "on", false), "{v:?}");
         }
-        assert!(node_param_bool(&node("true"), "Missing", true) && !node_param_bool(&node("true"), "Missing", false));
+        assert!(node_param_bool(&node("true"), "missing", true) && !node_param_bool(&node("true"), "missing", false));
     }
 
     /// MCP's add_param refuses a type that names no kind, and says which do.
@@ -5307,12 +5391,12 @@ mod tests {
         let mut redraw = false;
         let before = state.current_dir().children[0].params.len();
         let err = state
-            .apply_action(crate::app::McpAction::AddParam { slot: 0, name: "N".into(), param_type: "int".into(), default: "1".into() }, &mut redraw)
+            .apply_action(crate::app::McpAction::AddParam { slot: 0, name: "n".into(), param_type: "int".into(), default: "1".into(), label: String::new() }, &mut redraw)
             .unwrap_err();
         assert!(err.contains("int") && err.contains("spinbox"), "{err}");
         assert_eq!(state.current_dir().children[0].params.len(), before);
         state
-            .apply_action(crate::app::McpAction::AddParam { slot: 0, name: "N".into(), param_type: "spinbox".into(), default: "1".into() }, &mut redraw)
+            .apply_action(crate::app::McpAction::AddParam { slot: 0, name: "n".into(), param_type: "spinbox".into(), default: "1".into(), label: String::new() }, &mut redraw)
             .expect("a known kind is added");
     }
 
@@ -5325,15 +5409,15 @@ mod tests {
         let templates = crate::app::flatten_node_templates(&templates_root);
         let t = templates_root.children.iter().find(|t| t.node_type == "camera").unwrap();
         let names: Vec<&str> = t.params.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["Position", "Rotation", "Pivot"]);
+        assert_eq!(names, ["position", "rotation", "pivot"]);
         let mut old = t.clone();
-        old.params.push(crate::app::ParamDef::new("Square Aspect", "toggle", "true"));
-        old.params.push(crate::app::ParamDef::new("Show Camera Pivot", "toggle", "true"));
+        old.params.push(crate::app::ParamDef::new("square_aspect", "toggle", "true"));
+        old.params.push(crate::app::ParamDef::new("show_camera_pivot", "toggle", "true"));
         let mut root = templates_root.clone();
         root.children = vec![old];
         crate::app::merge_template_defs(&mut root, &templates);
         let names: Vec<&str> = root.children[0].params.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["Position", "Rotation", "Pivot"]);
+        assert_eq!(names, ["position", "rotation", "pivot"]);
     }
 
     /// Visualize's Blend has no Mix: it was Set under another name, Opacity
@@ -5344,17 +5428,17 @@ mod tests {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
         let t = templates_root.children.iter().find(|t| t.node_type == "visualize").unwrap();
-        let blend = t.params.iter().find(|p| p.name == "Blend").unwrap();
+        let blend = t.params.iter().find(|p| p.name == "blend").unwrap();
         assert_eq!(blend.choice_options(), vec!["Set", "Multiply", "Add"]);
         let mut old = t.clone();
-        let p = old.params.iter_mut().find(|p| p.name == "Blend").unwrap();
+        let p = old.params.iter_mut().find(|p| p.name == "blend").unwrap();
         p.set_type("choice:Set,Mix,Multiply,Add");
         p.set_text("Mix".to_string());
         assert!(p.invalid().is_none(), "the old row took Mix");
         let mut root = templates_root.clone();
         root.children = vec![old];
         crate::app::merge_template_defs(&mut root, &templates);
-        let p = root.children[0].params.iter().find(|p| p.name == "Blend").unwrap();
+        let p = root.children[0].params.iter().find(|p| p.name == "blend").unwrap();
         assert_eq!(p.text(), "Set");
         assert!(p.invalid().is_none(), "{:?}", p.invalid());
     }
@@ -5374,7 +5458,7 @@ mod tests {
             name: "opencl1".to_string(),
             node_type: "opencl".to_string(),
             children: vec![],
-            params: vec![crate::app::ParamDef::new("Code", "code", "OLD KERNEL")],
+            params: vec![crate::app::ParamDef::new("code", "code", "OLD KERNEL")],
             geometry_visible: true,
             bypassed: false,
             position: (4.0, 2.0),
@@ -5384,13 +5468,13 @@ mod tests {
         let mut output1 = output_t.clone();
         output1.id = "s_output1".to_string();
         output1.name = "output1".to_string();
-        output1.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("opencl1".to_string());
+        output1.params.iter_mut().find(|p| p.name == "input").unwrap().set_text("opencl1".to_string());
         let old_sphere = FsNode {
             id: "s".to_string(),
             name: "Sphere 3".to_string(),
             node_type: "node".to_string(),
             children: vec![opencl1, output1],
-            params: vec![crate::app::ParamDef::new("Radius", "slider", "0.70")],
+            params: vec![crate::app::ParamDef::new("radius", "slider", "0.70")],
             geometry_visible: true,
             bypassed: false,
             position: (3.0, 1.0),
@@ -5402,8 +5486,8 @@ mod tests {
         let mut old_group = group_t.clone();
         old_group.id = "g".to_string();
         old_group.name = "My Region".to_string(); // renamed: native nodes match by TYPE
-        old_group.params.retain(|p| p.name != "Highlight");
-        old_group.params.iter_mut().find(|p| p.name == "Center").unwrap().set_text("0.00:0.80:0.00".to_string());
+        old_group.params.retain(|p| p.name != "highlight");
+        old_group.params.iter_mut().find(|p| p.name == "center").unwrap().set_text("0.00:0.80:0.00".to_string());
 
         // A hand-built subnet that happens to share the Sphere name.
         let lookalike = FsNode {
@@ -5441,16 +5525,16 @@ mod tests {
         assert_eq!((s.node_type.as_str(), s.id.as_str(), s.name.as_str(), s.position), ("sphere", "s", "Sphere 3", (3.0, 1.0)));
         assert!(s.children.is_empty(), "the opencl and output children go");
         let names: Vec<&str> = s.params.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["Method", "Radius", "Rows", "Columns", "Frequency", "Resolution", "Center X", "Center Y", "Center Z", "Color"]);
-        assert_eq!(s.params.iter().find(|p| p.name == "Radius").unwrap().text(), "0.70", "instance value survives");
+        assert_eq!(names, ["method", "radius", "rows", "columns", "frequency", "resolution", "center_x", "center_y", "center_z", "color"]);
+        assert_eq!(s.params.iter().find(|p| p.name == "radius").unwrap().text(), "0.70", "instance value survives");
 
         // And the merged instance evaluates with the new controls live.
         let mut merged_sphere_root = root.clone();
         merged_sphere_root.children.truncate(1);
         merged_sphere_root.children[0].params.iter_mut()
-            .find(|p| p.name == "Rows").unwrap().set_text("4".to_string());
+            .find(|p| p.name == "rows").unwrap().set_text("4".to_string());
         merged_sphere_root.children[0].params.iter_mut()
-            .find(|p| p.name == "Columns").unwrap().set_text("6".to_string());
+            .find(|p| p.name == "columns").unwrap().set_text("6".to_string());
         let mut visited = Vec::new();
         let mut err = None;
         let mut cache = crate::geometry::SimCache::default();
@@ -5466,8 +5550,8 @@ mod tests {
 
         // Group (renamed, matched by type): Highlight restored, value kept.
         let g = &root.children[1];
-        assert!(g.params.iter().any(|p| p.name == "Highlight" && p.text() == "true"));
-        assert_eq!(g.params.iter().find(|p| p.name == "Center").unwrap().text(), "0.00:0.80:0.00");
+        assert!(g.params.iter().any(|p| p.name == "highlight" && p.text() == "true"));
+        assert_eq!(g.params.iter().find(|p| p.name == "center").unwrap().text(), "0.00:0.80:0.00");
 
         // Lookalike: untouched — no params gained, no children injected.
         let l = &root.children[2];
@@ -5523,12 +5607,12 @@ mod tests {
         assert_eq!(build(&[]).num_points(), crate::geometry::sphere_point_len(16, 24));
 
         // A coarse 4x6 tessellation.
-        let coarse = build(&[("Rows", "4"), ("Columns", "6")]);
+        let coarse = build(&[("rows", "4"), ("columns", "6")]);
         assert_eq!(coarse.num_points(), crate::geometry::sphere_point_len(4, 6));
 
         // Center X shifts the whole sphere: default spans x in [-0.5, 0.5],
         // shifted spans [0.5, 1.5].
-        let shifted = build(&[("Center X", "1.0")]);
+        let shifted = build(&[("center_x", "1.0")]);
         let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
         for pos in shifted.positions() {
             min_x = min_x.min(pos[0]);
@@ -5539,7 +5623,7 @@ mod tests {
 
         // Degenerate resolutions clamp instead of emitting nothing.
         assert_eq!(
-            build(&[("Rows", "0"), ("Columns", "0")]).num_points(),
+            build(&[("rows", "0"), ("columns", "0")]).num_points(),
             crate::geometry::sphere_point_len(2, 3)
         );
     }
@@ -5557,16 +5641,16 @@ mod tests {
     fn sphere_method_builds_a_uv_ico_or_cube_sphere() {
         let templates_root = crate::app::load_fs_tree();
         let sphere_t = templates_root.children.iter().find(|t| t.name == "Sphere").unwrap();
-        let method = sphere_t.params.iter().find(|p| p.name == "Method").expect("a Method dropdown");
+        let method = sphere_t.params.iter().find(|p| p.name == "method").expect("a Method dropdown");
         assert_eq!(method.ty(), "choice:UV,Icosphere,Cube");
         assert_eq!(method.text(), "UV", "the default stays the sphere every saved project was built with");
-        assert_eq!(sphere_t.params[0].name, "Method", "the method heads the pane, above the radius it governs");
+        assert_eq!(sphere_t.params[0].name, "method", "the method heads the pane, above the radius it governs");
         // And it heads the pane of a sphere SAVED before it existed too: the
         // bundled project's sphere1 gains it through the loader's merge, at
         // the template's position rather than below Color.
         let state = State::new(false);
         let saved = state.current_dir().children.iter().find(|c| c.name == "sphere1").expect("the bundled sphere1");
-        assert_eq!(saved.params[0].name, "Method", "merged order: {:?}", saved.params.iter().map(|p| &p.name).collect::<Vec<_>>());
+        assert_eq!(saved.params[0].name, "method", "merged order: {:?}", saved.params.iter().map(|p| &p.name).collect::<Vec<_>>());
         let build = |params: &[(&str, &str)]| {
             let mut inst = sphere_t.clone();
             inst.id = "s".to_string();
@@ -5609,11 +5693,11 @@ mod tests {
             }
         };
 
-        let uv = build(&[("Method", "UV")]);
+        let uv = build(&[("method", "UV")]);
         assert_eq!(uv.num_points(), crate::geometry::sphere_point_len(16, 24));
 
         for (freq, expect) in [("1", 12), ("2", 42), ("4", 162), ("7", 492)] {
-            let ico = build(&[("Method", "Icosphere"), ("Frequency", freq)]);
+            let ico = build(&[("method", "Icosphere"), ("frequency", freq)]);
             assert_eq!(ico.num_points(), expect, "icosphere at frequency {freq}");
             assert_eq!(ico.num_prims(), 20 * freq.parse::<usize>().unwrap().pow(2));
             assert!(ico.is_closed(), "icosphere at frequency {freq} is not closed");
@@ -5621,7 +5705,7 @@ mod tests {
         }
 
         for (res, expect) in [("1", 8), ("3", 56), ("8", 386)] {
-            let cube = build(&[("Method", "Cube"), ("Resolution", res), ("Radius", "0.8")]);
+            let cube = build(&[("method", "Cube"), ("resolution", res), ("radius", "0.8")]);
             assert_eq!(cube.num_points(), expect, "cube sphere at resolution {res}");
             assert_eq!(cube.num_prims(), 6 * res.parse::<usize>().unwrap().pow(2), "one quad per cell — the kernel fanned them");
             assert!(cube.is_closed(), "cube sphere at resolution {res} is not closed");
@@ -5629,7 +5713,7 @@ mod tests {
         }
 
         // The out-of-range guards: a frequency of 0 builds the icosahedron.
-        assert_eq!(build(&[("Method", "Icosphere"), ("Frequency", "0")]).num_points(), 12);
+        assert_eq!(build(&[("method", "Icosphere"), ("frequency", "0")]).num_points(), 12);
     }
 
     /// `param_number` is what a kernel's `chi()` reads: a choice is its
@@ -5637,7 +5721,7 @@ mod tests {
     #[test]
     fn a_choice_reads_as_its_option_index_from_a_kernel() {
         use crate::geometry::param_number;
-        let p = |ty: &str, val: &str| crate::app::ParamDef::new("X", ty, val);
+        let p = |ty: &str, val: &str| crate::app::ParamDef::new("x", ty, val);
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "Cube")), 2.0);
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "icosphere")), 1.0, "case-insensitive, like the reference path");
         assert_eq!(param_number(&p("choice:UV,Icosphere,Cube", "Nope")), 0.0, "an unknown option is the first");
@@ -5674,12 +5758,12 @@ mod tests {
             node_type: "node".to_string(),
             children: vec![
                 instance(find("Sphere"), "s", "Sphere 1", &[]),
-                instance(find("Scatter"), "sc", "Scatter 1", &[("Input", "Sphere 1")]),
+                instance(find("Scatter"), "sc", "Scatter 1", &[("input", "Sphere 1")]),
                 instance(find("Attribute"), "a", "Attr 1", &[
-                    ("Input", "Scatter 1"),
-                    ("Operation", "Create"),
-                    ("Attribute Name", "mass"),
-                    ("Value", "1.00"),
+                    ("input", "Scatter 1"),
+                    ("operation", "Create"),
+                    ("attribute_name", "mass"),
+                    ("value", "1.00"),
                 ]),
             ],
             params: vec![],
@@ -5783,14 +5867,14 @@ mod tests {
         assert!((max_z - 0.5).abs() < 0.01, "Expected half-length 0.5 on Z, got {}", max_z);
 
         // Width and Length size their axes independently.
-        let geom_2 = generate(&[("Width", "2.0"), ("Length", "3.0")], "plane_inst_2");
+        let geom_2 = generate(&[("width", "2.0"), ("length", "3.0")], "plane_inst_2");
         let max_x_2 = geom_2.positions().iter().map(|p| p[0].abs()).fold(0.0f32, f32::max);
         let max_z_2 = geom_2.positions().iter().map(|p| p[2].abs()).fold(0.0f32, f32::max);
         assert!((max_x_2 - 1.0).abs() < 0.01, "Expected half-width 1.0 on X, got {}", max_x_2);
         assert!((max_z_2 - 1.5).abs() < 0.01, "Expected half-length 1.5 on Z, got {}", max_z_2);
 
         // Columns/Rows control the cell counts per axis.
-        let geom_3 = generate(&[("Columns", "4"), ("Rows", "8")], "plane_inst_3");
+        let geom_3 = generate(&[("columns", "4"), ("rows", "8")], "plane_inst_3");
         assert_eq!(geom_3.num_points(), 5 * 9, "a 4x8 cell grid is 5x9 points");
     }
 
@@ -6494,7 +6578,7 @@ mod tests {
             "1.0",
             vec![phase3_node(
                 "grid",
-                &[("Rows", "4"), ("Columns", "6"), ("Width", "2.00"), ("Length", "3.00")],
+                &[("rows", "4"), ("columns", "6"), ("width", "2.00"), ("length", "3.00")],
             )],
         );
         let (g, err) = eval_node(&root, "grid 1");
@@ -6530,7 +6614,7 @@ mod tests {
     #[test]
     fn test_polygon_is_four_create_operators_with_one_parameter_varying() {
         let build = |params: &[(&str, &str)]| {
-            let mut ps = vec![("Radius", "1.00")];
+            let mut ps = vec![("radius", "1.00")];
             ps.extend_from_slice(params);
             let root = modelling_root("1.0", vec![phase3_node("polygon", &ps)]);
             eval_node(&root, "polygon 1").0
@@ -6538,14 +6622,14 @@ mod tests {
 
         // Three sides is a triangle, four a square, thirty-two a circle: the
         // same shape with one number changed.
-        let tri = build(&[("Sides", "3")]);
+        let tri = build(&[("sides", "3")]);
         assert_eq!(tri.num_prims(), 3, "a filled triangle is three fan triangles");
         assert_eq!(tri.num_points(), 4, "three corners and a hub");
-        let circle = build(&[("Sides", "32")]);
+        let circle = build(&[("sides", "32")]);
         assert_eq!(circle.num_points(), 33);
 
         // A circle's corners all sit at the radius; a square's do too.
-        for d in [&circle, &build(&[("Sides", "4")])] {
+        for d in [&circle, &build(&[("sides", "4")])] {
             for p in 0..d.num_points() {
                 let r = d.pos(p).length();
                 assert!(r < 1.0 + 1e-4, "point {p} is outside the radius at {r}");
@@ -6561,7 +6645,7 @@ mod tests {
 
         // A star alternates the two radii, so it has twice the corners and
         // half of them sit on the inner circle.
-        let star = build(&[("Sides", "5"), ("Inner Radius", "0.40")]);
+        let star = build(&[("sides", "5"), ("inner_radius", "0.40")]);
         assert_eq!(star.num_prims(), 10);
         let inner = (0..star.num_points())
             .filter(|&p| (star.pos(p).length() - 0.4).abs() < 1e-4)
@@ -6582,7 +6666,7 @@ mod tests {
 
         // Unfilled is the outline: one two-point primitive per edge, a closed
         // loop, and nothing to shade.
-        let ring = build(&[("Sides", "6"), ("Fill", "false")]);
+        let ring = build(&[("sides", "6"), ("fill", "false")]);
         assert_eq!(ring.num_points(), 6, "no hub when there is no fill");
         assert_eq!(ring.num_prims(), 6);
         assert_eq!(ring.edges().len(), 6, "the outline closes");
@@ -6601,14 +6685,14 @@ mod tests {
     fn test_a_row_shows_only_when_its_condition_holds() {
         use crate::app::{param_display, param_visible};
         let params = vec![
-            pd("Mode", "Twist", ""),
-            pd("Angle", "1.0", "Mode == Twist"),
-            pd("Bend Axis", "Y", "Mode == Bend"),
-            pd("Shared", "x", "Mode == Twist|Bend"),
-            pd("Not Bleed", "x", "Mode != Bleed"),
+            pd("mode", "Twist", ""),
+            pd("angle", "1.0", "mode == Twist"),
+            pd("bend_axis", "Y", "mode == Bend"),
+            pd("shared", "x", "mode == Twist|Bend"),
+            pd("not_bleed", "x", "mode != Bleed"),
         ];
         let shown: Vec<String> = param_display(&params).into_iter().map(|r| r.0).collect();
-        assert_eq!(shown, vec!["Mode", "Angle", "Shared", "Not Bleed"]);
+        assert_eq!(shown, vec!["mode", "angle", "shared", "not_bleed"]);
 
         // Flip the driving parameter and a different set applies. This is the
         // whole point: collapsing fifty operators into ten traded node count
@@ -6617,30 +6701,30 @@ mod tests {
         let mut bent = params.clone();
         bent[0].set_text("Bend");
         let shown: Vec<String> = param_display(&bent).into_iter().map(|r| r.0).collect();
-        assert_eq!(shown, vec!["Mode", "Bend Axis", "Shared", "Not Bleed"]);
+        assert_eq!(shown, vec!["mode", "bend_axis", "shared", "not_bleed"]);
 
         // Bleed matches none of the conditions, so only the driving row is
         // left — which is a node with one relevant control showing one.
         let mut bleeding = params.clone();
         bleeding[0].set_text("Bleed");
         let shown: Vec<String> = param_display(&bleeding).into_iter().map(|r| r.0).collect();
-        assert_eq!(shown, vec!["Mode"]);
+        assert_eq!(shown, vec!["mode"]);
 
         // The condition is evaluated against siblings' CURRENT values, which
         // is where this app keeps them.
-        assert!(param_visible(&params, "Mode == Twist"));
-        assert!(!param_visible(&bleeding, "Mode == Twist"));
+        assert!(param_visible(&params, "mode == Twist"));
+        assert!(!param_visible(&bleeding, "mode == Twist"));
     }
 
     #[test]
     fn test_conditions_and_together_and_compare_without_case() {
         use crate::app::param_visible;
         let params = vec![
-            pd("Mode", "Align", ""),
-            pd("Target", "Constant", ""),
+            pd("mode", "Align", ""),
+            pd("target", "Constant", ""),
         ];
-        assert!(param_visible(&params, "Mode == Align && Target == Constant"));
-        assert!(!param_visible(&params, "Mode == Align && Target == Attribute"));
+        assert!(param_visible(&params, "mode == Align && target == Constant"));
+        assert!(!param_visible(&params, "mode == Align && target == Attribute"));
         // Case does not matter: a template author writing `twist` and a choice
         // reading `Twist` is not a bug worth having.
         assert!(param_visible(&params, "mode == ALIGN"));
@@ -6652,13 +6736,13 @@ mod tests {
     #[test]
     fn test_a_broken_condition_hides_its_row_rather_than_hiding_the_mistake() {
         use crate::app::param_visible;
-        let params = vec![pd("Mode", "Twist", "")];
+        let params = vec![pd("mode", "Twist", "")];
         // A misspelled sibling, and a clause that is not a comparison at all.
         // Both are template bugs; showing the row unconditionally would let
         // them pass unnoticed, and the row going missing is a complaint you
         // can act on.
         assert!(!param_visible(&params, "Moed == Twist"));
-        assert!(!param_visible(&params, "Mode"));
+        assert!(!param_visible(&params, "mode"));
         assert!(!param_visible(&params, "Mode ~ Twist"));
     }
 
@@ -6711,8 +6795,8 @@ mod tests {
         // user who sets a Remap range, switches to Clip and switches back must
         // find their numbers still there.
         let mut params = vec![
-            pd("Operation", "Remap", ""),
-            pd("To Max", "7.5", "Operation == Remap"),
+            pd("operation", "Remap", ""),
+            pd("to_max", "7.5", "operation == Remap"),
         ];
         assert_eq!(param_display(&params).len(), 2);
         params[0].set_text("Clip");
@@ -6866,9 +6950,9 @@ mod tests {
                 "page1",
                 "page",
                 &[
-                    ("Preset", "Letter"),
-                    ("Resolution", "72"),
-                    ("Color", "1.00:1.00:1.00"),
+                    ("preset", "Letter"),
+                    ("resolution", "72"),
+                    ("color", "1.00:1.00:1.00"),
                 ],
             ),
             pnode(
@@ -6876,18 +6960,18 @@ mod tests {
                 "grid1",
                 "page_grid",
                 &[
-                    ("Input", "page1"),
-                    ("Cell Size", "0.5"),
-                    ("Line Width", "0.02"),
-                    ("Line Color", "0.00:0.00:0.00"),
-                    ("Fill Cells", "false"),
+                    ("input", "page1"),
+                    ("cell_size", "0.5"),
+                    ("line_width", "0.02"),
+                    ("line_color", "0.00:0.00:0.00"),
+                    ("fill_cells", "false"),
                 ],
             ),
             pnode(
                 "b",
                 "border1",
                 "page_border",
-                &[("Input", "grid1"), ("Width", "0.1"), ("Inset", "0.25"), ("Color", "1.00:0.00:0.00")],
+                &[("input", "grid1"), ("width", "0.1"), ("inset", "0.25"), ("color", "1.00:0.00:0.00")],
             ),
         ];
 
@@ -6908,7 +6992,7 @@ mod tests {
 
         // An orphan composite is not a page: a border with nothing under it
         // resolves to nothing rather than inventing a sheet.
-        let orphan = pnode("o", "border2", "page_border", &[("Input", "nothing")]);
+        let orphan = pnode("o", "border2", "page_border", &[("input", "nothing")]);
         let mut lone = root.clone();
         lone.children.push(orphan);
         assert!(
@@ -6918,7 +7002,7 @@ mod tests {
 
         // A cycle terminates rather than recursing forever.
         let mut looped = root.clone();
-        looped.children[0] = pnode("p", "page1", "page_border", &[("Input", "border1")]);
+        looped.children[0] = pnode("p", "page1", "page_border", &[("input", "border1")]);
         assert!(resolve_page(&looped, &looped.children[2], &mut Vec::new()).is_none());
 
         // The level's LAST visible page node is what gets displayed.
@@ -7397,12 +7481,12 @@ mod tests {
         state.graph_mut().set_selected_node(Some(slot));
         let default = {
             let dir = state.current_dir();
-            state.template_default(dir, &dir.children[slot], "Radius").expect("no Radius default").text().to_string()
+            state.template_default(dir, &dir.children[slot], "radius").expect("no Radius default").text().to_string()
         };
         let radius = |state: &State| {
-            state.current_dir().children[slot].params.iter().find(|p| p.name == "Radius").unwrap().text().to_string()
+            state.current_dir().children[slot].params.iter().find(|p| p.name == "radius").unwrap().text().to_string()
         };
-        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Radius").unwrap().set_text("3.25".to_string());
+        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "radius").unwrap().set_text("3.25".to_string());
         assert!(state.run_command("reset_parameters"));
         assert_eq!(radius(&state), default);
         assert!(crate::command::by_id("custom_preset").is_none(), "the custom preset is retired");
@@ -7434,8 +7518,8 @@ mod tests {
         };
         {
             let node = &mut state.current_dir_mut().children[slot];
-            node.params.iter_mut().find(|p| p.name == "Radius").unwrap().set_text("3.25".to_string());
-            let rows = node.params.iter_mut().find(|p| p.name == "Rows").unwrap();
+            node.params.iter_mut().find(|p| p.name == "radius").unwrap().set_text("3.25".to_string());
+            let rows = node.params.iter_mut().find(|p| p.name == "rows").unwrap();
             rows.set_text("$F + 4".to_string());
             rows.set_expr(true);
         }
@@ -7512,8 +7596,8 @@ mod tests {
             state.param_mut().set_display_params(&rows);
             state.sync_parameters_to_project();
         };
-        let radius = param(&state, "Radius");
-        let rows = param(&state, "Rows");
+        let radius = param(&state, "radius");
+        let rows = param(&state, "rows");
 
         // One drag: three motions, one step.
         for v in ["1.10", "1.20", "1.30"] {
@@ -7534,18 +7618,18 @@ mod tests {
         assert_eq!(state.edit_history.undo_len(), 3);
 
         assert!(state.run_command("undo"));
-        assert_eq!(param(&state, "Rows"), rows);
-        assert_eq!(param(&state, "Radius").0, "1.50", "undoing Rows left Radius alone");
+        assert_eq!(param(&state, "rows"), rows);
+        assert_eq!(param(&state, "radius").0, "1.50", "undoing Rows left Radius alone");
         assert!(state.run_command("undo"));
-        assert_eq!(param(&state, "Radius").0, "1.30");
+        assert_eq!(param(&state, "radius").0, "1.30");
         assert!(state.run_command("undo"));
-        assert_eq!(param(&state, "Radius"), radius);
+        assert_eq!(param(&state, "radius"), radius);
         assert!(!state.history_step(true), "three steps were recorded");
         let shown = state.param().node_params().into_iter().find(|r| r.0 == "Radius").unwrap().1;
         assert_eq!(shown, radius.0, "the pane shows the restored value");
         for want in ["1.30", "1.50"] {
             assert!(state.run_command("redo"));
-            assert_eq!(param(&state, "Radius").0, want);
+            assert_eq!(param(&state, "radius").0, want);
         }
         // An edit after an undo forks: what was undone is not redone over it.
         assert!(state.run_command("undo"));
@@ -7553,29 +7637,29 @@ mod tests {
         pane(&mut state, "Radius", "2.00");
         assert!(!state.history_step(false), "a new edit left the redo branch standing");
         assert!(state.run_command("undo"));
-        assert_eq!(param(&state, "Radius").0, "1.30");
+        assert_eq!(param(&state, "radius").0, "1.30");
 
         // A step restores what it changed and nothing else on the node.
         pane(&mut state, "Radius", "2.50");
-        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "Rows").unwrap().set_text("21".to_string());
+        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "rows").unwrap().set_text("21".to_string());
         assert!(state.run_command("undo"));
-        assert_eq!(param(&state, "Radius").0, "1.30");
-        assert_eq!(param(&state, "Rows").0, "21", "undoing Radius took back an edit to Rows");
+        assert_eq!(param(&state, "radius").0, "1.30");
+        assert_eq!(param(&state, "rows").0, "21", "undoing Radius took back an edit to Rows");
 
         // set_param, and one that is refused.
         let before = state.edit_history.undo_len();
-        state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "3.00".into() }, &mut redraw).unwrap();
-        assert!(state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "abc".into() }, &mut redraw).is_err());
+        state.apply_action(McpAction::SetParam { slot, name: "radius".into(), value: "3.00".into() }, &mut redraw).unwrap();
+        assert!(state.apply_action(McpAction::SetParam { slot, name: "radius".into(), value: "abc".into() }, &mut redraw).is_err());
         assert_eq!(state.edit_history.undo_len(), before + 1, "a refused value recorded a step");
         assert!(state.run_command("undo"));
-        assert_eq!(param(&state, "Radius").0, "1.30");
+        assert_eq!(param(&state, "radius").0, "1.30");
 
         // The row menu: the expression flag is part of what comes back.
-        state.run_param_action(&node_id, "Radius", ParamMenuAction::EditExpression);
-        assert!(param(&state, "Radius").1);
-        state.run_param_action(&node_id, "Radius", ParamMenuAction::CopyParameter);
+        state.run_param_action(&node_id, "radius", ParamMenuAction::EditExpression);
+        assert!(param(&state, "radius").1);
+        state.run_param_action(&node_id, "radius", ParamMenuAction::CopyParameter);
         assert!(state.run_command("undo"));
-        assert_eq!(param(&state, "Radius"), ("1.30".to_string(), false), "Copy Parameter is no edit, and Edit Expression is one");
+        assert_eq!(param(&state, "radius"), ("1.30".to_string(), false), "Copy Parameter is no edit, and Edit Expression is one");
     }
 
     /// Adding, deleting, moving and wiring nodes can be taken back, in the
@@ -7594,7 +7678,7 @@ mod tests {
                 .children
                 .iter()
                 .map(|c| {
-                    let input = c.params.iter().find(|p| p.name == "Input").map(|p| p.text().to_string()).unwrap_or_default();
+                    let input = c.params.iter().find(|p| p.name == "input").map(|p| p.text().to_string()).unwrap_or_default();
                     (c.name.clone(), c.position, input, c.geometry_visible, c.bypassed)
                 })
                 .collect()
@@ -7612,7 +7696,7 @@ mod tests {
         let name = added[slot].0.clone();
 
         // Wire it to the sphere, by the parameter, and move it.
-        state.apply_action(McpAction::SetParam { slot, name: "Radius".into(), value: "1".into() }, &mut redraw).ok();
+        state.apply_action(McpAction::SetParam { slot, name: "radius".into(), value: "1".into() }, &mut redraw).ok();
         let steps = state.edit_history.undo_len();
         state.current_dir_mut().children[slot].position = (12.0, 9.0);
         state.record_structure_changes();
@@ -7692,17 +7776,17 @@ mod tests {
             .current_dir()
             .children
             .iter()
-            .position(|c| c.params.iter().any(|p| p.name == "Input" && p.kind() == crate::app::ParamKind::Node))
+            .position(|c| c.params.iter().any(|p| p.name == "input" && p.kind() == crate::app::ParamKind::Node))
             .expect("a Normal node has an Input");
         let input = |state: &State| {
-            state.current_dir().children[wired].params.iter().find(|p| p.name == "Input").unwrap().text().to_string()
+            state.current_dir().children[wired].params.iter().find(|p| p.name == "input").unwrap().text().to_string()
         };
         let was = input(&state);
-        state.current_dir_mut().children[wired].params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("camera1".to_string());
+        state.current_dir_mut().children[wired].params.iter_mut().find(|p| p.name == "input").unwrap().set_text("camera1".to_string());
         state.record_structure_changes();
         assert_eq!(state.edit_history.undo_len(), 1);
         state
-            .apply_action(McpAction::SetParam { slot: wired, name: "Input".into(), value: String::new() }, &mut redraw)
+            .apply_action(McpAction::SetParam { slot: wired, name: "input".into(), value: String::new() }, &mut redraw)
             .unwrap();
         assert_eq!(state.edit_history.undo_len(), 2, "a wire set as a parameter is one step, not two");
         assert!(state.run_command("undo"));
@@ -7738,9 +7822,9 @@ mod tests {
         let old = state.current_dir().children[sphere].name.clone();
         let normal = add(&mut state, "Normal", 3.0);
         let embryo = add(&mut state, "Embryo", 5.0);
-        state.apply_action(McpAction::SetParam { slot: normal, name: "Input".into(), value: old.clone() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: normal, name: "input".into(), value: old.clone() }, &mut redraw).unwrap();
         // An expression a level down, reaching up and across to the sphere.
-        let reference = format!("ch(\"../../{old}/Radius\") * 2");
+        let reference = format!("ch(\"../../{old}/radius\") * 2");
         let inside = state.current_dir().children[embryo]
             .children
             .iter()
@@ -7762,7 +7846,7 @@ mod tests {
             let dir = state.current_dir();
             (
                 dir.children[sphere].name.clone(),
-                dir.children[normal].params.iter().find(|p| p.name == "Input").unwrap().text().to_string(),
+                dir.children[normal].params.iter().find(|p| p.name == "input").unwrap().text().to_string(),
                 dir.children[embryo].children[inside].params[0].text().to_string(),
                 state.active_camera.clone(),
                 state.viewport().active_camera.clone(),
@@ -7776,7 +7860,7 @@ mod tests {
         let after = names(&state);
         assert_eq!(after.0, "ball");
         assert_eq!(after.1, "ball", "the wire followed the rename");
-        assert!(after.2.contains("../../ball/Radius"), "{}", after.2);
+        assert!(after.2.contains("../../ball/radius"), "{}", after.2);
         assert_eq!((after.3.as_str(), after.4.as_str()), ("lens", "lens"), "both copies of the camera's name");
         assert_eq!(state.edit_history.undo_len(), 2, "each rename is one step, its wires with it");
 
@@ -7936,7 +8020,7 @@ mod tests {
         // A group of five points on the sphere, shown.
         state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("tagged".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
         let tagged = state.current_dir().children.iter().position(|c| c.name == "tagged").unwrap();
-        for (name, value) in [("Input", "sphere1"), ("Group Name", "five"), ("Mode", "Random"), ("Count", "5")] {
+        for (name, value) in [("input", "sphere1"), ("group_name", "five"), ("mode", "Random"), ("count", "5")] {
             state.apply_action(McpAction::SetParam { slot: tagged, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         state.current_dir_mut().set_child_geometry_visible(tagged, true);
@@ -7975,7 +8059,7 @@ mod tests {
         let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
         let far = |state: &State| state.marked_group_verts.iter().map(|v| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt()).fold(0.0f32, f32::max);
         let before = far(&state);
-        state.apply_action(McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "2.0".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "2.0".into() }, &mut redraw).unwrap();
         assert!(far(&state) > before * 1.5, "{} against {before}", far(&state));
         assert_eq!(state.marked_group_verts.len(), one);
 
@@ -8224,8 +8308,8 @@ mod tests {
         state.cursor_y = sy(0.0);
         assert!(state.viewer_tool_drag_motion());
         assert!(state.viewer_tool_release());
-        assert_eq!(param(&state, "Center"), "0.00:0.00:0.00", "the centre moved");
-        assert_eq!(param(&state, "Translation"), "0.40:0.00:0.00");
+        assert_eq!(param(&state, "center"), "0.00:0.00:0.00", "the centre moved");
+        assert_eq!(param(&state, "translation"), "0.40:0.00:0.00");
 
         // Fixed handles: a press on empty space adds nothing, and Delete
         // removes nothing — a third handle would mean nothing.
@@ -8246,14 +8330,14 @@ mod tests {
         state.cursor_y = sy(0.0);
         assert!(state.viewer_tool_drag_motion());
         assert!(state.viewer_tool_release());
-        assert_eq!(param(&state, "Center"), "0.10:0.00:0.00");
-        assert_eq!(param(&state, "Translation"), "0.30:0.00:0.00", "the tip should not have moved");
+        assert_eq!(param(&state, "center"), "0.10:0.00:0.00");
+        assert_eq!(param(&state, "translation"), "0.30:0.00:0.00", "the tip should not have moved");
 
         // And undo restores BOTH parameters, which is the case a "keep the
         // translation when the centre moves" rule would have broken.
         assert!(state.viewer_tool_undo());
-        assert_eq!(param(&state, "Center"), "0.00:0.00:0.00");
-        assert_eq!(param(&state, "Translation"), "0.40:0.00:0.00");
+        assert_eq!(param(&state, "center"), "0.00:0.00:0.00");
+        assert_eq!(param(&state, "translation"), "0.40:0.00:0.00");
     }
 
     /// Snapping rounds a dragged handle to a world increment, and only when it
@@ -8276,7 +8360,7 @@ mod tests {
         let points = |state: &State| {
             crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
                 &state.current_dir().children[slot],
-                "Points",
+                "points",
                 "",
             ))
         };
@@ -8374,12 +8458,12 @@ mod tests {
         let base = s.current_dir().children.len();
         // A column of its own, clear of the bundled project's nodes: the
         // chain's shape from the report, Output at the bottom.
-        for (t, y) in [("Attribute", 3.0), ("Relax", 5.0), ("Detangle", 6.0), ("Output", 7.0)] {
+        for (t, y) in [("attribute", 3.0), ("relax", 5.0), ("Detangle", 6.0), ("Output", 7.0)] {
             s.apply_action(McpAction::AddNode { template_name: t.into(), name: None, x: 13.0, y }, &mut r).unwrap();
         }
         let names: Vec<String> = s.current_dir().children[base..].iter().map(|c| c.name.clone()).collect();
         for i in 1..4 {
-            s.apply_action(McpAction::SetParam { slot: base + i, name: "Input".into(), value: names[i - 1].clone() }, &mut r)
+            s.apply_action(McpAction::SetParam { slot: base + i, name: "input".into(), value: names[i - 1].clone() }, &mut r)
                 .unwrap();
         }
         s.focused_pane = LEFT_MENUBAR_IDX;
@@ -8409,7 +8493,7 @@ mod tests {
         s.param_mut().set_display_params(&rows);
         s.sync_parameters_to_project();
         let relax = &s.current_dir().children[base + 1];
-        assert_eq!(crate::geometry::node_param_str(relax, "Iterations", ""), "12");
+        assert_eq!(crate::geometry::node_param_str(relax, "iterations", ""), "12");
     }
 
     #[test]
@@ -8610,7 +8694,7 @@ mod tests {
 
         // The Remesh's From naming a node outside: not on this level, no line.
         state.apply_action(McpAction::Up, &mut redraw).unwrap();
-        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "From").unwrap().set_text("elsewhere");
+        state.current_dir_mut().children[slot].params.iter_mut().find(|p| p.name == "from").unwrap().set_text("elsewhere");
         state.apply_action(McpAction::Enter { slot }, &mut redraw).unwrap();
         state.sync_nodes();
         let level = state.graph().get_nodes();
@@ -8623,8 +8707,8 @@ mod tests {
         let id = switch.id.clone();
         assert!(state.connect_port(&path, &id, "input1".into(), 2));
         let sw = state.current_dir().children.iter().find(|c| c.id == id).unwrap();
-        assert_eq!(sw.params.iter().find(|p| p.name == "Input 3").unwrap().text(), "input1");
-        assert_eq!(sw.params.iter().find(|p| p.name == "Input").unwrap().text(), "repeat1", "the Input is untouched");
+        assert_eq!(sw.params.iter().find(|p| p.name == "input_3").unwrap().text(), "input1");
+        assert_eq!(sw.params.iter().find(|p| p.name == "input").unwrap().text(), "repeat1", "the Input is untouched");
 
         // A second operand sets the row, not the column.
         use crate::layout::{arrange, LayoutNode};
@@ -8949,7 +9033,7 @@ mod tests {
             let mut redraw = false;
             let sphere = state.current_dir().children.iter().position(|c| c.name.starts_with("sphere")).expect("a sphere");
             state
-                .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.7".into() }, &mut redraw)
+                .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.7".into() }, &mut redraw)
                 .expect("set a sphere param");
             assert_eq!(flag(&state), !before, "{command} was undone by a parameter edit");
         }
@@ -9194,33 +9278,33 @@ mod tests {
             crate::app::node_wires(n)
         };
         state.current_dir_mut().children = vec![
-            ref_node("a", "a", "sphere", vec![("Radius", "float", "1")], vec![]),
-            ref_node("b", "b", "transform", vec![("Input", "node", "a")], vec![]),
-            ref_node("c", "c", "transform", vec![("Input", "node", "b")], vec![]),
-            ref_node("d", "d", "boolean", vec![("Input", "node", "c"), ("With", "node", "b")], vec![]),
+            ref_node("a", "a", "sphere", vec![("radius", "float", "1")], vec![]),
+            ref_node("b", "b", "transform", vec![("input", "node", "a")], vec![]),
+            ref_node("c", "c", "transform", vec![("input", "node", "b")], vec![]),
+            ref_node("d", "d", "boolean", vec![("input", "node", "c"), ("with", "node", "b")], vec![]),
         ];
         state.sync_nodes();
         state.record_structure_changes();
 
         assert!(state.delete_node(1));
         state.record_structure_changes();
-        assert_eq!(wires(&state, "c"), vec![("Input".to_string(), "a".to_string())], "A -> C");
+        assert_eq!(wires(&state, "c"), vec![("input".to_string(), "a".to_string())], "A -> C");
         assert_eq!(
             wires(&state, "d"),
-            vec![("Input".to_string(), "c".to_string()), ("With".to_string(), "a".to_string())],
+            vec![("input".to_string(), "c".to_string()), ("with".to_string(), "a".to_string())],
             "a second operand follows too"
         );
 
         // A generator has nothing to splice: what read it is left as it was.
         assert!(state.delete_node(0));
-        assert_eq!(wires(&state, "c"), vec![("Input".to_string(), "a".to_string())]);
+        assert_eq!(wires(&state, "c"), vec![("input".to_string(), "a".to_string())]);
 
         // Undo puts the node back and the wires with it.
         state.record_structure_changes();
         assert!(state.run_command("undo"));
         assert!(state.run_command("undo"));
-        assert_eq!(wires(&state, "c"), vec![("Input".to_string(), "b".to_string())]);
-        assert_eq!(wires(&state, "d")[1], ("With".to_string(), "b".to_string()));
+        assert_eq!(wires(&state, "c"), vec![("input".to_string(), "b".to_string())]);
+        assert_eq!(wires(&state, "d")[1], ("with".to_string(), "b".to_string()));
     }
 
     fn ref_node(id: &str, name: &str, node_type: &str, params: Vec<(&str, &str, &str)>, children: Vec<FsNode>) -> FsNode {
@@ -9274,10 +9358,10 @@ mod tests {
         impl Scope for Table {
             fn channel(&mut self, path: &str, kind: ChKind) -> Result<Value, String> {
                 let v = match path {
-                    "../Radius" => Value::Num(0.5),
-                    "../sphere1/Rows" => Value::Num(16.0),
-                    "Mode" => Value::Num(1.0),
-                    "../text1/Font" => Value::Str("Inter".into()),
+                    "../radius" => Value::Num(0.5),
+                    "../sphere1/rows" => Value::Num(16.0),
+                    "mode" => Value::Num(1.0),
+                    "../text1/font" => Value::Str("Inter".into()),
                     _ => return Err(format!("no {path}")),
                 };
                 Ok(match kind {
@@ -9296,10 +9380,10 @@ mod tests {
         assert_eq!(ev("2 ^ 3 ^ 2"), Value::Num(512.0), "power is right-associative");
         assert_eq!(ev("-2 ^ 2"), Value::Num(-4.0), "unary minus binds looser than power, as in Houdini");
         assert_eq!(ev("7 % 4"), Value::Num(3.0));
-        assert_eq!(ev("ch(\"../Radius\") * 2 + 1"), Value::Num(2.0));
-        assert_eq!(ev("chi(\"../sphere1/Rows\") / 3"), Value::Num(16.0 / 3.0));
-        assert_eq!(ev("chb(\"Mode\")"), Value::Num(1.0));
-        assert_eq!(ev("chs(\"../text1/Font\") + \" Bold\""), Value::Str("Inter Bold".into()));
+        assert_eq!(ev("ch(\"../radius\") * 2 + 1"), Value::Num(2.0));
+        assert_eq!(ev("chi(\"../sphere1/rows\") / 3"), Value::Num(16.0 / 3.0));
+        assert_eq!(ev("chb(\"mode\")"), Value::Num(1.0));
+        assert_eq!(ev("chs(\"../text1/font\") + \" Bold\""), Value::Str("Inter Bold".into()));
         assert_eq!(ev("$F / 24"), Value::Num(0.5));
         assert_eq!(ev("if($F > 10, 1, 0)"), Value::Num(1.0));
         assert_eq!(ev("$F > 10 && $F < 20"), Value::Num(1.0));
@@ -9334,15 +9418,15 @@ mod tests {
     #[test]
     fn a_typed_reference_is_an_expression_and_a_kernel_is_not() {
         use crate::expr::looks_like_expression;
-        assert!(looks_like_expression("ch(\"../sphere1/Radius\")"));
-        assert!(looks_like_expression("chf(\"../Radius\") * 2"));
+        assert!(looks_like_expression("ch(\"../sphere1/radius\")"));
+        assert!(looks_like_expression("chf(\"../radius\") * 2"));
         assert!(looks_like_expression("$F / 24"));
         assert!(!looks_like_expression("1 + 2"), "arithmetic alone is asked for through Edit Expression");
         assert!(!looks_like_expression("0.5"));
         assert!(!looks_like_expression("sphere1"));
         assert!(!looks_like_expression("true"));
         assert!(!looks_like_expression("0.00:0.80:0.00"));
-        assert!(!looks_like_expression("float r = chf(\"Radius\", 0.5);"), "a kernel is not a reference");
+        assert!(!looks_like_expression("float r = chf(\"radius\", 0.5);"), "a kernel is not a reference");
         let kernel = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/nodes/sphere.json")).unwrap();
         assert!(!looks_like_expression(&kernel));
     }
@@ -9353,9 +9437,9 @@ mod tests {
     #[test]
     fn rename_rewrites_the_paths_through_a_node() {
         use crate::expr::rewrite_paths;
-        let src = "ch( \"../sphere1/Radius\" ) * chs('../text1/Font') + chf(\"/sphere1/Rows\")";
+        let src = "ch( \"../sphere1/radius\" ) * chs('../text1/Font') + chf(\"/sphere1/rows\")";
         let out = rewrite_paths(src, |path| path.contains("sphere1").then(|| path.replace("sphere1", "ball")));
-        assert_eq!(out, "ch( \"../ball/Radius\" ) * chs('../text1/Font') + chf(\"/ball/Rows\")");
+        assert_eq!(out, "ch( \"../ball/radius\" ) * chs('../text1/Font') + chf(\"/ball/rows\")");
         assert_eq!(rewrite_paths("touch(\"x\")", |_| Some("no".into())), "touch(\"x\")", "only channel calls are paths");
     }
 
@@ -9389,29 +9473,31 @@ mod tests {
         proj.root.children[0].children[0].params[0].set_expr(false);
         proj.migrate_format();
         let r = &proj.root.children[0].children[0].params[0];
-        assert_eq!(r.text(), "chf(\"../Size\")");
+        // Format 0 → 1 gives the reference its parent; 3 → 4 the name.
+        assert_eq!(r.text(), "chf(\"../size\")");
+        assert_eq!(r.name, "radius");
         assert!(r.is_expr());
         assert_eq!(proj.format, crate::app::PROJECT_FORMAT);
         // A NEW file's bare name is the node's own parameter and stays.
-        proj.root.children[0].children[0].params[0].set_text("chf(\"Radius\")");
+        proj.root.children[0].children[0].params[0].set_text("chf(\"radius\")");
         proj.migrate_format();
-        assert_eq!(proj.root.children[0].children[0].params[0].text(), "chf(\"Radius\")");
+        assert_eq!(proj.root.children[0].children[0].params[0].text(), "chf(\"radius\")");
     }
 
     #[test]
     fn param_references_resolve_against_the_enclosing_subnet() {
         use crate::geometry::resolve_param_refs;
-        let sphere = ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "ch(\"../Radius\")")], vec![]);
-        let output = ref_node("o", "output1", "output", vec![("Input", "text", "sphere1")], vec![]);
+        let sphere = ref_node("s", "sphere1", "sphere", vec![("radius", "slider", "ch(\"../radius\")")], vec![]);
+        let output = ref_node("o", "output1", "output", vec![("input", "text", "sphere1")], vec![]);
         let inner = ref_node("sub", "shape1", "node",
-            vec![("Radius", "slider", "chf(\"../Size\")"), ("Mode", "choice:Basic,Scatter", "Scatter"), ("On", "toggle", "true")],
+            vec![("radius", "slider", "chf(\"../size\")"), ("mode", "choice:Basic,Scatter", "Scatter"), ("On", "toggle", "true")],
             vec![sphere, output]);
         let probe = ref_node("p", "probe", "switch",
-            vec![("Index", "spinbox", "chi(\"../Mode\")"), ("Flag", "text", "chb(\"../On\")"), ("Name", "text", "chs(\"../Mode\")"), ("Plain", "text", "kept")],
+            vec![("index", "spinbox", "chi(\"../mode\")"), ("Flag", "text", "chb(\"../on\")"), ("Name", "text", "chs(\"../mode\")"), ("Plain", "text", "kept")],
             vec![]);
         let mut inner = inner;
         inner.children.push(probe);
-        let outer = ref_node("outer", "outer1", "node", vec![("Size", "slider", "0.8")], vec![inner]);
+        let outer = ref_node("outer", "outer1", "node", vec![("size", "slider", "0.8")], vec![inner]);
         let root = ref_node("root", "root", "node", vec![], vec![outer]);
 
         // The probe's params, resolved against shape1.
@@ -9420,13 +9506,13 @@ mod tests {
         let resolved = resolve_param_refs(&root, probe, 0, &mut err).expect("it has references");
         assert!(err.is_none(), "{err:?}");
         let get = |n: &str| resolved.params.iter().find(|p| p.name == n).unwrap().text().to_string();
-        assert_eq!(get("Index"), "1", "chi on a choice is its option index");
+        assert_eq!(get("index"), "1", "chi on a choice is its option index");
         assert_eq!(get("Flag"), "1", "chb into a text row is 1 or 0");
         assert_eq!(get("Name"), "Scatter");
         assert_eq!(get("Plain"), "kept");
 
         // Evaluated, the sphere's Radius chains: sphere1 → shape1's Radius,
-        // which is itself chf("../Size") → outer1's 0.8.
+        // which is itself chf("../size") → outer1's 0.8.
         let shape = &root.children[0].children[0];
         let (g, err) = eval(&root, shape);
         assert!(err.is_none(), "{err:?}");
@@ -9438,15 +9524,15 @@ mod tests {
         assert!(none.is_none());
 
         // A reference to nothing is reported, and the value left as written.
-        let bad = ref_node("b", "bad1", "sphere", vec![("Radius", "slider", "ch(\"../Nope\")")], vec![]);
+        let bad = ref_node("b", "bad1", "sphere", vec![("radius", "slider", "ch(\"../nope\")")], vec![]);
         let holder = ref_node("h", "holder1", "node", vec![], vec![bad]);
         let root2 = ref_node("root", "root", "node", vec![], vec![holder]);
         let mut err = None;
         let r = resolve_param_refs(&root2, &root2.children[0].children[0], 0, &mut err).unwrap();
-        assert_eq!(r.params[0].text(), "ch(\"../Nope\")");
-        assert!(err.as_deref().unwrap_or("").contains("names no parameter Nope on holder1"), "{err:?}");
+        assert_eq!(r.params[0].text(), "ch(\"../nope\")");
+        assert!(err.as_deref().unwrap_or("").contains("names no parameter nope on holder1"), "{err:?}");
         // Too many levels up, likewise.
-        let far = ref_node("f", "far1", "sphere", vec![("Radius", "slider", "ch(\"../../../X\")")], vec![]);
+        let far = ref_node("f", "far1", "sphere", vec![("radius", "slider", "ch(\"../../../x\")")], vec![]);
         let root3 = ref_node("root", "root", "node", vec![], vec![far]);
         let mut err = None;
         resolve_param_refs(&root3, &root3.children[0], 0, &mut err);
@@ -9461,69 +9547,69 @@ mod tests {
     #[test]
     fn channel_paths_resolve_over_the_tree() {
         use crate::geometry::resolve_param_refs;
-        let a = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.25"), ("Center", "float3", "1:2:3")], vec![]);
+        let a = ref_node("a", "a1", "sphere", vec![("radius", "slider", "0.25"), ("center", "float3", "1:2:3")], vec![]);
         let b = ref_node("b", "b1", "sphere", vec![
-            ("Radius", "slider", "ch(\"../a1/Radius\") * 2"),
-            ("Rows", "spinbox", "ch(\"Radius\") * 100"),
-            ("Y", "slider", "ch(\"../a1/Center.y\") + ch(\"/sub1/a1/Center.z\")"),
+            ("radius", "slider", "ch(\"../a1/radius\") * 2"),
+            ("rows", "spinbox", "ch(\"radius\") * 100"),
+            ("y", "slider", "ch(\"../a1/center.y\") + ch(\"/sub1/a1/center.z\")"),
             ("Frame", "slider", "$F / 2"),
-            ("Up", "slider", "ch(\"../Size\") + ch(\"/Top\")"),
-            ("Mode", "choice:Basic,Scatter", "1"),
-            ("On", "toggle", "ch(\"../a1/Radius\") > 0"),
-            ("Label", "text", "chs(\"../a1/Radius\") + \" units\""),
-            ("Center", "float3", "chf(\"../a1/Center.x\"):0:ch(\"../Size\")"),
+            ("Up", "slider", "ch(\"../size\") + ch(\"/top\")"),
+            ("mode", "choice:Basic,Scatter", "1"),
+            ("On", "toggle", "ch(\"../a1/radius\") > 0"),
+            ("Label", "text", "chs(\"../a1/radius\") + \" units\""),
+            ("center", "float3", "chf(\"../a1/center.x\"):0:ch(\"../size\")"),
         ], vec![]);
-        let sub = ref_node("sub", "sub1", "node", vec![("Size", "slider", "0.5")], vec![a, b]);
+        let sub = ref_node("sub", "sub1", "node", vec![("size", "slider", "0.5")], vec![a, b]);
         let root = ref_node("root", "root", "node", vec![("Top", "slider", "10")], vec![sub]);
         // The choice's value is an index written as an expression; flag it.
         let mut root = root;
-        root.children[0].children[1].params.iter_mut().find(|p| p.name == "Mode").unwrap().set_expr(true);
+        root.children[0].children[1].params.iter_mut().find(|p| p.name == "mode").unwrap().set_expr(true);
 
         let b = &root.children[0].children[1];
         let mut err = None;
         let r = resolve_param_refs(&root, b, 12, &mut err).expect("b1 has expressions");
         assert!(err.is_none(), "{err:?}");
         let get = |n: &str| r.params.iter().find(|p| p.name == n).unwrap().text().to_string();
-        assert_eq!(get("Radius"), "0.5", "a sibling by path");
-        assert_eq!(get("Rows"), "50", "a bare name is the node's OWN parameter, read through its expression");
-        assert_eq!(get("Y"), "5", "components, relative and absolute");
+        assert_eq!(get("radius"), "0.5", "a sibling by path");
+        assert_eq!(get("rows"), "50", "a bare name is the node's OWN parameter, read through its expression");
+        assert_eq!(get("y"), "5", "components, relative and absolute");
         assert_eq!(get("Frame"), "6");
         assert_eq!(get("Up"), "10.5", "the parent and the root");
-        assert_eq!(get("Mode"), "Scatter", "a number into a choice picks the option");
+        assert_eq!(get("mode"), "Scatter", "a number into a choice picks the option");
         assert_eq!(get("On"), "true", "a number into a toggle is true or false");
         assert_eq!(get("Label"), "0.25 units");
-        assert_eq!(get("Center"), "1:0:0.5", "a float3 is three expressions");
+        assert_eq!(get("center"), "1:0:0.5", "a float3 is three expressions");
         assert!(r.params.iter().all(|p| !p.is_expr()), "the resolved clone holds values");
 
         // A circle: two parameters reading each other.
-        let x = ref_node("x", "x1", "sphere", vec![("Radius", "slider", "ch(\"../y1/Radius\")")], vec![]);
-        let y = ref_node("y", "y1", "sphere", vec![("Radius", "slider", "ch(\"../x1/Radius\") + 1")], vec![]);
+        let x = ref_node("x", "x1", "sphere", vec![("radius", "slider", "ch(\"../y1/radius\")")], vec![]);
+        let y = ref_node("y", "y1", "sphere", vec![("radius", "slider", "ch(\"../x1/radius\") + 1")], vec![]);
         let ring = ref_node("root", "root", "node", vec![], vec![x, y]);
         let mut err = None;
         let r = resolve_param_refs(&ring, &ring.children[0], 0, &mut err).unwrap();
         assert!(err.as_deref().unwrap_or("").contains("circular"), "{err:?}");
-        assert_eq!(r.params[0].text(), "ch(\"../y1/Radius\")", "left as written");
+        assert_eq!(r.params[0].text(), "ch(\"../y1/radius\")", "left as written");
         // A parameter reading itself is the shortest circle.
-        let me = ref_node("m", "me", "sphere", vec![("Radius", "slider", "ch(\"Radius\") + 1")], vec![]);
+        let me = ref_node("m", "me", "sphere", vec![("radius", "slider", "ch(\"radius\") + 1")], vec![]);
         let solo = ref_node("root", "root", "node", vec![], vec![me]);
         let mut err = None;
         resolve_param_refs(&solo, &solo.children[0], 0, &mut err);
         assert!(err.as_deref().unwrap_or("").contains("circular"), "{err:?}");
 
         // A path to a node that is not there names the step that failed.
-        let lost = ref_node("l", "lost", "sphere", vec![("Radius", "slider", "ch(\"../nope/Radius\")")], vec![]);
+        let lost = ref_node("l", "lost", "sphere", vec![("radius", "slider", "ch(\"../nope/radius\")")], vec![]);
         let root4 = ref_node("root", "root", "node", vec![], vec![lost]);
         let mut err = None;
         resolve_param_refs(&root4, &root4.children[0], 0, &mut err);
         assert!(err.as_deref().unwrap_or("").contains("no node `nope`"), "{err:?}");
         // A syntax error names the parameter.
-        let broken = ref_node("k", "broken", "sphere", vec![("Radius", "slider", "1 +")], vec![]);
+        let broken = ref_node("k", "broken", "sphere", vec![("radius", "slider", "1 +")], vec![]);
         let mut broken = broken;
         broken.params[0].set_expr(true);
         let root5 = ref_node("root", "root", "node", vec![], vec![broken]);
         let mut err = None;
         resolve_param_refs(&root5, &root5.children[0], 0, &mut err);
-        assert!(err.as_deref().unwrap_or("").contains("broken: Radius"), "{err:?}");
+        assert!(err.as_deref().unwrap_or("").contains("broken: radius"), "{err:?}");
     }
 
     /// The paths a paste writes, and what a rename does to the paths that
@@ -9533,16 +9619,16 @@ mod tests {
     #[test]
     fn renaming_a_node_carries_its_references() {
         use crate::geometry::{absolute_ref_path, relative_ref_path, rename_node_in_tree};
-        let a = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.25")], vec![]);
+        let a = ref_node("a", "a1", "sphere", vec![("radius", "slider", "0.25")], vec![]);
         let b = ref_node("b", "b1", "sphere", vec![
-            ("Radius", "slider", "ch( \"../a1/Radius\" ) * 2"),
-            ("Input", "text", "a1"),
+            ("radius", "slider", "ch( \"../a1/radius\" ) * 2"),
+            ("input", "text", "a1"),
         ], vec![]);
-        let deep = ref_node("d", "deep1", "sphere", vec![("Radius", "slider", "chf(\"/sub1/a1/Radius\") + ch(\"../../a1/Radius\")")], vec![]);
+        let deep = ref_node("d", "deep1", "sphere", vec![("radius", "slider", "chf(\"/sub1/a1/radius\") + ch(\"../../a1/radius\")")], vec![]);
         let inner = ref_node("in", "inner1", "node", vec![], vec![deep]);
-        let other = ref_node("oa", "a1", "sphere", vec![("Radius", "slider", "ch(\"../a1/Radius\")")], vec![]);
+        let other = ref_node("oa", "a1", "sphere", vec![("radius", "slider", "ch(\"../a1/radius\")")], vec![]);
         let elsewhere = ref_node("el", "elsewhere", "node", vec![], vec![other]);
-        let sub = ref_node("sub", "sub1", "node", vec![("Size", "slider", "0.5")], vec![a, b, inner]);
+        let sub = ref_node("sub", "sub1", "node", vec![("size", "slider", "0.5")], vec![a, b, inner]);
         let mut root = ref_node("root", "root", "node", vec![], vec![sub, elsewhere]);
 
         assert_eq!(relative_ref_path(&root, "b", "a").as_deref(), Some("../a1"));
@@ -9561,10 +9647,10 @@ mod tests {
             node.params.iter().find(|p| p.name == n).unwrap().text().to_string()
         };
         assert_eq!(root.children[0].children[0].name, "ball");
-        assert_eq!(get(&root, &[0, 1], "Radius"), "ch( \"../ball/Radius\" ) * 2", "spacing kept");
-        assert_eq!(get(&root, &[0, 1], "Input"), "ball", "the wire follows");
-        assert_eq!(get(&root, &[0, 2, 0], "Radius"), "chf(\"/sub1/ball/Radius\") + ch(\"../../ball/Radius\")");
-        assert_eq!(get(&root, &[1, 0], "Radius"), "ch(\"../a1/Radius\")", "the OTHER a1 is not this one");
+        assert_eq!(get(&root, &[0, 1], "radius"), "ch( \"../ball/radius\" ) * 2", "spacing kept");
+        assert_eq!(get(&root, &[0, 1], "input"), "ball", "the wire follows");
+        assert_eq!(get(&root, &[0, 2, 0], "radius"), "chf(\"/sub1/ball/radius\") + ch(\"../../ball/radius\")");
+        assert_eq!(get(&root, &[1, 0], "radius"), "ch(\"../a1/radius\")", "the OTHER a1 is not this one");
         assert!(!rename_node_in_tree(&mut root, "a", "ball"), "a rename to the same name is nothing");
         assert!(!rename_node_in_tree(&mut root, "zzz", "x"), "and so is one of a node that is not there");
     }
@@ -9618,33 +9704,33 @@ mod tests {
             templates.iter().find(|t| t.node.name == name).unwrap().node.params.iter()
                 .find(|p| p.name == pname).unwrap().description.clone()
         };
-        let radius = template("Sphere", "Radius");
+        let radius = template("Sphere", "radius");
         let want = wrap_words(&radius, PARAM_DESCRIPTION_WIDTH);
         assert!(want.len() > 1, "a sentence spans rows: {want:?}");
-        let (rows, _, headers) = state.param_menu_rows(sphere, "Radius");
-        assert_eq!(rows[0], "Name: Radius");
-        assert_eq!(&rows[1..1 + want.len()], &want[..], "the description sits under the name");
-        assert_eq!(rows[1 + want.len()], "Control: slider");
-        assert!(1 + want.len() < headers, "the description rows are headers, and run nothing");
+        let (rows, _, headers) = state.param_menu_rows(sphere, "radius");
+        assert_eq!(rows[..2], ["Name: radius".to_string(), "Label: Radius".to_string()], "the name a path spells, then what the pane shows");
+        assert_eq!(&rows[2..2 + want.len()], &want[..], "the description sits under the name and label");
+        assert_eq!(rows[2 + want.len()], "Control: slider");
+        assert!(2 + want.len() < headers, "the description rows are headers, and run nothing");
 
         // A child inside a subnet template takes its base template's.
         state.apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: Some("embryo1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
         let embryo = slot_of(&state, "embryo1");
-        let (rows, _, _) = state.param_menu_rows(embryo, "Radius");
-        let own = wrap_words(&template("Embryo", "Radius"), PARAM_DESCRIPTION_WIDTH);
+        let (rows, _, _) = state.param_menu_rows(embryo, "radius");
+        let own = wrap_words(&template("Embryo", "radius"), PARAM_DESCRIPTION_WIDTH);
         assert_ne!(own, want, "the Embryo's Radius is described as the Embryo's");
-        assert_eq!(&rows[1..1 + own.len()], &own[..]);
+        assert_eq!(&rows[2..2 + own.len()], &own[..]);
         state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
         let inner = slot_of(&state, "sphere1");
-        let (rows, _, _) = state.param_menu_rows(inner, "Radius");
-        assert_eq!(&rows[1..1 + want.len()], &want[..], "the Embryo's sphere1 says what a Sphere's Radius does");
+        let (rows, _, _) = state.param_menu_rows(inner, "radius");
+        assert_eq!(&rows[2..2 + want.len()], &want[..], "the Embryo's sphere1 says what a Sphere's Radius does");
         state.apply_action(McpAction::Up, &mut redraw).unwrap();
 
         // A parameter no template names says nothing, and the menu goes
         // straight from the name to the readouts.
-        state.apply_action(McpAction::AddParam { slot: sphere, name: "Extra".into(), param_type: "float".into(), default: "3".into() }, &mut redraw).unwrap();
-        let (rows, _, _) = state.param_menu_rows(sphere, "Extra");
-        assert_eq!(rows[1], "Control: text box");
+        state.apply_action(McpAction::AddParam { slot: sphere, name: "extra".into(), param_type: "float".into(), default: "3".into(), label: "Extra".into() }, &mut redraw).unwrap();
+        let (rows, _, _) = state.param_menu_rows(sphere, "extra");
+        assert_eq!(rows[2], "Control: text box");
 
         // A save never carries one, so the file is what it was.
         let saved = serde_json::to_string(&state.current_dir().children[sphere]).unwrap();
@@ -9706,17 +9792,17 @@ mod tests {
         };
         show(&mut state, sphere);
         let (x, y) = row_center(&state, "Radius");
-        assert_eq!(state.param_row_at(x, y), Some((sphere, "Radius".to_string())));
+        assert_eq!(state.param_row_at(x, y), Some((sphere, "radius".to_string())), "the row's NAME, though the pane shows its label");
         assert_eq!(state.param_row_at(x, state.positions[crate::slots::PARAM_IDX].1 - 5.0), None, "above the pane is no row");
 
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
         assert!(state.param_menu_open(), "a right press on a row opens its menu");
         assert!(!state.viewport_menu_open());
-        let radius_desc = described(&state, sphere, "Radius");
+        let radius_desc = described(&state, sphere, "radius");
         assert_eq!(
             state.param_menu_actions,
-            vec![ParamMenuAction::Info; 9 + radius_desc.len()].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
+            vec![ParamMenuAction::Info; 10 + radius_desc.len()].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
             "nothing copied yet, and the row holds a value"
         );
         // The header rows read the parameter out: its name, the control
@@ -9729,16 +9815,16 @@ mod tests {
         let shown: Vec<String> =
             cce_ui::widget::context_menu::options().into_iter().filter(|r| !radius_desc.contains(r)).collect();
         assert_eq!(
-            &shown[..10],
+            &shown[..11],
             &[
-                "Name: Radius".to_string(), "Control: slider".to_string(), "Type: float".to_string(),
+                "Name: radius".to_string(), "Label: Radius".to_string(), "Control: slider".to_string(), "Type: float".to_string(),
                 "Expression: false".to_string(), "Default: 0.5".to_string(), "Min: none".to_string(), "Max: none".to_string(),
                 "Step: none".to_string(), "Range: 0..2".to_string(), "-".to_string(),
             ]
         );
         assert!(shown.iter().all(|r| !r.starts_with("Value:")), "{shown:?}");
-        let (_, headers) = fields(&state, sphere, "Radius");
-        assert_eq!(headers, 9);
+        let (_, headers) = fields(&state, sphere, "radius");
+        assert_eq!(headers, 10);
         // The headers are the rows before the separator; each one is
         // looked up by its readout, not its position.
         let headers_of = |state: &State, pname: &str| -> Vec<String> {
@@ -9748,84 +9834,84 @@ mod tests {
         };
         // An inline range, a spinbox's range and step, a choice's options,
         // and a conditional row's condition.
-        let rows = headers_of(&state, "Center X");
+        let rows = headers_of(&state, "center_x");
         for want in ["Control: slider", "Type: float", "Min: -2", "Max: 2", "Step: none", "Range: -2..2"] {
             assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
         }
-        let rows = headers_of(&state, "Rows");
-        for want in ["Default: 16", "Min: 2", "Max: 128", "Step: 1", "Range: 2..128, step 1", "Shown when: Method == UV"] {
+        let rows = headers_of(&state, "rows");
+        for want in ["Default: 16", "Min: 2", "Max: 128", "Step: 1", "Range: 2..128, step 1", "Shown when: method == UV"] {
             assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
         }
-        let rows = headers_of(&state, "Method");
+        let rows = headers_of(&state, "method");
         for want in ["Control: dropdown", "Type: enum", "Default: UV", "Options: UV, Icosphere, Cube"] {
             assert!(rows.contains(&want.to_string()), "{want} missing from {rows:?}");
         }
-        assert_eq!(headers_of(&state, "Color"), vec!["Name: Color", "Control: toggle", "Type: boolean", "Expression: false", "Default: true"], "a toggle has neither a range nor options");
-        // A parameter no template names has no default row; one with a
-        // label shows it under the name.
-        state.apply_action(McpAction::AddParam { slot: sphere, name: "Extra".into(), param_type: "float".into(), default: "3".into() }, &mut redraw).unwrap();
+        assert_eq!(headers_of(&state, "color"), vec!["Name: color", "Label: Color", "Control: toggle", "Type: boolean", "Expression: false", "Default: true"], "a toggle has neither a range nor options");
+        // A parameter no template names has no default row, and its label
+        // is under its name as a template's is.
+        state.apply_action(McpAction::AddParam { slot: sphere, name: "extra".into(), param_type: "float".into(), default: "3".into(), label: "Extra".into() }, &mut redraw).unwrap();
         // A `float` parameter is drawn as a text box, and sets a float.
-        assert_eq!(headers_of(&state, "Extra"), vec!["Name: Extra", "Control: text box", "Type: float", "Expression: false"]);
-        state.current_dir_mut().children[sphere].params.iter_mut().find(|p| p.name == "Extra").unwrap().label = "Extra Size".into();
-        assert_eq!(headers_of(&state, "Extra")[..2], ["Name: Extra".to_string(), "Label: Extra Size".to_string()]);
+        assert_eq!(headers_of(&state, "extra"), vec!["Name: extra", "Label: Extra", "Control: text box", "Type: float", "Expression: false"]);
+        state.current_dir_mut().children[sphere].params.iter_mut().find(|p| p.name == "extra").unwrap().label = "Extra Size".into();
+        assert_eq!(headers_of(&state, "extra")[..2], ["Name: extra".to_string(), "Label: Extra Size".to_string()]);
         // Inside a subnet instance the SUBNET template's override is the
         // default: the Embryo's sphere1 was built with an expression.
         state.apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: Some("embryo1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
         let embryo = slot_of(&state, "embryo1");
         state.apply_action(McpAction::Enter { slot: embryo }, &mut redraw).unwrap();
         let inner = slot_of(&state, "sphere1");
-        let (rows, h) = fields(&state, inner, "Radius");
-        assert!(rows[..h].contains(&"Default: chf(\"../Radius\")".to_string()), "{rows:?}");
+        let (rows, h) = fields(&state, inner, "radius");
+        assert!(rows[..h].contains(&"Default: chf(\"../radius\")".to_string()), "{rows:?}");
         state.apply_action(McpAction::Up, &mut redraw).unwrap();
         // A click on a header runs nothing.
-        state.run_param_action(&state.current_dir().children[sphere].id.clone(), "Radius", ParamMenuAction::Info);
+        state.run_param_action(&state.current_dir().children[sphere].id.clone(), "radius", ParamMenuAction::Info);
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });
 
         // Copy, then paste onto ball's Radius — a sibling, so `../sphere1`.
         let sphere_id = state.current_dir().children[sphere].id.clone();
         let ball_id = state.current_dir().children[ball].id.clone();
-        state.run_param_action(&sphere_id, "Radius", ParamMenuAction::CopyParameter);
-        assert_eq!(state.copied_param, Some((sphere_id.clone(), "Radius".to_string())));
+        state.run_param_action(&sphere_id, "radius", ParamMenuAction::CopyParameter);
+        assert_eq!(state.copied_param, Some((sphere_id.clone(), "radius".to_string())));
         show(&mut state, ball);
         let (x, y) = row_center(&state, "Radius");
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
         assert!(state.param_menu_actions.contains(&ParamMenuAction::PasteRelative), "with a copy, paste is offered");
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });
-        state.run_param_action(&ball_id, "Radius", ParamMenuAction::PasteRelative);
-        let radius = |state: &State, slot: usize| state.current_dir().children[slot].params.iter().find(|p| p.name == "Radius").unwrap().clone();
-        assert_eq!(radius(&state, ball).text(), "ch(\"../sphere1/Radius\")");
+        state.run_param_action(&ball_id, "radius", ParamMenuAction::PasteRelative);
+        let radius = |state: &State, slot: usize| state.current_dir().children[slot].params.iter().find(|p| p.name == "radius").unwrap().clone();
+        assert_eq!(radius(&state, ball).text(), "ch(\"../sphere1/radius\")");
         assert!(radius(&state, ball).is_expr());
         let rows = crate::app::param_display(&state.current_dir().children[ball].params);
         assert_eq!(rows.iter().find(|r| r.0 == "Radius").unwrap().2, "text", "the pane shows an expression as text");
 
         // The reference is live: ball follows sphere1's Radius.
-        state.apply_action(McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
         let mut err = None;
         let r = crate::geometry::resolve_param_refs(&state.fs_root, &state.current_dir().children[ball], 0, &mut err).unwrap();
         assert!(err.is_none(), "{err:?}");
-        assert_eq!(r.params.iter().find(|p| p.name == "Radius").unwrap().text(), "0.9");
+        assert_eq!(r.params.iter().find(|p| p.name == "radius").unwrap().text(), "0.9");
 
         // Absolute paste, then Delete Expression bakes the current value.
-        state.run_param_action(&ball_id, "Radius", ParamMenuAction::PasteAbsolute);
-        assert_eq!(radius(&state, ball).text(), "ch(\"/sphere1/Radius\")");
-        state.run_param_action(&ball_id, "Radius", ParamMenuAction::DeleteExpression);
+        state.run_param_action(&ball_id, "radius", ParamMenuAction::PasteAbsolute);
+        assert_eq!(radius(&state, ball).text(), "ch(\"/sphere1/radius\")");
+        state.run_param_action(&ball_id, "radius", ParamMenuAction::DeleteExpression);
         assert_eq!(radius(&state, ball).text(), "0.9");
         assert!(!radius(&state, ball).is_expr());
         // Edit Expression flags without changing.
-        state.run_param_action(&ball_id, "Radius", ParamMenuAction::EditExpression);
+        state.run_param_action(&ball_id, "radius", ParamMenuAction::EditExpression);
         assert_eq!(radius(&state, ball).text(), "0.9");
         assert!(radius(&state, ball).is_expr());
         // …and the menu's readout says so: an expression is drawn as a
         // text box, and still sets the float its slider would. Method is a
         // dropdown setting an enum, Rows a spinbox setting an integer.
         show(&mut state, ball);
-        let (rows, _) = fields(&state, ball, "Radius");
-        assert_eq!(&rows[1..4], &["Control: text box".to_string(), "Type: float".to_string(), "Expression: true".to_string()]);
-        let (rows, _) = fields(&state, ball, "Method");
-        assert_eq!((&rows[1], &rows[2]), (&"Control: dropdown".to_string(), &"Type: enum".to_string()));
-        let (rows, _) = fields(&state, ball, "Rows");
-        assert_eq!((&rows[1], &rows[2]), (&"Control: spinbox".to_string(), &"Type: integer".to_string()));
+        let (rows, _) = fields(&state, ball, "radius");
+        assert_eq!(&rows[2..5], &["Control: text box".to_string(), "Type: float".to_string(), "Expression: true".to_string()]);
+        let (rows, _) = fields(&state, ball, "method");
+        assert_eq!((&rows[2], &rows[3]), (&"Control: dropdown".to_string(), &"Type: enum".to_string()));
+        let (rows, _) = fields(&state, ball, "rows");
+        assert_eq!((&rows[2], &rows[3]), (&"Control: spinbox".to_string(), &"Type: integer".to_string()));
 
         // The pull node: a text parameter the pane presents as sliders
         // over a float3. The menu reads the control drawn and the type it
@@ -9833,42 +9919,42 @@ mod tests {
         // box is a string.
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         let pull = slot_of(&state, "pull1");
-        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.06:0.00")] {
+        for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.06:0.00")] {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         show(&mut state, pull);
-        let (rows, h) = fields(&state, pull, "Value");
-        let want: Vec<String> = ["Name: Value", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(&rows[..4], &want[..], "{rows:?}");
+        let (rows, h) = fields(&state, pull, "value");
+        let want: Vec<String> = ["Name: value", "Label: Value", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(&rows[..5], &want[..], "{rows:?}");
         assert!(rows[..h].contains(&"Range: -1..1".to_string()), "the span around 0.06: {rows:?}");
         assert!(rows[..h].iter().all(|r| !r.starts_with("Value:")), "{rows:?}");
-        state.apply_action(McpAction::SetParam { slot: pull, name: "Value".into(), value: "0.06".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: pull, name: "value".into(), value: "0.06".into() }, &mut redraw).unwrap();
         show(&mut state, pull);
-        let (rows, _) = fields(&state, pull, "Value");
+        let (rows, _) = fields(&state, pull, "value");
         assert_eq!(
-            (&rows[1], &rows[2]),
+            (&rows[2], &rows[3]),
             (&"Control: trackball and sliders".to_string(), &"Type: float3".to_string()),
             "a single number is spread over the same control"
         );
 
         // And a reference typed straight into a row (or scripted) becomes one.
-        state.apply_action(McpAction::SetParam { slot: ball, name: "Rows".into(), value: "chi(\"../sphere1/Rows\") * 2".into() }, &mut redraw).unwrap();
-        let rows_p = state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap();
+        state.apply_action(McpAction::SetParam { slot: ball, name: "rows".into(), value: "chi(\"../sphere1/rows\") * 2".into() }, &mut redraw).unwrap();
+        let rows_p = state.current_dir().children[ball].params.iter().find(|p| p.name == "rows").unwrap();
         assert!(rows_p.is_expr());
 
         // A rename carries the paste along.
         state.apply_action(McpAction::RenameNode { slot: sphere, new_name: "orb".into() }, &mut redraw).unwrap();
-        assert_eq!(state.current_dir().children[ball].params.iter().find(|p| p.name == "Rows").unwrap().text(), "chi(\"../orb/Rows\") * 2");
+        assert_eq!(state.current_dir().children[ball].params.iter().find(|p| p.name == "rows").unwrap().text(), "chi(\"../orb/rows\") * 2");
     }
 
     /// A code parameter never becomes an expression, however its text reads:
-    /// a one-line script that IS `ch("../a/Radius")` is a program to run,
+    /// a one-line script that IS `ch("../a/radius")` is a program to run,
     /// and flagging it would evaluate it to a number first. Neither the
     /// template loader nor a scripted set_param flags one.
     #[test]
     fn a_code_parameter_is_never_an_expression() {
         use crate::app::{infer_template_exprs, McpAction};
-        let mut node = ref_node("w", "w1", "wrangle", vec![("Code", "code", "ch(\"../a/Radius\")"), ("Radius", "slider", "ch(\"../a/Radius\")")], vec![]);
+        let mut node = ref_node("w", "w1", "wrangle", vec![("code", "code", "ch(\"../a/radius\")"), ("radius", "slider", "ch(\"../a/radius\")")], vec![]);
         for p in &mut node.params {
             p.set_expr(false);
         }
@@ -9880,8 +9966,8 @@ mod tests {
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Wrangle".into(), name: Some("k".into()), x: 3.0, y: 9.0 }, &mut redraw).unwrap();
         let k = state.current_dir().children.iter().position(|c| c.name == "k").unwrap();
-        state.apply_action(McpAction::SetParam { slot: k, name: "Code".into(), value: "chf(\"../sphere1/Radius\")".into() }, &mut redraw).unwrap();
-        let code = state.current_dir().children[k].params.iter().find(|p| p.name == "Code").unwrap();
+        state.apply_action(McpAction::SetParam { slot: k, name: "code".into(), value: "chf(\"../sphere1/radius\")".into() }, &mut redraw).unwrap();
+        let code = state.current_dir().children[k].params.iter().find(|p| p.name == "code").unwrap();
         assert!(!code.is_expr());
         assert_eq!(code.ty(), "code");
     }
@@ -9891,16 +9977,16 @@ mod tests {
     #[test]
     fn input_lookups_prefer_siblings() {
         let make = |id: &str, name: &str, radius: &str| {
-            let src = ref_node(&format!("{id}-src"), "src", "sphere", vec![("Radius", "slider", radius)], vec![]);
-            let out = ref_node(&format!("{id}-out"), "output1", "output", vec![("Input", "text", "src")], vec![]);
+            let src = ref_node(&format!("{id}-src"), "src", "sphere", vec![("radius", "slider", radius)], vec![]);
+            let out = ref_node(&format!("{id}-out"), "output1", "output", vec![("input", "text", "src")], vec![]);
             ref_node(id, name, "node", vec![], vec![src, out])
         };
         let root = ref_node("root", "root", "node", vec![], vec![make("a", "shape1", "0.3"), make("b", "shape2", "0.9")]);
         let (g, _) = eval(&root, &root.children[1]);
         assert!((radius_of(&g.unwrap()) - 0.9).abs() < 0.02, "shape2's output read shape1's src");
         // Sibling-first, then anywhere: a name with no sibling still resolves globally.
-        let global = ref_node("g", "global1", "sphere", vec![("Radius", "slider", "0.6")], vec![]);
-        let user = ref_node("u", "user1", "node", vec![], vec![ref_node("u-out", "output1", "output", vec![("Input", "text", "global1")], vec![])]);
+        let global = ref_node("g", "global1", "sphere", vec![("radius", "slider", "0.6")], vec![]);
+        let user = ref_node("u", "user1", "node", vec![], vec![ref_node("u-out", "output1", "output", vec![("input", "text", "global1")], vec![])]);
         let root2 = ref_node("root", "root", "node", vec![], vec![global, user]);
         let (g, _) = eval(&root2, &root2.children[1]);
         assert!((radius_of(&g.unwrap()) - 0.6).abs() < 0.02);
@@ -9912,13 +9998,13 @@ mod tests {
     #[test]
     fn switch_node_selects_one_of_its_inputs() {
         use crate::geometry::switch_input_param;
-        assert_eq!(switch_input_param(0), "Input");
-        assert_eq!(switch_input_param(1), "Input 2");
-        assert_eq!(switch_input_param(3), "Input 4");
-        let a = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.2")], vec![]);
-        let b = ref_node("b", "b1", "sphere", vec![("Radius", "slider", "0.7")], vec![]);
+        assert_eq!(switch_input_param(0), "input");
+        assert_eq!(switch_input_param(1), "input_2");
+        assert_eq!(switch_input_param(3), "input_4");
+        let a = ref_node("a", "a1", "sphere", vec![("radius", "slider", "0.2")], vec![]);
+        let b = ref_node("b", "b1", "sphere", vec![("radius", "slider", "0.7")], vec![]);
         let sw = |index: &str| ref_node("sw", "switch1", "switch",
-            vec![("Input", "text", "a1"), ("Input 2", "text", "b1"), ("Input 3", "text", ""), ("Input 4", "text", ""), ("Index", "spinbox", index)], vec![]);
+            vec![("input", "text", "a1"), ("input_2", "text", "b1"), ("input_3", "text", ""), ("input_4", "text", ""), ("index", "spinbox", index)], vec![]);
         let root = |index: &str| ref_node("root", "root", "node", vec![], vec![a.clone(), b.clone(), sw(index)]);
         let r = root("0");
         assert!((radius_of(&eval(&r, &r.children[2]).0.unwrap()) - 0.2).abs() < 0.02);
@@ -9944,14 +10030,14 @@ mod tests {
     /// that path too.
     #[test]
     fn a_choice_drives_a_switch_and_the_walk_sees_it() {
-        let a = ref_node("a", "small", "sphere", vec![("Radius", "slider", "0.2")], vec![]);
-        let b = ref_node("b", "big", "sphere", vec![("Radius", "slider", "0.7")], vec![]);
+        let a = ref_node("a", "small", "sphere", vec![("radius", "slider", "0.2")], vec![]);
+        let b = ref_node("b", "big", "sphere", vec![("radius", "slider", "0.7")], vec![]);
         let sw = ref_node("sw", "switch1", "switch",
-            vec![("Input", "text", "small"), ("Input 2", "text", "big"), ("Index", "spinbox", "chi(\"../Size\")")], vec![]);
-        let out = ref_node("o", "output1", "output", vec![("Input", "text", "switch1")], vec![]);
+            vec![("input", "text", "small"), ("input_2", "text", "big"), ("index", "spinbox", "chi(\"../size\")")], vec![]);
+        let out = ref_node("o", "output1", "output", vec![("input", "text", "switch1")], vec![]);
         let mut a = a; a.geometry_visible = false;
         let mut b = b; b.geometry_visible = false;
-        let sub = |size: &str| ref_node("sub", "pick1", "node", vec![("Size", "choice:Small,Big", size)], vec![a.clone(), b.clone(), sw.clone(), out.clone()]);
+        let sub = |size: &str| ref_node("sub", "pick1", "node", vec![("size", "choice:Small,Big", size)], vec![a.clone(), b.clone(), sw.clone(), out.clone()]);
         for (size, want) in [("Small", 0.2), ("Big", 0.7)] {
             let root = ref_node("root", "root", "node", vec![], vec![sub(size)]);
             let (g, err) = eval(&root, &root.children[0]);
@@ -9969,7 +10055,7 @@ mod tests {
         }
     }
 
-    /// A Sphere TEMPLATE instance reads its kernel's chf("Radius") through
+    /// A Sphere TEMPLATE instance reads its kernel's chf("radius") through
     /// its parent's parameter — and that parameter may be a reference to the
     /// subnet above, which has to be resolved before the kernel sees it.
     #[test]
@@ -9981,11 +10067,11 @@ mod tests {
         for c in &mut sphere.children {
             c.id = format!("sph_{}", c.name);
         }
-        let radius = sphere.params.iter_mut().find(|p| p.name == "Radius").unwrap();
-        radius.set_text("ch(\"../Radius\")");
+        let radius = sphere.params.iter_mut().find(|p| p.name == "radius").unwrap();
+        radius.set_text("ch(\"../radius\")");
         radius.set_expr(true);
-        let out = ref_node("o", "output1", "output", vec![("Input", "text", "sphere1")], vec![]);
-        let sub = ref_node("sub", "subnet1", "node", vec![("Input", "text", ""), ("Radius", "slider", "0.9")], vec![sphere, out]);
+        let out = ref_node("o", "output1", "output", vec![("input", "text", "sphere1")], vec![]);
+        let sub = ref_node("sub", "subnet1", "node", vec![("input", "text", ""), ("radius", "slider", "0.9")], vec![sphere, out]);
         let root = ref_node("root", "root", "node", vec![], vec![sub]);
         let (g, err) = eval(&root, &root.children[0]);
         assert!(err.is_none(), "{err:?}");
@@ -9999,11 +10085,11 @@ mod tests {
     #[test]
     fn param_display_shows_references_as_text() {
         let params = vec![
-            crate::app::ParamDef::new("Radius", "slider", "ch(\"../Radius\")").with_range(Some(0.0), Some(2.0)).as_expr(),
-            crate::app::ParamDef::new("Rows", "spinbox", "16").with_range(Some(2.0), Some(128.0)).with_step(Some(1.0)),
+            crate::app::ParamDef::new("radius", "slider", "ch(\"../radius\")").with_range(Some(0.0), Some(2.0)).as_expr(),
+            crate::app::ParamDef::new("rows", "spinbox", "16").with_range(Some(2.0), Some(128.0)).with_step(Some(1.0)),
         ];
         let rows = crate::app::param_display(&params);
-        assert_eq!(rows[0], ("Radius".to_string(), "ch(\"../Radius\")".to_string(), "text".to_string()));
+        assert_eq!(rows[0], ("radius".to_string(), "ch(\"../radius\")".to_string(), "text".to_string()));
         assert!(rows[1].2.starts_with("spinbox"));
     }
 
@@ -10044,15 +10130,15 @@ mod tests {
         assert!(convex_hull(&pts[..3]).is_none());
 
         // The node: a hull of the input's points; too few to hull passes through.
-        let src = ref_node("s", "src", "points", vec![("Shape", "text", "Spiral"), ("Points", "spinbox", "60"), ("Markers", "text", "false")], vec![]);
-        let hull_node = ref_node("h", "hull1", "hull", vec![("Input", "text", "src")], vec![]);
+        let src = ref_node("s", "src", "points", vec![("shape", "text", "Spiral"), ("points", "spinbox", "60"), ("markers", "text", "false")], vec![]);
+        let hull_node = ref_node("h", "hull1", "hull", vec![("input", "text", "src")], vec![]);
         let root = ref_node("root", "root", "node", vec![], vec![src, hull_node]);
         let (g, err) = eval(&root, &root.children[1]);
         assert!(err.is_none(), "{err:?}");
         let g = g.unwrap();
         assert!(g.num_prims() > 0 && g.is_closed(), "the spiral hulls into a closed mesh");
-        let line = ref_node("l", "line", "points", vec![("Shape", "text", "Line"), ("Points", "spinbox", "5"), ("Markers", "text", "false")], vec![]);
-        let hull2 = ref_node("h2", "hull2", "hull", vec![("Input", "text", "line")], vec![]);
+        let line = ref_node("l", "line", "points", vec![("shape", "text", "Line"), ("points", "spinbox", "5"), ("markers", "text", "false")], vec![]);
+        let hull2 = ref_node("h2", "hull2", "hull", vec![("input", "text", "line")], vec![]);
         let root2 = ref_node("root", "root", "node", vec![], vec![line, hull2]);
         let g = eval(&root2, &root2.children[1]).0.unwrap();
         assert_eq!((g.num_points(), g.num_prims()), (5, 0), "a line of points passes through unhulled");
@@ -10077,11 +10163,11 @@ mod tests {
         assert!(scatter_on_surface(&Detail::new(), 10, 1.0).is_empty());
 
         let scatter = |relax: &str| {
-            let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "0.5")], vec![]);
+            let src = ref_node("s", "src", "sphere", vec![("radius", "slider", "0.5")], vec![]);
             let sc = ref_node("sc", "scatter1", "scatter", vec![
-                ("Input", "text", "src"), ("Mode", "choice:Volume,Surface", "Surface"), ("Points", "spinbox", "80"),
-                ("Seed", "slider", "1.1"), ("Relax Points", "toggle", relax), ("Relax Iterations", "spinbox", "30"),
-                ("Markers", "choice:true,false", "false"),
+                ("input", "text", "src"), ("mode", "choice:Volume,Surface", "Surface"), ("points", "spinbox", "80"),
+                ("seed", "slider", "1.1"), ("relax_points", "toggle", relax), ("relax_iterations", "spinbox", "30"),
+                ("markers", "choice:true,false", "false"),
             ], vec![]);
             let root = ref_node("root", "root", "node", vec![], vec![src, sc]);
             let (g, err) = eval(&root, &root.children[1]);
@@ -10118,10 +10204,10 @@ mod tests {
     #[test]
     fn relax_repel_mode_keeps_points_in_their_tangent_planes() {
         let relax = |in_3d: &str, iterations: &str| {
-            let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "0.5")], vec![]);
+            let src = ref_node("s", "src", "sphere", vec![("radius", "slider", "0.5")], vec![]);
             let rx = ref_node("r", "relax1", "relax", vec![
-                ("Input", "text", "src"), ("Mode", "choice:Springs,Repel", "Repel"), ("Iterations", "spinbox", iterations),
-                ("Radius", "slider", "0.08"), ("In 3D Space", "toggle", in_3d),
+                ("input", "text", "src"), ("mode", "choice:Springs,Repel", "Repel"), ("iterations", "spinbox", iterations),
+                ("radius", "slider", "0.08"), ("in_3d_space", "toggle", in_3d),
             ], vec![]);
             let root = ref_node("root", "root", "node", vec![], vec![src, rx]);
             (eval(&root, &root.children[1]).0.unwrap(), eval(&root, &root.children[0]).0.unwrap())
@@ -10163,8 +10249,8 @@ mod tests {
         // resolved children, kernel node params included.
         let sphere1 = t.children.iter().find(|c| c.name == "sphere1").unwrap();
         assert_eq!(sphere1.node_type, "sphere", "the nested sphere is the native Sphere");
-        assert!(sphere1.params.iter().any(|p| p.name == "Method"), "with its template's whole surface");
-        assert!(sphere1.params.iter().find(|p| p.name == "Radius").unwrap().is_expr(), "and the Embryo's reference on its Radius");
+        assert!(sphere1.params.iter().any(|p| p.name == "method"), "with its template's whole surface");
+        assert!(sphere1.params.iter().find(|p| p.name == "radius").unwrap().is_expr(), "and the Embryo's reference on its Radius");
 
         let instance = |overrides: &[(&str, &str)], extra: Vec<FsNode>| {
             let mut inst = t.clone();
@@ -10189,27 +10275,27 @@ mod tests {
         assert!(basic.num_prims() > 0);
         assert!((extent(&basic) - 0.5).abs() < 0.02, "Basic is the internal sphere of Radius 0.5: {}", extent(&basic));
         assert!(basic.points().value("N", 0).is_some(), "normals are written last");
-        let big = run(&instance(&[("Radius", "1.5"), ("Base Resolution", "8")], vec![]));
+        let big = run(&instance(&[("radius", "1.5"), ("base_resolution", "8")], vec![]));
         assert!((extent(&big) - 1.5).abs() < 0.05, "Radius reaches the sphere through chf: {}", extent(&big));
         assert!(big.num_points() < basic.num_points(), "Base Resolution reaches Rows and Columns through chi");
 
-        let scattered = run(&instance(&[("Method", "Scatter"), ("Scatter Count", "400"), ("Base Resolution", "16")], vec![]));
+        let scattered = run(&instance(&[("method", "Scatter"), ("scatter_count", "400"), ("base_resolution", "16")], vec![]));
         assert!(scattered.num_prims() > 0 && scattered.is_closed(), "Scatter hulls the points into a closed mesh");
         assert!(scattered.num_points() <= 400);
         assert!(extent(&scattered) <= 0.5 + 1e-3, "the hull lies inside the seed sphere");
         assert!(scattered.points().value("N", 0).is_some());
 
-        let seed = ref_node("seed", "seed", "sphere", vec![("Radius", "slider", "0.25")], vec![]);
-        let root = instance(&[("Source", "Input"), ("Input", "seed")], vec![seed]);
+        let seed = ref_node("seed", "seed", "sphere", vec![("radius", "slider", "0.25")], vec![]);
+        let root = instance(&[("source", "Input"), ("input", "seed")], vec![seed]);
         let from_input = run(&root);
         let seed_geom = eval(&root, &root.children[0]).0.unwrap();
         assert_eq!(from_input.num_points(), seed_geom.num_points(), "Source Input is the wired node");
         assert!((from_input.pos(0) - seed_geom.pos(0)).length() < 1e-6);
-        let e = instance(&[("Source", "Input")], vec![]);
+        let e = instance(&[("source", "Input")], vec![]);
         assert!(eval(&e, &e.children[0]).0.is_none(), "Source Input with nothing wired seeds nothing");
 
-        let coarse = run(&instance(&[("Base Resolution", "8")], vec![]));
-        let sub = run(&instance(&[("Base Resolution", "8"), ("Subdivision Depth", "1")], vec![]));
+        let coarse = run(&instance(&[("base_resolution", "8")], vec![]));
+        let sub = run(&instance(&[("base_resolution", "8"), ("subdivision_depth", "1")], vec![]));
         // Against the real subdivide of the same mesh rather than ×4: the
         // kernel sphere's pole triangles are degenerate and subdivide drops
         // them.
@@ -10225,7 +10311,7 @@ mod tests {
         let param = |n: &str, v: &str| crate::app::ParamDef::new(n, "text", v);
         let meta = ref_node("m", "meta", "meta", vec![("Point Markers", "toggle", "true")], vec![]);
         let mut native = ref_node("old-id", "embryo1", "embryo", vec![], vec![meta]);
-        native.params = vec![param("Input", ""), param("Method", "Scatter"), param("Scatter Count", "150"), param("Radius", "0.7"), param("Base Resolution", "16")];
+        native.params = vec![param("input", ""), param("method", "Scatter"), param("scatter_count", "150"), param("radius", "0.7"), param("base_resolution", "16")];
         native.position = (3.0, 4.0);
         native.geometry_visible = true;
         let mut root = ref_node("root", "root", "node", vec![], vec![native]);
@@ -10234,10 +10320,10 @@ mod tests {
         assert_eq!(e.node_type, "node", "recomposed as a subnet");
         assert_eq!((e.id.as_str(), e.name.as_str(), e.position, e.geometry_visible), ("old-id", "embryo1", (3.0, 4.0), true));
         let get = |n: &str| e.params.iter().find(|p| p.name == n).unwrap().text().to_string();
-        assert_eq!(get("Method"), "Scatter");
-        assert_eq!(get("Scatter Count"), "150");
-        assert_eq!(get("Radius"), "0.7");
-        assert_eq!(get("Scatter Seed"), "1.1", "a param the native node lacked takes the template default");
+        assert_eq!(get("method"), "Scatter");
+        assert_eq!(get("scatter_count"), "150");
+        assert_eq!(get("radius"), "0.7");
+        assert_eq!(get("scatter_seed"), "1.1", "a param the native node lacked takes the template default");
         assert!(e.children.iter().any(|c| c.name == "hull1"));
         // The per-node meta child an older save carried is stripped, here as
         // everywhere else: merge_template_defs takes them before it matches
@@ -10271,17 +10357,17 @@ mod tests {
                 outputs: 1,
             }
         }
-        let sphere = mnode("id-s", "sphere1", "sphere", &[("Radius", "0.8")]);
+        let sphere = mnode("id-s", "sphere1", "sphere", &[("radius", "0.8")]);
         let shell = mnode(
             "id-m",
             "mold1",
             "mold_shell",
             &[
-                ("Input", "sphere1"),
-                ("Maximum Thickness", "0.20"),
-                ("Minimum Thickness", "0.10"),
-                ("Remesh Division Size", "0.30"),
-                ("Ramp", "Linear"),
+                ("input", "sphere1"),
+                ("maximum_thickness", "0.20"),
+                ("minimum_thickness", "0.10"),
+                ("remesh_division_size", "0.30"),
+                ("ramp", "Linear"),
             ],
         );
         let mut root = mnode("id-root", "root", "node", &[]);
@@ -10705,7 +10791,7 @@ mod tests {
         // triangles.
         let root = modelling_root(
             "1.0",
-            vec![phase3_node("polygon", &[("Sides", "5"), ("Fill", "false")])],
+            vec![phase3_node("polygon", &[("sides", "5"), ("fill", "false")])],
         );
         let (ring, _) = eval_node(&root, "polygon 1");
         let text = obj(&ring, 1.0, "ring");
@@ -10779,7 +10865,7 @@ mod tests {
     /// A root holding a native sphere plus the nodes described, each already
     /// named "<type> 1" by `phase3_node`.
     fn modelling_root(radius: &str, nodes: Vec<FsNode>) -> FsNode {
-        let mut children = vec![phase3_node("sphere", &[("Radius", radius)])];
+        let mut children = vec![phase3_node("sphere", &[("radius", radius)])];
         children.extend(nodes);
         FsNode {
             id: "root".into(),
@@ -10799,7 +10885,7 @@ mod tests {
     fn test_normal_publishes_the_surface_normal_as_data() {
         let root = modelling_root(
             "1.0",
-            vec![phase3_node("normal", &[("Input", "sphere 1"), ("Attribute", "N")])],
+            vec![phase3_node("normal", &[("input", "sphere 1"), ("attribute", "N")])],
         );
         let (g, err) = eval_node(&root, "normal 1");
         assert!(err.is_none(), "{err:?}");
@@ -10822,7 +10908,7 @@ mod tests {
 
         let flipped = modelling_root(
             "1.0",
-            vec![phase3_node("normal", &[("Input", "sphere 1"), ("Flip", "true")])],
+            vec![phase3_node("normal", &[("input", "sphere 1"), ("flip", "true")])],
         );
         let (f, _) = eval_node(&flipped, "normal 1");
         let (lo, hi) = f.bounds().unwrap();
@@ -10871,7 +10957,7 @@ mod tests {
         // Through the node.
         let root = modelling_root(
             "1.0",
-            vec![phase3_node("normal", &[("Input", "sphere 1"), ("Class", "Vertices"), ("Cusp Angle", "180"), ("Flip", "true")])],
+            vec![phase3_node("normal", &[("input", "sphere 1"), ("class", "Vertices"), ("cusp_angle", "180"), ("flip", "true")])],
         );
         let (g, err) = eval_node(&root, "normal 1");
         assert!(err.is_none(), "{err:?}");
@@ -10910,7 +10996,7 @@ mod tests {
     fn test_bounds_measures_into_detail_attributes() {
         let root = modelling_root(
             "2.0",
-            vec![phase3_node("bounds", &[("Input", "sphere 1"), ("Prefix", "bb")])],
+            vec![phase3_node("bounds", &[("input", "sphere 1"), ("prefix", "bb")])],
         );
         let (g, err) = eval_node(&root, "bounds 1");
         assert!(err.is_none(), "{err:?}");
@@ -10936,10 +11022,10 @@ mod tests {
                 phase3_node(
                     "distance",
                     &[
-                        ("Input", "points 1"),
-                        ("To", "sphere 1"),
-                        ("Attribute", "dist"),
-                        ("Direction", "toward"),
+                        ("input", "points 1"),
+                        ("to", "sphere 1"),
+                        ("attribute", "dist"),
+                        ("direction", "toward"),
                     ],
                 ),
             ],
@@ -10948,7 +11034,7 @@ mod tests {
         // lays them along X.
         root.children[1]
             .params
-            .push(crate::app::ParamDef::new("Shape", "text", "Line"));
+            .push(crate::app::ParamDef::new("shape", "text", "Line"));
 
         let (g, err) = eval_node(&root, "distance 1");
         assert!(err.is_none(), "{err:?}");
@@ -10974,7 +11060,7 @@ mod tests {
         // A missing target is reported rather than silently writing zeros.
         let broken = modelling_root(
             "1.0",
-            vec![phase3_node("distance", &[("Input", "sphere 1"), ("To", "nope")])],
+            vec![phase3_node("distance", &[("input", "sphere 1"), ("to", "nope")])],
         );
         let (_, err) = eval_node(&broken, "distance 1");
         assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
@@ -11002,7 +11088,7 @@ mod tests {
         let mut geom = two_pieces();
         let big = sphere_detail(Vec3::ZERO, 1.0, 8, 12).num_points();
 
-        let node = phase3_node("connectivity", &[("Attribute", "piece")]);
+        let node = phase3_node("connectivity", &[("attribute", "piece")]);
         // Exercised through the resolver's own labelling by hand, since the
         // input is built here rather than by a graph.
         let root = modelling_root("1.0", vec![node]);
@@ -11040,7 +11126,7 @@ mod tests {
         // ordered, which is what makes "keep the largest" an ordinary Cull.
         let mut err = None;
         let g = {
-            let n = phase3_node("connectivity", &[("Attribute", "piece")]);
+            let n = phase3_node("connectivity", &[("attribute", "piece")]);
             crate::geometry::apply_connectivity_for_test(&mut geom, &n, &mut err);
             geom
         };
@@ -11055,15 +11141,15 @@ mod tests {
         let root = modelling_root(
             "1.0",
             vec![
-                phase3_node("connectivity", &[("Input", "sphere 1"), ("Attribute", "piece")]),
+                phase3_node("connectivity", &[("input", "sphere 1"), ("attribute", "piece")]),
                 phase3_node(
                     "cull",
                     &[
-                        ("Input", "connectivity 1"),
-                        ("Attribute", "piece"),
-                        ("Comparison", "Below"),
-                        ("Threshold", "1.00"),
-                        ("Invert", "false"),
+                        ("input", "connectivity 1"),
+                        ("attribute", "piece"),
+                        ("comparison", "Below"),
+                        ("threshold", "1.00"),
+                        ("invert", "false"),
                     ],
                 ),
             ],
@@ -11084,7 +11170,7 @@ mod tests {
             .unwrap()
             .params
             .iter_mut()
-            .find(|p| p.name == "Invert")
+            .find(|p| p.name == "invert")
             .unwrap()
             .set_text("true");
         let (kept, _) = eval_node(&kept_root, "cull 1");
@@ -11094,14 +11180,14 @@ mod tests {
         // A missing attribute is reported, and nothing is deleted on a guess.
         let broken = modelling_root(
             "1.0",
-            vec![phase3_node("cull", &[("Input", "sphere 1"), ("Attribute", "nope")])],
+            vec![phase3_node("cull", &[("input", "sphere 1"), ("attribute", "nope")])],
         );
         let (g, err) = eval_node(&broken, "cull 1");
         assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
         assert!(g.num_points() > 0, "nothing should be culled on an error");
 
         // With neither a group nor an attribute there is no selection at all.
-        let idle = modelling_root("1.0", vec![phase3_node("cull", &[("Input", "sphere 1")])]);
+        let idle = modelling_root("1.0", vec![phase3_node("cull", &[("input", "sphere 1")])]);
         let (g, _) = eval_node(&idle, "cull 1");
         assert_eq!(g.num_points(), sphere_detail(Vec3::ZERO, 1.0, 16, 24).num_points());
     }
@@ -11147,14 +11233,14 @@ mod tests {
         let root = modelling_root(
             "1.0",
             vec![
-                phase3_node("points", &[("Shape", "Line"), ("Points", "6"), ("Markers", "false")]),
+                phase3_node("points", &[("shape", "Line"), ("points", "6"), ("markers", "false")]),
                 phase3_node(
                     "transfer",
                     &[
-                        ("Input", "points 1"),
-                        ("From", "sphere 1"),
-                        ("Attributes", "N"),
-                        ("Maximum Distance", "0.00"),
+                        ("input", "points 1"),
+                        ("from", "sphere 1"),
+                        ("attributes", "N"),
+                        ("maximum_distance", "0.00"),
                     ],
                 ),
             ],
@@ -11178,7 +11264,7 @@ mod tests {
             .unwrap()
             .params
             .iter_mut()
-            .find(|p| p.name == "Maximum Distance")
+            .find(|p| p.name == "maximum_distance")
             .unwrap()
             .set_text("0.01");
         let (g, _) = eval_node(&limited, "transfer 1");
@@ -11192,7 +11278,7 @@ mod tests {
         // nothing.
         let broken = modelling_root(
             "1.0",
-            vec![phase3_node("transfer", &[("Input", "sphere 1"), ("From", "nope")])],
+            vec![phase3_node("transfer", &[("input", "sphere 1"), ("from", "nope")])],
         );
         let (_, err) = eval_node(&broken, "transfer 1");
         assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
@@ -11251,10 +11337,10 @@ mod tests {
         assert_eq!(member(&far, "top"), vec![true, true, true, true], "nothing within 0.05: nothing moves");
 
         // The nodes. A sphere with a group and an attribute is the source.
-        let up = phase3_node("group", &[("Input", "sphere 1"), ("Group Name", "top"), ("Mode", "Box"), ("Center", "-1.875:1.55:0.00"), ("Size", "4.00:2.00:4.00")]);
-        let tagged = phase3_node("attribute", &[("Input", "group 1"), ("Operation", "Create"), ("Attribute Name", "mass"), ("Type", "Float"), ("Value", "3")]);
-        let line = phase3_node("points", &[("Shape", "Line"), ("Points", "6"), ("Markers", "false")]);
-        let mut transfer = phase3_node("transfer", &[("Input", "points 1"), ("From", "attribute 1"), ("Attributes", "mass"), ("Transfer Groups", "true"), ("Groups", ""), ("Maximum Distance", "0.00")]);
+        let up = phase3_node("group", &[("input", "sphere 1"), ("group_name", "top"), ("mode", "Box"), ("center", "-1.875:1.55:0.00"), ("size", "4.00:2.00:4.00")]);
+        let tagged = phase3_node("attribute", &[("input", "group 1"), ("operation", "Create"), ("attribute_name", "mass"), ("type", "Float"), ("value", "3")]);
+        let line = phase3_node("points", &[("shape", "Line"), ("points", "6"), ("markers", "false")]);
+        let mut transfer = phase3_node("transfer", &[("input", "points 1"), ("from", "attribute 1"), ("attributes", "mass"), ("transfer_groups", "true"), ("groups", ""), ("maximum_distance", "0.00")]);
         let with = |t: FsNode| modelling_root("1.0", vec![up.clone(), tagged.clone(), line.clone(), t]);
         let (src, err) = eval_node(&with(transfer.clone()), "attribute 1");
         assert!(err.is_none(), "{err:?}");
@@ -11265,10 +11351,10 @@ mod tests {
         assert!(g.points().has_group("top") && g.points().has("mass"), "the group and the attribute were carried");
 
         // Off, no group moves — and a node without the row is off.
-        transfer.params.iter_mut().find(|p| p.name == "Transfer Groups").unwrap().set_text("false");
+        transfer.params.iter_mut().find(|p| p.name == "transfer_groups").unwrap().set_text("false");
         let (g, _) = eval_node(&with(transfer.clone()), "transfer 1");
         assert!(!g.points().has_group("top") && g.points().has("mass"), "nothing carried with the switch off");
-        transfer.params.retain(|p| p.name != "Transfer Groups" && p.name != "Groups");
+        transfer.params.retain(|p| p.name != "transfer_groups" && p.name != "groups");
         let (g, _) = eval_node(&with(transfer.clone()), "transfer 1");
         assert!(!g.points().has_group("top"), "a node from before the row carries none");
 
@@ -11277,7 +11363,7 @@ mod tests {
         // Both ways a remesh is: the native node, and the subnet whose
         // Transfer node reads From through an expression and finds a node
         // beside the subnet, not inside it.
-        let rows = [("Input", "attribute 1"), ("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0.0"), ("Transfer", "true"), ("From", ""), ("Attributes", ""), ("Transfer Groups", "true"), ("Groups", "")];
+        let rows = [("input", "attribute 1"), ("target_length", "0.5"), ("iterations", "3"), ("relax", "0.0"), ("transfer", "true"), ("from", ""), ("attributes", ""), ("transfer_groups", "true"), ("groups", "")];
         let templates = crate::app::load_fs_tree();
         let mut composed = templates.children.iter().find(|t| t.name == "Remesh").unwrap().clone();
         crate::app::regenerate_node_ids(&mut composed);
@@ -11301,7 +11387,7 @@ mod tests {
         // Off, the remesh carries what a remesh carries: the group through
         // its splits and collapses, as before this row.
         let mut off = remesh.clone();
-        off.params.iter_mut().find(|p| p.name == "Transfer").unwrap().set_text("false");
+        off.params.iter_mut().find(|p| p.name == "transfer").unwrap().set_text("false");
         let (plain, err) = eval_node(&with(off), "remesh 1");
         assert!(err.is_none(), "{err:?}");
         assert!(plain.points().has_group("top"));
@@ -11309,13 +11395,13 @@ mod tests {
         // so there is nothing to lay over the remeshed sphere and it is as
         // the remesh left it.
         let mut from_line = remesh.clone();
-        from_line.params.iter_mut().find(|p| p.name == "From").unwrap().set_text("points 1");
+        from_line.params.iter_mut().find(|p| p.name == "from").unwrap().set_text("points 1");
         let (g, err) = eval_node(&with(from_line), "remesh 1");
         assert!(err.is_none(), "{err:?}");
         assert_eq!(g.points().group_members("top"), plain.points().group_members("top"), "a source without the group leaves it as it was");
         // A From it cannot resolve is said.
         let mut broken = remesh.clone();
-        broken.params.iter_mut().find(|p| p.name == "From").unwrap().set_text("nope");
+        broken.params.iter_mut().find(|p| p.name == "from").unwrap().set_text("nope");
         let (_, err) = eval_node(&with(broken), "remesh 1");
         assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
         }
@@ -11326,7 +11412,7 @@ mod tests {
         use crate::remesh::{remesh, Settings};
         let root = modelling_root(
             "1.0",
-            vec![phase3_node("valence", &[("Input", "sphere 1"), ("Attribute", "valence")])],
+            vec![phase3_node("valence", &[("input", "sphere 1"), ("attribute", "valence")])],
         );
         let (g, err) = eval_node(&root, "valence 1");
         assert!(err.is_none(), "{err:?}");
@@ -11359,7 +11445,7 @@ mod tests {
         let base = sphere_detail(Vec3::ZERO, 1.0, 10, 14);
         let run = |mode: &str, amount: &str| {
             let mut g = base.clone();
-            let node = phase3_node("deform", &[("Mode", mode), ("Axis", "Y"), ("Amount", amount)]);
+            let node = phase3_node("deform", &[("mode", mode), ("axis", "Y"), ("amount", amount)]);
             crate::geometry::apply_deform(&mut g, &node);
             g
         };
@@ -11419,7 +11505,7 @@ mod tests {
         // because the markers were the only points there were.
         let markers = modelling_root(
             "1.0",
-            vec![phase3_node("points", &[("Shape", "Line"), ("Points", "5")])],
+            vec![phase3_node("points", &[("shape", "Line"), ("points", "5")])],
         );
         let (with, _) = eval_node(&markers, "points 1");
         assert!(with.num_prims() > 0, "markers are geometry");
@@ -11429,7 +11515,7 @@ mod tests {
             "1.0",
             vec![phase3_node(
                 "points",
-                &[("Shape", "Line"), ("Points", "5"), ("Markers", "false")],
+                &[("shape", "Line"), ("points", "5"), ("markers", "false")],
             )],
         );
         let (without, _) = eval_node(&bare, "points 1");
@@ -11439,7 +11525,7 @@ mod tests {
         // Default is unchanged, so no existing project looks different.
         let defaulted = modelling_root(
             "1.0",
-            vec![phase3_node("points", &[("Shape", "Line"), ("Points", "5")])],
+            vec![phase3_node("points", &[("shape", "Line"), ("points", "5")])],
         );
         assert_eq!(eval_node(&defaulted, "points 1").0.num_points(), with.num_points());
     }
@@ -11449,8 +11535,8 @@ mod tests {
         let root = modelling_root(
             "0.2",
             vec![
-                phase3_node("points", &[("Shape", "Line"), ("Points", "5")]),
-                phase3_node("copy", &[("Input", "sphere 1"), ("To", "points 1")]),
+                phase3_node("points", &[("shape", "Line"), ("points", "5")]),
+                phase3_node("copy", &[("input", "sphere 1"), ("to", "points 1")]),
             ],
         );
         let (src, _) = eval_node(&root, "sphere 1");
@@ -11491,17 +11577,17 @@ mod tests {
         let mut root = modelling_root(
             "0.2",
             vec![
-                phase3_node("points", &[("Shape", "Line"), ("Points", "4")]),
+                phase3_node("points", &[("shape", "Line"), ("points", "4")]),
                 phase3_node(
                     "normal",
-                    &[("Input", "points 1"), ("Attribute", "N")],
+                    &[("input", "points 1"), ("attribute", "N")],
                 ),
                 phase3_node(
                     "copy",
                     &[
-                        ("Input", "sphere 1"),
-                        ("To", "points 1"),
-                        ("Scale", "2.00"),
+                        ("input", "sphere 1"),
+                        ("to", "points 1"),
+                        ("scale", "2.00"),
                     ],
                 ),
             ],
@@ -11516,7 +11602,7 @@ mod tests {
             .unwrap()
             .params
             .iter_mut()
-            .find(|p| p.name == "Scale")
+            .find(|p| p.name == "scale")
             .unwrap()
             .set_text("0.50");
         let (small, _) = eval_node(&root, "copy 1");
@@ -11529,8 +11615,8 @@ mod tests {
         let huge = modelling_root(
             "1.0",
             vec![
-                phase3_node("points", &[("Shape", "Grid"), ("Points", "9000")]),
-                phase3_node("copy", &[("Input", "sphere 1"), ("To", "points 1")]),
+                phase3_node("points", &[("shape", "Grid"), ("points", "9000")]),
+                phase3_node("copy", &[("input", "sphere 1"), ("to", "points 1")]),
             ],
         );
         let (g, err) = eval_node(&huge, "copy 1");
@@ -11554,11 +11640,11 @@ mod tests {
         let node = phase3_node(
             "soft_transform",
             &[
-                ("Translation", "0.00:1.00:0.00"),
-                ("Group", "top"),
-                ("Radius", "0.80"),
-                ("Falloff", "Smooth"),
-                ("Attribute", "falloff"),
+                ("translation", "0.00:1.00:0.00"),
+                ("group", "top"),
+                ("radius", "0.80"),
+                ("falloff", "Smooth"),
+                ("attribute", "falloff"),
             ],
         );
         crate::geometry::apply_soft_transform(&mut sphere, &node);
@@ -11603,7 +11689,7 @@ mod tests {
         let before: Vec<Vec3> = (0..sphere.num_points()).map(|p| sphere.pos(p)).collect();
         let node = phase3_node(
             "soft_transform",
-            &[("Translation", "0.00:0.50:0.00"), ("Group", "ring"), ("Radius", "0.30")],
+            &[("translation", "0.00:0.50:0.00"), ("group", "ring"), ("radius", "0.30")],
         );
         crate::geometry::apply_soft_transform(&mut sphere, &node);
 
@@ -11625,21 +11711,21 @@ mod tests {
         let root = modelling_root(
             "1.0",
             vec![
-                phase3_node("connectivity", &[("Input", "sphere 1"), ("Attribute", "piece")]),
+                phase3_node("connectivity", &[("input", "sphere 1"), ("attribute", "piece")]),
                 phase3_node(
                     "normal",
-                    &[("Input", "connectivity 1"), ("Attribute", "N")],
+                    &[("input", "connectivity 1"), ("attribute", "N")],
                 ),
                 phase3_node(
                     "group",
                     &[
-                        ("Input", "normal 1"),
-                        ("Group Name", "up"),
-                        ("Mode", "Attribute"),
-                        ("Attribute", "N"),
-                        ("Comparison", "Above"),
-                        ("Threshold", "0.50"),
-                        ("Highlight", "false"),
+                        ("input", "normal 1"),
+                        ("group_name", "up"),
+                        ("mode", "Attribute"),
+                        ("attribute", "N"),
+                        ("comparison", "Above"),
+                        ("threshold", "0.50"),
+                        ("highlight", "false"),
                     ],
                 ),
             ],
@@ -11661,12 +11747,12 @@ mod tests {
         grown_root.children.push(phase3_node(
             "group",
             &[
-                ("Input", "group 1"),
-                ("Group Name", "wider"),
-                ("Mode", "Expand"),
-                ("Source Group", "up"),
-                ("Rings", "2"),
-                ("Highlight", "false"),
+                ("input", "group 1"),
+                ("group_name", "wider"),
+                ("mode", "Expand"),
+                ("source_group", "up"),
+                ("rings", "2"),
+                ("highlight", "false"),
             ],
         ));
         grown_root.children.last_mut().unwrap().name = "group 2".into();
@@ -11688,7 +11774,7 @@ mod tests {
             .unwrap()
             .params
             .iter_mut()
-            .find(|p| p.name == "Rings")
+            .find(|p| p.name == "rings")
             .unwrap()
             .set_text("-1");
         let (shrunk, _) = eval_node(&shrunk_root, "group 2");
@@ -11771,14 +11857,14 @@ mod tests {
         }
 
         let tagged = [
-            phase3_node("group", &[("Input", "sphere 1"), ("Group Name", "top"), ("Mode", "Box"), ("Center", "-1.875:1.55:0.00"), ("Size", "4.00:2.00:4.00")]),
-            phase3_node("attribute", &[("Input", "group 1"), ("Operation", "Create"), ("Attribute Name", "mass"), ("Type", "Float"), ("Value", "3")]),
+            phase3_node("group", &[("input", "sphere 1"), ("group_name", "top"), ("mode", "Box"), ("center", "-1.875:1.55:0.00"), ("size", "4.00:2.00:4.00")]),
+            phase3_node("attribute", &[("input", "group 1"), ("operation", "Create"), ("attribute_name", "mass"), ("type", "Float"), ("value", "3")]),
         ];
         let native = |name: &str, input: &str, s: &[(&str, &str)]| {
-            let mut n = phase3_node("remesh", &[("Input", input)]);
+            let mut n = phase3_node("remesh", &[("input", input)]);
             n.id = format!("id-{name}");
             n.name = name.into();
-            for (k, v) in s.iter().chain([("Split", "true"), ("Collapse", "true"), ("Flip", "true"), ("Project", "true")].iter()) {
+            for (k, v) in s.iter().chain([("Split", "true"), ("Collapse", "true"), ("flip", "true"), ("Project", "true")].iter()) {
                 n.params.push(crate::app::ParamDef::new(*k, "text", *v));
             }
             n
@@ -11787,7 +11873,7 @@ mod tests {
             let mut n = t.clone();
             crate::app::regenerate_node_ids(&mut n);
             n.name = name.into();
-            n.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text(input.to_string());
+            n.params.iter_mut().find(|p| p.name == "input").unwrap().set_text(input.to_string());
             for (k, v) in s {
                 n.params.iter_mut().find(|p| p.name == *k).unwrap_or_else(|| panic!("the subnet has {k}")).set_text(v.to_string());
             }
@@ -11800,9 +11886,9 @@ mod tests {
             assert!(a == b, "{what}: attributes, groups or the id counter");
         };
         for settings in [
-            vec![("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0.5"), ("Transfer", "false")],
-            vec![("Target Length", "0.25"), ("Iterations", "4"), ("Relax", "0.04"), ("Transfer", "true")],
-            vec![("Target Length", "0.8"), ("Iterations", "2"), ("Relax", "1.0"), ("Transfer", "true"), ("Transfer Groups", "true")],
+            vec![("target_length", "0.5"), ("iterations", "3"), ("relax", "0.5"), ("transfer", "false")],
+            vec![("target_length", "0.25"), ("iterations", "4"), ("relax", "0.04"), ("transfer", "true")],
+            vec![("target_length", "0.8"), ("iterations", "2"), ("relax", "1.0"), ("transfer", "true"), ("transfer_groups", "true")],
         ] {
             let mut children = tagged.to_vec();
             children.push(native("native1", "attribute 1", &settings));
@@ -11821,7 +11907,7 @@ mod tests {
         }
 
         // No relaxation, and a mesh already at its length: the input back.
-        let settings = [("Target Length", "0.5"), ("Iterations", "3"), ("Relax", "0"), ("Transfer", "false")];
+        let settings = [("target_length", "0.5"), ("iterations", "3"), ("relax", "0"), ("transfer", "false")];
         let root = modelling_root("1.0", vec![
             subnet("remesh1", "sphere 1", &settings),
             subnet("remesh2", "remesh1", &settings),
@@ -11844,8 +11930,8 @@ mod tests {
     fn a_native_remesh_recomposes_on_load() {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
-        let mut old = phase3_node("remesh", &[("Input", "sphere 1"), ("Target Length", "0.3"), ("Iterations", "2"), ("Relax", "0.04"),
-            ("Split", "false"), ("Collapse", "true"), ("Flip", "true"), ("Project", "true"), ("Transfer", "true"), ("From", "")]);
+        let mut old = phase3_node("remesh", &[("input", "sphere 1"), ("target_length", "0.3"), ("iterations", "2"), ("relax", "0.04"),
+            ("split", "false"), ("collapse", "true"), ("flip", "true"), ("project", "true"), ("transfer", "true"), ("from", "")]);
         old.id = "old-id".into();
         old.name = "remesh1".into();
         old.position = (2.0, 5.0);
@@ -11856,10 +11942,10 @@ mod tests {
             assert_eq!(r.node_type, "node", "recomposed as a subnet, nested ones too");
             assert!(r.is_enterable());
             let get = |n: &str| r.params.iter().find(|p| p.name == n).map(|p| p.text().to_string());
-            assert_eq!(get("Target Length").as_deref(), Some("0.3"));
-            assert_eq!(get("Relax").as_deref(), Some("0.04"));
-            assert_eq!(get("Transfer").as_deref(), Some("true"));
-            assert_eq!(get("Split"), None, "the pass switches are nodes now");
+            assert_eq!(get("target_length").as_deref(), Some("0.3"));
+            assert_eq!(get("relax").as_deref(), Some("0.04"));
+            assert_eq!(get("transfer").as_deref(), Some("true"));
+            assert_eq!(get("split"), None, "the pass switches are nodes now");
             let repeat = r.children.iter().find(|c| c.name == "repeat1").unwrap();
             let bypassed: Vec<&str> = repeat.children.iter().filter(|c| c.bypassed).map(|c| c.name.as_str()).collect();
             assert_eq!(bypassed, ["split1"], "Split was off");
@@ -11899,13 +11985,13 @@ mod tests {
             }
         }
         let mut root = modelling_root("1.0", vec![old]);
-        root.children[1].params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("sphere 1");
+        root.children[1].params.iter_mut().find(|p| p.name == "input").unwrap().set_text("sphere 1");
         crate::app::merge_template_defs(&mut root, &templates);
         let r = &root.children[1];
         let names: Vec<&str> = r.children.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["input1", "repeat1", "transfer1", "transfer_switch1", "output1"]);
         let out = r.children.iter().find(|c| c.name == "output1").unwrap();
-        assert_eq!(out.params.iter().find(|p| p.name == "Input").unwrap().text(), "transfer_switch1");
+        assert_eq!(out.params.iter().find(|p| p.name == "input").unwrap().text(), "transfer_switch1");
         let (g, err) = eval_node(&root, "remesh1");
         assert!(err.is_none() && g.num_points() > 0, "{err:?}");
     }
@@ -11925,9 +12011,9 @@ mod tests {
         crate::app::regenerate_node_ids(&mut repeat);
         repeat.name = "repeat1".into();
         repeat.geometry_visible = true;
-        repeat.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("sphere 1");
-        repeat.params.iter_mut().find(|p| p.name == "Iterations").unwrap().set_text("3");
-        let mut step = ref_node("step", "step1", "transform", vec![("Input", "node", "input1"), ("Translation", "float3", "1:0:0")], vec![]);
+        repeat.params.iter_mut().find(|p| p.name == "input").unwrap().set_text("sphere 1");
+        repeat.params.iter_mut().find(|p| p.name == "iterations").unwrap().set_text("3");
+        let mut step = ref_node("step", "step1", "transform", vec![("input", "node", "input1"), ("translation", "float3", "1:0:0")], vec![]);
         step.geometry_visible = false;
         repeat.children.push(step);
         repeat.children.iter_mut().find(|c| c.name == "output1").unwrap().params[0].set_text("step1");
@@ -11960,15 +12046,15 @@ mod tests {
         assert!((xs[sphere.num_points()] - (x0 + 3.0)).abs() < 1e-4, "the step as its last pass made it: {}", xs[sphere.num_points()] - x0);
 
         // A subnet inside a simnet, dived into, shows the frame.
-        let sub = ref_node("sub", "sub1", "node", vec![("Input", "node", "input1")], vec![
+        let sub = ref_node("sub", "sub1", "node", vec![("input", "node", "input1")], vec![
             ref_node("sub-in", "input1", "input", vec![], vec![]),
-            { let mut n = ref_node("sub-step", "step1", "transform", vec![("Input", "node", "input1"), ("Translation", "float3", "1:0:0")], vec![]); n.geometry_visible = true; n },
-            { let mut n = ref_node("sub-out", "output1", "output", vec![("Input", "node", "step1")], vec![]); n.geometry_visible = false; n },
+            { let mut n = ref_node("sub-step", "step1", "transform", vec![("input", "node", "input1"), ("translation", "float3", "1:0:0")], vec![]); n.geometry_visible = true; n },
+            { let mut n = ref_node("sub-out", "output1", "output", vec![("input", "node", "step1")], vec![]); n.geometry_visible = false; n },
         ]);
-        let simnet = ref_node("sim", "simnet1", "simnet", vec![("Input", "node", "sphere 1"), ("Substeps", "spinbox", "1")], vec![
+        let simnet = ref_node("sim", "simnet1", "simnet", vec![("input", "node", "sphere 1"), ("substeps", "spinbox", "1")], vec![
             ref_node("sim-in", "input1", "input", vec![], vec![]),
             sub,
-            ref_node("sim-out", "output1", "output", vec![("Input", "node", "sub1")], vec![]),
+            ref_node("sim-out", "output1", "output", vec![("input", "node", "sub1")], vec![]),
         ]);
         let root = modelling_root("1.0", vec![simnet]);
         let level = &root.children[1].children[1];
@@ -12265,7 +12351,7 @@ mod tests {
             name: "Develop 1".into(),
             node_type: "develop".into(),
             children: vec![],
-            params: [("Attribute", "growth"), ("Scale", "0.50"), ("Direction", "Normal")]
+            params: [("attribute", "growth"), ("scale", "0.50"), ("direction", "Normal")]
                 .into_iter()
                 .map(|(name, default)| crate::app::ParamDef::new(name, "text", default))
                 .collect(),
@@ -12468,7 +12554,7 @@ mod tests {
 
         let node = phase3_node(
             "detangle",
-            &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "6")],
+            &[("thickness", "1.00"), ("rings", "2"), ("iterations", "6")],
         );
         crate::geometry::apply_detangle(&mut d, &node);
 
@@ -12535,13 +12621,13 @@ mod tests {
         };
         let meshes = [("sheets", sheets), ("flat sphere", squashed(0.04)), ("round sphere", squashed(1.0))];
         let settings: [&[(&str, &str)]; 7] = [
-            &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "4")],
-            &[("Thickness", "2.00"), ("Rings", "1"), ("Iterations", "8")],
-            &[("Thickness", "0.50"), ("Rings", "0"), ("Iterations", "1")],
-            &[("Thickness", "3.00"), ("Rings", "3"), ("Iterations", "32")],
-            &[("Thickness", "1.50"), ("Rings", "2"), ("Iterations", "6"), ("Group", "some")],
-            &[("Thickness", "0.00"), ("Rings", "2"), ("Iterations", "4")],
-            &[("Thickness", "1.00"), ("Rings", "6"), ("Iterations", "4"), ("Group", "nobody")],
+            &[("thickness", "1.00"), ("rings", "2"), ("iterations", "4")],
+            &[("thickness", "2.00"), ("rings", "1"), ("iterations", "8")],
+            &[("thickness", "0.50"), ("rings", "0"), ("iterations", "1")],
+            &[("thickness", "3.00"), ("rings", "3"), ("iterations", "32")],
+            &[("thickness", "1.50"), ("rings", "2"), ("iterations", "6"), ("group", "some")],
+            &[("thickness", "0.00"), ("rings", "2"), ("iterations", "4")],
+            &[("thickness", "1.00"), ("rings", "6"), ("iterations", "4"), ("group", "nobody")],
         ];
         let mut moved_somewhere = 0;
         for (name, mesh) in &meshes {
@@ -12578,7 +12664,7 @@ mod tests {
     fn the_detangle_solve_skips_what_it_does_not_need() {
         let round = sphere_detail(Vec3::ZERO, 0.5, 10, 14);
         let n = round.num_points();
-        let node = phase3_node("detangle", &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "8")]);
+        let node = phase3_node("detangle", &[("thickness", "1.00"), ("rings", "2"), ("iterations", "8")]);
         let mut d = round.clone();
         let work = crate::detangle::apply(&mut d, &node);
         assert_eq!((work.passes, work.grids, work.searched), (1, 1, n), "nothing to separate: {work:?}");
@@ -12628,7 +12714,7 @@ mod tests {
             grouped.points_mut().add_to_group("some", p);
         }
         let members = grouped.points().group_len("some");
-        let node = phase3_node("detangle", &[("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "1"), ("Group", "some")]);
+        let node = phase3_node("detangle", &[("thickness", "1.00"), ("rings", "2"), ("iterations", "1"), ("group", "some")]);
         let work = crate::detangle::apply(&mut grouped, &node);
         assert_eq!(work.searched, members, "{work:?}");
 
@@ -12636,7 +12722,7 @@ mod tests {
         // moving — share one topology; another mesh, or another ring count,
         // is another.
         let kept = crate::detangle::kept_topologies();
-        let node = phase3_node("detangle", &[("Thickness", "1.00"), ("Rings", "5"), ("Iterations", "2")]);
+        let node = phase3_node("detangle", &[("thickness", "1.00"), ("rings", "5"), ("iterations", "2")]);
         let mut step = flat.clone();
         for _ in 0..5 {
             let mut next = step.clone();
@@ -12652,7 +12738,7 @@ mod tests {
         // so the same tangle untangles the same way however its points are
         // numbered. A Gauss-Seidel sweep would not.
         let mut a = sphere_detail(Vec3::ZERO, 0.5, 6, 8);
-        let node = phase3_node("detangle", &[("Thickness", "2.00"), ("Rings", "1"), ("Iterations", "3")]);
+        let node = phase3_node("detangle", &[("thickness", "2.00"), ("rings", "1"), ("iterations", "3")]);
         let mut b = a.clone();
         crate::geometry::apply_detangle(&mut a, &node);
         crate::geometry::apply_detangle(&mut b, &node);
@@ -12740,7 +12826,7 @@ mod tests {
     fn the_surface_method_sees_a_point_over_the_middle_of_a_triangle() {
         let start = sheet_and_patch(0.03, 0.0);
         let settings = |method: &'static str| {
-            phase3_node("detangle", &[("Method", method), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8")])
+            phase3_node("detangle", &[("method", method), ("thickness", "0.25"), ("rings", "2"), ("iterations", "8")])
         };
         let mut by_points = start.clone();
         let work = crate::detangle::apply(&mut by_points, &settings("Points"));
@@ -12762,7 +12848,7 @@ mod tests {
         // patch takes the whole move, not half of it.
         let node = phase3_node(
             "detangle",
-            &[("Method", "Surface"), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8"), ("Group", "patch")],
+            &[("method", "Surface"), ("thickness", "0.25"), ("rings", "2"), ("iterations", "8"), ("group", "patch")],
         );
         let mut held = start.clone();
         crate::detangle::apply(&mut held, &node);
@@ -12772,7 +12858,7 @@ mod tests {
         // A surface that touches itself nowhere is left alone, in one pass.
         let round = sphere_detail(Vec3::ZERO, 0.5, 10, 14);
         let mut d = round.clone();
-        let node = phase3_node("detangle", &[("Method", "Surface"), ("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "8")]);
+        let node = phase3_node("detangle", &[("method", "Surface"), ("thickness", "1.00"), ("rings", "2"), ("iterations", "8")]);
         let work = crate::detangle::apply(&mut d, &node);
         assert_eq!((work.passes, work.contacts), (1, 0), "{work:?}");
         assert_eq!(d.positions(), round.positions());
@@ -12788,7 +12874,7 @@ mod tests {
         let run = |method: &'static str| {
             let node = phase3_node(
                 "detangle",
-                &[("Method", method), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8"), ("Group", "patch"), ("Tangled Group", "tangled")],
+                &[("method", method), ("thickness", "0.25"), ("rings", "2"), ("iterations", "8"), ("group", "patch"), ("tangled_group", "tangled")],
             );
             let mut d = sheet_and_patch(0.2, 0.3);
             let (mut worst, mut marked) = (0, 0);
@@ -12824,7 +12910,7 @@ mod tests {
     fn the_surface_method_puts_back_what_went_through() {
         let node = phase3_node(
             "detangle",
-            &[("Method", "Surface"), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "8"), ("Group", "patch")],
+            &[("method", "Surface"), ("thickness", "0.25"), ("rings", "2"), ("iterations", "8"), ("group", "patch")],
         );
         let above = |d: &Detail| (4..d.num_points()).filter(|&p| d.pos(p).y > 0.0).count();
         for (from, to) in [(0.04, -0.04), (0.3, -0.5)] {
@@ -12894,7 +12980,7 @@ mod tests {
         let settings = |edges: &'static str, group: &'static str| {
             phase3_node(
                 "detangle",
-                &[("Method", "Surface"), ("Thickness", "0.20"), ("Rings", "2"), ("Iterations", "8"), ("Edge Contact", edges), ("Group", group)],
+                &[("method", "Surface"), ("thickness", "0.20"), ("rings", "2"), ("iterations", "8"), ("edge_contact", edges), ("group", group)],
             )
         };
         let gap = |d: &Detail| d.pos(0).z - d.pos(3).z;
@@ -12908,7 +12994,7 @@ mod tests {
         assert_eq!((work.contacts, without.positions()), (0, near.positions()));
         // A node from before the row is one without it.
         let mut before_the_row = near.clone();
-        crate::detangle::apply(&mut before_the_row, &phase3_node("detangle", &[("Method", "Surface"), ("Thickness", "0.20")]));
+        crate::detangle::apply(&mut before_the_row, &phase3_node("detangle", &[("method", "Surface"), ("thickness", "0.20")]));
         assert_eq!(before_the_row.positions(), near.positions());
 
         let mut with = near.clone();
@@ -12944,11 +13030,11 @@ mod tests {
 
         // An edge with neither end near anything is not tested at all.
         let round = crate::shapes::sphere_node_detail(
-            &phase3_node("sphere", &[("Method", "Icosphere"), ("Frequency", "8"), ("Radius", "0.5")]),
+            &phase3_node("sphere", &[("method", "Icosphere"), ("frequency", "8"), ("radius", "0.5")]),
             Some(Vec3::ZERO),
         );
         let mut d = round.clone();
-        let work = crate::detangle::apply(&mut d, &phase3_node("detangle", &[("Method", "Surface"), ("Thickness", "0.50"), ("Rings", "2"), ("Edge Contact", "true")]));
+        let work = crate::detangle::apply(&mut d, &phase3_node("detangle", &[("method", "Surface"), ("thickness", "0.50"), ("rings", "2"), ("edge_contact", "true")]));
         assert_eq!((work.edges_searched, work.contacts), (0, 0), "{work:?}");
         assert_eq!(d.positions(), round.positions());
     }
@@ -12998,12 +13084,12 @@ mod tests {
         let settings = |folds: &'static str| {
             phase3_node(
                 "detangle",
-                &[("Method", "Surface"), ("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "8"), ("Edge Contact", "true"), ("Fold Contact", folds), ("Group", "mover")],
+                &[("method", "Surface"), ("thickness", "1.00"), ("rings", "2"), ("iterations", "8"), ("edge_contact", "true"), ("fold_contact", folds), ("group", "mover")],
             )
         };
         // Without it, and with it but not told where the step began, the
         // fold stays.
-        for (node, told) in [(settings("false"), true), (settings("true"), false), (phase3_node("detangle", &[("Method", "Surface"), ("Group", "mover")]), true)] {
+        for (node, told) in [(settings("false"), true), (settings("true"), false), (phase3_node("detangle", &[("method", "Surface"), ("group", "mover")]), true)] {
             let mut d = carried.clone();
             let work = crate::detangle::apply_from(&mut d, told.then_some(&bowl), &node);
             assert_eq!(work.folds, 0);
@@ -13029,7 +13115,7 @@ mod tests {
         }
         let moved = still.clone();
         let mut node = settings("true");
-        node.params.retain(|p| p.name != "Group");
+        node.params.retain(|p| p.name != "group");
         let work = crate::detangle::apply_from(&mut still, Some(&bowl), &node);
         assert_eq!((work.folds, work.held), (0, 0), "{work:?}");
         assert_eq!(still.positions(), moved.positions());
@@ -13078,13 +13164,13 @@ mod tests {
                 "pull",
                 "pull1",
                 "attribute",
-                vec![("Input", "node", "sphere1"), ("Operation", "text", "Modify"), ("Attribute Name", "text", "Pos"), ("Value", "text", "1.00:0.00:0.00"), ("Combine", "text", "Add")],
+                vec![("input", "node", "sphere1"), ("operation", "text", "Modify"), ("attribute_name", "text", "Pos"), ("value", "text", "1.00:0.00:0.00"), ("combine", "text", "Add")],
                 vec![],
             );
             n.bypassed = bypassed;
             n
         };
-        let sphere = || ref_node("s", "sphere1", "sphere", vec![("Radius", "slider", "0.5"), ("Center X", "slider", "0"), ("Center Y", "slider", "0"), ("Center Z", "slider", "0")], vec![]);
+        let sphere = || ref_node("s", "sphere1", "sphere", vec![("radius", "slider", "0.5"), ("center_x", "slider", "0"), ("center_y", "slider", "0"), ("center_z", "slider", "0")], vec![]);
         let root = |nodes: Vec<FsNode>| ref_node("root", "root", "node", vec![], nodes);
         let min_x = |d: &Detail| d.positions().iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
 
@@ -13116,7 +13202,7 @@ mod tests {
         // nothing is an error on the node, and not on a bypassed one.
         let broken = |bypassed: bool| {
             let mut n = pull(bypassed);
-            n.params.push(crate::app::ParamDef::new("Strength", "slider", "ch(\"../nothing/Here\")").as_expr());
+            n.params.push(crate::app::ParamDef::new("strength", "slider", "ch(\"../nothing/here\")").as_expr());
             root(vec![sphere(), n])
         };
         assert!(eval_node(&broken(false), "pull1").1.is_some());
@@ -13129,11 +13215,11 @@ mod tests {
             "sub",
             "sub1",
             "node",
-            vec![("Input", "node", "sphere1")],
+            vec![("input", "node", "sphere1")],
             vec![
                 ref_node("in", "input1", "input", vec![], vec![]),
                 { let mut p = pull(false); p.params[0].set_text("input1"); p },
-                ref_node("out", "output1", "output", vec![("Input", "node", "pull1")], vec![]),
+                ref_node("out", "output1", "output", vec![("input", "node", "pull1")], vec![]),
             ],
         );
         let (through, _) = eval_node(&root(vec![sphere(), subnet.clone()]), "sub1");
@@ -13177,10 +13263,10 @@ mod tests {
         };
         let chain = |bypassed: &[&str]| {
             let mut nodes = vec![
-                node("p", "page1", "page", &[("Preset", "Letter"), ("Resolution", "72"), ("Color", "1.00:1.00:1.00")]),
-                node("g", "grid1", "page_grid", &[("Input", "page1"), ("Cell Size", "0.5"), ("Line Width", "0.02"), ("Line Color", "0.00:0.00:0.00"), ("Fill Cells", "false")]),
-                node("b", "border1", "page_border", &[("Input", "grid1"), ("Width", "0.1"), ("Inset", "0.25"), ("Color", "1.00:0.00:0.00")]),
-                node("e", "export1", "export", &[("Input", "border1")]),
+                node("p", "page1", "page", &[("preset", "Letter"), ("resolution", "72"), ("color", "1.00:1.00:1.00")]),
+                node("g", "grid1", "page_grid", &[("input", "page1"), ("cell_size", "0.5"), ("line_width", "0.02"), ("line_color", "0.00:0.00:0.00"), ("fill_cells", "false")]),
+                node("b", "border1", "page_border", &[("input", "grid1"), ("width", "0.1"), ("inset", "0.25"), ("color", "1.00:0.00:0.00")]),
+                node("e", "export1", "export", &[("input", "border1")]),
             ];
             for n in &mut nodes {
                 n.bypassed = bypassed.contains(&n.name.as_str());
@@ -13240,7 +13326,7 @@ mod tests {
     /// bypassed and not otherwise.
     #[test]
     fn the_bypass_flag_is_saved_only_when_it_is_set() {
-        let mut node = ref_node("a", "a1", "sphere", vec![("Radius", "slider", "0.5")], vec![]);
+        let mut node = ref_node("a", "a1", "sphere", vec![("radius", "slider", "0.5")], vec![]);
         let plain = serde_json::to_string(&node).unwrap();
         assert!(!plain.contains("bypassed"), "{plain}");
         node.bypassed = true;
@@ -13269,7 +13355,7 @@ mod tests {
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 3.0, y: 4.0 }, &mut redraw).unwrap();
         let slot = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).unwrap();
         let (ball, pull) = (slot(&state, "ball"), slot(&state, "pull1"));
-        for (name, value) in [("Input", "ball"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "1.00:0.00:0.00"), ("Combine", "Add")] {
+        for (name, value) in [("input", "ball"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "1.00:0.00:0.00"), ("combine", "Add")] {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         state.apply_action(McpAction::ToggleGeometry { slot: pull }, &mut redraw).unwrap();
@@ -13317,7 +13403,7 @@ mod tests {
         let settings = |method: &'static str, limit: &'static str| {
             phase3_node(
                 "detangle",
-                &[("Method", method), ("Thickness", "0.25"), ("Rings", "2"), ("Iterations", "4"), ("Step Limit", limit), ("Group", "patch")],
+                &[("method", method), ("thickness", "0.25"), ("rings", "2"), ("iterations", "4"), ("step_limit", limit), ("group", "patch")],
             )
         };
         let before = sheet_and_patch(1.0, 0.0);
@@ -13327,7 +13413,7 @@ mod tests {
             carried.set_pos(p, v + Vec3::new(0.3, 0.0, 0.4));
         }
         let mut d = carried.clone();
-        let work = crate::detangle::apply_from(&mut d, Some(&before), &settings("Surface", "0.50"));
+        let work = crate::detangle::apply_from(&mut d, Some(&before), &settings("surface", "0.50"));
         assert_eq!(work.limited, 25, "{work:?}");
         let went = d.pos(10) - before.pos(10);
         assert!((went.normalize() - Vec3::new(0.6, 0.0, 0.8)).length() < 1e-4, "the way it was going: {went:?}");
@@ -13338,7 +13424,7 @@ mod tests {
         assert!((went.length() - 0.5 * 0.25 * edge).abs() < 1e-5, "{} of an edge of {edge}", went.length());
         assert_eq!(d.positions()[..4], carried.positions()[..4], "the sheet is outside the group");
 
-        for (node, told) in [(settings("Surface", "0"), true), (settings("Surface", "0.50"), false), (settings("Points", "0.50"), true)] {
+        for (node, told) in [(settings("surface", "0"), true), (settings("surface", "0.50"), false), (settings("points", "0.50"), true)] {
             let mut d = carried.clone();
             let work = crate::detangle::apply_from(&mut d, told.then_some(&before), &node);
             assert_eq!(work.limited, 0);
@@ -13377,12 +13463,12 @@ mod tests {
         let saved: Vec<(String, String)> = find(&mut proj.root, "detangle").expect("a detangle node").params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect();
         println!("as loaded: {saved:?}");
         let ways: [(&str, &[(&str, &str)]); 6] = [
-            ("off (thickness 0)", &[("Method", "Points"), ("Thickness", "0.00")]),
-            ("points", &[("Method", "Points")]),
-            ("surface", &[("Method", "Surface"), ("Edge Contact", "false"), ("Fold Contact", "false")]),
-            ("surface, edges", &[("Method", "Surface"), ("Edge Contact", "true"), ("Fold Contact", "false")]),
-            ("surface, folds", &[("Method", "Surface"), ("Edge Contact", "false"), ("Fold Contact", "true")]),
-            ("all", &[("Method", "Surface"), ("Edge Contact", "true"), ("Fold Contact", "true")]),
+            ("off (thickness 0)", &[("method", "Points"), ("thickness", "0.00")]),
+            ("points", &[("method", "Points")]),
+            ("surface", &[("method", "Surface"), ("edge_contact", "false"), ("fold_contact", "false")]),
+            ("surface, edges", &[("method", "Surface"), ("edge_contact", "true"), ("fold_contact", "false")]),
+            ("surface, folds", &[("method", "Surface"), ("edge_contact", "false"), ("fold_contact", "true")]),
+            ("all", &[("method", "Surface"), ("edge_contact", "true"), ("fold_contact", "true")]),
         ];
         let out = std::env::var("CCE_DETANGLE_OUT").ok();
         for (name, settings) in ways {
@@ -13450,7 +13536,7 @@ mod tests {
         }
         let sim_node = simnet(&mut proj.root).expect("a simnet");
         // Never the disk: this measures the solve.
-        if let Some(p) = sim_node.params.iter_mut().find(|p| p.name == "Cache") {
+        if let Some(p) = sim_node.params.iter_mut().find(|p| p.name == "cache") {
             p.set_text("false");
         }
         let sim_name = sim_node.name.clone();
@@ -13506,7 +13592,7 @@ mod tests {
     fn detangle_timing() {
         for frequency in ["4", "8", "16"] {
             let sphere = crate::shapes::sphere_node_detail(
-                &phase3_node("sphere", &[("Method", "Icosphere"), ("Frequency", frequency), ("Radius", "0.5")]),
+                &phase3_node("sphere", &[("method", "Icosphere"), ("frequency", frequency), ("radius", "0.5")]),
                 Some(Vec3::ZERO),
             );
             let edges = sphere.edges();
@@ -13516,7 +13602,7 @@ mod tests {
             let steps = (1.1 / rate).ceil() as usize;
             let node = phase3_node(
                 "detangle",
-                &[("Method", "Surface"), ("Thickness", "1.00"), ("Rings", "2"), ("Iterations", "4"), ("Edge Contact", "true"), ("Fold Contact", "true")],
+                &[("method", "Surface"), ("thickness", "1.00"), ("rings", "2"), ("iterations", "4"), ("edge_contact", "true"), ("fold_contact", "true")],
             );
             let mut d = sphere.clone();
             let (mut worst, mut sum, mut spent, mut held, mut finds) = (0, 0.0f64, std::time::Duration::ZERO, 0, 0);
@@ -13566,7 +13652,7 @@ mod tests {
         ];
         for frequency in ["4", "8", "16"] {
             let sphere = crate::shapes::sphere_node_detail(
-                &phase3_node("sphere", &[("Method", "Icosphere"), ("Frequency", frequency), ("Radius", "0.5")]),
+                &phase3_node("sphere", &[("method", "Icosphere"), ("frequency", frequency), ("radius", "0.5")]),
                 Some(Vec3::ZERO),
             );
             let edges = sphere.edges();
@@ -13580,7 +13666,7 @@ mod tests {
                     for (name, method, told, edges, folds) in ways {
                         let node = phase3_node(
                             "detangle",
-                            &[("Method", method), ("Thickness", thickness), ("Rings", "2"), ("Iterations", "4"), ("Edge Contact", edges), ("Fold Contact", folds)],
+                            &[("method", method), ("thickness", thickness), ("rings", "2"), ("iterations", "4"), ("edge_contact", edges), ("fold_contact", folds)],
                         );
                         let mut d = sphere.clone();
                         let (mut worst, mut far, mut spent) = (0, 0, std::time::Duration::ZERO);
@@ -13644,7 +13730,7 @@ mod tests {
 
         let node = phase3_node(
             "suture",
-            &[("Distance Threshold", "0.10"), ("Fusion Threshold", "3"), ("Counter", "contact")],
+            &[("distance_threshold", "0.10"), ("fusion_threshold", "3"), ("counter", "contact")],
         );
         let count = |d: &Detail, p: usize| d.points().value("contact", p).unwrap().as_f32() as i32;
 
@@ -13673,7 +13759,7 @@ mod tests {
     fn test_suture_without_a_collider_changes_nothing_but_the_counter() {
         let mut sheet = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
         let before = sheet.positions().to_vec();
-        let node = phase3_node("suture", &[("Distance Threshold", "0.10"), ("Counter", "contact")]);
+        let node = phase3_node("suture", &[("distance_threshold", "0.10"), ("counter", "contact")]);
         crate::geometry::apply_suture(&mut sheet, None, &node);
         assert_eq!(sheet.positions(), &before[..]);
         // The counter exists so the chain downstream can read it either way.
@@ -15060,7 +15146,7 @@ mod tests {
         let mut redraw = false;
         let sphere = state.current_dir().children.iter().position(|c| c.name.starts_with("sphere")).expect("a sphere");
         state
-            .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.8".into() }, &mut redraw)
+            .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.8".into() }, &mut redraw)
             .expect("set a sphere param");
         assert_eq!(state.viewport().show_grid, !was, "a param edit reverted the toggle");
         assert!((state.grid_thickness - 0.04).abs() < 1e-6, "a param edit reverted the thickness");
@@ -15654,10 +15740,10 @@ mod tests {
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.current_dir_mut().children = vec![
-            ref_node("a", "a", "sphere", vec![("Radius", "float", "1")], vec![]),
-            ref_node("c", "c", "transform", vec![("Input", "node", "a")], vec![]),
-            ref_node("p", "p1", "transform", vec![("Input", "node", "")], vec![]),
-            ref_node("q", "q1", "transform", vec![("Input", "node", "p1")], vec![]),
+            ref_node("a", "a", "sphere", vec![("radius", "float", "1")], vec![]),
+            ref_node("c", "c", "transform", vec![("input", "node", "a")], vec![]),
+            ref_node("p", "p1", "transform", vec![("input", "node", "")], vec![]),
+            ref_node("q", "q1", "transform", vec![("input", "node", "p1")], vec![]),
         ];
         for (i, pos) in [(2.0, 1.0), (2.0, 5.0), (8.0, 1.0), (8.0, 2.0)].into_iter().enumerate() {
             state.current_dir_mut().children[i].position = pos;
@@ -15667,7 +15753,7 @@ mod tests {
         state.apply_layout();
         let input_of = |state: &State, name: &str| {
             let n = state.current_dir().children.iter().find(|c| c.name == name).expect(name);
-            crate::geometry::node_param_node(n, "Input")
+            crate::geometry::node_param_node(n, "input")
         };
 
         // One node, onto the wire a -> c.
@@ -15984,8 +16070,8 @@ mod tests {
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.current_dir_mut().children = vec![
-            ref_node("a", "a", "sphere", vec![("Radius", "float", "1")], vec![]),
-            ref_node("c", "c", "transform", vec![("Input", "node", "a")], vec![]),
+            ref_node("a", "a", "sphere", vec![("radius", "float", "1")], vec![]),
+            ref_node("c", "c", "transform", vec![("input", "node", "a")], vec![]),
         ];
         state.current_dir_mut().children[0].position = (2.0, 1.0);
         state.current_dir_mut().children[1].position = (2.0, 3.0);
@@ -15994,7 +16080,7 @@ mod tests {
         state.apply_layout();
         let input_of = |state: &State, name: &str| {
             let n = state.current_dir().children.iter().find(|c| c.name == name).expect(name);
-            crate::geometry::node_param_node(n, "Input")
+            crate::geometry::node_param_node(n, "input")
         };
         let add = |state: &mut State, template: &str, col: i32, row: i32| {
             state.grid_cursor_col = col;
@@ -16165,12 +16251,12 @@ mod tests {
     // ---- the wrangle node (src/wrangle.rs) ----
 
     fn wrangle_node(id: &str, name: &str, input: &str, class: &str, code: &str) -> FsNode {
-        ref_node(id, name, "wrangle", vec![("Input", "text", input), ("Class", "choice:Points,Primitives,Detail", class), ("Group", "text", ""), ("Code", "code", code)], vec![])
+        ref_node(id, name, "wrangle", vec![("input", "text", input), ("class", "choice:Points,Primitives,Detail", class), ("group", "text", ""), ("code", "code", code)], vec![])
     }
 
     /// The input as the wrangle sees it, then the wrangle's own result.
     fn wrangle_over_sphere(code: &str) -> (Detail, Option<Detail>, Option<String>) {
-        let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "1.0")], vec![]);
+        let src = ref_node("s", "src", "sphere", vec![("radius", "slider", "1.0")], vec![]);
         let w = wrangle_node("w", "wrangle1", "src", "Points", code);
         let root = ref_node("root", "root", "node", vec![], vec![src, w]);
         let before = eval(&root, &root.children[0]).0.unwrap();
@@ -16188,7 +16274,7 @@ mod tests {
         assert_eq!(desugar("let s = \"at @P\"; // @P here\n@x = 1;"), "let s = \"at @P\"; // @P here\n__at[\"x\"] = 1;");
         assert_eq!(desugar("/* @a */ @b = '@';"), "/* @a */ __at[\"b\"] = '@';");
         assert_eq!(desugar("a @ b"), "a @ b", "a bare @ is not sugar");
-        assert_eq!(crate::wrangle::channel_refs("ch(\"../Radius\") + chs('Name') + search(\"x\") // ch(\"no\")"), vec!["../Radius".to_string(), "Name".to_string()]);
+        assert_eq!(crate::wrangle::channel_refs("ch(\"../radius\") + chs('Name') + search(\"x\") // ch(\"no\")"), vec!["../radius".to_string(), "Name".to_string()]);
     }
 
     /// The core contract: positions move, and naming an attribute creates
@@ -16276,7 +16362,7 @@ mod tests {
     /// the primitive store.
     #[test]
     fn wrangle_prims_class_writes_prim_attributes_and_reads_centroids() {
-        let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "1.0")], vec![]);
+        let src = ref_node("s", "src", "sphere", vec![("radius", "slider", "1.0")], vec![]);
         let w = wrangle_node("w", "wrangle1", "src", "Primitives", "@r = length(@P);\n@n = points(@primnum).len();\n@which = @primnum;");
         let root = ref_node("root", "root", "node", vec![], vec![src, w]);
         let (g, err) = eval(&root, &root.children[1]);
@@ -16322,14 +16408,14 @@ mod tests {
     /// an expression-valued parameter is seen as its value.
     #[test]
     fn wrangle_ch_reads_parameters_through_the_expression_scope() {
-        let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "1.0")], vec![]);
+        let src = ref_node("s", "src", "sphere", vec![("radius", "slider", "1.0")], vec![]);
         let w = ref_node("w", "wrangle1", "wrangle", vec![
-            ("Input", "text", "src"), ("Class", "choice:Points,Primitives,Detail", "Points"), ("Group", "text", ""),
-            ("Amount", "slider", "ch(\"../Lift\") + 1"),
+            ("input", "text", "src"), ("class", "choice:Points,Primitives,Detail", "Points"), ("group", "text", ""),
+            ("amount", "slider", "ch(\"../lift\") + 1"),
             ("Label", "text", "hello"),
-            ("Code", "code", "@P = @P * ch(\"Amount\") + vec3(0, ch(\"../Lift\"), 0);\n@n = chi(\"Amount\");\n@s = chs(\"Label\").len();\n@v = chv(\"../Offset\");"),
+            ("code", "code", "@P = @P * ch(\"amount\") + vec3(0, ch(\"../lift\"), 0);\n@n = chi(\"amount\");\n@s = chs(\"label\").len();\n@v = chv(\"../offset\");"),
         ], vec![]);
-        let root = ref_node("root", "root", "node", vec![("Lift", "slider", "2"), ("Offset", "float3", "1:2:3")], vec![src, w]);
+        let root = ref_node("root", "root", "node", vec![("Lift", "slider", "2"), ("offset", "float3", "1:2:3")], vec![src, w]);
         let before = eval(&root, &root.children[0]).0.unwrap();
         let (g, err) = eval(&root, &root.children[1]);
         assert!(err.is_none(), "{err:?}");
@@ -16342,10 +16428,10 @@ mod tests {
         assert_eq!(g.points().value("s", p).unwrap().as_f32(), 5.0);
         assert_eq!(g.points().value("v", p).unwrap().as_vec3(), Vec3::new(1.0, 2.0, 3.0));
 
-        let bad = wrangle_node("b", "wrangle2", "src", "Points", "@x = ch(\"Nope\");");
+        let bad = wrangle_node("b", "wrangle2", "src", "Points", "@x = ch(\"nope\");");
         let root2 = ref_node("root", "root", "node", vec![], vec![root.children[0].clone(), bad]);
         let (_, err) = eval(&root2, &root2.children[1]);
-        assert!(err.as_deref().is_some_and(|e| e.contains("Nope")), "a channel to nothing is an error: {err:?}");
+        assert!(err.as_deref().is_some_and(|e| e.contains("nope")), "a channel to nothing is an error: {err:?}");
     }
 
     /// The shipped template resolves, and its default script runs.
@@ -16354,7 +16440,7 @@ mod tests {
         let templates = crate::app::load_fs_tree();
         let t = templates.children.iter().find(|n| n.node_type == "wrangle").expect("nodes/wrangle.json loads");
         assert_eq!(t.name, "Wrangle");
-        let code = t.params.iter().find(|p| p.name == "Code").map(|p| p.text().to_string()).unwrap();
+        let code = t.params.iter().find(|p| p.name == "code").map(|p| p.text().to_string()).unwrap();
         assert!(t.params.iter().all(|p| !p.is_expr()), "no template parameter reads as an expression — least of all the Code");
         let (before, g, err) = wrangle_over_sphere(&code);
         assert!(err.is_none(), "{err:?}");
@@ -16368,8 +16454,8 @@ mod tests {
     /// and in the CLI's warning, so the fix is one rewrite as a wrangle.
     #[test]
     fn a_retired_opencl_node_passes_its_input_through_and_says_so() {
-        let src = ref_node("s", "src", "sphere", vec![("Radius", "slider", "1.0")], vec![]);
-        let k = ref_node("k", "opencl1", "opencl", vec![("Input", "text", "src"), ("Code", "code", "__kernel void process() {}")], vec![]);
+        let src = ref_node("s", "src", "sphere", vec![("radius", "slider", "1.0")], vec![]);
+        let k = ref_node("k", "opencl1", "opencl", vec![("input", "text", "src"), ("code", "code", "__kernel void process() {}")], vec![]);
         let root = ref_node("root", "root", "node", vec![], vec![src, k]);
         let before = eval(&root, &root.children[0]).0.unwrap();
         let (g, err) = eval(&root, &root.children[1]);
@@ -16679,7 +16765,7 @@ mod tests {
         let i = rows.iter().position(|r| r.0 == "Rows").expect("a Rows row");
         assert!(rows[i].2.starts_with("spinbox"), "{:?}", rows[i]);
         let (x, y, w, h) = state.param_row_rects()[i];
-        let value = |state: &State| crate::geometry::node_param_f32(&state.current_dir().children[sphere], "Rows", -1.0);
+        let value = |state: &State| crate::geometry::node_param_f32(&state.current_dir().children[sphere], "rows", -1.0);
         let before = value(&state);
 
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (x + w * 0.3) as f64, y: (y + h * 0.5) as f64 } });
@@ -16850,11 +16936,11 @@ mod tests {
         state.fs_root.children = vec![
             instance(find("Sphere"), "s", "Sphere 1", &[]),
             instance(find("Attribute"), "a", "pull1", &[
-                ("Input", "Sphere 1"),
-                ("Operation", "Modify"),
-                ("Attribute Name", "Pos"),
-                ("Value", "0.00:0.06:0.00"),
-                ("Combine", "Add"),
+                ("input", "Sphere 1"),
+                ("operation", "Modify"),
+                ("attribute_name", "Pos"),
+                ("value", "0.00:0.06:0.00"),
+                ("combine", "Add"),
             ]),
         ];
         state.sync_nodes();
@@ -16871,74 +16957,74 @@ mod tests {
         let set = |state: &mut State, name: &str, val: &str| {
             state.fs_root.children[1].params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
         };
-        set(&mut state, "Attribute Name", "N");
+        set(&mut state, "attribute_name", "N");
         assert_eq!(value_row(&mut state), wide, "Modify on an input Float3");
-        set(&mut state, "Attribute Name", "uv");
+        set(&mut state, "attribute_name", "uv");
         assert_eq!(value_row(&mut state), "text", "three numbers do not fit an input Float2");
-        set(&mut state, "Value", "1:2");
+        set(&mut state, "value", "1:2");
         assert_eq!(value_row(&mut state), "float2:-10:10:soft", "Modify on an input Float2: 2 needs ±10");
-        set(&mut state, "Value", "0.00:0.06:0.00");
-        set(&mut state, "Attribute Name", "nothing_here");
+        set(&mut state, "value", "0.00:0.06:0.00");
+        set(&mut state, "attribute_name", "nothing_here");
         assert_eq!(value_row(&mut state), "text", "an attribute the input lacks has no width");
 
-        set(&mut state, "Operation", "Create");
-        set(&mut state, "Attribute Name", "vel");
-        set(&mut state, "Type", "Float3");
+        set(&mut state, "operation", "Create");
+        set(&mut state, "attribute_name", "vel");
+        set(&mut state, "type", "Float3");
         assert_eq!(value_row(&mut state), wide, "Create of a Float3");
-        set(&mut state, "Type", "Float");
+        set(&mut state, "type", "Float");
         assert_eq!(value_row(&mut state), "text", "three numbers do not fit a Float");
         let value_text = |state: &mut State| {
             state.sync_parameters_pane();
             state.param_mut().node_params().iter().find(|r| r.0 == "Value").unwrap().1.clone()
         };
-        set(&mut state, "Value", "1.00");
+        set(&mut state, "value", "1.00");
         assert_eq!(value_row(&mut state), "slider:-10:10:2:soft", "Create of a Float");
         for (ty, row, shown) in [
             ("Float2", "float2:-10:10:soft".to_string(), "1.00:1.00"),
             ("Float3", "float3:-10:10:trackball:soft".to_string(), "1.00:1.00:1.00"),
             ("Float4", "float4:-10:10:soft".to_string(), "1.00:1.00:1.00:1.00"),
         ] {
-            set(&mut state, "Type", ty);
+            set(&mut state, "type", ty);
             assert_eq!(value_row(&mut state), row, "Create of a {ty}");
             assert_eq!(value_text(&mut state), shown, "one number spread over a {ty}");
         }
         // Read back unchanged, the spread number is not an edit.
         let steps = state.edit_history.undo_len();
         state.sync_parameters_to_project();
-        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "Value").unwrap().text(), "1.00");
+        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "value").unwrap().text(), "1.00");
         assert_eq!(state.edit_history.undo_len(), steps);
 
-        set(&mut state, "Type", "Float3");
-        set(&mut state, "Value", "1.00:2.00:3.00");
+        set(&mut state, "type", "Float3");
+        set(&mut state, "value", "1.00:2.00:3.00");
         assert_eq!(value_row(&mut state), "float3:-10:10:trackball:soft", "3 stays inside the ±10 in use");
         // Past nineteen twentieths of it, the row re-scales: 9.6 to ±100.
-        set(&mut state, "Value", "9.6:0:0");
+        set(&mut state, "value", "9.6:0:0");
         assert_eq!(value_row(&mut state), "float3:-100:100:trackball:soft");
         // Held by a drag in the pane, it does not, whatever the value.
         state.drag_widget = Some(crate::slots::PARAM_IDX);
-        set(&mut state, "Value", "99:0:0");
+        set(&mut state, "value", "99:0:0");
         assert_eq!(value_row(&mut state), "float3:-100:100:trackball:soft", "no re-scale under the pointer");
         state.drag_widget = None;
         assert_eq!(value_row(&mut state), "float3:-1000:1000:trackball:soft", "and on the release it does");
         // Far inside, it comes back down.
-        set(&mut state, "Value", "1.00:2.00:3.00");
+        set(&mut state, "value", "1.00:2.00:3.00");
         assert_eq!(value_row(&mut state), "float3:-10:10:trackball:soft");
-        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "Value").unwrap().set_expr(true);
+        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "value").unwrap().set_expr(true);
         assert_eq!(value_row(&mut state), "text", "an expression is shown as its text");
-        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "Value").unwrap().set_expr(false);
+        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "value").unwrap().set_expr(false);
 
         // Read from an attribute: no Value row, and the source is picked
         // from the input's attributes.
-        set(&mut state, "Value From", "Attribute");
+        set(&mut state, "value_from", "Attribute");
         state.sync_parameters_pane();
         let rows = state.param_mut().node_params();
         assert!(rows.iter().all(|r| r.0 != "Value"), "no Value row");
         let from = rows.iter().find(|r| r.0 == "From Attribute").expect("a From Attribute row");
         assert!(from.2.starts_with("textpick:") && from.2["textpick:".len()..].split(',').any(|a| a == "N"), "{}", from.2);
-        set(&mut state, "Value From", "Constant");
+        set(&mut state, "value_from", "Constant");
 
         // The parameter itself never changed kind: it is text in the node.
-        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "Value").unwrap().kind(), crate::param::ParamKind::Text);
+        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "value").unwrap().kind(), crate::param::ParamKind::Text);
     }
 
     /// A trackpad swipe over a band of the pull node's float3 Value row
@@ -16960,7 +17046,7 @@ mod tests {
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
-        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.00:0.00")] {
+        for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.00:0.00")] {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         state.graph_mut().set_selected_node(Some(pull));
@@ -16977,7 +17063,7 @@ mod tests {
             (rx + (rw - 68.0) * 0.5, ry + rh * 0.5)
         };
         let value = |state: &State| -> Vec<f32> {
-            state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+            state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
                 .text().split(':').map(|v| v.parse().unwrap()).collect()
         };
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: bx as f64, y: by as f64 } });
@@ -17013,7 +17099,7 @@ mod tests {
         state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("group1".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
         let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
         let (pull, group) = (slot_of(&state, "pull1"), slot_of(&state, "group1"));
-        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.00:0.06")] {
+        for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.00:0.06")] {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         let show = |state: &mut State, slot: usize| {
@@ -17029,22 +17115,22 @@ mod tests {
         // The pull's Value: a vector, so the ball is there; the menu hides it.
         show(&mut state, pull);
         assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
-        assert!(entries(&state, pull, "Value").contains(&A::HideTrackball));
+        assert!(entries(&state, pull, "value").contains(&A::HideTrackball));
         let pull_id = state.current_dir().children[pull].id.clone();
-        state.run_param_action(&pull_id, "Value", A::HideTrackball);
+        state.run_param_action(&pull_id, "value", A::HideTrackball);
         assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
-        assert!(entries(&state, pull, "Value").contains(&A::ShowTrackball));
+        assert!(entries(&state, pull, "value").contains(&A::ShowTrackball));
         let saved = serde_json::to_string(&state.current_dir().children[pull]).unwrap();
         assert!(saved.contains("\"view\":\"sliders\""), "the choice rides the file: {saved}");
-        state.run_param_action(&pull_id, "Value", A::ShowTrackball);
+        state.run_param_action(&pull_id, "value", A::ShowTrackball);
         assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
 
         // Aimed at Col the three numbers are a colour: no ball by default.
-        state.apply_action(McpAction::SetParam { slot: pull, name: "Attribute Name".into(), value: "Col".into() }, &mut redraw).unwrap();
-        state.current_dir_mut().children[pull].params.iter_mut().find(|p| p.name == "Value").unwrap().view.clear();
+        state.apply_action(McpAction::SetParam { slot: pull, name: "attribute_name".into(), value: "Col".into() }, &mut redraw).unwrap();
+        state.current_dir_mut().children[pull].params.iter_mut().find(|p| p.name == "value").unwrap().view.clear();
         show(&mut state, pull);
         assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
-        state.apply_action(McpAction::SetParam { slot: pull, name: "Attribute Name".into(), value: "Pos".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: pull, name: "attribute_name".into(), value: "Pos".into() }, &mut redraw).unwrap();
 
         // A position (the Group node's Center): no ball until asked, and a
         // parameter that never chose writes no `view` at all.
@@ -17053,10 +17139,10 @@ mod tests {
         let untouched = serde_json::to_string(&state.current_dir().children[group]).unwrap();
         assert!(!untouched.contains("\"view\""), "{untouched}");
         let group_id = state.current_dir().children[group].id.clone();
-        state.run_param_action(&group_id, "Center", A::ShowTrackball);
+        state.run_param_action(&group_id, "center", A::ShowTrackball);
         assert!(row(&mut state, "Center").ends_with(":trackball"));
         // A slider row is not a float3: it is offered neither.
-        assert!(!entries(&state, slot_of(&state, "sphere1"), "Radius").iter().any(|a| matches!(a, A::ShowTrackball | A::HideTrackball)));
+        assert!(!entries(&state, slot_of(&state, "sphere1"), "radius").iter().any(|a| matches!(a, A::ShowTrackball | A::HideTrackball)));
 
         // Drag the ball a quarter turn to the right: the pull, pointing at
         // the viewer, swings onto +X at the length it had.
@@ -17072,7 +17158,7 @@ mod tests {
             state.handle_event(&at(cx + r * std::f32::consts::FRAC_PI_2 * i as f32 / 20.0, cy));
         }
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-        let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+        let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
             .text().split(':').map(|c| c.parse().unwrap()).collect();
         assert!((v[0] - 0.06).abs() < 2e-3 && v[1].abs() < 2e-3 && v[2].abs() < 2e-3, "the pull points along +X: {v:?}");
     }
@@ -17094,7 +17180,7 @@ mod tests {
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
-        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.00:0.06")] {
+        for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.00:0.06")] {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         state.graph_mut().set_selected_node(Some(pull));
@@ -17106,7 +17192,7 @@ mod tests {
             pane.float3s.iter().flatten().next().expect("the Value row").ball_circle().expect("its ball")
         };
         let value = |state: &State| -> Vec<f32> {
-            state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+            state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
                 .text().split(':').map(|c| c.parse().unwrap()).collect()
         };
         let len = |v: &[f32]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -17152,7 +17238,7 @@ mod tests {
         let eye = Vec3::new(2.5, 1.8, 2.5);
         let at_camera = eye.normalize() * 0.6;
         let text = format!("{:.4}:{:.4}:{:.4}", at_camera.x, at_camera.y, at_camera.z);
-        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", text.as_str())] {
+        for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", text.as_str())] {
             state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         state.graph_mut().set_selected_node(Some(pull));
@@ -17185,7 +17271,7 @@ mod tests {
             state.handle_event(&at(cx + r * std::f32::consts::FRAC_PI_2 * i as f32 / 20.0, cy));
         }
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-        let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "Value").unwrap()
+        let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
             .text().split(':').map(|c| c.parse().unwrap()).collect();
         let v = Vec3::new(v[0], v[1], v[2]);
         assert!(v.distance(right * 0.6) < 5e-3, "the pull lies along screen right: {v:?} against {:?}", right * 0.6);
@@ -17234,7 +17320,7 @@ mod tests {
         let mut redraw = false;
         main.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         let pull = main.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
-        for (name, value) in [("Input", "sphere1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.00:0.60:0.00")] {
+        for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.60:0.00")] {
             main.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         main.apply_action(McpAction::Select { slot: pull }, &mut redraw).unwrap();
@@ -17280,7 +17366,7 @@ mod tests {
 
         // A detached window's own change is written too, for the main one.
         child.needs_autosave = false;
-        child.apply_custom_event(crate::app::CustomEvent::RunAction(McpAction::SetParam { slot: pull, name: "Value".into(), value: "0.10:0.20:0.30".into() }));
+        child.apply_custom_event(crate::app::CustomEvent::RunAction(McpAction::SetParam { slot: pull, name: "value".into(), value: "0.10:0.20:0.30".into() }));
         assert!(child.needs_autosave);
 
         let _ = fs::remove_dir_all(&dir);
@@ -17340,7 +17426,7 @@ mod tests {
         assert_eq!(state.rt_geometry_version, version, "selecting evaluates nothing");
 
         // A refresh of the same node's table keeps it.
-        state.apply_action(McpAction::SetParam { slot: a, name: "Center".into(), value: "1.00:0.50:0.25".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: a, name: "center".into(), value: "1.00:0.50:0.25".into() }, &mut redraw).unwrap();
         state.sync_nodes();
         assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
         let moved = state.spreadsheet_points[1];
@@ -17371,18 +17457,18 @@ mod tests {
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
         let sim = state.current_dir().children.iter().position(|c| c.name == "sim").unwrap();
-        state.apply_action(McpAction::SetParam { slot: sim, name: "Input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: sim, name: "input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
         {
             let simnet = &mut state.current_dir_mut().children[sim];
             let mut pull = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
             pull.id = "pull-in-sim".into();
             pull.name = "pull1".into();
-            for (name, value) in [("Input", "input1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.05:0.00:0.00"), ("Combine", "Add")] {
+            for (name, value) in [("input", "input1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.05:0.00:0.00"), ("combine", "Add")] {
                 pull.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
             }
             simnet.children.push(pull);
             let output = simnet.children.iter_mut().find(|c| c.node_type == "output").unwrap();
-            output.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("pull1".to_string());
+            output.params.iter_mut().find(|p| p.name == "input").unwrap().set_text("pull1".to_string());
         }
         // Dive in and select the pull.
         state.current_path.push(sim);
@@ -17431,22 +17517,22 @@ mod tests {
         state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("tagged".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
         let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
         let (sim, tagged) = (slot_of(&state, "sim"), slot_of(&state, "tagged"));
-        state.apply_action(McpAction::SetParam { slot: sim, name: "Input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
-        state.apply_action(McpAction::SetParam { slot: tagged, name: "Input".into(), value: "sim".into() }, &mut redraw).unwrap();
-        state.apply_action(McpAction::SetParam { slot: tagged, name: "Mode".into(), value: "Random".into() }, &mut redraw).unwrap();
-        state.apply_action(McpAction::SetParam { slot: tagged, name: "Count".into(), value: "5".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: sim, name: "input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "input".into(), value: "sim".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "mode".into(), value: "Random".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "count".into(), value: "5".into() }, &mut redraw).unwrap();
         {
             let simnet = &mut state.current_dir_mut().children[sim];
             let template = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
             let mut node = template.clone();
             node.id = "pull-in-sim".into();
             node.name = "pull1".into();
-            for (name, value) in [("Input", "input1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.01:0.00:0.00"), ("Combine", "Add")] {
+            for (name, value) in [("input", "input1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.01:0.00:0.00"), ("combine", "Add")] {
                 node.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
             }
             simnet.children.push(node);
             let output = simnet.children.iter_mut().find(|c| c.node_type == "output").expect("a simnet has an output");
-            output.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("pull1".to_string());
+            output.params.iter_mut().find(|p| p.name == "input").unwrap().set_text("pull1".to_string());
         }
         state.slots.playbar.inner_mut().current_frame = 61.0;
         state.sync_nodes();
@@ -17518,14 +17604,14 @@ mod tests {
         // parameters are as they were, and the rows are read again.
         state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("tagged".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
         let tagged = slot_of(&state, "tagged");
-        for (name, value) in [("Input", "sphere1"), ("Mode", "Random"), ("Count", "5")] {
+        for (name, value) in [("input", "sphere1"), ("mode", "Random"), ("count", "5")] {
             state.apply_action(McpAction::SetParam { slot: tagged, name: name.into(), value: value.into() }, &mut redraw).unwrap();
         }
         state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
         state.sync_nodes();
         let (before, markers) = (state.last_spreadsheet_read_at, marks(&state));
         assert_eq!(markers.len(), 5);
-        state.apply_action(McpAction::SetParam { slot: sphere, name: "Radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
         assert_eq!(state.param_editor_selected(), Some(tagged), "the selection did not move");
         assert_ne!(state.last_spreadsheet_read_at, before, "the rows were read again");
         assert_ne!(marks(&state), markers, "and the markers moved out with the sphere");
@@ -17534,20 +17620,20 @@ mod tests {
         // is the frame the rows and the markers were read at.
         state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
         let sim = slot_of(&state, "sim");
-        state.apply_action(McpAction::SetParam { slot: sim, name: "Input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: sim, name: "input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
         {
             let simnet = &mut state.current_dir_mut().children[sim];
             let mut pull = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
             pull.id = "pull-in-sim".into();
             pull.name = "pull1".into();
-            for (name, value) in [("Input", "input1"), ("Operation", "Modify"), ("Attribute Name", "Pos"), ("Value", "0.05:0.00:0.00"), ("Combine", "Add")] {
+            for (name, value) in [("input", "input1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.05:0.00:0.00"), ("combine", "Add")] {
                 pull.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
             }
             simnet.children.push(pull);
             let output = simnet.children.iter_mut().find(|c| c.node_type == "output").unwrap();
-            output.params.iter_mut().find(|p| p.name == "Input").unwrap().set_text("pull1".to_string());
+            output.params.iter_mut().find(|p| p.name == "input").unwrap().set_text("pull1".to_string());
         }
-        state.apply_action(McpAction::SetParam { slot: tagged, name: "Input".into(), value: "sim".into() }, &mut redraw).unwrap();
+        state.apply_action(McpAction::SetParam { slot: tagged, name: "input".into(), value: "sim".into() }, &mut redraw).unwrap();
         state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
         state.slots.playbar.inner_mut().current_frame = 10.0;
         state.tick_frame(1.0 / 60.0);
@@ -17601,24 +17687,24 @@ mod tests {
             resolve_page(&root, &root.children[0], &mut Vec::new()).expect("no page")
         };
 
-        let px = make(&[("Units", "Pixels"), ("Width", "640"), ("Height", "360"), ("Resolution", "96")]);
+        let px = make(&[("units", "Pixels"), ("width", "640"), ("height", "360"), ("resolution", "96")]);
         assert_eq!((px.width, px.height), (640, 360), "a pixel size is that many pixels");
         assert_eq!(px.unit, PageUnit::Pixels);
         assert!((px.size[0] - 640.0 / 96.0).abs() < 1e-4, "its physical size is its pixels over its resolution");
 
-        let mm = make(&[("Units", "Millimetres"), ("Width", "210"), ("Height", "297"), ("Resolution", "100")]);
+        let mm = make(&[("units", "Millimetres"), ("width", "210"), ("height", "297"), ("resolution", "100")]);
         assert!((mm.size[0] - 210.0 / 25.4).abs() < 1e-4 && (mm.size[1] - 297.0 / 25.4).abs() < 1e-4);
         assert_eq!((mm.width, mm.height), (827, 1169), "A4 in millimetres at 100 DPI");
 
-        let cm = make(&[("Units", "Centimetres"), ("Width", "2.54"), ("Height", "5.08"), ("Resolution", "50")]);
+        let cm = make(&[("units", "Centimetres"), ("width", "2.54"), ("height", "5.08"), ("resolution", "50")]);
         assert_eq!((cm.width, cm.height), (50, 100));
 
         // A page from before the Units row is in inches, as it was.
-        let old = make(&[("Width", "2"), ("Height", "1"), ("Resolution", "50")]);
+        let old = make(&[("width", "2"), ("height", "1"), ("resolution", "50")]);
         assert_eq!((old.width, old.height, old.unit), (100, 50, PageUnit::Inches));
 
         // Opacity is the sheet's alpha, and Position where it stands.
-        let clear = make(&[("Width", "1"), ("Height", "1"), ("Resolution", "10"), ("Opacity", "0.25"), ("Position", "1.00:2.00:3.00")]);
+        let clear = make(&[("width", "1"), ("height", "1"), ("resolution", "10"), ("opacity", "0.25"), ("position", "1.00:2.00:3.00")]);
         assert!((clear.pixels[0][3] - 0.25).abs() < 1e-6);
         assert_eq!(clear.origin, [1.0, 2.0, 3.0]);
     }
@@ -17633,7 +17719,7 @@ mod tests {
         use crate::page::{follow_page_rows, migrate_preset_rows, resolve_page};
         let size = |node: &FsNode| {
             let row = |n: &str| node.params.iter().find(|p| p.name == n).unwrap().text().to_string();
-            (row("Width"), row("Height"))
+            (row("width"), row("height"))
         };
         let pick = |node: &mut FsNode, row: &str, value: &str| -> Vec<String> {
             let p = node.params.iter_mut().find(|p| p.name == row).unwrap();
@@ -17644,32 +17730,32 @@ mod tests {
         let templates_root = crate::app::load_fs_tree();
         let templates = crate::app::flatten_node_templates(&templates_root);
         let template = templates_root.children.iter().find(|t| t.node_type == "page").unwrap().clone();
-        let preset = template.params.iter().find(|p| p.name == "Preset").unwrap();
+        let preset = template.params.iter().find(|p| p.name == "preset").unwrap();
         assert!(!preset.choice_options().iter().any(|o| o == "Custom"), "{:?}", preset.choice_options());
-        assert!(template.params.iter().all(|p| p.name != "Orientation"));
-        for row in ["Width", "Height"] {
+        assert!(template.params.iter().all(|p| p.name != "orientation"));
+        for row in ["width", "height"] {
             assert!(template.params.iter().find(|p| p.name == row).unwrap().show_when.is_empty(), "{row} is always shown");
         }
 
         let mut page = template.clone();
-        assert_eq!(pick(&mut page, "Preset", "A4"), ["Width", "Height"], "what a pick overwrites is handed back, for undo");
+        assert_eq!(pick(&mut page, "preset", "A4"), ["width", "height"], "what a pick overwrites is handed back, for undo");
         assert_eq!(size(&page), ("8.268".into(), "11.693".into()));
-        pick(&mut page, "Preset", "Tabloid");
+        pick(&mut page, "preset", "Tabloid");
         assert_eq!(size(&page), ("11.00".into(), "17.00".into()), "a sheet is written portrait");
         // Units converts: the sheet keeps its size.
-        pick(&mut page, "Units", "Millimetres");
+        pick(&mut page, "units", "Millimetres");
         assert_eq!(size(&page), ("279.40".into(), "431.80".into()));
         // A raster size is written as it lies, in the page's unit.
-        pick(&mut page, "Units", "Pixels");
-        pick(&mut page, "Preset", "HD");
+        pick(&mut page, "units", "Pixels");
+        pick(&mut page, "preset", "HD");
         assert_eq!(size(&page), ("1920".into(), "1080".into()));
         let root = image_root(vec![page.clone()]);
         let img = resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap();
         assert_eq!((img.width, img.height), (1920, 1080));
         // Another row changes nothing.
-        assert!(pick(&mut page, "Resolution", "72").is_empty());
+        assert!(pick(&mut page, "resolution", "72").is_empty());
         // A size typed in is the size, whatever Preset still names.
-        pick(&mut page, "Width", "640");
+        pick(&mut page, "width", "640");
         let root = image_root(vec![page.clone()]);
         assert_eq!(resolve_page(&root, &root.children[0], &mut Vec::new()).unwrap().width, 640);
 
@@ -17679,13 +17765,13 @@ mod tests {
         // Letter; the Orientation row goes.
         let old = |preset: &str, w: &str, h: &str, orientation: &str| {
             let mut n = template.clone();
-            n.params.push(crate::app::ParamDef::new("Orientation", "choice:Portrait,Landscape", orientation));
-            for (row, v) in [("Preset", preset), ("Width", w), ("Height", h)] {
+            n.params.push(crate::app::ParamDef::new("orientation", "choice:Portrait,Landscape", orientation));
+            for (row, v) in [("preset", preset), ("width", w), ("height", h)] {
                 let p = n.params.iter_mut().find(|p| p.name == row).unwrap();
                 p.set_type("text");
                 p.set_text(v);
             }
-            for row in ["Width", "Height"] {
+            for row in ["width", "height"] {
                 n.params.iter_mut().find(|p| p.name == row).unwrap().show_when = "Preset == Custom".into();
             }
             n
@@ -17693,11 +17779,11 @@ mod tests {
         let mut tabloid = old("Tabloid", "8.5", "11.0", "Landscape");
         migrate_preset_rows(&mut tabloid);
         assert_eq!(size(&tabloid), ("17.00".into(), "11.00".into()));
-        assert!(tabloid.params.iter().all(|p| p.name != "Orientation"));
+        assert!(tabloid.params.iter().all(|p| p.name != "orientation"));
         let mut custom = old("Custom", "3", "2", "Portrait");
         migrate_preset_rows(&mut custom);
         assert_eq!(size(&custom), ("3".into(), "2".into()));
-        assert_eq!(custom.params.iter().find(|p| p.name == "Preset").unwrap().text(), "Letter");
+        assert_eq!(custom.params.iter().find(|p| p.name == "preset").unwrap().text(), "Letter");
         // Once: the merge takes the old conditions away, so a page loaded
         // a second time is left as it is.
         let mut loaded = image_root(vec![old("Custom", "3", "2", "Portrait")]);
@@ -17708,7 +17794,7 @@ mod tests {
         let mut merged = image_root(vec![old("A4", "8.5", "11.0", "Portrait")]);
         crate::app::merge_template_defs(&mut merged, &templates);
         assert_eq!(size(&merged.children[0]), ("8.268".into(), "11.693".into()));
-        assert!(merged.children[0].params.iter().all(|p| p.invalid().is_none() && p.name != "Orientation"));
+        assert!(merged.children[0].params.iter().all(|p| p.invalid().is_none() && p.name != "orientation"));
 
         // Through MCP, and undone as one step.
         let mut state = State::new(false);
@@ -17716,7 +17802,7 @@ mod tests {
         let slot = state.new_image().expect("the Page template is missing");
         let before = size(&state.current_dir().children[slot]);
         state
-            .apply_action(crate::app::McpAction::SetParam { slot, name: "Preset".into(), value: "Tabloid".into() }, &mut redraw)
+            .apply_action(crate::app::McpAction::SetParam { slot, name: "preset".into(), value: "Tabloid".into() }, &mut redraw)
             .unwrap();
         assert_eq!(size(&state.current_dir().children[slot]), ("11.00".into(), "17.00".into()));
         state.run_command("undo");
@@ -17731,14 +17817,14 @@ mod tests {
         use crate::page::resolve_page;
         let chain = |units: &str, w: &str, h: &str, dpi: &str| {
             let root = image_root(vec![
-                image_node("page1", "page", &[("Units", units), ("Width", w), ("Height", h), ("Resolution", dpi), ("Color", "1.00:1.00:1.00")]),
+                image_node("page1", "page", &[("units", units), ("width", w), ("height", h), ("resolution", dpi), ("color", "1.00:1.00:1.00")]),
                 image_node(
                     "shape1",
                     "page_shape",
                     &[
-                        ("Input", "page1"), ("Shape", "Rectangle"), ("X", "100"), ("Y", "50"),
-                        ("Width", "20"), ("Height", "10"), ("Fill", "true"),
-                        ("Fill Color", "1.00:0.00:0.00"), ("Stroke", "false"),
+                        ("input", "page1"), ("shape", "Rectangle"), ("x", "100"), ("y", "50"),
+                        ("width", "20"), ("height", "10"), ("fill", "true"),
+                        ("fill_color", "1.00:0.00:0.00"), ("stroke", "false"),
                     ],
                 ),
             ]);
@@ -17870,10 +17956,10 @@ mod tests {
         let slot = state.new_image().expect("the Page template is missing");
         let node = &mut state.current_dir_mut().children[slot];
         for (name, value) in [
-            ("Units", "Pixels".to_string()),
-            ("Width", w.to_string()),
-            ("Height", h.to_string()),
-            ("Resolution", dpi.to_string()),
+            ("units", "Pixels".to_string()),
+            ("width", w.to_string()),
+            ("height", h.to_string()),
+            ("resolution", dpi.to_string()),
         ] {
             node.params.iter_mut().find(|p| p.name == name).expect("a page row is missing").set_text(value);
         }
@@ -17960,7 +18046,7 @@ mod tests {
         state.current_dir_mut().children[slot]
             .params
             .iter_mut()
-            .find(|p| p.name == "Position")
+            .find(|p| p.name == "position")
             .unwrap()
             .set_text("3.00:-2.00:1.00");
         state.rebuild_scene_geometry();
@@ -18004,7 +18090,7 @@ mod tests {
         state.current_dir_mut().children[slot]
             .params
             .iter_mut()
-            .find(|p| p.name == "Position")
+            .find(|p| p.name == "position")
             .unwrap()
             .set_text("5.00:0.00:0.00");
         state.rebuild_scene_geometry();
@@ -18052,11 +18138,11 @@ mod tests {
             let n = s.current_dir().children.iter().find(|c| c.name == node).unwrap();
             n.params.iter().find(|p| p.name == row).unwrap_or_else(|| panic!("{node} has no {row}")).text().to_string()
         };
-        assert_eq!(text_of(&state, "page_shape1", "Input"), "page1");
-        assert_eq!(text_of(&state, "page_shape1", "Shape"), "Ellipse");
+        assert_eq!(text_of(&state, "page_shape1", "input"), "page1");
+        assert_eq!(text_of(&state, "page_shape1", "shape"), "Ellipse");
         // Letter, in inches: the middle of the sheet.
-        assert_eq!(text_of(&state, "page_shape1", "X"), "4.25");
-        assert_eq!(text_of(&state, "page_shape1", "Y"), "5.50");
+        assert_eq!(text_of(&state, "page_shape1", "x"), "4.25");
+        assert_eq!(text_of(&state, "page_shape1", "y"), "5.50");
 
         let flag = |s: &State, node: &str| s.current_dir().children.iter().find(|c| c.name == node).unwrap().geometry_visible;
         assert!(flag(&state, "page_shape1") && !flag(&state, "page1"), "the new node is not what shows");
@@ -18070,17 +18156,17 @@ mod tests {
         let page_slot = state.current_dir().children.iter().position(|c| c.name == "page1").unwrap();
         {
             let node = &mut state.current_dir_mut().children[page_slot];
-            for (row, v) in [("Units", "Pixels"), ("Width", "300"), ("Height", "200"), ("Resolution", "96")] {
+            for (row, v) in [("units", "Pixels"), ("width", "300"), ("height", "200"), ("resolution", "96")] {
                 node.params.iter_mut().find(|p| p.name == row).unwrap().set_text(v);
             }
         }
         state.graph_mut().set_selected_node(Some(page_slot));
         assert!(state.run_command("add_image_text"));
-        assert_eq!(text_of(&state, "page_text1", "Input"), "page1");
-        assert_eq!(text_of(&state, "page_shape1", "Input"), "page_text1", "the text was not inserted into the chain");
-        assert_eq!(text_of(&state, "page_text1", "X"), "150");
-        assert_eq!(text_of(&state, "page_text1", "Y"), "100");
-        assert_eq!(text_of(&state, "page_text1", "Size"), "10");
+        assert_eq!(text_of(&state, "page_text1", "input"), "page1");
+        assert_eq!(text_of(&state, "page_shape1", "input"), "page_text1", "the text was not inserted into the chain");
+        assert_eq!(text_of(&state, "page_text1", "x"), "150");
+        assert_eq!(text_of(&state, "page_text1", "y"), "100");
+        assert_eq!(text_of(&state, "page_text1", "size"), "10");
 
         // The whole chain still composes, from its end.
         let end = state.current_dir().children.iter().find(|c| c.name == "page_shape1").unwrap();
@@ -18094,7 +18180,7 @@ mod tests {
             assert!(state.run_command(cmd), "{cmd} is not a command");
             let all = names(&state, "page_shape");
             assert_eq!(all.len(), before + 1, "{cmd} added nothing");
-            assert_eq!(text_of(&state, all.last().unwrap(), "Shape"), shape);
+            assert_eq!(text_of(&state, all.last().unwrap(), "shape"), shape);
         }
     }
 
@@ -18107,10 +18193,10 @@ mod tests {
     fn a_page_frame_is_the_page_without_its_pixels() {
         use crate::page::{resolve_frame, resolve_page};
         let root = image_root(vec![
-            image_node("page1", "page", &[("Units", "Millimetres"), ("Width", "120"), ("Height", "80"), ("Resolution", "127"), ("Position", "1.00:2.00:3.00")]),
-            image_node("shape1", "page_shape", &[("Input", "page1")]),
-            image_node("text1", "page_text", &[("Input", "shape1")]),
-            image_node("lost1", "page_text", &[("Input", "nothing")]),
+            image_node("page1", "page", &[("units", "Millimetres"), ("width", "120"), ("height", "80"), ("resolution", "127"), ("position", "1.00:2.00:3.00")]),
+            image_node("shape1", "page_shape", &[("input", "page1")]),
+            image_node("text1", "page_text", &[("input", "shape1")]),
+            image_node("lost1", "page_text", &[("input", "nothing")]),
             image_node("sphere1", "sphere", &[]),
         ]);
         let page = resolve_page(&root, &root.children[2], &mut Vec::new()).expect("no page");
@@ -18181,7 +18267,7 @@ mod tests {
         assert_eq!(state.viewer_tool.as_ref().map(|t| t.source.name()), Some("Image Shape"), "adding a shape did not enter its viewer state");
         state.view_image_pixels();
         cache_scene_camera(&mut state);
-        let rows = |s: &State| ["X", "Y", "Width", "Height", "Rotation"].map(|r| edited_row(s, r));
+        let rows = |s: &State| ["x", "y", "width", "height", "rotation"].map(|r| edited_row(s, r));
         assert_eq!(rows(&state), [200.0, 100.0, 67.0, 67.0, 0.0]);
 
         let handles = state.viewer_tool_handles();
@@ -18216,9 +18302,9 @@ mod tests {
 
         // Each drag is one step to undo.
         assert!(state.viewer_tool_undo());
-        assert!((edited_row(&state, "Rotation")).abs() < 0.5, "undo did not take the turn back");
+        assert!((edited_row(&state, "rotation")).abs() < 0.5, "undo did not take the turn back");
         assert!(state.viewer_tool_redo());
-        assert!((edited_row(&state, "Rotation") - 90.0).abs() < 0.5);
+        assert!((edited_row(&state, "rotation") - 90.0).abs() < 0.5);
 
         // From an orbit the handles are still under the pointer: the middle,
         // dropped where a place on the image shows, is at that place.
@@ -18252,15 +18338,15 @@ mod tests {
         cache_scene_camera(&mut state);
         assert_eq!(state.viewer_tool_handles().len(), 2, "a line has a middle and an end");
         assert_eq!(state.viewer_tool_outline().len(), 2);
-        let height = edited_row(&state, "Height");
+        let height = edited_row(&state, "height");
 
         // Up and to the right of the middle by 30 and 40: fifty long each
         // way, running up the page.
         drag_handle_to(&mut state, 1, (630.0, 360.0));
-        assert_eq!(edited_row(&state, "Width"), 100.0);
-        assert!((edited_row(&state, "Rotation") - (-53.1)).abs() < 0.2, "{}", edited_row(&state, "Rotation"));
-        assert_eq!((edited_row(&state, "X"), edited_row(&state, "Y")), (200.0, 100.0));
-        assert_eq!(edited_row(&state, "Height"), height, "a line's handles wrote a row it does not show");
+        assert_eq!(edited_row(&state, "width"), 100.0);
+        assert!((edited_row(&state, "rotation") - (-53.1)).abs() < 0.2, "{}", edited_row(&state, "rotation"));
+        assert_eq!((edited_row(&state, "x"), edited_row(&state, "y")), (200.0, 100.0));
+        assert_eq!(edited_row(&state, "height"), height, "a line's handles wrote a row it does not show");
     }
 
     /// Text is moved by its anchor and sized by the handle under it, in the
@@ -18269,8 +18355,8 @@ mod tests {
     fn image_text_is_moved_and_sized_by_its_handles() {
         let mut state = state_showing_image(400, 200, 100);
         let page = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
-        state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "Units").unwrap().set_text("Inches");
-        for (row, v) in [("Width", "4"), ("Height", "2")] {
+        state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "units").unwrap().set_text("Inches");
+        for (row, v) in [("width", "4"), ("height", "2")] {
             state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == row).unwrap().set_text(v);
         }
         state.rebuild_scene_geometry();
@@ -18278,7 +18364,7 @@ mod tests {
         assert_eq!(state.viewer_tool.as_ref().map(|t| t.source.name()), Some("Image Text"));
         state.view_image_pixels();
         cache_scene_camera(&mut state);
-        assert_eq!((edited_row(&state, "X"), edited_row(&state, "Y"), edited_row(&state, "Size")), (2.0, 1.0, 0.1));
+        assert_eq!((edited_row(&state, "x"), edited_row(&state, "y"), edited_row(&state, "size")), (2.0, 1.0, 0.1));
 
         let handles = state.viewer_tool_handles();
         assert_eq!(handles.len(), 2);
@@ -18286,9 +18372,9 @@ mod tests {
 
         // A hundred pixels to the inch.
         drag_handle_to(&mut state, 0, (650.0, 375.0));
-        assert_eq!((edited_row(&state, "X"), edited_row(&state, "Y"), edited_row(&state, "Size")), (2.5, 0.75, 0.1));
+        assert_eq!((edited_row(&state, "x"), edited_row(&state, "y"), edited_row(&state, "size")), (2.5, 0.75, 0.1));
         drag_handle_to(&mut state, 1, (650.0, 375.0 + 25.0));
-        assert_eq!((edited_row(&state, "X"), edited_row(&state, "Y"), edited_row(&state, "Size")), (2.5, 0.75, 0.25));
+        assert_eq!((edited_row(&state, "x"), edited_row(&state, "y"), edited_row(&state, "size")), (2.5, 0.75, 0.25));
 
         // A node that draws on no image has no handles to grab.
         let id = state.viewer_tool.as_ref().unwrap().node_id.clone();
@@ -18296,7 +18382,7 @@ mod tests {
             .unwrap()
             .params
             .iter_mut()
-            .find(|p| p.name == "Input")
+            .find(|p| p.name == "input")
             .unwrap()
             .set_text("");
         assert!(state.viewer_tool_handles().is_empty());
@@ -18311,7 +18397,7 @@ mod tests {
         state.rebuild_scene_geometry();
         assert_eq!(state.page_image, Some(first), "the same picture took a new image");
         let page = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
-        state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "Width").unwrap().set_text("80");
+        state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "width").unwrap().set_text("80");
         state.rebuild_scene_geometry();
         assert!(state.page_image.is_some_and(|id| id != first), "a picture of another size kept the old image");
     }

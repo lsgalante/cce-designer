@@ -5,19 +5,22 @@
   "outputs": 1,
   "params": [
     {
-      "name": "Width",
+      "name": "width",
+      "label": "Width",
       "default": "1.0",
       "type": "slider:0:4",
       "description": "Size of the sheet along X in world units."
     },
     {
-      "name": "Length",
+      "name": "length",
+      "label": "Length",
       "default": "1.0",
       "type": "slider:0:4",
       "description": "Size of the sheet along Z in world units."
     },
     {
-      "name": "Columns",
+      "name": "columns",
+      "label": "Columns",
       "default": "16",
       "type": "spinbox",
       "min": 1,
@@ -26,7 +29,8 @@
       "description": "Number of quad divisions across the width (X). More columns give a finer sheet."
     },
     {
-      "name": "Rows",
+      "name": "rows",
+      "label": "Rows",
       "default": "16",
       "type": "spinbox",
       "min": 1,
@@ -35,28 +39,32 @@
       "description": "Number of quad divisions along the length (Z). More rows give a finer sheet."
     },
     {
-      "name": "Center X",
+      "name": "center_x",
+      "label": "Center X",
       "default": "0.0",
       "type": "slider:-2:2",
       "description": "X position of the sheet's center in world units.",
       "group": "place"
     },
     {
-      "name": "Center Y",
+      "name": "center_y",
+      "label": "Center Y",
       "default": "0.0",
       "type": "slider:-2:2",
       "description": "Height of the flat sheet in world units; the plane lies level in XZ at this Y.",
       "group": "place"
     },
     {
-      "name": "Center Z",
+      "name": "center_z",
+      "label": "Center Z",
       "default": "0.0",
       "type": "slider:-2:2",
       "description": "Z position of the sheet's center in world units.",
       "group": "place"
     },
     {
-      "name": "Color",
+      "name": "color",
+      "label": "Color",
       "default": "true",
       "type": "toggle",
       "description": "When on, colors the points with a gradient across the sheet; when off, the plane uses the plain default color.",

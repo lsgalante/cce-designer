@@ -520,9 +520,9 @@ pub fn sample_catmull_rom(pts: &[Vec3], segs: usize) -> Vec<Vec3> {
 /// one surface, which is a modeling decision the node has never made and is
 /// not this migration's to make.
 pub fn curve_detail(node: &FsNode) -> Detail {
-    let pts = parse_curve_points(&node_param_str(node, "Points", ""));
-    let segs = node_param_f32(node, "Segments", 8.0).max(1.0) as usize;
-    let thickness = node_param_f32(node, "Thickness", 0.02).max(0.001);
+    let pts = parse_curve_points(&node_param_str(node, "points", ""));
+    let segs = node_param_f32(node, "segments", 8.0).max(1.0) as usize;
+    let thickness = node_param_f32(node, "thickness", 0.02).max(0.001);
     let samples = sample_catmull_rom(&pts, segs);
     let mut d = Detail::new();
     for w in samples.windows(2) {
@@ -531,8 +531,14 @@ pub fn curve_detail(node: &FsNode) -> Detail {
     d
 }
 
+/// The parameter of that NAME — `base_resolution`, never the label the
+/// pane shows. Under test a name that cannot be one fails loudly: a reader
+/// still spelling a label (`"Base Resolution"`) finds nothing and reads its
+/// fallback, which is a quiet way for a node to stop listening to a row.
 fn find_param<'a>(node: &'a FsNode, name: &str) -> Option<&'a ParamDef> {
-    node.params.iter().find(|p| p.name.eq_ignore_ascii_case(name))
+    #[cfg(test)]
+    assert!(crate::app::is_param_name(name), "'{name}' is not a parameter name: the code spells names, the pane shows labels");
+    node.params.iter().find(|p| p.name == name)
 }
 
 /// A number: the parsed value of a number, whole-number or toggle
@@ -688,7 +694,7 @@ pub fn choice_options(p: &ParamDef) -> Vec<String> {
 /// and an expression's `ch()` both read. A toggle is 0 or 1; a choice is its
 /// option INDEX, the position in the template's list, the way an ordinal
 /// menu evaluates in Houdini. The index is what lets a subnet's dropdown
-/// drive a child switch's Index or a kernel's `chi("Method")`: the option
+/// drive a child switch's Index or a kernel's `chi("method")`: the option
 /// text parses as nothing, and until 2026-09-24 the kernel path parsed it
 /// anyway, so every choice read as 0 from inside a kernel.
 pub fn param_number(p: &ParamDef) -> f32 {
@@ -796,7 +802,7 @@ fn find_ref_param<'a>(node: &'a FsNode, name: &str) -> Option<(&'a ParamDef, Opt
 /// that comes back round to itself is an error rather than a stack overflow.
 ///
 /// Public so a SCRIPT on a node (the wrangle) can read channels through
-/// the same scope its parameters do: a `ch("../a/Radius")` in a script
+/// the same scope its parameters do: a `ch("../a/radius")` in a script
 /// then sees an expression-valued Radius evaluated, not its text.
 pub struct TreeScope<'a> {
     root: &'a FsNode,
@@ -894,7 +900,7 @@ impl Evaluated {
 
 /// One parameter's expression evaluated. A float3 is three expressions
 /// separated by `:` — each component its own, as Houdini's channels are —
-/// so `chf("../a/Size.x"):0:0` reads naturally.
+/// so `chf("../a/size.x"):0:0` reads naturally.
 fn eval_param_value(scope: &mut TreeScope, p: &ParamDef) -> Result<Evaluated, String> {
     if p.kind() == crate::app::ParamKind::Float3 {
         let parts: Vec<&str> = p.text().split(':').collect();
@@ -1323,9 +1329,9 @@ pub fn generate_single_node_geometry_with_errors(
 
     // Parameter references resolve here, once, for every resolver below:
     // a child of a composed subnet reads its parent's controls through
-    // `ch("Name")` and the resolvers never know.
+    // `ch("name")` and the resolvers never know.
     if is_bypassed(target) {
-        let res = param_node(root, target, "Input").and_then(|input| generate_single_node_geometry_with_errors(root, input, visited, ocl_error, sim));
+        let res = param_node(root, target, "input").and_then(|input| generate_single_node_geometry_with_errors(root, input, visited, ocl_error, sim));
         visited.pop();
         return res;
     }
@@ -1351,8 +1357,8 @@ pub fn generate_single_node_geometry_with_errors(
     } else if target.node_type.eq_ignore_ascii_case("line") {
         let idx = find_sphere_index(root, target)?;
         let start = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-        let length = node_param_f32(target, "Length", 1.0);
-        let thickness = node_param_f32(target, "Thickness", 0.02);
+        let length = node_param_f32(target, "length", 1.0);
+        let thickness = node_param_f32(target, "thickness", 0.02);
         let end = start + Vec3::new(0.0, length, 0.0);
         Some(box_detail(start, end, thickness))
     } else if target.node_type.eq_ignore_ascii_case("curve") {
@@ -1455,7 +1461,7 @@ pub fn generate_single_node_geometry_with_errors(
     } else if target.node_type.eq_ignore_ascii_case("output") {
         // Sibling-first, then anywhere — `find_input_node`'s own rule,
         // which this arm spelled out by hand before that function existed.
-        param_node(root, target, "Input")
+        param_node(root, target, "input")
             .and_then(|node| generate_single_node_geometry_with_errors(root, node, visited, ocl_error, sim))
     } else if target.node_type.eq_ignore_ascii_case("seed") {
         // What the enclosing loop began from, whichever pass it is on: a
@@ -1498,9 +1504,9 @@ pub fn resolve_transform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    let translation = node_param_vec3(target, "Translation", Vec3::ZERO).to_array();
+    let translation = node_param_vec3(target, "translation", Vec3::ZERO).to_array();
     // Moving points changes no topology, so the cache rides along.
     for p in geom.positions_mut() {
         for k in 0..3 {
@@ -1557,15 +1563,15 @@ pub fn resolve_group_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let group_name = node_param_str(target, "Group Name", "group1").trim().to_string();
-    let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
-    let center = node_param_vec3(target, "Center", Vec3::ZERO);
-    let half = node_param_vec3(target, "Size", Vec3::ONE) * 0.5;
-    let invert = node_param_bool(target, "Invert", false);
-    let highlight = node_param_bool(target, "Highlight", true);
+    let group_name = node_param_str(target, "group_name", "group1").trim().to_string();
+    let etype = node_param_str(target, "element_type", "Points").to_lowercase();
+    let center = node_param_vec3(target, "center", Vec3::ZERO);
+    let half = node_param_vec3(target, "size", Vec3::ONE) * 0.5;
+    let invert = node_param_bool(target, "invert", false);
+    let highlight = node_param_bool(target, "highlight", true);
 
     let inside = |p: Vec3| -> bool {
         (p.x - center.x).abs() <= half.x
@@ -1610,16 +1616,16 @@ fn select_elements(
         pts.iter().map(|&p| geom.pos(p as usize)).sum::<Vec3>() / pts.len() as f32
     };
 
-    let mode = node_param_str(target, "Mode", "Box").to_lowercase();
+    let mode = node_param_str(target, "mode", "Box").to_lowercase();
     if mode == "attribute" {
         // Select by what a point IS rather than where it is. This is what
         // makes the measuring nodes composable: Distance, Connectivity or a
         // solver's own attribute becomes a named selection that Cull, Relax's
         // pin, Attribute's group and Soft Transform all already read.
-        let attr = node_param_str(target, "Attribute", "");
+        let attr = node_param_str(target, "attribute", "");
         let attr = attr.trim().to_string();
-        let below = node_param_str(target, "Comparison", "Above").eq_ignore_ascii_case("below");
-        let threshold = node_param_f32(target, "Threshold", 0.5);
+        let below = node_param_str(target, "comparison", "Above").eq_ignore_ascii_case("below");
+        let threshold = node_param_f32(target, "threshold", 0.5);
         if geom.points().has(&attr) {
             for p in 0..geom.num_points() {
                 let v = geom.points().value(&attr, p).map(|v| v.as_f32()).unwrap_or(0.0);
@@ -1633,9 +1639,9 @@ fn select_elements(
         // signed: positive walks outward from the members, negative peels the
         // boundary off, which is how an erode/dilate pair reads without two
         // nodes.
-        let src = node_param_str(target, "Source Group", "");
+        let src = node_param_str(target, "source_group", "");
         let src = src.trim().to_string();
-        let rings = node_param_f32(target, "Rings", 1.0).clamp(-8.0, 8.0) as i32;
+        let rings = node_param_f32(target, "rings", 1.0).clamp(-8.0, 8.0) as i32;
         let mut inside: Vec<bool> = (0..geom.num_points())
             .map(|p| !src.is_empty() && geom.points().in_group(&src, p))
             .collect();
@@ -1662,10 +1668,10 @@ fn select_elements(
             member[p] = m;
         }
     } else if mode == "random" {
-        let count = node_param_f32(target, "Count", 1.0).max(0.0) as usize;
+        let count = node_param_f32(target, "count", 1.0).max(0.0) as usize;
         // Seed offsets the stream, and the element type joins it so switching
         // type reshuffles instead of replaying the same index sequence.
-        let mut rng = node_param_f32(target, "Seed", 0.0) as u64 ^ 0xCCE0;
+        let mut rng = node_param_f32(target, "seed", 0.0) as u64 ^ 0xCCE0;
         // Partial Fisher-Yates: draw `count` distinct indices out of `m`.
         let mut draw = |m: usize, count: usize| -> Vec<usize> {
             let mut idx: Vec<usize> = (0..m).collect();
@@ -1842,13 +1848,13 @@ pub fn resolve_collision_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     // Sibling-first like every other wire: this was a whole-tree
     // `find_node_by_name`, so inside a second copy of a subnet it found the
     // first copy's collider.
-    let Some(collider_node) = param_node(root, target, "Collider") else { return Some(geom) };
+    let Some(collider_node) = param_node(root, target, "collider") else { return Some(geom) };
     let Some(collider) = generate_single_node_geometry_with_errors(root, collider_node, visited, ocl_error, sim) else {
         return Some(geom);
     };
@@ -1865,8 +1871,8 @@ pub fn resolve_collision_geometry_with_errors(
         .map(|t| [t[0], t[1], t[2]])
         .collect();
 
-    let method = node_param_str(target, "Method", "Inside").to_lowercase();
-    let distance = node_param_f32(target, "Distance", 0.05).max(0.0);
+    let method = node_param_str(target, "method", "Inside").to_lowercase();
+    let distance = node_param_f32(target, "distance", 0.05).max(0.0);
     let test = if method == "proximity" { crate::collide::Test::Proximity(distance) } else { crate::collide::Test::Inside };
 
     // The test runs as ONE batch over every element the type asks about —
@@ -1874,8 +1880,8 @@ pub fn resolve_collision_geometry_with_errors(
     // (`crate::collide`, the second Phase 7 step 4 operator); the
     // per-element closure `select_elements` takes would have asked one
     // point at a time. Edges test both endpoints, as before.
-    let etype = node_param_str(target, "Element Type", "Points").to_lowercase();
-    let invert = node_param_bool(target, "Invert", false);
+    let etype = node_param_str(target, "element_type", "Points").to_lowercase();
+    let invert = node_param_bool(target, "invert", false);
     let queries: Vec<Vec3> = if etype == "primitives" {
         (0..geom.num_prims())
             .map(|prim| {
@@ -1936,8 +1942,8 @@ pub fn resolve_collision_geometry_with_errors(
         }
     }
 
-    let group_name = node_param_str(target, "Group Name", "collisions").trim().to_string();
-    let highlight = node_param_bool(target, "Highlight", true);
+    let group_name = node_param_str(target, "group_name", "collisions").trim().to_string();
+    let highlight = node_param_bool(target, "highlight", true);
     apply_group(
         &mut geom,
         &group_name,
@@ -1975,28 +1981,28 @@ pub fn resolve_relax_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
     // Tangential mode: the remesh's relaxation — each point toward the
     // centroid of its neighbours by Amount, less the part along its normal,
     // so the triangles even out and the shape stays. Zero iterations or a
     // zero Amount is off.
-    if node_param_str(target, "Mode", "Springs").eq_ignore_ascii_case("tangential") {
-        let iterations = node_param_f32(target, "Iterations", 1.0).max(0.0) as usize;
-        return Some(crate::remesh::relax_tangential(&geom, node_param_f32(target, "Amount", 0.5), iterations));
+    if node_param_str(target, "mode", "Springs").eq_ignore_ascii_case("tangential") {
+        let iterations = node_param_f32(target, "iterations", 1.0).max(0.0) as usize;
+        return Some(crate::remesh::relax_tangential(&geom, node_param_f32(target, "amount", 0.5), iterations));
     }
 
     // Repel mode: the Relax SOP — spheres of Radius pushed apart until they
     // stop overlapping, each point sliding in its tangent plane unless In 3D
     // Space lets it leave. No rest shape, no springs; zero iterations is off.
-    if node_param_str(target, "Mode", "Springs").eq_ignore_ascii_case("repel") {
-        let iterations = node_param_f32(target, "Iterations", 8.0).max(0.0) as usize;
-        let radius = node_param_f32(target, "Radius", 0.05);
+    if node_param_str(target, "mode", "Springs").eq_ignore_ascii_case("repel") {
+        let iterations = node_param_f32(target, "iterations", 8.0).max(0.0) as usize;
+        let radius = node_param_f32(target, "radius", 0.05);
         if iterations == 0 || radius <= 0.0 || geom.num_points() < 2 {
             return Some(geom);
         }
-        let in_3d = node_param_bool(target, "In 3D Space", false);
+        let in_3d = node_param_bool(target, "in_3d_space", false);
         let normals = if in_3d { None } else { Some(point_normals(&geom)) };
         let mut pts: Vec<Vec3> = (0..geom.num_points()).map(|p| geom.pos(p)).collect();
         crate::scatter::relax_points(&mut pts, normals.as_deref(), radius, iterations);
@@ -2008,7 +2014,7 @@ pub fn resolve_relax_geometry_with_errors(
 
     // Sibling-first, as the collider is: a simnet's `Rest: input1` has to
     // be ITS input1, not the first one in the tree.
-    let Some(rest_node) = param_node(root, target, "Rest") else { return Some(geom) };
+    let Some(rest_node) = param_node(root, target, "rest") else { return Some(geom) };
     let Some(rest) = generate_single_node_geometry_with_errors(root, rest_node, visited, ocl_error, sim) else {
         return Some(geom);
     };
@@ -2016,9 +2022,9 @@ pub fn resolve_relax_geometry_with_errors(
         return Some(geom);
     }
 
-    let stiffness = node_param_f32(target, "Stiffness", 0.5).clamp(0.0, 1.0);
-    let iterations = node_param_f32(target, "Iterations", 8.0).max(1.0) as usize;
-    let pin = node_param_str(target, "Pin Group", "").trim().to_string();
+    let stiffness = node_param_f32(target, "stiffness", 0.5).clamp(0.0, 1.0);
+    let iterations = node_param_f32(target, "iterations", 8.0).max(1.0) as usize;
+    let pin = node_param_str(target, "pin_group", "").trim().to_string();
 
     // The edges come from the REST shape's topology. This is where the soup
     // cost the most: it had to weld both shapes by position and rebuild the
@@ -2078,18 +2084,18 @@ pub fn resolve_normal_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    let name = node_param_str(target, "Attribute", "N").trim().to_string();
+    let name = node_param_str(target, "attribute", "N").trim().to_string();
     if name.is_empty() {
         return Some(geom);
     }
-    let flip = node_param_bool(target, "Flip", false);
+    let flip = node_param_bool(target, "flip", false);
     let sign = if flip { -1.0 } else { 1.0 };
     // A node without the Class row is one from before it, and writes the
     // points' as it always did.
-    if node_param_str(target, "Class", "Points").trim().eq_ignore_ascii_case("Vertices") {
-        let cusp = node_param_f32(target, "Cusp Angle", 60.0);
+    if node_param_str(target, "class", "Points").trim().eq_ignore_ascii_case("Vertices") {
+        let cusp = node_param_f32(target, "cusp_angle", 60.0);
         let normals: Vec<[f32; 3]> = vertex_normals(&geom, cusp).iter().map(|n| (*n * sign).to_array()).collect();
         geom.verts_mut().create(&name, AttribValue::Float3([0.0; 3]));
         let _ = geom.verts_mut().insert(&name, AttribData::Float3(normals));
@@ -2114,14 +2120,14 @@ pub fn resolve_bounds_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let prefix = node_param_str(target, "Prefix", "bounds").trim().to_string();
+    let prefix = node_param_str(target, "prefix", "bounds").trim().to_string();
     if prefix.is_empty() {
         return Some(geom);
     }
-    let group = node_param_str(target, "Group", "");
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let pts: Vec<Vec3> = (0..geom.num_points())
         .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
@@ -2166,10 +2172,10 @@ pub fn resolve_distance_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let to_name = node_param_node(target, "To").unwrap_or_default();
+    let to_name = node_param_node(target, "to").unwrap_or_default();
     let Some(other) = find_input_node(root, target, &to_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -2179,14 +2185,14 @@ pub fn resolve_distance_geometry_with_errors(
         return Some(geom);
     };
 
-    let name = node_param_str(target, "Attribute", "dist").trim().to_string();
-    let dir_name = node_param_str(target, "Direction", "");
+    let name = node_param_str(target, "attribute", "dist").trim().to_string();
+    let dir_name = node_param_str(target, "direction", "");
     let dir_name = dir_name.trim().to_string();
-    let signed = node_param_bool(target, "Signed", false);
+    let signed = node_param_bool(target, "signed", false);
     // Zero means no clamp: a maximum is for keeping a falloff bounded, and a
     // node whose default quietly flattened every measurement to zero would be
     // a trap.
-    let maximum = node_param_f32(target, "Maximum", 0.0).max(0.0);
+    let maximum = node_param_f32(target, "maximum", 0.0).max(0.0);
 
     let grid = crate::spatial::TriGrid::build(&other);
     // A point ON the surface has no direction to it, and the vector between
@@ -2246,7 +2252,7 @@ pub fn resolve_connectivity_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_connectivity(&mut geom, target);
     Some(geom)
@@ -2258,7 +2264,7 @@ pub fn apply_connectivity_for_test(geom: &mut Detail, target: &FsNode, _err: &mu
 }
 
 pub(crate) fn apply_connectivity(geom: &mut Detail, target: &FsNode) {
-    let name = node_param_str(target, "Attribute", "piece").trim().to_string();
+    let name = node_param_str(target, "attribute", "piece").trim().to_string();
     if name.is_empty() {
         return;
     }
@@ -2315,12 +2321,12 @@ pub fn resolve_cull_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let group = node_param_str(target, "Group", "");
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
-    let attr = node_param_str(target, "Attribute", "");
+    let attr = node_param_str(target, "attribute", "");
     let attr = attr.trim().to_string();
     if group.is_empty() && attr.is_empty() {
         return Some(geom);
@@ -2335,9 +2341,9 @@ pub fn resolve_cull_geometry_with_errors(
         return Some(geom);
     }
 
-    let below = node_param_str(target, "Comparison", "Below").eq_ignore_ascii_case("below");
-    let threshold = node_param_f32(target, "Threshold", 0.5);
-    let invert = node_param_bool(target, "Invert", false);
+    let below = node_param_str(target, "comparison", "Below").eq_ignore_ascii_case("below");
+    let threshold = node_param_f32(target, "threshold", 0.5);
+    let invert = node_param_bool(target, "invert", false);
 
     let selected: Vec<bool> = (0..geom.num_points())
         .map(|p| {
@@ -2375,16 +2381,16 @@ pub fn resolve_volume_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     if geom.num_prims() == 0 {
         return Some(geom);
     }
 
-    let voxel = node_param_f32(target, "Voxel Size", 0.05).max(1e-3);
-    let offset = node_param_f32(target, "Offset", 0.0);
-    let shell = node_param_str(target, "Mode", "Offset").eq_ignore_ascii_case("shell");
-    let thickness = node_param_f32(target, "Thickness", 0.05).max(1e-4);
+    let voxel = node_param_f32(target, "voxel_size", 0.05).max(1e-3);
+    let offset = node_param_f32(target, "offset", 0.0);
+    let shell = node_param_str(target, "mode", "Offset").eq_ignore_ascii_case("shell");
+    let thickness = node_param_f32(target, "thickness", 0.05).max(1e-4);
 
     // Room for everything the operation will ask the field to reach: the
     // offset itself, and for a shell the wall's thickness beyond it.
@@ -2432,10 +2438,10 @@ pub fn resolve_boolean_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let a = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let with_name = node_param_node(target, "With").unwrap_or_default();
+    let with_name = node_param_node(target, "with").unwrap_or_default();
     let Some(b) = find_input_node(root, target, &with_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -2448,8 +2454,8 @@ pub fn resolve_boolean_geometry_with_errors(
         return Some(a);
     }
 
-    let voxel = node_param_f32(target, "Voxel Size", 0.05).max(1e-3);
-    let op = node_param_str(target, "Operation", "Union").to_lowercase();
+    let voxel = node_param_f32(target, "voxel_size", 0.05).max(1e-3);
+    let op = node_param_str(target, "operation", "Union").to_lowercase();
     // One grid over BOTH, so the two fields line up sample for sample.
     let (alo, ahi) = a.bounds()?;
     let (blo, bhi) = b.bounds()?;
@@ -2474,14 +2480,14 @@ pub fn resolve_mold_shell_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let shell = crate::mold::mold_shell(
         &input,
-        node_param_f32(target, "Minimum Thickness", 0.6),
-        node_param_f32(target, "Maximum Thickness", 0.75),
-        node_param_f32(target, "Remesh Division Size", 0.9),
-        crate::mold::Ramp::parse(&node_param_str(target, "Ramp", "Linear")),
+        node_param_f32(target, "minimum_thickness", 0.6),
+        node_param_f32(target, "maximum_thickness", 0.75),
+        node_param_f32(target, "remesh_division_size", 0.9),
+        crate::mold::Ramp::parse(&node_param_str(target, "ramp", "Linear")),
     );
     // A node with nothing to thicken passes its input through rather than
     // vanishing: an empty result in the middle of a chain reads as a broken
@@ -2500,7 +2506,7 @@ pub fn resolve_hull_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let pts: Vec<Vec3> = (0..input.num_points()).map(|i| input.pos(i)).collect();
     Some(crate::hull::convex_hull(&pts).unwrap_or(input))
@@ -2511,7 +2517,7 @@ pub fn resolve_hull_geometry_with_errors(
 /// A wrangle with no input still runs — in Detail class, once, which is how
 /// a script builds geometry from nothing with `addpoint` / `addprim`. The
 /// channels the script names as literals are resolved HERE, before the run,
-/// through the expression scope: `ch("../Radius")` on a parameter that is
+/// through the expression scope: `ch("../radius")` on a parameter that is
 /// itself an expression sees the evaluated value, and neither language has
 /// to know the other exists. A failing script reports through the error
 /// slot and the input passes through unchanged.
@@ -2522,13 +2528,13 @@ pub fn resolve_wrangle_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input = match param_node(root, target, "Input") {
+    let input = match param_node(root, target, "input") {
         Some(n) => generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim).unwrap_or_default(),
         None => Detail::new(),
     };
-    let code = node_param_str(target, "Code", "");
-    let class = crate::wrangle::parse_class(&node_param_str(target, "Class", "Points"));
-    let group = node_param_str(target, "Group", "");
+    let code = node_param_str(target, "code", "");
+    let class = crate::wrangle::parse_class(&node_param_str(target, "class", "Points"));
+    let group = node_param_str(target, "group", "");
 
     let mut chans = std::collections::HashMap::new();
     {
@@ -2562,10 +2568,10 @@ pub fn resolve_extrude_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let input = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    let distance = node_param_f32(target, "Distance", 0.2);
-    let keep_base = node_param_bool(target, "Keep Base", true);
+    let distance = node_param_f32(target, "distance", 0.2);
+    let keep_base = node_param_bool(target, "keep_base", true);
     Some(crate::shapes::extrude_detail(&input, distance, keep_base))
 }
 
@@ -2584,14 +2590,14 @@ pub fn retired_opencl_node(
     if ocl_error.is_none() {
         *ocl_error = Some(format!("{}: OpenCL nodes are retired; rewrite the kernel as a wrangle", target.name));
     }
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
 }
 
 /// The Switch node: one of up to four inputs, chosen by Index.
 ///
 /// What a composed subnet puts behind a choice: the Embryo's Source is a
-/// switch whose Index reads `chi("Source")`, so Internal is input 0 and
+/// switch whose Index reads `chi("source")`, so Internal is input 0 and
 /// Input is input 1. Nothing else about it — it passes the chosen geometry
 /// through untouched, and an empty slot passes nothing.
 ///
@@ -2601,7 +2607,7 @@ pub fn retired_opencl_node(
 pub const SWITCH_INPUTS: usize = 4;
 
 pub fn switch_input_param(index: usize) -> String {
-    if index == 0 { "Input".to_string() } else { format!("Input {}", index + 1) }
+    if index == 0 { "input".to_string() } else { format!("input_{}", index + 1) }
 }
 
 pub fn resolve_switch_geometry_with_errors(
@@ -2611,7 +2617,7 @@ pub fn resolve_switch_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let index = (node_param_f32(target, "Index", 0.0).round().max(0.0) as usize).min(SWITCH_INPUTS - 1);
+    let index = (node_param_f32(target, "index", 0.0).round().max(0.0) as usize).min(SWITCH_INPUTS - 1);
     let input_node = param_node(root, target, &switch_input_param(index))?;
     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
 }
@@ -2630,18 +2636,18 @@ pub fn resolve_export_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)
 }
 
 /// The format and scale an Export node is configured for.
 pub fn export_settings(target: &FsNode) -> (crate::export::Format, f32) {
-    let format = match node_param_str(target, "Format", "STL").as_str() {
+    let format = match node_param_str(target, "format", "STL").as_str() {
         "OBJ" => crate::export::Format::Obj,
         "STL (ASCII)" => crate::export::Format::StlAscii,
         _ => crate::export::Format::StlBinary,
     };
-    (format, node_param_f32(target, "Scale", 1.0).max(1e-6))
+    (format, node_param_f32(target, "scale", 1.0).max(1e-6))
 }
 
 /// The Grid node: a flat sheet of quads in the XZ plane.
@@ -2656,11 +2662,11 @@ pub fn export_settings(target: &FsNode) -> (crate::export::Format, f32) {
 /// which is surprising the first time and unadjustable after; a parameter says
 /// what it is.
 pub fn grid_detail(target: &FsNode) -> Detail {
-    let rows = node_param_f32(target, "Rows", 10.0).clamp(1.0, 500.0) as usize;
-    let cols = node_param_f32(target, "Columns", 10.0).clamp(1.0, 500.0) as usize;
-    let width = node_param_f32(target, "Width", 1.0).max(1e-4);
-    let length = node_param_f32(target, "Length", 1.0).max(1e-4);
-    let centre = node_param_vec3(target, "Center", Vec3::ZERO);
+    let rows = node_param_f32(target, "rows", 10.0).clamp(1.0, 500.0) as usize;
+    let cols = node_param_f32(target, "columns", 10.0).clamp(1.0, 500.0) as usize;
+    let width = node_param_f32(target, "width", 1.0).max(1e-4);
+    let length = node_param_f32(target, "length", 1.0).max(1e-4);
+    let centre = node_param_vec3(target, "center", Vec3::ZERO);
 
     let mut d = Detail::new();
     for r in 0..=rows {
@@ -2694,11 +2700,11 @@ pub fn grid_detail(target: &FsNode) -> Detail {
 /// triangles cross the concave notches and the shape renders as its own convex
 /// hull.
 pub fn polygon_detail(target: &FsNode) -> Detail {
-    let sides = node_param_f32(target, "Sides", 4.0).clamp(3.0, 256.0) as usize;
-    let radius = node_param_f32(target, "Radius", 0.5).max(1e-4);
-    let inner = node_param_f32(target, "Inner Radius", 0.0).max(0.0);
-    let fill = node_param_bool(target, "Fill", true);
-    let centre = node_param_vec3(target, "Center", Vec3::ZERO);
+    let sides = node_param_f32(target, "sides", 4.0).clamp(3.0, 256.0) as usize;
+    let radius = node_param_f32(target, "radius", 0.5).max(1e-4);
+    let inner = node_param_f32(target, "inner_radius", 0.0).max(0.0);
+    let fill = node_param_bool(target, "fill", true);
+    let centre = node_param_vec3(target, "center", Vec3::ZERO);
 
     let mut d = Detail::new();
     // A star alternates between the two radii, so it has twice the corners.
@@ -2750,10 +2756,10 @@ pub fn resolve_transfer_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let from_name = node_param_node(target, "From").unwrap_or_default();
+    let from_name = node_param_node(target, "from").unwrap_or_default();
     let Some(source) = find_input_node(root, target, &from_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -2766,14 +2772,14 @@ pub fn resolve_transfer_geometry_with_errors(
         return Some(geom);
     }
 
-    let groups = node_param_bool(target, "Transfer Groups", false).then(|| name_list(&node_param_str(target, "Groups", "")));
+    let groups = node_param_bool(target, "transfer_groups", false).then(|| name_list(&node_param_str(target, "groups", "")));
     transfer_onto(
         &mut geom,
         &source,
-        &name_list(&node_param_str(target, "Attributes", "")),
+        &name_list(&node_param_str(target, "attributes", "")),
         groups.as_deref(),
-        node_param_f32(target, "Maximum Distance", 0.0),
-        node_param_str(target, "Group", "").trim(),
+        node_param_f32(target, "maximum_distance", 0.0),
+        node_param_str(target, "group", "").trim(),
     );
     Some(geom)
 }
@@ -2874,13 +2880,13 @@ pub fn resolve_valence_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    let name = node_param_str(target, "Attribute", "valence").trim().to_string();
+    let name = node_param_str(target, "attribute", "valence").trim().to_string();
     if name.is_empty() {
         return Some(geom);
     }
-    let by_prims = node_param_str(target, "Measure", "Neighbours").eq_ignore_ascii_case("primitives");
+    let by_prims = node_param_str(target, "measure", "Neighbours").eq_ignore_ascii_case("primitives");
     let data: Vec<i32> = (0..geom.num_points())
         .map(|p| {
             if by_prims {
@@ -2911,7 +2917,7 @@ pub fn resolve_deform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_deform(&mut geom, target);
     Some(geom)
@@ -2919,7 +2925,7 @@ pub fn resolve_deform_geometry_with_errors(
 
 pub(crate) fn apply_deform(geom: &mut Detail, target: &FsNode) {
     let Some((lo, hi)) = geom.bounds() else { return };
-    let axis = match node_param_str(target, "Axis", "Y").to_uppercase().as_str() {
+    let axis = match node_param_str(target, "axis", "Y").to_uppercase().as_str() {
         "X" => 0,
         "Z" => 2,
         _ => 1,
@@ -2933,9 +2939,9 @@ pub(crate) fn apply_deform(geom: &mut Detail, target: &FsNode) {
     if span.abs() < 1e-9 {
         return;
     }
-    let amount = node_param_f32(target, "Amount", 1.0);
-    let mode = node_param_str(target, "Mode", "Twist").to_lowercase();
-    let group = node_param_str(target, "Group", "");
+    let amount = node_param_f32(target, "amount", 1.0);
+    let mode = node_param_str(target, "mode", "Twist").to_lowercase();
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let centre = (lo + hi) * 0.5;
 
@@ -2996,10 +3002,10 @@ pub fn resolve_copy_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let source_node = param_node(root, target, "Input")?;
+    let source_node = param_node(root, target, "input")?;
     let source = generate_single_node_geometry_with_errors(root, source_node, visited, ocl_error, sim)?;
 
-    let to_name = node_param_node(target, "To").unwrap_or_default();
+    let to_name = node_param_node(target, "to").unwrap_or_default();
     let Some(onto) = find_input_node(root, target, &to_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -3009,7 +3015,7 @@ pub fn resolve_copy_geometry_with_errors(
         return Some(source);
     };
 
-    let group = node_param_str(target, "Group", "");
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let targets: Vec<usize> = (0..onto.num_points())
         .filter(|&p| group.is_empty() || onto.points().in_group(&group, p))
@@ -3034,9 +3040,9 @@ pub fn resolve_copy_geometry_with_errors(
         return Some(Detail::new());
     }
 
-    let orient = node_param_str(target, "Orient", "None").eq_ignore_ascii_case("normal");
-    let scale = node_param_f32(target, "Scale", 1.0);
-    let scale_attr = node_param_str(target, "Scale Attribute", "");
+    let orient = node_param_str(target, "orient", "None").eq_ignore_ascii_case("normal");
+    let scale = node_param_f32(target, "scale", 1.0);
+    let scale_attr = node_param_str(target, "scale_attribute", "");
     let scale_attr = scale_attr.trim().to_string();
     let normals = orient.then(|| point_normals(&onto));
 
@@ -3083,7 +3089,7 @@ pub fn resolve_soft_transform_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_soft_transform(&mut geom, target);
     Some(geom)
@@ -3094,19 +3100,19 @@ pub(crate) fn apply_soft_transform(geom: &mut Detail, target: &FsNode) {
     if n == 0 {
         return;
     }
-    let translation = node_param_vec3(target, "Translation", Vec3::ZERO);
-    let radius = node_param_f32(target, "Radius", 0.5).max(0.0);
-    let falloff = node_param_str(target, "Falloff", "Smooth").to_lowercase();
-    let group = node_param_str(target, "Group", "");
+    let translation = node_param_vec3(target, "translation", Vec3::ZERO);
+    let radius = node_param_f32(target, "radius", 0.5).max(0.0);
+    let falloff = node_param_str(target, "falloff", "Smooth").to_lowercase();
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
-    let write_attr = node_param_str(target, "Attribute", "");
+    let write_attr = node_param_str(target, "attribute", "");
     let write_attr = write_attr.trim().to_string();
 
     let members: Vec<Vec3> = (0..n)
         .filter(|&p| !group.is_empty() && geom.points().in_group(&group, p))
         .map(|p| geom.pos(p))
         .collect();
-    let centre = node_param_vec3(target, "Center", Vec3::ZERO);
+    let centre = node_param_vec3(target, "center", Vec3::ZERO);
     let grid = (!members.is_empty()).then(|| crate::spatial::PointGrid::build(&members, radius.max(1e-4)));
 
     let mut weights = vec![0.0f32; n];
@@ -3159,9 +3165,9 @@ pub fn resolve_subdivide_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    let depth = node_param_f32(target, "Depth", 1.0).clamp(0.0, 6.0) as usize;
+    let depth = node_param_f32(target, "depth", 1.0).clamp(0.0, 6.0) as usize;
     Some(crate::remesh::subdivide(&geom, depth))
 }
 
@@ -3186,7 +3192,7 @@ pub fn resolve_detangle_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     // Inside a simnet that is mid-solve, what the substep consumed is where
     // the points were when the step began: the nearest simnet above this
@@ -3230,13 +3236,13 @@ pub(crate) fn apply_detangle_reference(geom: &mut Detail, target: &FsNode) {
         .map(|e| (geom.pos(e[1] as usize) - geom.pos(e[0] as usize)).length())
         .sum::<f32>()
         / edges.len() as f32;
-    let thickness = node_param_f32(target, "Thickness", 1.0).max(0.0) * mean_edge;
+    let thickness = node_param_f32(target, "thickness", 1.0).max(0.0) * mean_edge;
     if thickness <= 0.0 {
         return;
     }
-    let rings = node_param_f32(target, "Rings", 2.0).clamp(0.0, 6.0) as usize;
-    let iterations = node_param_f32(target, "Iterations", 4.0).clamp(1.0, 32.0) as usize;
-    let group = node_param_str(target, "Group", "");
+    let rings = node_param_f32(target, "rings", 2.0).clamp(0.0, 6.0) as usize;
+    let iterations = node_param_f32(target, "iterations", 4.0).clamp(1.0, 32.0) as usize;
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let movable: Vec<bool> = (0..n)
         .map(|p| group.is_empty() || geom.points().in_group(&group, p))
@@ -3332,10 +3338,10 @@ pub fn resolve_suture_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let against = param_node(root, target, "Against")
+    let against = param_node(root, target, "against")
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim));
     apply_suture(&mut geom, against.as_ref(), target);
     Some(geom)
@@ -3346,9 +3352,9 @@ pub(crate) fn apply_suture(geom: &mut Detail, against: Option<&Detail>, target: 
     if n == 0 {
         return;
     }
-    let distance = node_param_f32(target, "Distance Threshold", 0.05).max(0.0);
-    let fusion = node_param_f32(target, "Fusion Threshold", 3.0).max(1.0) as i32;
-    let counter = node_param_str(target, "Counter", "contact");
+    let distance = node_param_f32(target, "distance_threshold", 0.05).max(0.0);
+    let fusion = node_param_f32(target, "fusion_threshold", 3.0).max(1.0) as i32;
+    let counter = node_param_str(target, "counter", "contact");
     let counter = counter.trim().to_string();
     if counter.is_empty() || distance <= 0.0 {
         return;
@@ -3439,7 +3445,7 @@ pub fn resolve_remesh_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     let mut out = crate::remesh::remesh(&geom, remesh_settings(target));
     remesh_transfer(&mut out, &geom, root, target, visited, ocl_error, sim);
@@ -3465,10 +3471,10 @@ fn remesh_transfer(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) {
-    if !node_param_bool(target, "Transfer", false) {
+    if !node_param_bool(target, "transfer", false) {
         return;
     }
-    let from_name = node_param_node(target, "From").unwrap_or_default();
+    let from_name = node_param_node(target, "from").unwrap_or_default();
     let named = if from_name.is_empty() {
         None
     } else {
@@ -3483,13 +3489,13 @@ fn remesh_transfer(
         }
     };
     let source = named.as_ref().unwrap_or(input);
-    let groups = node_param_bool(target, "Transfer Groups", false).then(|| name_list(&node_param_str(target, "Groups", "")));
+    let groups = node_param_bool(target, "transfer_groups", false).then(|| name_list(&node_param_str(target, "groups", "")));
     transfer_onto(
         out,
         source,
-        &name_list(&node_param_str(target, "Attributes", "")),
+        &name_list(&node_param_str(target, "attributes", "")),
         groups.as_deref(),
-        node_param_f32(target, "Maximum Distance", 0.0),
+        node_param_f32(target, "maximum_distance", 0.0),
         "",
     );
 }
@@ -3498,17 +3504,17 @@ fn remesh_transfer(
 /// repeat that each one is: what the load bypasses when it recomposes a
 /// native remesh whose switch was off.
 pub const REMESH_PASS_SWITCHES: [(&str, &str); 4] =
-    [("Split", "split1"), ("Collapse", "collapse1"), ("Flip", "flip1"), ("Project", "project1")];
+    [("split", "split1"), ("collapse", "collapse1"), ("flip", "flip1"), ("project", "project1")];
 
 pub(crate) fn remesh_settings(target: &FsNode) -> crate::remesh::Settings {
     crate::remesh::Settings {
-        target: node_param_f32(target, "Target Length", 0.1).max(1e-4),
-        iterations: node_param_f32(target, "Iterations", 3.0).clamp(1.0, 20.0) as usize,
-        relax: node_param_f32(target, "Relax", 0.5),
-        split: node_param_bool(target, "Split", true),
-        collapse: node_param_bool(target, "Collapse", true),
-        flip: node_param_bool(target, "Flip", true),
-        project: node_param_bool(target, "Project", true),
+        target: node_param_f32(target, "target_length", 0.1).max(1e-4),
+        iterations: node_param_f32(target, "iterations", 3.0).clamp(1.0, 20.0) as usize,
+        relax: node_param_f32(target, "relax", 0.5),
+        split: node_param_bool(target, "split", true),
+        collapse: node_param_bool(target, "collapse", true),
+        flip: node_param_bool(target, "flip", true),
+        project: node_param_bool(target, "project", true),
     }
 }
 
@@ -3529,7 +3535,7 @@ fn level_input(
         // Looked up from the SUBNET's level, not from inside it: the name is
         // the subnet's wire, and a child that happens to share it (the
         // Embryo's sphere1 beside an outer sphere1) is not what it names.
-        node_param_node(parent, "Input")
+        node_param_node(parent, "input")
             .and_then(|name| find_input_node(root, parent, &name))
             .and_then(|input_node| generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim))
     };
@@ -3550,9 +3556,9 @@ pub fn resolve_edge_pass_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    Some(crate::remesh::edge_pass(&geom, pass, node_param_f32(target, "Target Length", 0.1).max(1e-4)))
+    Some(crate::remesh::edge_pass(&geom, pass, node_param_f32(target, "target_length", 0.1).max(1e-4)))
 }
 
 /// The Project node: every point of the Input moved to the nearest place on
@@ -3566,9 +3572,9 @@ pub fn resolve_project_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
-    let Some(surface_name) = node_param_node(target, "Surface") else { return Some(geom) };
+    let Some(surface_name) = node_param_node(target, "surface") else { return Some(geom) };
     let Some(surface) = find_input_node(root, target, &surface_name)
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
     else {
@@ -3613,11 +3619,11 @@ fn run_repeat(
     sim: &mut EvalSim,
 ) -> Option<(Detail, Detail)> {
     let output_node = target.children.iter().find(|c| c.node_type.eq_ignore_ascii_case("output"))?;
-    let seed = param_node(root, target, "Input")
+    let seed = param_node(root, target, "input")
         .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
         .unwrap_or_default();
-    let iterations = (node_param_f32(target, "Iterations", 1.0).round().max(0.0) as usize).min(REPEAT_MAX);
-    let stop = node_param_bool(target, "Stop When Unchanged", false);
+    let iterations = (node_param_f32(target, "iterations", 1.0).round().max(0.0) as usize).min(REPEAT_MAX);
+    let stop = node_param_bool(target, "stop_when_unchanged", false);
     sim.seeds.push((target.id.clone(), Some(seed.clone())));
     let mut state = seed.clone();
     let mut prev = seed;
@@ -3728,14 +3734,14 @@ pub fn resolve_develop_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_develop(&mut geom, target, ocl_error);
     Some(geom)
 }
 
 pub(crate) fn apply_develop(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
-    let name = node_param_str(target, "Attribute", "").trim().to_string();
+    let name = node_param_str(target, "attribute", "").trim().to_string();
     if name.is_empty() {
         return;
     }
@@ -3749,11 +3755,11 @@ pub(crate) fn apply_develop(geom: &mut Detail, target: &FsNode, ocl_error: &mut 
         return;
     }
 
-    let scale = node_param_f32(target, "Scale", 0.1);
-    let group = node_param_str(target, "Group", "");
+    let scale = node_param_f32(target, "scale", 0.1);
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
-    let by_attr = node_param_str(target, "Direction", "Normal").eq_ignore_ascii_case("attribute");
-    let src = node_param_str(target, "Source", "");
+    let by_attr = node_param_str(target, "direction", "Normal").eq_ignore_ascii_case("attribute");
+    let src = node_param_str(target, "source", "");
     let src = src.trim().to_string();
 
     // Normals come off the geometry as it arrives, so every point is displaced
@@ -3864,7 +3870,7 @@ pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 
 /// pull arrows while one is selected.
 pub fn moves_points(node: &FsNode) -> bool {
     node.node_type.eq_ignore_ascii_case("attribute")
-        && node_param_str(node, "Attribute Name", "").trim().eq_ignore_ascii_case("Pos")
+        && node_param_str(node, "attribute_name", "").trim().eq_ignore_ascii_case("Pos")
 }
 
 /// `target`'s geometry as the scene SHOWS it: a node inside a simnet as the
@@ -3906,7 +3912,7 @@ pub fn node_geometry_as_shown(
 /// node was rewired onto something that adds or removes points) give nothing,
 /// since the indices no longer pair up.
 pub fn point_displacements(root: &FsNode, target: &FsNode, sim: &mut EvalSim) -> Vec<(Vec3, Vec3)> {
-    let Some(input_node) = param_node(root, target, "Input") else {
+    let Some(input_node) = param_node(root, target, "input") else {
         return Vec::new();
     };
     let mut ocl_error = None;
@@ -4010,14 +4016,14 @@ pub fn resolve_visualize_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_visualize(&mut geom, target, ocl_error);
     Some(geom)
 }
 
 pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
-    let name = node_param_str(target, "Attribute", "").trim().to_string();
+    let name = node_param_str(target, "attribute", "").trim().to_string();
     if name.is_empty() {
         return;
     }
@@ -4031,14 +4037,14 @@ pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         return;
     }
 
-    let group = node_param_str(target, "Group", "");
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let affected: Vec<usize> = (0..geom.num_points())
         .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
         .collect();
 
-    if node_param_str(target, "Mode", "Ramp").eq_ignore_ascii_case("vector") {
-        let scale = node_param_f32(target, "Scale", 0.2);
+    if node_param_str(target, "mode", "Ramp").eq_ignore_ascii_case("vector") {
+        let scale = node_param_f32(target, "scale", 0.2);
         let staged: Vec<[f32; 3]> = (0..geom.num_points())
             .map(|p| {
                 if !affected.contains(&p) {
@@ -4066,10 +4072,10 @@ pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     // Ramp. Auto measures across EVERY point, not just the group: a group's
     // colours should sit where they belong on the whole picture's scale, or
     // two Visualize nodes over two groups would each claim the full ramp.
-    let (from, to) = if node_param_str(target, "Range", "Auto").eq_ignore_ascii_case("manual") {
+    let (from, to) = if node_param_str(target, "range", "Auto").eq_ignore_ascii_case("manual") {
         (
-            node_param_f32(target, "From", 0.0),
-            node_param_f32(target, "To", 1.0),
+            node_param_f32(target, "from", 0.0),
+            node_param_f32(target, "to", 1.0),
         )
     } else {
         let vals: Vec<f32> = (0..geom.num_points())
@@ -4083,9 +4089,9 @@ pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     };
     let span = to - from;
 
-    let ramp = node_param_str(target, "Ramp", "Viridis").to_lowercase();
-    let blend = node_param_str(target, "Blend", "Set").to_lowercase();
-    let opacity = node_param_f32(target, "Opacity", 1.0).clamp(0.0, 1.0);
+    let ramp = node_param_str(target, "ramp", "Viridis").to_lowercase();
+    let blend = node_param_str(target, "blend", "Set").to_lowercase();
+    let opacity = node_param_f32(target, "opacity", 1.0).clamp(0.0, 1.0);
 
     for p in affected {
         let v = geom.points().value(&name, p).map(|v| v.as_f32()).unwrap_or(0.0);
@@ -4131,16 +4137,16 @@ pub fn resolve_analysis_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_analysis(&mut geom, target, ocl_error);
     Some(geom)
 }
 
 pub(crate) fn apply_analysis(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
-    let edges = node_param_str(target, "Source", "Attribute").eq_ignore_ascii_case("edge lengths");
-    let name = node_param_str(target, "Attribute", "").trim().to_string();
-    let group = node_param_str(target, "Group", "");
+    let edges = node_param_str(target, "source", "Attribute").eq_ignore_ascii_case("edge lengths");
+    let name = node_param_str(target, "attribute", "").trim().to_string();
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
 
     // The column to reduce, and the name its answers hang off.
@@ -4219,7 +4225,7 @@ pub fn resolve_time_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let frame = sim.frame;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_time(&mut geom, target, frame);
@@ -4227,12 +4233,12 @@ pub fn resolve_time_geometry_with_errors(
 }
 
 pub(crate) fn apply_time(geom: &mut Detail, target: &FsNode, frame: i32) {
-    let name = node_param_str(target, "Attribute", "t").trim().to_string();
+    let name = node_param_str(target, "attribute", "t").trim().to_string();
     if name.is_empty() {
         return;
     }
-    let start = node_param_f32(target, "Start Frame", 1.0);
-    let end = node_param_f32(target, "End Frame", 100.0);
+    let start = node_param_f32(target, "start_frame", 1.0);
+    let end = node_param_f32(target, "end_frame", 100.0);
     let span = end - start;
     // A zero-length range is 1.0 from its first frame on, not a division by
     // zero: "the whole range has elapsed" is the only reading that composes.
@@ -4241,7 +4247,7 @@ pub(crate) fn apply_time(geom: &mut Detail, target: &FsNode, frame: i32) {
     } else {
         (frame as f32 - start) / span
     };
-    let t = if node_param_bool(target, "Clamp", true) {
+    let t = if node_param_bool(target, "clamp", true) {
         t.clamp(0.0, 1.0)
     } else {
         t
@@ -4386,7 +4392,7 @@ pub fn resolve_neighbour_geometry_with_errors(
     ocl_error: &mut Option<String>,
     sim: &mut EvalSim,
 ) -> Option<Detail> {
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_neighbour(&mut geom, target, ocl_error);
     Some(geom)
@@ -4397,7 +4403,7 @@ pub fn resolve_neighbour_geometry_with_errors(
 /// Split from the resolver so the operator can be exercised on geometry a test
 /// controls, rather than only on whatever a graph happens to produce.
 pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
-    let name = node_param_str(target, "Attribute", "").trim().to_string();
+    let name = node_param_str(target, "attribute", "").trim().to_string();
     if name.is_empty() {
         return;
     }
@@ -4413,8 +4419,8 @@ pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mu
 
     let n = geom.num_points();
     let k = ty.components();
-    let amount = node_param_f32(target, "Amount", 0.5).clamp(0.0, 1.0);
-    let mode = node_param_str(target, "Mode", "Diffuse").to_lowercase();
+    let amount = node_param_f32(target, "amount", 0.5).clamp(0.0, 1.0);
+    let mode = node_param_str(target, "mode", "Diffuse").to_lowercase();
 
     // The attribute as a flat n x k matrix of components, so one body serves
     // every type. Integers ride through as floats and round on the way back.
@@ -4433,16 +4439,16 @@ pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     // A Group narrows which points are EDITED. Their neighbours are still read
     // from the whole geometry — a diffusion that could only see inside its own
     // group would bend away from the boundary rather than across it.
-    let group = node_param_str(target, "Group", "");
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let edits: Vec<bool> = (0..n)
         .map(|p| group.is_empty() || geom.points().in_group(&group, p))
         .collect();
 
-    let hood = match node_param_str(target, "Neighbourhood", "Connectivity").to_lowercase().as_str() {
-        "radius" => Hood::Radius(node_param_f32(target, "Radius", 0.2).max(0.0)),
+    let hood = match node_param_str(target, "neighbourhood", "Connectivity").to_lowercase().as_str() {
+        "radius" => Hood::Radius(node_param_f32(target, "radius", 0.2).max(0.0)),
         "global" => Hood::Global,
-        _ => Hood::Connectivity(node_param_f32(target, "Rings", 1.0).max(1.0) as usize),
+        _ => Hood::Connectivity(node_param_f32(target, "rings", 1.0).max(1.0) as usize),
     };
 
     let mut out = val.clone();
@@ -4455,7 +4461,7 @@ pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             }
         }
         "migrate" => {
-            let dir_name = node_param_str(target, "Direction", "");
+            let dir_name = node_param_str(target, "direction", "");
             let dir_name = dir_name.trim().to_string();
             if dir_name.is_empty() || !geom.points().has(&dir_name) {
                 if ocl_error.is_none() {
@@ -4520,11 +4526,11 @@ pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                 let read = |val: &[f32], p: usize| {
                     Vec3::new(val[p * k], val[p * k + 1], if k > 2 { val[p * k + 2] } else { 0.0 })
                 };
-                let src_name = node_param_str(target, "Source", "");
+                let src_name = node_param_str(target, "source", "");
                 let src_name = src_name.trim().to_string();
 
                 let targets: Vec<Vec3> = if mode == "align" {
-                    let kind = node_param_str(target, "Target", "Local Average").to_lowercase();
+                    let kind = node_param_str(target, "target", "Local Average").to_lowercase();
                     align_targets(geom, &val, &hood, &kind, target, &src_name, &read)
                 } else {
                     // Lead: each point turns toward the neighbouring vector
@@ -4609,7 +4615,7 @@ pub(crate) fn apply_neighbour(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // spend. Integrate-and-fire, which is how an excitable medium makes a
         // wave out of a gradient.
         "charge" => {
-            let release = node_param_f32(target, "Release", 1.0);
+            let release = node_param_f32(target, "release", 1.0);
             for p in (0..n).filter(|&p| edits[p]) {
                 for c in 0..k {
                     out[p * k + c] = val[p * k + c] + amount;
@@ -4738,7 +4744,7 @@ fn align_targets(
                 .collect()
         }
         "constant" => {
-            let c = node_param_vec3(target, "Constant", Vec3::Y);
+            let c = node_param_vec3(target, "constant", Vec3::Y);
             vec![c; n]
         }
         "attribute" => (0..n)
@@ -4852,7 +4858,7 @@ pub fn resolve_attribute_geometry_with_errors(
     // pushes the target's id before dispatching to this resolver, so a local
     // `visited.contains` check would see it and refuse every call (the trap
     // that broke this node's first draft).
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let mut geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
     apply_attribute(&mut geom, target, ocl_error);
     Some(geom)
@@ -4861,18 +4867,18 @@ pub fn resolve_attribute_geometry_with_errors(
 /// The Attribute operator itself, over geometry already in hand — split from
 /// the resolver for the same reason `apply_neighbour` is.
 pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
-    let name = node_param_str(target, "Attribute Name", "attr1").trim().to_string();
+    let name = node_param_str(target, "attribute_name", "attr1").trim().to_string();
     if name.is_empty() {
         return;
     }
-    let op = node_param_str(target, "Operation", "Create").to_lowercase();
-    let combine_mode = node_param_str(target, "Combine", "Set").to_lowercase();
+    let op = node_param_str(target, "operation", "Create").to_lowercase();
+    let combine_mode = node_param_str(target, "combine", "Set").to_lowercase();
     let is_pos = name.eq_ignore_ascii_case("Pos");
     let is_col = name.eq_ignore_ascii_case("Col");
     let builtin = is_pos || is_col;
 
     let mut fail = String::new();
-    let group = node_param_str(target, "Group", "");
+    let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
     let affected: Vec<usize> = (0..geom.num_points())
         .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
@@ -4880,7 +4886,7 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
 
     // Value, as raw components. Delete never reads it; Create/Modify reject
     // the edit outright when any component fails to parse.
-    let value_str = node_param_str(target, "Value", "");
+    let value_str = node_param_str(target, "value", "");
     let raw: Vec<&str> = value_str
         .split(|c| c == ':' || c == ',' || c == ' ')
         .filter(|p| !p.is_empty())
@@ -4903,8 +4909,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     // attribute being written. Pos and Col (P and Cd) are the position and
     // the colour. `None` for a constant Value.
     let from_attr = matches!(op.as_str(), "create" | "modify")
-        && node_param_str(target, "Value From", "Constant").eq_ignore_ascii_case("attribute");
-    let src_name = node_param_str(target, "From Attribute", "").trim().to_string();
+        && node_param_str(target, "value_from", "Constant").eq_ignore_ascii_case("attribute");
+    let src_name = node_param_str(target, "from_attribute", "").trim().to_string();
     let src_rows: Option<Vec<Vec<f32>>> = if !from_attr {
         None
     } else if src_name.is_empty() {
@@ -4967,8 +4973,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             // much of Value, a Set goes that far toward it, a Multiply that
             // far toward the product. At exactly one the combined value is
             // written as it always was, bit for bit.
-            let strength = node_param_f32(target, "Strength", 1.0);
-            let scale_by = node_param_str(target, "Scale By", "");
+            let strength = node_param_f32(target, "strength", 1.0);
+            let scale_by = node_param_str(target, "scale_by", "");
             let scale_by = scale_by.trim().to_string();
             let weights: Option<Vec<f32>> = if scale_by.is_empty() {
                 None
@@ -4997,7 +5003,7 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             // before it, and the chains that Add one to a counter to count
             // the runs of the chain, which a rate would make a count of
             // frames.
-            let per_frame = node_param_bool(target, "Per Frame", false);
+            let per_frame = node_param_bool(target, "per_frame", false);
             let dt = if per_frame { geom.detail().value("dt", 0).map_or(1.0, |v| v.as_f32()) } else { 1.0 };
             let dt = if dt.is_finite() && dt > 0.0 { dt } else { 1.0 };
             let (adds, multiplies) = (combine_mode == "add", combine_mode == "multiply");
@@ -5065,12 +5071,12 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // always remapped before anything reads it.
         "remap" => {
             let (f0, f1) = (
-                node_param_f32(target, "From Min", 0.0),
-                node_param_f32(target, "From Max", 1.0),
+                node_param_f32(target, "from_min", 0.0),
+                node_param_f32(target, "from_max", 1.0),
             );
             let (t0, t1) = (
-                node_param_f32(target, "To Min", 0.0),
-                node_param_f32(target, "To Max", 1.0),
+                node_param_f32(target, "to_min", 0.0),
+                node_param_f32(target, "to_max", 1.0),
             );
             let span = f1 - f0;
             if span.abs() < 1e-9 {
@@ -5085,8 +5091,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // and Clip read the same way and chain without renaming anything.
         "clip" => {
             let (lo, hi) = (
-                node_param_f32(target, "From Min", 0.0),
-                node_param_f32(target, "From Max", 1.0),
+                node_param_f32(target, "from_min", 0.0),
+                node_param_f32(target, "from_max", 1.0),
             );
             let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
             edit_components(geom, &name, &affected, |v| v.clamp(lo, hi));
@@ -5101,8 +5107,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                 .filter_map(|&p| geom.points().value(&name, p))
                 .map(|v| v.as_f32())
                 .collect();
-            let goal = node_param_f32(target, "To Max", 1.0);
-            let measure = match node_param_str(target, "Target", "Maximum").to_lowercase().as_str() {
+            let goal = node_param_f32(target, "to_max", 1.0);
+            let measure = match node_param_str(target, "target", "Maximum").to_lowercase().as_str() {
                 "sum" => vals.iter().sum::<f32>(),
                 "range" => {
                     let hi = vals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -5122,12 +5128,12 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // and Length collapse to a scalar written into every component, since
         // the destination keeps its own type.
         "composite" => {
-            let b_name = node_param_str(target, "Source B", "");
+            let b_name = node_param_str(target, "source_b", "");
             let b_name = b_name.trim().to_string();
             if !geom.points().has(&b_name) {
                 fail = format!("Source B '{}' is not a point attribute", b_name);
             } else {
-                let op = node_param_str(target, "Combine Op", "Add").to_lowercase();
+                let op = node_param_str(target, "combine_op", "Add").to_lowercase();
                 let Some(ty) = geom.points().get(&name).map(|a| a.ty()) else {
                     *ocl_error = Some(format!("Attribute '{}': '{}' is missing", target.name, name));
                     return;
@@ -5193,8 +5199,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // gets back into per-point arithmetic.
         "promote" => {
             let to_detail =
-                node_param_str(target, "To Class", "Detail").eq_ignore_ascii_case("detail");
-            let method = node_param_str(target, "Method", "Average").to_lowercase();
+                node_param_str(target, "to_class", "Detail").eq_ignore_ascii_case("detail");
+            let method = node_param_str(target, "method", "Average").to_lowercase();
             if to_detail {
                 match geom.points().get(&name).map(|a| a.ty()) {
                     None => fail = format!("'{}' is not a point attribute", name),
@@ -5230,7 +5236,7 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             } else if !value_ok {
                 fail = format!("Value '{}' does not parse as numbers", value_str);
             } else {
-                let ty = match node_param_str(target, "Type", "Float").to_lowercase().as_str() {
+                let ty = match node_param_str(target, "type", "Float").to_lowercase().as_str() {
                     "float2" => crate::detail::AttribType::Float2,
                     "float3" => crate::detail::AttribType::Float3,
                     "float4" => crate::detail::AttribType::Float4,
@@ -5242,7 +5248,7 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                         // Declared where the author knows the answer: at the
                         // point of creation, not in a list somewhere else that
                         // has to be kept in step.
-                        let kind = if node_param_str(target, "Kind", "Live")
+                        let kind = if node_param_str(target, "kind", "Live")
                             .eq_ignore_ascii_case("derivative")
                         {
                             crate::detail::AttribKind::Derivative
@@ -5362,28 +5368,28 @@ pub fn resolve_scatter_geometry_with_errors(
     // geometry evaluated to None for the spreadsheet and for any downstream
     // consumer, while the scene walk's direct call (fresh `visited`) kept the
     // node LOOKING healthy. Cycles stay guarded by the dispatch itself.
-    let input_node = param_node(root, target, "Input")?;
+    let input_node = param_node(root, target, "input")?;
     let geom = generate_single_node_geometry_with_errors(root, input_node, visited, ocl_error, sim)?;
 
-    let num_points = node_param_f32(target, "Points", 100.0) as usize;
-    let radius = node_param_f32(target, "Radius", 0.02);
+    let num_points = node_param_f32(target, "points", 100.0) as usize;
+    let radius = node_param_f32(target, "radius", 0.02);
     // See points_detail: markers are for looking at, bare points are for
     // working with.
-    let markers = node_param_bool(target, "Markers", true);
+    let markers = node_param_bool(target, "markers", true);
 
     // Surface mode: points ON the surface, by area, optionally pushed apart
     // across it — the Scatter SOP with Relax Points, which is what a seed
     // for a hull wants. Volume mode below is what this node did first:
     // points INSIDE the shape, by parity.
-    if node_param_str(target, "Mode", "Volume").eq_ignore_ascii_case("surface") {
-        let seed = node_param_f32(target, "Seed", 1.1);
+    if node_param_str(target, "mode", "Volume").eq_ignore_ascii_case("surface") {
+        let seed = node_param_f32(target, "seed", 1.1);
         let mut pts = crate::scatter::scatter_on_surface(&geom, num_points, seed);
-        let relax = node_param_bool(target, "Relax Points", false);
-        let iterations = node_param_f32(target, "Relax Iterations", 50.0).max(0.0) as usize;
+        let relax = node_param_bool(target, "relax_points", false);
+        let iterations = node_param_f32(target, "relax_iterations", 50.0).max(0.0) as usize;
         if relax && iterations > 0 && !pts.is_empty() {
-            let scale = node_param_f32(target, "Scale Radii By", 1.248);
-            let max = (node_param_bool(target, "Use Max Relax Radius", true))
-                .then(|| node_param_f32(target, "Max Relax Radius", 10.0));
+            let scale = node_param_f32(target, "scale_radii_by", 1.248);
+            let max = (node_param_bool(target, "use_max_relax_radius", true))
+                .then(|| node_param_f32(target, "max_relax_radius", 10.0));
             let r = crate::scatter::relax_radius(&geom, pts.len(), scale, max);
             let grid = crate::spatial::TriGrid::build(&geom);
             crate::scatter::relax_on_surface(&mut pts, &grid, r, iterations);
@@ -5691,8 +5697,8 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             *count += 1;
             if is_visible {
                 let start = Vec3::new((idx % 4) as f32 * 1.25 - 1.875, 0.55, -((idx / 4) as f32) * 1.25);
-                let length = node_param_f32(node, "Length", 1.0);
-                let thickness = node_param_f32(node, "Thickness", 0.02);
+                let length = node_param_f32(node, "length", 1.0);
+                let thickness = node_param_f32(node, "thickness", 0.02);
                 let end = start + Vec3::new(0.0, length, 0.0);
                 out.merge(&box_detail(start, end, thickness));
             }
@@ -6083,14 +6089,14 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
 /// markers that happen to land on the same spot are still two points with two
 /// identities rather than one welded blob.
 pub fn points_detail(node: &FsNode, center: Vec3) -> Detail {
-    let num_points = node_param_f32(node, "Points", 100.0) as i32;
-    let shape = node_param_str(node, "Shape", "None");
+    let num_points = node_param_f32(node, "points", 100.0) as i32;
+    let shape = node_param_str(node, "shape", "None");
     // Markers off emits BARE POINTS — no marker geometry at all. Everything
     // that generates locations drew little spheres at them, which is right for
     // looking at and wrong for working with: Copy placed one instance per
     // marker vertex rather than one per location, because the markers were the
     // only points there were.
-    let markers = node_param_bool(node, "Markers", true);
+    let markers = node_param_bool(node, "markers", true);
     let mut d = Detail::new();
     for i in 0..num_points {
         let t = i as f32 / num_points.max(1) as f32;
@@ -6755,7 +6761,7 @@ mod tests {
             name: "Curve".into(),
             node_type: "curve".into(),
             children: vec![],
-            params: [("Points", "0 0 0; 1 0 0"), ("Segments", "2"), ("Thickness", "0.02")]
+            params: [("points", "0 0 0; 1 0 0"), ("segments", "2"), ("thickness", "0.02")]
                 .into_iter()
                 .map(|(name, default)| crate::app::ParamDef::new(name.to_string(), "text".to_string(), default.to_string()))
                 .collect(),
@@ -6790,8 +6796,8 @@ mod tests {
             node_type: "points".to_string(),
             children: vec![],
             params: vec![
-                crate::app::ParamDef::new("Points".to_string(), "spinbox".to_string(), "5".to_string()).with_range(Some(1.0), Some(10.0)).with_step(Some(1.0)),
-                crate::app::ParamDef::new("Shape".to_string(), "choice:None,Spiral,Line,Circle,Grid".to_string(), shape.to_string()),
+                crate::app::ParamDef::new("points".to_string(), "spinbox".to_string(), "5".to_string()).with_range(Some(1.0), Some(10.0)).with_step(Some(1.0)),
+                crate::app::ParamDef::new("shape".to_string(), "choice:None,Spiral,Line,Circle,Grid".to_string(), shape.to_string()),
             ],
             geometry_visible: true,
             bypassed: false,
@@ -6847,7 +6853,7 @@ mod tests {
             node_type: "sphere".to_string(),
             children: vec![],
             params: vec![
-                crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.5".to_string())
+                crate::app::ParamDef::new("radius".to_string(), "slider".to_string(), "0.5".to_string())
             ],
             geometry_visible: true,
             bypassed: false,
@@ -6861,8 +6867,8 @@ mod tests {
             node_type: "transform".to_string(),
             children: vec![],
             params: vec![
-                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Sphere 1".to_string()),
-                crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "1.00:2.00:3.00".to_string())
+                crate::app::ParamDef::new("input".to_string(), "text".to_string(), "Sphere 1".to_string()),
+                crate::app::ParamDef::new("translation".to_string(), "float3".to_string(), "1.00:2.00:3.00".to_string())
             ],
             geometry_visible: true,
             bypassed: false,
@@ -6901,8 +6907,8 @@ mod tests {
             node_type: "transform".to_string(),
             children: vec![],
             params: vec![
-                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Transform 1".to_string()),
-                crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "-1.00:-1.00:-1.00".to_string())
+                crate::app::ParamDef::new("input".to_string(), "text".to_string(), "Transform 1".to_string()),
+                crate::app::ParamDef::new("translation".to_string(), "float3".to_string(), "-1.00:-1.00:-1.00".to_string())
             ],
             geometry_visible: true,
             bypassed: false,
@@ -6938,8 +6944,8 @@ mod tests {
             node_type: "transform".to_string(),
             children: vec![],
             params: vec![
-                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Transform Loop".to_string()),
-                crate::app::ParamDef::new("Translation".to_string(), "float3".to_string(), "1.00:1.00:1.00".to_string())
+                crate::app::ParamDef::new("input".to_string(), "text".to_string(), "Transform Loop".to_string()),
+                crate::app::ParamDef::new("translation".to_string(), "float3".to_string(), "1.00:1.00:1.00".to_string())
             ],
             geometry_visible: true,
             bypassed: false,
@@ -6972,7 +6978,7 @@ mod tests {
             node_type: "sphere".to_string(),
             children: vec![],
             params: vec![
-                crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.5".to_string())
+                crate::app::ParamDef::new("radius".to_string(), "slider".to_string(), "0.5".to_string())
             ],
             geometry_visible: true,
             bypassed: false,
@@ -6987,9 +6993,9 @@ mod tests {
             node_type: "scatter".to_string(),
             children: vec![],
             params: vec![
-                crate::app::ParamDef::new("Input".to_string(), "text".to_string(), "Sphere 1".to_string()),
-                crate::app::ParamDef::new("Points".to_string(), "spinbox".to_string(), "15".to_string()),
-                crate::app::ParamDef::new("Radius".to_string(), "slider".to_string(), "0.02".to_string())
+                crate::app::ParamDef::new("input".to_string(), "text".to_string(), "Sphere 1".to_string()),
+                crate::app::ParamDef::new("points".to_string(), "spinbox".to_string(), "15".to_string()),
+                crate::app::ParamDef::new("radius".to_string(), "slider".to_string(), "0.02".to_string())
             ],
             geometry_visible: true,
             bypassed: false,
@@ -7056,7 +7062,7 @@ pub fn resolve_simnet_geometry_with_errors(
         .clone();
 
     let seed = {
-        param_node(root, target, "Input")
+        param_node(root, target, "input")
             .and_then(|n| generate_single_node_geometry_with_errors(root, n, visited, ocl_error, sim))
             .unwrap_or_default()
     };
@@ -7066,7 +7072,7 @@ pub fn resolve_simnet_geometry_with_errors(
     // which is what every sim did before this parameter existed; a number
     // decouples when a simulation starts from when the shot does, so two sims
     // in one scene can begin at different times.
-    let start_frame = node_param_f32(target, "Start Frame", sim.start_frame as f32).round() as i32;
+    let start_frame = node_param_f32(target, "start_frame", sim.start_frame as f32).round() as i32;
     let due = (sim.frame - start_frame).max(0);
 
     // Resume from what is kept of this solve: the latest state when it has
@@ -7126,7 +7132,7 @@ pub fn resolve_simnet_geometry_with_errors(
     if let Some(c) = checkpoints.behind(due, in_hand) {
         cached = Some((c.state.clone(), c.prev.clone(), c.frame));
     }
-    let caching = node_param_bool(target, "Cache", false);
+    let caching = node_param_bool(target, "cache", false);
     // What the last substep consumed, carried with the solve so the interior
     // view can be drawn without re-solving: resumed from the cache when the
     // cache is what we resume from, the seed otherwise.
@@ -7149,7 +7155,7 @@ pub fn resolve_simnet_geometry_with_errors(
     // Clamped, and deliberately not by trusting the parameter's declared
     // range: a hand-edited project file reaches here too, and a solve of a
     // hundred thousand substeps is indistinguishable from a hang.
-    let substeps = (node_param_f32(target, "Substeps", 1.0).round() as i64).clamp(1, 64);
+    let substeps = (node_param_f32(target, "substeps", 1.0).round() as i64).clamp(1, 64);
     // What one substep is worth, as a fraction of a frame. The chain reads it
     // by promoting it onto points and compositing it into a rate — halve the
     // step and a rate scaled by `dt` covers the same ground in twice as many
@@ -7356,7 +7362,7 @@ mod simnet_tests {
     /// Apply one Attribute-node operation to geometry in hand.
     fn run_attr(before: &Detail, params: &[(&str, &str)]) -> (Detail, Option<String>) {
         let mut geom = before.clone();
-        let mut ps = vec![param("Input", "In"), param("Attribute Name", "mass")];
+        let mut ps = vec![param("input", "In"), param("attribute_name", "mass")];
         for (k, v) in params {
             match ps.iter_mut().find(|p| p.name == *k) {
                 Some(p) => p.set_text(v.to_string()),
@@ -7391,11 +7397,11 @@ mod simnet_tests {
         let (remapped, err) = run_attr(
             &before,
             &[
-                ("Operation", "Remap"),
-                ("From Min", "0.00"),
-                ("From Max", &last.to_string()),
-                ("To Min", "0.00"),
-                ("To Max", "1.00"),
+                ("operation", "Remap"),
+                ("from_min", "0.00"),
+                ("from_max", &last.to_string()),
+                ("to_min", "0.00"),
+                ("to_max", "1.00"),
             ],
         );
         assert!(err.is_none(), "{err:?}");
@@ -7406,7 +7412,7 @@ mod simnet_tests {
         // renaming anything between them.
         let (clipped, err) = run_attr(
             &before,
-            &[("Operation", "Clip"), ("From Min", "2.00"), ("From Max", "5.00")],
+            &[("operation", "Clip"), ("from_min", "2.00"), ("from_max", "5.00")],
         );
         assert!(err.is_none(), "{err:?}");
         assert_eq!(mass(&clipped, 0), 2.0);
@@ -7416,7 +7422,7 @@ mod simnet_tests {
         // A degenerate source range is refused rather than dividing by zero.
         let (_, err) = run_attr(
             &before,
-            &[("Operation", "Remap"), ("From Min", "1.00"), ("From Max", "1.00")],
+            &[("operation", "Remap"), ("from_min", "1.00"), ("from_max", "1.00")],
         );
         assert!(err.is_some(), "a zero-width source range must be reported");
     }
@@ -7431,7 +7437,7 @@ mod simnet_tests {
         let before = ramped_mass();
         let n = before.num_points();
         let get = |d: &Detail, name: &str, p: usize| attrib_components(d.points().value(name, p).unwrap());
-        let from = |src: &str| [("Value From", "Attribute"), ("From Attribute", src)].map(|(k, v)| (k, v.to_string()));
+        let from = |src: &str| [("value_from", "Attribute"), ("from_attribute", src)].map(|(k, v)| (k, v.to_string()));
         let run = |extra: &[(&str, &str)], src: &str| {
             let f = from(src);
             let mut ps: Vec<(&str, &str)> = f.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -7440,39 +7446,39 @@ mod simnet_tests {
         };
 
         // A Float copied: weight = mass, point by point.
-        let (d, err) = run(&[("Operation", "Create"), ("Attribute Name", "weight"), ("Type", "Float")], "mass");
+        let (d, err) = run(&[("operation", "Create"), ("attribute_name", "weight"), ("type", "Float")], "mass");
         assert!(err.is_none(), "{err:?}");
         for p in 0..n {
             assert_eq!(get(&d, "weight", p), vec![p as f32]);
         }
         // Spread over a Float3.
-        let (d, _) = run(&[("Operation", "Create"), ("Attribute Name", "v"), ("Type", "Float3")], "mass");
+        let (d, _) = run(&[("operation", "Create"), ("attribute_name", "v"), ("type", "Float3")], "mass");
         assert_eq!(get(&d, "v", 3), vec![3.0, 3.0, 3.0]);
         // Pos into a Float2: as many components as fit.
-        let (d, _) = run(&[("Operation", "Create"), ("Attribute Name", "xy"), ("Type", "Float2")], "Pos");
+        let (d, _) = run(&[("operation", "Create"), ("attribute_name", "xy"), ("type", "Float2")], "Pos");
         let pos = before.pos(5);
         assert_eq!(get(&d, "xy", 5), vec![pos.x, pos.y]);
         // Pos into a Float4: the rest zero.
-        let (d, _) = run(&[("Operation", "Create"), ("Attribute Name", "xyzw"), ("Type", "Float4")], "Pos");
+        let (d, _) = run(&[("operation", "Create"), ("attribute_name", "xyzw"), ("type", "Float4")], "Pos");
         assert_eq!(get(&d, "xyzw", 5), vec![pos.x, pos.y, pos.z, 0.0]);
 
         // Modify: Pos plus the point's own displacement, mass spread.
-        let (d, err) = run(&[("Operation", "Modify"), ("Attribute Name", "Pos"), ("Combine", "Add")], "mass");
+        let (d, err) = run(&[("operation", "Modify"), ("attribute_name", "Pos"), ("combine", "Add")], "mass");
         assert!(err.is_none(), "{err:?}");
         let moved = d.pos(4) - before.pos(4);
         assert!((moved - Vec3::splat(4.0)).length() < 1e-5, "{moved:?}");
         // From itself: read before it is written.
-        let (d, _) = run(&[("Operation", "Modify"), ("Attribute Name", "mass"), ("Combine", "Add")], "mass");
+        let (d, _) = run(&[("operation", "Modify"), ("attribute_name", "mass"), ("combine", "Add")], "mass");
         assert_eq!(get(&d, "mass", 6), vec![12.0]);
 
         // Nothing named, or nothing there: an error, and nothing written.
-        let (d, err) = run(&[("Operation", "Create"), ("Attribute Name", "w2"), ("Type", "Float")], "nope");
+        let (d, err) = run(&[("operation", "Create"), ("attribute_name", "w2"), ("type", "Float")], "nope");
         assert!(err.is_some_and(|e| e.contains("nope")));
         assert!(!d.points().has("w2"));
-        let (_, err) = run(&[("Operation", "Create"), ("Attribute Name", "w3")], "");
+        let (_, err) = run(&[("operation", "Create"), ("attribute_name", "w3")], "");
         assert!(err.is_some());
         // An operation that has no Value is untouched by the switch.
-        let (_, err) = run(&[("Operation", "Clip"), ("From Min", "0"), ("From Max", "1")], "nope");
+        let (_, err) = run(&[("operation", "Clip"), ("from_min", "0"), ("from_max", "1")], "nope");
         assert!(err.is_none(), "{err:?}");
     }
 
@@ -7485,18 +7491,18 @@ mod simnet_tests {
 
         // Unlike Remap, Normalize needs no knowledge of the values — which is
         // what lets it sit in a solve whose range moves every frame.
-        let (by_max, err) = run_attr(&before, &[("Operation", "Normalize"), ("Target", "Maximum"), ("To Max", "1.00")]);
+        let (by_max, err) = run_attr(&before, &[("operation", "Normalize"), ("target", "Maximum"), ("to_max", "1.00")]);
         assert!(err.is_none(), "{err:?}");
         assert!((mass(&by_max, n - 1) - 1.0).abs() < 1e-5);
 
-        let (by_sum, _) = run_attr(&before, &[("Operation", "Normalize"), ("Target", "Sum"), ("To Max", "1.00")]);
+        let (by_sum, _) = run_attr(&before, &[("operation", "Normalize"), ("target", "Sum"), ("to_max", "1.00")]);
         assert!((sum(&by_sum) - 1.0).abs() < 1e-4, "sum is {}", sum(&by_sum));
 
         // An all-zero attribute has no scale to hit, and says so instead of
         // filling the geometry with infinities.
         let mut flat = before.clone();
         flat.points_mut().create("mass", AttribValue::Float(0.0));
-        let (_, err) = run_attr(&flat, &[("Operation", "Normalize")]);
+        let (_, err) = run_attr(&flat, &[("operation", "Normalize")]);
         assert!(err.is_some(), "normalizing nothing must be reported");
     }
 
@@ -7506,10 +7512,10 @@ mod simnet_tests {
         before.points_mut().create("other", AttribValue::Float(2.0));
 
         let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
-        for (op, want) in [("Multiply", 6.0), ("Add", 5.0), ("Subtract", 1.0), ("Maximum", 3.0)] {
+        for (op, want) in [("Multiply", 6.0), ("Add", 5.0), ("Subtract", 1.0), ("maximum", 3.0)] {
             let (g, err) = run_attr(
                 &before,
-                &[("Operation", "Composite"), ("Source B", "other"), ("Combine Op", op)],
+                &[("operation", "Composite"), ("source_b", "other"), ("combine_op", op)],
             );
             assert!(err.is_none(), "{op}: {err:?}");
             assert_eq!(mass(&g, 3), want, "{op}");
@@ -7521,13 +7527,13 @@ mod simnet_tests {
         zeroed.points_mut().create("other", AttribValue::Float(0.0));
         let (g, _) = run_attr(
             &zeroed,
-            &[("Operation", "Composite"), ("Source B", "other"), ("Combine Op", "Divide")],
+            &[("operation", "Composite"), ("source_b", "other"), ("combine_op", "Divide")],
         );
         assert_eq!(mass(&g, 3), 3.0);
 
         let (_, err) = run_attr(
             &before,
-            &[("Operation", "Composite"), ("Source B", "nope"), ("Combine Op", "Add")],
+            &[("operation", "Composite"), ("source_b", "nope"), ("combine_op", "Add")],
         );
         assert!(err.is_some(), "a missing Source B must be reported");
     }
@@ -7550,7 +7556,7 @@ mod simnet_tests {
         let with = |b: &str, op: &str| {
             let (g, err) = run_attr(
                 &before,
-                &[("Attribute Name", "v"), ("Operation", "Composite"), ("Source B", b), ("Combine Op", op)],
+                &[("attribute_name", "v"), ("operation", "Composite"), ("source_b", b), ("combine_op", op)],
             );
             assert!(err.is_none(), "{op} with {b}: {err:?}");
             v(&g)
@@ -7561,7 +7567,7 @@ mod simnet_tests {
             ("Subtract", [0.5, 1.5, 2.5]),
             ("Divide", [2.0, 4.0, 6.0]),
             ("Minimum", [0.5, 0.5, 0.5]),
-            ("Maximum", [1.0, 2.0, 3.0]),
+            ("maximum", [1.0, 2.0, 3.0]),
             ("Average", [0.75, 1.25, 1.75]),
             ("Difference", [0.5, 1.5, 2.5]),
         ] {
@@ -7579,7 +7585,7 @@ mod simnet_tests {
         // which differs from point to point, times the same vector.
         let (g, err) = run_attr(
             &before,
-            &[("Attribute Name", "v"), ("Operation", "Composite"), ("Source B", "mass"), ("Combine Op", "Multiply")],
+            &[("attribute_name", "v"), ("operation", "Composite"), ("source_b", "mass"), ("combine_op", "Multiply")],
         );
         assert!(err.is_none(), "{err:?}");
         for p in [0, 3, g.num_points() - 1] {
@@ -7598,7 +7604,7 @@ mod simnet_tests {
             "id-an",
             "An",
             "analysis",
-            vec![param("Input", "In"), param("Source", "Attribute"), param("Attribute", "mass")],
+            vec![param("input", "In"), param("source", "attribute"), param("attribute", "mass")],
             vec![],
         );
         let mut err = None;
@@ -7623,7 +7629,7 @@ mod simnet_tests {
             "id-an",
             "An",
             "analysis",
-            vec![param("Input", "In"), param("Source", "Edge Lengths")],
+            vec![param("input", "In"), param("source", "Edge Lengths")],
             vec![],
         );
         apply_analysis(&mut edges, &an, &mut None);
@@ -7639,7 +7645,7 @@ mod simnet_tests {
             "id-an",
             "An",
             "analysis",
-            vec![param("Input", "In"), param("Attribute", "nope")],
+            vec![param("input", "In"), param("attribute", "nope")],
             vec![],
         );
         let mut err = None;
@@ -7658,7 +7664,7 @@ mod simnet_tests {
 
         apply_analysis(
             &mut geom,
-            &node("a", "A", "analysis", vec![param("Attribute", "mass")], vec![]),
+            &node("a", "A", "analysis", vec![param("attribute", "mass")], vec![]),
             &mut None,
         );
         let measured_max = geom.detail().value("mass_max", 0).unwrap().as_f32();
@@ -7666,7 +7672,7 @@ mod simnet_tests {
 
         let (geom, err) = run_attr(
             &geom,
-            &[("Operation", "Promote"), ("Attribute Name", "mass_max"), ("To Class", "Point")],
+            &[("operation", "Promote"), ("attribute_name", "mass_max"), ("to_class", "Point")],
         );
         assert!(err.is_none(), "{err:?}");
         assert_eq!(
@@ -7677,7 +7683,7 @@ mod simnet_tests {
 
         let (geom, err) = run_attr(
             &geom,
-            &[("Operation", "Composite"), ("Source B", "mass_max"), ("Combine Op", "Divide")],
+            &[("operation", "Composite"), ("source_b", "mass_max"), ("combine_op", "Divide")],
         );
         assert!(err.is_none(), "{err:?}");
         let mass = |p: usize| geom.points().value("mass", p).unwrap().as_f32();
@@ -7693,12 +7699,12 @@ mod simnet_tests {
             ("Average", (0..n).map(|p| p as f32).sum::<f32>() / n as f32),
             ("Sum", (0..n).map(|p| p as f32).sum::<f32>()),
             ("Minimum", 0.0),
-            ("Maximum", (n - 1) as f32),
+            ("maximum", (n - 1) as f32),
             ("First", 0.0),
         ] {
             let (g, err) = run_attr(
                 &before,
-                &[("Operation", "Promote"), ("To Class", "Detail"), ("Method", method)],
+                &[("operation", "Promote"), ("to_class", "Detail"), ("method", method)],
             );
             assert!(err.is_none(), "{method}: {err:?}");
             let got = g.detail().value("mass", 0).unwrap().as_f32();
@@ -7714,7 +7720,7 @@ mod simnet_tests {
             "id-t",
             "T",
             "time",
-            vec![param("Attribute", "t"), param("Start Frame", "1"), param("End Frame", "11")],
+            vec![param("attribute", "t"), param("start_frame", "1"), param("end_frame", "11")],
             vec![],
         );
         let t_at = |frame: i32| {
@@ -7735,7 +7741,7 @@ mod simnet_tests {
             "id-t",
             "T",
             "time",
-            vec![param("Attribute", "t"), param("Start Frame", "5"), param("End Frame", "5")],
+            vec![param("attribute", "t"), param("start_frame", "5"), param("end_frame", "5")],
             vec![],
         );
         let mut g = before.clone();
@@ -7747,7 +7753,7 @@ mod simnet_tests {
 
     fn run_vis(before: &Detail, params: &[(&str, &str)]) -> (Detail, Option<String>) {
         let mut geom = before.clone();
-        let mut ps = vec![param("Input", "In"), param("Attribute", "mass")];
+        let mut ps = vec![param("input", "In"), param("attribute", "mass")];
         for (k, v) in params {
             match ps.iter_mut().find(|p| p.name == *k) {
                 Some(p) => p.set_text(v.to_string()),
@@ -7788,7 +7794,7 @@ mod simnet_tests {
             before.points_mut().set_value("mass", p, AttribValue::Float(p as f32)).unwrap();
         }
 
-        let (g, err) = run_vis(&before, &[("Ramp", "Grayscale"), ("Range", "Auto")]);
+        let (g, err) = run_vis(&before, &[("ramp", "Grayscale"), ("range", "Auto")]);
         assert!(err.is_none(), "{err:?}");
         // The measured range spreads across the whole ramp regardless of what
         // the numbers happen to be — which is the setting a simulation wants,
@@ -7802,7 +7808,7 @@ mod simnet_tests {
         for p in 0..n {
             scaled.points_mut().set_value("mass", p, AttribValue::Float(p as f32 * 10.0)).unwrap();
         }
-        let (h, _) = run_vis(&scaled, &[("Ramp", "Grayscale"), ("Range", "Auto")]);
+        let (h, _) = run_vis(&scaled, &[("ramp", "Grayscale"), ("range", "Auto")]);
         for p in 0..n {
             assert_eq!(g.color(p), h.color(p), "point {p}");
         }
@@ -7811,7 +7817,7 @@ mod simnet_tests {
         // the honest picture of "nothing varies here", not a division by zero.
         let mut flat = before.clone();
         flat.points_mut().create("mass", AttribValue::Float(3.0));
-        let (f, err) = run_vis(&flat, &[("Ramp", "Grayscale"), ("Range", "Auto")]);
+        let (f, err) = run_vis(&flat, &[("ramp", "Grayscale"), ("range", "Auto")]);
         assert!(err.is_none(), "{err:?}");
         assert_eq!(f.color(0), [0.0; 3]);
     }
@@ -7830,25 +7836,25 @@ mod simnet_tests {
         // attributes read at once come from STACKING nodes, not from one node
         // growing a list of layers — so any one of them can be bypassed to see
         // what it was contributing.
-        let (base, _) = run_vis(&before, &[("Ramp", "Grayscale"), ("Blend", "Set")]);
+        let (base, _) = run_vis(&before, &[("ramp", "Grayscale"), ("blend", "Set")]);
         assert_eq!(base.color(0), [0.0; 3], "a flat attribute floors the ramp");
 
-        let (over, _) = run_vis(&base, &[("Attribute", "heat"), ("Ramp", "Grayscale"), ("Blend", "Set"), ("Opacity", "0.50")]);
+        let (over, _) = run_vis(&base, &[("attribute", "heat"), ("ramp", "Grayscale"), ("blend", "Set"), ("opacity", "0.50")]);
         // Half-strength Set is a half-way mix with what was already there.
         assert!((over.color(n - 1)[0] - 0.5).abs() < 1e-5, "{:?}", over.color(n - 1));
 
         // Opacity 0 changes nothing at all, whatever the blend.
         for blend in ["Set", "Multiply", "Add"] {
-            let (none, _) = run_vis(&base, &[("Attribute", "heat"), ("Blend", blend), ("Opacity", "0.00")]);
+            let (none, _) = run_vis(&base, &[("attribute", "heat"), ("blend", blend), ("opacity", "0.00")]);
             for p in 0..n {
                 assert_eq!(none.color(p), base.color(p), "{blend} at zero opacity, point {p}");
             }
         }
 
         // Multiply darkens toward the ramp, Add brightens away from it.
-        let mid = run_vis(&before, &[("Ramp", "Grayscale"), ("Range", "Manual"), ("From", "0.00"), ("To", "2.00")]).0;
-        let (mul, _) = run_vis(&mid, &[("Attribute", "heat"), ("Ramp", "Grayscale"), ("Blend", "Multiply")]);
-        let (add, _) = run_vis(&mid, &[("Attribute", "heat"), ("Ramp", "Grayscale"), ("Blend", "Add")]);
+        let mid = run_vis(&before, &[("ramp", "Grayscale"), ("range", "Manual"), ("from", "0.00"), ("to", "2.00")]).0;
+        let (mul, _) = run_vis(&mid, &[("attribute", "heat"), ("ramp", "Grayscale"), ("blend", "Multiply")]);
+        let (add, _) = run_vis(&mid, &[("attribute", "heat"), ("ramp", "Grayscale"), ("blend", "Add")]);
         assert!(mul.color(0)[0] <= mid.color(0)[0] + 1e-6);
         assert!(add.color(n - 1)[0] >= mid.color(n - 1)[0] - 1e-6);
     }
@@ -7858,7 +7864,7 @@ mod simnet_tests {
         let mut before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
         before.points_mut().create("vel", AttribValue::Float3([0.0, 4.0, 0.0]));
 
-        let (g, err) = run_vis(&before, &[("Attribute", "vel"), ("Mode", "Vector"), ("Scale", "0.25")]);
+        let (g, err) = run_vis(&before, &[("attribute", "vel"), ("mode", "Vector"), ("scale", "0.25")]);
         assert!(err.is_none(), "{err:?}");
         let vis = format!("{}vel", crate::detail::VIS_PREFIX);
         assert!(g.points().has(&vis), "the marker request rides the geometry");
@@ -7873,7 +7879,7 @@ mod simnet_tests {
         let mut grouped = before.clone();
         grouped.points_mut().create_group("some");
         grouped.points_mut().add_to_group("some", 2);
-        let (h, _) = run_vis(&grouped, &[("Attribute", "vel"), ("Mode", "Vector"), ("Group", "some")]);
+        let (h, _) = run_vis(&grouped, &[("attribute", "vel"), ("mode", "Vector"), ("group", "some")]);
         assert_ne!(h.points().value(&vis, 2), Some(AttribValue::Float3([0.0; 3])));
         assert_eq!(h.points().value(&vis, 0), Some(AttribValue::Float3([0.0; 3])));
     }
@@ -7883,7 +7889,7 @@ mod simnet_tests {
         let mut d = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
         d.points_mut().create("vel", AttribValue::Float3([0.0, 1.0, 0.0]));
         // Only two points get a marker; the rest stage a zero vector.
-        let (mut g, _) = run_vis(&d, &[("Attribute", "vel"), ("Mode", "Vector"), ("Scale", "0.50")]);
+        let (mut g, _) = run_vis(&d, &[("attribute", "vel"), ("mode", "Vector"), ("scale", "0.50")]);
         let vis = format!("{}vel", crate::detail::VIS_PREFIX);
         for p in 2..g.num_points() {
             g.points_mut().set_value(&vis, p, AttribValue::Float3([0.0; 3])).unwrap();
@@ -7915,8 +7921,8 @@ mod simnet_tests {
         // Spheres sit on the resolver's own 1.25-spaced layout, so a radius of
         // 0.8 makes them overlap by 0.35 — a lens neither operation can
         // mistake for the other.
-        let a = node("id-a", "sphere1", "sphere", vec![param("Radius", "0.8")], vec![]);
-        let b = node("id-b", "sphere2", "sphere", vec![param("Radius", "0.8")], vec![]);
+        let a = node("id-a", "sphere1", "sphere", vec![param("radius", "0.8")], vec![]);
+        let b = node("id-b", "sphere2", "sphere", vec![param("radius", "0.8")], vec![]);
 
         for (op, expect) in [("Union", "wider"), ("Intersect", "narrower"), ("Subtract", "narrower")] {
             let bool_node = node(
@@ -7924,10 +7930,10 @@ mod simnet_tests {
                 "bool1",
                 "boolean",
                 vec![
-                    param("Input", "sphere1"),
-                    param("With", "sphere2"),
-                    param("Operation", op),
-                    param("Voxel Size", "0.08"),
+                    param("input", "sphere1"),
+                    param("with", "sphere2"),
+                    param("operation", op),
+                    param("voxel_size", "0.08"),
                 ],
                 vec![],
             );
@@ -7971,17 +7977,17 @@ mod simnet_tests {
     /// The Volume node's two modes, likewise through the resolver.
     #[test]
     fn test_the_volume_node_offsets_and_shells() {
-        let sphere = node("id-s", "sphere1", "sphere", vec![param("Radius", "0.8")], vec![]);
+        let sphere = node("id-s", "sphere1", "sphere", vec![param("radius", "0.8")], vec![]);
 
         let grown = node(
             "id-v",
             "vol1",
             "volume",
             vec![
-                param("Input", "sphere1"),
-                param("Mode", "Offset"),
-                param("Voxel Size", "0.08"),
-                param("Offset", "0.2"),
+                param("input", "sphere1"),
+                param("mode", "offset"),
+                param("voxel_size", "0.08"),
+                param("offset", "0.2"),
             ],
             vec![],
         );
@@ -8013,11 +8019,11 @@ mod simnet_tests {
             "vol2",
             "volume",
             vec![
-                param("Input", "sphere1"),
-                param("Mode", "Shell"),
-                param("Voxel Size", "0.08"),
-                param("Offset", "0.0"),
-                param("Thickness", "0.15"),
+                param("input", "sphere1"),
+                param("mode", "Shell"),
+                param("voxel_size", "0.08"),
+                param("offset", "0.0"),
+                param("thickness", "0.15"),
             ],
             vec![],
         );
@@ -8051,7 +8057,7 @@ mod simnet_tests {
     #[test]
     fn test_visualize_reports_a_missing_attribute_and_leaves_colour_alone() {
         let before = sphere_detail(Vec3::ZERO, 0.5, 4, 6);
-        let (g, err) = run_vis(&before, &[("Attribute", "nope")]);
+        let (g, err) = run_vis(&before, &[("attribute", "nope")]);
         assert!(err.as_deref().unwrap_or("").contains("nope"), "{err:?}");
         for p in 0..before.num_points() {
             assert_eq!(g.color(p), before.color(p), "point {p}");
@@ -8061,24 +8067,24 @@ mod simnet_tests {
     /// A sphere, one point given a spike of `mass`, then a Neighbour node.
     /// Returns (before, after) so a test can compare the two directly.
     fn neighbour_chain(extra: &[(&str, &str)]) -> (Detail, Detail) {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let seed = node(
             "id-seed",
             "Seed 1",
             "attribute",
             vec![
-                param("Input", "Sphere 1"),
-                param("Operation", "Create"),
-                param("Attribute Name", "mass"),
-                param("Type", "Float"),
-                param("Value", "0.00"),
+                param("input", "Sphere 1"),
+                param("operation", "Create"),
+                param("attribute_name", "mass"),
+                param("type", "Float"),
+                param("value", "0.00"),
             ],
             vec![],
         );
         let mut params = vec![
-            param("Input", "Seed 1"),
-            param("Attribute", "mass"),
-            param("Amount", "0.50"),
+            param("input", "Seed 1"),
+            param("attribute", "mass"),
+            param("amount", "0.50"),
         ];
         for (k, v) in extra {
             match params.iter_mut().find(|p| p.name == *k) {
@@ -8109,7 +8115,7 @@ mod simnet_tests {
     /// bypassing the graph so the spike survives.
     fn run_neighbour(before: &Detail, params: &[(&str, &str)]) -> Detail {
         let mut geom = before.clone();
-        let mut params_vec = vec![param("Input", "In"), param("Attribute", "mass")];
+        let mut params_vec = vec![param("input", "In"), param("attribute", "mass")];
         for (k, v) in params {
             match params_vec.iter_mut().find(|p| p.name == *k) {
                 Some(p) => p.set_text(v.to_string()),
@@ -8127,7 +8133,7 @@ mod simnet_tests {
         let spike_nbrs: Vec<u32> = before.point_neighbours(0).to_vec();
         assert!(!spike_nbrs.is_empty());
 
-        let after = run_neighbour(&before, &[("Mode", "Diffuse"), ("Amount", "0.50")]);
+        let after = run_neighbour(&before, &[("mode", "Diffuse"), ("amount", "0.50")]);
         let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
 
         // The spike falls toward its neighbours' average (zero) by Amount, and
@@ -8146,8 +8152,8 @@ mod simnet_tests {
     #[test]
     fn test_neighbour_concentrate_is_diffuse_with_the_sign_flipped() {
         let (before, _) = neighbour_chain(&[]);
-        let diffused = run_neighbour(&before, &[("Mode", "Diffuse"), ("Amount", "0.40")]);
-        let sharpened = run_neighbour(&before, &[("Mode", "Concentrate"), ("Amount", "0.40")]);
+        let diffused = run_neighbour(&before, &[("mode", "Diffuse"), ("amount", "0.40")]);
+        let sharpened = run_neighbour(&before, &[("mode", "Concentrate"), ("amount", "0.40")]);
         let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
 
         // Same distance from the starting value, opposite directions.
@@ -8175,7 +8181,7 @@ mod simnet_tests {
 
         let after = run_neighbour(
             &before,
-            &[("Mode", "Migrate"), ("Direction", "dir"), ("Amount", "0.50")],
+            &[("mode", "Migrate"), ("direction", "dir"), ("amount", "0.50")],
         );
 
         // The sender loses exactly what the receivers gain — that is what makes
@@ -8199,13 +8205,13 @@ mod simnet_tests {
     #[test]
     fn test_neighbour_bleed_decays_toward_zero_and_ignores_the_hood() {
         let (before, _) = neighbour_chain(&[]);
-        let after = run_neighbour(&before, &[("Mode", "Bleed"), ("Amount", "0.25")]);
+        let after = run_neighbour(&before, &[("mode", "Bleed"), ("amount", "0.25")]);
         let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
         assert!((mass(&after, 0) - 7.5).abs() < 1e-4);
         // Applying it repeatedly approaches zero without crossing it.
         let mut g = before.clone();
         for _ in 0..40 {
-            g = run_neighbour(&g, &[("Mode", "Bleed"), ("Amount", "0.25")]);
+            g = run_neighbour(&g, &[("mode", "Bleed"), ("amount", "0.25")]);
         }
         assert!(mass(&g, 0) > 0.0 && mass(&g, 0) < 1e-3, "{}", mass(&g, 0));
     }
@@ -8216,12 +8222,12 @@ mod simnet_tests {
         let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
         let touched = |d: &Detail| (0..d.num_points()).filter(|&p| mass(d, p) != 0.0).count();
 
-        let one = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Connectivity"), ("Rings", "1")]);
-        let two = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Connectivity"), ("Rings", "2")]);
+        let one = run_neighbour(&before, &[("mode", "Diffuse"), ("neighbourhood", "Connectivity"), ("rings", "1")]);
+        let two = run_neighbour(&before, &[("mode", "Diffuse"), ("neighbourhood", "Connectivity"), ("rings", "2")]);
         assert!(touched(&two) > touched(&one), "a second ring must reach further");
 
         // Global reaches everything: every point but the spike rises off zero.
-        let global = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Global"), ("Amount", "1.00")]);
+        let global = run_neighbour(&before, &[("mode", "Diffuse"), ("neighbourhood", "Global"), ("amount", "1.00")]);
         assert_eq!(touched(&global), before.num_points() - 1);
         // The spike lands on exactly zero, because a point is not its own
         // neighbour and every OTHER point holds zero.
@@ -8230,11 +8236,11 @@ mod simnet_tests {
         // Radius ignores connectivity, and the rules are continuous with each
         // other: a radius wide enough to swallow the sphere IS Global. That
         // only holds because neither includes the point itself.
-        let wide = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Radius"), ("Radius", "5.00"), ("Amount", "1.00")]);
+        let wide = run_neighbour(&before, &[("mode", "Diffuse"), ("neighbourhood", "Radius"), ("radius", "5.00"), ("amount", "1.00")]);
         for p in 0..before.num_points() {
             assert!((mass(&wide, p) - mass(&global, p)).abs() < 1e-6, "point {p}");
         }
-        let none = run_neighbour(&before, &[("Mode", "Diffuse"), ("Neighbourhood", "Radius"), ("Radius", "0.00")]);
+        let none = run_neighbour(&before, &[("mode", "Diffuse"), ("neighbourhood", "Radius"), ("radius", "0.00")]);
         assert_eq!(touched(&none), 1, "no neighbours means no change");
     }
 
@@ -8246,7 +8252,7 @@ mod simnet_tests {
         before.points_mut().create_group("inner");
         before.points_mut().add_to_group("inner", q);
 
-        let after = run_neighbour(&before, &[("Mode", "Diffuse"), ("Group", "inner"), ("Amount", "1.00")]);
+        let after = run_neighbour(&before, &[("mode", "Diffuse"), ("group", "inner"), ("amount", "1.00")]);
         let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
 
         assert_eq!(mass(&after, 0), 10.0, "a point outside the group is not edited");
@@ -8265,14 +8271,14 @@ mod simnet_tests {
         g.points_mut().create("count", AttribValue::Int(0));
         g.points_mut().set_value("count", 0, AttribValue::Int(10)).unwrap();
 
-        let v = run_neighbour(&g, &[("Attribute", "vel"), ("Mode", "Bleed"), ("Amount", "0.50")]);
+        let v = run_neighbour(&g, &[("attribute", "vel"), ("mode", "Bleed"), ("amount", "0.50")]);
         assert_eq!(
             v.points().value("vel", 0),
             Some(AttribValue::Float3([1.5, 3.0, 4.5])),
             "every component decays alike"
         );
 
-        let c = run_neighbour(&g, &[("Attribute", "count"), ("Mode", "Bleed"), ("Amount", "0.25")]);
+        let c = run_neighbour(&g, &[("attribute", "count"), ("mode", "Bleed"), ("amount", "0.25")]);
         // An integer count stays an integer: 10 * 0.75 = 7.5 rounds rather
         // than silently becoming a float nobody can index with.
         assert!(matches!(c.points().value("count", 0), Some(AttribValue::Int(_))));
@@ -8301,7 +8307,7 @@ mod simnet_tests {
         // average turns it around.
         let after = run_neighbour(
             &before,
-            &[("Attribute", "vel"), ("Mode", "Align"), ("Target", "Local Average"), ("Amount", "1.00")],
+            &[("attribute", "vel"), ("mode", "Align"), ("target", "Local Average"), ("amount", "1.00")],
         );
         assert!(vel(&after, 0).y > 0.0, "the odd one out did not turn: {:?}", vel(&after, 0));
         // Steering is a statement about heading only: a vector attribute
@@ -8321,13 +8327,13 @@ mod simnet_tests {
     fn test_align_targets_are_five_different_answers_to_agree_with_what() {
         let before = vectored();
         let run = |extra: &[(&str, &str)]| {
-            let mut params = vec![("Attribute", "vel"), ("Mode", "Align"), ("Amount", "1.00")];
+            let mut params = vec![("attribute", "vel"), ("mode", "Align"), ("amount", "1.00")];
             params.extend_from_slice(extra);
             run_neighbour(&before, &params)
         };
 
         // Constant: everyone ends up pointing the same way.
-        let c = run(&[("Target", "Constant"), ("Constant", "1.00:0.00:0.00")]);
+        let c = run(&[("target", "Constant"), ("constant", "1.00:0.00:0.00")]);
         for p in 0..before.num_points() {
             assert!((vel(&c, p).normalize() - Vec3::X).length() < 1e-4, "point {p}");
         }
@@ -8337,13 +8343,13 @@ mod simnet_tests {
         with_goal.points_mut().create("goal", AttribValue::Float3([0.0, 0.0, 1.0]));
         let a = run_neighbour(
             &with_goal,
-            &[("Attribute", "vel"), ("Mode", "Align"), ("Amount", "1.00"), ("Target", "Attribute"), ("Source", "goal")],
+            &[("attribute", "vel"), ("mode", "Align"), ("amount", "1.00"), ("target", "Attribute"), ("source", "goal")],
         );
         assert!((vel(&a, 5).normalize() - Vec3::Z).length() < 1e-4);
 
         // Surface tangent: the result lies in the surface, so it is
         // perpendicular to the point's normal.
-        let t = run(&[("Target", "Surface Tangent")]);
+        let t = run(&[("target", "Surface Tangent")]);
         let normals = point_normals(&before);
         let mut turned = 0usize;
         let mut left_alone = 0usize;
@@ -8374,7 +8380,7 @@ mod simnet_tests {
         // Global average excludes the point itself, exactly as the
         // neighbourhoods do — otherwise the dissenter would average partly
         // with itself and could never be turned all the way.
-        let g = run(&[("Target", "Global Average")]);
+        let g = run(&[("target", "Global Average")]);
         assert!(vel(&g, 0).y > 0.0);
     }
 
@@ -8386,7 +8392,7 @@ mod simnet_tests {
         // annihilate it.
         let after = run_neighbour(
             &before,
-            &[("Attribute", "vel"), ("Mode", "Align"), ("Target", "Constant"), ("Constant", "0.00:-1.00:0.00"), ("Amount", "0.50")],
+            &[("attribute", "vel"), ("mode", "Align"), ("target", "Constant"), ("constant", "0.00:-1.00:0.00"), ("amount", "0.50")],
         );
         assert!((vel(&after, 5).length() - 2.0).abs() < 1e-4, "{:?}", vel(&after, 5));
         assert_ne!(vel(&after, 5), Vec3::ZERO);
@@ -8398,7 +8404,7 @@ mod simnet_tests {
             "id-n",
             "N",
             "neighbour",
-            vec![param("Attribute", "mass"), param("Mode", "Align")],
+            vec![param("attribute", "mass"), param("mode", "Align")],
             vec![],
         );
         g.points_mut().create("mass", AttribValue::Float(1.0));
@@ -8414,7 +8420,7 @@ mod simnet_tests {
 
         let after = run_neighbour(
             &before,
-            &[("Attribute", "vel"), ("Mode", "Lead"), ("Amount", "1.00")],
+            &[("attribute", "vel"), ("mode", "Lead"), ("amount", "1.00")],
         );
         // The dissenter's neighbours each see one vector that disagrees with
         // them — point 0's — so they turn onto it. That is the mechanism:
@@ -8435,7 +8441,7 @@ mod simnet_tests {
         weighted.points_mut().set_value("clout", 0, AttribValue::Float(0.0)).unwrap();
         let quiet = run_neighbour(
             &weighted,
-            &[("Attribute", "vel"), ("Mode", "Lead"), ("Amount", "1.00"), ("Source", "clout")],
+            &[("attribute", "vel"), ("mode", "Lead"), ("amount", "1.00"), ("source", "clout")],
         );
         for &q in &spread {
             assert!(vel(&quiet, q as usize).y > 0.0, "a silenced dissenter still led {q}");
@@ -8451,7 +8457,7 @@ mod simnet_tests {
         let total = |d: &Detail| (0..n).map(|p| mass(d, p)).sum::<f32>();
 
         // Below the threshold it simply fills.
-        let charged = run_neighbour(&before, &[("Mode", "Charge"), ("Amount", "0.30"), ("Release", "1.00")]);
+        let charged = run_neighbour(&before, &[("mode", "Charge"), ("amount", "0.30"), ("release", "1.00")]);
         assert!((mass(&charged, 0) - 0.3).abs() < 1e-5);
         assert!((total(&charged) - 0.3 * n as f32).abs() < 1e-3);
 
@@ -8462,7 +8468,7 @@ mod simnet_tests {
         for p in 0..n {
             primed.points_mut().set_value("mass", p, AttribValue::Float(0.9)).unwrap();
         }
-        let fired = run_neighbour(&primed, &[("Mode", "Charge"), ("Amount", "0.20"), ("Release", "1.00")]);
+        let fired = run_neighbour(&primed, &[("mode", "Charge"), ("amount", "0.20"), ("release", "1.00")]);
         let expected_after_fill = total(&primed) + 0.2 * n as f32;
         assert!(
             (total(&fired) - expected_after_fill).abs() < 1e-2,
@@ -8501,7 +8507,7 @@ mod simnet_tests {
         before.points_mut().set_value("mass", 0, AttribValue::Float(5.0)).unwrap();
         let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
 
-        let after = run_neighbour(&before, &[("Mode", "Charge"), ("Amount", "0.00"), ("Release", "1.00")]);
+        let after = run_neighbour(&before, &[("mode", "Charge"), ("amount", "0.00"), ("release", "1.00")]);
         assert_eq!(mass(&after, 0), 0.0, "the primed point emptied");
         let nbrs = before.point_neighbours(0).to_vec();
         let share = 5.0 / nbrs.len() as f32;
@@ -8521,7 +8527,7 @@ mod simnet_tests {
             "id-n",
             "N",
             "neighbour",
-            vec![param("Input", "In"), param("Attribute", "nope")],
+            vec![param("input", "In"), param("attribute", "nope")],
             vec![],
         );
         apply_neighbour(&mut geom, &nbr, &mut err);
@@ -8535,8 +8541,8 @@ mod simnet_tests {
     /// subnet, only its own children do.
     #[test]
     fn test_scene_walk_scoped_to_start_level() {
-        let outer = node("id-outer", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
-        let inner = node("id-inner", "Sphere 2", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let outer = node("id-outer", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
+        let inner = node("id-inner", "Sphere 2", "sphere", vec![param("radius", "0.5")], vec![]);
         let sub = node("id-sub", "Sub 1", "node", vec![], vec![inner]);
         let root = node("id-root", "root", "node", vec![], vec![outer, sub]);
 
@@ -8559,21 +8565,21 @@ mod simnet_tests {
     /// the same offset, so the solved position reads back the step COUNT. Uses
     /// transform, not an OpenCL node, so the test is pure CPU.
     fn stepping_graph() -> FsNode {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let inner_input = node("id-in", "input1", "input", vec![], vec![]);
         let step = node(
             "id-step",
             "step1",
             "transform",
-            vec![param("Input", "input1"), param("Translation", "1.00:0.00:0.00")],
+            vec![param("input", "input1"), param("translation", "1.00:0.00:0.00")],
             vec![],
         );
-        let inner_output = node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "step1")], vec![]);
         let sim = node(
             "id-sim",
             "Simnet 1",
             "simnet",
-            vec![param("Input", "Sphere 1")],
+            vec![param("input", "Sphere 1")],
             vec![inner_input, step, inner_output],
         );
         node("id-root", "root", "node", vec![], vec![sphere, sim])
@@ -8596,18 +8602,18 @@ mod simnet_tests {
     /// A sim whose step adds 1 to `acc` every frame. The seed declares `acc`
     /// with the given kind, which is the only difference between the two runs.
     fn accumulating_graph(kind: &str) -> FsNode {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let seed = node(
             "id-seed",
             "Seed 1",
             "attribute",
             vec![
-                param("Input", "Sphere 1"),
-                param("Operation", "Create"),
-                param("Attribute Name", "acc"),
-                param("Type", "Float"),
-                param("Value", "0.00"),
-                param("Kind", kind),
+                param("input", "Sphere 1"),
+                param("operation", "Create"),
+                param("attribute_name", "acc"),
+                param("type", "Float"),
+                param("value", "0.00"),
+                param("kind", kind),
             ],
             vec![],
         );
@@ -8617,20 +8623,20 @@ mod simnet_tests {
             "step1",
             "attribute",
             vec![
-                param("Input", "input1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "acc"),
-                param("Combine", "Add"),
-                param("Value", "1.00"),
+                param("input", "input1"),
+                param("operation", "Modify"),
+                param("attribute_name", "acc"),
+                param("combine", "Add"),
+                param("value", "1.00"),
             ],
             vec![],
         );
-        let inner_output = node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "step1")], vec![]);
         let sim = node(
             "id-sim",
             "Simnet 1",
             "simnet",
-            vec![param("Input", "Seed 1")],
+            vec![param("input", "Seed 1")],
             vec![inner_input, step, inner_output],
         );
         node("id-root", "root", "node", vec![], vec![sphere, seed, sim])
@@ -8638,17 +8644,17 @@ mod simnet_tests {
 
     /// A sim that adds a fixed 1.0 to `acc` every time the chain runs.
     fn substep_graph(substeps: &str) -> FsNode {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let seed = node(
             "id-seed",
             "Seed 1",
             "attribute",
             vec![
-                param("Input", "Sphere 1"),
-                param("Operation", "Create"),
-                param("Attribute Name", "acc"),
-                param("Type", "Float"),
-                param("Value", "0.00"),
+                param("input", "Sphere 1"),
+                param("operation", "Create"),
+                param("attribute_name", "acc"),
+                param("type", "Float"),
+                param("value", "0.00"),
             ],
             vec![],
         );
@@ -8658,20 +8664,20 @@ mod simnet_tests {
             "step1",
             "attribute",
             vec![
-                param("Input", "input1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "acc"),
-                param("Combine", "Add"),
-                param("Value", "1.00"),
+                param("input", "input1"),
+                param("operation", "Modify"),
+                param("attribute_name", "acc"),
+                param("combine", "Add"),
+                param("value", "1.00"),
             ],
             vec![],
         );
-        let inner_output = node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "step1")], vec![]);
         let sim = node(
             "id-sim",
             "Simnet 1",
             "simnet",
-            vec![param("Input", "Seed 1"), param("Substeps", substeps)],
+            vec![param("input", "Seed 1"), param("substeps", substeps)],
             vec![inner_input, step, inner_output],
         );
         node("id-root", "root", "node", vec![], vec![sphere, seed, sim])
@@ -8688,10 +8694,10 @@ mod simnet_tests {
             "promote1",
             "attribute",
             vec![
-                param("Input", "input1"),
-                param("Operation", "Promote"),
-                param("Attribute Name", "dt"),
-                param("To Class", "Point"),
+                param("input", "input1"),
+                param("operation", "Promote"),
+                param("attribute_name", "dt"),
+                param("to_class", "Point"),
             ],
             vec![],
         );
@@ -8700,11 +8706,11 @@ mod simnet_tests {
             "step1",
             "attribute",
             vec![
-                param("Input", "promote1"),
-                param("Operation", "Composite"),
-                param("Attribute Name", "acc"),
-                param("Source B", "dt"),
-                param("Combine Op", "Add"),
+                param("input", "promote1"),
+                param("operation", "Composite"),
+                param("attribute_name", "acc"),
+                param("source_b", "dt"),
+                param("combine_op", "Add"),
             ],
             vec![],
         );
@@ -8712,7 +8718,7 @@ mod simnet_tests {
             node("id-in", "input1", "input", vec![], vec![]),
             promote,
             step,
-            node("id-out", "output1", "output", vec![param("Input", "step1")], vec![]),
+            node("id-out", "output1", "output", vec![param("input", "step1")], vec![]),
         ];
         root
     }
@@ -8722,7 +8728,7 @@ mod simnet_tests {
         let with_start = |start: &str| {
             let mut root = substep_graph("1");
             let sim = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
-            sim.params.push(param("Start Frame", start));
+            sim.params.push(param("start_frame", start));
             root
         };
         let acc = |root: &FsNode, frame: i32| -> f32 {
@@ -9055,7 +9061,7 @@ mod simnet_tests {
         {
             let sim_mut = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
             let step = sim_mut.children.iter_mut().find(|c| c.name == "step1").unwrap();
-            step.params.iter_mut().find(|p| p.name == "Translation").unwrap().set_text("2.00:0.00:0.00".to_string());
+            step.params.iter_mut().find(|p| p.name == "translation").unwrap().set_text("2.00:0.00:0.00".to_string());
         }
         let sim_node = root.children.iter().find(|c| c.node_type == "simnet").unwrap().clone();
         // Frame 5 is as it was: no step is run for it.
@@ -9119,7 +9125,7 @@ mod simnet_tests {
         let with_only = |name: &str| {
             let mut root = stepping_graph();
             let sim_node = root.children.iter_mut().find(|c| c.node_type == "simnet").unwrap();
-            sim_node.children.push(node("id-seed", "seed1", "sphere", vec![param("Radius", "0.25")], vec![]));
+            sim_node.children.push(node("id-seed", "seed1", "sphere", vec![param("radius", "0.25")], vec![]));
             for c in &mut sim_node.children {
                 c.geometry_visible = c.name == name;
             }
@@ -9160,10 +9166,10 @@ mod simnet_tests {
     /// arms add no second copy to outer views.
     #[test]
     fn test_scene_walk_draws_passthrough_subnet_interior() {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let inner_input = node("id-in", "input1", "input", vec![], vec![]);
-        let inner_output = node("id-out", "output1", "output", vec![param("Input", "input1")], vec![]);
-        let sub = node("id-sub", "Subnet 1", "node", vec![param("Input", "Sphere 1")],
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "input1")], vec![]);
+        let sub = node("id-sub", "Subnet 1", "node", vec![param("input", "Sphere 1")],
             vec![inner_input, inner_output]);
         let root = node("id-root", "root", "node", vec![], vec![sphere, sub]);
 
@@ -9198,18 +9204,18 @@ mod simnet_tests {
     #[test]
     fn test_group_random_point_is_welded_and_deterministic() {
         let make_root = |seed: &str| {
-            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
             let group = node(
                 "id-group",
                 "Group 1",
                 "group",
                 vec![
-                    param("Input", "Sphere 1"),
-                    param("Group Name", "pull"),
-                    param("Mode", "Random"),
-                    param("Count", "1"),
-                    param("Seed", seed),
-                    param("Highlight", "false"),
+                    param("input", "Sphere 1"),
+                    param("group_name", "pull"),
+                    param("mode", "Random"),
+                    param("count", "1"),
+                    param("seed", seed),
+                    param("highlight", "false"),
                 ],
                 vec![],
             );
@@ -9241,18 +9247,18 @@ mod simnet_tests {
     #[test]
     fn test_collision_inside_marks_enclosed_points() {
         let build = |collider: &str, method: &str| {
-            let s1 = node("id-s1", "Sphere 1", "sphere", vec![param("Radius", "0.7")], vec![]);
-            let s2 = node("id-s2", "Sphere 2", "sphere", vec![param("Radius", "0.7")], vec![]);
+            let s1 = node("id-s1", "Sphere 1", "sphere", vec![param("radius", "0.7")], vec![]);
+            let s2 = node("id-s2", "Sphere 2", "sphere", vec![param("radius", "0.7")], vec![]);
             let col = node(
                 "id-col",
                 "Collision 1",
                 "collision",
                 vec![
-                    param("Input", "Sphere 1"),
-                    param("Collider", collider),
-                    param("Method", method),
-                    param("Group Name", "collisions"),
-                    param("Highlight", "false"),
+                    param("input", "Sphere 1"),
+                    param("collider", collider),
+                    param("method", method),
+                    param("group_name", "collisions"),
+                    param("highlight", "false"),
                 ],
                 vec![],
             );
@@ -9317,18 +9323,18 @@ mod simnet_tests {
     /// point keeps its pulled position, neighbors follow part of the way.
     #[test]
     fn test_relax_spreads_a_pinned_pull() {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let group = node(
             "id-group",
             "Group 1",
             "group",
             vec![
-                param("Input", "Sphere 1"),
-                param("Group Name", "pull"),
-                param("Mode", "Random"),
-                param("Count", "1"),
-                param("Seed", "3"),
-                param("Highlight", "false"),
+                param("input", "Sphere 1"),
+                param("group_name", "pull"),
+                param("mode", "Random"),
+                param("count", "1"),
+                param("seed", "3"),
+                param("highlight", "false"),
             ],
             vec![],
         );
@@ -9337,12 +9343,12 @@ mod simnet_tests {
             "Pull 1",
             "attribute",
             vec![
-                param("Input", "Group 1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "Pos"),
-                param("Value", "0.00:0.50:0.00"),
-                param("Combine", "Add"),
-                param("Group", "pull"),
+                param("input", "Group 1"),
+                param("operation", "Modify"),
+                param("attribute_name", "Pos"),
+                param("value", "0.00:0.50:0.00"),
+                param("combine", "Add"),
+                param("group", "pull"),
             ],
             vec![],
         );
@@ -9351,11 +9357,11 @@ mod simnet_tests {
             "Relax 1",
             "relax",
             vec![
-                param("Input", "Pull 1"),
-                param("Rest", "Group 1"),
-                param("Pin Group", "pull"),
-                param("Stiffness", "0.50"),
-                param("Iterations", "8"),
+                param("input", "Pull 1"),
+                param("rest", "Group 1"),
+                param("pin_group", "pull"),
+                param("stiffness", "0.50"),
+                param("iterations", "8"),
             ],
             vec![],
         );
@@ -9389,18 +9395,18 @@ mod simnet_tests {
     /// for the points it left alone.
     #[test]
     fn pull_arrows_measure_what_the_node_moves() {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let group = node(
             "id-group",
             "Group 1",
             "group",
             vec![
-                param("Input", "Sphere 1"),
-                param("Group Name", "pull"),
-                param("Mode", "Random"),
-                param("Count", "30"),
-                param("Seed", "3"),
-                param("Highlight", "false"),
+                param("input", "Sphere 1"),
+                param("group_name", "pull"),
+                param("mode", "Random"),
+                param("count", "30"),
+                param("seed", "3"),
+                param("highlight", "false"),
             ],
             vec![],
         );
@@ -9409,12 +9415,12 @@ mod simnet_tests {
             "Pull 1",
             "attribute",
             vec![
-                param("Input", "Group 1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "Pos"),
-                param("Value", "0.00:0.06:0.00"),
-                param("Combine", "Add"),
-                param("Group", "pull"),
+                param("input", "Group 1"),
+                param("operation", "Modify"),
+                param("attribute_name", "Pos"),
+                param("value", "0.00:0.06:0.00"),
+                param("combine", "Add"),
+                param("group", "pull"),
             ],
             vec![],
         );
@@ -9455,14 +9461,14 @@ mod simnet_tests {
     #[test]
     fn strength_and_scale_by_scale_the_pulls_effect() {
         let pull_of = |extra: Vec<(&str, &str)>, combine: &str, value: &str| {
-            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
             let mut params = vec![
-                param("Input", "Sphere 1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "Pos"),
-                param("Value", value),
-                param("Combine", combine),
-                param("Group", ""),
+                param("input", "Sphere 1"),
+                param("operation", "Modify"),
+                param("attribute_name", "Pos"),
+                param("value", value),
+                param("combine", combine),
+                param("group", ""),
             ];
             params.extend(extra.into_iter().map(|(k, v)| param(k, v)));
             let pull = node("id-pull", "Pull 1", "attribute", params, vec![]);
@@ -9482,16 +9488,16 @@ mod simnet_tests {
         // Absent (an older save) and at one: the pull as it always was.
         let (d, err) = moved_by(&pull_of(vec![], "Add", "0.00:0.06:0.00"), 1);
         assert!(err.is_none() && all(&d, up), "{err:?}");
-        let (d, _) = moved_by(&pull_of(vec![("Strength", "1.00")], "Add", "0.00:0.06:0.00"), 1);
+        let (d, _) = moved_by(&pull_of(vec![("strength", "1.00")], "Add", "0.00:0.06:0.00"), 1);
         assert!(all(&d, up));
         // Half, none, double.
         for (strength, want) in [("0.50", up * 0.5), ("0.00", Vec3::ZERO), ("2.00", up * 2.0)] {
-            let (d, _) = moved_by(&pull_of(vec![("Strength", strength)], "Add", "0.00:0.06:0.00"), 1);
+            let (d, _) = moved_by(&pull_of(vec![("strength", strength)], "Add", "0.00:0.06:0.00"), 1);
             assert!(all(&d, want), "strength {strength}: {:?}", d[0]);
         }
         // Under Set it is how far toward Value each point goes: at a half,
         // halfway from where it was to (0, 2, 0).
-        let root = pull_of(vec![("Strength", "0.50")], "Set", "0.00:2.00:0.00");
+        let root = pull_of(vec![("strength", "0.50")], "Set", "0.00:2.00:0.00");
         let base = eval(&root, "Sphere 1");
         let out = eval(&root, "Pull 1");
         for p in 0..out.num_points() {
@@ -9501,7 +9507,7 @@ mod simnet_tests {
 
         // Scale By: each point by its own value of the attribute — the
         // sphere's uv, whose first component runs around it — times Strength.
-        let root = pull_of(vec![("Strength", "0.50"), ("Scale By", "uv")], "Add", "0.00:0.06:0.00");
+        let root = pull_of(vec![("strength", "0.50"), ("scale_by", "uv")], "Add", "0.00:0.06:0.00");
         let base = eval(&root, "Sphere 1");
         let (d, err) = moved_by(&root, 1);
         assert!(err.is_none(), "{err:?}");
@@ -9515,14 +9521,14 @@ mod simnet_tests {
         assert!(hi - lo > 0.5, "the fixture's weights vary, or this proves nothing: {lo}..{hi}");
 
         // An attribute the input lacks is said, and nothing moves.
-        let (d, err) = moved_by(&pull_of(vec![("Scale By", "nothing_here")], "Add", "0.00:0.06:0.00"), 1);
+        let (d, err) = moved_by(&pull_of(vec![("scale_by", "nothing_here")], "Add", "0.00:0.06:0.00"), 1);
         assert!(err.as_deref().is_some_and(|e| e.contains("Scale By") && e.contains("nothing_here")), "{err:?}");
         assert!(all(&d, Vec3::ZERO));
 
         // Strength is a number, so it takes an expression: a pull that
         // ramps in over ten frames.
-        let mut root = pull_of(vec![("Strength", "$F / 10")], "Add", "0.00:0.06:0.00");
-        let strength = root.children[1].params.iter_mut().find(|p| p.name == "Strength").unwrap();
+        let mut root = pull_of(vec![("strength", "$F / 10")], "Add", "0.00:0.06:0.00");
+        let strength = root.children[1].params.iter_mut().find(|p| p.name == "strength").unwrap();
         strength.set_type("float");
         strength.set_expr(true);
         for frame in [2, 5, 10] {
@@ -9540,21 +9546,21 @@ mod simnet_tests {
     #[test]
     fn per_frame_makes_the_pull_independent_of_the_substep_count() {
         let sim_of = |substeps: &str, combine: &str, value: &str, extra: Vec<(&str, &str)>| {
-            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
             let mover = node("id-shift", "Shift 1", "attribute", vec![
-                param("Input", "Sphere 1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
-                param("Value", "3.00:0.00:0.00"), param("Combine", "Add"), param("Group", ""),
+                param("input", "Sphere 1"), param("operation", "Modify"), param("attribute_name", "Pos"),
+                param("value", "3.00:0.00:0.00"), param("combine", "Add"), param("group", ""),
             ], vec![]);
             let inner_input = node("id-in", "input1", "input", vec![], vec![]);
             let mut params = vec![
-                param("Input", "input1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
-                param("Value", value), param("Combine", combine), param("Group", ""),
+                param("input", "input1"), param("operation", "Modify"), param("attribute_name", "Pos"),
+                param("value", value), param("combine", combine), param("group", ""),
             ];
             params.extend(extra.into_iter().map(|(k, v)| param(k, v)));
             let pull = node("id-pull", "pull1", "attribute", params, vec![]);
-            let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+            let inner_output = node("id-out", "output1", "output", vec![param("input", "pull1")], vec![]);
             let sim_node = node("id-sim", "Simnet 1", "simnet",
-                vec![param("Input", "Shift 1"), param("Substeps", substeps)],
+                vec![param("input", "Shift 1"), param("substeps", substeps)],
                 vec![inner_input, pull, inner_output]);
             node("id-root", "root", "node", vec![], vec![sphere, mover, sim_node])
         };
@@ -9563,14 +9569,14 @@ mod simnet_tests {
 
         // Add: five frames on from the seed, one unit a frame, at any count.
         for substeps in ["1", "4", "16"] {
-            let root = sim_of(substeps, "Add", "1.00:0.00:0.00", vec![("Per Frame", "true")]);
+            let root = sim_of(substeps, "Add", "1.00:0.00:0.00", vec![("per_frame", "true")]);
             assert!((at(&root, 6) - (seed + 5.0)).abs() < 1e-3, "{substeps} substeps: {}", at(&root, 6) - seed);
         }
         // With Strength: half a unit a frame.
-        let root = sim_of("4", "Add", "1.00:0.00:0.00", vec![("Per Frame", "true"), ("Strength", "0.50")]);
+        let root = sim_of("4", "Add", "1.00:0.00:0.00", vec![("per_frame", "true"), ("strength", "0.50")]);
         assert!((at(&root, 6) - (seed + 2.5)).abs() < 1e-3);
         // Off, or on a node without the row: per step, four times as far.
-        for extra in [vec![("Per Frame", "false")], vec![]] {
+        for extra in [vec![("per_frame", "false")], vec![]] {
             let root = sim_of("4", "Add", "1.00:0.00:0.00", extra);
             assert!((at(&root, 6) - (seed + 20.0)).abs() < 1e-3, "{}", at(&root, 6) - seed);
         }
@@ -9579,19 +9585,19 @@ mod simnet_tests {
         // whatever the count. (The seed sits well clear of zero.)
         assert!(seed > 0.1, "the fixture's points are on the positive side: {seed}");
         for substeps in ["1", "4", "16"] {
-            let root = sim_of(substeps, "Multiply", "2.00:1.00:1.00", vec![("Per Frame", "true")]);
+            let root = sim_of(substeps, "Multiply", "2.00:1.00:1.00", vec![("per_frame", "true")]);
             let got = at(&root, 4);
             assert!((got - seed * 8.0).abs() < seed * 8.0 * 1e-3, "{substeps} substeps: {got} against {}", seed * 8.0);
         }
         // A Set does not accumulate: it sets, at any count, switch or no.
-        let root = sim_of("4", "Set", "7.00:0.00:0.00", vec![("Per Frame", "true")]);
+        let root = sim_of("4", "Set", "7.00:0.00:0.00", vec![("per_frame", "true")]);
         assert!((at(&root, 3) - 7.0).abs() < 1e-4);
 
         // Outside a simnet there is no step to account for.
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let pull = node("id-pull", "Pull 1", "attribute", vec![
-            param("Input", "Sphere 1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
-            param("Value", "1.00:0.00:0.00"), param("Combine", "Add"), param("Group", ""), param("Per Frame", "true"),
+            param("input", "Sphere 1"), param("operation", "Modify"), param("attribute_name", "Pos"),
+            param("value", "1.00:0.00:0.00"), param("combine", "Add"), param("group", ""), param("per_frame", "true"),
         ], vec![]);
         let root = node("id-root", "root", "node", vec![], vec![sphere, pull]);
         assert!((min_x(&eval(&root, "Pull 1")) - (min_x(&eval(&root, "Sphere 1")) + 1.0)).abs() < 1e-5);
@@ -9619,19 +9625,19 @@ mod simnet_tests {
     #[test]
     fn a_detangle_in_a_simnet_knows_where_the_step_began() {
         let graph = |nested: bool| {
-            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
             let pull = |input: &str| {
                 node(
                     "id-pull",
                     "pull1",
                     "attribute",
                     vec![
-                        param("Input", input),
-                        param("Operation", "Modify"),
-                        param("Attribute Name", "Pos"),
-                        param("Value", "1.00:0.00:0.00"),
-                        param("Combine", "Add"),
-                        param("Group", ""),
+                        param("input", input),
+                        param("operation", "Modify"),
+                        param("attribute_name", "Pos"),
+                        param("value", "1.00:0.00:0.00"),
+                        param("combine", "Add"),
+                        param("group", ""),
                     ],
                     vec![],
                 )
@@ -9641,7 +9647,7 @@ mod simnet_tests {
                     "id-detangle",
                     "detangle1",
                     "detangle",
-                    vec![param("Input", input), param("Method", "Surface"), param("Thickness", "1.00"), param("Step Limit", "0.50")],
+                    vec![param("input", input), param("method", "surface"), param("thickness", "1.00"), param("step_limit", "0.50")],
                     vec![],
                 )
             };
@@ -9650,28 +9656,28 @@ mod simnet_tests {
                     "id-sub",
                     "sub1",
                     "node",
-                    vec![param("Input", "pull1")],
+                    vec![param("input", "pull1")],
                     vec![
                         node("id-sub-in", "input1", "input", vec![], vec![]),
                         detangle("input1"),
-                        node("id-sub-out", "output1", "output", vec![param("Input", "detangle1")], vec![]),
+                        node("id-sub-out", "output1", "output", vec![param("input", "detangle1")], vec![]),
                     ],
                 );
                 vec![
                     node("id-in", "input1", "input", vec![], vec![]),
                     pull("input1"),
                     inside,
-                    node("id-out", "output1", "output", vec![param("Input", "sub1")], vec![]),
+                    node("id-out", "output1", "output", vec![param("input", "sub1")], vec![]),
                 ]
             } else {
                 vec![
                     node("id-in", "input1", "input", vec![], vec![]),
                     pull("input1"),
                     detangle("pull1"),
-                    node("id-out", "output1", "output", vec![param("Input", "detangle1")], vec![]),
+                    node("id-out", "output1", "output", vec![param("input", "detangle1")], vec![]),
                 ]
             };
-            let sim = node("id-sim", "Simnet 1", "simnet", vec![param("Input", "Sphere 1")], chain);
+            let sim = node("id-sim", "Simnet 1", "simnet", vec![param("input", "Sphere 1")], chain);
             let outside = detangle("pull1");
             node("id-root", "root", "node", vec![], vec![sphere, sim, pull("Sphere 1"), outside])
         };
@@ -9698,28 +9704,28 @@ mod simnet_tests {
     /// would give (the `input` node reads the seed with no feedback pushed).
     #[test]
     fn pull_arrows_inside_a_simnet_start_from_this_frames_state() {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let inner_input = node("id-in", "input1", "input", vec![], vec![]);
         let pull = node(
             "id-pull",
             "pull1",
             "attribute",
             vec![
-                param("Input", "input1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "Pos"),
-                param("Value", "1.00:0.00:0.00"),
-                param("Combine", "Add"),
-                param("Group", ""),
+                param("input", "input1"),
+                param("operation", "Modify"),
+                param("attribute_name", "Pos"),
+                param("value", "1.00:0.00:0.00"),
+                param("combine", "Add"),
+                param("group", ""),
             ],
             vec![],
         );
-        let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "pull1")], vec![]);
         let sim_node = node(
             "id-sim",
             "Simnet 1",
             "simnet",
-            vec![param("Input", "Sphere 1")],
+            vec![param("input", "Sphere 1")],
             vec![inner_input, pull, inner_output],
         );
         let root = node("id-root", "root", "node", vec![], vec![sphere, sim_node]);
@@ -9747,28 +9753,28 @@ mod simnet_tests {
     /// feedback, so a visible chain node draws where the output does too.
     #[test]
     fn pull_arrows_inside_a_simnet_anchor_at_the_last_substep() {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let inner_input = node("id-in", "input1", "input", vec![], vec![]);
         let pull = node(
             "id-pull",
             "pull1",
             "attribute",
             vec![
-                param("Input", "input1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "Pos"),
-                param("Value", "1.00:0.00:0.00"),
-                param("Combine", "Add"),
-                param("Group", ""),
+                param("input", "input1"),
+                param("operation", "Modify"),
+                param("attribute_name", "Pos"),
+                param("value", "1.00:0.00:0.00"),
+                param("combine", "Add"),
+                param("group", ""),
             ],
             vec![],
         );
-        let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "pull1")], vec![]);
         let sim_node = node(
             "id-sim",
             "Simnet 1",
             "simnet",
-            vec![param("Input", "Sphere 1"), param("Substeps", "4")],
+            vec![param("input", "Sphere 1"), param("substeps", "4")],
             vec![inner_input, pull, inner_output],
         );
         let root = node("id-root", "root", "node", vec![], vec![sphere, sim_node]);
@@ -9801,28 +9807,28 @@ mod simnet_tests {
     /// under `cfg(test)`, so the node id here reaches no user cache.
     #[test]
     fn a_disk_resume_landing_on_the_frame_keeps_its_last_substeps_input() {
-        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
         let inner_input = node("id-in", "input1", "input", vec![], vec![]);
         let pull = node(
             "id-pull",
             "pull1",
             "attribute",
             vec![
-                param("Input", "input1"),
-                param("Operation", "Modify"),
-                param("Attribute Name", "Pos"),
-                param("Value", "1.00:0.00:0.00"),
-                param("Combine", "Add"),
-                param("Group", ""),
+                param("input", "input1"),
+                param("operation", "Modify"),
+                param("attribute_name", "Pos"),
+                param("value", "1.00:0.00:0.00"),
+                param("combine", "Add"),
+                param("group", ""),
             ],
             vec![],
         );
-        let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "pull1")], vec![]);
         let sim_node = node(
             "id-sim-disk-resume",
             "Simnet 1",
             "simnet",
-            vec![param("Input", "Sphere 1"), param("Substeps", "2"), param("Cache", "true")],
+            vec![param("input", "Sphere 1"), param("substeps", "2"), param("cache", "true")],
             vec![inner_input, pull, inner_output],
         );
         let root = node("id-root", "root", "node", vec![], vec![sphere, sim_node]);
@@ -9863,15 +9869,15 @@ mod simnet_tests {
     #[test]
     fn a_scrub_resumes_from_a_checkpoint_and_arrives_at_the_same_state() {
         let sim_of = |value: &str, substeps: &str| {
-            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("Radius", "0.5")], vec![]);
+            let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
             let inner_input = node("id-in", "input1", "input", vec![], vec![]);
             let pull = node("id-pull", "pull1", "attribute", vec![
-                param("Input", "input1"), param("Operation", "Modify"), param("Attribute Name", "Pos"),
-                param("Value", value), param("Combine", "Multiply"), param("Group", ""),
+                param("input", "input1"), param("operation", "Modify"), param("attribute_name", "Pos"),
+                param("value", value), param("combine", "Multiply"), param("group", ""),
             ], vec![]);
-            let inner_output = node("id-out", "output1", "output", vec![param("Input", "pull1")], vec![]);
+            let inner_output = node("id-out", "output1", "output", vec![param("input", "pull1")], vec![]);
             let sim_node = node("id-sim-checkpoints", "Simnet 1", "simnet",
-                vec![param("Input", "Sphere 1"), param("Substeps", substeps)],
+                vec![param("input", "Sphere 1"), param("substeps", substeps)],
                 vec![inner_input, pull, inner_output]);
             node("id-root", "root", "node", vec![], vec![sphere, sim_node])
         };
@@ -9967,18 +9973,18 @@ mod simnet_tests {
     /// sphere toward. Rest equal to the input is a relax with nothing to do.
     #[test]
     fn a_rest_wire_resolves_to_its_own_sibling() {
-        let small = node("id-a-shape", "shape", "sphere", vec![param("Radius", "0.5")], vec![]);
+        let small = node("id-a-shape", "shape", "sphere", vec![param("radius", "0.5")], vec![]);
         let a = node("id-a", "a", "node", vec![], vec![small]);
-        let big = node("id-b-shape", "shape", "sphere", vec![param("Radius", "1.0")], vec![]);
+        let big = node("id-b-shape", "shape", "sphere", vec![param("radius", "1.0")], vec![]);
         let relax = node(
             "id-b-relax",
             "relax1",
             "relax",
             vec![
-                param("Input", "shape"),
-                param("Rest", "shape"),
-                param("Stiffness", "1.00"),
-                param("Iterations", "8"),
+                param("input", "shape"),
+                param("rest", "shape"),
+                param("stiffness", "1.00"),
+                param("iterations", "8"),
             ],
             vec![],
         );
@@ -9986,7 +9992,7 @@ mod simnet_tests {
         let root = node("id-root", "root", "node", vec![], vec![a, b]);
         let relax = &root.children[1].children[1];
 
-        assert_eq!(param_node(&root, relax, "Rest").map(|n| n.id.as_str()), Some("id-b-shape"));
+        assert_eq!(param_node(&root, relax, "rest").map(|n| n.id.as_str()), Some("id-b-shape"));
         let mut cache = SimCache::default();
         let mut sim = EvalSim::new(1, 1, &mut cache);
         let input = generate_single_node_geometry_with_errors(&root, &root.children[1].children[0], &mut Vec::new(), &mut None, &mut sim).unwrap();

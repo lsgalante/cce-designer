@@ -4,12 +4,12 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "The node whose geometry is moved, with the move fading out smoothly around the affected region." },
-  { "name": "Translation", "type": "float3", "default": "0.00:0.20:0.00", "description": "Offset in world units applied at full strength to the affected points, and faded by the falloff for points around them." },
-  { "name": "Center", "type": "float3", "default": "0.00:0.00:0.00", "description": "Point in world space the falloff is measured from when no Group is given. Points within Radius of it are moved." },
-  { "name": "Group", "type": "group", "default": "", "description": "Point group to move at full strength; the falloff is measured from its nearest member rather than from Center. Empty uses Center.", "group": "where" },
-  { "name": "Radius", "type": "slider", "default": "0.50", "min": 0.0, "max": 10.0, "step": 0.01, "description": "Distance in world units over which the move fades to nothing. Points farther than this from the center or group are not moved.", "group": "falloff" },
-  { "name": "Falloff", "type": "choice:Smooth,Linear,Constant", "default": "Smooth", "description": "Shape of the fade with distance. Smooth eases in with no crease, Linear falls off evenly, and Constant moves everything inside the radius fully.", "group": "falloff" },
-  { "name": "Attribute", "type": "attribute", "default": "", "description": "Name of a point attribute to write each point's falloff weight to, from 1 at the center to 0 at the radius. Empty writes nothing.", "group": "output" }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "The node whose geometry is moved, with the move fading out smoothly around the affected region." },
+  { "name": "translation", "label": "Translation", "type": "float3", "default": "0.00:0.20:0.00", "description": "Offset in world units applied at full strength to the affected points, and faded by the falloff for points around them." },
+  { "name": "center", "label": "Center", "type": "float3", "default": "0.00:0.00:0.00", "description": "Point in world space the falloff is measured from when no Group is given. Points within Radius of it are moved." },
+  { "name": "group", "label": "Group", "type": "group", "default": "", "description": "Point group to move at full strength; the falloff is measured from its nearest member rather than from Center. Empty uses Center.", "group": "where" },
+  { "name": "radius", "label": "Radius", "type": "slider", "default": "0.50", "min": 0.0, "max": 10.0, "step": 0.01, "description": "Distance in world units over which the move fades to nothing. Points farther than this from the center or group are not moved.", "group": "falloff" },
+  { "name": "falloff", "label": "Falloff", "type": "choice:Smooth,Linear,Constant", "default": "Smooth", "description": "Shape of the fade with distance. Smooth eases in with no crease, Linear falls off evenly, and Constant moves everything inside the radius fully.", "group": "falloff" },
+  { "name": "attribute", "label": "Attribute", "type": "attribute", "default": "", "description": "Name of a point attribute to write each point's falloff weight to, from 1 at the center to 0 at the radius. Empty writes nothing.", "group": "output" }
  ]
 }

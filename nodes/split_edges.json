@@ -5,13 +5,15 @@
  "outputs": 1,
  "params": [
   {
-   "name": "Input",
+   "name": "input",
+   "label": "Input",
    "type": "node",
    "default": "",
    "description": "The node whose mesh is refined. Point values ride to the new midpoints by interpolation."
   },
   {
-   "name": "Target Length",
+   "name": "target_length",
+   "label": "Target Length",
    "type": "slider",
    "default": "0.10",
    "min": 0.001,

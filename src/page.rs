@@ -791,20 +791,20 @@ fn toggle_of(node: &FsNode, name: &str) -> bool {
 /// Preset and Units rows do not enter into it — they set Width and Height
 /// when they are picked ([`follow_page_rows`]).
 fn page_node_frame(target: &FsNode) -> PageFrame {
-    let unit = PageUnit::parse(&node_param_str(target, "Units", "Inches"));
+    let unit = PageUnit::parse(&node_param_str(target, "units", "Inches"));
     let dpi = page_dpi(target);
     let size = [
-        unit.to_inches(node_param_f32(target, "Width", 8.5), dpi),
-        unit.to_inches(node_param_f32(target, "Height", 11.0), dpi),
+        unit.to_inches(node_param_f32(target, "width", 8.5), dpi),
+        unit.to_inches(node_param_f32(target, "height", 11.0), dpi),
     ];
     let mut frame = PageFrame::new(size, dpi as u32);
     frame.unit = unit;
-    frame.origin = node_param_vec3(target, "Position", Vec3::ZERO).to_array();
+    frame.origin = node_param_vec3(target, "position", Vec3::ZERO).to_array();
     frame
 }
 
 fn page_dpi(node: &FsNode) -> f32 {
-    node_param_f32(node, "Resolution", 300.0).round().clamp(1.0, 2400.0)
+    node_param_f32(node, "resolution", 300.0).round().clamp(1.0, 2400.0)
 }
 
 /// A preset's size in inches: a sheet portrait, or turned by `landscape`
@@ -836,23 +836,23 @@ pub fn follow_page_rows(node: &mut FsNode, was: &crate::app::ParamDef) -> Vec<cr
 }
 
 fn follow(node: &mut FsNode, was: &crate::app::ParamDef, landscape: bool) -> Vec<crate::app::ParamDef> {
-    let unit = PageUnit::parse(&node_param_str(node, "Units", "Inches"));
+    let unit = PageUnit::parse(&node_param_str(node, "units", "Inches"));
     let dpi = page_dpi(node);
-    let (w, h) = (node_param_f32(node, "Width", 8.5), node_param_f32(node, "Height", 11.0));
+    let (w, h) = (node_param_f32(node, "width", 8.5), node_param_f32(node, "height", 11.0));
     let (nw, nh) = match was.name.as_str() {
-        "Preset" => {
-            let preset = node_param_str(node, "Preset", "Letter");
+        "preset" => {
+            let preset = node_param_str(node, "preset", "Letter");
             let Some([iw, ih]) = preset_inches(&preset, dpi, landscape) else { return Vec::new() };
             (unit.from_inches(iw, dpi), unit.from_inches(ih, dpi))
         }
-        "Units" => {
+        "units" => {
             let old = PageUnit::parse(was.text());
             (unit.from_inches(old.to_inches(w, dpi), dpi), unit.from_inches(old.to_inches(h, dpi), dpi))
         }
         _ => return Vec::new(),
     };
     let mut rewritten = Vec::new();
-    for (name, value) in [("Width", nw), ("Height", nh)] {
+    for (name, value) in [("width", nw), ("height", nh)] {
         let text = row_text(unit, value);
         if let Some(p) = node.params.iter_mut().find(|p| p.name == name) {
             if !p.is_expr() && p.text() != text {
@@ -872,15 +872,15 @@ fn follow(node: &mut FsNode, was: &crate::app::ParamDef, landscape: bool) -> Vec
 /// template merge replaces it. The Orientation row itself goes, from this
 /// save and any other: a page's orientation is its Width and Height.
 pub fn migrate_preset_rows(node: &mut FsNode) {
-    let old = node.params.iter().any(|p| p.name == "Width" && p.show_when.contains("Custom"));
-    let landscape = node_param_str(node, "Orientation", "Portrait").eq_ignore_ascii_case("Landscape");
-    node.params.retain(|p| p.name != "Orientation");
+    let old = node.params.iter().any(|p| p.name == "width" && p.show_when.contains("Custom"));
+    let landscape = node_param_str(node, "orientation", "Portrait").eq_ignore_ascii_case("Landscape");
+    node.params.retain(|p| p.name != "orientation");
     if !old {
         return;
     }
-    let Some(preset) = node.params.iter().find(|p| p.name == "Preset").cloned() else { return };
+    let Some(preset) = node.params.iter().find(|p| p.name == "preset").cloned() else { return };
     if preset.text().trim().eq_ignore_ascii_case("custom") {
-        if let Some(p) = node.params.iter_mut().find(|p| p.name == "Preset") {
+        if let Some(p) = node.params.iter_mut().find(|p| p.name == "preset") {
             p.set_text("Letter".to_string());
         }
     } else {
@@ -906,7 +906,7 @@ pub fn resolve_frame(root: &FsNode, target: &FsNode) -> Option<PageFrame> {
         if !is_page_node(&kind) && kind != "export" {
             return None;
         }
-        node = crate::geometry::param_node(root, node, "Input")?;
+        node = crate::geometry::param_node(root, node, "input")?;
     }
 }
 
@@ -923,7 +923,7 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
     // Bypassed, a page node passes the sheet it was handed, and a sheet that
     // is bypassed is no sheet.
     if crate::geometry::is_bypassed(target) {
-        let input = crate::geometry::param_node(root, target, "Input")?;
+        let input = crate::geometry::param_node(root, target, "input")?;
         return resolve_page(root, input, visited);
     }
 
@@ -931,7 +931,7 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
     if kind == "page" {
         return Some(Page::blank(
             page_node_frame(target),
-            color_with(target, "Color", Vec3::ONE, "Opacity"),
+            color_with(target, "color", Vec3::ONE, "opacity"),
         ));
     }
 
@@ -942,7 +942,7 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
     // the geometry resolvers rather than being claimed by this one.
     // Sibling-first like every geometry wire; a whole-tree search by name
     // found the first same-named page node anywhere.
-    let input = crate::geometry::param_node(root, target, "Input")?;
+    let input = crate::geometry::param_node(root, target, "input")?;
     let mut page = resolve_page(root, input, visited)?;
 
     match kind.as_str() {
@@ -951,71 +951,71 @@ pub fn resolve_page(root: &FsNode, target: &FsNode, visited: &mut Vec<String>) -
         // becomes the mesh format its Format parameter names.
         "export" => {}
         "page_grid" => {
-            let cell_color = if toggle_of(target, "Fill Cells") {
-                color_of(target, "Cell Color", Vec3::ONE)
+            let cell_color = if toggle_of(target, "fill_cells") {
+                color_of(target, "cell_color", Vec3::ONE)
             } else {
                 [0.0; 4]
             };
             page.grid(
-                page.len(node_param_f32(target, "Cell Size", 0.25)),
-                page.len(node_param_f32(target, "Line Width", 0.01)),
+                page.len(node_param_f32(target, "cell_size", 0.25)),
+                page.len(node_param_f32(target, "line_width", 0.01)),
                 cell_color,
-                color_of(target, "Line Color", Vec3::ZERO),
+                color_of(target, "line_color", Vec3::ZERO),
             );
         }
         "page_border" => page.border(
-            page.len(node_param_f32(target, "Width", 0.06)),
-            page.len(node_param_f32(target, "Inset", 0.4)),
-            color_of(target, "Color", Vec3::ZERO),
+            page.len(node_param_f32(target, "width", 0.06)),
+            page.len(node_param_f32(target, "inset", 0.4)),
+            color_of(target, "color", Vec3::ZERO),
         ),
         "page_shape" => {
             let spec = ShapeSpec {
-                kind: ShapeKind::parse(&node_param_str(target, "Shape", "Rectangle")),
+                kind: ShapeKind::parse(&node_param_str(target, "shape", "Rectangle")),
                 center: [
-                    page.len(node_param_f32(target, "X", 0.0)),
-                    page.len(node_param_f32(target, "Y", 0.0)),
+                    page.len(node_param_f32(target, "x", 0.0)),
+                    page.len(node_param_f32(target, "y", 0.0)),
                 ],
                 size: [
-                    page.len(node_param_f32(target, "Width", 1.0)),
-                    page.len(node_param_f32(target, "Height", 1.0)),
+                    page.len(node_param_f32(target, "width", 1.0)),
+                    page.len(node_param_f32(target, "height", 1.0)),
                 ],
-                rotation: node_param_f32(target, "Rotation", 0.0),
-                corner_radius: page.len(node_param_f32(target, "Corner Radius", 0.0)),
-                sides: node_param_f32(target, "Sides", 3.0).round().max(3.0) as u32,
-                fill: toggle_of(target, "Fill")
-                    .then(|| color_with(target, "Fill Color", Vec3::splat(0.5), "Fill Opacity")),
-                stroke: toggle_of(target, "Stroke").then(|| {
+                rotation: node_param_f32(target, "rotation", 0.0),
+                corner_radius: page.len(node_param_f32(target, "corner_radius", 0.0)),
+                sides: node_param_f32(target, "sides", 3.0).round().max(3.0) as u32,
+                fill: toggle_of(target, "fill")
+                    .then(|| color_with(target, "fill_color", Vec3::splat(0.5), "fill_opacity")),
+                stroke: toggle_of(target, "stroke").then(|| {
                     (
-                        color_with(target, "Stroke Color", Vec3::ZERO, "Stroke Opacity"),
-                        page.len(node_param_f32(target, "Stroke Width", 0.02)),
+                        color_with(target, "stroke_color", Vec3::ZERO, "stroke_opacity"),
+                        page.len(node_param_f32(target, "stroke_width", 0.02)),
                     )
                 }),
             };
             page.shape(&spec);
         }
         "page_text" => {
-            let text = node_param_str(target, "Text", "");
-            let font = node_param_str(target, "Font", "");
+            let text = node_param_str(target, "text", "");
+            let font = node_param_str(target, "font", "");
             let spec = TextSpec {
                 text: &text,
                 font: &font,
-                size: page.len(node_param_f32(target, "Size", 0.25)),
-                color: color_of(target, "Color", Vec3::ZERO),
+                size: page.len(node_param_f32(target, "size", 0.25)),
+                color: color_of(target, "color", Vec3::ZERO),
                 at: [
-                    page.len(node_param_f32(target, "X", 4.25)),
-                    page.len(node_param_f32(target, "Y", 0.8)),
+                    page.len(node_param_f32(target, "x", 4.25)),
+                    page.len(node_param_f32(target, "y", 0.8)),
                 ],
-                halign: match node_param_str(target, "Horizontal", "Center").as_str() {
+                halign: match node_param_str(target, "horizontal", "Center").as_str() {
                     "Left" => HAlign::Left,
                     "Right" => HAlign::Right,
                     _ => HAlign::Center,
                 },
-                valign: match node_param_str(target, "Vertical", "Top").as_str() {
+                valign: match node_param_str(target, "vertical", "Top").as_str() {
                     "Middle" => VAlign::Middle,
                     "Bottom" => VAlign::Bottom,
                     _ => VAlign::Top,
                 },
-                leading: node_param_f32(target, "Leading", 1.25),
+                leading: node_param_f32(target, "leading", 1.25),
             };
             with_fonts(|fonts, cache| page.text(fonts, cache, &spec));
         }

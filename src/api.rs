@@ -60,12 +60,12 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool(
             "set_param",
-            "Set a parameter on the node at the given slot. All values are strings (e.g. \"1.5\", \"0.2,0.4,1\"). A value that reads as an expression — ch(\"../sphere1/Radius\") * 2, $F / 24 — becomes one (Houdini paths: relative to the node, .. its parent, / the root, a bare name its own parameter).",
+            "Set a parameter on the node at the given slot. All values are strings (e.g. \"1.5\", \"0.2,0.4,1\"). A value that reads as an expression — ch(\"../sphere1/radius\") * 2, $F / 24 — becomes one (Houdini paths: relative to the node, .. its parent, / the root, a bare name its own parameter).",
             json!({
                 "type": "object",
                 "properties": {
                     "slot": slot("Child index in the current network level"),
-                    "name": { "type": "string", "description": "Parameter name" },
+                    "name": { "type": "string", "description": "Parameter name (radius, base_resolution); its label (Base Resolution) is accepted too" },
                     "value": { "type": "string", "description": "New value, as a string" },
                 },
                 "required": ["slot", "name", "value"],
@@ -163,7 +163,8 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
                 "type": "object",
                 "properties": {
                     "slot": slot("Child index in the current network level"),
-                    "name": { "type": "string" },
+                    "name": { "type": "string", "description": "The parameter's name, what a ch() path spells: lowercase letters, digits and underscores (base_resolution)" },
+                    "label": { "type": "string", "description": "What the params pane shows for it (Base Resolution); the name when absent" },
                     "param_type": { "type": "string", "description": "One of text, float, slider, spinbox, float3, choice, toggle, button, code, node, attribute, group — optionally with detail after a colon (slider:-2:2, choice:A,B,C)" },
                     "default": { "type": "string", "description": "Default value, as a string" },
                 },
@@ -177,7 +178,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
                 "type": "object",
                 "properties": {
                     "slot": slot("Child index in the current network level"),
-                    "name": { "type": "string", "description": "Parameter name" },
+                    "name": { "type": "string", "description": "Parameter name (radius, base_resolution); its label (Base Resolution) is accepted too" },
                 },
                 "required": ["slot", "name"],
             }),

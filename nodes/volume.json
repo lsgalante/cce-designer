@@ -4,10 +4,10 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "The node whose closed surface is turned into a distance field and rebuilt as an offset surface or a shell." },
-  { "name": "Mode", "type": "choice:Offset,Shell", "default": "Offset", "description": "Offset moves the whole surface out or in. Shell keeps only a wall between the offset surface and a copy moved inward by Thickness." },
-  { "name": "Voxel Size", "type": "slider", "default": "0.05", "min": 0.005, "max": 1.0, "step": 0.005, "description": "Grid spacing of the distance field in world units. Smaller keeps finer detail but costs more; the grid is capped at 256 samples per axis." },
-  { "name": "Offset", "type": "slider", "default": "0.00", "min": -1.0, "max": 1.0, "step": 0.005, "description": "How far, in world units, the surface is moved: positive grows it outward, negative shrinks it inward. 0 rebuilds it in place." },
-  { "name": "Thickness", "type": "slider", "default": "0.05", "min": 0.001, "max": 1.0, "step": 0.005, "show_when": "Mode == Shell", "description": "Wall thickness of the shell in world units, measured inward from the offset surface." }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "The node whose closed surface is turned into a distance field and rebuilt as an offset surface or a shell." },
+  { "name": "mode", "label": "Mode", "type": "choice:Offset,Shell", "default": "Offset", "description": "Offset moves the whole surface out or in. Shell keeps only a wall between the offset surface and a copy moved inward by Thickness." },
+  { "name": "voxel_size", "label": "Voxel Size", "type": "slider", "default": "0.05", "min": 0.005, "max": 1.0, "step": 0.005, "description": "Grid spacing of the distance field in world units. Smaller keeps finer detail but costs more; the grid is capped at 256 samples per axis." },
+  { "name": "offset", "label": "Offset", "type": "slider", "default": "0.00", "min": -1.0, "max": 1.0, "step": 0.005, "description": "How far, in world units, the surface is moved: positive grows it outward, negative shrinks it inward. 0 rebuilds it in place." },
+  { "name": "thickness", "label": "Thickness", "type": "slider", "default": "0.05", "min": 0.001, "max": 1.0, "step": 0.005, "show_when": "mode == Shell", "description": "Wall thickness of the shell in world units, measured inward from the offset surface." }
  ]
 }

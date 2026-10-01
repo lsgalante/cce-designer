@@ -5,13 +5,15 @@
  "outputs": 1,
  "params": [
   {
-   "name": "Input",
+   "name": "input",
+   "label": "Input",
    "type": "node",
    "default": "",
    "description": "The node whose mesh is coarsened. The surviving point of each collapsed edge keeps its values and joins the other end's groups."
   },
   {
-   "name": "Target Length",
+   "name": "target_length",
+   "label": "Target Length",
    "type": "slider",
    "default": "0.10",
    "min": 0.001,

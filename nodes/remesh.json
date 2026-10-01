@@ -5,13 +5,15 @@
  "outputs": 1,
  "params": [
   {
-   "name": "Input",
+   "name": "input",
+   "label": "Input",
    "type": "node",
    "default": "",
    "description": "The node whose surface is remeshed. Its triangles are rebuilt toward an even edge length; point attributes ride through splits and collapses."
   },
   {
-   "name": "Target Length",
+   "name": "target_length",
+   "label": "Target Length",
    "type": "slider",
    "default": "0.10",
    "min": 0.001,
@@ -20,7 +22,8 @@
    "description": "Edge length, in world units, the mesh is steered toward. Edges over 4/3 of it are split and edges under 4/5 collapsed; smaller means denser."
   },
   {
-   "name": "Iterations",
+   "name": "iterations",
+   "label": "Iterations",
    "type": "spinbox",
    "default": "3",
    "min": 1.0,
@@ -29,7 +32,8 @@
    "description": "How many times the split, collapse, flip, relax and project passes repeat. More rounds settle the mesh closer to the target; it stops early once a round changes nothing."
   },
   {
-   "name": "Relax",
+   "name": "relax",
+   "label": "Relax",
    "type": "slider",
    "default": "0.50",
    "min": 0.0,
@@ -38,52 +42,58 @@
    "description": "How far each point slides toward its neighbours' centroid along the surface in every round, evening out the triangles. 0 turns the relaxation off; 1 is full strength."
   },
   {
-   "name": "Transfer",
+   "name": "transfer",
+   "label": "Transfer",
    "type": "toggle",
    "default": "false",
    "description": "After remeshing, copy point attributes (and optionally groups) onto the new points from the nearest point of a source mesh, so they survive the rebuild.",
    "group": "transfer"
   },
   {
-   "name": "From",
+   "name": "from",
+   "label": "From",
    "type": "node",
    "default": "",
-   "show_when": "Transfer == true",
+   "show_when": "transfer == true",
    "description": "The node whose point attributes and groups are copied onto the remeshed points. Empty uses the remesh's own input, as it was before remeshing.",
    "group": "transfer"
   },
   {
-   "name": "Attributes",
+   "name": "attributes",
+   "label": "Attributes",
    "type": "text",
    "default": "",
-   "show_when": "Transfer == true",
+   "show_when": "transfer == true",
    "description": "Comma-separated names of the point attributes to copy from the source. Empty copies every point attribute the source has.",
    "group": "transfer"
   },
   {
-   "name": "Transfer Groups",
+   "name": "transfer_groups",
+   "label": "Transfer Groups",
    "type": "toggle",
    "default": "false",
-   "show_when": "Transfer == true",
+   "show_when": "transfer == true",
    "description": "Also copy point group membership from the nearest source point, joining and leaving groups to match the source.",
    "group": "transfer"
   },
   {
-   "name": "Groups",
+   "name": "groups",
+   "label": "Groups",
    "type": "text",
    "default": "",
-   "show_when": "Transfer == true && Transfer Groups == true",
+   "show_when": "transfer == true && transfer_groups == true",
    "description": "Comma-separated names of the point groups to copy. Empty copies every point group the source has.",
    "group": "transfer"
   },
   {
-   "name": "Maximum Distance",
+   "name": "maximum_distance",
+   "label": "Maximum Distance",
    "type": "slider",
    "default": "0.00",
    "min": 0.0,
    "max": 10.0,
    "step": 0.01,
-   "show_when": "Transfer == true",
+   "show_when": "transfer == true",
    "description": "Only points within this many world units of a source point receive values; farther points keep their own. 0 means no limit.",
    "group": "transfer"
   }
@@ -108,16 +118,16 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "input1"
     },
     {
-     "name": "Iterations",
-     "default": "chi(\"../Iterations\")",
+     "name": "iterations",
+     "default": "chi(\"../iterations\")",
      "expr": true
     },
     {
-     "name": "Stop When Unchanged",
+     "name": "stop_when_unchanged",
      "default": "true"
     }
    ],
@@ -151,12 +161,12 @@
      ],
      "params": [
       {
-       "name": "Input",
+       "name": "input",
        "default": "input1"
       },
       {
-       "name": "Target Length",
-       "default": "chf(\"../../Target Length\")",
+       "name": "target_length",
+       "default": "chf(\"../../target_length\")",
        "expr": true
       }
      ],
@@ -171,12 +181,12 @@
      ],
      "params": [
       {
-       "name": "Input",
+       "name": "input",
        "default": "split1"
       },
       {
-       "name": "Target Length",
-       "default": "chf(\"../../Target Length\")",
+       "name": "target_length",
+       "default": "chf(\"../../target_length\")",
        "expr": true
       }
      ],
@@ -191,12 +201,12 @@
      ],
      "params": [
       {
-       "name": "Input",
+       "name": "input",
        "default": "collapse1"
       },
       {
-       "name": "Target Length",
-       "default": "chf(\"../../Target Length\")",
+       "name": "target_length",
+       "default": "chf(\"../../target_length\")",
        "expr": true
       }
      ],
@@ -211,20 +221,20 @@
      ],
      "params": [
       {
-       "name": "Input",
+       "name": "input",
        "default": "flip1"
       },
       {
-       "name": "Mode",
+       "name": "mode",
        "default": "Tangential"
       },
       {
-       "name": "Iterations",
+       "name": "iterations",
        "default": "1"
       },
       {
-       "name": "Amount",
-       "default": "chf(\"../../Relax\")",
+       "name": "amount",
+       "default": "chf(\"../../relax\")",
        "expr": true
       }
      ],
@@ -239,11 +249,11 @@
      ],
      "params": [
       {
-       "name": "Input",
+       "name": "input",
        "default": "relax1"
       },
       {
-       "name": "Surface",
+       "name": "surface",
        "default": "seed1"
       }
      ],
@@ -258,7 +268,7 @@
      ],
      "params": [
       {
-       "name": "Input",
+       "name": "input",
        "default": "project1"
       }
      ],
@@ -276,32 +286,32 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "repeat1"
     },
     {
-     "name": "From",
-     "default": "if(chs(\"../From\"), chs(\"../From\"), \"input1\")",
+     "name": "from",
+     "default": "if(chs(\"../from\"), chs(\"../from\"), \"input1\")",
      "expr": true
     },
     {
-     "name": "Attributes",
-     "default": "chs(\"../Attributes\")",
+     "name": "attributes",
+     "default": "chs(\"../attributes\")",
      "expr": true
     },
     {
-     "name": "Transfer Groups",
-     "default": "chb(\"../Transfer Groups\")",
+     "name": "transfer_groups",
+     "default": "chb(\"../transfer_groups\")",
      "expr": true
     },
     {
-     "name": "Groups",
-     "default": "chs(\"../Groups\")",
+     "name": "groups",
+     "default": "chs(\"../groups\")",
      "expr": true
     },
     {
-     "name": "Maximum Distance",
-     "default": "chf(\"../Maximum Distance\")",
+     "name": "maximum_distance",
+     "default": "chf(\"../maximum_distance\")",
      "expr": true
     }
    ],
@@ -316,16 +326,16 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "repeat1"
     },
     {
-     "name": "Input 2",
+     "name": "input_2",
      "default": "transfer1"
     },
     {
-     "name": "Index",
-     "default": "chi(\"../Transfer\")",
+     "name": "index",
+     "default": "chi(\"../transfer\")",
      "expr": true
     }
    ]
@@ -339,7 +349,7 @@
    ],
    "params": [
     {
-     "name": "Input",
+     "name": "input",
      "default": "transfer_switch1"
     }
    ],

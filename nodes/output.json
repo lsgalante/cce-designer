@@ -4,6 +4,6 @@
   "inputs": 1,
   "outputs": 0,
   "params": [
-    { "name": "Input", "default": "", "type": "node", "description": "Node whose geometry becomes the result of the enclosing subnet, what nodes outside it read." }
+    { "name": "input", "label": "Input", "default": "", "type": "node", "description": "Node whose geometry becomes the result of the enclosing subnet, what nodes outside it read." }
   ]
 }

@@ -4,8 +4,8 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "The node whose geometry is measured; its bounding box is added as detail attributes and the geometry passed on." },
-  { "name": "Prefix", "type": "text", "default": "bounds", "description": "The start of the four detail attribute names written: <prefix>_min, _max, _size and _center. Empty writes nothing." },
-  { "name": "Group", "type": "group", "default": "", "description": "A point group whose points alone are measured. Empty measures every point.", "group": "where" }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "The node whose geometry is measured; its bounding box is added as detail attributes and the geometry passed on." },
+  { "name": "prefix", "label": "Prefix", "type": "text", "default": "bounds", "description": "The start of the four detail attribute names written: <prefix>_min, _max, _size and _center. Empty writes nothing." },
+  { "name": "group", "label": "Group", "type": "group", "default": "", "description": "A point group whose points alone are measured. Empty measures every point.", "group": "where" }
  ]
 }

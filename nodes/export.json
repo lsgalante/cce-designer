@@ -4,10 +4,10 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "The node whose output is written. A page chain is written as a PNG; geometry is written in the mesh format chosen by Format. Passed through unchanged." },
-  { "name": "File", "type": "text", "default": "", "description": "Path of the file to write; ~/ means your home folder and missing folders are created. An existing file is overwritten. Required before exporting." },
-  { "name": "Format", "type": "choice:STL,STL (ASCII),OBJ", "default": "STL", "description": "Mesh format for geometry: binary STL, ASCII STL (readable text, larger), or OBJ, which keeps shared points and quads. Ignored for pages, always PNG." },
-  { "name": "Scale", "type": "slider", "default": "1.00", "min": 0.001, "max": 100.0, "step": 0.01, "description": "Multiplies every coordinate as the mesh is written, for example to convert units for a slicer. Does not affect the scene, or a page's PNG." },
-  { "name": "Export", "type": "button", "default": "", "description": "Writes the input to File now, at the current frame, and reports the result on the status line. Nothing is written when the node is merely evaluated.", "group": "action" }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "The node whose output is written. A page chain is written as a PNG; geometry is written in the mesh format chosen by Format. Passed through unchanged." },
+  { "name": "file", "label": "File", "type": "text", "default": "", "description": "Path of the file to write; ~/ means your home folder and missing folders are created. An existing file is overwritten. Required before exporting." },
+  { "name": "format", "label": "Format", "type": "choice:STL,STL (ASCII),OBJ", "default": "STL", "description": "Mesh format for geometry: binary STL, ASCII STL (readable text, larger), or OBJ, which keeps shared points and quads. Ignored for pages, always PNG." },
+  { "name": "scale", "label": "Scale", "type": "slider", "default": "1.00", "min": 0.001, "max": 100.0, "step": 0.01, "description": "Multiplies every coordinate as the mesh is written, for example to convert units for a slicer. Does not affect the scene, or a page's PNG." },
+  { "name": "export", "label": "Export", "type": "button", "default": "", "description": "Writes the input to File now, at the current frame, and reports the result on the status line. Nothing is written when the node is merely evaluated.", "group": "action" }
  ]
 }

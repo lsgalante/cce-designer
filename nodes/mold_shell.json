@@ -4,10 +4,10 @@
  "inputs": 1,
  "outputs": 1,
  "params": [
-  { "name": "Input", "type": "node", "default": "", "description": "The node whose surface is the cast; a shell is built inward from it with a thickness that follows its curvature." },
-  { "name": "Maximum Thickness", "type": "slider", "default": "0.75", "min": 0.001, "max": 5.0, "step": 0.01, "description": "Shell thickness in world units where the surface is most concave, cupping inward, where a mold needs the most material." },
-  { "name": "Minimum Thickness", "type": "slider", "default": "0.60", "min": 0.001, "max": 5.0, "step": 0.01, "description": "Shell thickness in world units where the surface is most convex, bulging outward." },
-  { "name": "Remesh Division Size", "type": "slider", "default": "0.90", "min": 0.01, "max": 5.0, "step": 0.01, "description": "Edge length in world units the surface is remeshed to before thickening, which sets how finely the thickness can vary.", "group": "remesh" },
-  { "name": "Ramp", "type": "choice:Linear,Smooth,Constant", "default": "Linear", "description": "How curvature maps to thickness between the minimum and maximum. Linear is proportional, Smooth eases at both ends, Constant uses the maximum everywhere." }
+  { "name": "input", "label": "Input", "type": "node", "default": "", "description": "The node whose surface is the cast; a shell is built inward from it with a thickness that follows its curvature." },
+  { "name": "maximum_thickness", "label": "Maximum Thickness", "type": "slider", "default": "0.75", "min": 0.001, "max": 5.0, "step": 0.01, "description": "Shell thickness in world units where the surface is most concave, cupping inward, where a mold needs the most material." },
+  { "name": "minimum_thickness", "label": "Minimum Thickness", "type": "slider", "default": "0.60", "min": 0.001, "max": 5.0, "step": 0.01, "description": "Shell thickness in world units where the surface is most convex, bulging outward." },
+  { "name": "remesh_division_size", "label": "Remesh Division Size", "type": "slider", "default": "0.90", "min": 0.01, "max": 5.0, "step": 0.01, "description": "Edge length in world units the surface is remeshed to before thickening, which sets how finely the thickness can vary.", "group": "remesh" },
+  { "name": "ramp", "label": "Ramp", "type": "choice:Linear,Smooth,Constant", "default": "Linear", "description": "How curvature maps to thickness between the minimum and maximum. Linear is proportional, Smooth eases at both ends, Constant uses the maximum everywhere." }
  ]
 }

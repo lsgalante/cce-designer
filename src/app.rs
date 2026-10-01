@@ -74,7 +74,7 @@ pub const MIN_COLUMN: f32 = 120.0;
 pub const BREADCRUMB_H: f32 = 24.0;
 pub const PLAYBAR_H: f32 = 36.0;
 
-pub use crate::param::{invalid_params, unknown_param_kinds, ParamDef, ParamKind, ParamSlot, ParamValue};
+pub use crate::param::{invalid_params, is_param_name, misnamed_params, param_name_of, unknown_param_kinds, ParamDef, ParamKind, ParamSlot, ParamValue};
 
 /// Expand a leading `~` to the home directory. A path typed into a text field
 /// is typed by a person, and `~/models/thing.stl` is what a person writes.
@@ -111,7 +111,7 @@ pub fn param_visible(params: &[ParamDef], cond: &str) -> bool {
                 None => return false,
             },
         };
-        let Some(sibling) = params.iter().find(|p| p.name.eq_ignore_ascii_case(name)) else {
+        let Some(sibling) = params.iter().find(|p| p.name == name) else {
             return false;
         };
         let matches = wanted
@@ -377,7 +377,7 @@ pub struct Project {
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 3;
+pub const PROJECT_FORMAT: u32 = 4;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -586,7 +586,15 @@ pub enum McpAction {
     DeleteNode { slot: usize },
     RenameNode { slot: usize, new_name: String },
     MoveNode { slot: usize, x: f32, y: f32 },
-    AddParam { slot: usize, name: String, param_type: String, default: String },
+    AddParam {
+        slot: usize,
+        name: String,
+        param_type: String,
+        default: String,
+        /// What the params pane shows for it; the name when absent.
+        #[serde(default)]
+        label: String,
+    },
     DeleteParam { slot: usize, name: String },
     ToggleCircularPane,
     MenuClick { widget_idx: usize, menu_idx: usize, item_idx: usize },
@@ -820,7 +828,7 @@ pub fn same_value_row_text(kept: &str, shown: &str) -> bool {
 /// A wire whose row is hidden (`show_when`) names nothing here: it keeps its
 /// port and draws no line, since what is not on screen should not be. An
 /// expression wire names what it EVALUATES to at `frame` — the Remesh
-/// subnet's transfer reads its From through `if(chs("../From"), …,
+/// subnet's transfer reads its From through `if(chs("../from"), …,
 /// "input1")`, and is drawn from input1 — and nothing when it fails.
 /// Auto-layout reads the same wires.
 pub fn node_wires_at(root: &FsNode, node: &FsNode, frame: i32) -> Vec<(String, String)> {
@@ -844,7 +852,7 @@ pub(crate) fn splice_out(dir: &mut FsNode, slot: usize) {
     let Some(upstream) = gone
         .params
         .iter()
-        .find(|p| p.name == "Input" && p.kind() == ParamKind::Node && !p.is_expr() && param_visible(&gone.params, &p.show_when))
+        .find(|p| p.name == "input" && p.kind() == ParamKind::Node && !p.is_expr() && param_visible(&gone.params, &p.show_when))
         .map(|p| p.text().trim().to_string())
         .filter(|u| !u.is_empty() && *u != name)
     else {
@@ -875,13 +883,13 @@ pub(crate) fn splice_into_wire(dir: &mut FsNode, mid_id: &str, src_name: String,
 /// [`splice_into_wire`] for a chain: its `head` takes the wire's upstream,
 /// and the downstream node reads its `tail`. A pasted chain goes in whole.
 pub(crate) fn splice_chain_into_wire(dir: &mut FsNode, head_id: &str, tail_id: &str, src_name: String, dest_id: &str) -> bool {
-    let has_input = |id: &str| dir.children.iter().any(|c| c.id == id && c.params.iter().any(|p| p.name == "Input"));
+    let has_input = |id: &str| dir.children.iter().any(|c| c.id == id && c.params.iter().any(|p| p.name == "input"));
     let Some(tail_name) = dir.children.iter().find(|c| c.id == tail_id).map(|c| c.name.clone()) else { return false };
     if !has_input(head_id) || !has_input(dest_id) {
         return false;
     }
     for (id, wire) in [(head_id, src_name), (dest_id, tail_name)] {
-        if let Some(p) = dir.children.iter_mut().find(|c| c.id == id).and_then(|c| c.params.iter_mut().find(|p| p.name == "Input")) {
+        if let Some(p) = dir.children.iter_mut().find(|c| c.id == id).and_then(|c| c.params.iter_mut().find(|p| p.name == "input")) {
             p.set_text(wire);
         }
     }
@@ -952,14 +960,14 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
 /// shows it, and the row type.
 fn param_row(p: &ParamDef) -> (String, String, String) {
     {
-        let key = if p.label.is_empty() { &p.name } else { &p.label };
+        let key = p.shown_name();
         let kind = p.kind();
         let value = if p.ty() == "choice" && !p.options().is_empty() && p.text().is_empty() {
             p.options()[0].clone()
         } else {
             p.text().to_string()
         };
-        // An expression (`ch("../sphere1/Radius") * 2`) is shown as the text
+        // An expression (`ch("../sphere1/radius") * 2`) is shown as the text
         // it is: a slider cannot hold it, and a spinbox would show zero and
         // then write zero back over it.
         let ptype = if p.is_expr() {
@@ -988,7 +996,7 @@ fn param_row(p: &ParamDef) -> (String, String, String) {
         } else {
             p.ty().to_string()
         };
-        (key.clone(), value, ptype)
+        (key.to_string(), value, ptype)
     }
 }
 
@@ -1125,6 +1133,42 @@ pub fn sanitize_node_name(name: &str) -> String {
     }
 }
 
+/// The parameter MCP means by `name`: the one of that name, else the one
+/// whose label it is (in any case — what the pane shows is what a person
+/// reads off it), else the one its [`param_name_of`] names, so a script
+/// written against the old names (`Base Resolution`) still reaches
+/// `base_resolution`.
+pub fn param_by_name_or_label<'a>(params: &'a mut [ParamDef], name: &str) -> Option<&'a mut ParamDef> {
+    let i = params
+        .iter()
+        .position(|p| p.name == name)
+        .or_else(|| params.iter().position(|p| !p.label.is_empty() && p.label.eq_ignore_ascii_case(name)))
+        .or_else(|| {
+            let snake = param_name_of(name);
+            params.iter().position(|p| p.name == snake)
+        })?;
+    params.get_mut(i)
+}
+
+/// A channel path with its parameter segment — the last, less a `.x` /
+/// `.y` / `.z` component — renamed by [`param_name_of`]: format 4's
+/// rewrite of what an expression names. None when nothing changes.
+fn param_path_renamed(path: &str) -> Option<String> {
+    let (head, last) = match path.rfind('/') {
+        Some(i) => (&path[..=i], &path[i + 1..]),
+        None => ("", path),
+    };
+    let (name, comp) = match last.rfind('.') {
+        Some(i) if i > 0 && matches!(&last[i..], ".x" | ".y" | ".z") => (&last[..i], &last[i..]),
+        _ => (last, ""),
+    };
+    if name.is_empty() || name == "." || name == ".." {
+        return None;
+    }
+    let renamed = param_name_of(name);
+    (renamed != name && !renamed.is_empty()).then(|| format!("{head}{renamed}{comp}"))
+}
+
 impl Project {
     /// Bring a loaded project's node names under [`sanitize_node_name`],
     /// and follow every reference to a renamed node.
@@ -1210,7 +1254,45 @@ impl Project {
         if self.format < 3 {
             self.rename_attribute("UV", "uv");
         }
+        if self.format < 4 {
+            self.migrate_param_names();
+        }
         self.format = PROJECT_FORMAT;
+    }
+
+    /// Format 3 → 4: a parameter's NAME is an identifier
+    /// (`base_resolution`), where it was the text the pane showed (`Base
+    /// Resolution`) — that is the template's label now. Every parameter is
+    /// renamed by [`param_name_of`], and what spells a name follows: each
+    /// channel path in an expression and in a wrangle's Code, whose last
+    /// segment is a parameter (`chf("../sphere1/Radius")` →
+    /// `chf("../sphere1/radius")`). `show_when` is left alone: the template
+    /// merge replaces it, and `page::migrate_preset_rows` recognises an old
+    /// page by the condition as it was. The retired settings nodes are
+    /// skipped — `Project::migrate_meta_settings_node` reads them by the
+    /// names they were saved with, after this.
+    fn migrate_param_names(&mut self) {
+        fn walk(node: &mut FsNode) {
+            if matches!(node.node_type.as_str(), "session" | "meta" | "utility") {
+                return;
+            }
+            for p in &mut node.params {
+                let name = param_name_of(&p.name);
+                if !name.is_empty() {
+                    p.name = name;
+                }
+                if p.is_expr() || p.kind() == ParamKind::Code {
+                    let text = crate::expr::rewrite_paths(p.text(), param_path_renamed);
+                    if text != p.text() {
+                        p.set_text(text);
+                    }
+                }
+            }
+            for c in &mut node.children {
+                walk(c);
+            }
+        }
+        walk(&mut self.root);
     }
 
     /// Format 0 → 1, as above.
@@ -1288,7 +1370,7 @@ fn rename_at_attribute(code: &str, old: &str, new: &str) -> String {
 }
 
 /// A template's parameters whose defaults READ as expressions become ones:
-/// `chf("../Radius")` in `embryo.json` is a reference by any reading, and a
+/// `chf("../radius")` in `embryo.json` is a reference by any reading, and a
 /// template author should not have to say `"expr": true` beside it (though
 /// they may). `looks_like_expression` is the inference, and it is the same
 /// one a typed or scripted value gets — arithmetic alone is not enough.
@@ -1482,7 +1564,7 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         // settings are the viewport's, and ride the project's view state.
         // Retired, and dropped from a save that still has them.
         if node.node_type == "camera" {
-            node.params.retain(|p| p.name != "Square Aspect" && p.name != "Show Camera Pivot");
+            node.params.retain(|p| p.name != "square_aspect" && p.name != "show_camera_pivot");
         }
         // A page's size is its Width and Height now, Preset has no Custom
         // and there is no Orientation row: a save from before is carried
@@ -1495,7 +1577,7 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
         // every blend alike) and is retired; a save holding it is Set, or
         // it would load as a choice the row no longer offers.
         if node.node_type == "visualize" {
-            if let Some(p) = node.params.iter_mut().find(|p| p.name == "Blend" && p.text().trim().eq_ignore_ascii_case("mix")) {
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == "blend" && p.text().trim().eq_ignore_ascii_case("mix")) {
                 p.set_text("Set".to_string());
             }
         }
@@ -1513,8 +1595,8 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                             .iter_mut()
                             .find(|ic| ic.name == tc.name && ic.node_type == tc.node_type)
                             .expect("children_match checked above");
-                        if let Some(t_code) = tc.params.iter().find(|p| p.name == "Code") {
-                            if let Some(i_code) = ic.params.iter_mut().find(|p| p.name == "Code") {
+                        if let Some(t_code) = tc.params.iter().find(|p| p.name == "code") {
+                            if let Some(i_code) = ic.params.iter_mut().find(|p| p.name == "code") {
                                 i_code.set_text(t_code.text().to_string());
                             }
                         }
@@ -1567,6 +1649,17 @@ pub fn load_fs_tree() -> FsNode {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),
+                    // So is a parameter whose name is not one: the name is
+                    // what a path spells, and the pane shows the label.
+                    Ok(node) if !misnamed_params(&node).is_empty() => eprintln!(
+                        "cce-designer: dropping node template {} — a parameter name must be lowercase letters, digits and underscores: {}",
+                        path.display(),
+                        misnamed_params(&node)
+                            .iter()
+                            .map(|(at, name)| format!("{at} '{name}' (say '{}', with the text as its label)", param_name_of(name)))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                     Ok(mut node) => {
                         infer_template_exprs(&mut node);
                         raw_nodes.push(node);
@@ -1616,7 +1709,7 @@ pub fn load_fs_tree() -> FsNode {
                             base_p.set_text(override_p.text().to_string());
                             // The flag travels with the value: an override
                             // that is a reference (the Embryo's sphere1
-                            // reading `chf("../Radius")`) stays one.
+                            // reading `chf("../radius")`) stays one.
                             base_p.set_expr(override_p.is_expr());
                         }
                     }
@@ -3552,11 +3645,11 @@ impl State {
                 // From what the last pan wrote in full, while the node
                 // still says it; from the node otherwise.
                 let (from_pivot, from_pos) = match exact {
-                    Some((name, p, e)) if name == active && text(node, "Pivot") == Some(fmt3(p)) && text(node, "Position") == Some(fmt3(e)) => (p, e),
+                    Some((name, p, e)) if name == active && text(node, "pivot") == Some(fmt3(p)) && text(node, "position") == Some(fmt3(e)) => (p, e),
                     _ => (pivot, pos),
                 };
                 let (to_pivot, to_pos) = (from_pivot + by, from_pos + by);
-                for (name, v) in [("Pivot", to_pivot), ("Position", to_pos)] {
+                for (name, v) in [("pivot", to_pivot), ("position", to_pos)] {
                     if let Some(p) = node.params.iter_mut().find(|p| p.name == name) {
                         p.set_text(fmt3(v));
                     }
@@ -4313,13 +4406,13 @@ impl State {
                         // set, else name), so resolve back to the param by that
                         // key rather than by name alone.
                         if let Some(p) = child.params.iter_mut().find(|p| {
-                            let key = if p.label.is_empty() { &p.name } else { &p.label };
+                            let key = p.shown_name();
                             key == u_name
                         }) {
                             // A value row presents a single number spread
                             // over its components; read back unchanged, it
                             // is the text it was, not an edit.
-                            let presented = p.name == "Value" && !p.is_expr() && same_value_row_text(p.text(), u_val);
+                            let presented = p.name == "value" && !p.is_expr() && same_value_row_text(p.text(), u_val);
                             if p.text() != *u_val && !presented {
                                 // A reference typed into a plain row becomes
                                 // an expression — the one way to make one
@@ -4330,7 +4423,7 @@ impl State {
                                     || (p.takes_expressions() && crate::expr::looks_like_expression(u_val));
                                 if !as_expr {
                                     if let Err(why) = p.check(u_val) {
-                                        rejected.push((u_name.clone(), p.text().to_string(), format!("{}: {why}", p.name)));
+                                        rejected.push((u_name.clone(), p.text().to_string(), format!("{}: {why}", p.shown_name())));
                                         continue;
                                     }
                                 }
@@ -4378,7 +4471,7 @@ impl State {
                     // and Height; what they overwrite is part of the step.
                     let mut followed = false;
                     if child.node_type == "page" {
-                        let setters: Vec<ParamDef> = was.iter().filter(|w| matches!(w.name.as_str(), "Preset" | "Units")).cloned().collect();
+                        let setters: Vec<ParamDef> = was.iter().filter(|w| matches!(w.name.as_str(), "preset" | "units")).cloned().collect();
                         for w in setters {
                             for r in crate::page::follow_page_rows(child, &w) {
                                 followed = true;
@@ -4476,7 +4569,7 @@ impl State {
             return;
         };
         let node = node.clone();
-        let file = crate::geometry::node_param_str(&node, "File", "");
+        let file = crate::geometry::node_param_str(&node, "file", "");
         let file = file.trim().to_string();
         if file.is_empty() {
             self.update_status_text("Export: set a File first.");
@@ -4883,7 +4976,7 @@ impl State {
                 .params
                 .iter()
                 .filter(|p| matches!(p.kind(), ParamKind::Attribute | ParamKind::Group))
-                .map(|p| (if p.label.is_empty() { p.name.clone() } else { p.label.clone() }, p.kind()))
+                .map(|p| (p.shown_name().to_string(), p.kind()))
                 .collect();
             let value_row = Self::attribute_value_target(node);
             if kinds.is_empty() && value_row.is_none() {
@@ -4940,12 +5033,12 @@ impl State {
         if !node.node_type.eq_ignore_ascii_case("attribute") {
             return None;
         }
-        let p = node.params.iter().find(|p| p.name == "Value")?;
+        let p = node.params.iter().find(|p| p.name == "value")?;
         if p.is_expr() {
             return None;
         }
         // Read from an attribute, the row is not shown at all.
-        if node_param_str(node, "Value From", "Constant").eq_ignore_ascii_case("attribute") {
+        if node_param_str(node, "value_from", "Constant").eq_ignore_ascii_case("attribute") {
             return None;
         }
         let comps = p
@@ -4958,12 +5051,12 @@ impl State {
         if comps == 0 || comps > 4 || raw != comps {
             return None;
         }
-        let key = if p.label.is_empty() { p.name.clone() } else { p.label.clone() };
-        let name = node_param_str(node, "Attribute Name", "");
+        let key = p.shown_name().to_string();
+        let name = node_param_str(node, "attribute_name", "");
         let name = name.trim().to_string();
         let ball = p.wants_trackball(!name.eq_ignore_ascii_case("Col"));
-        let target = match node_param_str(node, "Operation", "Create").to_lowercase().as_str() {
-            "create" => ValueTarget::Width(match node_param_str(node, "Type", "Float").to_lowercase().as_str() {
+        let target = match node_param_str(node, "operation", "Create").to_lowercase().as_str() {
+            "create" => ValueTarget::Width(match node_param_str(node, "type", "Float").to_lowercase().as_str() {
                 "float3" => 3,
                 "float2" => 2,
                 "float4" => 4,
@@ -4988,7 +5081,7 @@ impl State {
     /// is what decides the control the Attribute node's Value row gets.
     fn input_pick_lists(&mut self, node_id: &str) -> PickLists {
         let input_id = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
-            .and_then(|n| crate::geometry::param_node(&self.fs_root, n, "Input"))
+            .and_then(|n| crate::geometry::param_node(&self.fs_root, n, "input"))
             .map(|n| n.id.clone());
         let Some(input_id) = input_id else { return PickLists::default() };
         let key = (input_id.clone(), self.rt_geometry_version);
@@ -5380,10 +5473,10 @@ impl State {
                     }
                     None
                 };
-                let pos = node.params.iter().find(|p| p.name == "Position")
+                let pos = node.params.iter().find(|p| p.name == "position")
                     .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
-                let piv = node.params.iter().find(|p| p.name == "Pivot")
+                let piv = node.params.iter().find(|p| p.name == "pivot")
                     .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::ZERO);
                 let offset = pos - piv;
@@ -5394,10 +5487,10 @@ impl State {
                 };
                 let new_pos = center + dir_unit * dist;
                 let fmt3 = |v: Vec3| format!("{:.2}:{:.2}:{:.2}", v.x, v.y, v.z);
-                if let Some(p) = node.params.iter_mut().find(|p| p.name == "Pivot") {
+                if let Some(p) = node.params.iter_mut().find(|p| p.name == "pivot") {
                     p.set_text(fmt3(center));
                 }
-                if let Some(p) = node.params.iter_mut().find(|p| p.name == "Position") {
+                if let Some(p) = node.params.iter_mut().find(|p| p.name == "position") {
                     p.set_text(fmt3(new_pos));
                 }
                 self.viewport_mut().zoom = 1.0;
@@ -5476,16 +5569,16 @@ impl State {
                     }
                     None
                 };
-                let pos = node.params.iter().find(|p| p.name == "Position")
+                let pos = node.params.iter().find(|p| p.name == "position")
                     .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
-                let piv = node.params.iter().find(|p| p.name == "Pivot")
+                let piv = node.params.iter().find(|p| p.name == "pivot")
                     .and_then(|p| parse3(p.text()))
                     .unwrap_or(Vec3::ZERO);
                 let offset = pos - piv;
                 let dir_unit = if offset.length() > 1e-4 { offset.normalize() } else { Vec3::new(2.5, 1.8, 2.5).normalize() };
                 let new_pos = piv + dir_unit * dist;
-                if let Some(p) = node.params.iter_mut().find(|p| p.name == "Position") {
+                if let Some(p) = node.params.iter_mut().find(|p| p.name == "position") {
                     p.set_text(format!("{:.3}:{:.3}:{:.3}", new_pos.x, new_pos.y, new_pos.z));
                 }
                 self.viewport_mut().zoom = 1.0;
@@ -5525,7 +5618,7 @@ impl State {
             return None;
         }
         let p = child.params.iter().find(|p| {
-            let key = if p.label.is_empty() { &p.name } else { &p.label };
+            let key = p.shown_name();
             *key == row.0
         })?;
         Some((slot, p.name.clone()))
@@ -5541,7 +5634,7 @@ impl State {
     /// What the template says `pname` on `node` defaults to, where `dir` is
     /// the level `node` sits in. A child of a subnet instance (the Embryo's
     /// `sphere1`) takes the SUBNET template's word for it — its override
-    /// (`chf("../Radius")`) is the default that instance was built with,
+    /// (`chf("../radius")`) is the default that instance was built with,
     /// and the merge refreshes the child from there — and any other node
     /// its own template's. `None` for a parameter no template names, such
     /// as one added over MCP.
@@ -5676,7 +5769,7 @@ impl State {
     /// float3 presentations `add_pick_lists` makes are seen), what
     /// `param_display` alone would give otherwise.
     fn display_row_type(&self, slot: usize, param: &ParamDef) -> String {
-        let key = if param.label.is_empty() { &param.name } else { &param.label };
+        let key = param.shown_name();
         if self.param_editor_selected() == Some(slot) {
             if let Some(row) = self.param().node_params().into_iter().find(|r| r.0 == *key) {
                 return row.2;
@@ -5981,7 +6074,7 @@ impl State {
                 {
                     p.set_expr(true);
                 }
-                self.update_status_text(&format!("{pname} is an expression — type ch(\"../node/Param\"), $F, arithmetic."));
+                self.update_status_text(&format!("{pname} is an expression — type ch(\"../node/param\"), $F, arithmetic."));
             }
             ParamMenuAction::DeleteExpression => {
                 // The expression's value NOW becomes the value, as Houdini's
@@ -6830,17 +6923,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 }
                 None
             };
-            let pos = node.params.iter().find(|p| p.name == "Position")
+            let pos = node.params.iter().find(|p| p.name == "position")
                 .and_then(|p| parse3(p.text()))
                 .unwrap_or(Vec3::new(2.5, 1.8, 2.5));
-            let piv = node.params.iter().find(|p| p.name == "Pivot")
+            let piv = node.params.iter().find(|p| p.name == "pivot")
                 .and_then(|p| parse3(p.text()))
                 .unwrap_or(Vec3::ZERO);
             let offset = pos - piv;
             let pitch0_deg = (offset.y / offset.length().max(1e-5)).asin().to_degrees();
             let max_pitch_deg = crate::viewport_3d::Viewport3D::MAX_PITCH.to_degrees();
 
-            if let Some(p) = node.params.iter_mut().find(|p| p.name == "Rotation") {
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == "rotation") {
                 let mut rx = 0.0f32;
                 let mut ry = 0.0f32;
                 let mut rz = 0.0f32;
@@ -6876,7 +6969,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let camera_name = self.active_camera.clone();
         let dir = self.current_dir_mut();
         if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
-            if let Some(p) = node.params.iter_mut().find(|p| p.name == "Rotation") {
+            if let Some(p) = node.params.iter_mut().find(|p| p.name == "rotation") {
                 p.set_text("0.00:0.00:0.00".to_string());
                 self.sync_nodes();
                 // Through the one pane-sync path, so the pick-list upgrade
@@ -7045,7 +7138,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // A node with no wire parameter at all (none that says so) takes
         // it as its Input, as a connection always did.
         let slot = child.params.iter().enumerate().filter(|(_, p)| p.kind() == ParamKind::Node).map(|(i, _)| i).nth(port)
-            .or_else(|| child.params.iter().position(|p| p.name == "Input"));
+            .or_else(|| child.params.iter().position(|p| p.name == "input"));
         let Some(slot) = slot else { return false };
         child.params[slot].set_text(output);
         self.sync_nodes();
@@ -7196,7 +7289,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         if group_key != self.last_group_points_key {
             let mut member_verts = Vec::new();
             if let Some(node) = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")) {
-                let group_name = node_param_str(node, "Group Name", "group1");
+                let group_name = node_param_str(node, "group_name", "group1");
                 let mut ocl_error = None;
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
                 if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.fs_root, node, &mut ocl_error, &mut sim) {
@@ -7564,7 +7657,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             param: ParametersBg::new(),
             canvas: Canvas::new(),
             left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Network Plate", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
-            right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["Square Aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
+            right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["square_aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
             param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
             status: StatusBar::new().with_text("Ready"),
             breadcrumb: {
@@ -9247,7 +9340,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     fn splice_paste(&mut self, ids: &[String], src_id: &str, dest_id: &str) {
         let dir = self.current_dir();
         let nodes: Vec<&FsNode> = dir.children.iter().filter(|c| ids.contains(&c.id)).collect();
-        let input = |n: &FsNode| crate::geometry::node_param_node(n, "Input");
+        let input = |n: &FsNode| crate::geometry::node_param_node(n, "input");
         let heads: Vec<&FsNode> = nodes.iter().copied().filter(|n| !input(n).is_some_and(|i| nodes.iter().any(|m| m.name == i))).collect();
         let tails: Vec<&FsNode> = nodes.iter().copied().filter(|n| !nodes.iter().any(|m| input(m).as_deref() == Some(n.name.as_str()))).collect();
         let ([head], [tail], Some(src)) = (heads.as_slice(), tails.as_slice(), dir.children.iter().find(|c| c.id == src_id)) else { return };
@@ -12005,7 +12098,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let mut cy = 1.8f32;
                 let mut cz = 2.5f32;
                 for p in &node.params {
-                    if p.name == "Position" {
+                    if p.name == "position" {
                         let parts: Vec<&str> = p.text()
                             .split(|c| c == ':' || c == ',' || c == ' ')
                             .filter(|s| !s.is_empty())
@@ -12017,7 +12110,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 cz = vz;
                             }
                         }
-                    } else if p.name == "Rotation" {
+                    } else if p.name == "rotation" {
                         let parts: Vec<&str> = p.text()
                             .split(|c| c == ':' || c == ',' || c == ' ')
                             .filter(|s| !s.is_empty())
@@ -12029,7 +12122,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 rz = vz;
                             }
                         }
-                    } else if p.name == "Pivot" {
+                    } else if p.name == "pivot" {
                         let parts: Vec<&str> = p.text()
                             .split(|c| c == ':' || c == ',' || c == ' ')
                             .filter(|s| !s.is_empty())

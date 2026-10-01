@@ -1,8 +1,8 @@
 //! Parameter expressions — Houdini's channel references, with arithmetic.
 //!
 //! A parameter whose `expr` flag is set holds an EXPRESSION rather than a
-//! value, and is evaluated every time the node is: `ch("../sphere1/Radius")
-//! * 2 + 1`, `$F / 24`, `chs("../text1/Font")`. The flag is the model, not a
+//! value, and is evaluated every time the node is: `ch("../sphere1/radius")
+//! * 2 + 1`, `$F / 24`, `chs("../text1/font")`. The flag is the model, not a
 //! guess about the text: a kernel's Code contains `chf(`, a node name is an
 //! identifier and `0.5` is an expression too, so anything that decided by
 //! looking at the string would be wrong somewhere. Houdini makes the same
@@ -433,7 +433,7 @@ pub fn parse(src: &str) -> Result<Expr, String> {
 
 /// Whether `s` reads as an expression that REFERS to something — a channel
 /// or a variable. This is the inference applied to a value typed or scripted
-/// into a parameter that has no expression yet: `ch("../a/Radius")` becomes
+/// into a parameter that has no expression yet: `ch("../a/radius")` becomes
 /// one, while `1+2`, a node name and a kernel do not — arithmetic on a
 /// literal is asked for through the row's Edit Expression, not guessed.
 pub fn looks_like_expression(s: &str) -> bool {
@@ -445,7 +445,7 @@ pub fn looks_like_expression(s: &str) -> bool {
         return e.refers();
     }
     // A float3: three components, each a number or an expression, at least
-    // one of which refers — `chf("../a/Size.x"):0:0`.
+    // one of which refers — `chf("../a/size.x"):0:0`.
     let parts: Vec<&str> = t.split(':').collect();
     parts.len() == 3 && {
         let parsed: Vec<Option<Expr>> = parts.iter().map(|p| parse(p.trim()).ok()).collect();
@@ -660,7 +660,9 @@ pub fn rewrite_paths(src: &str, mut f: impl FnMut(&str) -> Option<String>) -> St
         let at_ident_start = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
         let mut matched = None;
         if at_ident_start && bytes[i] == b'c' {
-            for name in ["chf", "chi", "chb", "chs", "ch"] {
+            // `chv` is a wrangle's (a float3 off a path); it is here so the
+            // same rewrite serves a wrangle's Code.
+            for name in ["chf", "chi", "chb", "chs", "chv", "ch"] {
                 if src[i..].starts_with(name) {
                     let rest = &src[i + name.len()..];
                     let trimmed = rest.trim_start();

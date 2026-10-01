@@ -5,126 +5,141 @@
   "outputs": 1,
   "params": [
     {
-      "name": "Input",
+      "name": "input",
+      "label": "Input",
       "type": "node",
       "default": "",
       "description": "The node whose geometry this reads; the selected elements are added to the named group and the geometry passed on."
     },
     {
-      "name": "Group Name",
+      "name": "group_name",
+      "label": "Group Name",
       "type": "group",
       "default": "group1",
       "description": "The name of the group the selection is written to, which downstream nodes can pick by name."
     },
     {
-      "name": "Element Type",
+      "name": "element_type",
+      "label": "Element Type",
       "type": "choice:Points,Primitives,Edges",
       "default": "Points",
-      "show_when": "Mode != Expand|Attribute",
+      "show_when": "mode != Expand|Attribute",
       "description": "What is selected: points, primitives (tested at their centre, with their points), or edges (both ends must match; their points are grouped)."
     },
     {
-      "name": "Mode",
+      "name": "mode",
+      "label": "Mode",
       "type": "choice:Box,Random,Attribute,Expand",
       "default": "Box",
       "description": "How elements are chosen: inside a box, a random count, by comparing an attribute to a threshold, or by growing or shrinking an existing group."
     },
     {
-      "name": "Count",
+      "name": "count",
+      "label": "Count",
       "type": "spinbox",
       "default": "1",
       "min": 1.0,
       "max": 500.0,
       "step": 1.0,
-      "show_when": "Mode == Random",
+      "show_when": "mode == Random",
       "description": "How many elements are picked at random. More than there are selects them all.",
       "group": "mode"
     },
     {
-      "name": "Seed",
+      "name": "seed",
+      "label": "Seed",
       "type": "spinbox",
       "default": "0",
       "min": 0.0,
       "max": 999.0,
       "step": 1.0,
-      "show_when": "Mode == Random",
+      "show_when": "mode == Random",
       "description": "Changes which elements are picked at random; the same seed always picks the same ones.",
       "group": "mode"
     },
     {
-      "name": "Center",
+      "name": "center",
+      "label": "Center",
       "type": "float3",
       "default": "0.00:0.00:0.00",
       "min": -10.0,
       "max": 10.0,
-      "show_when": "Mode == Box",
+      "show_when": "mode == Box",
       "description": "The centre of the selection box, in world units.",
       "group": "mode"
     },
     {
-      "name": "Size",
+      "name": "size",
+      "label": "Size",
       "type": "float3",
       "default": "1.00:1.00:1.00",
       "min": 0.0,
       "max": 20.0,
-      "show_when": "Mode == Box",
+      "show_when": "mode == Box",
       "description": "The full width, height and depth of the selection box, in world units. Elements inside or on its faces are selected.",
       "group": "mode"
     },
     {
-      "name": "Invert",
+      "name": "invert",
+      "label": "Invert",
       "type": "toggle",
       "default": "false",
       "description": "Selects everything the mode would not select, and nothing it would.",
       "group": "output"
     },
     {
-      "name": "Highlight",
+      "name": "highlight",
+      "label": "Highlight",
       "type": "toggle",
       "default": "true",
       "description": "Tints the selected points amber so the group can be seen in the viewport. Changes their colour in the output.",
       "group": "output"
     },
     {
-      "name": "Attribute",
+      "name": "attribute",
+      "label": "Attribute",
       "type": "attribute",
       "default": "",
-      "show_when": "Mode == Attribute",
+      "show_when": "mode == Attribute",
       "description": "The point attribute compared against Threshold; points without it are not selected.",
       "group": "mode"
     },
     {
-      "name": "Comparison",
+      "name": "comparison",
+      "label": "Comparison",
       "type": "choice:Below,Above",
       "default": "Above",
-      "show_when": "Mode == Attribute",
+      "show_when": "mode == Attribute",
       "description": "Whether points whose attribute is below or above Threshold are selected. A value equal to Threshold is never selected.",
       "group": "mode"
     },
     {
-      "name": "Threshold",
+      "name": "threshold",
+      "label": "Threshold",
       "type": "float",
       "default": "0.50",
-      "show_when": "Mode == Attribute",
+      "show_when": "mode == Attribute",
       "description": "The value the attribute is compared against.",
       "group": "mode"
     },
     {
-      "name": "Source Group",
+      "name": "source_group",
+      "label": "Source Group",
       "type": "group",
       "default": "",
-      "show_when": "Mode == Expand",
+      "show_when": "mode == Expand",
       "description": "The existing point group that is grown or shrunk across the mesh.",
       "group": "mode"
     },
     {
-      "name": "Rings",
+      "name": "rings",
+      "label": "Rings",
       "type": "spinbox",
       "default": "1",
       "min": -8.0,
       "max": 8.0,
       "step": 1.0,
-      "show_when": "Mode == Expand",
+      "show_when": "mode == Expand",
       "description": "How many rings of neighbouring points the source group grows by. Negative shrinks it by peeling its boundary; 0 copies it unchanged.",
       "group": "mode"
     }
