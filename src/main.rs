@@ -665,7 +665,7 @@ mod tests {
 
         proj.sanitize_node_names();
 
-        proj.migrate_param_refs();
+        proj.migrate_format();
 
         let names: Vec<&str> = proj.root.children.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"camera1"));
@@ -682,8 +682,55 @@ mod tests {
         // A clean file is left exactly alone.
         let before = serde_json::to_string(&proj).unwrap();
         proj.sanitize_node_names();
-        proj.migrate_param_refs();
+        proj.migrate_format();
         assert_eq!(serde_json::to_string(&proj).unwrap(), before);
+    }
+
+    /// Format 1 → 2: the generators' normal attribute is `N`, and what names
+    /// `Norm` in a save follows it — an attribute row, a name in a comma
+    /// list of attributes, `@Norm` in a wrangle (not `@Normal`) — once: a
+    /// format-2 file naming `Norm` is left alone, since that attribute is
+    /// someone's own.
+    #[test]
+    fn a_save_naming_norm_names_n() {
+        use crate::app::{FsNode, ParamDef, Project, PROJECT_FORMAT};
+        let node = |name: &str, ty: &str, params: Vec<ParamDef>| FsNode {
+            id: name.into(),
+            name: name.into(),
+            node_type: ty.into(),
+            children: vec![],
+            params,
+            geometry_visible: true,
+            bypassed: false,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        let mut root = node("root", "subnet", vec![]);
+        root.children = vec![
+            node("vis", "visualize", vec![ParamDef::new("Attribute", "attribute", "Norm")]),
+            node("xfer", "transfer", vec![ParamDef::new("Attributes", "text", "Cd, Norm,UV")]),
+            node("w", "wrangle", vec![ParamDef::new("Code", "code", "@P += @Norm * 0.1; @Normal = 1;")]),
+            node("keep", "visualize", vec![ParamDef::new("Attribute", "attribute", "Normx")]),
+        ];
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 1 };
+        proj.migrate_format();
+        assert_eq!(proj.format, PROJECT_FORMAT);
+        let text = |proj: &Project, i: usize| proj.root.children[i].params[0].text().to_string();
+        assert_eq!(text(&proj, 0), "N");
+        assert_eq!(text(&proj, 1), "Cd, N,UV");
+        assert_eq!(text(&proj, 2), "@P += @N * 0.1; @Normal = 1;");
+        assert_eq!(text(&proj, 3), "Normx", "only the whole name");
+
+        // Once: a format-2 file's Norm is its own attribute.
+        let mut again = proj.clone();
+        again.root.children[0].params[0].set_text("Norm".to_string());
+        again.migrate_format();
+        assert_eq!(text(&again, 0), "Norm");
+
+        // And the generators write N.
+        let s = crate::geometry::sphere_detail(glam::Vec3::ZERO, 1.0, 4, 6);
+        assert!(s.points().has("N") && !s.points().has("Norm"));
     }
 
     #[test]
@@ -3653,7 +3700,7 @@ mod tests {
             let r = (pos[0].powi(2) + (pos[1] - 0.55).powi(2) + pos[2].powi(2)).sqrt();
             assert!((r - 0.5).abs() < 1e-4, "point {pos:?} is {r} from the centre");
         }
-        assert!(geom.points().has("Norm") && geom.points().has("UV") && geom.points().has("Cd"));
+        assert!(geom.points().has("N") && geom.points().has("UV") && geom.points().has("Cd"));
     }
 
     /// The native curve node: a Catmull-Rom strip through the "Points"
@@ -4444,7 +4491,7 @@ mod tests {
         };
         let attr_ty = row("Attribute Name");
         assert!(attr_ty.starts_with("textpick:"), "got {attr_ty}");
-        for expected in ["Norm", "UV", "Pos", "Col"] {
+        for expected in ["N", "UV", "Pos", "Col"] {
             assert!(attr_ty.contains(expected), "{expected} missing from {attr_ty}");
         }
         assert_eq!(row("Group"), "textpick:group1");
@@ -5777,8 +5824,8 @@ mod tests {
         // A box line fans to 36 renderer vertices: 6 faces * 2 triangles * 3 corners.
         assert_eq!(detail_vertices(&d).len(), 36);
 
-        // Norm and UV ride the vertices, one per corner.
-        assert!(d.verts().has("Norm"));
+        // N and UV ride the vertices, one per corner.
+        assert!(d.verts().has("N"));
         assert!(d.verts().has("UV"));
     }
 
@@ -7680,7 +7727,7 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.rebuild_scene_geometry();
-        assert!(state.scene_attributes.iter().any(|a| a.name == "Norm"), "{:?}", state.scene_attributes);
+        assert!(state.scene_attributes.iter().any(|a| a.name == "N"), "{:?}", state.scene_attributes);
         let colours = |state: &State| state.rt_sphere_verts.iter().map(|v| v.color).collect::<Vec<_>>();
         let plain = colours(&state);
         let nodes_before = serde_json::to_string(&state.fs_root).unwrap();
@@ -7699,8 +7746,8 @@ mod tests {
         let has = |state: &State, f: &str| state.slots.dialog.rows.iter().any(|r| r.id == field(f));
         assert!(has(&state, "ramp") && has(&state, "opacity") && !has(&state, "scale"), "Ramp's rows");
 
-        // On Norm, a Ramp recolours the scene, which gained no node.
-        state.set_visualizer_field(0, "attribute", "Norm", true);
+        // On N, a Ramp recolours the scene, which gained no node.
+        state.set_visualizer_field(0, "attribute", "N", true);
         assert_ne!(colours(&state), plain, "the ramp is on the scene");
         assert_eq!(serde_json::to_string(&state.fs_root).unwrap(), nodes_before, "no node in the graph");
 
@@ -7726,7 +7773,7 @@ mod tests {
         assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
         let id = format!("{VIS_ROW_PREFIX}0");
         let row = state.slots.dialog.rows.iter().find(|r| r.id == id).expect("its row").clone();
-        assert!(row.label.starts_with("Norm — Vector"), "{}", row.label);
+        assert!(row.label.starts_with("N — Vector"), "{}", row.label);
         assert_eq!(row.toggle(), Some(true));
 
         // Kept with the display settings.
@@ -7759,7 +7806,7 @@ mod tests {
         let mut state = State::new(false);
         state.rebuild_scene_geometry();
         let base = state.scene_base.clone().expect("a scene");
-        let mut v = crate::visualizer::Visualizer::new("Norm");
+        let mut v = crate::visualizer::Visualizer::new("N");
         v.ramp = "Heat".into();
         let mut by_vis = base.clone();
         crate::visualizer::apply_all(&[v.clone()], &mut by_vis);
@@ -9244,14 +9291,14 @@ mod tests {
             format: 0,
         };
         proj.root.children[0].children[0].params[0].set_expr(false);
-        proj.migrate_param_refs();
+        proj.migrate_format();
         let r = &proj.root.children[0].children[0].params[0];
         assert_eq!(r.text(), "chf(\"../Size\")");
         assert!(r.is_expr());
         assert_eq!(proj.format, crate::app::PROJECT_FORMAT);
         // A NEW file's bare name is the node's own parameter and stays.
         proj.root.children[0].children[0].params[0].set_text("chf(\"Radius\")");
-        proj.migrate_param_refs();
+        proj.migrate_format();
         assert_eq!(proj.root.children[0].children[0].params[0].text(), "chf(\"Radius\")");
     }
 
@@ -10732,7 +10779,11 @@ mod tests {
         );
         let (g, err) = eval_node(&root, "normal 1");
         assert!(err.is_none(), "{err:?}");
-        assert!(!g.points().has("N"), "the points' is not written");
+        // The points' N is the sphere's own, as it came in: Vertices writes
+        // the vertices and leaves it alone.
+        let (input, _) = eval_node(&root, "sphere 1");
+        let pn = |d: &crate::detail::Detail| (0..d.num_points()).map(|p| d.points().value("N", p).map(|v| v.as_vec3())).collect::<Vec<_>>();
+        assert_eq!(pn(&g), pn(&input), "the points' is not written");
         let n = crate::geometry::own_vertex_normals(&g).expect("a normal a vertex");
         assert_eq!(n.len(), g.num_verts());
         let of_points = crate::geometry::point_normals(&g);
@@ -11006,7 +11057,7 @@ mod tests {
                     &[
                         ("Input", "points 1"),
                         ("From", "sphere 1"),
-                        ("Attributes", "Norm"),
+                        ("Attributes", "N"),
                         ("Maximum Distance", "0.00"),
                     ],
                 ),
@@ -11015,9 +11066,9 @@ mod tests {
         let (g, err) = eval_node(&root, "transfer 1");
         assert!(err.is_none(), "{err:?}");
         // No limit: everything finds a nearest source point however far.
-        assert!(g.points().has("Norm"));
+        assert!(g.points().has("N"));
         assert!(
-            (0..g.num_points()).any(|p| g.points().value("Norm", p).unwrap().as_vec3() != Vec3::ZERO),
+            (0..g.num_points()).any(|p| g.points().value("N", p).unwrap().as_vec3() != Vec3::ZERO),
             "nothing was transferred"
         );
 
@@ -11035,9 +11086,9 @@ mod tests {
             .unwrap()
             .set_text("0.01");
         let (g, _) = eval_node(&limited, "transfer 1");
-        assert!(g.points().has("Norm"), "the column exists even where nothing was near");
+        assert!(g.points().has("N"), "the column exists even where nothing was near");
         assert!(
-            (0..g.num_points()).all(|p| g.points().value("Norm", p).unwrap().as_vec3() == Vec3::ZERO),
+            (0..g.num_points()).all(|p| g.points().value("N", p).unwrap().as_vec3() == Vec3::ZERO),
             "something transferred from out of range"
         );
 
@@ -13218,7 +13269,7 @@ mod tests {
         let mut proj: crate::app::Project = serde_json::from_str(&std::fs::read_to_string(&file).expect("reads")).expect("parses");
         let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
         proj.sanitize_node_names();
-        proj.migrate_param_refs();
+        proj.migrate_format();
         crate::app::merge_template_defs(&mut proj.root, &templates);
 
         fn find<'a>(n: &'a mut FsNode, ty: &str) -> Option<&'a mut FsNode> {
@@ -13293,7 +13344,7 @@ mod tests {
         let mut proj: crate::app::Project = serde_json::from_str(&std::fs::read_to_string(&file).expect("reads")).expect("parses");
         let templates = crate::app::flatten_node_templates(&crate::app::load_fs_tree());
         proj.sanitize_node_names();
-        proj.migrate_param_refs();
+        proj.migrate_format();
         crate::app::merge_template_defs(&mut proj.root, &templates);
         fn simnet(n: &mut FsNode) -> Option<&mut FsNode> {
             if n.node_type == "simnet" {
@@ -16681,7 +16732,7 @@ mod tests {
     /// presents it as a control as wide as its target — over the wide
     /// span around its value (`value_row_span`) — a slider for one, the float group with two, three
     /// or four rows for more: Modify on Pos (the pull node), on an input
-    /// Float3 (Norm) or Float2 (UV), Create by its Type. A single number is
+    /// Float3 (N) or Float2 (UV), Create by its Type. A single number is
     /// spread over the components, as the node spreads it, and the pane
     /// writing it back unchanged is not an edit. A text that fits no width,
     /// an attribute the input lacks and an expression keep the text box;
@@ -16724,7 +16775,7 @@ mod tests {
         let set = |state: &mut State, name: &str, val: &str| {
             state.fs_root.children[1].params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
         };
-        set(&mut state, "Attribute Name", "Norm");
+        set(&mut state, "Attribute Name", "N");
         assert_eq!(value_row(&mut state), wide, "Modify on an input Float3");
         set(&mut state, "Attribute Name", "UV");
         assert_eq!(value_row(&mut state), "text", "three numbers do not fit an input Float2");
@@ -16787,7 +16838,7 @@ mod tests {
         let rows = state.param_mut().node_params();
         assert!(rows.iter().all(|r| r.0 != "Value"), "no Value row");
         let from = rows.iter().find(|r| r.0 == "From Attribute").expect("a From Attribute row");
-        assert!(from.2.starts_with("textpick:") && from.2.contains("Norm"), "{}", from.2);
+        assert!(from.2.starts_with("textpick:") && from.2["textpick:".len()..].split(',').any(|a| a == "N"), "{}", from.2);
         set(&mut state, "Value From", "Constant");
 
         // The parameter itself never changed kind: it is text in the node.

@@ -992,9 +992,17 @@ into a choice its option name, into a spinbox an integer.
 whole value had to be one reference, nothing else). `Project::format` is
 the version that tells the two apart: 0 (absent) loads through
 `migrate_param_refs`, which turns each old reference into an expression
-with `../` added to a bare name, and saves as 1 — beside
-`sanitize_node_names` on every load path, and never twice, since a bare
-name in a format-1 file is the node's own parameter. Templates go through
+with `../` added to a bare name — beside `sanitize_node_names` on every
+load path, and never twice, since a bare name in a format-1 file is the
+node's own parameter. It is a step of `Project::migrate_format`, which
+takes a file through every step it is behind. **Format 2** (2026-10-01):
+the generators' normal attribute is `N` — the Sphere, Box, Plane and
+their kin wrote `Norm`, where the Normal node, the exporter and a
+wrangle's `@N` already said `N` — and `migrate_norm_to_n` rewrites what
+names `Norm` in an older save: an attribute row, a name in a comma list of
+attributes (`Attributes`), `@Norm` in a wrangle's Code (not `@Normal`).
+Once, by the version, so an attribute someone names `Norm` afterwards is
+theirs (`a_save_naming_norm_names_n`). Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
 (`embryo.json` says `chf("../Radius")` now). The same inference applies to a
 value typed into a plain row or scripted through `set_param`: a reference

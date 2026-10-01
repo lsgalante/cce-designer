@@ -367,14 +367,16 @@ pub struct Project {
     /// The file format this project was saved in, so a load can tell an old
     /// meaning from a new one. 0 (absent) is every save before 2026-09-24,
     /// when a bare `ch("Name")` meant the PARENT's parameter; 1 is Houdini's
-    /// semantics, where it means the node's own — `migrate_param_refs` is
-    /// the step between them, and it must not run twice.
+    /// semantics, where it means the node's own; 2 (2026-10-01) is the
+    /// generators' normal attribute called `N` where it was `Norm`.
+    /// `migrate_format` takes a file through each step it is behind, and a
+    /// step must not run twice.
     #[serde(default)]
     pub format: u32,
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 1;
+pub const PROJECT_FORMAT: u32 = 2;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -1185,6 +1187,10 @@ impl Project {
 }
 
 impl Project {
+    /// Take a loaded project through every format step it is behind, then
+    /// call it current. Runs beside `sanitize_node_names` on every load
+    /// path; a step must not run twice, which is what the version is for.
+    ///
     /// Format 0 → 1: every parameter that was a pre-expression reference —
     /// the whole value `ch("Name")`, `chf` / `chi` / `chb`, with `../` per
     /// level — becomes an expression with Houdini's semantics. A bare name
@@ -1193,10 +1199,18 @@ impl Project {
     /// path, and on a format-1 file does nothing, which is what the version
     /// is for: a bare name in a NEW file is the node's own parameter and
     /// must not be rewritten.
-    pub fn migrate_param_refs(&mut self) {
-        if self.format >= PROJECT_FORMAT {
-            return;
+    pub fn migrate_format(&mut self) {
+        if self.format < 1 {
+            self.migrate_param_refs();
         }
+        if self.format < 2 {
+            self.migrate_norm_to_n();
+        }
+        self.format = PROJECT_FORMAT;
+    }
+
+    /// Format 0 → 1, as above.
+    fn migrate_param_refs(&mut self) {
         fn walk(node: &mut FsNode) {
             for p in &mut node.params {
                 if !p.is_expr() {
@@ -1211,8 +1225,59 @@ impl Project {
             }
         }
         walk(&mut self.root);
-        self.format = PROJECT_FORMAT;
     }
+
+    /// Format 1 → 2: the generators' normal attribute is `N`, as the Normal
+    /// node, the exporter and a wrangle's `@N` already named it, where the
+    /// Sphere, Box and Plane wrote `Norm`. What names it in a save follows:
+    /// a parameter naming an attribute (`ParamKind::Attribute`) that says
+    /// `Norm`, a name in a comma list of attributes (Transfer's and the
+    /// Remesh's `Attributes`), and `@Norm` in a wrangle's Code. Once, by
+    /// the version — an attribute someone names `Norm` after this is theirs.
+    fn migrate_norm_to_n(&mut self) {
+        fn walk(node: &mut FsNode) {
+            for p in &mut node.params {
+                if p.is_expr() {
+                    continue;
+                }
+                let text = p.text().to_string();
+                let new = if p.kind() == ParamKind::Attribute && text.trim() == "Norm" {
+                    Some("N".to_string())
+                } else if p.name == "Attributes" && text.split(',').any(|a| a.trim() == "Norm") {
+                    Some(text.split(',').map(|a| if a.trim() == "Norm" { a.replace("Norm", "N") } else { a.to_string() }).collect::<Vec<_>>().join(","))
+                } else if p.kind() == ParamKind::Code && text.contains("@Norm") {
+                    Some(rename_at_attribute(&text, "Norm", "N"))
+                } else {
+                    None
+                };
+                if let Some(new) = new.filter(|n| *n != text) {
+                    p.set_text(new);
+                }
+            }
+            for c in &mut node.children {
+                walk(c);
+            }
+        }
+        walk(&mut self.root);
+    }
+}
+
+/// `code` with every `@old` that is a whole name (not `@Normal` for
+/// `@Norm`) written `@new`.
+fn rename_at_attribute(code: &str, old: &str, new: &str) -> String {
+    let pat = format!("@{old}");
+    let renamed = format!("@{new}");
+    let mut out = String::with_capacity(code.len());
+    let mut rest = code;
+    while let Some(i) = rest.find(&pat) {
+        let after = &rest[i + pat.len()..];
+        let whole = !after.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        out.push_str(&rest[..i]);
+        out.push_str(if whole { &renamed } else { &pat });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A template's parameters whose defaults READ as expressions become ones:
@@ -7428,7 +7493,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             if let Ok(content) = fs::read_to_string(&default_proj_path) {
                 if let Ok(mut proj) = serde_json::from_str::<Project>(&content) {
                     proj.sanitize_node_names();
-                    proj.migrate_param_refs();
+                    proj.migrate_format();
                     merge_template_defs(&mut proj.root, &node_templates);
                     loaded_project = Some(proj);
                 }

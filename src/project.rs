@@ -448,7 +448,7 @@ impl State {
         let content = fs::read_to_string(path)?;
         let mut proj: Project = serde_json::from_str(&content)?;
         proj.sanitize_node_names();
-        proj.migrate_param_refs();
+        proj.migrate_format();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         self.fs_root = proj.root;
         // Another window's edits, or the bundled file: not this one's to undo.
@@ -530,7 +530,7 @@ impl State {
         let content = fs::read_to_string(&state_file_path)?;
         let mut proj: Project = serde_json::from_str(&content)?;
         proj.sanitize_node_names();
-        proj.migrate_param_refs();
+        proj.migrate_format();
         crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
         self.fs_root = proj.root;
         self.edit_history.clear();

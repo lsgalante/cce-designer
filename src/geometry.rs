@@ -290,7 +290,7 @@ pub fn smooth_lit_vertices(d: &Detail) -> Vec<Vertex3D> {
 /// express neither: it emitted `lat_steps * lon_steps * 6` loose corners, of
 /// which the two pole bands were zero-area triangles.
 ///
-/// `Norm` and `UV` are POINT attributes, computed from the surface normal
+/// `N` and `UV` are POINT attributes, computed from the surface normal
 /// exactly as before. Both are pure functions of the normal, so a welded point
 /// has one answer — including at the seam, where the old per-corner UVs
 /// already agreed because they were derived from the normal rather than from
@@ -362,7 +362,7 @@ pub fn sphere_detail(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usi
         .map(|n| [0.35 + n.x.abs() * 0.35, 0.45 + n.y.abs() * 0.35, 0.85])
         .collect();
     let points = d.points_mut();
-    let _ = points.insert("Norm", AttribData::Float3(norms));
+    let _ = points.insert("N", AttribData::Float3(norms));
     let _ = points.insert("UV", AttribData::Float2(uvs));
     let _ = points.insert(CD, AttribData::Float3(cds));
     d
@@ -415,7 +415,7 @@ pub fn box_detail(start: Vec3, end: Vec3, thickness: f32) -> Detail {
 
     // Wound counter-clockwise seen from outside, like the sphere and the
     // template meshes. The soup's order was the reverse, which meant every
-    // face of a native box wound against the `Norm` attribute the same
+    // face of a native box wound against the `N` attribute the same
     // function attached to it — the geometry and its own normal disagreed.
     let faces: [([u32; 4], Vec3); 6] = [
         ([3, 2, 1, 0], -dir), // start cap
@@ -434,7 +434,7 @@ pub fn box_detail(start: Vec3, end: Vec3, thickness: f32) -> Detail {
         norms.extend(std::iter::repeat(normal.to_array()).take(4));
     }
     let (num_verts, num_points) = (d.num_verts(), d.num_points());
-    let _ = d.verts_mut().insert("Norm", AttribData::Float3(norms));
+    let _ = d.verts_mut().insert("N", AttribData::Float3(norms));
     let _ = d
         .verts_mut()
         .insert("UV", AttribData::Float2(vec![[0.0, 0.0]; num_verts]));
@@ -6719,13 +6719,13 @@ mod tests {
         // Three faces meet at every corner with three different normals, so
         // the normal cannot live on the point. This is what the vertex class
         // is for.
-        assert!(d.verts().has("Norm"));
-        assert!(!d.points().has("Norm"));
+        assert!(d.verts().has("N"));
+        assert!(!d.points().has("N"));
         assert_eq!(d.point_prims(0).len(), 3);
         assert_eq!(d.topology().valence(0), 3);
 
         let normals: Vec<[f32; 3]> = (0..d.num_verts())
-            .filter_map(|v| match d.verts().value("Norm", v) {
+            .filter_map(|v| match d.verts().value("N", v) {
                 Some(crate::detail::AttribValue::Float3(n)) => Some(n),
                 _ => None,
             })
@@ -6733,7 +6733,7 @@ mod tests {
         assert_eq!(normals.len(), 24);
         let corner_0_normals: Vec<[f32; 3]> = (0..d.num_prims())
             .filter(|&p| d.prim_points(p).contains(&0))
-            .filter_map(|p| match d.verts().value("Norm", d.prim_verts(p).start) {
+            .filter_map(|p| match d.verts().value("N", d.prim_verts(p).start) {
                 Some(crate::detail::AttribValue::Float3(n)) => Some(n),
                 _ => None,
             })

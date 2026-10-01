@@ -1437,7 +1437,7 @@ pub(crate) fn scene_point_overlays(
         // Smooth point normals: for each point, the normalized sum of the
         // face normals of the primitives touching it. Template meshes wind
         // CCW seen from outside (the raster culling convention), so the
-        // plain cross(B-A, C-A) points outward. The kernel outputs' Norm
+        // plain cross(B-A, C-A) points outward. The kernel outputs' N
         // attribute is a default up-vector — useless here.
         //
         // The soup had to reconstruct "which triangles touch this point" by
