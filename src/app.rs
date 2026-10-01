@@ -641,7 +641,7 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
     let head = shown.split(':').next().unwrap_or("");
     let control = match head {
         "float3" if shown.split(':').nth(3) == Some("trackball") => "trackball and sliders",
-        "slider" | "float3" => "slider",
+        "slider" | "float2" | "float3" | "float4" => "slider",
         "spinbox" => "spinbox",
         "choice" => "dropdown",
         "toggle" | "checkbox" => "toggle",
@@ -652,10 +652,14 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
         "color" | "rgb" | "rgba" => "color picker",
         _ => "text box",
     };
-    let ty = if head == "float3" {
-        "float3"
-    } else {
-        match kind {
+    let ty = match head {
+        "float2" => "float2",
+        "float3" => "float3",
+        "float4" => "float4",
+        // A text parameter presented as a slider (the Attribute node's
+        // Value, one wide) sets a number.
+        "slider" => "float",
+        _ => match kind {
             ParamKind::Slider | ParamKind::Float => "float",
             ParamKind::Spin => "integer",
             ParamKind::Float3 => "float3",
@@ -666,7 +670,7 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
             ParamKind::Attribute => "attribute",
             ParamKind::Group => "group",
             ParamKind::Button => "none",
-        }
+        },
     };
     (control, ty)
 }
@@ -737,6 +741,51 @@ pub struct PickLists {
 /// ball beside the sliders (cce-ui's `Float3::set_trackball`).
 pub fn float3_row(min: f32, max: f32, trackball: bool) -> String {
     format!("float3:{}:{}{}", min, max, if trackball { ":trackball" } else { "" })
+}
+
+/// The control the Attribute node's Value row is presented as, for a target
+/// `width` components wide, and the row's text as that control shows it: a
+/// slider for one, the float group with two, three or four rows for more
+/// (cce-ui's `float2` / `float3` / `float4`), over [`VALUE_ROW_RANGE`].
+/// The text must hold one number or `width` of them; one is SPREAD to every
+/// component, which is what a single number means to the node (`fit` in
+/// `apply_attribute`), so the controls show it as it acts. `None` — a text
+/// box, as before — for a width it does not fit.
+pub fn value_row_control(text: &str, width: usize, ball: bool) -> Option<(String, String)> {
+    let parts: Vec<&str> = text.split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).collect();
+    if !(1..=4).contains(&width) || parts.iter().any(|p| p.parse::<f32>().is_err()) {
+        return None;
+    }
+    let shown = match parts.len() {
+        n if n == width => parts.join(":"),
+        1 => vec![parts[0]; width].join(":"),
+        _ => return None,
+    };
+    let (lo, hi) = VALUE_ROW_RANGE;
+    let ty = match width {
+        1 => format!("slider:{lo}:{hi}"),
+        3 => float3_row(lo, hi, ball),
+        n => format!("float{n}:{lo}:{hi}"),
+    };
+    Some((ty, shown))
+}
+
+/// Whether `shown` is `kept` as a value row presents it — the same numbers,
+/// or one number of `kept` spread over every component of `shown` — so the
+/// write-back leaves a row the user did not touch alone rather than
+/// rewriting `1.00` as `1.00:1.00:1.00` the first time the pane syncs.
+pub fn same_value_row_text(kept: &str, shown: &str) -> bool {
+    let nums = |t: &str| -> Option<Vec<f32>> {
+        t.split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).map(|s| s.parse::<f32>().ok()).collect()
+    };
+    let (Some(a), Some(b)) = (nums(kept), nums(shown)) else { return false };
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a.len() == b.len() {
+        return a == b;
+    }
+    a.len() == 1 && b.iter().all(|v| *v == a[0])
 }
 
 /// A node's wires as the network draws them: every parameter of the `node`
@@ -4115,7 +4164,11 @@ impl State {
                             let key = if p.label.is_empty() { &p.name } else { &p.label };
                             key == u_name
                         }) {
-                            if p.text() != *u_val {
+                            // A value row presents a single number spread
+                            // over its components; read back unchanged, it
+                            // is the text it was, not an edit.
+                            let presented = p.name == "Value" && !p.is_expr() && same_value_row_text(p.text(), u_val);
+                            if p.text() != *u_val && !presented {
                                 // A reference typed into a plain row becomes
                                 // an expression — the one way to make one
                                 // without the row menu — and an expression is
@@ -4706,9 +4759,10 @@ impl State {
                     .find(|(n, _)| n.eq_ignore_ascii_case(&name))
                     .map_or(0, |(_, w)| *w),
             };
-            if width == 3 {
-                if let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") {
-                    row.2 = float3_row(VALUE_ROW_RANGE.0, VALUE_ROW_RANGE.1, ball);
+            if let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") {
+                if let Some((ty, text)) = value_row_control(&row.1, width, ball) {
+                    row.2 = ty;
+                    row.1 = text;
                 }
             }
         }
@@ -4733,6 +4787,10 @@ impl State {
         if p.is_expr() {
             return None;
         }
+        // Read from an attribute, the row is not shown at all.
+        if node_param_str(node, "Value From", "Constant").eq_ignore_ascii_case("attribute") {
+            return None;
+        }
         let comps = p
             .text()
             .split(|c| c == ':' || c == ',' || c == ' ')
@@ -4740,7 +4798,7 @@ impl State {
             .filter_map(|s| s.parse::<f32>().ok())
             .count();
         let raw = p.text().split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).count();
-        if comps != 3 || raw != 3 {
+        if comps == 0 || comps > 4 || raw != comps {
             return None;
         }
         let key = if p.label.is_empty() { p.name.clone() } else { p.label.clone() };

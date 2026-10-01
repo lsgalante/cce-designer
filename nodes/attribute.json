@@ -30,10 +30,24 @@
       "description": "How many components the new attribute has: one number, or a vector of two, three or four."
     },
     {
+      "name": "Value From",
+      "type": "choice:Constant,Attribute",
+      "default": "Constant",
+      "show_when": "Operation == Create|Modify",
+      "description": "Where the value comes from: Constant uses the Value row for every point; Attribute reads each point's own value of From Attribute."
+    },
+    {
+      "name": "From Attribute",
+      "type": "attribute",
+      "default": "",
+      "show_when": "Operation == Create|Modify && Value From == Attribute",
+      "description": "The point attribute each point's value is read from when Value From is Attribute: copied as it is when it is as wide as the result, a single number spread to every component, otherwise as many components as fit, the rest zero. Pos and Col name the position and the colour."
+    },
+    {
       "name": "Value",
       "type": "text",
       "default": "1.00",
-      "show_when": "Operation == Create|Modify",
+      "show_when": "Operation == Create|Modify && Value From == Constant",
       "description": "The number or numbers written, separated by spaces, commas or colons. One number fills every component; otherwise the count must match the attribute's width."
     },
     {

@@ -9661,7 +9661,11 @@ mod tests {
         state.apply_action(McpAction::SetParam { slot: pull, name: "Value".into(), value: "0.06".into() }, &mut redraw).unwrap();
         show(&mut state, pull);
         let (rows, _) = fields(&state, pull, "Value");
-        assert_eq!((&rows[1], &rows[2]), (&"Control: text box".to_string(), &"Type: string".to_string()), "a broadcast number stays a text box");
+        assert_eq!(
+            (&rows[1], &rows[2]),
+            (&"Control: trackball and sliders".to_string(), &"Type: float3".to_string()),
+            "a single number is spread over the same control"
+        );
 
         // And a reference typed straight into a row (or scripted) becomes one.
         state.apply_action(McpAction::SetParam { slot: ball, name: "Rows".into(), value: "chi(\"../sphere1/Rows\") * 2".into() }, &mut redraw).unwrap();
@@ -16611,13 +16615,16 @@ mod tests {
     }
 
     /// The Attribute node's Value stays a text parameter, but the pane
-    /// presents it as a float3 row — over the wide `VALUE_ROW_RANGE` — when
-    /// the target is three wide and the text holds three numbers: Modify on
-    /// Pos (the pull node), on an input Float3 (Norm), or Create with Type
-    /// Float3. Modify on a Float2 (UV), Create of a Float, a broadcast
-    /// single number and an expression all keep the text box.
+    /// presents it as a control as wide as its target — over the wide
+    /// `VALUE_ROW_RANGE` — a slider for one, the float group with two, three
+    /// or four rows for more: Modify on Pos (the pull node), on an input
+    /// Float3 (Norm) or Float2 (UV), Create by its Type. A single number is
+    /// spread over the components, as the node spreads it, and the pane
+    /// writing it back unchanged is not an edit. A text that fits no width,
+    /// an attribute the input lacks and an expression keep the text box;
+    /// read from an attribute, there is no Value row at all.
     #[test]
-    fn an_attribute_value_row_is_a_float3_when_its_target_is_three_wide() {
+    fn an_attribute_value_row_is_a_control_as_wide_as_its_target() {
         let templates_root = crate::app::load_fs_tree();
         let find = |name: &str| templates_root.children.iter().find(|t| t.name == name).unwrap();
         let instance = |template: &FsNode, id: &str, name: &str, params: &[(&str, &str)]| {
@@ -16657,7 +16664,10 @@ mod tests {
         set(&mut state, "Attribute Name", "Norm");
         assert_eq!(value_row(&mut state), wide, "Modify on an input Float3");
         set(&mut state, "Attribute Name", "UV");
-        assert_eq!(value_row(&mut state), "text", "Modify on an input Float2 stays text");
+        assert_eq!(value_row(&mut state), "text", "three numbers do not fit an input Float2");
+        set(&mut state, "Value", "1:2");
+        assert_eq!(value_row(&mut state), "float2:-1000:1000", "Modify on an input Float2");
+        set(&mut state, "Value", "0.00:0.06:0.00");
         set(&mut state, "Attribute Name", "nothing_here");
         assert_eq!(value_row(&mut state), "text", "an attribute the input lacks has no width");
 
@@ -16666,14 +16676,44 @@ mod tests {
         set(&mut state, "Type", "Float3");
         assert_eq!(value_row(&mut state), wide, "Create of a Float3");
         set(&mut state, "Type", "Float");
-        assert_eq!(value_row(&mut state), "text", "Create of a Float");
-        set(&mut state, "Type", "Float3");
+        assert_eq!(value_row(&mut state), "text", "three numbers do not fit a Float");
+        let value_text = |state: &mut State| {
+            state.sync_parameters_pane();
+            state.param_mut().node_params().iter().find(|r| r.0 == "Value").unwrap().1.clone()
+        };
         set(&mut state, "Value", "1.00");
-        assert_eq!(value_row(&mut state), "text", "a broadcast single number stays text");
+        assert_eq!(value_row(&mut state), "slider:-1000:1000", "Create of a Float");
+        for (ty, row, shown) in [
+            ("Float2", "float2:-1000:1000".to_string(), "1.00:1.00"),
+            ("Float3", wide.clone(), "1.00:1.00:1.00"),
+            ("Float4", "float4:-1000:1000".to_string(), "1.00:1.00:1.00:1.00"),
+        ] {
+            set(&mut state, "Type", ty);
+            assert_eq!(value_row(&mut state), row, "Create of a {ty}");
+            assert_eq!(value_text(&mut state), shown, "one number spread over a {ty}");
+        }
+        // Read back unchanged, the spread number is not an edit.
+        let steps = state.edit_history.undo_len();
+        state.sync_parameters_to_project();
+        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "Value").unwrap().text(), "1.00");
+        assert_eq!(state.edit_history.undo_len(), steps);
+
+        set(&mut state, "Type", "Float3");
         set(&mut state, "Value", "1.00:2.00:3.00");
         assert_eq!(value_row(&mut state), wide);
         state.fs_root.children[1].params.iter_mut().find(|p| p.name == "Value").unwrap().set_expr(true);
         assert_eq!(value_row(&mut state), "text", "an expression is shown as its text");
+        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "Value").unwrap().set_expr(false);
+
+        // Read from an attribute: no Value row, and the source is picked
+        // from the input's attributes.
+        set(&mut state, "Value From", "Attribute");
+        state.sync_parameters_pane();
+        let rows = state.param_mut().node_params();
+        assert!(rows.iter().all(|r| r.0 != "Value"), "no Value row");
+        let from = rows.iter().find(|r| r.0 == "From Attribute").expect("a From Attribute row");
+        assert!(from.2.starts_with("textpick:") && from.2.contains("Norm"), "{}", from.2);
+        set(&mut state, "Value From", "Constant");
 
         // The parameter itself never changed kind: it is text in the node.
         assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "Value").unwrap().kind(), crate::param::ParamKind::Text);

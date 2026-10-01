@@ -4898,6 +4898,49 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             None
         }
     };
+    // Value From Attribute: each affected point's own value of From
+    // Attribute, read BEFORE anything is written, since it may be the very
+    // attribute being written. Pos and Col (P and Cd) are the position and
+    // the colour. `None` for a constant Value.
+    let from_attr = matches!(op.as_str(), "create" | "modify")
+        && node_param_str(target, "Value From", "Constant").eq_ignore_ascii_case("attribute");
+    let src_name = node_param_str(target, "From Attribute", "").trim().to_string();
+    let src_rows: Option<Vec<Vec<f32>>> = if !from_attr {
+        None
+    } else if src_name.is_empty() {
+        fail = "From Attribute names no attribute".to_string();
+        None
+    } else if src_name.eq_ignore_ascii_case("Pos") || src_name == "P" {
+        Some(affected.iter().map(|&p| geom.pos(p).to_array().to_vec()).collect())
+    } else if src_name.eq_ignore_ascii_case("Col") || src_name == "Cd" {
+        Some(affected.iter().map(|&p| geom.color(p).to_vec()).collect())
+    } else if geom.points().has(&src_name) {
+        Some(affected.iter().map(|&p| geom.points().value(&src_name, p).map(attrib_components).unwrap_or_default()).collect())
+    } else {
+        fail = format!("From Attribute '{}' is not a point attribute", src_name);
+        None
+    };
+    // What the i-th affected point is given at width `n`: the constant
+    // resized as `fit` does, or its own source value — as it is when as
+    // wide, a single number spread to every component, otherwise as many
+    // components as fit and the rest zero.
+    let src_for = |i: usize, n: usize| -> Option<Vec<f32>> {
+        match &src_rows {
+            None => fit(n),
+            Some(rows) => {
+                let row = rows.get(i)?;
+                Some(if row.len() == n {
+                    row.clone()
+                } else if row.len() == 1 {
+                    vec![row[0]; n]
+                } else {
+                    (0..n).map(|k| row.get(k).copied().unwrap_or(0.0)).collect()
+                })
+            }
+        }
+    };
+    // Constant values must parse; a value read from an attribute has.
+    let value_ok = value_ok || src_rows.is_some();
     let combine = |dst: &mut [f32], src: &[f32]| {
         for (d, s) in dst.iter_mut().zip(src) {
             match combine_mode.as_str() {
@@ -4980,9 +5023,10 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             } else if !value_ok {
                 fail = format!("Value '{}' does not parse as numbers", value_str);
             } else if builtin {
-                match fit(3) {
-                    Some(src) => {
+                match fit(3).or_else(|| src_rows.as_ref().map(|_| Vec::new())) {
+                    Some(_) => {
                         for (i, &p) in affected.iter().enumerate() {
+                            let Some(src) = src_for(i, 3) else { continue };
                             let old = if is_col { geom.color(p) } else { geom.pos(p).to_array() };
                             let mut v = old;
                             combine(&mut v, &src);
@@ -4999,10 +5043,11 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             } else {
                 match geom.points().get(&name).map(|a| a.ty()) {
                     None => {}
-                    Some(ty) => match fit(ty.components()) {
+                    Some(ty) => match fit(ty.components()).or_else(|| src_rows.as_ref().map(|_| Vec::new())) {
                         None => fail = format!("Value '{}' does not fit '{}'", value_str, name),
-                        Some(src) => {
+                        Some(_) => {
                             for (i, &p) in affected.iter().enumerate() {
+                                let Some(src) = src_for(i, ty.components()) else { continue };
                                 let Some(cur) = geom.points().value(&name, p) else { continue };
                                 let old = attrib_components(cur);
                                 let mut buf = old.clone();
@@ -5180,6 +5225,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         _ => {
             if builtin {
                 fail = format!("'{}' is built-in and cannot be created", name);
+            } else if !fail.is_empty() {
+                // From Attribute names nothing: the message is set.
             } else if !value_ok {
                 fail = format!("Value '{}' does not parse as numbers", value_str);
             } else {
@@ -5189,10 +5236,9 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                     "float4" => crate::detail::AttribType::Float4,
                     _ => crate::detail::AttribType::Float,
                 };
-                match fit(ty.components()) {
-                    Some(src) => {
+                match fit(ty.components()).or_else(|| src_rows.as_ref().map(|_| Vec::new())) {
+                    Some(_) => {
                         let zero = components_attrib(ty, &vec![0.0; ty.components()]);
-                        let value = components_attrib(ty, &src);
                         // Declared where the author knows the answer: at the
                         // point of creation, not in a list somewhere else that
                         // has to be kept in step.
@@ -5204,8 +5250,10 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                             crate::detail::AttribKind::Live
                         };
                         geom.points_mut().create_kind(&name, zero, kind);
-                        for &p in &affected {
-                            let _ = geom.points_mut().set_value(&name, p, value);
+                        for (i, &p) in affected.iter().enumerate() {
+                            if let Some(src) = src_for(i, ty.components()) {
+                                let _ = geom.points_mut().set_value(&name, p, components_attrib(ty, &src));
+                            }
                         }
                     }
                     None => {
@@ -7371,6 +7419,61 @@ mod simnet_tests {
             &[("Operation", "Remap"), ("From Min", "1.00"), ("From Max", "1.00")],
         );
         assert!(err.is_some(), "a zero-width source range must be reported");
+    }
+
+    /// Value From Attribute: Create and Modify take each point's own value
+    /// of From Attribute in place of the constant — copied when as wide,
+    /// one number spread, otherwise as many components as fit and the rest
+    /// zero; Pos is the position. An attribute that is not there is an
+    /// error, and a Remap left with the switch set is not affected.
+    #[test]
+    fn test_attribute_takes_its_value_from_another_attribute() {
+        let before = ramped_mass();
+        let n = before.num_points();
+        let get = |d: &Detail, name: &str, p: usize| attrib_components(d.points().value(name, p).unwrap());
+        let from = |src: &str| [("Value From", "Attribute"), ("From Attribute", src)].map(|(k, v)| (k, v.to_string()));
+        let run = |extra: &[(&str, &str)], src: &str| {
+            let f = from(src);
+            let mut ps: Vec<(&str, &str)> = f.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            ps.extend_from_slice(extra);
+            run_attr(&before, &ps)
+        };
+
+        // A Float copied: weight = mass, point by point.
+        let (d, err) = run(&[("Operation", "Create"), ("Attribute Name", "weight"), ("Type", "Float")], "mass");
+        assert!(err.is_none(), "{err:?}");
+        for p in 0..n {
+            assert_eq!(get(&d, "weight", p), vec![p as f32]);
+        }
+        // Spread over a Float3.
+        let (d, _) = run(&[("Operation", "Create"), ("Attribute Name", "v"), ("Type", "Float3")], "mass");
+        assert_eq!(get(&d, "v", 3), vec![3.0, 3.0, 3.0]);
+        // Pos into a Float2: as many components as fit.
+        let (d, _) = run(&[("Operation", "Create"), ("Attribute Name", "xy"), ("Type", "Float2")], "Pos");
+        let pos = before.pos(5);
+        assert_eq!(get(&d, "xy", 5), vec![pos.x, pos.y]);
+        // Pos into a Float4: the rest zero.
+        let (d, _) = run(&[("Operation", "Create"), ("Attribute Name", "xyzw"), ("Type", "Float4")], "Pos");
+        assert_eq!(get(&d, "xyzw", 5), vec![pos.x, pos.y, pos.z, 0.0]);
+
+        // Modify: Pos plus the point's own displacement, mass spread.
+        let (d, err) = run(&[("Operation", "Modify"), ("Attribute Name", "Pos"), ("Combine", "Add")], "mass");
+        assert!(err.is_none(), "{err:?}");
+        let moved = d.pos(4) - before.pos(4);
+        assert!((moved - Vec3::splat(4.0)).length() < 1e-5, "{moved:?}");
+        // From itself: read before it is written.
+        let (d, _) = run(&[("Operation", "Modify"), ("Attribute Name", "mass"), ("Combine", "Add")], "mass");
+        assert_eq!(get(&d, "mass", 6), vec![12.0]);
+
+        // Nothing named, or nothing there: an error, and nothing written.
+        let (d, err) = run(&[("Operation", "Create"), ("Attribute Name", "w2"), ("Type", "Float")], "nope");
+        assert!(err.is_some_and(|e| e.contains("nope")));
+        assert!(!d.points().has("w2"));
+        let (_, err) = run(&[("Operation", "Create"), ("Attribute Name", "w3")], "");
+        assert!(err.is_some());
+        // An operation that has no Value is untouched by the switch.
+        let (_, err) = run(&[("Operation", "Clip"), ("From Min", "0"), ("From Max", "1")], "nope");
+        assert!(err.is_none(), "{err:?}");
     }
 
     #[test]

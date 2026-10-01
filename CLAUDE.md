@@ -718,11 +718,27 @@ old text Center a float3 from the load on. Tests build parameters with
   typed into blind; a template declares it now and needs no entry anywhere.
   What is still `text` is text for a reason: Attribute's `Value` is as wide
   as its `Type` row says (one number or two, three or four) — though the
-  pane PRESENTS it as a float3 row, over a deliberately wide
-  `VALUE_ROW_RANGE`, when the target is three wide and the text holds three
-  numbers (`add_pick_lists`, since 2026-09-28: Create with Type Float3, or
-  Modify aimed at Pos, Col or an input Float3; the parameter, the file and
-  MCP see text throughout) — Transfer's
+  pane PRESENTS it as a control as wide as its target, over a deliberately
+  wide `VALUE_ROW_RANGE` (`add_pick_lists` / `value_row_control`): a
+  slider for one, cce-ui's `float2` / `float3` / `float4` group for more
+  (the float3 since 2026-09-28, every width since 2026-10-01). The target
+  is Create's Type, or Modify's Pos, Col or input attribute. The text must
+  hold one number or as many as the target: ONE is shown spread over every
+  component, as the node spreads it (`fit` in `apply_attribute`), and the
+  pane's write-back reading that spread back unchanged is not an edit
+  (`same_value_row_text`), or every sync would rewrite `1.00` as
+  `1.00:1.00:1.00` and file an undo step. An expression, a text that fits
+  no width and an attribute the input lacks keep the text box; the
+  parameter, the file and MCP see text throughout. **Value From** (Constant
+  / Attribute, since the same day, Create and Modify) replaces the Value
+  row with **From Attribute**, an `attribute` row: each point's own value
+  of it is used in place of the constant — copied when as wide, a single
+  number spread, otherwise as many components as fit and the rest zero;
+  Pos and Col name the position and the colour; read before anything is
+  written, so a Modify can read the attribute it writes. A save from
+  before has Constant. `test_attribute_takes_its_value_from_another_attribute`
+  and `an_attribute_value_row_is_a_control_as_wide_as_its_target` are the
+  tests — Transfer's
   `Attributes` is a comma LIST of names, Simnet's `Start Frame` is empty for
   "the playbar's", Bounds' `Prefix` is a prefix, Curve's `Points` a list of
   positions, Export's `File` a path. The same day Attribute's `From Min` /
