@@ -752,6 +752,35 @@ pub fn node_wires_at(root: &FsNode, node: &FsNode, frame: i32) -> Vec<(String, S
     }
 }
 
+/// Rewire around the child at `slot` of `dir`, ahead of its removal: every
+/// sibling's wire that names it — `Input` or a second operand, any shown,
+/// plain `node` parameter — takes the name the child's own `Input` wire
+/// carries. Nothing changes when that wire is empty, an expression, hidden
+/// or names the child itself, and a sibling is never wired to itself.
+pub(crate) fn splice_out(dir: &mut FsNode, slot: usize) {
+    let Some(gone) = dir.children.get(slot) else { return };
+    let name = gone.name.clone();
+    let Some(upstream) = gone
+        .params
+        .iter()
+        .find(|p| p.name == "Input" && p.kind() == ParamKind::Node && !p.is_expr() && param_visible(&gone.params, &p.show_when))
+        .map(|p| p.text().trim().to_string())
+        .filter(|u| !u.is_empty() && *u != name)
+    else {
+        return;
+    };
+    for (i, sibling) in dir.children.iter_mut().enumerate() {
+        if i == slot || sibling.name == upstream {
+            continue;
+        }
+        for p in sibling.params.iter_mut() {
+            if p.kind() == ParamKind::Node && !p.is_expr() && p.text().trim() == name {
+                p.set_text(upstream.clone());
+            }
+        }
+    }
+}
+
 /// [`node_wires_at`] with nothing evaluated: an expression wire names
 /// nothing.
 pub fn node_wires(node: &FsNode) -> Vec<(String, String)> {
@@ -6669,9 +6698,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         (x, y)
     }
 
+    /// Delete the node at `slot` of the current level, splicing it out of
+    /// its chain: every sibling wire that named it is rewired to what it
+    /// read through its `Input`, so deleting B from A → B → C leaves A → C.
+    /// A node with no Input (a generator) leaves those wires as they were.
+    /// The rewiring is part of the same undo step as the deletion, since a
+    /// structure step holds the wires of every node it touches.
     pub fn delete_node(&mut self, slot: usize) -> bool {
         let len = self.current_dir().children.len();
         if slot < len {
+            splice_out(self.current_dir_mut(), slot);
             self.current_dir_mut().children.remove(slot);
             if let Some(sel_idx) = self.graph().selected_node() {
                 if sel_idx == slot {

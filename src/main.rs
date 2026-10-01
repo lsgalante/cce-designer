@@ -8842,6 +8842,46 @@ mod tests {
     /// The shell end to end, through the resolver the viewport calls.
     // ----- Parameter references and the Switch node (src/geometry.rs) -----
 
+    /// Deleting a node wired between two splices it out: what read it reads
+    /// what it read, through every wire — Input and second operand alike —
+    /// and the rewiring is undone with the deletion.
+    #[test]
+    fn deleting_a_wired_node_connects_its_neighbours() {
+        let mut state = State::new(false);
+        let wires = |state: &State, name: &str| -> Vec<(String, String)> {
+            let n = state.current_dir().children.iter().find(|c| c.name == name).expect(name);
+            crate::app::node_wires(n)
+        };
+        state.current_dir_mut().children = vec![
+            ref_node("a", "a", "sphere", vec![("Radius", "float", "1")], vec![]),
+            ref_node("b", "b", "transform", vec![("Input", "node", "a")], vec![]),
+            ref_node("c", "c", "transform", vec![("Input", "node", "b")], vec![]),
+            ref_node("d", "d", "boolean", vec![("Input", "node", "c"), ("With", "node", "b")], vec![]),
+        ];
+        state.sync_nodes();
+        state.record_structure_changes();
+
+        assert!(state.delete_node(1));
+        state.record_structure_changes();
+        assert_eq!(wires(&state, "c"), vec![("Input".to_string(), "a".to_string())], "A -> C");
+        assert_eq!(
+            wires(&state, "d"),
+            vec![("Input".to_string(), "c".to_string()), ("With".to_string(), "a".to_string())],
+            "a second operand follows too"
+        );
+
+        // A generator has nothing to splice: what read it is left as it was.
+        assert!(state.delete_node(0));
+        assert_eq!(wires(&state, "c"), vec![("Input".to_string(), "a".to_string())]);
+
+        // Undo puts the node back and the wires with it.
+        state.record_structure_changes();
+        assert!(state.run_command("undo"));
+        assert!(state.run_command("undo"));
+        assert_eq!(wires(&state, "c"), vec![("Input".to_string(), "b".to_string())]);
+        assert_eq!(wires(&state, "d")[1], ("With".to_string(), "b".to_string()));
+    }
+
     fn ref_node(id: &str, name: &str, node_type: &str, params: Vec<(&str, &str, &str)>, children: Vec<FsNode>) -> FsNode {
         FsNode {
             id: id.into(),

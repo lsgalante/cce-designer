@@ -1046,6 +1046,21 @@ page resolver — with each node of a sheet, grid, border and export chain
 bypassed in turn — and `bypass_is_one_flag_however_it_is_asked_for` the
 three ways of asking.
 
+### Deleting a node splices it out
+
+`State::delete_node` rewires around the node before it goes (since
+2026-10-01, `app::splice_out`): every sibling wire that named it — an
+`Input` or a second operand, any plain `node` parameter — takes the name
+the deleted node's own `Input` carried, so deleting B from A → B → C
+leaves A → C. Every way of deleting goes through it (Delete over a
+selection, Cut, the node menu, MCP); a selection is deleted highest slot
+first, one splice at a time, so a run of chained nodes leaves its ends
+joined. Nothing is rewired when the node's Input is empty (a generator),
+an expression or hidden — those wires are left naming it, as before —
+and a node is never wired to itself. The rewiring is in the deletion's
+undo step, since a structure step holds the wires of every node it
+touches. `deleting_a_wired_node_connects_its_neighbours` is the test.
+
 ### Sibling-first inputs and the Switch node
 
 Two pieces added on 2026-09-21 so a node can be BUILT FROM other nodes
