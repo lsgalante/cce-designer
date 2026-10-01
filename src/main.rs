@@ -15241,6 +15241,51 @@ mod tests {
         assert_eq!(pasted, vec![(20.0, 20.0), (22.0, 21.0)]);
     }
 
+    /// Pasting on a wire splices the paste in — one node, or a copied chain
+    /// whole — and a pasted node whose name is taken takes the next free
+    /// one, the wires inside the paste following it.
+    #[test]
+    fn a_paste_on_a_wire_is_spliced_into_its_chain() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.current_dir_mut().children = vec![
+            ref_node("a", "a", "sphere", vec![("Radius", "float", "1")], vec![]),
+            ref_node("c", "c", "transform", vec![("Input", "node", "a")], vec![]),
+            ref_node("p", "p1", "transform", vec![("Input", "node", "")], vec![]),
+            ref_node("q", "q1", "transform", vec![("Input", "node", "p1")], vec![]),
+        ];
+        for (i, pos) in [(2.0, 1.0), (2.0, 5.0), (8.0, 1.0), (8.0, 2.0)].into_iter().enumerate() {
+            state.current_dir_mut().children[i].position = pos;
+        }
+        state.sync_nodes();
+        state.rebuild_positions();
+        state.apply_layout();
+        let input_of = |state: &State, name: &str| {
+            let n = state.current_dir().children.iter().find(|c| c.name == name).expect(name);
+            crate::geometry::node_param_node(n, "Input")
+        };
+
+        // One node, onto the wire a -> c.
+        state.node_clipboard = vec![state.current_dir().children[2].clone()];
+        state.grid_cursor_col = 2;
+        state.grid_cursor_row = 2;
+        assert!(state.paste_nodes());
+        assert_eq!(input_of(&state, "p2").as_deref(), Some("a"), "renamed past p1, and reading the upstream");
+        assert_eq!(input_of(&state, "c").as_deref(), Some("p2"));
+
+        // The chain p1 -> q1, onto the wire p2 -> c: in whole, wired inside
+        // to its own copies and not to the originals.
+        state.node_clipboard = state.current_dir().children[2..4].to_vec();
+        state.grid_cursor_col = 2;
+        state.grid_cursor_row = 3;
+        state.sync_nodes();
+        assert!(state.paste_nodes());
+        assert_eq!(input_of(&state, "p3").as_deref(), Some("p2"), "the head reads the wire's upstream");
+        assert_eq!(input_of(&state, "q2").as_deref(), Some("p3"), "the copy reads the copy");
+        assert_eq!(input_of(&state, "c").as_deref(), Some("q2"), "the downstream reads the tail");
+        assert_eq!(input_of(&state, "q1").as_deref(), Some("p1"), "the original is untouched");
+    }
+
     /// A press the graph itself took does not arm the expansion drag. The
     /// case that bites is a PORT: it starts a connection and consumes the
     /// press without selecting anything, so the empty-grid arm would read it

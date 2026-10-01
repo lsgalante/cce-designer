@@ -788,12 +788,18 @@ pub(crate) fn splice_out(dir: &mut FsNode, slot: usize) {
 /// false, and nothing written, when either node has no Input. What a node
 /// dropped onto a wire runs, and Add Node on a cell a wire runs through.
 pub(crate) fn splice_into_wire(dir: &mut FsNode, mid_id: &str, src_name: String, dest_id: &str) -> bool {
+    splice_chain_into_wire(dir, mid_id, mid_id, src_name, dest_id)
+}
+
+/// [`splice_into_wire`] for a chain: its `head` takes the wire's upstream,
+/// and the downstream node reads its `tail`. A pasted chain goes in whole.
+pub(crate) fn splice_chain_into_wire(dir: &mut FsNode, head_id: &str, tail_id: &str, src_name: String, dest_id: &str) -> bool {
     let has_input = |id: &str| dir.children.iter().any(|c| c.id == id && c.params.iter().any(|p| p.name == "Input"));
-    let Some(mid_name) = dir.children.iter().find(|c| c.id == mid_id).map(|c| c.name.clone()) else { return false };
-    if !has_input(mid_id) || !has_input(dest_id) {
+    let Some(tail_name) = dir.children.iter().find(|c| c.id == tail_id).map(|c| c.name.clone()) else { return false };
+    if !has_input(head_id) || !has_input(dest_id) {
         return false;
     }
-    for (id, wire) in [(mid_id, src_name), (dest_id, mid_name)] {
+    for (id, wire) in [(head_id, src_name), (dest_id, tail_name)] {
         if let Some(p) = dir.children.iter_mut().find(|c| c.id == id).and_then(|c| c.params.iter_mut().find(|p| p.name == "Input")) {
             p.set_text(wire);
         }
@@ -8928,6 +8934,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// A node whose cell is taken steps aside to the nearest free one, which
     /// is the one case where the shape gives: a paste that silently sat two
     /// nodes on one crossing would be worse than a paste that is a cell out.
+    ///
+    /// A pasted node whose name is taken takes the next free one
+    /// (`transform1` beside a `transform1` becomes `transform2`), and the
+    /// wires between pasted nodes follow, so a pasted chain reads itself
+    /// and not the chain it was copied from. A wire to a node that was not
+    /// copied still names that node.
+    ///
+    /// Pasted on a free cursor cell a wire runs through, the paste is
+    /// spliced into that wire, as Add Node there would be: one node, or a
+    /// chain with one head and one tail, goes in whole.
     pub(crate) fn paste_nodes(&mut self) -> bool {
         if self.node_clipboard.is_empty() {
             return false;
@@ -8936,7 +8952,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             (x.min(n.position.0), y.min(n.position.1))
         });
         let (cx, cy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
+        // Asked before the paste, whose nodes' own wires would touch the cell.
+        let free = !self.current_dir().children.iter().any(|c| c.position == (cx, cy));
+        let wire = if free { self.graph().input_wire_through_cell(cx, cy) } else { None };
         let mut last = (cx, cy);
+        let mut renamed: Vec<(String, String)> = Vec::new();
+        let mut pasted: Vec<String> = Vec::new();
         for source in self.node_clipboard.clone() {
             let mut node = source;
             regenerate_node_ids(&mut node);
@@ -8946,8 +8967,26 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // Added = hidden, same as AddNode: a paste of a displayed node
             // must not become a second visible sibling.
             node.geometry_visible = false;
+            let old = node.name.clone();
+            if self.current_dir().children.iter().any(|c| c.name == old) {
+                node.name = self.get_lowest_unused_name(old.trim_end_matches(|c: char| c.is_ascii_digit()));
+            }
+            renamed.push((old, node.name.clone()));
+            pasted.push(node.id.clone());
             self.current_dir_mut().children.push(node);
             last = (nx, ny);
+        }
+        let dir = self.current_dir_mut();
+        for node in dir.children.iter_mut().filter(|c| pasted.contains(&c.id)) {
+            for p in node.params.iter_mut().filter(|p| p.kind() == ParamKind::Node && !p.is_expr()) {
+                let wired = p.text().trim().to_string();
+                if let Some((_, new)) = renamed.iter().find(|(old, _)| *old == wired) {
+                    p.set_text(new.clone());
+                }
+            }
+        }
+        if let Some((src_id, dest_id)) = wire {
+            self.splice_paste(&pasted, &src_id, &dest_id);
         }
         // The cursor lands on the last node pasted, collapsed — the pasted
         // nodes are new, and the region that selected the originals means
@@ -8963,6 +9002,24 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         self.rebuild_scene_geometry();
         self.viewport_dirty = true;
         true
+    }
+
+    /// Splice the nodes just pasted (`ids`) into the wire from `src_id` to
+    /// `dest_id`: as one chain, its head the pasted node whose Input reads
+    /// no other pasted node, its tail the one no other pasted node reads.
+    /// A paste that is not one such chain is left beside the wire.
+    fn splice_paste(&mut self, ids: &[String], src_id: &str, dest_id: &str) {
+        let dir = self.current_dir();
+        let nodes: Vec<&FsNode> = dir.children.iter().filter(|c| ids.contains(&c.id)).collect();
+        let input = |n: &FsNode| crate::geometry::node_param_node(n, "Input");
+        let heads: Vec<&FsNode> = nodes.iter().copied().filter(|n| !input(n).is_some_and(|i| nodes.iter().any(|m| m.name == i))).collect();
+        let tails: Vec<&FsNode> = nodes.iter().copied().filter(|n| !nodes.iter().any(|m| input(m).as_deref() == Some(n.name.as_str()))).collect();
+        let ([head], [tail], Some(src)) = (heads.as_slice(), tails.as_slice(), dir.children.iter().find(|c| c.id == src_id)) else { return };
+        let (head_id, tail_id, src_name) = (head.id.clone(), tail.id.clone(), src.name.clone());
+        if splice_chain_into_wire(self.current_dir_mut(), &head_id, &tail_id, src_name.clone(), dest_id) {
+            let dest = self.current_dir().children.iter().find(|c| c.id == dest_id).map(|c| c.name.clone()).unwrap_or_default();
+            self.update_status_text(&format!("Pasted between {src_name} and {dest}."));
+        }
     }
 
     /// Move the SELECTED nodes one cell, and the cursor with them — so a run

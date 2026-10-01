@@ -1076,6 +1076,17 @@ Input — a generator — is added beside the wire and cuts nothing. MCP's
 `add_node` places at the coordinates it is given and does not splice.
 `a_node_added_on_a_wire_is_wired_into_its_chain` is the test.
 
+**A paste splices the same way** (`paste_nodes`, the same day): one node,
+or a pasted set that is ONE chain — one head whose Input reads no other
+pasted node, one tail no other pasted node reads — goes into the wire
+whole (`splice_chain_into_wire`); any other shape is pasted beside it.
+That needed a fix it could not work without: a paste KEPT ITS NAMES, so a
+pasted `transform1` stood beside the original and a wire naming it found
+the original. A pasted node whose name is taken now takes the next free
+one, and the wires between pasted nodes follow; a wire to a node that was
+not copied still names that node.
+`a_paste_on_a_wire_is_spliced_into_its_chain` is the test.
+
 ### Sibling-first inputs and the Switch node
 
 Two pieces added on 2026-09-21 so a node can be BUILT FROM other nodes
