@@ -2751,7 +2751,8 @@ A right press on the playbar's plate (`over_playbar`) opens the sixth
 `playbar_menu_rows` / `handle_playbar_menu_click` /
 `run_playbar_menu_action`, `PlaybarMenuAction`. Rows: the transport's
 commands by id (Play / Pause, Play / Pause Reverse, Go To Start Frame),
-the **Repeat Playback** switch with its mark, then three slider rows —
+the **Repeat Playback** and **Show Step Buttons** switches with their
+marks, then three slider rows —
 **Playback Rate** (1–120 fps by one), **Start Frame** (1–999) and **End
 Frame** (2–1000). An end moved past the other carries it a frame ahead,
 and the playhead is kept inside the range. The rate is a setting,
@@ -2764,6 +2765,17 @@ through `drain_menu_slider`, so the viewport's and the playbar's sliders
 share them without either being named there. `get_state` reports `fps`
 in its `playbar` block. `the_playbar_menu_sets_the_rate_and_the_range`
 drives it by pointer.
+
+**The step buttons** (since 2026-10-01): Previous Frame and Next Frame
+stand either side of the play button (|◁ ▷ ▷|), each a whole frame off
+the ROUNDED frame and inside the range, without pausing —
+`Playbar::step`, which the Left / Right chords (`frame_prev` /
+`frame_next`) share. Show Step Buttons (`toggle_playbar_step_buttons`,
+unbound, a switch in the palette too) takes them away and the track
+widens into their room; on by default, persisted as top-level
+`playbar_step_buttons` in state.kdl beside `playbar_repeat`, and reported
+as `step_buttons` in `get_state`'s playbar block.
+`the_playbar_step_buttons_step_and_can_be_hidden` is the test.
 
 ### Display mode: the viewport menu, and smooth shading
 

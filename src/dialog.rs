@@ -2003,6 +2003,7 @@ impl State {
             "show_parameters_pane" => self.show_parameters,
             "show_playbar_pane" => self.show_playbar,
             "toggle_playbar_repeat" => self.slots.playbar.inner().repeat,
+            "toggle_playbar_step_buttons" => self.slots.playbar.inner().step_buttons,
             "toggle_snap" => self.viewer_tool.as_ref()?.snap.is_some(),
             _ => return None,
         })

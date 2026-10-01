@@ -250,6 +250,9 @@ pub const COMMANDS: &[Command] = &[
     // (off). A setting rather than a transport key, so it ships unbound and
     // carries a switch in the palette; persisted in state.kdl.
     Command { id: "toggle_playbar_repeat", label: "Repeat Playback", context: Context::Playbar, run: Run::Key(Action::TogglePlaybarRepeat), default_chord: None },
+    // The Previous / Next Frame buttons either side of the play button: a
+    // switch in the playbar menu and the palette, saved with the settings.
+    Command { id: "toggle_playbar_step_buttons", label: "Show Step Buttons", context: Context::Playbar, run: Run::Key(Action::TogglePlaybarStepButtons), default_chord: None },
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Command> {

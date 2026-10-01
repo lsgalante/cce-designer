@@ -2038,6 +2038,10 @@ pub struct DesignSettings {
     /// Rate. Top-level like `playbar_repeat`, and for the same reason.
     #[serde(default = "default_playbar_fps")]
     pub playbar_fps: f32,
+    /// Whether the playbar shows its Previous / Next Frame buttons —
+    /// `toggle_playbar_step_buttons`. Top-level like `playbar_repeat`.
+    #[serde(default = "default_true")]
+    pub playbar_step_buttons: bool,
 }
 
 fn default_playbar_fps() -> f32 {
@@ -2053,6 +2057,7 @@ impl Default for DesignSettings {
             gpu: default_gpu(),
             playbar_repeat: true,
             playbar_fps: default_playbar_fps(),
+            playbar_step_buttons: true,
         }
     }
 }
@@ -3175,6 +3180,7 @@ impl State {
             gpu: self.gpu_preference.clone(),
             playbar_repeat: self.slots.playbar.inner().repeat,
             playbar_fps: self.slots.playbar.inner().fps,
+            playbar_step_buttons: self.slots.playbar.inner().step_buttons,
         };
         settings.save();
         self.last_design_mod_time = {
@@ -5748,6 +5754,7 @@ impl State {
         command(&mut options, &mut actions, "frame_start");
         row(&mut options, &mut actions, "-", PlaybarMenuAction::Separator);
         command(&mut options, &mut actions, "toggle_playbar_repeat");
+        command(&mut options, &mut actions, "toggle_playbar_step_buttons");
         row(&mut options, &mut actions, "-", PlaybarMenuAction::Separator);
         row(&mut options, &mut actions, "Playback Rate", PlaybarMenuAction::FpsSlider);
         row(&mut options, &mut actions, "Start Frame", PlaybarMenuAction::StartFrameSlider);
@@ -7590,6 +7597,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         });
 
         slots.playbar.inner_mut().repeat = settings.playbar_repeat;
+        slots.playbar.inner_mut().step_buttons = settings.playbar_step_buttons;
         let wire_style = cce_ui::widget::display::WireStyle::parse(&settings.viewport.node_wire_style);
         slots.content.inner_mut().set_wire_style(wire_style);
         slots.content2.inner_mut().set_wire_style(wire_style);
@@ -9759,14 +9767,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 pb.repeat = !pb.repeat;
                 settings_changed = true;
             }
-            // Whole-frame stepping off the ROUNDED current frame: during
-            // playback the playhead sits between frames, and stepping from
-            // the fractional value would land off the frame grid. The scene
-            // rebuild follows from tick_frame's last_sim_frame diff.
+            Action::TogglePlaybarStepButtons => {
+                let pb = self.slots.playbar.inner_mut();
+                pb.step_buttons = !pb.step_buttons;
+                settings_changed = true;
+            }
+            // Whole-frame stepping (`Playbar::step`, which the playbar's
+            // own step buttons share). The scene rebuild follows from
+            // tick_frame's last_sim_frame diff.
             Action::FrameNext | Action::FramePrev => {
                 let step = if action == Action::FrameNext { 1.0 } else { -1.0 };
-                let pb = self.slots.playbar.inner_mut();
-                pb.current_frame = (pb.current_frame.round() + step).clamp(pb.start_frame, pb.end_frame);
+                self.slots.playbar.inner_mut().step(step);
             }
             // Rewind: pause whatever is playing and land on the start frame.
             // The scene rebuild follows from tick_frame's last_sim_frame
@@ -11610,6 +11621,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                          self.default_project_setting = settings.default_project.clone();
                          self.gpu_preference = settings.gpu.clone();
                          self.slots.playbar.inner_mut().repeat = settings.playbar_repeat;
+                         self.slots.playbar.inner_mut().step_buttons = settings.playbar_step_buttons;
                          self.slots.playbar.inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
                          self.square_viewport = settings.viewport.square;
                          self.grid_thickness = settings.viewport.grid_thickness;

@@ -27,14 +27,29 @@ pub struct Playbar {
     /// this field is the one copy, read by the dialog's switch and
     /// `save_settings`.
     pub repeat: bool,
+    /// Whether the Previous Frame / Next Frame buttons flank the play
+    /// button — the playbar menu's Step Buttons switch
+    /// (`toggle_playbar_step_buttons`), persisted in state.kdl
+    /// (`playbar_step_buttons`). On by default. Off, the play button and
+    /// the track stand where they always did.
+    pub step_buttons: bool,
     dragging: bool,
 }
 
 const PAD: f32 = 8.0;
 /// Width of the play/pause button box (square-ish, clamped to pane height).
 const BTN_W: f32 = 28.0;
+/// Space between two transport buttons.
+const BTN_GAP: f32 = 4.0;
 /// Width reserved right of the track for the frame readout.
 const READOUT_W: f32 = 110.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Btn {
+    Prev,
+    Play,
+    Next,
+}
 
 impl Playbar {
     pub fn new() -> Adapted<Playbar> {
@@ -46,6 +61,7 @@ impl Playbar {
             end_frame: 240.0,
             fps: 24.0,
             repeat: true,
+            step_buttons: true,
             dragging: false,
         })
     }
@@ -66,13 +82,47 @@ impl Playbar {
         }
     }
 
-    fn button_rect(&self, rect: Rect) -> Rect {
+    /// Step one whole frame, off the ROUNDED current frame: during playback
+    /// the playhead sits between frames, and stepping from the fractional
+    /// value would land off the frame grid. The chords and the buttons
+    /// share it; neither pauses a playing timeline.
+    pub fn step(&mut self, by: f32) {
+        self.current_frame = (self.current_frame.round() + by).clamp(self.start_frame, self.end_frame);
+    }
+
+    /// The transport's square buttons, left to right: Previous Frame, Play,
+    /// Next Frame with the step buttons on, Play alone with them off.
+    fn button_rects(&self, rect: Rect) -> Vec<(Btn, Rect)> {
         let s = (rect.height - 2.0 * PAD).max(12.0).min(BTN_W);
-        Rect { x: rect.x + PAD, y: rect.y + (rect.height - s) * 0.5, width: s, height: s }
+        let y = rect.y + (rect.height - s) * 0.5;
+        let order: &[Btn] = if self.step_buttons { &[Btn::Prev, Btn::Play, Btn::Next] } else { &[Btn::Play] };
+        order
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (*b, Rect { x: rect.x + PAD + i as f32 * (s + BTN_GAP), y, width: s, height: s }))
+            .collect()
+    }
+
+    fn button_at(&self, rect: Rect, x: f32, y: f32) -> Option<Btn> {
+        self.button_rects(rect)
+            .into_iter()
+            .find(|(_, b)| x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height)
+            .map(|(btn, _)| btn)
+    }
+
+    /// Where a transport button is in the pane, for tests: Previous Frame
+    /// is -1, Play 0 and Next Frame 1. `None` for a button not shown.
+    pub fn transport_button_rect(&self, rect: Rect, which: i32) -> Option<Rect> {
+        let want = match which {
+            -1 => Btn::Prev,
+            0 => Btn::Play,
+            _ => Btn::Next,
+        };
+        self.button_rects(rect).into_iter().find(|(b, _)| *b == want).map(|(_, r)| r)
     }
 
     fn track_rect(&self, rect: Rect) -> Rect {
-        let b = self.button_rect(rect);
+        let b = self.button_rects(rect).last().expect("the play button").1;
         let x = b.x + b.width + PAD;
         let h = (rect.height - 2.0 * PAD).max(8.0).min(16.0);
         Rect {
@@ -138,38 +188,23 @@ impl Paint for Playbar {
         let relief = cce_ui::layout::control_relief();
         let accent = colors::highlight_primary_color();
 
-        // Play/pause button: raised plate under the DE relief styling (the
-        // Button transparent-fill degradation — edges only, the pane plate is
-        // the face), flat outline otherwise.
-        let b = self.button_rect(rect);
-        let br = cce_ui::layout::button_corner_radius().min(b.width * 0.5);
-        if relief {
-            let depth = cce_ui::layout::bevel_width().min(b.height * 0.2);
-            ctx.boss(b, (br, br, br, br), depth);
-        } else {
-            ctx.border(b, (br, br, br, br), [0.0; 4], [0.35, 0.35, 0.42, 0.9], 1.0);
-        }
+        // The transport buttons: raised plates under the DE relief styling
+        // (the Button transparent-fill degradation — edges only, the pane
+        // plate is the face), flat outlines otherwise.
         let icon = [0.85, 0.86, 0.90, 0.95];
-        if self.playing {
-            // Pause: two bars.
-            let bw = b.width * 0.16;
-            let bh = b.height * 0.44;
-            let by = b.y + (b.height - bh) * 0.5;
-            ctx.quad(Rect { x: b.x + b.width * 0.32 - bw * 0.5, y: by, width: bw, height: bh }, icon);
-            ctx.quad(Rect { x: b.x + b.width * 0.68 - bw * 0.5, y: by, width: bw, height: bh }, icon);
-        } else {
-            // Play: triangle outline (no filled-triangle prim; the DE's line
-            // aesthetic reads fine here).
-            let (cx, cy) = (b.x + b.width * 0.54, b.y + b.height * 0.5);
-            let r = b.width * 0.24;
-            let (x0, y0) = (cx - r * 0.6, cy - r);
-            let (x1, y1) = (cx - r * 0.6, cy + r);
-            let (x2, y2) = (cx + r, cy);
-            ctx.vector(x0, y0, x1, y1, 1.5, icon, Cap::Round);
-            ctx.vector(x1, y1, x2, y2, 1.5, icon, Cap::Round);
-            ctx.vector(x2, y2, x0, y0, 1.5, icon, Cap::Round);
+        for (btn, b) in self.button_rects(rect) {
+            let br = cce_ui::layout::button_corner_radius().min(b.width * 0.5);
+            if relief {
+                let depth = cce_ui::layout::bevel_width().min(b.height * 0.2);
+                ctx.boss(b, (br, br, br, br), depth);
+            } else {
+                ctx.border(b, (br, br, br, br), [0.0; 4], [0.35, 0.35, 0.42, 0.9], 1.0);
+            }
+            match btn {
+                Btn::Play => self.paint_play_icon(b, icon, ctx),
+                Btn::Prev | Btn::Next => paint_step_icon(b, btn == Btn::Next, icon, ctx),
+            }
         }
-
         // Timeline track: the toolkit's band (the one slider style) — a band the
         // width of the track with its swell at the playhead, in its own shaded
         // well, drawn by the Slider's painter.
@@ -233,6 +268,44 @@ impl Paint for Playbar {
     }
 }
 
+impl Playbar {
+    fn paint_play_icon(&self, b: Rect, icon: [f32; 4], ctx: &mut PaintCtx) {
+        if self.playing {
+            // Pause: two bars.
+            let bw = b.width * 0.16;
+            let bh = b.height * 0.44;
+            let by = b.y + (b.height - bh) * 0.5;
+            ctx.quad(Rect { x: b.x + b.width * 0.32 - bw * 0.5, y: by, width: bw, height: bh }, icon);
+            ctx.quad(Rect { x: b.x + b.width * 0.68 - bw * 0.5, y: by, width: bw, height: bh }, icon);
+        } else {
+            // Play: triangle outline (no filled-triangle prim; the DE's line
+            // aesthetic reads fine here).
+            let (cx, cy) = (b.x + b.width * 0.54, b.y + b.height * 0.5);
+            let r = b.width * 0.24;
+            let (x0, y0) = (cx - r * 0.6, cy - r);
+            let (x1, y1) = (cx - r * 0.6, cy + r);
+            let (x2, y2) = (cx + r, cy);
+            ctx.vector(x0, y0, x1, y1, 1.5, icon, Cap::Round);
+            ctx.vector(x1, y1, x2, y2, 1.5, icon, Cap::Round);
+            ctx.vector(x2, y2, x0, y0, 1.5, icon, Cap::Round);
+        }
+    }
+}
+
+/// A step button's icon: a triangle outline toward the step and a bar at
+/// its point, the transport's frame-step glyph (|◁ and ▷|).
+fn paint_step_icon(b: Rect, forward: bool, icon: [f32; 4], ctx: &mut PaintCtx) {
+    let dir = if forward { 1.0 } else { -1.0 };
+    let (cx, cy) = (b.x + b.width * 0.5, b.y + b.height * 0.5);
+    let r = b.width * 0.2;
+    let (x0, x1) = (cx - dir * r * 0.75, cx + dir * r * 0.65);
+    ctx.vector(x0, cy - r, x0, cy + r, 1.5, icon, Cap::Round);
+    ctx.vector(x0, cy + r, x1, cy, 1.5, icon, Cap::Round);
+    ctx.vector(x1, cy, x0, cy - r, 1.5, icon, Cap::Round);
+    let bx = x1 + dir * 1.5;
+    ctx.vector(bx, cy - r, bx, cy + r, 1.5, icon, Cap::Round);
+}
+
 impl Input for Playbar {
     fn is_dragging(&self) -> bool {
         self.dragging
@@ -243,17 +316,27 @@ impl Input for Playbar {
         match event {
             Event::MouseButton { button: MouseButton::Left, state, x, y, .. } => match state {
                 ElementState::Pressed => {
-                    let b = self.button_rect(rect);
-                    if *x >= b.x && *x <= b.x + b.width && *y >= b.y && *y <= b.y + b.height {
-                        // The button is the FORWARD transport: playing (either
-                        // direction) pauses; paused starts forward. Reverse is
-                        // the Down-arrow chord's domain.
-                        if self.playing {
-                            self.playing = false;
-                        } else {
-                            self.begin(false);
+                    match self.button_at(rect, *x, *y) {
+                        // The play button is the FORWARD transport: playing
+                        // (either direction) pauses; paused starts forward.
+                        // Reverse is the Down-arrow chord's domain.
+                        Some(Btn::Play) => {
+                            if self.playing {
+                                self.playing = false;
+                            } else {
+                                self.begin(false);
+                            }
+                            return true;
                         }
-                        return true;
+                        Some(Btn::Prev) => {
+                            self.step(-1.0);
+                            return true;
+                        }
+                        Some(Btn::Next) => {
+                            self.step(1.0);
+                            return true;
+                        }
+                        None => {}
                     }
                     let t = self.track_rect(rect);
                     // A generous vertical band around the slim track.

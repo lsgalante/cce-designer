@@ -2603,7 +2603,7 @@ mod tests {
             groups,
             vec![
                 vec![A::Command("play_pause"), A::Command("play_pause_reverse"), A::Command("frame_start")],
-                vec![A::Command("toggle_playbar_repeat")],
+                vec![A::Command("toggle_playbar_repeat"), A::Command("toggle_playbar_step_buttons")],
                 vec![A::FpsSlider, A::StartFrameSlider, A::EndFrameSlider],
                 vec![
                     A::Plate(crate::plate_menu::PlateMenuAction::Collapse),
@@ -2668,6 +2668,74 @@ mod tests {
         let pb = again.slots.playbar.inner();
         assert_eq!((pb.start_frame, pb.end_frame), (151.0, 152.0));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The playbar's Previous / Next Frame buttons step a whole frame by
+    /// pointer, either side of the play button, and the playbar menu's
+    /// Show Step Buttons switch takes them away — the track widening into
+    /// their room — and saves the choice.
+    #[test]
+    fn the_playbar_step_buttons_step_and_can_be_hidden() {
+        use crate::app::PlaybarMenuAction as A;
+        use crate::slots::PLAYBAR_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::scene::layout::Rect;
+        use cce_ui::widget::{context_menu, ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.execute_menu_action("Show Playbar Pane");
+        state.rebuild_positions();
+        state.apply_layout();
+        let (px, py, pw, ph) = state.positions[PLAYBAR_IDX];
+        let rect = Rect { x: px, y: py, width: pw, height: ph };
+        assert!(state.slots.playbar.inner().step_buttons, "on by default");
+        let press = |state: &mut State, r: Rect| {
+            let (x, y) = (r.x + r.width * 0.5, r.y + r.height * 0.5);
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        };
+        let pb = state.slots.playbar.inner();
+        let prev = pb.transport_button_rect(rect, -1).expect("a Previous Frame button");
+        let play = pb.transport_button_rect(rect, 0).expect("a play button");
+        let next = pb.transport_button_rect(rect, 1).expect("a Next Frame button");
+        assert!(prev.x + prev.width < play.x && play.x + play.width < next.x, "|< > >| left to right");
+
+        state.slots.playbar.inner_mut().current_frame = 10.4;
+        press(&mut state, next);
+        assert_eq!(state.slots.playbar.inner().current_frame, 11.0, "a whole frame on, off the rounded one");
+        press(&mut state, prev);
+        press(&mut state, prev);
+        assert_eq!(state.slots.playbar.inner().current_frame, 9.0);
+        assert!(!state.slots.playbar.inner().playing, "a step does not start playback");
+        state.slots.playbar.inner_mut().current_frame = 1.0;
+        press(&mut state, prev);
+        assert_eq!(state.slots.playbar.inner().current_frame, 1.0, "held inside the range");
+
+        // The menu's switch hides them, and is saved.
+        let (options, actions) = state.playbar_menu_rows();
+        let i = actions.iter().position(|a| *a == A::Command("toggle_playbar_step_buttons")).expect("a Step Buttons row");
+        assert!(options[i].starts_with("● "), "{}", options[i]);
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (play.x + 400.0) as f64, y: (py + ph * 0.5) as f64 } });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
+        assert!(state.playbar_menu_open());
+        state.cursor_x = context_menu::x() + 20.0;
+        state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(!state.playbar_menu_open());
+        let pb = state.slots.playbar.inner();
+        assert!(!pb.step_buttons);
+        assert!(pb.transport_button_rect(rect, -1).is_none() && pb.transport_button_rect(rect, 1).is_none());
+        assert_eq!(pb.transport_button_rect(rect, 0).unwrap().x, prev.x, "the play button takes the first place");
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        assert!(!crate::app::DesignSettings::from_kdl_str(&kdl).playbar_step_buttons, "persisted");
+
+        // Where Next Frame stood is the track now: a press there scrubs.
+        state.slots.playbar.inner_mut().current_frame = 50.0;
+        press(&mut state, next);
+        assert_ne!(state.slots.playbar.inner().current_frame, 51.0, "no step button there any more");
+        state.run_command("toggle_playbar_step_buttons");
+        assert!(state.slots.playbar.inner().step_buttons);
     }
 
     /// Camera Pivot Size is a slider under Show Camera Pivot, over 0–1:

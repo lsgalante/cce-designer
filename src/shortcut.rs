@@ -17,6 +17,8 @@ pub enum Action {
     ToggleShowOccluded,
     /// Whether playback wraps at the end of the frame range or stops there.
     TogglePlaybarRepeat,
+    /// Whether the playbar shows its Previous / Next Frame buttons.
+    TogglePlaybarStepButtons,
     /// The three point overlays on the visible scene — markers, index
     /// numbers, normal whiskers. Global display settings reached from the
     /// command palette; they were per-node `meta` child preferences until
