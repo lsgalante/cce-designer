@@ -368,7 +368,8 @@ pub struct Project {
     /// meaning from a new one. 0 (absent) is every save before 2026-09-24,
     /// when a bare `ch("Name")` meant the PARENT's parameter; 1 is Houdini's
     /// semantics, where it means the node's own; 2 (2026-10-01) is the
-    /// generators' normal attribute called `N` where it was `Norm`.
+    /// generators' normal attribute called `N` where it was `Norm`, and 3
+    /// (the same day) their texture coordinates `uv` where they were `UV`.
     /// `migrate_format` takes a file through each step it is behind, and a
     /// step must not run twice.
     #[serde(default)]
@@ -376,7 +377,7 @@ pub struct Project {
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 2;
+pub const PROJECT_FORMAT: u32 = 3;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -1204,7 +1205,10 @@ impl Project {
             self.migrate_param_refs();
         }
         if self.format < 2 {
-            self.migrate_norm_to_n();
+            self.rename_attribute("Norm", "N");
+        }
+        if self.format < 3 {
+            self.rename_attribute("UV", "uv");
         }
         self.format = PROJECT_FORMAT;
     }
@@ -1227,38 +1231,41 @@ impl Project {
         walk(&mut self.root);
     }
 
-    /// Format 1 → 2: the generators' normal attribute is `N`, as the Normal
-    /// node, the exporter and a wrangle's `@N` already named it, where the
-    /// Sphere, Box and Plane wrote `Norm`. What names it in a save follows:
-    /// a parameter naming an attribute (`ParamKind::Attribute`) that says
-    /// `Norm`, a name in a comma list of attributes (Transfer's and the
-    /// Remesh's `Attributes`), and `@Norm` in a wrangle's Code. Once, by
-    /// the version — an attribute someone names `Norm` after this is theirs.
-    fn migrate_norm_to_n(&mut self) {
-        fn walk(node: &mut FsNode) {
+    /// A step that renames an attribute the generators write, `old` to
+    /// `new` — format 1 → 2 `Norm` → `N` (as the Normal node, the exporter
+    /// and a wrangle's `@N` already named it), 2 → 3 `UV` → `uv` (the
+    /// lowercase every other built-in name has) — and what names it in a
+    /// save follows: a parameter naming an attribute
+    /// (`ParamKind::Attribute`) that says `old`, a name in a comma list of
+    /// attributes (Transfer's and the Remesh's `Attributes`), and `@old` in
+    /// a wrangle's Code. A choice row is not touched (the Sphere's Method
+    /// keeps its `UV` option). Once, by the version — an attribute someone
+    /// names `old` after this is theirs.
+    fn rename_attribute(&mut self, old: &str, new: &str) {
+        fn walk(node: &mut FsNode, old: &str, new: &str) {
             for p in &mut node.params {
                 if p.is_expr() {
                     continue;
                 }
                 let text = p.text().to_string();
-                let new = if p.kind() == ParamKind::Attribute && text.trim() == "Norm" {
-                    Some("N".to_string())
-                } else if p.name == "Attributes" && text.split(',').any(|a| a.trim() == "Norm") {
-                    Some(text.split(',').map(|a| if a.trim() == "Norm" { a.replace("Norm", "N") } else { a.to_string() }).collect::<Vec<_>>().join(","))
-                } else if p.kind() == ParamKind::Code && text.contains("@Norm") {
-                    Some(rename_at_attribute(&text, "Norm", "N"))
+                let renamed = if p.kind() == ParamKind::Attribute && text.trim() == old {
+                    Some(new.to_string())
+                } else if p.name == "Attributes" && text.split(',').any(|a| a.trim() == old) {
+                    Some(text.split(',').map(|a| if a.trim() == old { a.replace(old, new) } else { a.to_string() }).collect::<Vec<_>>().join(","))
+                } else if p.kind() == ParamKind::Code && text.contains(&format!("@{old}")) {
+                    Some(rename_at_attribute(&text, old, new))
                 } else {
                     None
                 };
-                if let Some(new) = new.filter(|n| *n != text) {
-                    p.set_text(new);
+                if let Some(renamed) = renamed.filter(|n| *n != text) {
+                    p.set_text(renamed);
                 }
             }
             for c in &mut node.children {
-                walk(c);
+                walk(c, old, new);
             }
         }
-        walk(&mut self.root);
+        walk(&mut self.root, old, new);
     }
 }
 

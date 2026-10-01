@@ -998,11 +998,14 @@ node's own parameter. It is a step of `Project::migrate_format`, which
 takes a file through every step it is behind. **Format 2** (2026-10-01):
 the generators' normal attribute is `N` — the Sphere, Box, Plane and
 their kin wrote `Norm`, where the Normal node, the exporter and a
-wrangle's `@N` already said `N` — and `migrate_norm_to_n` rewrites what
-names `Norm` in an older save: an attribute row, a name in a comma list of
-attributes (`Attributes`), `@Norm` in a wrangle's Code (not `@Normal`).
-Once, by the version, so an attribute someone names `Norm` afterwards is
-theirs (`a_save_naming_norm_names_n`). Templates go through
+wrangle's `@N` already said `N`. **Format 3** (the same day): their
+texture coordinates are `uv`, where they were `UV`. Both are
+`Project::rename_attribute` steps, which rewrite what names the old name
+in an older save: an attribute row, a name in a comma list of attributes
+(`Attributes`), `@old` in a wrangle's Code as a whole name (not `@Normal`,
+not `@UVW`) — and never a choice row, so the Sphere's Method keeps its
+`UV` option. Once, by the version, so an attribute someone names `Norm` or
+`UV` afterwards is theirs (`a_save_naming_norm_or_uv_names_n_or_uv`). Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
 (`embryo.json` says `chf("../Radius")` now). The same inference applies to a
 value typed into a plain row or scripted through `set_param`: a reference

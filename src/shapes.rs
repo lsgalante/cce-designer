@@ -113,7 +113,7 @@ pub fn sphere_node_detail(target: &FsNode, legacy_center: Option<Vec3>) -> Detai
     d
 }
 
-/// `N`, `UV` and `Cd` from the surface normal, as the sphere has always
+/// `N`, `uv` and `Cd` from the surface normal, as the sphere has always
 /// carried them. Colour is the kernel's: the SIGNED normal folded into
 /// 0..1, world-anchored so a point keeps its colour as the sphere turns.
 fn finish_sphere(d: &mut Detail, center: Vec3, colored: bool) {
@@ -129,7 +129,7 @@ fn finish_sphere(d: &mut Detail, center: Vec3, colored: bool) {
         .collect();
     let points = d.points_mut();
     let _ = points.insert("N", AttribData::Float3(norms));
-    let _ = points.insert("UV", AttribData::Float2(uvs));
+    let _ = points.insert("uv", AttribData::Float2(uvs));
     let _ = points.insert(CD, AttribData::Float3(cds));
 }
 
@@ -252,7 +252,7 @@ pub fn cuboid_detail(center: Vec3, half: Vec3, color: [f32; 3]) -> Detail {
         norms.extend(std::iter::repeat(normal.to_array()).take(4));
     }
     let _ = d.verts_mut().insert("N", AttribData::Float3(norms));
-    let _ = d.verts_mut().insert("UV", AttribData::Float2(vec![[0.0, 0.0]; 24]));
+    let _ = d.verts_mut().insert("uv", AttribData::Float2(vec![[0.0, 0.0]; 24]));
     let _ = d.points_mut().insert(CD, AttribData::Float3(vec![color; 8]));
     d
 }
@@ -327,7 +327,7 @@ pub fn plane_node_detail(target: &FsNode) -> Detail {
     let n = d.num_points();
     let points = d.points_mut();
     let _ = points.insert("N", AttribData::Float3(vec![[0.0, 1.0, 0.0]; n]));
-    let _ = points.insert("UV", AttribData::Float2(uvs));
+    let _ = points.insert("uv", AttribData::Float2(uvs));
     let _ = points.insert(CD, AttribData::Float3(cds));
     d
 }

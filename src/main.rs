@@ -686,13 +686,14 @@ mod tests {
         assert_eq!(serde_json::to_string(&proj).unwrap(), before);
     }
 
-    /// Format 1 → 2: the generators' normal attribute is `N`, and what names
-    /// `Norm` in a save follows it — an attribute row, a name in a comma
+    /// Format 1 → 2 and 2 → 3: the generators' normal attribute is `N`
+    /// and their texture coordinates `uv`, and what names `Norm` / `UV` in
+    /// a save follows them — an attribute row, a name in a comma
     /// list of attributes, `@Norm` in a wrangle (not `@Normal`) — once: a
     /// format-2 file naming `Norm` is left alone, since that attribute is
     /// someone's own.
     #[test]
-    fn a_save_naming_norm_names_n() {
+    fn a_save_naming_norm_or_uv_names_n_or_uv() {
         use crate::app::{FsNode, ParamDef, Project, PROJECT_FORMAT};
         let node = |name: &str, ty: &str, params: Vec<ParamDef>| FsNode {
             id: name.into(),
@@ -718,7 +719,7 @@ mod tests {
         assert_eq!(proj.format, PROJECT_FORMAT);
         let text = |proj: &Project, i: usize| proj.root.children[i].params[0].text().to_string();
         assert_eq!(text(&proj, 0), "N");
-        assert_eq!(text(&proj, 1), "Cd, N,UV");
+        assert_eq!(text(&proj, 1), "Cd, N,uv", "every step a file is behind: N, then uv");
         assert_eq!(text(&proj, 2), "@P += @N * 0.1; @Normal = 1;");
         assert_eq!(text(&proj, 3), "Normx", "only the whole name");
 
@@ -731,6 +732,23 @@ mod tests {
         // And the generators write N.
         let s = crate::geometry::sphere_detail(glam::Vec3::ZERO, 1.0, 4, 6);
         assert!(s.points().has("N") && !s.points().has("Norm"));
+
+        // Format 2 → 3: UV is uv, the same way; a choice row keeps its UV
+        // (the Sphere's Method), and a format-2 file takes only this step.
+        let mut root = node("root", "subnet", vec![]);
+        root.children = vec![
+            node("vis", "visualize", vec![ParamDef::new("Attribute", "attribute", "UV")]),
+            node("w", "wrangle", vec![ParamDef::new("Code", "code", "@P.y = @UV.x; @UVW = 1;")]),
+            node("ball", "sphere", vec![ParamDef::new("Method", "choice:UV,Icosphere,Cube", "UV")]),
+            node("n", "visualize", vec![ParamDef::new("Attribute", "attribute", "Norm")]),
+        ];
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 2 };
+        proj.migrate_format();
+        assert_eq!(text(&proj, 0), "uv");
+        assert_eq!(text(&proj, 1), "@P.y = @uv.x; @UVW = 1;");
+        assert_eq!(text(&proj, 2), "UV", "a choice is not an attribute");
+        assert_eq!(text(&proj, 3), "Norm", "a format-2 file is past the N step");
+        assert!(s.points().has("uv") && !s.points().has("UV"));
     }
 
     #[test]
@@ -3700,7 +3718,7 @@ mod tests {
             let r = (pos[0].powi(2) + (pos[1] - 0.55).powi(2) + pos[2].powi(2)).sqrt();
             assert!((r - 0.5).abs() < 1e-4, "point {pos:?} is {r} from the centre");
         }
-        assert!(geom.points().has("N") && geom.points().has("UV") && geom.points().has("Cd"));
+        assert!(geom.points().has("N") && geom.points().has("uv") && geom.points().has("Cd"));
     }
 
     /// The native curve node: a Catmull-Rom strip through the "Points"
@@ -4102,7 +4120,7 @@ mod tests {
             let mid = pts.iter().map(|&q| g.pos(q as usize)).sum::<Vec3>() / pts.len() as f32;
             assert!(n.dot(mid - centre) > 0.0, "primitive {pr} faces inward");
         }
-        assert!(g.points().has("Cd") && g.points().has("UV"), "point attributes ride to the top");
+        assert!(g.points().has("Cd") && g.points().has("uv"), "point attributes ride to the top");
 
         let root2 = ref_node("root", "root", "node", vec![], vec![plane, extrude("false")]);
         let g2 = eval(&root2, &root2.children[1]).0.unwrap();
@@ -4491,7 +4509,7 @@ mod tests {
         };
         let attr_ty = row("Attribute Name");
         assert!(attr_ty.starts_with("textpick:"), "got {attr_ty}");
-        for expected in ["N", "UV", "Pos", "Col"] {
+        for expected in ["N", "uv", "Pos", "Col"] {
             assert!(attr_ty.contains(expected), "{expected} missing from {attr_ty}");
         }
         assert_eq!(row("Group"), "textpick:group1");
@@ -5824,9 +5842,9 @@ mod tests {
         // A box line fans to 36 renderer vertices: 6 faces * 2 triangles * 3 corners.
         assert_eq!(detail_vertices(&d).len(), 36);
 
-        // N and UV ride the vertices, one per corner.
+        // N and uv ride the vertices, one per corner.
         assert!(d.verts().has("N"));
-        assert!(d.verts().has("UV"));
+        assert!(d.verts().has("uv"));
     }
 
     /// The reference cube guide is gone, and nothing that used to carry it
@@ -16732,7 +16750,7 @@ mod tests {
     /// presents it as a control as wide as its target — over the wide
     /// span around its value (`value_row_span`) — a slider for one, the float group with two, three
     /// or four rows for more: Modify on Pos (the pull node), on an input
-    /// Float3 (N) or Float2 (UV), Create by its Type. A single number is
+    /// Float3 (N) or Float2 (uv), Create by its Type. A single number is
     /// spread over the components, as the node spreads it, and the pane
     /// writing it back unchanged is not an edit. A text that fits no width,
     /// an attribute the input lacks and an expression keep the text box;
@@ -16777,7 +16795,7 @@ mod tests {
         };
         set(&mut state, "Attribute Name", "N");
         assert_eq!(value_row(&mut state), wide, "Modify on an input Float3");
-        set(&mut state, "Attribute Name", "UV");
+        set(&mut state, "Attribute Name", "uv");
         assert_eq!(value_row(&mut state), "text", "three numbers do not fit an input Float2");
         set(&mut state, "Value", "1:2");
         assert_eq!(value_row(&mut state), "float2:-10:10:soft", "Modify on an input Float2: 2 needs ±10");

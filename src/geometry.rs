@@ -290,7 +290,7 @@ pub fn smooth_lit_vertices(d: &Detail) -> Vec<Vertex3D> {
 /// express neither: it emitted `lat_steps * lon_steps * 6` loose corners, of
 /// which the two pole bands were zero-area triangles.
 ///
-/// `N` and `UV` are POINT attributes, computed from the surface normal
+/// `N` and `uv` are POINT attributes, computed from the surface normal
 /// exactly as before. Both are pure functions of the normal, so a welded point
 /// has one answer — including at the seam, where the old per-corner UVs
 /// already agreed because they were derived from the normal rather than from
@@ -363,7 +363,7 @@ pub fn sphere_detail(center: Vec3, radius: f32, lat_steps: usize, lon_steps: usi
         .collect();
     let points = d.points_mut();
     let _ = points.insert("N", AttribData::Float3(norms));
-    let _ = points.insert("UV", AttribData::Float2(uvs));
+    let _ = points.insert("uv", AttribData::Float2(uvs));
     let _ = points.insert(CD, AttribData::Float3(cds));
     d
 }
@@ -437,7 +437,7 @@ pub fn box_detail(start: Vec3, end: Vec3, thickness: f32) -> Detail {
     let _ = d.verts_mut().insert("N", AttribData::Float3(norms));
     let _ = d
         .verts_mut()
-        .insert("UV", AttribData::Float2(vec![[0.0, 0.0]; num_verts]));
+        .insert("uv", AttribData::Float2(vec![[0.0, 0.0]; num_verts]));
     // A distinct color for lines.
     let _ = d
         .points_mut()
@@ -9500,14 +9500,14 @@ mod simnet_tests {
         }
 
         // Scale By: each point by its own value of the attribute — the
-        // sphere's UV, whose first component runs around it — times Strength.
-        let root = pull_of(vec![("Strength", "0.50"), ("Scale By", "UV")], "Add", "0.00:0.06:0.00");
+        // sphere's uv, whose first component runs around it — times Strength.
+        let root = pull_of(vec![("Strength", "0.50"), ("Scale By", "uv")], "Add", "0.00:0.06:0.00");
         let base = eval(&root, "Sphere 1");
         let (d, err) = moved_by(&root, 1);
         assert!(err.is_none(), "{err:?}");
         let mut weights = Vec::new();
         for (p, moved) in d.iter().enumerate() {
-            let w = base.points().value("UV", p).expect("the sphere carries UV").as_f32();
+            let w = base.points().value("uv", p).expect("the sphere carries uv").as_f32();
             assert!(moved.distance(up * 0.5 * w) < 1e-5, "point {p} weighs {w}: {moved:?}");
             weights.push(w);
         }
