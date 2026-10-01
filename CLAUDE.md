@@ -52,13 +52,13 @@ gone.)
   with the main window by autosaving/polling `default_project.json` mtime (see the
   main loop in `src/main.rs`) — there is no socket between the two.
 - `cce-designer --detached-params` / `--detached-spreadsheet` / `--detached-playbar`
-  — the same idea for the other plates (`plate_corner::pane_detach_flag`), spawned by
-  the plate corner menu's Detach. These windows are plain rectangles with standard CSD
+  — the same idea for the other plates (`plate_menu::pane_detach_flag`), spawned by
+  the plate menu's Detach. These windows are plain rectangles with standard CSD
   and no 3D canvas; `--detached-network` stays its own flag because that window is
   CIRCULAR, with a radial border resize no rectangular pane wants. All of them share
   the one `default_project.json` sync channel, and only the main window runs the MCP
-  server. The parent keeps a stub for each pane it handed out — that stub's corner
-  control is the only way to Reattach — and reaps its children with `try_wait` from
+  server. The parent keeps a stub for each pane it handed out — a right press on
+  that stub is the only way to Reattach — and reaps its children with `try_wait` from
   the frame tick, so a window the user closes hands its pane back. NOT `kill(pid, 0)`:
   an unreaped exited child is a zombie, which that probe calls alive forever.
   The main window's reload of that channel takes the TREE and navigation only
@@ -245,16 +245,26 @@ gone from cce-ui with the wgpu path).
   writes its settings back. See "The dialog (Alt+D)" below — three of its four
   hard parts are about paint order and occlusion, none of which is guessable
   from the widget.
-- `src/plate_corner.rs` — the plate corner control: a circular menu trigger on the
-  top-right of each pane that draws its own plate (`PLATE_SLOTS` — network, params,
-  spreadsheet, playbar; NOT the viewport, whose plate is the window-spanning lip).
-  Geometry is derived from the slot's live rect, so it holds across all three
-  `rebuild_positions` branches; the circular network pane is special-cased onto its
-  arc. The menu is a fourth `cce_ui::widget::context_menu` consumer alongside the node,
-  viewport and network right-click menus, with the same `*_menu_actions` +
-  `handle_*_menu_click` contract. Collapse shrinks a plate to its title stub via `apply_collapsed_panes`, a
-  post-pass over `positions[..]` (one place, all three branches); the stub is exempt
-  from the minimum-span guard or it would lose the control that expands it again.
+- `src/plate_menu.rs` — the plate menu: what can be done to a pane's PLATE
+  (`PLATE_SLOTS` — network, params, spreadsheet, playbar, network 2; NOT the
+  viewport, whose plate is the window-spanning lip) — Collapse/Expand, Detach/
+  Reattach, Full Width, the selection pins, the dock's tabs, Add Tab, Move To Own
+  Plate, **Move To Left/Right/Bottom** and Close Tab. `plate_menu_rows(idx)` is the
+  one list. **There is no corner trigger** (since 2026-10-01; it was a small
+  circle on each plate's top-right, which opened these rows as a menu of their
+  own and, DRAGGED, moved the pane to another dock — the drag, its drop
+  highlight and `AppDrag::DockDrag` went with it, and Move To is the rows'
+  replacement). The rows are in each plate's RIGHT-CLICK menu: appended under
+  the network editor's empty-space menu (`NetworkMenuAction::Plate`) and the
+  playbar's (`PlaybarMenuAction::Plate`), and the whole menu where a pane has
+  none of its own — the params pane off a row, the spreadsheet, the second
+  network editor (`open_plate_menu`, at the pointer). A row from any of them runs
+  through `run_plate_menu_action`, whose Add Tab / Back page swaps open where the
+  menu stood. Collapse shrinks a plate to its title stub via
+  `apply_collapsed_panes`, a post-pass over `positions[..]` (one place, all three
+  branches); a LEFT press on a collapsed stub expands it, and a right press on any
+  stub (collapsed or detached) opens its plate menu. `a_plates_rows_are_in_its_right_click_menu`
+  is the test.
 - `src/application.rs` — the `Application` impl: translates engine hooks into
   `WindowEvent`s, detached-window CSD, HTTP-server startup, exit autosave.
 - `src/window.rs` — `WindowEvent` plus the post-event side-effect pass
@@ -3397,7 +3407,7 @@ compresses as configured.
 high `z_order` is not enough: `append_frame_text`, `append_scale_readout` and the
 point-number overlay all run AFTER the whole walk, so the graph's node labels drew
 straight over a dialog that had already covered them. `append_dialog` runs
-between the plate corners and the context menu instead.
+after the popovers, before the context menu, instead.
 
 **And even that is not enough, because text is not painted in display-list
 order.** The engine collects every `Prim::Text` and lays them all out at the end,
@@ -3452,7 +3462,7 @@ branches: `dialog_key_input` is TOTAL rather than a layer, because the network
 pane's bare-letter family is ungated and typing "frame" into the filter would
 otherwise step the grid cursor four times and flip a node's geometry toggle on
 the way past. A press outside the plate dismisses and is swallowed, the way the
-node and plate-corner menus behave.
+node and plate menus behave.
 
 **Nothing in this crate shells out to `cce-cloud` any more**, and
 `nothing_shells_out_to_cce_cloud_any_more` scans the source to keep it that

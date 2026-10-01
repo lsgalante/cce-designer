@@ -194,14 +194,12 @@ impl State {
         self.append_scale_readout(&mut pc);
         self.append_viewer_state_overlay(&mut pc);
         self.append_popovers(&mut pc);
-        self.append_dock_drag_overlay(&mut pc);
-        self.append_plate_corners(&mut pc);
         // Above every pane AND every overlay text pass, below only the context
         // menu — which can be opened from inside it.
         self.append_dialog(&mut pc, show_cursor, &mut visited, clip);
 
-        // The context menu (node/viewport right-click AND the plate corner
-        // menus — one shared state) floats above everything, drawn last as
+        // The context menu (every right-click menu, the plate menus
+        // included — one shared state) floats above everything, drawn last as
         // the toolkit's lit plate: rounded, translucent, frosted — the
         // material every other floating surface wears. NOT the legacy
         // extra_quads loop, which is the square opaque pre-frost look.
@@ -234,8 +232,8 @@ impl State {
             return;
         }
 
-        // A collapsed pane is its title stub and nothing else: the plate, the
-        // name, and (from the later corner pass) the control that restores it.
+        // A collapsed pane is its title stub and nothing else: the plate and
+        // the name. A press on it restores it; a right press, its plate menu.
         // Returning here is what suppresses the body — the params rows, the
         // spreadsheet grid, the transport controls — rather than relying on
         // each pane's own clip to hide content taller than the stub.
@@ -244,8 +242,8 @@ impl State {
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(sx, sy, sw, sh));
             let font_size = 12.0;
             let ty = cce_ui::layout::align_text_y(sy, sh, font_size, 0.0);
-            // Bounds stop at the corner control so a long name cannot run under it.
-            let text_right = sx + sw - 2.0 * crate::plate_corner::CORNER_INSET;
+            // Bounds stop a margin short of the stub's end.
+            let text_right = sx + sw - 12.0;
             pc.text_with(
                 stub_label,
                 sx + 12.0,
@@ -880,43 +878,6 @@ impl State {
 
     }
 
-    /// Open popovers (the params pane's expanded dropdowns), background then
-    /// text per widget. Appended after `append_frame_text` so the popover
-    /// occludes the widget labels underneath it — the display list is drawn
-    /// strictly in order, so a popover background emitted in the geometry
-    /// pass would sit under every label.
-    /// The plates' corner menu triggers, drawn above pane content but below an
-    /// open context menu: a solid dot in the plate's border color — one color,
-    /// like the graph's port dots and geometry toggles — growing slightly on
-    /// hover (and while its menu is open) instead of changing tint.
-    /// The dock-drop highlight while a plate is being dragged by its dot: the
-    /// region the release would snap it into, tinted and outlined.
-    fn append_dock_drag_overlay(&self, pc: &mut PaintCtx) {
-        let (Some(crate::app::AppDrag::DockDrag { .. }), Some(target)) = (self.app_drag, self.dock_drag_target) else {
-            return;
-        };
-        let (x, y, w, h) = self.dock_rect(target);
-        if w <= 0.0 || h <= 0.0 {
-            return;
-        }
-        let hl = colors::highlight_primary_color();
-        let r = cce_ui::layout::plate_corner_radius();
-        pc.rounded_rect(rect(x, y, w, h), r, (true, true, true, true), [hl[0], hl[1], hl[2], 0.12]);
-        pc.border(rect(x, y, w, h), (r, r, r, r), [0.0; 4], [hl[0], hl[1], hl[2], 0.8], 2.0);
-    }
-
-    fn append_plate_corners(&self, pc: &mut PaintCtx) {
-        let hovered = self.plate_corner_at(self.cursor_x, self.cursor_y);
-        for idx in crate::plate_corner::PLATE_SLOTS {
-            let Some(c) = self.plate_corner_center(idx) else { continue };
-            cce_ui::widget::plate_dock::draw_corner_dot(
-                pc,
-                c,
-                hovered == Some(idx) || self.plate_menu_slot == Some(idx),
-            );
-        }
-    }
-
     /// The Alt+D dialog, last of the pane content: its plate and command list,
     /// its settings body, and that body's popovers.
     ///
@@ -939,6 +900,11 @@ impl State {
         self.paint_widget(DIALOG_IDX, pc, show_cursor, visited, clip, None);
     }
 
+    /// Open popovers (the params pane's expanded dropdowns), background then
+    /// text per widget. Appended after `append_frame_text` so the popover
+    /// occludes the widget labels underneath it — the display list is drawn
+    /// strictly in order, so a popover background emitted in the geometry
+    /// pass would sit under every label.
     fn append_popovers(&self, pc: &mut PaintCtx) {
         for i in 0..WIDGET_COUNT {
             let w = self.slots.get_dyn(i);

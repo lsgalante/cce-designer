@@ -572,14 +572,14 @@ impl State {
                 }
             }
             McpAction::SetPaneCollapsed { pane, collapsed } => {
-                let idx = crate::plate_corner::pane_slot_from_name(&pane)
+                let idx = crate::plate_menu::pane_slot_from_name(&pane)
                     .ok_or_else(|| format!("unknown pane: {pane}"))?;
                 state.set_pane_collapsed(idx, collapsed);
                 needs_redraw = true;
                 Ok(format!("{pane} collapsed={collapsed}"))
             }
             McpAction::SetPaneDetached { pane, detached } => {
-                let idx = crate::plate_corner::pane_slot_from_name(&pane)
+                let idx = crate::plate_menu::pane_slot_from_name(&pane)
                     .ok_or_else(|| format!("unknown pane: {pane}"))?;
                 state.set_pane_detached(idx, detached);
                 needs_redraw = true;

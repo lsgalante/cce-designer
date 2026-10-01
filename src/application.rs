@@ -150,7 +150,7 @@ impl Application for State {
     ) -> Self {
         let is_detached_network = std::env::args().any(|arg| arg == "--detached-network");
         let detached_pane = std::env::args()
-            .find_map(|arg| crate::plate_corner::pane_from_detach_flag(&arg));
+            .find_map(|arg| crate::plate_menu::pane_from_detach_flag(&arg));
         let mut state = State::new(is_detached_network);
         if let Some(idx) = detached_pane {
             // Set after construction, so the layout that `State::new` already
@@ -179,7 +179,7 @@ impl Application for State {
         let (app_id, min_size) = if self.is_detached_network {
             ("circular-network-pane", (200, 200))
         } else if let Some(idx) = self.detached_pane {
-            (crate::plate_corner::pane_app_id(idx), (240, 160))
+            (crate::plate_menu::pane_app_id(idx), (240, 160))
         } else {
             ("cce-designer", (480, 320))
         };

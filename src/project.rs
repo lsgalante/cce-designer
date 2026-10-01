@@ -100,10 +100,10 @@ impl State {
     /// camera/pan fields. Visibility rode the root meta node's View subnet
     /// params into the file until that node was retired.
     pub(crate) fn project_view_state(&self) -> ProjectViewState {
-        let collapsed_panes = crate::plate_corner::PLATE_SLOTS
+        let collapsed_panes = crate::plate_menu::PLATE_SLOTS
             .iter()
             .filter(|&&i| self.collapsed_panes[i])
-            .filter_map(|&i| crate::plate_corner::pane_name_from_slot(i))
+            .filter_map(|&i| crate::plate_menu::pane_name_from_slot(i))
             .map(str::to_string)
             .collect();
         let splitters = if self.width > 1.0 {
@@ -120,12 +120,12 @@ impl State {
             .map(|d| {
                 let active = self.dock_panes[d];
                 let mut names: Vec<String> = Vec::new();
-                if let Some(n) = crate::plate_corner::pane_name_from_slot(active) {
+                if let Some(n) = crate::plate_menu::pane_name_from_slot(active) {
                     names.push(n.to_string());
                 }
                 for &t in &self.dock_tabs[d] {
                     if t != active {
-                        if let Some(n) = crate::plate_corner::pane_name_from_slot(t) {
+                        if let Some(n) = crate::plate_menu::pane_name_from_slot(t) {
                             names.push(n.to_string());
                         }
                     }
@@ -347,8 +347,8 @@ impl State {
         }
         // Absent names expand: an older save (no collapse list) loads with
         // every pane open rather than inheriting this session's collapses.
-        for &idx in crate::plate_corner::PLATE_SLOTS.iter() {
-            let desired = crate::plate_corner::pane_name_from_slot(idx)
+        for &idx in crate::plate_menu::PLATE_SLOTS.iter() {
+            let desired = crate::plate_menu::pane_name_from_slot(idx)
                 .map_or(false, |n| vs.collapsed_panes.iter().any(|c| c == n));
             self.set_pane_collapsed(idx, desired);
         }
@@ -366,7 +366,7 @@ impl State {
                 .map(|names| {
                     names
                         .iter()
-                        .filter_map(|n| crate::plate_corner::pane_slot_from_name(n))
+                        .filter_map(|n| crate::plate_menu::pane_slot_from_name(n))
                         .collect()
                 })
                 .collect();

@@ -511,6 +511,8 @@ pub enum PlaybarMenuAction {
     StartFrameSlider,
     /// The frame range's far end, 2–1000 by one; kept above the near end.
     EndFrameSlider,
+    /// A row of the playbar's plate menu (Collapse, Detach).
+    Plate(crate::plate_menu::PlateMenuAction),
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -523,6 +525,9 @@ pub enum PlaybarMenuAction {
 pub enum NetworkMenuAction {
     /// Run `command::by_id(id)` — the row's label came from the same row.
     Command(&'static str),
+    /// A row of the network pane's plate menu: collapse, detach, its dock's
+    /// tabs, Move To.
+    Plate(crate::plate_menu::PlateMenuAction),
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -2155,12 +2160,6 @@ pub enum AppDrag {
     SpreadsheetResizeLeft { start_inset: f32, start_mouse_x: f32 },
     /// The spreadsheet's right edge, symmetrically, tucking under the parameter pane.
     SpreadsheetResizeRight { start_inset: f32, start_mouse_x: f32 },
-    /// Dragging a plate's corner dot repositions the plate: the dock region
-    /// under the cursor highlights, and release snaps the plate there,
-    /// swapping with whatever pane held that dock. Armed from a press on the
-    /// dot once motion exceeds the click threshold; a clean click still opens
-    /// the menu. (Sizing stays on the pane edge hotspots.)
-    DockDrag { idx: usize },
 }
 
 #[repr(C)]
@@ -2374,25 +2373,21 @@ pub struct State {
     /// Frame the scene was last built at, so the timeline moving can invalidate it.
     pub last_sim_frame: i32,
     pub plate_menu_slot: Option<usize>,
-    pub plate_menu_actions: Vec<crate::plate_corner::PlateMenuAction>,
+    pub plate_menu_actions: Vec<crate::plate_menu::PlateMenuAction>,
     /// Panes shrunk to their title stub, indexed by slot. Only the
-    /// `plate_corner::PLATE_SLOTS` entries are ever set.
+    /// `plate_menu::PLATE_SLOTS` entries are ever set.
     pub collapsed_panes: [bool; WIDGET_COUNT],
-    /// A press on a plate corner dot, not yet resolved into click-opens-menu
-    /// or drag-repositions-plate: `(slot, press_x, press_y)`.
-    pub corner_press: Option<(usize, f32, f32)>,
-    /// Dock occupancy, indexed Left/Right/Bottom. Swapped by dot drags.
+    /// Dock occupancy, indexed Left/Right/Bottom. Swapped by the plate
+    /// menu's Move To rows.
     /// With tabs this names each dock's ACTIVE pane — always a member of the
     /// dock's `dock_tabs` list — or [`NO_PANE`] for a dock whose tabs were
     /// all pulled elsewhere.
     pub dock_panes: [usize; 3],
     /// The panes tabbed into each dock, indexed Left/Right/Bottom. One dock
     /// rect, several panes: only the active one (`dock_panes`) is laid out;
-    /// the rest wait as tabs, switched and moved through the plate corner
+    /// the rest wait as tabs, switched and moved through the plate
     /// menus. Every docked pane lives in exactly ONE dock's list.
     pub dock_tabs: [Vec<usize>; 3],
-    /// The dock a live DockDrag would drop into — the render pass highlights it.
-    pub dock_drag_target: Option<Dock>,
 
     pub drag_widget: Option<usize>,
     /// Where the pointer pressed when `drag_widget` armed — the drag
@@ -3678,37 +3673,6 @@ impl State {
         self.pane_shown(self.pane_in_dock(dock))
     }
 
-    /// The dock a cursor position drops into: the lower band is the bottom
-    /// strip, the rest splits into left and right halves.
-    pub fn dock_region_at(&self, cx: f32, cy: f32) -> Dock {
-        if cy > self.height * 0.62 {
-            Dock::Bottom
-        } else if cx < self.width * 0.5 {
-            Dock::Left
-        } else {
-            Dock::Right
-        }
-    }
-
-    /// A dock's current rect from the DOCK-owned dimensions — independent of
-    /// whether its pane is shown, so the drag overlay can highlight it.
-    pub fn dock_rect(&self, dock: Dock) -> (f32, f32, f32, f32) {
-        let gap = 18.0_f32;
-        let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
-        match dock {
-            Dock::Left => {
-                let (fx, fy, _, fh) = self.floating_network_layout;
-                (fx.max(gap), fy.max(gap), self.left_dock_width(), fh)
-            }
-            Dock::Right => {
-                let param_w = self.right_dock_width();
-                let h = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
-                (self.width - gap - param_w, gap, param_w, h)
-            }
-            Dock::Bottom => self.floating_spreadsheet_rect(),
-        }
-    }
-
     /// Move a plate to a dock, swapping with the pane that held it. The
     /// dock-owned dimensions stay put, so the geometry survives the swap.
     /// With tabs, the whole GROUPS trade places — a dot drag moves the
@@ -3902,7 +3866,6 @@ impl State {
             return Some(match drag {
                 AppDrag::NetworkResize { dir, .. } => dir_cursor(dir),
                 AppDrag::ParamResize { .. } => CursorIcon::EwResize,
-                AppDrag::DockDrag { .. } => CursorIcon::Grabbing,
                 AppDrag::SpreadsheetResize { .. } => CursorIcon::NsResize,
                 AppDrag::SpreadsheetResizeLeft { .. } | AppDrag::SpreadsheetResizeRight { .. } => {
                     CursorIcon::EwResize
@@ -5557,6 +5520,12 @@ impl State {
         row(&mut options, &mut actions, "Playback Rate", PlaybarMenuAction::FpsSlider);
         row(&mut options, &mut actions, "Start Frame", PlaybarMenuAction::StartFrameSlider);
         row(&mut options, &mut actions, "End Frame", PlaybarMenuAction::EndFrameSlider);
+        let (plate, plate_actions) = self.plate_menu_rows(PLAYBAR_IDX);
+        if !plate.is_empty() {
+            row(&mut options, &mut actions, "-", PlaybarMenuAction::Separator);
+            options.extend(plate);
+            actions.extend(plate_actions.into_iter().map(PlaybarMenuAction::Plate));
+        }
         (options, actions)
     }
 
@@ -5638,9 +5607,12 @@ impl State {
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = idx.and_then(|i| self.playbar_menu_actions.get(i).copied());
+            let at = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
             self.close_playbar_menu();
-            if let Some(action) = picked {
-                self.run_playbar_menu_action(action);
+            match picked {
+                Some(PlaybarMenuAction::Plate(a)) => self.run_plate_menu_action(PLAYBAR_IDX, a, at),
+                Some(action) => self.run_playbar_menu_action(action),
+                None => {}
             }
             return true;
         }
@@ -5649,8 +5621,12 @@ impl State {
     }
 
     pub(crate) fn run_playbar_menu_action(&mut self, action: PlaybarMenuAction) {
-        if let PlaybarMenuAction::Command(id) = action {
-            self.run_command(id);
+        match action {
+            PlaybarMenuAction::Command(id) => {
+                self.run_command(id);
+            }
+            PlaybarMenuAction::Plate(a) => self.run_plate_menu_action(PLAYBAR_IDX, a, (self.cursor_x, self.cursor_y)),
+            _ => {}
         }
     }
 
@@ -6313,6 +6289,14 @@ impl State {
             options.pop();
             actions.pop();
         }
+        // The network pane's plate rows, below the graph's own.
+        let (plate, plate_actions) = self.plate_menu_rows(NETWORK_PANEL_IDX);
+        if !plate.is_empty() {
+            options.push("-".to_string());
+            actions.push(NetworkMenuAction::Separator);
+            options.extend(plate);
+            actions.extend(plate_actions.into_iter().map(NetworkMenuAction::Plate));
+        }
 
         let target = self.slots.get_dyn(CONTENT_IDX).base().id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, 0, target);
@@ -6351,6 +6335,7 @@ impl State {
                 Some(NetworkMenuAction::Command(id)) => {
                     self.run_command(id);
                 }
+                Some(NetworkMenuAction::Plate(a)) => self.run_plate_menu_action(NETWORK_PANEL_IDX, a, corner),
                 _ => {}
             }
             return true;
@@ -7486,14 +7471,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
             collapsed_panes: [false; WIDGET_COUNT],
-            corner_press: None,
             dock_panes: [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX],
             dock_tabs: [
                 vec![NETWORK_PANEL_IDX],
                 vec![PARAM_IDX],
                 vec![SPREADSHEET_IDX],
             ],
-            dock_drag_target: None,
             drag_widget: None,
             drag_press_cursor: None,
             focused_widget: None,
@@ -9971,24 +9954,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     return self.grid_cursor_drag_motion();
                 }
 
-                // An armed corner-dot press becomes a layout drag once it
-                // moves; stubbed (collapsed/detached) panes stay click-only.
-                if let Some((idx, px, py)) = self.corner_press {
-                    if cce_ui::widget::plate_dock::press_becomes_drag(
-                        (px, py),
-                        (self.cursor_x, self.cursor_y),
-                    ) {
-                        self.corner_press = None;
-                        if !self.pane_is_stubbed(idx) && idx != PLAYBAR_IDX {
-                            self.app_drag = Some(AppDrag::DockDrag { idx });
-                            self.dock_drag_target = Some(self.dock_region_at(self.cursor_x, self.cursor_y));
-                            if std::env::var("CCE_DOCK_DEBUG").is_ok() {
-                                eprintln!("[dock] drag start slot={idx} target={:?}", self.dock_drag_target);
-                            }
-                        }
-                    }
-                }
-
                 if self.is_panning {
                     let dx = self.cursor_x - self.pan_start_cx;
                     let dy = self.cursor_y - self.pan_start_cy;
@@ -10072,17 +10037,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 self.apply_layout();
                                 self.sync_grid_settings();
                                 changed = true;
-                            }
-                            AppDrag::DockDrag { idx } => {
-                                let _ = idx;
-                                let target = self.dock_region_at(self.cursor_x, self.cursor_y);
-                                if std::env::var("CCE_DOCK_DEBUG").is_ok() {
-                                    eprintln!("[dock] motion ({:.0},{:.0}) -> {target:?}", self.cursor_x, self.cursor_y);
-                                }
-                                if self.dock_drag_target != Some(target) {
-                                    self.dock_drag_target = Some(target);
-                                    changed = true;
-                                }
                             }
                             AppDrag::SpreadsheetResizeRight { start_inset, start_mouse_x } => {
                                 // The right edge tucks under the parameter pane, symmetrically.
@@ -10292,16 +10246,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 return true;
                             }
                         }
-                        // A press ON a corner control arms click-vs-drag: a
-                        // clean release opens the menu, motion past the
-                        // threshold becomes a layout drag. Either way the
-                        // press never reaches the pane underneath.
-                        if *button == MouseButton::Left {
-                            if let Some(idx) = self.plate_corner_at(self.cursor_x, self.cursor_y) {
-                                if std::env::var("CCE_DOCK_DEBUG").is_ok() {
-                                    eprintln!("[dock] armed corner press slot={idx} at ({:.0},{:.0})", self.cursor_x, self.cursor_y);
-                                }
-                                self.corner_press = Some((idx, self.cursor_x, self.cursor_y));
+                        // A plate drawn as its stub has nothing in it but its
+                        // title: a left press on a collapsed one expands it,
+                        // and a right press on either kind opens its plate
+                        // menu (Expand, or a detached pane's Reattach).
+                        if let Some(idx) = self.plate_at(self.cursor_x, self.cursor_y).filter(|&i| self.pane_is_stubbed(i)) {
+                            if *button == MouseButton::Left && !self.pane_is_detached(idx) {
+                                self.set_pane_collapsed(idx, false);
+                                return true;
+                            }
+                            if *button == MouseButton::Right {
+                                self.close_node_menu();
+                                self.close_viewport_menu();
+                                self.close_network_menu();
+                                self.close_param_menu();
+                                self.open_plate_menu(idx);
                                 return true;
                             }
                         }
@@ -10367,6 +10326,19 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 self.close_viewport_menu();
                                 self.close_network_menu();
                                 self.open_playbar_context_menu();
+                                return true;
+                            }
+                            // A plate with no context menu of its own — the
+                            // params pane off a row, the spreadsheet, the
+                            // second network editor — has its plate menu.
+                            if let Some(idx) = self
+                                .plate_at(self.cursor_x, self.cursor_y)
+                                .filter(|&i| matches!(i, PARAM_IDX | SPREADSHEET_IDX | crate::slots::NETWORK_PANEL2_IDX))
+                            {
+                                self.close_node_menu();
+                                self.close_viewport_menu();
+                                self.close_network_menu();
+                                self.open_plate_menu(idx);
                                 return true;
                             }
                         }
@@ -10824,18 +10796,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 AppDrag::SpreadsheetResize { .. }
                                 | AppDrag::SpreadsheetResizeLeft { .. }
                                 | AppDrag::SpreadsheetResizeRight { .. } => SPREADSHEET_IDX,
-                                AppDrag::DockDrag { idx } => idx,
                             };
-                            // Dock drop: snap the dragged plate into the
-                            // highlighted region, swapping occupants.
-                            if let AppDrag::DockDrag { idx } = drag {
-                                if let Some(target) = self.dock_drag_target.take() {
-                                    if std::env::var("CCE_DOCK_DEBUG").is_ok() {
-                                        eprintln!("[dock] drop slot={idx} into {target:?} (was {:?})", self.dock_of_pane(idx));
-                                    }
-                                    self.move_pane_to_dock(idx, target);
-                                }
-                            }
                             {
                                 let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
@@ -10847,16 +10808,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 drag,
                                 AppDrag::NetworkResize { .. }
                                     | AppDrag::SpreadsheetResizeLeft { .. }
-                                    | AppDrag::DockDrag { .. }
                             ) {
                                 self.read_panel_offsets();
                             }
-                            changed = true;
-                        }
-                        // A corner-dot press that never became a drag is a
-                        // click: open that plate's menu now, on release.
-                        if let Some((idx, _, _)) = self.corner_press.take() {
-                            self.open_plate_menu(idx);
                             changed = true;
                         }
                         if self.drag_widget.is_some() {

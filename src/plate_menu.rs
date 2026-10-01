@@ -1,32 +1,28 @@
-//! The plate corner control: a small circular menu trigger riding the top-right
-//! of every pane that draws a plate of its own, and the menu it opens.
+//! The plate menu: what can be done to a pane's PLATE — collapse, detach,
+//! its dock's tabs, where it is docked — as rows of that pane's right-click
+//! menu.
 //!
-//! Geometry is derived from the slot's LIVE rect rather than computed alongside
-//! `positions[..]`, because `rebuild_positions` lays the panes out in three
-//! different branches (normal, circular network, detached window) and a corner
-//! computed per-branch would be three things to keep in step. The circular
-//! network pane is the one shape whose "top-right" is not a rect corner, so it
-//! is special-cased onto the arc.
+//! Until 2026-10-01 these rows were a menu of their own, opened by a small
+//! circular trigger on the top-right of every plate (and that trigger, dragged,
+//! moved the pane to another dock). The trigger is gone: the rows are appended
+//! to the plate's own context menu where it has one (the network editor's,
+//! the playbar's) and make up the whole menu where it has none (the params
+//! pane off a row, the spreadsheet, the second network editor, and a
+//! collapsed or detached plate's stub). Moving a pane to another dock is a
+//! row too, `Move To …`, which swaps it with what is there as the drag did.
 //!
-//! The control follows the DE's closed-menu-trigger language (see
-//! `cce-ui`'s popover conventions): a transparent face over an inset trough,
-//! here on a fully-round radius so the trough reads as a ring.
+//! [`State::plate_menu_rows`] is the one list; [`State::open_plate_menu_at`]
+//! shows it alone, and a pane with a menu of its own appends it, dispatching
+//! a pick through [`State::run_plate_menu_action`].
 
-use crate::app::State;
+use crate::app::{Dock, State};
 use crate::slots::{
     NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT,
 };
-
-/// Radius of the control itself.
-// The affordance's geometry and protocol are toolkit-owned since cce-ui RFC
-// Phase 7c generalized this file's machinery (`cce_ui::widget::plate_dock`);
-// the constants re-export so the designer's draw/hit code keeps its names.
-pub use cce_ui::widget::plate_dock::{CORNER_INSET, CORNER_R, MIN_PLATE_SPAN};
 use cce_ui::widget::plate_dock::{self, PlateDockAction, PlateDockState};
 
-/// The plates that carry a corner control. The viewport is deliberately absent:
-/// its "plate" is the window-spanning lip, so a top-right control would sit on
-/// the window corner rather than on a pane.
+/// The plates that carry a plate menu. The viewport is deliberately absent:
+/// its "plate" is the window-spanning lip, not a pane.
 pub const PLATE_SLOTS: [usize; 5] =
     [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX, NETWORK_PANEL2_IDX];
 
@@ -36,7 +32,7 @@ pub const PLATE_SLOTS: [usize; 5] =
 pub const TAB_CANDIDATES: [usize; 4] =
     [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, NETWORK_PANEL2_IDX];
 
-/// What the corner menu can do to its plate.
+/// What the plate menu can do to its plate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlateMenuAction {
     /// Shrink the plate to its title stub (or restore it).
@@ -58,58 +54,22 @@ pub enum PlateMenuAction {
     /// Swap the menu for the Add Tab page — the list of panes that can be
     /// pulled in ([`State::open_plate_add_tab_menu`]).
     AddTabMenu,
-    /// The Add Tab page's Back row: swap the main menu page back in.
+    /// The Add Tab page's Back row: swap the plate's rows back in.
     BackToMain,
     /// Move this pane out of its shared dock into the first empty one.
     SplitTab,
+    /// Move this pane, and the tabs riding it, to another dock, swapping
+    /// with what is there — what dragging the plate's corner used to do.
+    MoveTo(Dock),
     /// Remove a closable pane (the second network editor) from the docks.
     CloseTab,
     /// Bind this pane to whichever editor takes the last node click.
     PinFollow,
     /// Bind this pane to one editor (CONTENT_IDX / CONTENT2_IDX).
     PinTo(usize),
-    /// A "-" row: engraved, inert — keeps `plate_menu_actions` aligned with
-    /// the option rows so a click on the line dispatches nothing.
+    /// A "-" row: engraved, inert — keeps the action list aligned with the
+    /// option rows so a click on the line dispatches nothing.
     Separator,
-}
-
-impl State {
-    /// Centre of `idx`'s corner control, or `None` when the plate is hidden or
-    /// too small to carry one.
-    pub fn plate_corner_center(&self, idx: usize) -> Option<(f32, f32)> {
-        if !PLATE_SLOTS.contains(&idx) {
-            return None;
-        }
-        let w = self.slots.get_dyn(idx);
-        if !w.visible() {
-            return None;
-        }
-
-        // The circular network pane: put the control where the plate's own
-        // top-right actually is — on the arc, at 45°.
-        if idx == NETWORK_PANEL_IDX && self.circular_network_pane {
-            let c = &self.circular_network_layout;
-            if c.r < MIN_PLATE_SPAN {
-                return None;
-            }
-            let d = std::f32::consts::FRAC_1_SQRT_2 * (c.r - CORNER_INSET);
-            return Some((c.x + d, c.y - d));
-        }
-
-        // Rect-based placement is toolkit-owned (stub exemption included);
-        // only the circular-pane arc above stays designer policy.
-        plate_dock::corner_center(w.rect(), self.pane_is_stubbed(idx))
-    }
-
-    /// The plate whose corner control is under `(px, py)`, if any. Searched in
-    /// reverse draw order so an overlapping pane's control wins, matching what
-    /// the user sees on top.
-    pub fn plate_corner_at(&self, px: f32, py: f32) -> Option<usize> {
-        PLATE_SLOTS.iter().rev().copied().find(|&idx| {
-            self.plate_corner_center(idx)
-                .is_some_and(|c| plate_dock::corner_hit(c, px, py))
-        })
-    }
 }
 
 /// The pane's display name — the stub's label, and what the menu is "about".
@@ -124,13 +84,34 @@ pub fn plate_title(idx: usize) -> &'static str {
     }
 }
 
-impl State {
-    /// Open the corner menu for `idx`, anchored under its control. Items are
-    /// contextual: a collapsed plate offers Expand instead of Collapse, and
-    /// Detach only appears where a detached window exists for that pane.
-    pub fn open_plate_menu(&mut self, idx: usize) {
-        let Some((cx, cy)) = self.plate_corner_center(idx) else { return };
+/// A dock's name in a `Move To` row.
+fn dock_title(d: Dock) -> &'static str {
+    match d {
+        Dock::Left => "Left",
+        Dock::Right => "Right",
+        Dock::Bottom => "Bottom",
+    }
+}
 
+impl State {
+    /// The plate whose rect holds (px, py), topmost first — the plate a
+    /// right press there is about.
+    pub fn plate_at(&self, px: f32, py: f32) -> Option<usize> {
+        PLATE_SLOTS.iter().rev().copied().find(|&idx| {
+            let w = self.slots.get_dyn(idx);
+            if !w.visible() {
+                return false;
+            }
+            let (x, y, ww, h) = w.rect();
+            ww > 0.0 && h > 0.0 && px >= x && px < x + ww && py >= y && py < y + h
+        })
+    }
+
+    /// The rows of `idx`'s plate menu, labels and actions in step. Contextual:
+    /// a collapsed plate offers Expand instead of Collapse, Detach appears only
+    /// where a detached window exists for that pane, and a detached pane's
+    /// stub offers Reattach alone.
+    pub fn plate_menu_rows(&self, idx: usize) -> (Vec<String>, Vec<PlateMenuAction>) {
         // The standard rows come from the toolkit protocol (Reattach-only for
         // a detached pane's stub, Collapse/Expand, Detach when allowed); the
         // designer appends its app rows after.
@@ -150,11 +131,7 @@ impl State {
             });
         }
         if state.detached {
-            let target = self.slots.get_dyn(idx).base().id();
-            cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 0, target);
-            self.plate_menu_slot = Some(idx);
-            self.plate_menu_actions = actions;
-            return;
+            return (options, actions);
         }
 
         // Group boundaries are engraved separators ("-" rows — the toolkit
@@ -242,15 +219,38 @@ impl State {
                 options.push("Move To Own Plate".to_string());
                 actions.push(PlateMenuAction::SplitTab);
             }
+            // Every other dock, swapping with what is there — the drag the
+            // corner trigger used to start, as rows.
+            for other in [Dock::Left, Dock::Right, Dock::Bottom] {
+                if other != d {
+                    manage_row(&mut options, &mut actions);
+                    options.push(format!("Move To {}", dock_title(other)));
+                    actions.push(PlateMenuAction::MoveTo(other));
+                }
+            }
             if idx == NETWORK_PANEL2_IDX {
                 manage_row(&mut options, &mut actions);
                 options.push("Close Tab".to_string());
                 actions.push(PlateMenuAction::CloseTab);
             }
         }
+        (options, actions)
+    }
 
+    /// Show `idx`'s plate menu alone, at the pointer — a pane with no
+    /// context menu of its own, or a stub.
+    pub fn open_plate_menu(&mut self, idx: usize) {
+        self.open_plate_menu_at(idx, self.cursor_x, self.cursor_y);
+    }
+
+    /// Show `idx`'s plate menu alone, its top-left at (x, y).
+    pub fn open_plate_menu_at(&mut self, idx: usize, x: f32, y: f32) {
+        let (options, actions) = self.plate_menu_rows(idx);
+        if options.is_empty() {
+            return;
+        }
         let target = self.slots.get_dyn(idx).base().id();
-        cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 0, target);
+        cce_ui::widget::context_menu::show(x, y, options, 0, target);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
     }
@@ -268,11 +268,10 @@ impl State {
             .collect()
     }
 
-    /// The Add Tab page: swaps the corner menu in place for the list of
-    /// addable panes, under a dimmed header row. Same anchor, same click
-    /// contract — a second PAGE of the one menu, not a second menu.
-    pub fn open_plate_add_tab_menu(&mut self, idx: usize) {
-        let Some((cx, cy)) = self.plate_corner_center(idx) else { return };
+    /// The Add Tab page: swaps the menu in place for the list of addable
+    /// panes, under a dimmed header row, at (x, y) — where the menu that
+    /// asked for it stood. A second PAGE of the menu, not a second menu.
+    pub fn open_plate_add_tab_menu(&mut self, idx: usize, x: f32, y: f32) {
         let Some(d) = self.dock_of_pane(idx) else { return };
         let candidates = self.plate_add_tab_candidates(idx, d);
         if candidates.is_empty() {
@@ -289,7 +288,7 @@ impl State {
         options.push("‹ Back".to_string());
         actions.push(PlateMenuAction::BackToMain);
         let target = self.slots.get_dyn(idx).base().id();
-        cce_ui::widget::context_menu::show(cx - CORNER_R, cy + CORNER_R, options, 1, target);
+        cce_ui::widget::context_menu::show(x, y, options, 1, target);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
     }
@@ -304,7 +303,7 @@ impl State {
         self.plate_menu_actions.clear();
     }
 
-    /// Route a left press while the corner menu is open — same contract as
+    /// Route a left press while the plate menu is open — same contract as
     /// `handle_node_menu_click`.
     pub fn handle_plate_menu_click(&mut self) -> bool {
         if !self.plate_menu_open() {
@@ -313,9 +312,10 @@ impl State {
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let row = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = self.plate_menu_slot.zip(row.and_then(|r| self.plate_menu_actions.get(r).copied()));
+            let at = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
             self.close_plate_menu();
             if let Some((idx, action)) = picked {
-                self.dispatch_plate_menu(idx, action);
+                self.run_plate_menu_action(idx, action, at);
             }
             return true;
         }
@@ -323,7 +323,10 @@ impl State {
         false
     }
 
-    fn dispatch_plate_menu(&mut self, idx: usize, action: PlateMenuAction) {
+    /// Run a plate row for `idx`, picked from a menu whose top-left was `at`
+    /// — where a page swap (Add Tab, Back) puts the next page, whichever
+    /// menu the row was part of.
+    pub fn run_plate_menu_action(&mut self, idx: usize, action: PlateMenuAction, at: (f32, f32)) {
         match action {
             PlateMenuAction::Collapse => self.set_pane_collapsed(idx, true),
             PlateMenuAction::Expand => self.set_pane_collapsed(idx, false),
@@ -341,9 +344,10 @@ impl State {
                     self.add_dock_tab(d, o);
                 }
             }
-            PlateMenuAction::AddTabMenu => self.open_plate_add_tab_menu(idx),
-            PlateMenuAction::BackToMain => self.open_plate_menu(idx),
+            PlateMenuAction::AddTabMenu => self.open_plate_add_tab_menu(idx, at.0, at.1),
+            PlateMenuAction::BackToMain => self.open_plate_menu_at(idx, at.0, at.1),
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
+            PlateMenuAction::MoveTo(d) => self.move_pane_to_dock(idx, d),
             PlateMenuAction::CloseTab => self.close_dock_tab(idx),
             PlateMenuAction::PinFollow => self.set_pane_pin(idx, None),
             PlateMenuAction::PinTo(e) => self.set_pane_pin(idx, Some(e)),

@@ -22,7 +22,7 @@ pub mod collide;
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
 use app::{CustomEvent, McpAction, ModifiersState};
-pub mod plate_corner;
+pub mod plate_menu;
 pub mod playbar;
 pub mod viewport_3d;
 pub mod api;
@@ -368,37 +368,84 @@ mod tests {
         assert_eq!(state.default_project_setting, before);
     }
 
-    /// The corner control has to land ON its plate: derived from the slot's live
-    /// rect, an off-by-one in the inset would put the trigger outside the pane
-    /// (unclickable, and painted over the neighbour) with nothing to catch it —
-    /// the render pass draws wherever it is told.
+    /// Press `button` at (x, y), as the pointer would.
+    fn press_at(state: &mut State, x: f32, y: f32, button: cce_ui::widget::MouseButton) {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::ElementState;
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button });
+    }
+
+    /// There are no corner triggers: a plate's rows are in its right-click
+    /// menu. The panes with a menu of their own carry them under it (the
+    /// network's empty space, the playbar); the rest open them alone.
     #[test]
-    fn test_plate_corner_sits_inside_its_plate() {
-        use crate::plate_corner::{CORNER_R, PLATE_SLOTS};
+    fn a_plates_rows_are_in_its_right_click_menu() {
+        use crate::plate_menu::PlateMenuAction;
+        use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
+        use cce_ui::widget::MouseButton;
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
+        state.show_spreadsheet = true;
+        state.show_playbar = true;
+        state.rebuild_positions();
+        state.apply_layout();
+        let collapse = "Collapse".to_string();
 
-        let mut checked = 0;
-        for idx in PLATE_SLOTS {
-            let Some((cx, cy)) = state.plate_corner_center(idx) else { continue };
+        // Params, off a row (its bottom edge), and the spreadsheet: the plate
+        // menu alone.
+        for idx in [PARAM_IDX, SPREADSHEET_IDX] {
             let (x, y, w, h) = state.slots.get_dyn(idx).rect();
-            checked += 1;
-
-            // Inside the plate, with the whole disc clear of every edge.
-            assert!(cx - CORNER_R >= x && cx + CORNER_R <= x + w,
-                "slot {idx}: corner x {cx} escapes plate {x}..{}", x + w);
-            assert!(cy - CORNER_R >= y && cy + CORNER_R <= y + h,
-                "slot {idx}: corner y {cy} escapes plate {y}..{}", y + h);
-            // ...and in the TOP-RIGHT quadrant of it, not merely somewhere inside.
-            assert!(cx > x + w / 2.0, "slot {idx}: corner is not on the right");
-            assert!(cy < y + h / 2.0, "slot {idx}: corner is not at the top");
-
-            // The hit test must agree with where it is painted.
-            assert_eq!(state.plate_corner_at(cx, cy), Some(idx), "slot {idx}: centre misses");
-            assert_eq!(state.plate_corner_at(cx + CORNER_R * 2.0, cy), None,
-                "slot {idx}: hit radius reaches past the control");
+            press_at(&mut state, x + w - 6.0, y + h - 6.0, MouseButton::Right);
+            assert_eq!(state.plate_menu_slot, Some(idx), "{}", crate::plate_menu::plate_title(idx));
+            assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+            press_at(&mut state, 2.0, 2.0, MouseButton::Left);
+            assert!(!state.plate_menu_open(), "a press outside dismisses it");
         }
-        assert!(checked >= 2, "expected at least the network and params plates, checked {checked}");
+
+        // The network: its own rows, then the plate's.
+        let (cx, cy, cw, ch) = state.positions[crate::slots::CONTENT_IDX];
+        let (px, py) = (cx + cw * 0.85, cy + ch * 0.2);
+        assert!(state.graph().node_at(px, py).is_none());
+        press_at(&mut state, px, py, MouseButton::Right);
+        let options = cce_ui::widget::context_menu::options();
+        assert_eq!(options.first().map(String::as_str), Some("Add Node"));
+        assert!(options.contains(&collapse), "{options:?}");
+        assert!(options.iter().any(|o| o.starts_with("Move To")), "{options:?}");
+        // Picking Collapse there collapses the network plate.
+        let row = options.iter().position(|o| *o == collapse).unwrap();
+        let rx = cce_ui::widget::context_menu::x() + 8.0;
+        let ry = cce_ui::widget::context_menu::row_y(row) + 4.0;
+        press_at(&mut state, rx, ry, MouseButton::Left);
+        assert!(state.pane_is_collapsed(NETWORK_PANEL_IDX));
+        state.set_pane_collapsed(NETWORK_PANEL_IDX, false);
+
+        // The playbar: its transport, then the plate's.
+        let (x, y, w, h) = state.positions[PLAYBAR_IDX];
+        press_at(&mut state, x + w * 0.5, y + h * 0.5, MouseButton::Right);
+        let options = cce_ui::widget::context_menu::options();
+        assert!(options.contains(&collapse), "{options:?}");
+        assert!(state.playbar_menu_actions.contains(&crate::app::PlaybarMenuAction::Plate(PlateMenuAction::Collapse)));
+        press_at(&mut state, 2.0, 2.0, MouseButton::Left);
+    }
+
+    /// Move To swaps the pane, and the tabs riding it, with what holds the
+    /// other dock — what dragging the corner used to do.
+    #[test]
+    fn move_to_swaps_a_pane_into_another_dock() {
+        use crate::app::Dock;
+        use crate::plate_menu::PlateMenuAction;
+        use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.open_plate_menu(PARAM_IDX);
+        assert!(state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Left)));
+        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Right)), "not to its own dock");
+        state.close_plate_menu();
+        state.run_plate_menu_action(PARAM_IDX, PlateMenuAction::MoveTo(Dock::Left), (0.0, 0.0));
+        assert_eq!(state.dock_of_pane(PARAM_IDX), Some(Dock::Left));
+        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Right));
     }
 
     /// Collapse must actually reclaim the plate AND take its body with it, and
@@ -406,7 +453,7 @@ mod tests {
     /// graph would paint the pane over the viewport it just freed.
     #[test]
     fn test_collapse_shrinks_the_plate_and_restores_it() {
-        use crate::plate_corner::STUB_H;
+        use crate::plate_menu::STUB_H;
         use crate::slots::{CONTENT_IDX, NETWORK_PANEL_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
@@ -419,11 +466,12 @@ mod tests {
         let (_, _, _, stub_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
         assert_eq!(stub_h, STUB_H, "collapsed plate is not the stub height");
         assert!(!state.slots.get_dyn(CONTENT_IDX).visible(), "graph survived the collapse");
-        // The control that expands it again must still be there.
-        assert!(state.plate_corner_center(NETWORK_PANEL_IDX).is_some(),
-            "collapsed plate lost its corner control — nothing can expand it");
-
-        state.set_pane_collapsed(NETWORK_PANEL_IDX, false);
+        // A right press on the stub offers Expand; a left press expands it.
+        let (x, y, w, h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Right);
+        assert!(state.plate_menu_actions.contains(&crate::plate_menu::PlateMenuAction::Expand));
+        state.close_plate_menu();
+        press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Left);
         let (_, _, _, back_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
         assert_eq!(back_h, full_h, "expanding did not restore the plate height");
         assert!(state.slots.get_dyn(CONTENT_IDX).visible(), "graph did not come back");
@@ -434,7 +482,7 @@ mod tests {
     /// laying the pane out, or the space it held is never released.
     #[test]
     fn test_detached_pane_claims_its_window_and_leaves_the_parent() {
-        use crate::plate_corner::DETACHED_MARGIN;
+        use crate::plate_menu::DETACHED_MARGIN;
         use crate::slots::{PARAM_IDX, VIEWPORT_IDX, WIDGET_COUNT};
 
         // Child: the detached window.
@@ -451,8 +499,8 @@ mod tests {
         assert_eq!(h, 400.0 - 2.0 * DETACHED_MARGIN);
 
         // Parent: the window that handed the pane out keeps a STUB, because the
-        // stub carries the corner control that is the only way to reattach.
-        use crate::plate_corner::STUB_H;
+        // stub's plate menu is the only way to reattach.
+        use crate::plate_menu::STUB_H;
         let mut parent = State::new(false);
         parent.resize(1600.0, 900.0, 1.0);
         assert!(parent.slots.get_dyn(PARAM_IDX).visible(), "params starts in the parent");
@@ -465,15 +513,18 @@ mod tests {
         let (_, _, _, stub_h) = parent.slots.get_dyn(PARAM_IDX).rect();
         assert!(full_h > stub_h, "detaching did not shrink the pane in the parent");
         assert_eq!(stub_h, STUB_H, "the parent's leftover is not a stub");
-        assert!(parent.plate_corner_center(PARAM_IDX).is_some(),
-            "the stub has no corner control — nothing can reattach the pane");
+        let (sx, sy, sw, sh) = parent.slots.get_dyn(PARAM_IDX).rect();
+        press_at(&mut parent, sx + sw * 0.5, sy + sh * 0.5, cce_ui::widget::MouseButton::Right);
+        assert_eq!(parent.plate_menu_actions, vec![crate::plate_menu::PlateMenuAction::Reattach],
+            "the stub's right press offers Reattach — nothing else can reattach the pane");
+        parent.close_plate_menu();
         // Collapsed and detached stubs must not read the same.
         let label = parent.pane_stub_label(PARAM_IDX).expect("a detached pane is stubbed");
         assert!(label.contains("detached"), "stub does not say the pane is detached: {label}");
         assert!(parent.slots.get_dyn(VIEWPORT_IDX).visible(), "the rest of the parent survived");
     }
 
-    /// Dock swap: dragging a plate's dot to another region swaps occupants,
+    /// Dock swap: Move To another dock swaps occupants,
     /// and the dock-owned dimensions stay put — the network lands in the
     /// bottom strip's rect, the spreadsheet in the left column's.
     /// A left press on the spreadsheet's column header reaches the widget,
@@ -667,18 +718,6 @@ mod tests {
         assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Bottom));
     }
 
-    /// The drop-region mapping: lower band is the bottom dock, the rest
-    /// splits into halves.
-    #[test]
-    fn test_dock_region_mapping() {
-        use crate::app::Dock;
-        let mut state = State::new(false);
-        state.resize(1000.0, 1000.0, 1.0);
-        assert_eq!(state.dock_region_at(100.0, 100.0), Dock::Left);
-        assert_eq!(state.dock_region_at(900.0, 100.0), Dock::Right);
-        assert_eq!(state.dock_region_at(500.0, 900.0), Dock::Bottom);
-    }
-
     /// Full width tucks the spreadsheet under BOTH neighbors (their bottoms
     /// rise via the tuck interlock); between-panes clears both tucks.
     #[test]
@@ -703,7 +742,7 @@ mod tests {
     /// and reattaching restores the pane in full.
     #[test]
     fn test_reattach_brings_a_detached_pane_back() {
-        use crate::plate_corner::PlateMenuAction;
+        use crate::plate_menu::PlateMenuAction;
         use crate::slots::PARAM_IDX;
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
@@ -782,13 +821,13 @@ mod tests {
     /// restores it is unreachable.
     #[test]
     fn test_plate_corner_menu_is_contextual() {
-        use crate::plate_corner::{PlateMenuAction, PLATE_SLOTS};
+        use crate::plate_menu::{PlateMenuAction, PLATE_SLOTS};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
 
         let idx = PLATE_SLOTS.iter().copied()
-            .find(|&i| state.plate_corner_center(i).is_some())
-            .expect("some plate carries a corner control at this size");
+            .find(|&i| state.slots.get_dyn(i).visible())
+            .expect("some plate is shown at this size");
 
         state.open_plate_menu(idx);
         assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
@@ -1150,7 +1189,7 @@ mod tests {
     #[test]
     fn move_to_own_plate_needs_an_empty_dock() {
         use crate::app::Dock;
-        use crate::plate_corner::PlateMenuAction;
+        use crate::plate_menu::PlateMenuAction;
         use crate::slots::{NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
@@ -2500,6 +2539,10 @@ mod tests {
                 vec![A::Command("play_pause"), A::Command("play_pause_reverse"), A::Command("frame_start")],
                 vec![A::Command("toggle_playbar_repeat")],
                 vec![A::FpsSlider, A::StartFrameSlider, A::EndFrameSlider],
+                vec![
+                    A::Plate(crate::plate_menu::PlateMenuAction::Collapse),
+                    A::Plate(crate::plate_menu::PlateMenuAction::Detach),
+                ],
             ]
         );
         let repeat = actions.iter().position(|a| *a == A::Command("toggle_playbar_repeat")).unwrap();
