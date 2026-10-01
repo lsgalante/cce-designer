@@ -30,7 +30,8 @@
    "max": 100,
    "step": 1,
    "show_when": "Source == Internal",
-   "description": "Rows and columns of the internal UV sphere. Higher values give a smoother, denser seed."
+   "description": "Rows and columns of the internal UV sphere. Higher values give a smoother, denser seed.",
+   "group": "source"
   },
   {
    "name": "Radius",
@@ -40,7 +41,8 @@
    "max": 10.0,
    "step": 0.01,
    "show_when": "Source == Internal",
-   "description": "Radius of the internal sphere in world units, centered at the origin."
+   "description": "Radius of the internal sphere in world units, centered at the origin.",
+   "group": "source"
   },
   {
    "name": "Scatter Count",
@@ -50,7 +52,8 @@
    "max": 10000,
    "step": 10,
    "show_when": "Method == Scatter",
-   "description": "Number of points scattered over the source surface before the hull is built. More points give a finer hull mesh."
+   "description": "Number of points scattered over the source surface before the hull is built. More points give a finer hull mesh.",
+   "group": "scatter"
   },
   {
    "name": "Scatter Seed",
@@ -60,14 +63,16 @@
    "max": 10.0,
    "step": 0.1,
    "show_when": "Method == Scatter",
-   "description": "Random seed for the scatter. Change it for a different but equally spaced point layout."
+   "description": "Random seed for the scatter. Change it for a different but equally spaced point layout.",
+   "group": "scatter"
   },
   {
    "name": "Relax Points",
    "type": "toggle",
    "default": "true",
    "show_when": "Method == Scatter",
-   "description": "When on, pushes the scattered points apart across the surface so they are evenly spaced before the hull is built."
+   "description": "When on, pushes the scattered points apart across the surface so they are evenly spaced before the hull is built.",
+   "group": "scatter"
   },
   {
    "name": "Scatter Relax Iterations",
@@ -77,7 +82,8 @@
    "max": 100,
    "step": 1,
    "show_when": "Method == Scatter && Relax Points == true",
-   "description": "How many push-apart passes the scattered points get. More passes give a more even spacing; 0 does none."
+   "description": "How many push-apart passes the scattered points get. More passes give a more even spacing; 0 does none.",
+   "group": "scatter"
   },
   {
    "name": "Scale Radii By",
@@ -87,14 +93,16 @@
    "max": 2.0,
    "step": 0.001,
    "show_when": "Method == Scatter && Relax Points == true",
-   "description": "Multiplier on each scattered point's push radius, which is derived from the surface area per point. Larger values spread points more forcefully."
+   "description": "Multiplier on each scattered point's push radius, which is derived from the surface area per point. Larger values spread points more forcefully.",
+   "group": "scatter"
   },
   {
    "name": "Use Max Relax Radius",
    "type": "toggle",
    "default": "true",
    "show_when": "Method == Scatter && Relax Points == true",
-   "description": "When on, the scattered points' push radius is capped at Scatter Relax Radius."
+   "description": "When on, the scattered points' push radius is capped at Scatter Relax Radius.",
+   "group": "scatter"
   },
   {
    "name": "Scatter Relax Radius",
@@ -104,7 +112,8 @@
    "max": 100.0,
    "step": 0.1,
    "show_when": "Method == Scatter && Relax Points == true && Use Max Relax Radius == true",
-   "description": "Upper limit on the scattered points' push radius in world units, used when Use Max Relax Radius is on."
+   "description": "Upper limit on the scattered points' push radius in world units, used when Use Max Relax Radius is on.",
+   "group": "scatter"
   },
   {
    "name": "Relax Iterations",
@@ -113,7 +122,8 @@
    "min": 0,
    "max": 50,
    "step": 1,
-   "description": "Passes of the final repel relax that pushes the mesh's points apart. 0 turns the relax off."
+   "description": "Passes of the final repel relax that pushes the mesh's points apart. 0 turns the relax off.",
+   "group": "relax"
   },
   {
    "name": "Relax Radius",
@@ -122,13 +132,15 @@
    "min": 0.001,
    "max": 1.0,
    "step": 0.001,
-   "description": "Radius in world units of the sphere each point pushes with in the final relax; points closer than twice this move apart."
+   "description": "Radius in world units of the sphere each point pushes with in the final relax; points closer than twice this move apart.",
+   "group": "relax"
   },
   {
    "name": "Relax in 3D Space",
    "type": "toggle",
    "default": "false",
-   "description": "When off, the final relax slides points along the surface to keep its shape; when on, points may move freely in 3D."
+   "description": "When off, the final relax slides points along the surface to keep its shape; when on, points may move freely in 3D.",
+   "group": "relax"
   },
   {
    "name": "Subdivision Depth",
@@ -137,7 +149,8 @@
    "min": 0,
    "max": 3,
    "step": 1,
-   "description": "How many times each triangle is split into four at the end, without smoothing. 0 leaves the mesh as is."
+   "description": "How many times each triangle is split into four at the end, without smoothing. 0 leaves the mesh as is.",
+   "group": "subdivide"
   }
  ],
  "children": [

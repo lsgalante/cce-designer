@@ -5,7 +5,7 @@
   "outputs": 1,
   "params": [
     { "name": "Points", "default": "-0.75 0.05 0; -0.25 1.05 0; 0.25 0.05 0; 0.75 1.05 0", "type": "text", "description": "Control points as x y z triples in world coordinates, separated by semicolons. The curve passes through each one; Edit Handles lets you drag them in the viewport." },
-    { "name": "Segments", "default": "8", "type": "spinbox", "min": 1, "max": 64, "step": 1, "description": "Number of straight pieces sampled between each pair of control points. Higher values give a smoother curve." },
-    { "name": "Thickness", "default": "0.02", "type": "slider", "description": "Width of the curve's square cross-section in world units." }
+    { "name": "Segments", "default": "8", "type": "spinbox", "min": 1, "max": 64, "step": 1, "description": "Number of straight pieces sampled between each pair of control points. Higher values give a smoother curve.", "group": "shape" },
+    { "name": "Thickness", "default": "0.02", "type": "slider", "description": "Width of the curve's square cross-section in world units.", "group": "shape" }
   ]
 }

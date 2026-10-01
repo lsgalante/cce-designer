@@ -25,20 +25,23 @@
       "name": "Element Type",
       "type": "choice:Points,Primitives",
       "default": "Points",
-      "description": "Points tests each point. Primitives tests each primitive's centroid and groups the hit primitives and their points."
+      "description": "Points tests each point. Primitives tests each primitive's centroid and groups the hit primitives and their points.",
+      "group": "output"
     },
-    { "name": "Group Name", "default": "collisions", "type": "group", "description": "Name of the group written with the elements that hit. Also written as a primitive group when primitives are tested." },
+    { "name": "Group Name", "default": "collisions", "type": "group", "description": "Name of the group written with the elements that hit. Also written as a primitive group when primitives are tested.", "group": "output" },
     {
       "name": "Invert",
       "type": "toggle",
       "default": "false",
-      "description": "Groups the elements that did NOT hit the collider instead of those that did."
+      "description": "Groups the elements that did NOT hit the collider instead of those that did.",
+      "group": "output"
     },
     {
       "name": "Highlight",
       "type": "toggle",
       "default": "true",
-      "description": "Tints the grouped points red so the contact shows in the viewport. Off leaves colours untouched."
+      "description": "Tints the grouped points red so the contact shows in the viewport. Off leaves colours untouched.",
+      "group": "display"
     }
   ]
 }

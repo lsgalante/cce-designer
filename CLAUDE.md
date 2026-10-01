@@ -805,6 +805,40 @@ hands every instance its template's type along with the rest of the UI
 metadata (`adopt_ui_from`, which re-parses), so an old save's
 `"type": "text"` wire loads as `node` (`a_saved_text_wire_loads_as_a_node_wire`).
 
+### The params pane separates groups of parameters (since 2026-10-01)
+
+A template parameter may carry `"group": "<name>"`; `param_display` puts
+a separator row (cce-ui's `separator`, a hairline) wherever two rows it
+SHOWS belong to different groups (`param_group`). So a separator is only
+ever between two shown rows — never first, last or doubled — and a run
+whose rows are all hidden by `show_when` leaves no line behind. The
+LEADING run of wires (the node's inputs, at the top of its list) is a
+group of its own without a template saying so (`PARAM_INPUTS_GROUP`), so
+every node with an input has a line under it; a wire further down
+(Relax's Rest) is part of whatever run it is in. Rows with no group are
+the node's unnamed run, so a template names only the runs after the first.
+
+- **The group is the template's**, as the description is: `adopt_ui_from`
+  hands it to every instance, and it is read and never written, so a save
+  is byte-identical and `sim_solve_key` does not move.
+- **Groups follow the template's ORDER.** Reordering a template's
+  parameters would reorder no saved instance (the merge keeps an
+  instance's order), so groups are contiguous runs as the parameters
+  stand; a name may come back after another run (the Group node's mode
+  rows sit either side of Invert/Highlight) and simply draws a line each
+  time it changes.
+- **What the groups are**, by convention across the templates: a node's
+  point-group filter (`Group`) is `where`; an operator's settings, its
+  output naming, its display switches and its mode-specific rows are
+  runs of their own (the Attribute node: target, value, amount, where,
+  range…; Page Shape: geometry, fill, stroke).
+- **A separator names no parameter**: its key and value are empty, so the
+  pane's write-back and `param_row_at` find nothing by it, and it shifts
+  no index between the pane's rows and `param_display`'s, which both
+  include it.
+
+`the_params_pane_separates_groups_of_parameters` is the test.
+
 ### Conditional parameter rows
 
 A `ParamDef` may carry `show_when`, a condition over its SIBLINGS' current

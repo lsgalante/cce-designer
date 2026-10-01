@@ -27,7 +27,8 @@
       "type": "choice:Connectivity,Radius,Global",
       "default": "Connectivity",
       "show_when": "Mode != Bleed",
-      "description": "Which points count as neighbours: those within Rings edges on the mesh, those within Radius in space (across folds too), or every point."
+      "description": "Which points count as neighbours: those within Rings edges on the mesh, those within Radius in space (across folds too), or every point.",
+      "group": "neighbourhood"
     },
     {
       "name": "Rings",
@@ -37,7 +38,8 @@
       "max": 8.0,
       "step": 1.0,
       "show_when": "Neighbourhood == Connectivity && Mode != Bleed",
-      "description": "How many edge rings out from a point count as its neighbours. More rings spread the effect wider per evaluation."
+      "description": "How many edge rings out from a point count as its neighbours. More rings spread the effect wider per evaluation.",
+      "group": "neighbourhood"
     },
     {
       "name": "Radius",
@@ -47,7 +49,8 @@
       "max": 2.0,
       "step": 0.01,
       "show_when": "Neighbourhood == Radius && Mode != Bleed",
-      "description": "Distance in world units within which points count as neighbours, regardless of mesh connectivity."
+      "description": "Distance in world units within which points count as neighbours, regardless of mesh connectivity.",
+      "group": "neighbourhood"
     },
     {
       "name": "Amount",
@@ -56,41 +59,47 @@
       "min": 0.0,
       "max": 1.0,
       "step": 0.01,
-      "description": "Strength of each evaluation, 0 to 1: the fraction of the way toward the target, the fraction moved or decayed, or the charge added per step. Inside a simnet it acts as a rate."
+      "description": "Strength of each evaluation, 0 to 1: the fraction of the way toward the target, the fraction moved or decayed, or the charge added per step. Inside a simnet it acts as a rate.",
+      "group": "amount"
     },
     {
       "name": "Direction",
       "type": "attribute",
       "default": "",
       "show_when": "Mode == Migrate",
-      "description": "A vector point attribute giving the direction value flows in Migrate mode; neighbours in front of each point receive what it gives up."
+      "description": "A vector point attribute giving the direction value flows in Migrate mode; neighbours in front of each point receive what it gives up.",
+      "group": "amount"
     },
     {
       "name": "Group",
       "type": "group",
       "default": "",
-      "description": "Only points in this group are changed; neighbours outside it are still read. Empty changes every point."
+      "description": "Only points in this group are changed; neighbours outside it are still read. Empty changes every point.",
+      "group": "where"
     },
     {
       "name": "Target",
       "type": "choice:Local Average,Global Average,Constant,Attribute,Surface Tangent",
       "default": "Local Average",
       "show_when": "Mode == Align",
-      "description": "What vectors turn toward: the neighbours' average, the whole geometry's average, the Constant vector, the Source attribute, or the vector's own projection onto the surface."
+      "description": "What vectors turn toward: the neighbours' average, the whole geometry's average, the Constant vector, the Source attribute, or the vector's own projection onto the surface.",
+      "group": "mode"
     },
     {
       "name": "Constant",
       "type": "float3",
       "default": "0.00:1.00:0.00",
       "show_when": "Mode == Align && Target == Constant",
-      "description": "The fixed direction vectors turn toward when Target is Constant."
+      "description": "The fixed direction vectors turn toward when Target is Constant.",
+      "group": "mode"
     },
     {
       "name": "Source",
       "type": "attribute",
       "default": "",
       "show_when": "Mode == Align|Lead",
-      "description": "In Align with Target set to Attribute, the vector attribute to turn toward. In Lead, a number weighting each neighbour's influence; empty weighs all equally."
+      "description": "In Align with Target set to Attribute, the vector attribute to turn toward. In Lead, a number weighting each neighbour's influence; empty weighs all equally.",
+      "group": "mode"
     },
     {
       "name": "Release",
@@ -100,7 +109,8 @@
       "max": 10.0,
       "step": 0.05,
       "show_when": "Mode == Charge",
-      "description": "Threshold at which a point's charge discharges, split evenly among its neighbours. Higher stores more before firing; 0 never discharges."
+      "description": "Threshold at which a point's charge discharges, split evenly among its neighbours. Higher stores more before firing; 0 never discharges.",
+      "group": "mode"
     }
   ]
 }

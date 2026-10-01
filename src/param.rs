@@ -203,6 +203,12 @@ pub struct ParamDef {
     /// description kept there would go stale the day the template's
     /// wording changed (and move `sim_solve_key` the day it did).
     pub description: String,
+    /// Which run of related parameters this one belongs to, by name — the
+    /// params pane draws a separator wherever two rows it shows belong to
+    /// different groups (`param_display`). The TEMPLATE's, read and never
+    /// written, as the description is. Empty is the node's ungrouped run;
+    /// the leading wires are a group of their own without saying so.
+    pub group: String,
 }
 
 /// The file shape of a [`ParamDef`] — the struct as it was before the value
@@ -241,6 +247,9 @@ struct ParamDefRepr {
     /// [`ParamDef::description`]; read, never written.
     #[serde(default, skip_serializing)]
     description: String,
+    /// [`ParamDef::group`]; read, never written.
+    #[serde(default, skip_serializing)]
+    group: String,
 }
 
 fn default_param_type() -> String {
@@ -263,6 +272,7 @@ impl<'de> Deserialize<'de> for ParamDef {
             show_when: r.show_when,
             view: r.view,
             description: r.description,
+            group: r.group,
         };
         if !r.expr {
             p.reparse();
@@ -286,6 +296,7 @@ impl Serialize for ParamDef {
             expr: self.is_expr(),
             view: self.view.clone(),
             description: String::new(),
+            group: String::new(),
         }
         .serialize(s)
     }
@@ -355,6 +366,7 @@ impl ParamDef {
             show_when: String::new(),
             view: String::new(),
             description: String::new(),
+            group: String::new(),
         };
         p.reparse();
         p
@@ -574,6 +586,7 @@ impl ParamDef {
         self.step = template.step;
         self.show_when = template.show_when.clone();
         self.description = template.description.clone();
+        self.group = template.group.clone();
         // The view is the instance's to choose; the template's is what it
         // starts from.
         if self.view.is_empty() {

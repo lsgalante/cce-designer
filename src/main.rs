@@ -4742,8 +4742,9 @@ mod tests {
                 o.entry(k).or_insert(Value::Null);
             }
             o.entry("show_when").or_insert("".into());
-            // A template's description is read and never written.
+            // A template's description and group are read and never written.
             o.remove("description");
+            o.remove("group");
             if o.get("expr") == Some(&Value::Bool(false)) {
                 o.remove("expr");
             }
@@ -5091,7 +5092,47 @@ mod tests {
         let row = |ty: &str| crate::app::ParamDef::new("X", ty, "1");
         let shown = crate::app::param_display(&[row("node"), row("float"), row("string"), row("attribute"), row("group"), row("toggle")]);
         let types: Vec<&str> = shown.iter().map(|r| r.2.as_str()).collect();
-        assert_eq!(types, vec!["text", "text", "text", "text", "text", "toggle"]);
+        // The leading wire is the inputs, a separator under it.
+        assert_eq!(types, vec!["text", "separator", "text", "text", "text", "text", "toggle"]);
+    }
+
+    /// The params pane draws a separator wherever two rows it shows belong to
+    /// different groups: under the leading wires, and between the runs a
+    /// template names. Only between two SHOWN rows — never first, last or
+    /// doubled, and a run whose rows are all hidden leaves no line — and a
+    /// wire further down is part of the run it is in. The separator names
+    /// no parameter, so the write-back passes over it.
+    #[test]
+    fn the_params_pane_separates_groups_of_parameters() {
+        let p = |name: &str, ty: &str, group: &str, show_when: &str| {
+            let mut d = crate::app::ParamDef::new(name, ty, "1");
+            d.group = group.to_string();
+            d.show_when = show_when.to_string();
+            d
+        };
+        let rows = |ps: &[crate::app::ParamDef]| -> Vec<String> {
+            crate::app::param_display(ps).into_iter().map(|r| if r.2 == "separator" { "|".to_string() } else { r.0 }).collect()
+        };
+        let params = vec![
+            p("Input", "node", "", ""),
+            p("With", "node", "", ""),
+            p("Mode", "choice:A,B", "", ""),
+            p("Rest", "node", "", ""),
+            p("Size", "float", "shape", ""),
+            p("Sides", "float", "shape", "Mode == B"),
+            p("Hidden", "float", "extra", "Mode == B"),
+            p("Group", "group", "where", ""),
+        ];
+        assert_eq!(rows(&params), ["Input", "With", "|", "Mode", "Rest", "|", "Size", "|", "Group"]);
+        // A node with no wires and no groups has no line at all.
+        assert_eq!(rows(&[p("A", "float", "", ""), p("B", "float", "", "")]), ["A", "B"]);
+        // A template-named group on a wire takes it out of the inputs.
+        assert_eq!(rows(&[p("Input", "node", "", ""), p("Surface", "node", "x", ""), p("Size", "float", "x", "")]), ["Input", "|", "Surface", "Size"]);
+        // The group is the template's: it rides the merge, never the file.
+        let mut inst = crate::app::ParamDef::new("Size", "float", "2");
+        inst.adopt_ui_from(&params[4]);
+        assert_eq!(inst.group, "shape");
+        assert!(!serde_json::to_string(&inst).unwrap().contains("shape"), "not written");
     }
 
     /// Phase 2's toggle reader: the words a toggle can hold, in any case,

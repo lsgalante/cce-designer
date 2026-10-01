@@ -28,7 +28,8 @@
       "type": "group",
       "default": "",
       "show_when": "Source == Attribute",
-      "description": "A point group limiting which points are measured. Empty means every point."
+      "description": "A point group limiting which points are measured. Empty means every point.",
+      "group": "where"
     }
   ]
 }

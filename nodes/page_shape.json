@@ -6,19 +6,19 @@
  "params": [
   { "name": "Input", "type": "node", "default": "", "description": "The page node (or page chain) whose image the shape is drawn onto. Without one the node produces nothing." },
   { "name": "Shape", "type": "choice:Rectangle,Ellipse,Line,Polygon", "default": "Rectangle", "description": "Outline to draw: a rectangle, an ellipse, a straight line, or a regular polygon fitted inside the Width by Height box." },
-  { "name": "X", "type": "float", "default": "4.25", "description": "Horizontal position of the shape's centre, in the page's Units from the page's left edge." },
-  { "name": "Y", "type": "float", "default": "5.50", "description": "Vertical position of the shape's centre, in the page's Units from the page's top edge (y runs down)." },
-  { "name": "Width", "type": "float", "default": "3.00", "description": "Width of the shape's box before rotation, in the page's Units. For a line, its length." },
-  { "name": "Height", "type": "float", "default": "2.00", "show_when": "Shape != Line", "description": "Height of the shape's box before rotation, in the page's Units. A line's thickness comes from Stroke Width instead." },
-  { "name": "Rotation", "type": "slider", "default": "0", "min": -180.0, "max": 180.0, "step": 1.0, "description": "Turns the shape about its centre, in degrees; positive is clockwise as the page is viewed." },
-  { "name": "Corner Radius", "type": "float", "default": "0.00", "show_when": "Shape == Rectangle", "description": "Rounds the rectangle's corners, in the page's Units. 0 gives sharp corners; limited to half the shorter side." },
-  { "name": "Sides", "type": "spinbox", "default": "3", "min": 3, "max": 64, "step": 1, "show_when": "Shape == Polygon", "description": "Number of corners of the polygon, 3 to 64, with the first corner at the top. More sides approach an ellipse." },
-  { "name": "Fill", "type": "toggle", "default": "true", "show_when": "Shape != Line", "description": "When on, the inside of the shape is filled with Fill Color. Turn off for an outline only." },
-  { "name": "Fill Color", "type": "float3", "default": "0.20:0.45:0.85", "min": 0.0, "max": 1.0, "show_when": "Shape != Line && Fill == true", "description": "Colour of the shape's fill; how solid it is comes from Fill Opacity." },
-  { "name": "Fill Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01, "show_when": "Shape != Line && Fill == true", "description": "Opacity of the fill, 0 (invisible) to 1 (solid), blended over what is already on the page." },
-  { "name": "Stroke", "type": "toggle", "default": "true", "description": "When on, the outline is drawn in Stroke Color at Stroke Width. A line shape is drawn only while this is on." },
-  { "name": "Stroke Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0, "show_when": "Stroke == true", "description": "Colour of the outline, and of the whole line for the Line shape." },
-  { "name": "Stroke Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01, "show_when": "Stroke == true", "description": "Opacity of the outline, 0 (invisible) to 1 (solid), blended over the fill and the page." },
-  { "name": "Stroke Width", "type": "float", "default": "0.02", "show_when": "Stroke == true", "description": "Thickness of the outline in the page's Units, centred on the shape's edge (half inside, half out). For a line, its thickness." }
+  { "name": "X", "type": "float", "default": "4.25", "description": "Horizontal position of the shape's centre, in the page's Units from the page's left edge.", "group": "geometry" },
+  { "name": "Y", "type": "float", "default": "5.50", "description": "Vertical position of the shape's centre, in the page's Units from the page's top edge (y runs down).", "group": "geometry" },
+  { "name": "Width", "type": "float", "default": "3.00", "description": "Width of the shape's box before rotation, in the page's Units. For a line, its length.", "group": "geometry" },
+  { "name": "Height", "type": "float", "default": "2.00", "show_when": "Shape != Line", "description": "Height of the shape's box before rotation, in the page's Units. A line's thickness comes from Stroke Width instead.", "group": "geometry" },
+  { "name": "Rotation", "type": "slider", "default": "0", "min": -180.0, "max": 180.0, "step": 1.0, "description": "Turns the shape about its centre, in degrees; positive is clockwise as the page is viewed.", "group": "geometry" },
+  { "name": "Corner Radius", "type": "float", "default": "0.00", "show_when": "Shape == Rectangle", "description": "Rounds the rectangle's corners, in the page's Units. 0 gives sharp corners; limited to half the shorter side.", "group": "geometry" },
+  { "name": "Sides", "type": "spinbox", "default": "3", "min": 3, "max": 64, "step": 1, "show_when": "Shape == Polygon", "description": "Number of corners of the polygon, 3 to 64, with the first corner at the top. More sides approach an ellipse.", "group": "geometry" },
+  { "name": "Fill", "type": "toggle", "default": "true", "show_when": "Shape != Line", "description": "When on, the inside of the shape is filled with Fill Color. Turn off for an outline only.", "group": "fill" },
+  { "name": "Fill Color", "type": "float3", "default": "0.20:0.45:0.85", "min": 0.0, "max": 1.0, "show_when": "Shape != Line && Fill == true", "description": "Colour of the shape's fill; how solid it is comes from Fill Opacity.", "group": "fill" },
+  { "name": "Fill Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01, "show_when": "Shape != Line && Fill == true", "description": "Opacity of the fill, 0 (invisible) to 1 (solid), blended over what is already on the page.", "group": "fill" },
+  { "name": "Stroke", "type": "toggle", "default": "true", "description": "When on, the outline is drawn in Stroke Color at Stroke Width. A line shape is drawn only while this is on.", "group": "stroke" },
+  { "name": "Stroke Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0, "show_when": "Stroke == true", "description": "Colour of the outline, and of the whole line for the Line shape.", "group": "stroke" },
+  { "name": "Stroke Opacity", "type": "slider", "default": "1.00", "min": 0.0, "max": 1.0, "step": 0.01, "show_when": "Stroke == true", "description": "Opacity of the outline, 0 (invisible) to 1 (solid), blended over the fill and the page.", "group": "stroke" },
+  { "name": "Stroke Width", "type": "float", "default": "0.02", "show_when": "Stroke == true", "description": "Thickness of the outline in the page's Units, centred on the shape's edge (half inside, half out). For a line, its thickness.", "group": "stroke" }
  ]
 }

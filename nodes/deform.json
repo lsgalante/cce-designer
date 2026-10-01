@@ -8,6 +8,6 @@
   { "name": "Mode", "type": "choice:Twist,Bend,Taper", "default": "Twist", "description": "Twist rotates slices about the axis, Bend curves the shape along the axis, and Taper scales slices so one end narrows and the other widens." },
   { "name": "Axis", "type": "choice:X,Y,Z", "default": "Y", "description": "The axis the deformation runs along. The middle of the geometry's extent on this axis stays still and the two ends deform in opposite ways." },
   { "name": "Amount", "type": "slider", "default": "1.00", "min": -4.0, "max": 4.0, "step": 0.05, "description": "Strength of the deformation over the geometry's full length: radians of rotation for Twist and Bend, change in scale for Taper. Negative reverses it." },
-  { "name": "Group", "type": "group", "default": "", "description": "Point group to deform; other points stay where they are. Empty deforms every point." }
+  { "name": "Group", "type": "group", "default": "", "description": "Point group to deform; other points stay where they are. Empty deforms every point.", "group": "where" }
  ]
 }

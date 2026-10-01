@@ -6,13 +6,13 @@
  "params": [
   { "name": "Input", "type": "node", "default": "", "description": "The page node (or page chain) whose image the text is drawn onto. Without one the node produces nothing." },
   { "name": "Text", "type": "text", "default": "Title", "description": "The text to draw. It is not wrapped: a long line runs past the page edge rather than breaking." },
-  { "name": "Font", "type": "text", "default": "", "description": "Font family name, such as a system font installed on this machine. Empty uses the default font." },
-  { "name": "Size", "type": "float", "default": "0.25", "description": "Font size in the page's Units. The same size prints the same at any Resolution; only the pixel count changes." },
-  { "name": "Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0, "description": "Colour of the text, drawn fully opaque over the page." },
-  { "name": "X", "type": "float", "default": "4.25", "description": "Horizontal position of the text's anchor, in the page's Units from the left edge. Horizontal decides which part of the text sits here." },
-  { "name": "Y", "type": "float", "default": "0.80", "description": "Vertical position of the text's anchor, in the page's Units from the top edge (y runs down). Vertical decides which part of the text sits here." },
-  { "name": "Horizontal", "type": "choice:Left,Center,Right", "default": "Center", "description": "Which part of the text is placed at X: its left edge, its centre, or its right edge." },
-  { "name": "Vertical", "type": "choice:Top,Middle,Bottom", "default": "Top", "description": "Which part of the text block is placed at Y: its top, its middle, or its bottom." },
-  { "name": "Leading", "type": "slider", "default": "1.25", "min": 0.5, "max": 3.0, "step": 0.05, "description": "Line spacing as a multiple of Size. 1 sets lines tightly; larger values space multi-line text further apart." }
+  { "name": "Font", "type": "text", "default": "", "description": "Font family name, such as a system font installed on this machine. Empty uses the default font.", "group": "type" },
+  { "name": "Size", "type": "float", "default": "0.25", "description": "Font size in the page's Units. The same size prints the same at any Resolution; only the pixel count changes.", "group": "type" },
+  { "name": "Color", "type": "float3", "default": "0.00:0.00:0.00", "min": 0.0, "max": 1.0, "description": "Colour of the text, drawn fully opaque over the page.", "group": "type" },
+  { "name": "X", "type": "float", "default": "4.25", "description": "Horizontal position of the text's anchor, in the page's Units from the left edge. Horizontal decides which part of the text sits here.", "group": "layout" },
+  { "name": "Y", "type": "float", "default": "0.80", "description": "Vertical position of the text's anchor, in the page's Units from the top edge (y runs down). Vertical decides which part of the text sits here.", "group": "layout" },
+  { "name": "Horizontal", "type": "choice:Left,Center,Right", "default": "Center", "description": "Which part of the text is placed at X: its left edge, its centre, or its right edge.", "group": "layout" },
+  { "name": "Vertical", "type": "choice:Top,Middle,Bottom", "default": "Top", "description": "Which part of the text block is placed at Y: its top, its middle, or its bottom.", "group": "layout" },
+  { "name": "Leading", "type": "slider", "default": "1.25", "min": 0.5, "max": 3.0, "step": 0.05, "description": "Line spacing as a multiple of Size. 1 sets lines tightly; larger values space multi-line text further apart.", "group": "layout" }
  ]
 }

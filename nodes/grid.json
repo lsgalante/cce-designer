@@ -6,8 +6,8 @@
  "params": [
   { "name": "Rows", "type": "spinbox", "default": "10", "min": 1.0, "max": 500.0, "step": 1.0, "description": "Number of quad divisions along the length (Z). More rows give a finer grid." },
   { "name": "Columns", "type": "spinbox", "default": "10", "min": 1.0, "max": 500.0, "step": 1.0, "description": "Number of quad divisions across the width (X). More columns give a finer grid." },
-  { "name": "Width", "type": "slider", "default": "1.00", "min": 0.01, "max": 20.0, "step": 0.05, "description": "Size of the grid along X in world units." },
-  { "name": "Length", "type": "slider", "default": "1.00", "min": 0.01, "max": 20.0, "step": 0.05, "description": "Size of the grid along Z in world units." },
-  { "name": "Center", "type": "float3", "default": "0.00:0.00:0.00", "description": "Position of the grid's center in world units; the grid lies flat in the XZ plane through this point." }
+  { "name": "Width", "type": "slider", "default": "1.00", "min": 0.01, "max": 20.0, "step": 0.05, "description": "Size of the grid along X in world units.", "group": "size" },
+  { "name": "Length", "type": "slider", "default": "1.00", "min": 0.01, "max": 20.0, "step": 0.05, "description": "Size of the grid along Z in world units.", "group": "size" },
+  { "name": "Center", "type": "float3", "default": "0.00:0.00:0.00", "description": "Position of the grid's center in world units; the grid lies flat in the XZ plane through this point.", "group": "size" }
  ]
 }

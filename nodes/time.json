@@ -6,8 +6,8 @@
  "params": [
   { "name": "Input", "type": "node", "default": "", "description": "The geometry that passes through with a time detail attribute added." },
   { "name": "Attribute", "type": "attribute", "default": "t", "description": "Name of the detail attribute written with the 0 to 1 progress through the frame range. Empty writes nothing." },
-  { "name": "Start Frame", "type": "spinbox", "default": "1", "min": -9999.0, "max": 9999.0, "step": 1.0, "description": "The frame at which the attribute reads 0." },
-  { "name": "End Frame", "type": "spinbox", "default": "100", "min": -9999.0, "max": 9999.0, "step": 1.0, "description": "The frame at which the attribute reads 1. If equal to Start Frame, it jumps from 0 to 1 at that frame." },
-  { "name": "Clamp", "type": "choice:true,false", "default": "true", "description": "When true the value stays between 0 and 1 outside the range. When false it keeps running, below 0 before the start and above 1 after the end." }
+  { "name": "Start Frame", "type": "spinbox", "default": "1", "min": -9999.0, "max": 9999.0, "step": 1.0, "description": "The frame at which the attribute reads 0.", "group": "range" },
+  { "name": "End Frame", "type": "spinbox", "default": "100", "min": -9999.0, "max": 9999.0, "step": 1.0, "description": "The frame at which the attribute reads 1. If equal to Start Frame, it jumps from 0 to 1 at that frame.", "group": "range" },
+  { "name": "Clamp", "type": "choice:true,false", "default": "true", "description": "When true the value stays between 0 and 1 outside the range. When false it keeps running, below 0 before the start and above 1 after the end.", "group": "range" }
  ]
 }

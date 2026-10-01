@@ -11,7 +11,8 @@
       "name": "Code",
       "type": "code",
       "default": "// Runs once per point. @P is the position, @name any attribute;\n// ch(\"Name\") reads a parameter, neighbours(@ptnum) the topology.\n@P.y += sin(@P.x * 4.0) * 0.15;\n",
-      "description": "The Rhai script run per element. @name reads or writes an attribute, ch(\"path\") reads a parameter. Applies on ctrl+enter or when leaving the editor; an error leaves the input unchanged."
+      "description": "The Rhai script run per element. @name reads or writes an attribute, ch(\"path\") reads a parameter. Applies on ctrl+enter or when leaving the editor; an error leaves the input unchanged.",
+      "group": "code"
     }
   ]
 }

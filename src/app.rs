@@ -898,11 +898,57 @@ pub fn node_wires(node: &FsNode) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The run a parameter belongs to, for the pane's separators: the
+/// template's `group`, or for the LEADING run of wires — the node's inputs
+/// at the top of its list — a group of their own, so every node with an
+/// input has a line under it without a template saying so. A wire further
+/// down (Relax's Rest, under its Mode) is part of whatever run it is in.
+pub fn param_group(params: &[ParamDef], i: usize) -> String {
+    let p = &params[i];
+    if !p.group.is_empty() {
+        return p.group.clone();
+    }
+    let leading_wire = params[..=i].iter().all(|q| q.kind() == ParamKind::Node && q.group.is_empty());
+    if leading_wire { PARAM_INPUTS_GROUP.to_string() } else { String::new() }
+}
+
+/// The group the leading wires are in when a template names none.
+pub const PARAM_INPUTS_GROUP: &str = "inputs";
+
+/// A separator row in `param_display`'s output: cce-ui's `separator` row,
+/// with no key and no value, so the write-back finds no parameter by it.
+pub const PARAM_SEPARATOR: &str = "separator";
+
+/// The params pane's rows: every SHOWN parameter as (display key, value,
+/// row type), with a separator row wherever two shown rows belong to
+/// different groups ([`param_group`]) — between the inputs and the rest,
+/// and between runs of parameters about different things. Never first or
+/// last, and never two in a row, since one is only ever placed between two
+/// shown parameters.
 pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
     // Rows whose condition does not hold are not shown. Write-back resolves a
     // row by its display key rather than by position, so a hidden parameter
     // simply is not reported and keeps whatever value it had.
-    params.iter().filter(|p| param_visible(params, &p.show_when)).map(|p| {
+    let mut out = Vec::new();
+    let mut last_group: Option<String> = None;
+    for (i, p) in params.iter().enumerate() {
+        if !param_visible(params, &p.show_when) {
+            continue;
+        }
+        let group = param_group(params, i);
+        if last_group.as_ref().is_some_and(|g| *g != group) {
+            out.push((String::new(), String::new(), PARAM_SEPARATOR.to_string()));
+        }
+        last_group = Some(group);
+        out.push(param_row(p));
+    }
+    out
+}
+
+/// One parameter as the pane's row: its display key, its value as the row
+/// shows it, and the row type.
+fn param_row(p: &ParamDef) -> (String, String, String) {
+    {
         let key = if p.label.is_empty() { &p.name } else { &p.label };
         let kind = p.kind();
         let value = if p.ty() == "choice" && !p.options().is_empty() && p.text().is_empty() {
@@ -940,7 +986,7 @@ pub fn param_display(params: &[ParamDef]) -> Vec<(String, String, String)> {
             p.ty().to_string()
         };
         (key.clone(), value, ptype)
-    }).collect()
+    }
 }
 
 pub fn flatten_node_templates(root: &FsNode) -> Vec<NodeTemplate> {
