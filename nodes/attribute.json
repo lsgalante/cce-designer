@@ -18,6 +18,7 @@
     },
     {
       "name": "Attribute Name",
+      "label": "Name",
       "type": "attribute",
       "default": "attr1",
       "description": "The point attribute to work on. Pos and Col are the built-in position and colour; they can be modified but not created or deleted."

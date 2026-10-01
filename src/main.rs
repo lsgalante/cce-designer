@@ -4575,12 +4575,22 @@ mod tests {
         let row = |name: &str| {
             rows.iter().find(|r| r.0 == name).unwrap_or_else(|| panic!("row {name}")).2.clone()
         };
-        let attr_ty = row("Attribute Name");
+        let attr_ty = row("Name");
         assert!(attr_ty.starts_with("textpick:"), "got {attr_ty}");
         for expected in ["N", "uv", "Pos", "Col"] {
             assert!(attr_ty.contains(expected), "{expected} missing from {attr_ty}");
         }
         assert_eq!(row("Group"), "textpick:group1");
+        assert!(!rows.iter().any(|r| r.0 == "Attribute Name"), "the row shows its label, not its name");
+        // An edit to the labelled row lands on the parameter it names.
+        let mut edited = rows.clone();
+        edited.iter_mut().find(|r| r.0 == "Name").unwrap().1 = "weight".into();
+        state.param_mut().set_display_params(&edited);
+        state.sync_parameters_to_project();
+        let attr = &state.fs_root.children[2];
+        assert_eq!(attr.params.iter().find(|p| p.name == "Attribute Name").unwrap().text(), "weight");
+        state.sync_parameters_pane();
+        let rows = state.param_mut().node_params();
         // The Input row stays plain text.
         assert_eq!(row("Input"), "text");
 
