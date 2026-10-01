@@ -781,6 +781,26 @@ pub(crate) fn splice_out(dir: &mut FsNode, slot: usize) {
     }
 }
 
+/// Splice the child `mid_id` of `dir` into the wire from `src_name` to
+/// `dest_id`: the middle node takes the wire's upstream as its Input, and
+/// the downstream node re-aims its Input at the middle one. Both rewires or
+/// neither — a splice that only cut the wire would orphan downstream — so
+/// false, and nothing written, when either node has no Input. What a node
+/// dropped onto a wire runs, and Add Node on a cell a wire runs through.
+pub(crate) fn splice_into_wire(dir: &mut FsNode, mid_id: &str, src_name: String, dest_id: &str) -> bool {
+    let has_input = |id: &str| dir.children.iter().any(|c| c.id == id && c.params.iter().any(|p| p.name == "Input"));
+    let Some(mid_name) = dir.children.iter().find(|c| c.id == mid_id).map(|c| c.name.clone()) else { return false };
+    if !has_input(mid_id) || !has_input(dest_id) {
+        return false;
+    }
+    for (id, wire) in [(mid_id, src_name), (dest_id, mid_name)] {
+        if let Some(p) = dir.children.iter_mut().find(|c| c.id == id).and_then(|c| c.params.iter_mut().find(|p| p.name == "Input")) {
+            p.set_text(wire);
+        }
+    }
+    true
+}
+
 /// [`node_wires_at`] with nothing evaluated: an expression wire names
 /// nothing.
 pub fn node_wires(node: &FsNode) -> Vec<(String, String)> {
@@ -10910,30 +10930,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // at the dragged node. Both rewires or neither — a splice
                 // that only cut the wire would silently orphan downstream.
                 if let Some((mid_id, src_name, dest_id)) = self.graph_mut().take_pending_splice() {
-                    let dir = self.current_dir_mut();
-                    let mid_name = dir
-                        .children
-                        .iter()
-                        .find(|c| c.id == mid_id)
-                        .map(|c| c.name.clone());
-                    let both_rewirable = mid_name.is_some()
-                        && dir.children.iter().any(|c| {
-                            c.id == dest_id && c.params.iter().any(|p| p.name == "Input")
-                        })
-                        && dir.children.iter().any(|c| {
-                            c.id == mid_id && c.params.iter().any(|p| p.name == "Input")
-                        });
-                    if let (Some(mid_name), true) = (mid_name, both_rewirable) {
-                        if let Some(mid) = dir.children.iter_mut().find(|c| c.id == mid_id) {
-                            if let Some(p) = mid.params.iter_mut().find(|p| p.name == "Input") {
-                                p.set_text(src_name);
-                            }
-                        }
-                        if let Some(dest) = dir.children.iter_mut().find(|c| c.id == dest_id) {
-                            if let Some(p) = dest.params.iter_mut().find(|p| p.name == "Input") {
-                                p.set_text(mid_name);
-                            }
-                        }
+                    if splice_into_wire(self.current_dir_mut(), &mid_id, src_name, &dest_id) {
                         self.sync_nodes();
                         self.rebuild_scene_geometry();
                         self.sync_parameters_pane();
@@ -10967,30 +10964,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         self.slots.content2.take_pending_splice()
                     {
                         let p2 = self.current_path2.clone();
-                        let dir = self.dir_at_mut(&p2);
-                        let mid_name = dir
-                            .children
-                            .iter()
-                            .find(|c| c.id == mid_id)
-                            .map(|c| c.name.clone());
-                        let both = mid_name.is_some()
-                            && dir.children.iter().any(|c| {
-                                c.id == dest_id && c.params.iter().any(|p| p.name == "Input")
-                            })
-                            && dir.children.iter().any(|c| {
-                                c.id == mid_id && c.params.iter().any(|p| p.name == "Input")
-                            });
-                        if let (Some(mid_name), true) = (mid_name, both) {
-                            if let Some(mid) = dir.children.iter_mut().find(|c| c.id == mid_id) {
-                                if let Some(p) = mid.params.iter_mut().find(|p| p.name == "Input") {
-                                    p.set_text(src_name);
-                                }
-                            }
-                            if let Some(dest) = dir.children.iter_mut().find(|c| c.id == dest_id) {
-                                if let Some(p) = dest.params.iter_mut().find(|p| p.name == "Input") {
-                                    p.set_text(mid_name);
-                                }
-                            }
+                        if splice_into_wire(self.dir_at_mut(&p2), &mid_id, src_name, &dest_id) {
                             self.sync_nodes();
                             self.rebuild_scene_geometry();
                             self.sync_parameters_pane();

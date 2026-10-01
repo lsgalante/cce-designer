@@ -1061,6 +1061,21 @@ and a node is never wired to itself. The rewiring is in the deletion's
 undo step, since a structure step holds the wires of every node it
 touches. `deleting_a_wired_node_connects_its_neighbours` is the test.
 
+### Adding a node on a wire splices it in
+
+Add Node (the dialog's AddNode pick, from Tab or the network menu) on a
+FREE grid-cursor cell that a wire into an Input runs through wires the new
+node into that chain (since 2026-10-01): A → C becomes A → new → C. Which
+wire is cce-ui's `GraphController::input_wire_through_cell`, the hit test a
+node dragged onto a wire uses, asked about the body the new node will have
+— so adding and dropping agree about what is on a wire, in every wire
+style. It is asked BEFORE the add, since the new node's own wires would
+touch the cell after. The rewiring is `app::splice_into_wire`, the one the
+drag drop runs (both editors): both Inputs or neither, so a node with no
+Input — a generator — is added beside the wire and cuts nothing. MCP's
+`add_node` places at the coordinates it is given and does not splice.
+`a_node_added_on_a_wire_is_wired_into_its_chain` is the test.
+
 ### Sibling-first inputs and the Switch node
 
 Two pieces added on 2026-09-21 so a node can be BUILT FROM other nodes

@@ -1513,6 +1513,22 @@ impl State {
         self.open_dialog_anchored(Mode::AddNode, Some((x, y)));
     }
 
+    /// Wire the node just added (the level's last) into the wire from the
+    /// node `src_id` to `dest_id`, and say so. A node with no Input — a
+    /// generator — is left unwired: it cannot sit mid-chain.
+    fn splice_new_node(&mut self, src_id: &str, dest_id: &str) {
+        let dir = self.current_dir();
+        let (Some(new), Some(src)) = (dir.children.last(), dir.children.iter().find(|c| c.id == src_id)) else { return };
+        let (new_id, new_name, src_name) = (new.id.clone(), new.name.clone(), src.name.clone());
+        if crate::app::splice_into_wire(self.current_dir_mut(), &new_id, src_name.clone(), dest_id) {
+            self.sync_nodes();
+            self.rebuild_scene_geometry();
+            self.sync_parameters_pane();
+            let dest = self.current_dir().children.iter().find(|c| c.id == dest_id).map(|c| c.name.clone()).unwrap_or_default();
+            self.update_status_text(&format!("Added {new_name} between {src_name} and {dest}."));
+        }
+    }
+
     /// Open the dialog to rename the node in `slot` of the current level.
     /// The query line is the name: it opens holding the one the node has,
     /// so a rename that changes a letter is a letter typed.
@@ -2452,6 +2468,12 @@ impl State {
             }
             Mode::Groups => {}
             Mode::AddNode => {
+                // A free cursor cell a wire runs through is a place in that
+                // chain: the new node is spliced into the wire, as a node
+                // dropped there would be. Asked before the add, which puts
+                // a node on the cell and its own wires through it.
+                let free = !self.current_dir().children.iter().any(|c| c.position == (gx, gy));
+                let wire = if free { self.graph().input_wire_through_cell(gx, gy) } else { None };
                 let mut redraw = false;
                 let action = crate::app::McpAction::AddNode {
                     template_name: id,
@@ -2459,12 +2481,17 @@ impl State {
                     x: gx,
                     y: gy,
                 };
-                if let Err(e) = self.apply_action(action, &mut redraw) {
+                match self.apply_action(action, &mut redraw) {
+                    Ok(_) => {
+                        if let Some((src_id, dest_id)) = wire {
+                            self.splice_new_node(&src_id, &dest_id);
+                        }
+                    }
                     // The one refusal this can hit is a geometry template in
                     // a utility dir, which `refresh_dialog_rows` already
                     // filters out — but the rule lives in `apply_action`, so
                     // say what it said rather than assume it cannot fire.
-                    self.update_status_text(&e);
+                    Err(e) => self.update_status_text(&e),
                 }
             }
         }

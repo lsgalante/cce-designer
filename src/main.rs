@@ -15526,6 +15526,51 @@ mod tests {
         assert_eq!(added.position, (3.0, 2.0), "placed at the grid cursor");
     }
 
+    /// Adding a node on a free cell a wire runs through wires it into that
+    /// chain: A -> C becomes A -> new -> C. Off the wire, or for a node with
+    /// no Input, nothing is rewired.
+    #[test]
+    fn a_node_added_on_a_wire_is_wired_into_its_chain() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.current_dir_mut().children = vec![
+            ref_node("a", "a", "sphere", vec![("Radius", "float", "1")], vec![]),
+            ref_node("c", "c", "transform", vec![("Input", "node", "a")], vec![]),
+        ];
+        state.current_dir_mut().children[0].position = (2.0, 1.0);
+        state.current_dir_mut().children[1].position = (2.0, 3.0);
+        state.sync_nodes();
+        state.rebuild_positions();
+        state.apply_layout();
+        let input_of = |state: &State, name: &str| {
+            let n = state.current_dir().children.iter().find(|c| c.name == name).expect(name);
+            crate::geometry::node_param_node(n, "Input")
+        };
+        let add = |state: &mut State, template: &str, col: i32, row: i32| {
+            state.grid_cursor_col = col;
+            state.grid_cursor_row = row;
+            state.open_node_palette();
+            state.take_dialog_pick(template.to_string());
+            state.current_dir().children.last().unwrap().name.clone()
+        };
+
+        let mid = add(&mut state, "Transform", 2, 2);
+        assert_eq!(input_of(&state, &mid).as_deref(), Some("a"), "the new node reads the wire's upstream");
+        assert_eq!(input_of(&state, "c").as_deref(), Some(mid.as_str()), "and the downstream reads it");
+        assert!(state.last_status_text.contains("between"), "{}", state.last_status_text);
+
+        // Off every wire: added, wired to nothing new.
+        let aside = add(&mut state, "Transform", 6, 2);
+        assert_eq!(input_of(&state, "c").as_deref(), Some(mid.as_str()));
+        assert_ne!(input_of(&state, &aside).as_deref(), Some("a"));
+
+        // A generator on a wire cannot sit mid-chain: the wire is left alone.
+        state.current_dir_mut().children[1].position = (2.0, 5.0);
+        state.sync_nodes();
+        let gen = add(&mut state, "Sphere", 2, 4);
+        assert_eq!(input_of(&state, "c").as_deref(), Some(mid.as_str()), "{gen} did not cut the wire");
+    }
+
     /// The Add Node list offers every template, everywhere.
     ///
     /// It used to hide the geometry ones inside a "utility dir" — the root
