@@ -207,6 +207,30 @@ pub fn layout_in(width: f32, height: f32) -> (f32, f32, f32, f32) {
     (x, y, w, h)
 }
 
+/// The least height an anchored plate shrinks to before it moves up
+/// instead: a query line and a dozen rows.
+const ANCHORED_MIN_H: f32 = 340.0;
+
+/// The dialog's rect when it opens where something else stood — the network
+/// menu's Add Node, which turns the menu into the list. The top-left corner
+/// is the anchor's wherever the plate fits there: short of room below, it
+/// gives up height down to [`ANCHORED_MIN_H`] and only then rises, and it is
+/// pulled in from the right edge. The width is the centred plate's.
+pub fn layout_at(width: f32, height: f32, ax: f32, ay: f32) -> (f32, f32, f32, f32) {
+    let (_, _, w, full_h) = layout_in(width, height);
+    let x = ax.min(width - PAD - w).max(0.0).round();
+    let below = height - PAD - ay;
+    let (y, h) = if below >= full_h {
+        (ay, full_h)
+    } else if below >= ANCHORED_MIN_H.min(full_h) {
+        (ay, below)
+    } else {
+        let h = ANCHORED_MIN_H.min(full_h);
+        ((height - PAD - h).max(0.0), h)
+    };
+    (x, y.round(), w, h.floor())
+}
+
 /// The query line, at the top of the plate.
 fn query_rect(rect: Rect) -> Rect {
     Rect { x: rect.x + PAD, y: rect.y + PAD, width: (rect.width - 2.0 * PAD).max(0.0), height: QUERY_H }
@@ -226,6 +250,9 @@ pub fn visible_rows(x: f32, y: f32, w: f32, h: f32) -> usize {
 
 pub struct Dialog {
     pub mode: Mode,
+    /// Where the plate's top-left corner goes, when it opened in place of
+    /// something else (see [`layout_at`]); `None` centres it.
+    pub anchor: Option<(f32, f32)>,
     /// What has been typed into the filter.
     pub query: String,
     /// The filtered, ranked rows — rebuilt by the app whenever `query`
@@ -312,6 +339,7 @@ impl Dialog {
         slider_stamp.set_scroll(false);
         let mut d = Adapted::new(Dialog {
             mode: Mode::Commands,
+            anchor: None,
             query: String::new(),
             rows: Vec::new(),
             selected: 0,
@@ -1475,6 +1503,16 @@ impl State {
         self.open_dialog_in(Mode::AddNode);
     }
 
+    /// The add-node palette opened where the network menu stood, by that
+    /// menu's Add Node row: the menu TRANSFORMS into the list, as the
+    /// palette transforms into Group Markers. The two plates are one
+    /// material (`paint_menu_plate`), so the list taking the menu's corner
+    /// is what makes it read as the same plate grown, not a second one
+    /// arriving across the window.
+    pub fn open_node_palette_at(&mut self, x: f32, y: f32) {
+        self.open_dialog_anchored(Mode::AddNode, Some((x, y)));
+    }
+
     /// Open the dialog to rename the node in `slot` of the current level.
     /// The query line is the name: it opens holding the one the node has,
     /// so a rename that changes a letter is a letter typed.
@@ -1506,10 +1544,15 @@ impl State {
     }
 
     fn open_dialog_in(&mut self, mode: Mode) {
+        self.open_dialog_anchored(mode, None);
+    }
+
+    fn open_dialog_anchored(&mut self, mode: Mode, anchor: Option<(f32, f32)>) {
         // Always with an empty query: a dialog that reopens holding the last
         // search has to be cleared before it can be used, which is a step
         // every single time to save one occasionally.
         self.slots.dialog.mode = mode;
+        self.slots.dialog.anchor = anchor;
         self.slots.dialog.query.clear();
         self.slots.dialog.set_visible(true);
         self.refresh_dialog_rows();
@@ -2130,7 +2173,10 @@ impl State {
             self.positions[DIALOG_IDX] = (0.0, 0.0, 0.0, 0.0);
             return;
         }
-        let (x, y, w, h) = layout_in(self.width, self.height);
+        let (x, y, w, h) = match self.slots.dialog.anchor {
+            Some((ax, ay)) => layout_at(self.width, self.height, ax, ay),
+            None => layout_in(self.width, self.height),
+        };
         self.positions[DIALOG_IDX] = (x, y, w, h);
         self.slots.dialog.set_page(visible_rows(x, y, w, h));
     }

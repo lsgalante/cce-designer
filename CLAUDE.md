@@ -2317,7 +2317,13 @@ the pointer. Until 2026-09-22 the empty-space press opened the **add-node
 palette** outright, which left the network the one pane whose right-click was
 not a context menu, and left every other graph-wide command reachable only by
 chord or through the palette. **Add Node is the first row** instead, and picking
-it opens the same palette.
+it opens the same palette — ON THE MENU'S CORNER (since 2026-10-01): the menu
+transforms into the list, as the palette transforms into Group Markers, where
+it used to vanish for a plate centred across the window. `Dialog::anchor` holds
+the corner and `dialog::layout_at` places the plate there, giving up height
+(down to `ANCHORED_MIN_H`) before it moves up and pulling in from the right
+edge; every other opening clears the anchor and centres, Tab's Add Node
+included.
 
 Rows are `NETWORK_MENU_COMMANDS` — a list of COMMAND IDS, `None` for a
 separator — resolved through `command::by_id`, so a label is the registry's

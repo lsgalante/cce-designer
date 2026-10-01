@@ -6286,9 +6286,17 @@ impl State {
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = idx.and_then(|i| self.network_menu_actions.get(i).copied());
+            // Where the menu stands, read before it is hidden: Add Node
+            // opens its list on the menu's corner, so the menu turns into
+            // the list rather than vanishing for one across the window.
+            let corner = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
             self.close_network_menu();
-            if let Some(NetworkMenuAction::Command(id)) = picked {
-                self.run_command(id);
+            match picked {
+                Some(NetworkMenuAction::Command("add_node")) => self.open_node_palette_at(corner.0, corner.1),
+                Some(NetworkMenuAction::Command(id)) => {
+                    self.run_command(id);
+                }
+                _ => {}
             }
             return true;
         }

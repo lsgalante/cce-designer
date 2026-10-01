@@ -15313,6 +15313,7 @@ mod tests {
         state.handle_event(&WindowEvent::CursorMoved {
             position: LocalPosition { x: rx as f64, y: ry as f64 },
         });
+        let menu_corner = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
         state.handle_event(&WindowEvent::MouseInput {
             state: ElementState::Pressed,
             button: MouseButton::Left,
@@ -15321,6 +15322,41 @@ mod tests {
         assert!(state.dialog_visible());
         assert_eq!(state.slots.dialog.mode, Mode::AddNode);
         assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cell);
+
+        // The menu turns into the list: the plate opens on the menu's
+        // corner, as far as the window lets it, not centred.
+        let (dx, dy, dw, dh) = state.positions[crate::slots::DIALOG_IDX];
+        let want = crate::dialog::layout_at(state.width, state.height, menu_corner.0, menu_corner.1);
+        assert_eq!((dx, dy, dw, dh), want);
+        assert_ne!((dx, dy), {
+            let (x, y, _, _) = crate::dialog::layout_in(state.width, state.height);
+            (x, y)
+        }, "not the centred plate");
+        assert!(dx + dw <= state.width && dy + dh <= state.height, "inside the window");
+
+        // Tab and the palette's other openings still centre it.
+        state.close_dialog();
+        state.open_node_palette();
+        assert_eq!(
+            state.positions[crate::slots::DIALOG_IDX],
+            crate::dialog::layout_in(state.width, state.height)
+        );
+    }
+
+    /// An anchored plate keeps its corner where it fits, gives up height
+    /// before it moves, and rises only below the least height it keeps.
+    #[test]
+    fn an_anchored_dialog_keeps_the_corner_it_was_given() {
+        use crate::dialog::{layout_at, layout_in};
+        let (_, _, w, h) = layout_in(1600.0, 1200.0);
+        assert_eq!(layout_at(1600.0, 1200.0, 100.0, 50.0), (100.0, 50.0, w, h), "room for all of it");
+        let (x, y, _, short) = layout_at(1600.0, 1200.0, 100.0, 700.0);
+        assert_eq!((x, y), (100.0, 700.0), "the corner stays");
+        assert!(short < h && short >= 340.0, "it is shorter: {short}");
+        let (_, y, _, hh) = layout_at(1600.0, 1200.0, 100.0, 1100.0);
+        assert!(y < 1100.0 && y + hh <= 1200.0, "too low, it rises: {y} + {hh}");
+        let (x, _, _, _) = layout_at(1600.0, 1200.0, 1500.0, 50.0);
+        assert!(x + w <= 1600.0, "pulled in from the right: {x}");
     }
 
     /// Every row of the network context menu names a command that exists —
