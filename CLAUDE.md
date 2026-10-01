@@ -2947,11 +2947,13 @@ the later over the earlier, as a chain of Visualize nodes composites.
   states: `State::visualizers`, persisted in the viewport block of
   state.kdl and with the project's display block, so a project keeps its
   own. **As one string** (`visualizer::encode` / `decode`: `key=value`
-  joined by `|`, a visualizer per `;`, percent-escaped) — and not JSON,
-  because cce-ui's `json_to_kdl_string` writes a string between quotes
-  WITHOUT escaping the ones inside it: a JSON string came back as a line no
-  parser reads, and a settings file that fails to parse is read as the
-  DEFAULTS. A key the reader does not know is skipped.
+  joined by `|`, a visualizer per `;`, percent-escaped) — not JSON,
+  because when this landed cce-ui's `json_to_kdl_string` wrote a string
+  between quotes WITHOUT escaping the ones inside it: a JSON string came
+  back as a line no parser reads, and a settings file that fails to parse
+  is read as the DEFAULTS. cce-ui escapes since the same day (`kdl_quote`),
+  but the encoding stays: it is what state.kdl files already hold, and it
+  reads plainly there. A key the reader does not know is skipped.
 - **They are applied to the scene, not evaluated with it.**
   `rebuild_scene_geometry` evaluates the graph, keeps the result as
   `State::scene_base` with its attributes and ranges

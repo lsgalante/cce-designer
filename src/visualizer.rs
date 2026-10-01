@@ -144,11 +144,12 @@ pub fn apply_all(visualizers: &[Visualizer], geom: &mut Detail) {
 /// `;`, each `key=value` pairs joined by `|`, with `%`, `|`, `;`, `=`, `"`
 /// and `\` percent-escaped in the values. One string, as the marked groups
 /// are one, because the KDL writer cannot be trusted with a list of
-/// records; and not JSON, because it writes a string between quotes
-/// WITHOUT escaping the ones inside it — a JSON string came back as a line
-/// no parser reads, and a settings file that fails to parse is read as the
-/// DEFAULTS. A key the reader does not know is skipped and one it lacks
-/// takes the default, so the format can grow.
+/// records; and not JSON, because the writer then put a string between
+/// quotes WITHOUT escaping the ones inside it — a JSON string came back as
+/// a line no parser reads, and a settings file that fails to parse is read
+/// as the DEFAULTS. (cce-ui escapes since 2026-10-01; this format stays,
+/// being what the files hold.) A key the reader does not know is skipped
+/// and one it lacks takes the default, so the format can grow.
 pub fn encode(visualizers: &[Visualizer]) -> String {
     visualizers
         .iter()
