@@ -3362,30 +3362,47 @@ selection stays where it was:
   range the pitch limits), landing through `set_zoom_percent`, which zooms
   about the cursor cell and re-reads the row, since `zoom` clamps.
 - `Choice` — a fixed set (World Unit, GPU, Node Wire Style, the
-  visualizer settings): a DROPDOWN (since 2026-10-01). The current option
-  reads in the chord column in a well with cce-icons' `chevron-down` after
-  it (`choice_mark`, a square box 0.8 of the row's font size, rasterized
-  at twice that), and the well lifts under the pointer — `choice_span` is
-  the one rect the paint, the hover and the dropdown share. A press on the
-  row, or Enter, opens the toolkit's context menu as its dropdown
-  (`State::open_dialog_dropdown`): one row an option, the current one
-  marked `●` and highlighted, right-aligned under the well. It is a popup
-  ABOVE the dialog, so it runs past the plate's edge, and it is in front
-  of the dialog for input — `dialog_dropdown_press` ahead of
-  `dialog_mouse_input` (a press off it closes it alone and is swallowed),
-  `dialog_dropdown_wheel` ahead of the dialog's wheel, and
-  `dialog_dropdown_key` ahead of the dialog's keys: Up/Down walk it
-  (cce-ui's `context_menu::step_hovered`), Enter picks, Escape and Tab
-  close it. A pick lands through `land_dialog_choice`, the one write the
-  arrow keys use too — Left/Right still step a choice without opening it.
-  `State::dialog_dropdown` is the open row's id and its options' values.
-  Until then a click or Enter stepped to the next option and the value
-  stood between a left and a right chevron; before 2026-09-30 those were
-  the text triangles `◂` `▸`, which the dialog's font has no glyph for.
-  The right column (values and chords alike) is measured by SHAPING
-  (`shaped_width`, as `Button::label_width` does): `measure_text_width`
-  resolves the family through usvg and measured a value 8 px wider than it
-  drew. `a_choice_row_is_a_dropdown` drives it by pointer and keys.
+  visualizer settings): the PARAMS PANE'S DROPDOWN (since 2026-10-01,
+  the toolkit `Dropdown`), in the control band the sliders and colour
+  wells use. Closed, a row draws `Dialog::dropdown_stamp` — one
+  `Dropdown` handed each row's options and selection as it is painted,
+  as the toggle and slider stamps are. A press on the row or Enter opens
+  `Dialog::dropdown`, the LIVE one (`State::open_dialog_dropdown`): it
+  takes the row's options, is laid out on the row's band
+  (`sync_dialog_dropdown`), focused and sent Enter, and its plate GROWS
+  out of the trigger into the list and shrinks back, the toolkit's own
+  animation and frosted style — painted after the rows
+  (`render_popover`), over them. Up/Down/Enter/Escape are the dropdown's
+  own; Tab closes it; Left/Right on a closed row still step it in place;
+  every pick lands through `land_dialog_choice`. Four things it took:
+  - **Text is painted twice** (`paint_retagged`): a trigger's text must
+    carry the DIALOG's bounds or the dialog's occluder clamps it away.
+  - **The open plate is an occluder registered AFTER the dialog's** —
+    after the slot registration in `collect_display_list`, and after its
+    `clear_hierarchy`, which wipes the widget tree: registered before
+    that, the id stayed in `active_popovers` but resolved to nothing, the
+    engine's clamp skipped it in silence, and the list's labels were
+    clamped while the rows under it showed through. The clamp lets an
+    occluder's own labels through only past the occluders registered
+    before it, so the order is the whole trick.
+  - **The runner hands the press to the dropdown first.** Every left
+    press goes to each registered popover whose hit test MISSES it
+    before the app is asked (`close_popovers_missed_by_press`), and the
+    dialog's claim covers the dropdown, so it always misses: the
+    dropdown has taken the press — picked a row, or closed — before
+    `handle_event` runs. `Dialog::dropdown_armed` remembers it was
+    expanded; a press that finds it not expanded while armed is one it
+    already took, and `dialog_dropdown_press` lands the pick and
+    swallows the press, so the row under the list is not pressed too.
+    The test's press does what the runner does, or it would not have
+    caught this.
+  - **Closing the dialog shuts it outright** (`open = false`), so no
+    shrinking plate is left reporting a popover over the panes.
+  `Dropdown::is_expanded` (cce-ui, the same day) is what tells a
+  shrinking dropdown from one taking input. For one day before this the
+  choice was the context menu shown as a list under the row, and before
+  that a click stepped the value between two chevrons.
+  `a_choice_row_is_a_dropdown` is the test.
 - `Color` — a hex colour. Behind each colour row the
   dialog keeps one toolkit `ColorSelector` (`Dialog::colors`, by row id,
   kept across re-rankings so a query that drops the row does not kill its

@@ -168,6 +168,16 @@ impl State {
             let w = self.slots.get_dyn(i);
             self.ui_context.register_widget(w.base().id(), w as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static));
         }
+        // The dialog's open dropdown, AFTER the dialog and after the wipe
+        // above (which would drop it from the tree, leaving an id the
+        // engine's clamp cannot resolve): the clamp lets an occluder's own
+        // labels through only past the occluders registered before it, so
+        // the dialog's labels under the list are clamped and the list's are
+        // not.
+        if self.dialog_visible() && self.slots.dialog.dropdown.open && self.sync_dialog_dropdown() {
+            let dd: &mut (dyn cce_ui::widget::WidgetHost + 'static) = &mut *self.slots.dialog.dropdown;
+            self.ui_context.register_popover(dd);
+        }
 
         let mut pc = PaintCtx::new();
         let mut visited = vec![false; WIDGET_COUNT];

@@ -7669,7 +7669,8 @@ mod tests {
         let lines_before = state.overlay_normal_verts.len();
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert!(state.dialog_dropdown_open(), "a choice opens its dropdown");
-        assert_eq!(cce_ui::widget::context_menu::options(), vec!["● Ramp".to_string(), "○ Vector".to_string()]);
+        assert_eq!(state.slots.dialog.dropdown.options, vec!["Ramp".to_string(), "Vector".to_string()]);
+        assert_eq!(state.slots.dialog.dropdown.selected, 0);
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert!(state.visualizers[0].is_vector());
@@ -14606,16 +14607,20 @@ mod tests {
     /// ranked with the commands, so a query finds a colour the way it finds
     /// a command. There is no second half: Tab in this mode does nothing,
     /// and nothing draws a strip.
-    /// A choice row is a dropdown: its value sits in a well with one
-    /// chevron-down after it — cce-icons', square, sized from the row's
-    /// font — and a press on it opens a menu of the options under it,
-    /// right-aligned on the well, the current one marked and highlighted.
-    /// Up, Down and Enter walk and pick; a press on a row picks it; Escape
-    /// or a press elsewhere closes the menu and leaves the dialog up.
+    /// A choice row is the params pane's dropdown. Closed, its row draws
+    /// the toolkit `Dropdown` in the control band, the value's text carried
+    /// under the dialog's bounds so the dialog's occluder lets it through.
+    /// A press on it opens the live dropdown laid out on that band: its
+    /// plate grows out of the trigger into the list, registered as an
+    /// occluder AFTER the dialog so the rows under it are hidden and its
+    /// own labels are not. Up, Down and Enter walk and pick; a press on a
+    /// row picks it; Escape or a press elsewhere closes it, and the dialog
+    /// stays up.
     #[test]
     fn a_choice_row_is_a_dropdown() {
         use cce_ui::scene::paint::Prim;
-        use cce_ui::widget::context_menu;
+        use cce_ui::widget::WidgetHost;
+        use crate::dialog::setting_row_id;
         use crate::slots::DIALOG_IDX;
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{ElementState, MouseButton};
@@ -14628,68 +14633,78 @@ mod tests {
             state.dialog_key_input(&typed(c));
         }
         let (dx, dy, dw, dh) = state.positions[DIALOG_IDX];
+        let own = [dx, dy, dx + dw, dy + dh];
         let list = state.collect_display_list();
-        let inside = |x: f32, y: f32| x >= dx && x <= dx + dw && y >= dy && y <= dy + dh;
-        let (vx, vy, font) = list
+        let (vx, vy) = list
             .items
             .iter()
             .find_map(|item| match &item.prim {
-                Prim::Text { text, x, y, font_size, .. } if text == "mm" && inside(*x, *y) => Some((*x, *y, *font_size)),
+                // The trigger draws its text a cluster at a time.
+                Prim::Text { text, x, y, bounds: Some(b), .. } if text == "m" && *b == own && *x > dx + dw * 0.5 => Some((*x, *y)),
                 _ => None,
             })
-            .expect("the World Unit row shows its value");
-        let marks: Vec<_> = list
-            .items
-            .iter()
-            .filter_map(|item| match &item.prim {
-                Prim::Image { rect, .. } if inside(rect.x, rect.y) => Some(*rect),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(marks.len(), 1, "one mark: {marks:?}");
-        let mark = marks[0];
-        assert!(mark.x > vx, "after the value");
-        assert_eq!(mark.width, mark.height, "square");
-        assert_eq!(mark.width, (font * 0.8).round(), "sized from the row's font");
+            .expect("the World Unit row's dropdown shows its value under the dialog's bounds");
 
-        // A press on the value opens the dropdown under it.
+        // As the runner presses: a frame drawn (which registers the open
+        // dropdown), then the press handed to every open popover that the
+        // press MISSED by its hit test — which the dialog's own claim makes
+        // the dropdown's — and only then to the app.
         let press = |state: &mut State, x: f32, y: f32| {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+            let _ = state.collect_display_list();
+            state.ui_context.close_popovers_missed_by_press(x, y);
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
         };
-        press(&mut state, vx + 2.0, vy + font * 0.5);
+        press(&mut state, vx + 2.0, vy + 4.0);
         assert!(state.dialog_dropdown_open(), "the press opened the dropdown");
-        let options = context_menu::options();
-        assert_eq!(options.first().map(String::as_str), Some("● mm"), "{options:?}");
-        assert!(options[1..].iter().all(|o| o.starts_with("○ ")));
-        assert_eq!(context_menu::hovered_item(), Some(0), "the current option is highlighted");
-        let (_, menu_w, _) = context_menu::natural_geometry();
-        assert!((context_menu::x() + menu_w - (mark.x + mark.width + 6.0)).abs() < 1.0, "right-aligned on the trigger");
-        assert!(context_menu::y() > vy, "under the row");
+        let units = state.slots.dialog.dropdown.options.clone();
+        assert_eq!(units[state.slots.dialog.dropdown.selected], "mm");
+        let (tx, ty, tw, th) = state.slots.dialog.dropdown.rect();
+        assert!(vx >= tx && vx < tx + tw && vy >= ty - 4.0 && vy < ty + th, "laid out on the band its value was drawn in");
+
+        // The plate grows out of the trigger into the list.
+        let grown = |state: &State| state.slots.dialog.dropdown.popover_rect().map(|r| r.3).unwrap_or(0.0);
+        let first = grown(&state);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        state.tick_frame(0.25);
+        assert!(grown(&state) > first.max(th) + 24.0, "{} then {}", first, grown(&state));
+        // Registered after the dialog, so the rows under it are clamped
+        // and its labels are not.
+        let _ = state.collect_display_list();
+        let pops = &state.ui_context.active_popovers;
+        let dialog_at = pops.iter().position(|&p| p == state.slots.dialog.base().id()).expect("the dialog");
+        let dd_id = state.slots.dialog.dropdown.base().id();
+        let dd_at = pops.iter().position(|&p| p == dd_id).expect("the dropdown");
+        assert!(dd_at > dialog_at);
+        // And resolvable, which is what the engine's clamp walks: an id the
+        // tree has dropped is skipped in silence.
+        assert!(state.ui_context.tree.get_ptr(dd_id).is_some(), "the dropdown is in the widget tree");
 
         // Down, Enter: the next unit, the dialog still up.
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
-        assert_eq!(state.world_unit.suffix(), options[1].trim_start_matches("○ "));
+        assert_eq!(state.world_unit.suffix(), units[1]);
         assert!(!state.dialog_dropdown_open() && state.dialog_visible());
 
-        // A press on a row of the menu picks that row.
-        state.open_dialog_dropdown(&crate::dialog::setting_row_id("World Unit"));
-        let pick = context_menu::options().iter().position(|o| o.ends_with(" in")).expect("inches");
-        press(&mut state, context_menu::x() + 8.0, context_menu::row_y(pick) + 4.0);
+        // A press on a row of the list picks that row.
+        state.open_dialog_dropdown(&setting_row_id("World Unit"));
+        let k = units.iter().position(|u| u == "in").expect("inches");
+        let (rx, ry, _, _) = state.slots.dialog.dropdown.popover_geom(cce_ui::scene::layout::Rect { x: tx, y: ty, width: tw, height: th });
+        press(&mut state, rx + 10.0, ry + k as f32 * 24.0 + 12.0);
         assert_eq!(state.world_unit.suffix(), "in");
         assert!(state.dialog_visible());
 
         // Escape closes the dropdown alone; a press off it does too.
-        state.open_dialog_dropdown(&crate::dialog::setting_row_id("World Unit"));
+        state.open_dialog_dropdown(&setting_row_id("World Unit"));
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
         assert!(!state.dialog_dropdown_open() && state.dialog_visible());
-        state.open_dialog_dropdown(&crate::dialog::setting_row_id("World Unit"));
+        state.open_dialog_dropdown(&setting_row_id("World Unit"));
         press(&mut state, dx + 20.0, dy + dh - 20.0);
-        assert!(!state.dialog_dropdown_open() && state.dialog_visible(), "a press off the menu closes it alone");
+        assert!(!state.dialog_dropdown_open() && state.dialog_visible(), "a press off the list closes it alone");
         assert_eq!(state.world_unit.suffix(), "in", "and picks nothing");
         state.close_dialog();
+        assert!(!state.slots.dialog.dropdown.open, "a closed dialog leaves no plate behind");
     }
 
     /// A control in the palette lifts under the pointer: the row whose
