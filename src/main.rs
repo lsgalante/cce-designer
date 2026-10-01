@@ -9656,7 +9656,7 @@ mod tests {
         let (rows, h) = fields(&state, pull, "Value");
         let want: Vec<String> = ["Name: Value", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
         assert_eq!(&rows[..4], &want[..], "{rows:?}");
-        assert!(rows[..h].contains(&"Range: -1000..1000".to_string()), "{rows:?}");
+        assert!(rows[..h].contains(&"Range: -1..1".to_string()), "the span around 0.06: {rows:?}");
         assert!(rows[..h].iter().all(|r| !r.starts_with("Value:")), "{rows:?}");
         state.apply_action(McpAction::SetParam { slot: pull, name: "Value".into(), value: "0.06".into() }, &mut redraw).unwrap();
         show(&mut state, pull);
@@ -16614,9 +16614,31 @@ mod tests {
         assert!(DesignSettings::from_kdl_str(&fs::read_to_string(DesignSettings::file_path()).unwrap()).playbar_repeat);
     }
 
+    /// The Value row's span: the smallest power of ten (at least one)
+    /// whose middle half holds the value; kept while the value stays
+    /// between a twentieth and nineteen twentieths of it.
+    #[test]
+    fn the_value_rows_span_adapts_to_the_value() {
+        use crate::app::value_row_span as span;
+        assert_eq!(span(&[0.0], None), 1.0);
+        assert_eq!(span(&[0.06, 0.0, 0.0], None), 1.0);
+        assert_eq!(span(&[0.5], None), 1.0);
+        assert_eq!(span(&[0.6], None), 10.0);
+        assert_eq!(span(&[1.0], None), 10.0);
+        assert_eq!(span(&[-7.0, 2.0], None), 100.0, "the largest magnitude, either sign");
+        assert_eq!(span(&[300.0], None), 1000.0);
+        assert_eq!(span(&[3.0], Some(10.0)), 10.0, "inside: kept");
+        assert_eq!(span(&[9.0], Some(10.0)), 10.0);
+        assert_eq!(span(&[9.6], Some(10.0)), 100.0, "at the end: grows");
+        assert_eq!(span(&[6.0], Some(100.0)), 100.0, "a twentieth or more: kept");
+        assert_eq!(span(&[0.6], Some(100.0)), 10.0, "far inside: shrinks");
+        assert_eq!(span(&[0.4], Some(100.0)), 1.0);
+        assert_eq!(span(&[0.0], Some(1.0)), 1.0, "one is the floor");
+    }
+
     /// The Attribute node's Value stays a text parameter, but the pane
     /// presents it as a control as wide as its target — over the wide
-    /// `VALUE_ROW_RANGE` — a slider for one, the float group with two, three
+    /// span around its value (`value_row_span`) — a slider for one, the float group with two, three
     /// or four rows for more: Modify on Pos (the pull node), on an input
     /// Float3 (Norm) or Float2 (UV), Create by its Type. A single number is
     /// spread over the components, as the node spreads it, and the pane
@@ -16654,9 +16676,9 @@ mod tests {
             state.param_mut().node_params().iter().find(|r| r.0 == "Value").expect("a Value row").2.clone()
         };
         // A vector gets the trackball beside its sliders by default.
-        let wide = crate::app::float3_row(crate::app::VALUE_ROW_RANGE.0, crate::app::VALUE_ROW_RANGE.1, true);
+        // 0.06 sits in the middle half of ±1.
+        let wide = "float3:-1:1:trackball:soft".to_string();
         assert_eq!(value_row(&mut state), wide, "Modify on Pos");
-        assert!(crate::app::VALUE_ROW_RANGE.0 <= -100.0 && crate::app::VALUE_ROW_RANGE.1 >= 100.0, "a wide range");
 
         let set = |state: &mut State, name: &str, val: &str| {
             state.fs_root.children[1].params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
@@ -16666,7 +16688,7 @@ mod tests {
         set(&mut state, "Attribute Name", "UV");
         assert_eq!(value_row(&mut state), "text", "three numbers do not fit an input Float2");
         set(&mut state, "Value", "1:2");
-        assert_eq!(value_row(&mut state), "float2:-1000:1000", "Modify on an input Float2");
+        assert_eq!(value_row(&mut state), "float2:-10:10:soft", "Modify on an input Float2: 2 needs ±10");
         set(&mut state, "Value", "0.00:0.06:0.00");
         set(&mut state, "Attribute Name", "nothing_here");
         assert_eq!(value_row(&mut state), "text", "an attribute the input lacks has no width");
@@ -16682,11 +16704,11 @@ mod tests {
             state.param_mut().node_params().iter().find(|r| r.0 == "Value").unwrap().1.clone()
         };
         set(&mut state, "Value", "1.00");
-        assert_eq!(value_row(&mut state), "slider:-1000:1000", "Create of a Float");
+        assert_eq!(value_row(&mut state), "slider:-10:10:2:soft", "Create of a Float");
         for (ty, row, shown) in [
-            ("Float2", "float2:-1000:1000".to_string(), "1.00:1.00"),
-            ("Float3", wide.clone(), "1.00:1.00:1.00"),
-            ("Float4", "float4:-1000:1000".to_string(), "1.00:1.00:1.00:1.00"),
+            ("Float2", "float2:-10:10:soft".to_string(), "1.00:1.00"),
+            ("Float3", "float3:-10:10:trackball:soft".to_string(), "1.00:1.00:1.00"),
+            ("Float4", "float4:-10:10:soft".to_string(), "1.00:1.00:1.00:1.00"),
         ] {
             set(&mut state, "Type", ty);
             assert_eq!(value_row(&mut state), row, "Create of a {ty}");
@@ -16700,7 +16722,19 @@ mod tests {
 
         set(&mut state, "Type", "Float3");
         set(&mut state, "Value", "1.00:2.00:3.00");
-        assert_eq!(value_row(&mut state), wide);
+        assert_eq!(value_row(&mut state), "float3:-10:10:trackball:soft", "3 stays inside the ±10 in use");
+        // Past nineteen twentieths of it, the row re-scales: 9.6 to ±100.
+        set(&mut state, "Value", "9.6:0:0");
+        assert_eq!(value_row(&mut state), "float3:-100:100:trackball:soft");
+        // Held by a drag in the pane, it does not, whatever the value.
+        state.drag_widget = Some(crate::slots::PARAM_IDX);
+        set(&mut state, "Value", "99:0:0");
+        assert_eq!(value_row(&mut state), "float3:-100:100:trackball:soft", "no re-scale under the pointer");
+        state.drag_widget = None;
+        assert_eq!(value_row(&mut state), "float3:-1000:1000:trackball:soft", "and on the release it does");
+        // Far inside, it comes back down.
+        set(&mut state, "Value", "1.00:2.00:3.00");
+        assert_eq!(value_row(&mut state), "float3:-10:10:trackball:soft");
         state.fs_root.children[1].params.iter_mut().find(|p| p.name == "Value").unwrap().set_expr(true);
         assert_eq!(value_row(&mut state), "text", "an expression is shown as its text");
         state.fs_root.children[1].params.iter_mut().find(|p| p.name == "Value").unwrap().set_expr(false);
@@ -16802,26 +16836,26 @@ mod tests {
         };
         let row = |state: &mut State, name: &str| state.param_mut().node_params().iter().find(|r| r.0 == name).expect("the row").2.clone();
         let entries = |state: &State, slot: usize, pname: &str| state.param_menu_rows(slot, pname).1;
-        let (lo, hi) = crate::app::VALUE_ROW_RANGE;
+        let (lo, hi) = (-1.0, 1.0);
 
         // The pull's Value: a vector, so the ball is there; the menu hides it.
         show(&mut state, pull);
-        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, true));
+        assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
         assert!(entries(&state, pull, "Value").contains(&A::HideTrackball));
         let pull_id = state.current_dir().children[pull].id.clone();
         state.run_param_action(&pull_id, "Value", A::HideTrackball);
-        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, false));
+        assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
         assert!(entries(&state, pull, "Value").contains(&A::ShowTrackball));
         let saved = serde_json::to_string(&state.current_dir().children[pull]).unwrap();
         assert!(saved.contains("\"view\":\"sliders\""), "the choice rides the file: {saved}");
         state.run_param_action(&pull_id, "Value", A::ShowTrackball);
-        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, true));
+        assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
 
         // Aimed at Col the three numbers are a colour: no ball by default.
         state.apply_action(McpAction::SetParam { slot: pull, name: "Attribute Name".into(), value: "Col".into() }, &mut redraw).unwrap();
         state.current_dir_mut().children[pull].params.iter_mut().find(|p| p.name == "Value").unwrap().view.clear();
         show(&mut state, pull);
-        assert_eq!(row(&mut state, "Value"), crate::app::float3_row(lo, hi, false));
+        assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
         state.apply_action(McpAction::SetParam { slot: pull, name: "Attribute Name".into(), value: "Pos".into() }, &mut redraw).unwrap();
 
         // A position (the Group node's Center): no ball until asked, and a
@@ -17032,7 +17066,7 @@ mod tests {
         assert_eq!(child.param_mut().node_params().len(), 0, "a new state has nothing selected");
         child.seed_detached_window(&channel);
         assert_eq!(child.param_editor_selected(), Some(pull), "it opens on the main window's selection");
-        assert!(child.param_mut().node_params().iter().any(|r| r.0 == "Value" && r.2.ends_with(":trackball")), "with its rows");
+        assert!(child.param_mut().node_params().iter().any(|r| r.0 == "Value" && r.2.contains(":trackball")), "with its rows");
         assert!(same(ball_view(&child), ball_view(&main)), "and sees the ball from the main window's camera");
         assert!(!child.needs_autosave, "a detached window has no camera to tell of");
 

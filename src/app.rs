@@ -705,7 +705,7 @@ pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
 fn shown_row_range(shown: &str) -> Option<(f32, f32, Option<f32>)> {
     let mut parts = shown.split(':');
     let head = parts.next()?;
-    if head != "slider" && head != "float3" {
+    if !matches!(head, "slider" | "float2" | "float3" | "float4") {
         return None;
     }
     let lo = parts.next()?.parse::<f32>().ok()?;
@@ -713,11 +713,29 @@ fn shown_row_range(shown: &str) -> Option<(f32, f32, Option<f32>)> {
     Some((lo, hi, None))
 }
 
-/// The Attribute node's Value row's range when it is presented as a float3
-/// (`add_pick_lists`): wide, because a float3 row clamps to its range and
-/// Pos is set to whatever the scene needs. A drag is coarse at this width;
-/// the row's readouts take typed values.
-pub const VALUE_ROW_RANGE: (f32, f32) = (-1000.0, 1000.0);
+/// The half-span of the Attribute node's Value row: the row runs from
+/// minus this to plus it. It ADAPTS to the value (since 2026-10-01; until
+/// then a fixed ±1000, which a drag crossed in hundreds): the smallest power
+/// of ten, and at least one, whose middle half holds every component — so
+/// 1.00 drags over ±10 and 9.6 over ±100. A span already in use (`kept`)
+/// stands while the value stays between a twentieth of it and nineteen
+/// twentieths, so a value moving inside the row does not re-scale it under
+/// the pointer; one that reaches an end, or falls far inside, is given a
+/// new one. The row's range is SOFT: a value typed past an end widens it
+/// rather than being clamped, and the next span holds it.
+pub fn value_row_span(values: &[f32], kept: Option<f32>) -> f32 {
+    let m = values.iter().filter(|v| v.is_finite()).fold(0.0f32, |a, v| a.max(v.abs()));
+    if let Some(r) = kept {
+        if m <= 0.95 * r && (r <= 1.0 || m >= 0.05 * r) {
+            return r;
+        }
+    }
+    let mut r = 1.0f32;
+    while m > 0.5 * r && r < 1e9 {
+        r *= 10.0;
+    }
+    r
+}
 
 /// What an Attribute node's `Value` is aimed at, as `add_pick_lists` needs
 /// it: a width the node itself decides, or the name of the input attribute
@@ -744,14 +762,15 @@ pub fn float3_row(min: f32, max: f32, trackball: bool) -> String {
 }
 
 /// The control the Attribute node's Value row is presented as, for a target
-/// `width` components wide, and the row's text as that control shows it: a
-/// slider for one, the float group with two, three or four rows for more
-/// (cce-ui's `float2` / `float3` / `float4`), over [`VALUE_ROW_RANGE`].
-/// The text must hold one number or `width` of them; one is SPREAD to every
-/// component, which is what a single number means to the node (`fit` in
-/// `apply_attribute`), so the controls show it as it acts. `None` — a text
-/// box, as before — for a width it does not fit.
-pub fn value_row_control(text: &str, width: usize, ball: bool) -> Option<(String, String)> {
+/// `width` components wide, the row's text as that control shows it, and
+/// the half-span it runs over: a slider for one, the float group with two,
+/// three or four rows for more (cce-ui's `float2` / `float3` / `float4`),
+/// over ± [`value_row_span`] — `kept` is the span the row has now, kept
+/// outright while `hold` (a drag in the pane) — with a soft range. The text must hold one number or `width` of them; one is
+/// SPREAD to every component, which is what a single number means to the
+/// node (`fit` in `apply_attribute`), so the controls show it as it acts.
+/// `None` — a text box, as before — for a width it does not fit.
+pub fn value_row_control(text: &str, width: usize, ball: bool, kept: Option<f32>, hold: bool) -> Option<(String, String, f32)> {
     let parts: Vec<&str> = text.split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).collect();
     if !(1..=4).contains(&width) || parts.iter().any(|p| p.parse::<f32>().is_err()) {
         return None;
@@ -761,13 +780,18 @@ pub fn value_row_control(text: &str, width: usize, ball: bool) -> Option<(String
         1 => vec![parts[0]; width].join(":"),
         _ => return None,
     };
-    let (lo, hi) = VALUE_ROW_RANGE;
-    let ty = match width {
-        1 => format!("slider:{lo}:{hi}"),
-        3 => float3_row(lo, hi, ball),
-        n => format!("float{n}:{lo}:{hi}"),
+    let values: Vec<f32> = parts.iter().filter_map(|p| p.parse().ok()).collect();
+    // Held (a drag in the pane), the span in use stands whatever the value.
+    let r = match (hold, kept) {
+        (true, Some(r)) => r,
+        _ => value_row_span(&values, kept),
     };
-    Some((ty, shown))
+    let ty = match width {
+        1 => format!("slider:{}:{}:2:soft", -r, r),
+        3 => format!("{}:soft", float3_row(-r, r, ball)),
+        n => format!("float{n}:{}:{}:soft", -r, r),
+    };
+    Some((ty, shown, r))
 }
 
 /// Whether `shown` is `kept` as a value row presents it — the same numbers,
@@ -2788,6 +2812,10 @@ pub struct State {
     pub visualizers: Vec<crate::visualizer::Visualizer>,
     /// The visualizer the dialog's VisualizerEdit page is editing.
     pub vis_editing: Option<usize>,
+    /// The half-span the Attribute node's Value row runs over, with the
+    /// node it is for (`value_row_span`): kept between pane syncs so the row
+    /// re-scales only when its value leaves it.
+    pub value_row_span: Option<(String, f32)>,
     /// The displayed scene's point attributes as last built, with their
     /// ranges: what the visualizer editor offers.
     pub scene_attributes: Vec<crate::visualizer::SceneAttribute>,
@@ -4710,9 +4738,9 @@ impl State {
     /// numbers: a single number BROADCASTS to every component, and a row
     /// that showed it as `(n, 0, 0)` would write that triple back on the
     /// first drag; an expression is shown as its text like any other. The
-    /// row's range is [`VALUE_ROW_RANGE`], deliberately wide — a float3 row
-    /// holds a fraction of its range and clamps to it, and Pos is set to
-    /// whatever the scene needs; the readouts are typed into for precision.
+    /// row's range adapts to the value ([`value_row_span`]) and is soft.
+    /// Since 2026-10-01 every width is presented, a single number spread
+    /// over the components ([`value_row_control`]).
     fn add_pick_lists(
         &mut self,
         mut params: Vec<(String, String, String)>,
@@ -4759,10 +4787,15 @@ impl State {
                     .find(|(n, _)| n.eq_ignore_ascii_case(&name))
                     .map_or(0, |(_, w)| *w),
             };
+            // The span the row already has stands through a drag: a new
+            // one rebuilds the pane, which would drop the slider being held.
+            let kept = self.value_row_span.as_ref().filter(|(id, _)| *id == node_id).map(|(_, r)| *r);
+            let held = self.drag_widget == Some(crate::slots::PARAM_IDX);
             if let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") {
-                if let Some((ty, text)) = value_row_control(&row.1, width, ball) {
+                if let Some((ty, text, r)) = value_row_control(&row.1, width, ball, kept, held) {
                     row.2 = ty;
                     row.1 = text;
+                    self.value_row_span = Some((node_id.clone(), r));
                 }
             }
         }
@@ -5424,7 +5457,7 @@ impl State {
     /// `slider:-2:2` included), `none` where it declares nothing, then
     /// `Range: lo..hi` as the pane APPLIES it, with its step when one is
     /// set — the parameter's own range, or the presented row's when the
-    /// parameter has none (the Value row's `VALUE_ROW_RANGE`). A choice
+    /// parameter has none (the Value row's adaptive span). A choice
     /// adds `Options: a, b, c`. Around those, `Name:` heads the list — the
     /// parameter's name, which is what a `ch()` path and a wire spell —
     /// with `Label:` after it only when the template gives one (the pane
@@ -7757,6 +7790,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
             visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
             vis_editing: None,
+            value_row_span: None,
             scene_attributes: Vec::new(),
             scene_base: None,
             scene_groups: Vec::new(),

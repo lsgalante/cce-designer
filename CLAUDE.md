@@ -718,10 +718,20 @@ old text Center a float3 from the load on. Tests build parameters with
   typed into blind; a template declares it now and needs no entry anywhere.
   What is still `text` is text for a reason: Attribute's `Value` is as wide
   as its `Type` row says (one number or two, three or four) — though the
-  pane PRESENTS it as a control as wide as its target, over a deliberately
-  wide `VALUE_ROW_RANGE` (`add_pick_lists` / `value_row_control`): a
-  slider for one, cce-ui's `float2` / `float3` / `float4` group for more
-  (the float3 since 2026-09-28, every width since 2026-10-01). The target
+  pane PRESENTS it as a control as wide as its target (`add_pick_lists` /
+  `value_row_control`): a slider for one, cce-ui's `float2` / `float3` /
+  `float4` group for more (the float3 since 2026-09-28, every width since
+  2026-10-01). **Its range adapts to the value** (`value_row_span`, the
+  same day; it was a fixed ±1000, which a drag crossed in hundreds): ± the
+  smallest power of ten, at least one, whose middle half holds every
+  component — 1.00 drags over ±10, 9.6 over ±100. The span in use
+  (`State::value_row_span`, by node) is KEPT while the value stays between
+  a twentieth and nineteen twentieths of it, and is never re-chosen during
+  a drag in the pane (`drag_widget == PARAM_IDX`): a new span is a new
+  row type, which rebuilds the pane and would drop the slider being held.
+  So a drag to the end re-scales on the release. The rows are cce-ui
+  SOFT ranges (`:soft`): a value typed past an end widens the range
+  rather than clamping, and the next span holds it. The target
   is Create's Type, or Modify's Pos, Col or input attribute. The text must
   hold one number or as many as the target: ONE is shown spread over every
   component, as the node spreads it (`fit` in `apply_attribute`), and the
