@@ -1533,6 +1533,11 @@ pub struct ViewportSettings {
     /// the two ends.
     #[serde(default)]
     pub marked_groups: String,
+    /// The attribute visualizers, as one JSON string — see
+    /// `crate::visualizer::encode` for why one string. Absent from older
+    /// files — none.
+    #[serde(default)]
+    pub visualizers: String,
     /// World-unit radius and colour of the Show Point Markers overlay.
     #[serde(default = "default_point_marker_size")]
     pub point_marker_size: f32,
@@ -1731,6 +1736,7 @@ impl Default for ViewportSettings {
             show_vertex_markers: false,
             show_vertex_normals: false,
             marked_groups: String::new(),
+            visualizers: String::new(),
             point_marker_size: default_point_marker_size(),
             point_marker_color: default_point_marker_color(),
             world_unit: default_world_unit(),
@@ -2728,6 +2734,18 @@ pub struct State {
     /// the list and marks nothing, so a switch set for a group that comes
     /// and goes with a frame or an edit is not lost with it.
     pub marked_groups: Vec<String>,
+    /// The attribute visualizers, applied in order to the displayed scene
+    /// (`crate::visualizer`). Persisted in the viewport block.
+    pub visualizers: Vec<crate::visualizer::Visualizer>,
+    /// The visualizer the dialog's VisualizerEdit page is editing.
+    pub vis_editing: Option<usize>,
+    /// The displayed scene's point attributes as last built, with their
+    /// ranges: what the visualizer editor offers.
+    pub scene_attributes: Vec<crate::visualizer::SceneAttribute>,
+    /// The displayed scene as last EVALUATED, before the visualizers: what a
+    /// visualizer edit re-presents (`State::revisualize`) without running
+    /// the graph again.
+    pub scene_base: Option<crate::detail::Detail>,
     /// Every point group of the scene as last built, with its members'
     /// positions: what the dialog lists and what the markers are built
     /// from, so a switch flipped evaluates nothing.
@@ -2931,6 +2949,7 @@ impl State {
                 show_vertex_markers: self.show_vertex_markers,
                 show_vertex_normals: self.show_vertex_normals,
                 marked_groups: Self::join_marked_groups(&self.marked_groups),
+                visualizers: crate::visualizer::encode(&self.visualizers),
                 point_marker_size: self.point_marker_size,
                 point_marker_color: self.point_marker_color,
                 world_unit: self.world_unit.suffix().to_string(),
@@ -3011,6 +3030,7 @@ impl State {
         self.show_vertex_markers = v.show_vertex_markers;
         self.show_vertex_normals = v.show_vertex_normals;
         self.marked_groups = Self::marked_groups_of(&v.marked_groups);
+        self.visualizers = crate::visualizer::decode(&v.visualizers);
         self.point_marker_size = v.point_marker_size;
         self.point_marker_color = v.point_marker_color;
         if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
@@ -3046,6 +3066,8 @@ impl State {
         self.sync_grid_settings();
         self.rebuild_positions();
         self.apply_layout();
+        // The visualizers came with the block: shown on the scene in hand.
+        self.revisualize();
         self.viewport_dirty = true;
         self.save_settings();
     }
@@ -4341,6 +4363,7 @@ impl State {
                 self.reset_parameters();
             }
             "Group Markers" => self.open_group_markers_dialog(),
+            "Attribute Visualizers" => self.open_visualizers_dialog(),
             "Rename Node" => match self.selected_slots().first().copied() {
                 Some(slot) => self.open_rename_dialog(slot),
                 None => self.update_status_text("Select a node to rename."),
@@ -6127,6 +6150,14 @@ impl State {
         for page in [ViewportMenuPage::Style, ViewportMenuPage::Markers] {
             row(&mut options, &mut actions, page.label().into(), ViewportMenuAction::Submenu(page));
         }
+        // The visualizers' editor, which is the dialog — a list is not a
+        // submenu's shape.
+        row(
+            &mut options,
+            &mut actions,
+            label("attribute_visualizers", "Attribute Visualizers").to_string(),
+            ViewportMenuAction::Command("attribute_visualizers"),
+        );
 
         // The viewport's editor binding, as a radio group: follow the active
         // editor, or pin to one. Pin rows appear only while a second editor
@@ -7666,6 +7697,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             show_vertex_markers: settings.viewport.show_vertex_markers,
             show_vertex_normals: settings.viewport.show_vertex_normals,
             marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
+            visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
+            vis_editing: None,
+            scene_attributes: Vec::new(),
+            scene_base: None,
             scene_groups: Vec::new(),
             marked_group_verts: Vec::new(),
             marked_groups_dirty: false,

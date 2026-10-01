@@ -186,6 +186,7 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "bypass_node", label: "Bypass Node", context: Context::Network, run: Run::Key(Action::ToggleBypass), default_chord: Some("b") },
     Command { id: "rename_node", label: "Rename Node", context: Context::Network, run: Run::Menu("Rename Node"), default_chord: None },
     Command { id: "group_markers", label: "Group Markers", context: Context::Viewport, run: Run::Menu("Group Markers"), default_chord: None },
+    Command { id: "attribute_visualizers", label: "Attribute Visualizers", context: Context::Viewport, run: Run::Menu("Attribute Visualizers"), default_chord: None },
     Command { id: "add_node", label: "Add Node", context: Context::Network, run: Run::Menu("Add Node"), default_chord: None },
     Command { id: "zoom_in", label: "Zoom In", context: Context::Network, run: Run::Menu("Zoom In"), default_chord: None },
     Command { id: "zoom_out", label: "Zoom Out", context: Context::Network, run: Run::Menu("Zoom Out"), default_chord: None },

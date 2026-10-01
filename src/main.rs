@@ -23,6 +23,7 @@ pub mod collide;
 #[allow(unused_imports)]
 use app::{CustomEvent, McpAction, ModifiersState};
 pub mod plate_menu;
+pub mod visualizer;
 pub mod playbar;
 pub mod viewport_3d;
 pub mod api;
@@ -2208,7 +2209,7 @@ mod tests {
             vec![
                 vec![A::FrameAll, A::OneToOne],
                 vec![A::Command("toggle_grid"), A::Command("toggle_origin"), A::Command("toggle_camera_pivot"), A::CameraPivotSizeSlider],
-                vec![A::Submenu(P::Style), A::Submenu(P::Markers)],
+                vec![A::Submenu(P::Style), A::Submenu(P::Markers), A::Command("attribute_visualizers")],
             ]
         );
         assert_eq!(
@@ -7626,6 +7627,114 @@ mod tests {
     /// wear a marker in the scene, built from what the last rebuild kept,
     /// following the geometry through a rebuild and persisted with the
     /// display settings.
+    /// Attribute visualizers: added, edited, switched and deleted in the
+    /// dialog, applied to the displayed scene with no node in the graph,
+    /// and kept with the display settings.
+    #[test]
+    fn attribute_visualizers_are_edited_in_the_dialog_and_shown_on_the_scene() {
+        use crate::dialog::Mode;
+        use crate::visualizer::{VIS_ADD_ROW_ID, VIS_FIELD_PREFIX, VIS_ROW_PREFIX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.rebuild_scene_geometry();
+        assert!(state.scene_attributes.iter().any(|a| a.name == "Norm"), "{:?}", state.scene_attributes);
+        let colours = |state: &State| state.rt_sphere_verts.iter().map(|v| v.color).collect::<Vec<_>>();
+        let plain = colours(&state);
+        let nodes_before = serde_json::to_string(&state.fs_root).unwrap();
+
+        // The list, empty but for Add Visualizer.
+        assert!(state.run_command("attribute_visualizers"));
+        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
+        assert_eq!(state.slots.dialog.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec![VIS_ADD_ROW_ID]);
+
+        // Add one: the list turns into its settings.
+        state.take_dialog_pick(VIS_ADD_ROW_ID.to_string());
+        assert_eq!(state.visualizers.len(), 1);
+        assert_eq!(state.slots.dialog.mode, Mode::VisualizerEdit);
+        assert_eq!(state.vis_editing, Some(0));
+        let field = |f: &str| format!("{VIS_FIELD_PREFIX}{f}");
+        let has = |state: &State, f: &str| state.slots.dialog.rows.iter().any(|r| r.id == field(f));
+        assert!(has(&state, "ramp") && has(&state, "opacity") && !has(&state, "scale"), "Ramp's rows");
+
+        // On Norm, a Ramp recolours the scene, which gained no node.
+        state.set_visualizer_field(0, "attribute", "Norm", true);
+        assert_ne!(colours(&state), plain, "the ramp is on the scene");
+        assert_eq!(serde_json::to_string(&state.fs_root).unwrap(), nodes_before, "no node in the graph");
+
+        // Enter on Mode steps it to Vector: Vector's rows, and lines drawn.
+        let mode_row = state.slots.dialog.rows.iter().position(|r| r.id == field("mode")).unwrap();
+        state.slots.dialog.selected = mode_row;
+        let lines_before = state.overlay_normal_verts.len();
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(state.visualizers[0].is_vector());
+        assert!(has(&state, "scale") && !has(&state, "ramp"), "Vector's rows");
+        assert_eq!(state.slots.dialog.selected_id(), Some(field("mode").as_str()), "the selection stays");
+        assert!(state.overlay_normal_verts.len() > lines_before, "the vectors are drawn");
+        assert_eq!(colours(&state), plain, "a Vector leaves the colours");
+
+        // Escape goes back to the list, which names it.
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
+        assert!(state.dialog_visible());
+        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
+        let id = format!("{VIS_ROW_PREFIX}0");
+        let row = state.slots.dialog.rows.iter().find(|r| r.id == id).expect("its row").clone();
+        assert!(row.label.starts_with("Norm — Vector"), "{}", row.label);
+        assert_eq!(row.toggle(), Some(true));
+
+        // Kept with the display settings.
+        let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+        let kept = crate::visualizer::decode(&crate::app::DesignSettings::from_kdl_str(&kdl).viewport.visualizers);
+        assert_eq!(kept, state.visualizers);
+
+        // Its switch turns it off; the rest of the row opens it.
+        state.take_dialog_pick_at(id.clone(), true);
+        assert!(!state.visualizers[0].enabled);
+        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
+        let lines_off = state.overlay_normal_verts.len();
+        assert!(lines_off < lines_before + 1, "off draws nothing");
+        state.take_dialog_pick_at(id, false);
+        assert_eq!(state.slots.dialog.mode, Mode::VisualizerEdit);
+
+        // Delete, and the list is empty again.
+        state.take_dialog_pick(field("delete"));
+        assert!(state.visualizers.is_empty());
+        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
+        assert_eq!(colours(&state), plain);
+        state.close_dialog();
+    }
+
+    /// A visualizer is the Visualize node's reading: the same settings give
+    /// the same colours as the node does, and the settings round-trip
+    /// through their one string.
+    #[test]
+    fn a_visualizer_reads_as_the_visualize_node_does() {
+        let mut state = State::new(false);
+        state.rebuild_scene_geometry();
+        let base = state.scene_base.clone().expect("a scene");
+        let mut v = crate::visualizer::Visualizer::new("Norm");
+        v.ramp = "Heat".into();
+        let mut by_vis = base.clone();
+        crate::visualizer::apply_all(&[v.clone()], &mut by_vis);
+        let mut by_node = base.clone();
+        let mut err = None;
+        crate::geometry::apply_visualize(&mut by_node, &v.as_node(), &mut err);
+        assert!(err.is_none());
+        assert_eq!(by_vis, by_node);
+        assert_ne!(by_vis, base);
+        let both = vec![v.clone(), crate::visualizer::Visualizer::new("Cd")];
+        assert_eq!(crate::visualizer::decode(&crate::visualizer::encode(&both)), both);
+        assert!(crate::visualizer::decode("not a record").is_empty());
+        // What the KDL writer cannot carry is escaped, and comes back.
+        let mut odd = crate::visualizer::Visualizer::new("a|b;c=\"d\\%");
+        odd.group = "g;1".into();
+        let text = crate::visualizer::encode(&[odd.clone()]);
+        assert!(!text.contains('"') && !text.contains('\\'), "{text}");
+        assert_eq!(crate::visualizer::decode(&text), vec![odd]);
+        assert_eq!(crate::visualizer::encode(&[]), "");
+    }
+
     #[test]
     fn the_group_markers_dialog_marks_a_groups_points() {
         use crate::dialog::{Mode, GROUP_ROW_PREFIX};

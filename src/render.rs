@@ -1212,6 +1212,37 @@ impl State {
             self.update_status_text("Geometry updated successfully.");
         }
 
+        // What the visualizers are applied to, kept so an edit to one
+        // re-presents this scene rather than running the graph again.
+        self.scene_attributes = crate::visualizer::scene_attributes(&geom);
+        self.scene_base = Some(geom.clone());
+        self.present_scene(geom);
+
+        // The pull arrows measure the selected node against this new
+        // geometry version; a playing simnet reaches here every frame.
+        self.sync_selection_readouts();
+        self.sync_pull_arrows();
+
+        // Last, not first: the page's status line would otherwise be
+        // overwritten by the geometry pass's own, and a level showing a page
+        // has nothing to say about geometry.
+        self.rebuild_page();
+    }
+
+    /// Show the scene last evaluated again, under the visualizers as they
+    /// now stand — what an edit to one runs. Nothing before the first
+    /// evaluation.
+    pub(crate) fn revisualize(&mut self) {
+        if let Some(base) = self.scene_base.clone() {
+            self.present_scene(base);
+        }
+    }
+
+    /// Everything the viewport draws of an evaluated scene: the visualizers
+    /// applied to it, then its fill, its groups, its overlays and its edges.
+    fn present_scene(&mut self, mut geom: crate::detail::Detail) {
+        crate::visualizer::apply_all(&self.visualizers, &mut geom);
+
         let verts = crate::geometry::detail_vertices(&geom);
         self.vertex_count_spheres = verts.len() as u32;
         // Smooth shading bakes the light into a raster copy of the fill;
@@ -1291,8 +1322,8 @@ impl State {
         self.scene_edge_verts =
             if self.wireframe { scene_edge_verts(&geom) } else { Vec::new() };
 
-        // Visualize's vector markers ride the same LINE_LIST channel as the
-        // normal whiskers.
+        // Visualize's vector markers — a node's or a visualizer's — ride the
+        // same LINE_LIST channel as the normal whiskers.
         self.overlay_normal_verts.extend(crate::geometry::vis_marker_vertices(
             &geom,
             cce_ui::colors::to_linear_rgb,
@@ -1307,15 +1338,6 @@ impl State {
         if let Some(mvp) = self.last_scene_mvp {
             self.sync_point_number_alpha(mvp, self.last_scene_eye);
         }
-        // The pull arrows measure the selected node against this new
-        // geometry version; a playing simnet reaches here every frame.
-        self.sync_selection_readouts();
-        self.sync_pull_arrows();
-
-        // Last, not first: the page's status line would otherwise be
-        // overwritten by the geometry pass's own, and a level showing a page
-        // has nothing to say about geometry.
-        self.rebuild_page();
     }
 
     /// The path tracer's scene: the scene geometry as triangles, with one

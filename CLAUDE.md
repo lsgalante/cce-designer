@@ -2930,6 +2930,59 @@ simulation rebuilds at every frame, and the numbers flickered
 the whiskers' order has none, being a draw list only a renderer reads, and
 was checked in a shadow session before and after.
 
+### Attribute visualizers
+
+`src/visualizer.rs` (since 2026-10-01) is Houdini's viewport visualizers:
+a point attribute of whatever the viewport displays, coloured through a
+ramp or drawn as a line from each point, with NO node in the graph. A
+`Visualizer` is the Visualize node's settings under the node's own names
+and options (Attribute, Mode, Ramp, Range, From/To, Blend, Opacity, Scale,
+Group) plus a switch, and it runs through `geometry::apply_visualize` over
+a node built from them (`Visualizer::as_node`), so a visualizer and a
+Visualize node cannot disagree about what they draw
+(`a_visualizer_reads_as_the_visualize_node_does`). Several apply in order,
+the later over the earlier, as a chain of Visualize nodes composites.
+
+- **They are display settings**, by the rule "There are no meta nodes"
+  states: `State::visualizers`, persisted in the viewport block of
+  state.kdl and with the project's display block, so a project keeps its
+  own. **As one string** (`visualizer::encode` / `decode`: `key=value`
+  joined by `|`, a visualizer per `;`, percent-escaped) — and not JSON,
+  because cce-ui's `json_to_kdl_string` writes a string between quotes
+  WITHOUT escaping the ones inside it: a JSON string came back as a line no
+  parser reads, and a settings file that fails to parse is read as the
+  DEFAULTS. A key the reader does not know is skipped.
+- **They are applied to the scene, not evaluated with it.**
+  `rebuild_scene_geometry` evaluates the graph, keeps the result as
+  `State::scene_base` with its attributes and ranges
+  (`State::scene_attributes`), and hands a copy to `present_scene`, which
+  applies the visualizers and does everything the viewport draws of a
+  scene — the fill, the traced copy, the groups, the overlays, the edges.
+  An edit to a visualizer runs `revisualize`, which presents `scene_base`
+  again: no graph evaluation, so a dragged slider costs a re-mesh. A
+  visualizer naming an attribute the scene lacks draws nothing and says
+  "not in the scene" in the list; it is kept, since the scene it was made
+  for may come back. Not in `--thumbnail` or `--export`, which have no
+  display settings.
+- **They are edited in the dialog**, two modes: `Mode::Visualizers` (the
+  `attribute_visualizers` command — the palette, and a row of the viewport
+  menu under its submenus) lists them, a switch each, and Add Visualizer;
+  a press on a row's SWITCH turns it on or off and a press on the rest of
+  the row, or Enter, opens it (`Dialog::activated_on_control`,
+  `take_dialog_pick_at`). `Mode::VisualizerEdit` (`State::vis_editing`) is
+  that visualizer's settings as rows — the Visualize node's `show_when`
+  applied, so Ramp's rows or Vector's; Attribute and Group are choices
+  over the scene's attributes and groups; a Manual range's From and To are
+  sliders over the attribute's range in the scene with a quarter to spare
+  — then Delete Visualizer and Back. Escape goes back to the list. Rows
+  re-read IN PLACE (`refresh_dialog_rows_in_place`, selection and scroll
+  kept), since switching the mode swaps rows under the one selected.
+  A new visualizer starts on the scene's first attribute that is not
+  `P`, `Cd` or `N`.
+
+`attribute_visualizers_are_edited_in_the_dialog_and_shown_on_the_scene`
+drives the dialog end to end.
+
 ### The Normal node writes point or vertex normals
 
 `normal` has a **Class** row (since 2026-09-29): `Points`, what it always
@@ -3249,6 +3302,9 @@ rather than two:
   A marked name the scene has no group for marks nothing and is kept, so
   a group that comes and goes with a frame does not lose its switch.
   `the_group_markers_dialog_marks_a_groups_points` is the test.
+- `Mode::Visualizers` / `Mode::VisualizerEdit` (the
+  `attribute_visualizers` command) — the attribute visualizers and one
+  visualizer's settings; see "Attribute visualizers".
 - `Mode::AddNode` (**Tab**, in the network pane) — one list of node
   templates, and a pick that instantiates at the grid cursor. Tab is what
   opened it, so Tab closes it again. The query hint names the mode; there
