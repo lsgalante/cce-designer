@@ -2739,6 +2739,9 @@ pub struct State {
     pub visualizers: Vec<crate::visualizer::Visualizer>,
     /// The visualizer the dialog's VisualizerEdit page is editing.
     pub vis_editing: Option<usize>,
+    /// The dialog row whose dropdown is open, and its options' values in
+    /// the order the menu lists them (`State::open_dialog_dropdown`).
+    pub dialog_dropdown: Option<(String, Vec<String>)>,
     /// The displayed scene's point attributes as last built, with their
     /// ranges: what the visualizer editor offers.
     pub scene_attributes: Vec<crate::visualizer::SceneAttribute>,
@@ -7699,6 +7702,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
             visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
             vis_editing: None,
+            dialog_dropdown: None,
             scene_attributes: Vec::new(),
             scene_base: None,
             scene_groups: Vec::new(),
@@ -9732,6 +9736,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // The dialog is modal: a wheel over it scrolls it, and a wheel
                 // anywhere else does nothing rather than scrolling — and
                 // focusing — the pane it is covering.
+                if self.dialog_dropdown_open() && self.dialog_dropdown_wheel(delta) {
+                    return true;
+                }
                 if self.dialog_visible() {
                     return self.dialog_mouse_wheel(*delta);
                 }
@@ -9944,7 +9951,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 // Track hover on the node/viewport/network context menus so
                 // the highlight follows.
-                if (self.node_menu_open() || self.viewport_menu_open() || self.network_menu_open() || self.playbar_menu_open())
+                if (self.node_menu_open() || self.viewport_menu_open() || self.network_menu_open() || self.playbar_menu_open() || self.dialog_dropdown_open())
                     && cce_ui::widget::context_menu::cursor_moved(self.cursor_x, self.cursor_y)
                 {
                     changed = true;
@@ -10156,6 +10163,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // convention every other floating surface in this app follows
                 // (the node menu, the plate corner menu) — and is swallowed
                 // rather than also acting on the pane it landed on.
+                // A choice row's dropdown is in front of the dialog: it takes
+                // the press first, and a press off it closes it alone.
+                if *btn_state == ElementState::Pressed && self.dialog_dropdown_open() {
+                    return self.dialog_dropdown_press(*button);
+                }
                 if self.dialog_visible() {
                     if let Some(handled) = self.dialog_mouse_input(*button, *btn_state) {
                         return handled;

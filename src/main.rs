@@ -7663,10 +7663,14 @@ mod tests {
         assert_ne!(colours(&state), plain, "the ramp is on the scene");
         assert_eq!(serde_json::to_string(&state.fs_root).unwrap(), nodes_before, "no node in the graph");
 
-        // Enter on Mode steps it to Vector: Vector's rows, and lines drawn.
+        // Mode's dropdown, Down, Enter: Vector's rows, and lines drawn.
         let mode_row = state.slots.dialog.rows.iter().position(|r| r.id == field("mode")).unwrap();
         state.slots.dialog.selected = mode_row;
         let lines_before = state.overlay_normal_verts.len();
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert!(state.dialog_dropdown_open(), "a choice opens its dropdown");
+        assert_eq!(cce_ui::widget::context_menu::options(), vec!["● Ramp".to_string(), "○ Vector".to_string()]);
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert!(state.visualizers[0].is_vector());
         assert!(has(&state, "scale") && !has(&state, "ramp"), "Vector's rows");
@@ -14602,13 +14606,19 @@ mod tests {
     /// ranked with the commands, so a query finds a colour the way it finds
     /// a command. There is no second half: Tab in this mode does nothing,
     /// and nothing draws a strip.
-    /// A choice row's value stands between two arrows, and they are
-    /// cce-icons' chevrons — not the text triangles they were, which the
-    /// font has no glyph for — in square boxes sized from the row's font.
+    /// A choice row is a dropdown: its value sits in a well with one
+    /// chevron-down after it — cce-icons', square, sized from the row's
+    /// font — and a press on it opens a menu of the options under it,
+    /// right-aligned on the well, the current one marked and highlighted.
+    /// Up, Down and Enter walk and pick; a press on a row picks it; Escape
+    /// or a press elsewhere closes the menu and leaves the dialog up.
     #[test]
-    fn a_choice_rows_arrows_are_cce_icons_the_size_of_its_text() {
+    fn a_choice_row_is_a_dropdown() {
         use cce_ui::scene::paint::Prim;
+        use cce_ui::widget::context_menu;
         use crate::slots::DIALOG_IDX;
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
@@ -14620,7 +14630,7 @@ mod tests {
         let (dx, dy, dw, dh) = state.positions[DIALOG_IDX];
         let list = state.collect_display_list();
         let inside = |x: f32, y: f32| x >= dx && x <= dx + dw && y >= dy && y <= dy + dh;
-        let value = list
+        let (vx, vy, font) = list
             .items
             .iter()
             .find_map(|item| match &item.prim {
@@ -14628,11 +14638,7 @@ mod tests {
                 _ => None,
             })
             .expect("the World Unit row shows its value");
-        assert!(
-            !list.items.iter().any(|item| matches!(&item.prim, Prim::Text { text, .. } if text.contains('\u{25c2}') || text.contains('\u{25b8}'))),
-            "no text triangles: the font has no glyph for them"
-        );
-        let arrows: Vec<_> = list
+        let marks: Vec<_> = list
             .items
             .iter()
             .filter_map(|item| match &item.prim {
@@ -14640,14 +14646,50 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let (vx, _, font) = value;
-        let left = arrows.iter().find(|r| r.x + r.width <= vx).expect("an arrow ahead of the value");
-        let right = arrows.iter().find(|r| r.x > vx).expect("an arrow after the value");
-        for r in [left, right] {
-            assert_eq!(r.width, r.height, "square");
-            assert_eq!(r.width, (font * 0.8).round(), "sized from the row's font");
-        }
-        assert_eq!(left.y, right.y, "on one line");
+        assert_eq!(marks.len(), 1, "one mark: {marks:?}");
+        let mark = marks[0];
+        assert!(mark.x > vx, "after the value");
+        assert_eq!(mark.width, mark.height, "square");
+        assert_eq!(mark.width, (font * 0.8).round(), "sized from the row's font");
+
+        // A press on the value opens the dropdown under it.
+        let press = |state: &mut State, x: f32, y: f32| {
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+            state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        };
+        press(&mut state, vx + 2.0, vy + font * 0.5);
+        assert!(state.dialog_dropdown_open(), "the press opened the dropdown");
+        let options = context_menu::options();
+        assert_eq!(options.first().map(String::as_str), Some("● mm"), "{options:?}");
+        assert!(options[1..].iter().all(|o| o.starts_with("○ ")));
+        assert_eq!(context_menu::hovered_item(), Some(0), "the current option is highlighted");
+        let (_, menu_w, _) = context_menu::natural_geometry();
+        assert!((context_menu::x() + menu_w - (mark.x + mark.width + 6.0)).abs() < 1.0, "right-aligned on the trigger");
+        assert!(context_menu::y() > vy, "under the row");
+
+        // Down, Enter: the next unit, the dialog still up.
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert_eq!(state.world_unit.suffix(), options[1].trim_start_matches("○ "));
+        assert!(!state.dialog_dropdown_open() && state.dialog_visible());
+
+        // A press on a row of the menu picks that row.
+        state.open_dialog_dropdown(&crate::dialog::setting_row_id("World Unit"));
+        let pick = context_menu::options().iter().position(|o| o.ends_with(" in")).expect("inches");
+        press(&mut state, context_menu::x() + 8.0, context_menu::row_y(pick) + 4.0);
+        assert_eq!(state.world_unit.suffix(), "in");
+        assert!(state.dialog_visible());
+
+        // Escape closes the dropdown alone; a press off it does too.
+        state.open_dialog_dropdown(&crate::dialog::setting_row_id("World Unit"));
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
+        assert!(!state.dialog_dropdown_open() && state.dialog_visible());
+        state.open_dialog_dropdown(&crate::dialog::setting_row_id("World Unit"));
+        press(&mut state, dx + 20.0, dy + dh - 20.0);
+        assert!(!state.dialog_dropdown_open() && state.dialog_visible(), "a press off the menu closes it alone");
+        assert_eq!(state.world_unit.suffix(), "in", "and picks nothing");
+        state.close_dialog();
     }
 
     /// A control in the palette lifts under the pointer: the row whose
@@ -14791,7 +14833,11 @@ mod tests {
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
         assert_eq!(state.world_unit, before, "left arrow steps it back");
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
-        assert_ne!(state.world_unit, before, "Enter steps a choice too");
+        assert!(state.dialog_dropdown_open(), "Enter opens a choice's dropdown");
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        assert_ne!(state.world_unit, before, "Down and Enter pick the next option");
+        assert!(!state.dialog_dropdown_open());
         assert!(state.dialog_visible(), "and keeps the dialog up");
 
         let scale_row = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("Group Marker Size")).unwrap();

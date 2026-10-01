@@ -3361,17 +3361,31 @@ selection stays where it was:
   pane's) is one of these over `State::zoom_percent` (100 = Reset Zoom,
   range the pitch limits), landing through `set_zoom_percent`, which zooms
   about the cursor cell and re-reads the row, since `zoom` clamps.
-- `Choice` — a fixed set (World Unit). The current option reads in the
-  chord column between two arrows; Enter or a click steps to the next,
-  Left/Right either way. The arrows are cce-icons' `chevron-left` /
-  `chevron-right` (`choice_arrows`), in square boxes 0.8 of the row's font
-  size — the triangle then stands about a capital high — rasterized at
-  twice that. Until 2026-09-30 they were the text triangles `◂` `▸`, which
-  the dialog's font has no glyph for, so they drew as boxes. The right
-  column (values and chords alike) is measured by SHAPING
+- `Choice` — a fixed set (World Unit, GPU, Node Wire Style, the
+  visualizer settings): a DROPDOWN (since 2026-10-01). The current option
+  reads in the chord column in a well with cce-icons' `chevron-down` after
+  it (`choice_mark`, a square box 0.8 of the row's font size, rasterized
+  at twice that), and the well lifts under the pointer — `choice_span` is
+  the one rect the paint, the hover and the dropdown share. A press on the
+  row, or Enter, opens the toolkit's context menu as its dropdown
+  (`State::open_dialog_dropdown`): one row an option, the current one
+  marked `●` and highlighted, right-aligned under the well. It is a popup
+  ABOVE the dialog, so it runs past the plate's edge, and it is in front
+  of the dialog for input — `dialog_dropdown_press` ahead of
+  `dialog_mouse_input` (a press off it closes it alone and is swallowed),
+  `dialog_dropdown_wheel` ahead of the dialog's wheel, and
+  `dialog_dropdown_key` ahead of the dialog's keys: Up/Down walk it
+  (cce-ui's `context_menu::step_hovered`), Enter picks, Escape and Tab
+  close it. A pick lands through `land_dialog_choice`, the one write the
+  arrow keys use too — Left/Right still step a choice without opening it.
+  `State::dialog_dropdown` is the open row's id and its options' values.
+  Until then a click or Enter stepped to the next option and the value
+  stood between a left and a right chevron; before 2026-09-30 those were
+  the text triangles `◂` `▸`, which the dialog's font has no glyph for.
+  The right column (values and chords alike) is measured by SHAPING
   (`shaped_width`, as `Button::label_width` does): `measure_text_width`
   resolves the family through usvg and measured a value 8 px wider than it
-  drew, which left the right arrow twice as far from it as the left.
+  drew. `a_choice_row_is_a_dropdown` drives it by pointer and keys.
 - `Color` — a hex colour. Behind each colour row the
   dialog keeps one toolkit `ColorSelector` (`Dialog::colors`, by row id,
   kept across re-rankings so a query that drops the row does not kill its

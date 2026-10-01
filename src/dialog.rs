@@ -77,8 +77,9 @@ pub enum Control {
     /// over the band turns it, a press on the band jumps to the pointer.
     /// A `dec` of zero snaps to whole numbers — the spinbox shape.
     Slider { value: f32, min: f32, max: f32, dec: usize, step: f32, suffix: &'static str },
-    /// One of a fixed set: picking the row steps to the next option, the
-    /// arrows step either way.
+    /// One of a fixed set: picking the row opens a dropdown of the options
+    /// under its value ([`State::open_dialog_dropdown`]); the arrows step
+    /// either way without it.
     Choice { options: Vec<String>, index: usize },
     /// A colour, `#rrggbb`, drawn as the toolkit's colour selector: a hex
     /// well and a swatch that opens the picker.
@@ -305,6 +306,9 @@ pub struct Dialog {
     /// Whether the press that set `activated` was on the row's control
     /// (its switch) rather than on the rest of the row.
     activated_control: bool,
+    /// The row whose dropdown is open, so its trigger stays lifted while
+    /// the pointer is over the menu.
+    dropdown_open: Option<usize>,
     /// Whether the dialog is currently claiming its rect as an occluder — see
     /// [`Paint::popover`]. Lowered for the length of an event dispatch into
     /// the dialog, because the one claim serves two mechanisms that want
@@ -364,6 +368,7 @@ impl Dialog {
             hover_ctl: None,
             activated: None,
             activated_control: false,
+            dropdown_open: None,
             occluding: true,
             toggle_stamps: RefCell::new([off, on]),
             slider_stamp: RefCell::new(slider_stamp),
@@ -663,9 +668,37 @@ impl Dialog {
         Rect { x, y: r.y + 2.0, width: (right - x).max(10.0), height: ROW_H - 4.0 }
     }
 
+    /// A choice row's dropdown trigger in row rect `r`: the well around
+    /// its current value and the mark, right-aligned on the chord column —
+    /// what is painted, what the pointer lifts, and what the dropdown opens
+    /// under.
+    fn choice_span(&self, r: Rect, value: &str, family: &str, font_size: f32) -> Rect {
+        let text_w = if value.is_empty() { 0.0 } else { shaped_width(value, family, font_size) };
+        let mark_w = choice_mark(font_size).map_or(0.0, |a| a.size + a.gap);
+        let right = r.x + r.width - 8.0 - self.toggle_col() + CHOICE_WELL_PAD;
+        let width = text_w + mark_w + 2.0 * CHOICE_WELL_PAD;
+        Rect { x: right - width, y: r.y + 2.0, width, height: r.height - 4.0 }
+    }
+
+    /// Row `i`'s dropdown trigger in window coordinates, when it is a
+    /// choice row in view — where its dropdown opens.
+    pub fn choice_trigger(&self, rect: Rect, i: usize) -> Option<Rect> {
+        let r = self.row_rect(rect, i)?;
+        let Some(Control::Choice { options, index }) = &self.rows.get(i)?.control else { return None };
+        let (family, font_size) = cce_ui::layout::control_label_font_parsed();
+        Some(self.choice_span(r, options.get(*index).map(String::as_str).unwrap_or(""), &family, font_size))
+    }
+
+    /// Mark row `i` as the one whose dropdown is open (its trigger stays
+    /// lifted), or none.
+    pub fn set_dropdown_open(&mut self, i: Option<usize>) {
+        self.dropdown_open = i;
+    }
+
     /// Where a row's control is, for the hover: the switch, the whole
-    /// slider (readout lane included), the colour band. None for a row
-    /// with no control the pointer can lift.
+    /// slider (readout lane included), the colour band, a choice's
+    /// dropdown trigger. None for a row with no control the pointer can
+    /// lift.
     fn control_rect(&self, r: Rect, row: &Row) -> Option<Rect> {
         match &row.control {
             Some(Control::Toggle(_)) => Some(Rect {
@@ -676,7 +709,11 @@ impl Dialog {
             }),
             Some(Control::Slider { .. }) => Some(self.slider_rect(r)),
             Some(Control::Color { .. }) => Some(self.slider_band_rect(r)),
-            Some(Control::Choice { .. }) | None => None,
+            Some(Control::Choice { options, index }) => {
+                let (family, font_size) = cce_ui::layout::control_label_font_parsed();
+                Some(self.choice_span(r, options.get(*index).map(String::as_str).unwrap_or(""), &family, font_size))
+            }
+            None => None,
         }
     }
 
@@ -789,29 +826,32 @@ fn shaped_width(text: &str, family: &str, font_size: f32) -> f32 {
         .unwrap_or_else(|| display::measure_text_width(text, family, font_size))
 }
 
-/// A choice row's two arrows: cce-icons' `chevron-left` / `chevron-right`,
-/// as image ids, drawn in a square box of `size` logical px with `gap` px
-/// between each and the value.
+/// A choice row's dropdown mark: cce-icons' `chevron-down`, as an image
+/// id, drawn in a square box of `size` logical px, `gap` px right of the
+/// value. Until 2026-10-01 a choice was a value between a left and a right
+/// chevron, stepped by a click; it is a dropdown now
+/// ([`State::open_dialog_dropdown`]), and the arrow keys still step it.
 #[derive(Clone, Copy)]
-struct ChoiceArrows {
-    left: u32,
-    right: u32,
+struct ChoiceMark {
+    down: u32,
     size: f32,
     gap: f32,
 }
 
-/// The arrows for a row set in `font_size`: the chevron's triangle is three
+/// The mark for a row set in `font_size`: the chevron's triangle is three
 /// quarters of its box, so a box of 0.8 of the font size makes the triangle
 /// about as tall as a capital. Rasterized at twice the box, so a scale-2
 /// output draws it at its own pixels and scale 1 minifies it cleanly.
 /// `None` when the icon set is missing.
-fn choice_arrows(font_size: f32) -> Option<ChoiceArrows> {
+fn choice_mark(font_size: f32) -> Option<ChoiceMark> {
     let size = (font_size * 0.8).round().max(6.0);
     let px = (size * 2.0).ceil() as u32;
-    let (left, _, _) = cce_ui::upload_icon("chevron-left", px)?;
-    let (right, _, _) = cce_ui::upload_icon("chevron-right", px)?;
-    Some(ChoiceArrows { left, right, size, gap: (font_size * 0.3).round().max(3.0) })
+    let (down, _, _) = cce_ui::upload_icon("chevron-down", px)?;
+    Some(ChoiceMark { down, size, gap: (font_size * 0.3).round().max(3.0) })
 }
+
+/// How far the dropdown's well reaches past the value and the mark.
+const CHOICE_WELL_PAD: f32 = 6.0;
 
 impl Paint for Dialog {
     /// `paint` authors geometry AND text, so the Text prims pass through
@@ -992,26 +1032,26 @@ impl Paint for Dialog {
             let ty = cce_ui::layout::align_text_y(r.y, r.height, font_size, 0.0);
             let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
             // What the chord column shows: the chord, or a choice row's
-            // current option between its two arrows — a value, so it wears
-            // the label's colour rather than the chord's grey. The arrows
-            // are cce-icons' chevrons, text triangles only if the icon set
-            // is missing (the font has no glyph for those, and drew boxes).
-            let arrows = match &row.control {
-                Some(Control::Choice { .. }) => choice_arrows(font_size),
+            // current option and its dropdown mark — a value, so it wears
+            // the label's colour rather than the chord's grey — in a well
+            // that reads as the dropdown's trigger and lifts under the
+            // pointer. The mark is cce-icons' chevron, left out if the icon
+            // set is missing (the font has no glyph for a triangle).
+            let mark = match &row.control {
+                Some(Control::Choice { .. }) => choice_mark(font_size),
                 _ => None,
             };
             let (right_text, right_color) = match &row.control {
                 Some(Control::Choice { options, index }) => {
-                    let value = options.get(*index).map(String::as_str).unwrap_or("");
-                    let text = if arrows.is_some() { value.to_string() } else { format!("\u{25c2} {value} \u{25b8}") };
-                    (text, label_color)
+                    (options.get(*index).cloned().unwrap_or_default(), label_color)
                 }
                 _ => (row.chord.clone(), [0x85, 0x85, 0x92]),
             };
             let text_w = if right_text.is_empty() { 0.0 } else { shaped_width(&right_text, &family, font_size) };
-            // An arrow's box, and the gap between it and the value.
-            let arrow_w = arrows.map_or(0.0, |a| a.size + a.gap);
-            let right_w = text_w + 2.0 * arrow_w;
+            // The mark's box, and the gap between it and the value.
+            let arrow_w = mark.map_or(0.0, |a| a.size + a.gap);
+            let well = if mark.is_some() || matches!(row.control, Some(Control::Choice { .. })) { CHOICE_WELL_PAD } else { 0.0 };
+            let right_w = text_w + arrow_w + well;
             // The label's clip stops short of the chord column so a long
             // label is cut by it rather than running under it.
             let chord_right = r.x + r.width - 8.0 - ctl_col;
@@ -1030,10 +1070,15 @@ impl Paint for Dialog {
                 Some(family.clone()),
                 own,
             );
+            if let Some(Control::Choice { .. }) = &row.control {
+                let span = self.choice_span(r, &right_text, &family, font_size);
+                let lift = if self.hover_ctl == Some(i) || self.dropdown_open == Some(i) { 0.34 } else { 0.22 };
+                ctx.rounded_rect(span, ctrl_r, (true, true, true, true), [0.0, 0.0, 0.0, lift]);
+            }
             if text_w > 0.0 {
                 ctx.text_with(
                     right_text,
-                    chord_right - right_w + arrow_w,
+                    chord_right - right_w + well,
                     ty,
                     font_size,
                     right_color,
@@ -1041,13 +1086,11 @@ impl Paint for Dialog {
                     own,
                 );
             }
-            if let Some(a) = arrows {
-                // White glyphs, dimmed to the value's own brightness.
+            if let Some(a) = mark {
+                // A white glyph, dimmed to the value's own brightness.
                 let alpha = right_color[0] as f32 / 255.0;
                 let y = r.y + (r.height - a.size) * 0.5;
-                let at = |x: f32| Rect { x, y, width: a.size, height: a.size };
-                ctx.image(a.left, at(chord_right - right_w), alpha);
-                ctx.image(a.right, at(chord_right - a.size), alpha);
+                ctx.image(a.down, Rect { x: chord_right - a.size, y, width: a.size, height: a.size }, alpha);
             }
             match &row.control {
                 Some(Control::Toggle(on)) => {
@@ -1650,6 +1693,7 @@ impl State {
         if !self.dialog_visible() {
             return;
         }
+        self.close_dialog_dropdown();
         self.slots.dialog.set_visible(false);
         if self.focused_widget == Some(DIALOG_IDX) {
             self.focused_widget = None;
@@ -2299,6 +2343,10 @@ impl State {
             self.drain_dialog_clicks();
             return true;
         }
+        // An open dropdown has the keys next: it is in front of the rows.
+        if self.dialog_dropdown_open() {
+            return self.dialog_dropdown_key(event);
+        }
         // The dialog's own chord closes it, wherever the user has bound it —
         // asked for by id rather than hardcoded to Alt+D, so a rebind in
         // `input.kdl` keeps working both ways.
@@ -2405,17 +2453,124 @@ impl State {
                 }
                 let n = options.len() as i32;
                 let next = (index as i32 + dir).rem_euclid(n) as usize;
-                if let Some(label) = id.strip_prefix(SETTING_ROW_PREFIX) {
-                    let label = label.to_string();
-                    self.apply_setting(&label, &options[next]);
-                } else if let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) {
-                    let field = field.to_string();
-                    self.set_visualizer_field(i, &field, &options[next], true);
-                    self.refresh_dialog_controls();
-                }
+                self.land_dialog_choice(&id, &options[next]);
             }
             _ => {}
         }
+    }
+
+    /// A choice row's new option, from its dropdown or an arrow key: a
+    /// setting row writes its setting, a visualizer's row its field.
+    pub(crate) fn land_dialog_choice(&mut self, id: &str, value: &str) {
+        if let Some(label) = id.strip_prefix(SETTING_ROW_PREFIX) {
+            let label = label.to_string();
+            self.apply_setting(&label, value);
+        } else if let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) {
+            let field = field.to_string();
+            self.set_visualizer_field(i, &field, value, true);
+            self.refresh_dialog_controls();
+        }
+    }
+
+    /// Open row `id`'s dropdown: the toolkit's context menu, one row an
+    /// option with the current one marked and highlighted, right-aligned
+    /// under the row's trigger. It is a popup above the dialog, so it can
+    /// run past the plate's edge. Picking a row lands it through
+    /// [`Self::land_dialog_choice`]; the dialog stays up.
+    pub(crate) fn open_dialog_dropdown(&mut self, id: &str) {
+        let Some(i) = self.slots.dialog.rows.iter().position(|r| r.id == id) else { return };
+        let Some(Control::Choice { options, index }) = self.slots.dialog.rows[i].control.clone() else { return };
+        if options.is_empty() {
+            return;
+        }
+        self.slots.dialog.selected = i;
+        self.slots.dialog.scroll_to_selected();
+        let (x, y, w, h) = self.positions[DIALOG_IDX];
+        let Some(trigger) = self.slots.dialog.choice_trigger(Rect { x, y, width: w, height: h }, i) else { return };
+        let labels: Vec<String> =
+            options.iter().enumerate().map(|(k, o)| format!("{} {o}", if k == index { "●" } else { "○" })).collect();
+        let target = self.slots.dialog.base().id();
+        // Shown once to learn its width, then where it goes: its right edge
+        // on the trigger's, its top on the trigger's bottom.
+        cce_ui::widget::context_menu::show(trigger.x, trigger.y + trigger.height, labels.clone(), 0, target);
+        let (_, menu_w, _) = cce_ui::widget::context_menu::natural_geometry();
+        let left = (trigger.x + trigger.width - menu_w).max(0.0);
+        cce_ui::widget::context_menu::show(left, trigger.y + trigger.height, labels, 0, target);
+        cce_ui::widget::context_menu::set_hovered_item(Some(index));
+        self.slots.dialog.set_dropdown_open(Some(i));
+        self.dialog_dropdown = Some((id.to_string(), options));
+    }
+
+    pub(crate) fn dialog_dropdown_open(&self) -> bool {
+        self.dialog_dropdown.is_some() && cce_ui::widget::context_menu::is_visible()
+    }
+
+    pub(crate) fn close_dialog_dropdown(&mut self) {
+        if self.dialog_dropdown.take().is_some() {
+            cce_ui::widget::context_menu::hide();
+        }
+        self.slots.dialog.set_dropdown_open(None);
+    }
+
+    /// Land option `k` of the open dropdown, and close it.
+    fn pick_dialog_dropdown(&mut self, k: usize) {
+        let Some((id, options)) = self.dialog_dropdown.clone() else { return };
+        self.close_dialog_dropdown();
+        if let Some(value) = options.get(k) {
+            self.land_dialog_choice(&id, value);
+        }
+    }
+
+    /// A press while the dropdown is open: on a row it picks it, anywhere
+    /// else it closes the dropdown and is swallowed — the dialog under it
+    /// stays up, as any menu's dismissing press leaves what is under it.
+    pub(crate) fn dialog_dropdown_press(&mut self, button: MouseButton) -> bool {
+        let (x, y) = (self.cursor_x, self.cursor_y);
+        if button == MouseButton::Left && cce_ui::widget::context_menu::hit_test(x, y) {
+            if let Some(k) = cce_ui::widget::context_menu::row_at(x, y) {
+                self.pick_dialog_dropdown(k);
+            }
+            return true;
+        }
+        self.close_dialog_dropdown();
+        true
+    }
+
+    /// A wheel while the dropdown is open: over it, it scrolls a list too
+    /// long for the screen; anywhere else it closes it, and the dialog
+    /// takes the wheel.
+    pub(crate) fn dialog_dropdown_wheel(&mut self, delta: &MouseScrollDelta) -> bool {
+        if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
+            cce_ui::widget::context_menu::mouse_wheel(delta, self.cursor_x, self.cursor_y);
+            return true;
+        }
+        self.close_dialog_dropdown();
+        false
+    }
+
+    /// A key while the dropdown is open: Up and Down walk it, Enter picks
+    /// the highlighted option, Escape and Tab close it; nothing else
+    /// reaches the dialog behind it.
+    fn dialog_dropdown_key(&mut self, event: &KeyEvent) -> bool {
+        if event.state != ElementState::Pressed {
+            return true;
+        }
+        match &event.logical_key {
+            Key::Named(NamedKey::ArrowDown) => {
+                cce_ui::widget::context_menu::step_hovered(1);
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                cce_ui::widget::context_menu::step_hovered(-1);
+            }
+            Key::Named(NamedKey::Enter) => {
+                if let Some(k) = cce_ui::widget::context_menu::hovered_item() {
+                    self.pick_dialog_dropdown(k);
+                }
+            }
+            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Tab) => self.close_dialog_dropdown(),
+            _ => {}
+        }
+        true
     }
 
     /// A slider row's value arriving from a drag, a wheel or an arrow: the
@@ -2527,7 +2682,7 @@ impl State {
                         self.set_visualizer_field(i, &field, if on { "false" } else { "true" }, true);
                         self.refresh_dialog_controls();
                     }
-                    Some(Control::Choice { .. }) => self.nudge_dialog_selection(1),
+                    Some(Control::Choice { .. }) => self.open_dialog_dropdown(&id),
                     _ => {}
                 },
             }
@@ -2551,7 +2706,7 @@ impl State {
                         let v = if on { "false" } else { "true" };
                         self.apply_setting(s.label, v);
                     }
-                    Some(Control::Choice { .. }) => self.nudge_dialog_selection(1),
+                    Some(Control::Choice { .. }) => self.open_dialog_dropdown(&id),
                     _ => {}
                 }
                 return;
