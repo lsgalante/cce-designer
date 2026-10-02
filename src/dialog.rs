@@ -257,8 +257,23 @@ pub fn visible_rows(x: f32, y: f32, w: f32, h: f32) -> usize {
     (list_rect(Rect { x, y, width: w, height: h }).height / ROW_H).floor().max(0.0) as usize
 }
 
+/// The dialog turning into what it now shows — from the menu it replaced,
+/// or from the list it was in another mode — animated as the context
+/// menu's page turns are (`context_menu::TURN_MS`): the plate on its way
+/// from `from` to its own rect, the rows sliding in and coming up.
+#[derive(Debug, Clone, Copy)]
+pub struct DialogTurn {
+    /// The plate it turned from, when that was another size: a menu.
+    pub from: Option<Rect>,
+    pub start: std::time::Instant,
+    /// +1 forward (the rows come in from the right), -1 back.
+    pub dir: f32,
+}
+
 pub struct Dialog {
     pub mode: Mode,
+    /// The turn being animated, if one is.
+    pub turning: Option<DialogTurn>,
     /// Where the plate's top-left corner goes, when it opened in place of
     /// something else (see [`layout_at`]); `None` centres it.
     pub anchor: Option<(f32, f32)>,
@@ -372,6 +387,7 @@ impl Dialog {
         slider_stamp.set_scroll(false);
         let mut d = Adapted::new(Dialog {
             mode: Mode::Commands,
+            turning: None,
             anchor: None,
             query: String::new(),
             rows: Vec::new(),
@@ -522,6 +538,27 @@ impl Dialog {
             return None;
         }
         Some(Rect { x: list.x, y: list.y + offset, width: list.width, height: ROW_H })
+    }
+
+    /// How far the turn in progress has gone, eased; `None` when none is.
+    pub fn turn_progress(&self) -> Option<f32> {
+        let t = self.turning.as_ref()?;
+        let raw = t.start.elapsed().as_secs_f32() * 1000.0 / cce_ui::widget::context_menu::turn_ms();
+        (raw < 1.0).then(|| cce_ui::widget::context_menu::turn_ease(raw))
+    }
+
+    /// The plate as it is drawn on `rect`: there, or on its way there from
+    /// the plate it turned from.
+    pub fn drawn_rect(&self, rect: Rect) -> Rect {
+        match (self.turn_progress(), self.turning.and_then(|t| t.from)) {
+            (Some(e), Some(f)) => Rect {
+                x: f.x + (rect.x - f.x) * e,
+                y: f.y + (rect.y - f.y) * e,
+                width: f.width + (rect.width - f.width) * e,
+                height: f.height + (rect.height - f.height) * e,
+            },
+            _ => rect,
+        }
     }
 
     /// The row under `(x, y)` in a dialog laid out on `rect`.
@@ -902,7 +939,9 @@ impl Paint for Dialog {
     /// `State::dispatch_uncovered` lowers the flag for the length of a
     /// dispatch into the dialog and puts it straight back.
     fn popover(&self, rect: Rect) -> Option<(f32, f32, f32, f32)> {
-        self.occluding.then_some((rect.x, rect.y, rect.width, rect.height))
+        // While it turns, the plate as it is drawn: the labels are cut there.
+        let r = self.drawn_rect(rect);
+        self.occluding.then_some((r.x, r.y, r.width, r.height))
     }
 
     fn paint(&self, rect: Rect, ctx: &mut PaintCtx) {
@@ -1209,7 +1248,8 @@ impl Input for Dialog {
         // landed close settled back to a closed trigger.
         let band = self.dropdown_trigger(rect).unwrap_or(rect);
         let unfolding = self.dropdown.open && Input::tick(self.dropdown.inner_mut(), dt, band);
-        moved || self.scroll_motion.is_animating() || flipped || self.sb_activity.holding() || fading || picking || colored || unfolding
+        let turning = self.turn_progress().is_some();
+        moved || self.scroll_motion.is_animating() || flipped || self.sb_activity.holding() || fading || picking || colored || unfolding || turning
     }
 
     /// The whole rect, always — this is what makes the dialog modal over what
@@ -1606,10 +1646,16 @@ impl State {
     /// The dialog in `mode`, turned to from the menu `origin` by one of its
     /// page rows: its top-left where the menu's was, and a swipe back shows
     /// the menu again (see `crate::menu_page`).
+    ///
+    /// The plate grows out of the menu just put down: its size is what the
+    /// context menu still holds after the hide.
     pub fn open_dialog_from(&mut self, mode: Mode, origin: crate::menu_page::MenuOrigin, at: (f32, f32)) {
+        use cce_ui::widget::context_menu;
+        let from = Rect { x: at.0, y: at.1, width: context_menu::w(), height: context_menu::h() };
         self.close_dialog();
         self.open_dialog_anchored(mode, Some(at));
         self.dialog_from = Some(origin);
+        self.slots.dialog.turning = Some(DialogTurn { from: Some(from), start: std::time::Instant::now(), dir: 1.0 });
     }
 
     /// Turn the open dialog to `mode`, as the row or key that leads there
@@ -1720,13 +1766,21 @@ impl State {
         // the trail's last, it is going back, and comes off. Opened afresh
         // it has neither, and whoever opened it from a menu says so after.
         let was = self.dialog_visible().then_some(self.slots.dialog.mode);
+        self.slots.dialog.turning = None;
         match was {
             Some(prev) if anchor.is_none() => {
-                if self.dialog_trail.last() == Some(&mode) {
+                // The same plate turned to another list: the rows slide in,
+                // from the right going on, from the left coming back.
+                let dir = if self.dialog_trail.last() == Some(&mode) {
                     self.dialog_trail.pop();
+                    Some(-1.0)
                 } else if prev != mode {
                     self.dialog_trail.push(prev);
-                }
+                    Some(1.0)
+                } else {
+                    None
+                };
+                self.slots.dialog.turning = dir.map(|dir| DialogTurn { from: None, start: std::time::Instant::now(), dir });
             }
             _ => {
                 self.slots.dialog.anchor = anchor;

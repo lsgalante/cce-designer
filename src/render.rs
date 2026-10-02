@@ -307,8 +307,44 @@ impl State {
             // backdrop as the config says rather than folding that into
             // opacity as the hosted menus must.
             let (x, y, ww, h) = w.rect();
-            cce_ui::widget::context_menu::paint_menu_plate(pc, rect(x, y, ww, h), false);
-            w.paint_self(&self.ui_context, pc);
+            let full = rect(x, y, ww, h);
+            match (self.slots.dialog.turn_progress(), self.slots.dialog.turning) {
+                (Some(e), Some(turn)) => {
+                    // Turning (see `dialog::DialogTurn`): the plate on its way
+                    // from the one it replaced, and what it shows sliding in
+                    // and coming up inside it. Everything is painted aside
+                    // and replayed moved; the text is cut at the plate as it
+                    // is drawn, which is the occluder the dialog claims
+                    // meanwhile, so the clamp still lets it through.
+                    let now = self.slots.dialog.drawn_rect(full);
+                    cce_ui::widget::context_menu::paint_menu_plate(pc, now, false);
+                    let mut scratch = PaintCtx::new();
+                    w.paint_self(&self.ui_context, &mut scratch);
+                    let dx = turn.dir * (1.0 - e) * cce_ui::widget::context_menu::TURN_SLIDE;
+                    // Bounds are offset by the translate; these land on `now`.
+                    let bounds = Some([now.x - dx, now.y, now.x + now.width - dx, now.y + now.height]);
+                    let radius = cce_ui::layout::menu_corner_radius();
+                    pc.clip_rounded(now, radius, |pc| {
+                        pc.translate(dx, 0.0, |pc| {
+                            for item in scratch.finish().items {
+                                if let Some(c) = item.clip {
+                                    pc.push_clip(c);
+                                }
+                                if let Some(Prim::Text { text, x, y, font_size, color, alpha, font, .. }) = pc.replay(item.prim) {
+                                    pc.text_faded(text, x, y, font_size, color, alpha * e * e, font, bounds);
+                                }
+                                if item.clip.is_some() {
+                                    pc.pop_clip();
+                                }
+                            }
+                        });
+                    });
+                }
+                _ => {
+                    cce_ui::widget::context_menu::paint_menu_plate(pc, full, false);
+                    w.paint_self(&self.ui_context, pc);
+                }
+            }
         } else if idx == PLAYBAR_IDX {
             // Modern-paint pane: the plate from the legacy views like the other
             // panes, then paint_self emits the transport controls — geometry AND

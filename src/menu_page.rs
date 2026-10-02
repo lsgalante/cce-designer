@@ -251,10 +251,14 @@ impl State {
             return true;
         }
         let Some(origin) = self.dialog_from else { return false };
-        let (x, y, _, _) = self.positions[DIALOG_IDX];
+        // The menu turns back out of the plate as it is drawn: it shrinks
+        // from the dialog's size into its own.
+        let (x, y, w, h) = self.positions[DIALOG_IDX];
+        let drawn = self.slots.dialog.drawn_rect(cce_ui::scene::layout::Rect { x, y, width: w, height: h });
         self.close_dialog();
         self.close_open_menu();
-        self.reopen_menu(origin, x, y);
+        self.reopen_menu(origin, drawn.x, drawn.y);
+        context_menu::turn_from_size(drawn.width, drawn.height, false);
         true
     }
 }

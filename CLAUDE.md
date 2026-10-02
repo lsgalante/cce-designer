@@ -2674,6 +2674,19 @@ Markers and Attribute Visualizers, a visualizer and Add Visualizer.
   the palette still up, so it is on the trail. Opened afresh, the dialog
   has neither. A swipe back with neither does nothing.
 
+- **Every turn is animated** (cce-ui's `TURN_MS`, 180 ms): a page of rows
+  by cce-ui itself; the dialog by `dialog::DialogTurn` the same way — the
+  plate grows from the menu just put down (`open_dialog_from` reads its
+  size off the hidden context menu), and a mode turned to while it is up
+  (Group Markers, a visualizer and back) slides its rows in from the side
+  it came from at the plate's own size. The render arm paints a turning
+  dialog's content aside and replays it moved and clipped, its text faded
+  and bounded by the plate as drawn, which is also the occluder the dialog
+  claims meanwhile (`Dialog::drawn_rect` in `popover`), so the clamp still
+  lets the labels through. A swipe back from the dialog shrinks the menu
+  out of the dialog's size (`context_menu::turn_from_size`). Checked in a
+  shadow session under `CCE_UI_TURN_MS=2000`.
+
 `the_viewport_menu_turns_into_its_pages_and_back` drives the viewport
 menu's pages, the back band and both swipes, into the dialog and back.
 
