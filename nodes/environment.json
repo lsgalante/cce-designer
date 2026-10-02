@@ -1,0 +1,15 @@
+{
+  "name": "Environment",
+  "type": "environment",
+  "inputs": 0,
+  "outputs": 0,
+  "params": [
+    { "name": "sun_azimuth", "label": "Sun Azimuth", "type": "slider", "default": "52", "min": 0.0, "max": 360.0, "step": 1.0, "description": "Which way the sun is, in degrees around the up axis: 0 is toward +Z, 90 toward +X. Both the shaded and the path-traced view are lit from this direction.", "group": "sun" },
+    { "name": "sun_elevation", "label": "Sun Elevation", "type": "slider", "default": "53", "min": -90.0, "max": 90.0, "step": 1.0, "description": "How high the sun stands, in degrees above the horizon: 90 is straight overhead, below 0 it lights from underneath.", "group": "sun" },
+    { "name": "sun_intensity", "label": "Sun Intensity", "type": "float", "default": "8", "description": "How bright the sun is in the path-traced view; 0 leaves the sky as the only light. The shaded view takes the sun's direction only.", "group": "sun" },
+    { "name": "sun_color", "label": "Sun Color", "type": "float3", "default": "1.00:0.95:0.85", "min": 0.0, "max": 1.0, "description": "Colour of the sunlight in the path-traced view, as linear values, scaled by Sun Intensity.", "group": "sun" },
+    { "name": "sky_color", "label": "Sky Color", "type": "float3", "default": "0.72:0.82:0.98", "min": 0.0, "max": 1.0, "description": "Colour of the sky straight overhead in the path-traced view, as linear values; it grades into Ground Color toward straight down.", "group": "sky" },
+    { "name": "ground_color", "label": "Ground Color", "type": "float3", "default": "0.32:0.31:0.35", "min": 0.0, "max": 1.0, "description": "Colour of the sky straight down in the path-traced view, as linear values: the light a surface facing the ground receives.", "group": "sky" },
+    { "name": "sky_intensity", "label": "Sky Intensity", "type": "float", "default": "1", "description": "Multiplies Sky Color and Ground Color: how much light the sky itself gives in the path-traced view.", "group": "sky" }
+  ]
+}

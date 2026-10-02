@@ -2932,6 +2932,10 @@ pub struct State {
     /// uploads this in place of `rt_sphere_verts`, which the path tracer
     /// keeps reading unlit.
     pub scene_smooth_verts: Vec<Vertex3D>,
+    /// The scene's light, as the Environment node at the root says (or its
+    /// defaults) — read by `present_scene` and `sync_environment`, handed
+    /// to both views by the stage pass. See `crate::environment`.
+    pub environment: crate::environment::Environment,
     /// See-through fill (`toggle_show_occluded`), in effect only below full
     /// opacity — at 100% there is nothing to see through, and the ordinary
     /// depth-writing fill is exact.
@@ -7999,6 +8003,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             show_occluded: settings.render.show_occluded,
             sorted_fill_key: None,
             scene_smooth_verts: Vec::new(),
+            environment: crate::environment::Environment::default(),
             group_point_verts: Vec::new(),
             spreadsheet_points: Vec::new(),
             row_marker_verts: Vec::new(),
@@ -11662,6 +11667,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// a rebuild. The render half lives in [`State::stage_frame`].
     pub fn tick_frame(&mut self, dt: f32) -> bool {
         let now = Instant::now();
+        let light_moved = self.sync_environment();
 
         // A replacement renderer left the page pane with no image; recompose
         // and re-upload it now that the frame has settled.
@@ -11975,7 +11981,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.read_panel_offsets();
         }
 
-        tick_changed || panned || reclaimed || glow_animating || frame_moved || config_changed
+        tick_changed || panned || reclaimed || glow_animating || frame_moved || config_changed || light_moved
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.
@@ -12453,6 +12459,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         }
                         draws.extend(fill);
                     }
+                    // One light for both views: the environment's sun.
+                    renderer.set_scene_light(self.environment.sun_direction.to_array());
                     renderer.stage_scene((sx, sy, cw, ch), draws);
                     if let (Some(image), Some(shown)) = (self.page_image, &self.page_shown) {
                         renderer.stage_scene_images(vec![cce_ui::vk::SceneImage {
@@ -12520,6 +12528,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     // pass draws it (since 2026-10-02; it was the tracer's
                     // sky). The sky still lights the scene.
                     renderer.set_rt_background(Some(cce_ui::colors::to_linear_rgb(self.viewport().bg_color)));
+                    renderer.set_rt_environment(self.environment.to_rt());
                     renderer.stage_rt((sx, sy, cw, ch), cce_ui::vk::RtCamera { inv_mvp });
                 }
             } else if self.viewport_dirty {

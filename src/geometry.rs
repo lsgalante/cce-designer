@@ -220,22 +220,18 @@ pub fn point_transmittance(
         .collect()
 }
 
-/// The raster pass's light, in WORLD space — `scene3d.wgsl`'s `l`, which the
-/// smooth bake below has to match or switching shading modes would move
-/// the lit side of the model.
-pub const SCENE_LIGHT: [f32; 3] = [-0.55, 0.45, 0.7];
-
 /// The raster pass's shading factor for a surface whose OUTWARD normal is
-/// `n` — the multiplier `scene3d.wgsl` applies to a fragment's colour.
+/// `n`, lit from `toward` (unit, toward the light — the environment's sun,
+/// which `scene3d.wgsl` is handed too): the multiplier the shader applies
+/// to a fragment's colour, its wrap term and its 0.55 floor. A zero normal
+/// (a point on no primitive) takes the midpoint.
 ///
-/// The shader's normal is `cross(dpdx(world), dpdy(world))`: screen right
-/// crossed with framebuffer DOWN, which for any visible surface points away
-/// from the viewer — into the surface. So the shader's `dot(n, l)` is this
-/// function's `dot(-n, l)`, and the wrap term and the 0.55 floor are its
-/// own. A zero normal (a point on no primitive) takes the midpoint.
-pub fn shade_factor(n: Vec3) -> f32 {
-    let l = Vec3::from_array(SCENE_LIGHT).normalize();
-    let d = if n.length_squared() > 0.0 { ((-n).dot(l) * 0.5 + 0.5).clamp(0.0, 1.0) } else { 0.5 };
+/// Until 2026-10-02 the light was a constant here and in the shader,
+/// `(-0.55, 0.45, 0.7)`, dotted with the shader's INWARD normal — a light
+/// from below, read the right way round — and the tracer's sun was another
+/// direction altogether. See `crate::environment`.
+pub fn shade_factor(n: Vec3, toward: Vec3) -> f32 {
+    let d = if n.length_squared() > 0.0 { (n.dot(toward) * 0.5 + 0.5).clamp(0.0, 1.0) } else { 0.5 };
     0.55 + 0.45 * d
 }
 
@@ -251,9 +247,9 @@ pub fn shade_factor(n: Vec3) -> f32 {
 /// triangles or a cut along a seam stays faceted there — as it would in
 /// any smooth-shaded viewport. Colours here only; the path tracer keeps
 /// reading the unlit ones.
-pub fn smooth_lit_vertices(d: &Detail) -> Vec<Vertex3D> {
+pub fn smooth_lit_vertices(d: &Detail, toward: Vec3) -> Vec<Vertex3D> {
     let normals = point_normals(d);
-    let lit: Vec<f32> = normals.iter().map(|n| shade_factor(*n)).collect();
+    let lit: Vec<f32> = normals.iter().map(|n| shade_factor(*n, toward)).collect();
     // Vertex normals, where the geometry carries them, are the normals it
     // asked to be shaded by: a corner is lit by its own, so a crease the
     // Normal node cusped reads hard and the rest smooth.
@@ -272,7 +268,7 @@ pub fn smooth_lit_vertices(d: &Detail) -> Vec<Vertex3D> {
                     .and_then(|n| n.get(first + corner))
                     .map(|n| n.as_vec3())
                     .filter(|n| n.length_squared() > 1e-12)
-                    .map(|n| shade_factor(n.normalize()));
+                    .map(|n| shade_factor(n.normalize(), toward));
                 let k = by_vertex.unwrap_or_else(|| lit.get(p).copied().unwrap_or(1.0));
                 let c = d.color(p);
                 out.push(Vertex3D { position: d.pos(p).to_array(), color: [c[0] * k, c[1] * k, c[2] * k] });
@@ -6587,7 +6583,8 @@ mod tests {
                 || ty.eq_ignore_ascii_case("node")
                 || crate::context::is_geometry_container(ty)
                 || crate::page::is_page_node(ty)
-                || ty.eq_ignore_ascii_case("camera");
+                || ty.eq_ignore_ascii_case("camera")
+                || ty.eq_ignore_ascii_case(crate::environment::ENVIRONMENT);
             if !resolvable {
                 orphans.push(format!("{} (type {ty:?})", t.name));
             }

@@ -85,6 +85,8 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
         _ => None,
     };
     off.set_scene_with_image(&tris, &mats, image);
+    // The project's Environment node, at the frame rendered.
+    off.set_environment(crate::environment::Environment::of_scene(&proj.root, frame.unwrap_or(0)).to_rt());
     // Behind the scene, the Background Color the project was saved with, as
     // the traced viewport shows it; the sky, which still lights the scene,
     // for a save without display settings.

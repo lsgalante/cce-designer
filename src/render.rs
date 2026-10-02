@@ -1236,6 +1236,23 @@ impl State {
     /// Show the scene last evaluated again, under the visualizers as they
     /// now stand — what an edit to one runs. Nothing before the first
     /// evaluation.
+    /// Read the scene's environment again (`crate::environment`), and when
+    /// it moved, redraw: a smooth-shaded fill re-bakes its light from the
+    /// scene as last evaluated, which evaluates nothing. Run from the tick,
+    /// so a sun driven by `$F`, or an edit that rebuilt nothing, is seen.
+    pub(crate) fn sync_environment(&mut self) -> bool {
+        let env = crate::environment::Environment::of_scene(&self.fs_root, self.sim_frame());
+        if env == self.environment {
+            return false;
+        }
+        self.environment = env;
+        if self.smooth_shading {
+            self.revisualize();
+        }
+        self.viewport_dirty = true;
+        true
+    }
+
     pub(crate) fn revisualize(&mut self) {
         if let Some(base) = self.scene_base.clone() {
             self.present_scene(base);
@@ -1253,8 +1270,13 @@ impl State {
         // `verts` stays unlit for the path tracer, whose materials are
         // these colours. Same triangles in the same order, so the count
         // above serves both.
-        self.scene_smooth_verts =
-            if self.smooth_shading { crate::geometry::smooth_lit_vertices(&geom) } else { Vec::new() };
+        // Lit by the environment's sun, which the flat shader is handed too.
+        self.environment = crate::environment::Environment::of_scene(&self.fs_root, self.sim_frame());
+        self.scene_smooth_verts = if self.smooth_shading {
+            crate::geometry::smooth_lit_vertices(&geom, self.environment.sun_direction)
+        } else {
+            Vec::new()
+        };
         // Cache for the path tracer, so RT mode never re-runs the node
         // graph; the version bump invalidates its scene.
         // The raster mesh uploads from this same cache on the next

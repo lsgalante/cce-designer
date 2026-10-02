@@ -30,6 +30,7 @@ pub mod api;
 pub mod window;
 pub mod geometry;
 pub mod context;
+pub mod environment;
 pub mod project;
 pub mod render;
 pub mod shortcut;
@@ -2067,13 +2068,14 @@ mod tests {
     fn smooth_shading_bakes_the_flat_shaders_light_per_vertex() {
         use crate::geometry::{shade_factor, smooth_lit_vertices, sphere_detail, detail_vertices};
         use glam::Vec3;
-        // The shader's normal faces away from the viewer, so a face turned
-        // TOWARD the light (outward normal along l) is its darkest, and one
-        // turned away its brightest — the bake keeps that convention.
-        let l = Vec3::from_array(crate::geometry::SCENE_LIGHT).normalize();
-        assert!((shade_factor(l) - 0.55).abs() < 1e-5);
-        assert!((shade_factor(-l) - 1.0).abs() < 1e-5);
-        assert!((shade_factor(Vec3::ZERO) - (0.55 + 0.45 * 0.5)).abs() < 1e-5);
+        // Lit by the environment's sun: a face turned toward it is its
+        // brightest, one turned away its darkest. (Until 2026-10-02 it was
+        // the other way round, a constant read against the shader's inward
+        // normal — a light from below.)
+        let l = crate::environment::Environment::default().sun_direction;
+        assert!((shade_factor(l, l) - 1.0).abs() < 1e-5);
+        assert!((shade_factor(-l, l) - 0.55).abs() < 1e-5);
+        assert!((shade_factor(Vec3::ZERO, l) - (0.55 + 0.45 * 0.5)).abs() < 1e-5);
 
         // A single quad in the XZ plane, wound to face +y.
         let mut quad = crate::detail::Detail::new();
@@ -2084,10 +2086,10 @@ mod tests {
         quad.add_prim(&[a, b, c, d]);
         let n = crate::geometry::point_normals(&quad)[0];
         assert!((n - Vec3::Y).length() < 1e-5, "the quad faces +y: {n}");
-        let lit = smooth_lit_vertices(&quad);
+        let lit = smooth_lit_vertices(&quad, l);
         let flat = detail_vertices(&quad);
         assert_eq!(lit.len(), flat.len(), "same triangles as the unlit fill");
-        let k = shade_factor(Vec3::Y);
+        let k = shade_factor(Vec3::Y, l);
         for (l, f) in lit.iter().zip(&flat) {
             assert_eq!(l.position, f.position);
             for ch in 0..3 {
@@ -2098,7 +2100,7 @@ mod tests {
         // A closed UV sphere: same triangle list, and corners of one face
         // no longer share one brightness.
         let sphere = sphere_detail(Vec3::ZERO, 1.0, 12, 16);
-        let lit = smooth_lit_vertices(&sphere);
+        let lit = smooth_lit_vertices(&sphere, l);
         assert_eq!(lit.len(), detail_vertices(&sphere).len());
         let varied = lit.chunks(3).filter(|t| {
             let b = |v: &crate::geometry::Vertex3D| v.color[0] + v.color[1] + v.color[2];
@@ -11145,8 +11147,8 @@ mod tests {
             .verts_mut()
             .insert("N", crate::detail::AttribData::Float3(hard.iter().map(|n| n.to_array()).collect()))
             .unwrap();
-        let lit = crate::geometry::smooth_lit_vertices(&cusped);
-        let plain = crate::geometry::smooth_lit_vertices(&d);
+        let lit = crate::geometry::smooth_lit_vertices(&cusped, crate::environment::Environment::default().sun_direction);
+        let plain = crate::geometry::smooth_lit_vertices(&d, crate::environment::Environment::default().sun_direction);
         assert_eq!(lit.len(), plain.len());
         for tri in lit.chunks(3) {
             assert!(tri.iter().all(|c| (c.color[0] - tri[0].color[0]).abs() < 1e-6), "one face, one light");
@@ -16184,8 +16186,8 @@ mod tests {
         assert!(state.dialog_visible());
         assert_eq!(state.slots.dialog.mode, Mode::AddNode);
         // Inside the bundled project's Geometry node: every template but the
-        // two that stand at the root.
-        assert_eq!(state.slots.dialog.rows.len(), state.node_templates.len() - 2);
+        // three that stand at the root.
+        assert_eq!(state.slots.dialog.rows.len(), state.node_templates.len() - 3);
         assert!(
             state.slots.dialog.rows.iter().all(|r| r.chord.is_empty()),
             "a template has no chord to teach"
@@ -16271,6 +16273,58 @@ mod tests {
         assert_eq!(input_of(&state, "c").as_deref(), Some(mid.as_str()), "{gen} did not cut the wire");
     }
 
+    /// The Environment node is the scene's light, for both views: its sun
+    /// direction lights the raster shading (and the smooth bake) and the
+    /// tracer's sky; with none, or with it bypassed, the defaults do, which
+    /// are the template's — so adding one changes nothing until a row
+    /// moves. It stands at the root, and its rows follow the frame.
+    #[test]
+    fn the_environment_node_lights_both_views() {
+        use crate::environment::{sun_direction, Environment};
+        let templates = crate::app::load_fs_tree();
+        let template = templates.children.iter().find(|t| t.name == "Environment").expect("an Environment template");
+        assert_eq!(Environment::of_node(template), Environment::default(), "the template says what the defaults say");
+        let old_sun = Vec3::new(0.45, 0.75, 0.35).normalize();
+        assert!(Environment::default().sun_direction.angle_between(old_sun) < 1.0f32.to_radians(), "the default sun is the tracer's old one");
+        assert!((sun_direction(90.0, 0.0) - Vec3::X).length() < 1e-5 && (sun_direction(0.0, 90.0) - Vec3::Y).length() < 1e-5);
+
+        // At the root, through MCP.
+        let mut state = State::new(false);
+        state.current_path.clear();
+        state.on_path_changed();
+        state.smooth_shading = true;
+        state.rebuild_scene_geometry();
+        assert_eq!(state.environment, Environment::default());
+        let colours = |state: &State| state.scene_smooth_verts.iter().map(|v| v.color).collect::<Vec<_>>();
+        let baked = colours(&state);
+        assert!(!baked.is_empty());
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Environment".into(), name: None, x: 3.0, y: 0.0 }, &mut redraw).unwrap();
+        assert!(!state.sync_environment(), "adding one changes nothing");
+        let slot = state.current_dir().children.iter().position(|c| c.node_type == "environment").unwrap();
+        state.apply_action(McpAction::SetParam { slot, name: "sun_elevation".into(), value: "-40".into() }, &mut redraw).unwrap();
+        state.sync_environment();
+        assert!(state.environment.sun_direction.y < -0.5, "lit from below now: {:?}", state.environment.sun_direction);
+        assert_eq!(state.environment.to_rt().sun_direction, state.environment.sun_direction.to_array(), "the tracer's sun is the same one");
+        assert_ne!(colours(&state), baked, "the smooth bake is lit by it");
+
+        // Bypassed, it is as if it were not there.
+        state.set_bypassed(&[slot], true);
+        state.sync_environment(); // the bypass's own rebuild has already read it
+        assert_eq!(state.environment, Environment::default());
+        assert_eq!(colours(&state), baked);
+
+        // Its rows evaluate at the frame.
+        state.set_bypassed(&[slot], false);
+        let node = &mut state.current_dir_mut().children[slot];
+        let az = node.params.iter_mut().find(|p| p.name == "sun_azimuth").unwrap();
+        az.set_text("$F * 10".to_string());
+        az.set_expr(true);
+        let at = |frame| Environment::of_scene(&state.fs_root, frame).sun_direction;
+        assert!((at(9) - sun_direction(90.0, -40.0)).length() < 1e-4, "{:?}", at(9));
+        assert!((at(0) - sun_direction(0.0, -40.0)).length() < 1e-4);
+    }
+
     /// The Add Node list offers what may stand at the level (since
     /// 2026-10-02, `context`): at the root, the object level, the Geometry
     /// node, cameras and the page nodes, and no operator; inside a Geometry
@@ -16294,7 +16348,7 @@ mod tests {
         for operator in ["Sphere", "Box", "Grid", "Subnet", "Simnet", "Embryo", "Page", "Export"] {
             assert!(here.iter().any(|l| l == operator), "{operator} missing inside: {here:?}");
         }
-        assert!(!here.iter().any(|l| l == "Geometry" || l == "Camera"), "{here:?}");
+        assert!(!here.iter().any(|l| l == "Geometry" || l == "Camera" || l == "Environment"), "{here:?}");
         state.close_dialog();
 
         // At the root.
@@ -16303,7 +16357,7 @@ mod tests {
         state.open_node_palette();
         let mut root = labels(&state);
         root.sort();
-        assert_eq!(root, ["Camera", "Export", "Geometry", "Page", "Page Border", "Page Grid", "Page Shape", "Page Text"]);
+        assert_eq!(root, ["Camera", "Environment", "Export", "Geometry", "Page", "Page Border", "Page Grid", "Page Shape", "Page Text"]);
         state.close_dialog();
 
         // MCP: an operator at the root is refused, with why.

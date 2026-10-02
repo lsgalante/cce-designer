@@ -10,8 +10,9 @@
 //!
 //! Three placements, by node type ([`placement`]):
 //!
-//! - **Object** — the root only: the `geometry` container itself, and
-//!   cameras, which are seen from every level (`State::camera_level`).
+//! - **Object** — the root only: the `geometry` container itself, cameras,
+//!   which are seen from every level (`State::camera_level`), and the
+//!   `environment` node, the scene's light (`crate::environment`).
 //! - **Geometry** — inside a geometry node only: every operator, subnets,
 //!   simnets, repeats and the subnet templates (the Embryo, the Remesh).
 //! - **Any** — the page nodes, which are a 2D context of their own and stay
@@ -49,7 +50,10 @@ pub fn is_geometry_container(node_type: &str) -> bool {
 /// Where a node of `node_type` may stand. Everything not named is an
 /// operator, so a new node type is a geometry node without a line here.
 pub fn placement(node_type: &str) -> Placement {
-    if is_geometry_container(node_type) || node_type.eq_ignore_ascii_case("camera") {
+    if is_geometry_container(node_type)
+        || node_type.eq_ignore_ascii_case("camera")
+        || node_type.eq_ignore_ascii_case(crate::environment::ENVIRONMENT)
+    {
         Placement::Object
     } else if crate::page::is_page_node(node_type) || node_type.eq_ignore_ascii_case("export") {
         Placement::Any

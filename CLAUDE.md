@@ -402,14 +402,15 @@ is the introspection surface.
 ### The root is the object level; geometry goes in a Geometry node (since 2026-10-02)
 
 Houdini's `/obj` and its geometry objects. The root holds **Geometry**
-nodes (`nodes/geometry.json`, type `geometry`), cameras and pages; every
+nodes (`nodes/geometry.json`, type `geometry`), cameras, the Environment
+node and pages; every
 operator — generators, modifiers, subnets, simnets, repeats, the subnet
 templates — stands inside a Geometry node, at any depth. Until this every
 node could stand anywhere and the root was one big geometry level.
 `src/context.rs` is the whole rule.
 
 - **Placement is by node type** (`context::placement`): Object (the
-  `geometry` container and `camera`, root only), Any (the page nodes, which
+  `geometry` container, `camera` and `environment`, root only), Any (the page nodes, which
   are a 2D context of their own and stay where they always could, and
   `export`, which writes a page or a mesh), Geometry (everything else, so a
   new node type is a geometry operator without a line anywhere). A level's
@@ -460,6 +461,49 @@ node could stand anywhere and the root was one big geometry level.
 `an_older_save_puts_its_geometry_in_a_geometry_node`,
 `geometry_nodes_at_the_root_each_show_their_own` and
 `the_add_node_list_offers_what_belongs_at_the_level` are the tests.
+
+### The Environment node: one light for both views (since 2026-10-02)
+
+`src/environment.rs` and `nodes/environment.json`. The raster pass and the
+path tracer each had a light of their own, hard-coded and pointing
+different ways — the raster one, read the right way round, from BELOW
+(`(-0.55, 0.45, 0.7)` dotted with the shader's inward normal), the
+tracer's sun at `(0.45, 0.75, 0.35)` — so switching modes moved the lit
+side of a model. Now one `Environment` lights both: its sun direction goes
+to the flat shader (`VkRenderer::set_scene_light`, cce-ui) and the smooth
+bake (`shade_factor(n, toward)`), and all of it to the tracer's sky
+(`VkRenderer::set_rt_environment` / `RtOffscreen::set_environment`, an
+`RtEnvironment`: sun direction, sun radiance, zenith and nadir colours).
+
+- **The node stands at the root** (an Object placement). The scene's
+  environment is the root's first `environment` node that is NOT BYPASSED;
+  with none it is `Environment::default()`, which is the template's
+  defaults (`the_environment_node_lights_both_views` holds the two equal) —
+  so adding one changes nothing until a row moves, and Bypass is how to
+  compare. Not the display flag: a node arrives with it off, and an
+  environment that did nothing until `e` would read as broken.
+- **Rows**: Sun Azimuth (degrees about +Y, 0 toward +Z, 90 toward +X),
+  Sun Elevation (above the horizon; below 0 lights from underneath), Sun
+  Intensity and Sun Color, Sky Color (overhead), Ground Color (straight
+  down) and Sky Intensity. The defaults are the tracer's old sky to the
+  nearest degree, so the traced view looks as it did; the raster view now
+  lights from that sun, from above, where it was lit from below.
+- **What each view takes**: the raster pass the DIRECTION only — its
+  shading is a 0.55..1 wrap of the surface colour, not a light with a
+  strength; the tracer everything. Colours are LINEAR, as the tracer reads
+  them, and an intensity may push them past 1. The sky stays the tracer's
+  only light, and with the Background Color behind the scene (above) it is
+  seen only in what it lights.
+- **Rows evaluate at the current frame** (`Environment::of_scene`, through
+  `resolve_param_refs`), so a sun can move with `$F`. `State::environment`
+  is the value in use: `present_scene` reads it for the bake, and
+  `sync_environment` runs from the tick, re-baking a smooth fill from
+  `scene_base` (no evaluation) when it moved, so an animated sun or an edit
+  that rebuilt nothing is still seen. `--thumbnail` reads it from the
+  project at the frame it renders.
+
+Verified in a shadow session against a grey sphere: with the sun at
+azimuth 90 both views are brighter on the right, at 270 both on the left.
 
 ### There are no meta nodes (retired 2026-09-23)
 
@@ -3049,10 +3093,15 @@ exact: `geometry::smooth_lit_vertices` multiplies each corner's colour by
 `shade_factor(point_normals[p])`, and the fill draws with
 `SceneDraw::prelit` (cce-ui, 2026-09-24) so the shader does not shade it
 twice. `shade_factor` has to agree with the shader about which side is
-lit: the shader's normal is screen-right × framebuffer-DOWN, which for any
-visible surface points AWAY from the viewer — into the surface — so the
-bake uses `dot(-n_outward, l)`; on a plane the two modes give identical
-brightness (`smooth_shading_bakes_the_flat_shaders_light_per_vertex`). The
+lit, and since 2026-10-02 both take the environment's sun as the direction
+TOWARD the light: the shader's derivative normal is screen-right ×
+framebuffer-DOWN, which points INTO a visible surface, so it dots `-n`
+with the light where the bake dots the outward normal; on a plane the two
+modes give identical brightness
+(`smooth_shading_bakes_the_flat_shaders_light_per_vertex`). Before that
+date both dotted the INWARD normal with a constant `(-0.55, 0.45, 0.7)` —
+a light from below, read the right way round. See "The Environment
+node". The
 lit copy is `State::scene_smooth_verts`, kept only while smooth is on; the
 path tracer keeps reading the unlit `rt_sphere_verts`, whose colours are
 its materials. Smoothing follows topology, so a welded mesh rounds off and
