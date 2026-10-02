@@ -310,6 +310,13 @@ gone from cce-ui with the wgpu path).
   (still named `ocl_error` from the days it held OpenCL's), not fatal.
 - `src/viewport_3d.rs` — app-owned `Viewport3D` widget (camera orbit/zoom, inertial
   scroll, `rt_mode` flag switching the pane to the `cce_ui::vk` compute path tracer).
+  **The traced pane's backdrop is the Background Color** (since
+  2026-10-02, `VkRenderer::set_rt_background`, linear RGB like the raster
+  quad's): a camera ray that meets nothing shows it, where it showed the
+  tracer's studio sky. Only the camera ray — a bounce that leaves the
+  scene still meets the sky, the tracer's one light, so the scene is lit
+  as before. `--thumbnail` takes the colour from the project's display
+  block and keeps the sky for a save without one (the bundled projects).
 - `src/viewer_state.rs` — the **viewer-state framework**: interactive viewport
   tools, generalized out of the curve tool. A viewer state is a mode the
   viewport is in, bound to one node, in which the pointer edits that node

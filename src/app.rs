@@ -12516,6 +12516,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     let aspect = cw as f32 / ch as f32;
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
                     let inv_mvp = (proj * view_mat * model).inverse().to_cols_array_2d();
+                    // Behind the scene, the Background Color, as the raster
+                    // pass draws it (since 2026-10-02; it was the tracer's
+                    // sky). The sky still lights the scene.
+                    renderer.set_rt_background(Some(cce_ui::colors::to_linear_rgb(self.viewport().bg_color)));
                     renderer.stage_rt((sx, sy, cw, ch), cce_ui::vk::RtCamera { inv_mvp });
                 }
             } else if self.viewport_dirty {

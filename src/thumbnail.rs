@@ -85,6 +85,15 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
         _ => None,
     };
     off.set_scene_with_image(&tris, &mats, image);
+    // Behind the scene, the Background Color the project was saved with, as
+    // the traced viewport shows it; the sky, which still lights the scene,
+    // for a save without display settings.
+    off.set_background(
+        proj.view_state
+            .display
+            .as_ref()
+            .map(|d| cce_ui::colors::to_linear_rgb(d.viewport.bg_color)),
+    );
     let pixels = off.render(camera, size, size, samples.unwrap_or(SAMPLES));
 
     let file = std::fs::File::create(out).map_err(|e| format!("create {}: {e}", out.display()))?;
