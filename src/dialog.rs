@@ -524,6 +524,11 @@ impl Dialog {
         Some(Rect { x: list.x, y: list.y + offset, width: list.width, height: ROW_H })
     }
 
+    /// The row under `(x, y)` in a dialog laid out on `rect`.
+    pub fn row_index_at(&self, rect: Rect, x: f32, y: f32) -> Option<usize> {
+        self.row_at(rect, x, y)
+    }
+
     fn row_at(&self, rect: Rect, x: f32, y: f32) -> Option<usize> {
         let list = list_rect(rect);
         if x < list.x || x >= list.x + list.width || y < list.y || y >= list.y + list.height {
@@ -1538,6 +1543,21 @@ pub const SETTINGS: &[Setting] = &[
     Setting::field("Origin Size", "origin_size", Ctl::Spin { min: 1.0, max: 50.0, unit: 10.0 }),
 ];
 
+/// The page mark, as a menu's page row wears it.
+use cce_ui::widget::context_menu::PAGE_MARK;
+
+/// Whether a row of the dialog in `mode` turns it into another list: the
+/// palette's Group Markers and Attribute Visualizers, a visualizer of the
+/// list and Add Visualizer. A press runs it, as before; a side swipe forward
+/// with the pointer on it does too.
+pub fn dialog_row_leads(mode: Mode, id: &str) -> bool {
+    match mode {
+        Mode::Commands => matches!(id, "group_markers" | "attribute_visualizers"),
+        Mode::Visualizers => id.starts_with(VIS_ROW_PREFIX),
+        _ => false,
+    }
+}
+
 impl State {
     pub fn dialog_visible(&self) -> bool {
         self.slots.dialog.visible()
@@ -1580,7 +1600,29 @@ impl State {
     /// is what makes it read as the same plate grown, not a second one
     /// arriving across the window.
     pub fn open_node_palette_at(&mut self, x: f32, y: f32) {
-        self.open_dialog_anchored(Mode::AddNode, Some((x, y)));
+        self.open_dialog_from(Mode::AddNode, crate::menu_page::MenuOrigin::Network, (x, y));
+    }
+
+    /// The dialog in `mode`, turned to from the menu `origin` by one of its
+    /// page rows: its top-left where the menu's was, and a swipe back shows
+    /// the menu again (see `crate::menu_page`).
+    pub fn open_dialog_from(&mut self, mode: Mode, origin: crate::menu_page::MenuOrigin, at: (f32, f32)) {
+        self.close_dialog();
+        self.open_dialog_anchored(mode, Some(at));
+        self.dialog_from = Some(origin);
+    }
+
+    /// Turn the open dialog to `mode`, as the row or key that leads there
+    /// does.
+    pub(crate) fn open_dialog_mode(&mut self, mode: Mode) {
+        match mode {
+            Mode::Visualizers => self.open_visualizers_dialog(),
+            Mode::VisualizerEdit => match self.vis_editing {
+                Some(i) => self.open_visualizer_editor(i),
+                None => self.open_visualizers_dialog(),
+            },
+            other => self.open_dialog_in(other),
+        }
     }
 
     /// Wire the node just added (the level's last) into the wire from the
@@ -1603,12 +1645,21 @@ impl State {
     /// The query line is the name: it opens holding the one the node has,
     /// so a rename that changes a letter is a letter typed.
     pub fn open_rename_dialog(&mut self, slot: usize) {
+        self.open_rename_dialog_from(slot, None);
+    }
+
+    /// [`Self::open_rename_dialog`], turned to from a menu's Rename row
+    /// standing at a corner, when `from` says so.
+    pub fn open_rename_dialog_from(&mut self, slot: usize, from: Option<(crate::menu_page::MenuOrigin, (f32, f32))>) {
         let Some((id, name)) = self.current_dir().children.get(slot).map(|n| (n.id.clone(), n.name.clone())) else {
             self.update_status_text("Select a node to rename.");
             return;
         };
         self.rename_target = Some(id);
-        self.open_dialog_in(Mode::Rename);
+        match from {
+            Some((origin, at)) => self.open_dialog_from(Mode::Rename, origin, at),
+            None => self.open_dialog_in(Mode::Rename),
+        }
         self.slots.dialog.query = name;
         self.refresh_dialog_rows();
     }
@@ -1663,11 +1714,30 @@ impl State {
     }
 
     fn open_dialog_anchored(&mut self, mode: Mode, anchor: Option<(f32, f32)>) {
+        // A dialog that is up and turns to another mode stays where it
+        // stands, turned to from where it was: the mode it leaves goes on
+        // the trail a swipe back follows — or, when the mode it turns to IS
+        // the trail's last, it is going back, and comes off. Opened afresh
+        // it has neither, and whoever opened it from a menu says so after.
+        let was = self.dialog_visible().then_some(self.slots.dialog.mode);
+        match was {
+            Some(prev) if anchor.is_none() => {
+                if self.dialog_trail.last() == Some(&mode) {
+                    self.dialog_trail.pop();
+                } else if prev != mode {
+                    self.dialog_trail.push(prev);
+                }
+            }
+            _ => {
+                self.slots.dialog.anchor = anchor;
+                self.dialog_trail.clear();
+                self.dialog_from = None;
+            }
+        }
         // Always with an empty query: a dialog that reopens holding the last
         // search has to be cleared before it can be used, which is a step
         // every single time to save one occasionally.
         self.slots.dialog.mode = mode;
-        self.slots.dialog.anchor = anchor;
         self.slots.dialog.query.clear();
         self.slots.dialog.set_visible(true);
         self.refresh_dialog_rows();
@@ -1696,6 +1766,8 @@ impl State {
         self.slots.dialog.dropdown_row = None;
         self.slots.dialog.dropdown_armed = false;
         self.slots.dialog.set_visible(false);
+        self.dialog_from = None;
+        self.dialog_trail.clear();
         if self.focused_widget == Some(DIALOG_IDX) {
             self.focused_widget = None;
         }
@@ -1889,6 +1961,18 @@ impl State {
                     .collect()
             }
         };
+        // A row that turns the dialog into another list says so where a
+        // menu's page row does, at its right end.
+        let mode = self.slots.dialog.mode;
+        let rows = rows
+            .into_iter()
+            .map(|mut r| {
+                if dialog_row_leads(mode, &r.id) {
+                    r.chord = if r.chord.is_empty() { PAGE_MARK.to_string() } else { format!("{}  {PAGE_MARK}", r.chord) };
+                }
+                r
+            })
+            .collect();
         self.slots.dialog.set_rows(rows);
     }
 
@@ -2784,6 +2868,12 @@ impl State {
                 return;
             }
         }
+        // A row that turns the palette into another list does so in place,
+        // the palette left on the trail for a swipe back.
+        if mode == Mode::Commands && dialog_row_leads(mode, &id) {
+            self.run_command(&id);
+            return;
+        }
         if mode == Mode::Commands && self.command_toggle_state(&id).is_some() {
             self.run_command(&id);
             self.refresh_dialog_controls();
@@ -2944,6 +3034,26 @@ impl State {
         let (x, y) = (self.cursor_x, self.cursor_y);
         let ev = cce_ui::widget::Event::MouseWheel { delta, x, y, local_x: x, local_y: y };
         if self.in_dialog_slot(DIALOG_IDX, x, y) {
+            // A side swipe turns the dialog: into what the row under the
+            // pointer leads to, or back to where it was turned from.
+            match cce_ui::widget::side_swipe::feed(&delta) {
+                Some(cce_ui::widget::SwipeDir::Forward) => {
+                    let (rx, ry, rw, rh) = self.positions[DIALOG_IDX];
+                    let rect = Rect { x: rx, y: ry, width: rw, height: rh };
+                    let mode = self.slots.dialog.mode;
+                    let row = self.slots.dialog.row_index_at(rect, x, y).and_then(|i| self.slots.dialog.rows.get(i)).map(|r| r.id.clone());
+                    if let Some(id) = row.filter(|id| dialog_row_leads(mode, id)) {
+                        self.take_dialog_pick(id);
+                        return true;
+                    }
+                }
+                Some(cce_ui::widget::SwipeDir::Back) => {
+                    if self.dialog_back() {
+                        return true;
+                    }
+                }
+                None => {}
+            }
             let taken = self.dispatch_uncovered(DIALOG_IDX, &ev);
             // A wheel over a slider row moved it: land the value.
             self.drain_dialog_clicks();

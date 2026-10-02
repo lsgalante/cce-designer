@@ -51,11 +51,10 @@ pub enum PlateMenuAction {
     ShowTab(usize),
     /// Pull the named pane out of its dock and tab it into this one, active.
     AddTab(usize),
-    /// Swap the menu for the Add Tab page — the list of panes that can be
-    /// pulled in ([`State::open_plate_add_tab_menu`]).
+    /// Turn the menu into the Add Tab page — the list of panes that can be
+    /// pulled in ([`State::open_plate_add_tab_menu`]). A page row: its back
+    /// band, or a swipe back, returns to the menu it was turned from.
     AddTabMenu,
-    /// The Add Tab page's Back row: swap the plate's rows back in.
-    BackToMain,
     /// Move this pane out of its shared dock into the first empty one.
     SplitTab,
     /// Move this pane, and the tabs riding it, to another dock, swapping
@@ -240,19 +239,22 @@ impl State {
     /// Show `idx`'s plate menu alone, at the pointer — a pane with no
     /// context menu of its own, or a stub.
     pub fn open_plate_menu(&mut self, idx: usize) {
-        self.open_plate_menu_at(idx, self.cursor_x, self.cursor_y);
+        self.open_plate_menu_at(idx, None);
     }
 
-    /// Show `idx`'s plate menu alone, its top-left at (x, y).
-    pub fn open_plate_menu_at(&mut self, idx: usize, x: f32, y: f32) {
+    /// Show `idx`'s plate menu alone: at the pointer, or with its top-left
+    /// at `at` in place of a page it is turned back to from.
+    pub fn open_plate_menu_at(&mut self, idx: usize, at: Option<(f32, f32)>) {
         let (options, actions) = self.plate_menu_rows(idx);
         if options.is_empty() {
             return;
         }
         let target = self.slots.get_dyn(idx).base().id();
-        cce_ui::widget::context_menu::show(x, y, options, 0, target);
+        self.put_up_menu(at, None, options, 0, target);
+        crate::menu_page::mark_page_rows(&actions, |a| a == PlateMenuAction::AddTabMenu);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
+        self.plate_page_from = None;
     }
 
     /// The panes a plate's Add Tab page can offer: docked (or dockable)
@@ -268,10 +270,10 @@ impl State {
             .collect()
     }
 
-    /// The Add Tab page: swaps the menu in place for the list of addable
-    /// panes, under a dimmed header row, at (x, y) — where the menu that
-    /// asked for it stood. A second PAGE of the menu, not a second menu.
-    pub fn open_plate_add_tab_menu(&mut self, idx: usize, x: f32, y: f32) {
+    /// The Add Tab page: the menu `from` turned in place into the list of
+    /// addable panes, under a dimmed header row, its top-left at `at` —
+    /// where that menu stood — and a back band to it across the top.
+    pub fn open_plate_add_tab_menu(&mut self, idx: usize, at: (f32, f32), from: crate::menu_page::MenuOrigin) {
         let Some(d) = self.dock_of_pane(idx) else { return };
         let candidates = self.plate_add_tab_candidates(idx, d);
         if candidates.is_empty() {
@@ -283,14 +285,11 @@ impl State {
             options.push(plate_title(other).to_string());
             actions.push(PlateMenuAction::AddTab(other));
         }
-        options.push("-".to_string());
-        actions.push(PlateMenuAction::Separator);
-        options.push("‹ Back".to_string());
-        actions.push(PlateMenuAction::BackToMain);
         let target = self.slots.get_dyn(idx).base().id();
-        cce_ui::widget::context_menu::show(x, y, options, 1, target);
+        self.put_up_menu(Some(at), Some(from), options, 1, target);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
+        self.plate_page_from = Some(from);
     }
 
     pub fn plate_menu_open(&self) -> bool {
@@ -301,6 +300,7 @@ impl State {
         cce_ui::widget::context_menu::hide();
         self.plate_menu_slot = None;
         self.plate_menu_actions.clear();
+        self.plate_page_from = None;
     }
 
     /// Route a left press while the plate menu is open — same contract as
@@ -324,8 +324,8 @@ impl State {
     }
 
     /// Run a plate row for `idx`, picked from a menu whose top-left was `at`
-    /// — where a page swap (Add Tab, Back) puts the next page, whichever
-    /// menu the row was part of.
+    /// — where the Add Tab page goes, turned from the menu the plate's rows
+    /// are part of.
     pub fn run_plate_menu_action(&mut self, idx: usize, action: PlateMenuAction, at: (f32, f32)) {
         match action {
             PlateMenuAction::Collapse => self.set_pane_collapsed(idx, true),
@@ -344,8 +344,9 @@ impl State {
                     self.add_dock_tab(d, o);
                 }
             }
-            PlateMenuAction::AddTabMenu => self.open_plate_add_tab_menu(idx, at.0, at.1),
-            PlateMenuAction::BackToMain => self.open_plate_menu_at(idx, at.0, at.1),
+            PlateMenuAction::AddTabMenu => {
+                self.open_plate_add_tab_menu(idx, at, crate::menu_page::MenuOrigin::of_plate(idx))
+            }
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
             PlateMenuAction::MoveTo(d) => self.move_pane_to_dock(idx, d),
             PlateMenuAction::CloseTab => self.close_dock_tab(idx),

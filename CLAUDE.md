@@ -259,8 +259,10 @@ gone from cce-ui with the wgpu path).
   playbar's (`PlaybarMenuAction::Plate`), and the whole menu where a pane has
   none of its own — the params pane off a row, the spreadsheet, the second
   network editor (`open_plate_menu`, at the pointer). A row from any of them runs
-  through `run_plate_menu_action`, whose Add Tab / Back page swaps open where the
-  menu stood. Collapse shrinks a plate to its title stub via
+  through `run_plate_menu_action`. Add Tab is a PAGE row (see "Page rows"
+  below): the menu turns into the list of panes where it stood, under a back
+  band to whichever menu it turned from — the network's, the playbar's, or the
+  plate menu alone (`State::plate_page_from`). Collapse shrinks a plate to its title stub via
   `apply_collapsed_panes`, a post-pass over `positions[..]` (one place, all three
   branches); a LEFT press on a collapsed stub expands it, and a right press on any
   stub (collapsed or detached) opens its plate menu. `a_plates_rows_are_in_its_right_click_menu`
@@ -2618,14 +2620,62 @@ ON a node still opens that node's menu, which is the more specific thing under
 the pointer. Until 2026-09-22 the empty-space press opened the **add-node
 palette** outright, which left the network the one pane whose right-click was
 not a context menu, and left every other graph-wide command reachable only by
-chord or through the palette. **Add Node is the first row** instead, and picking
-it opens the same palette — ON THE MENU'S CORNER (since 2026-10-01): the menu
-transforms into the list, as the palette transforms into Group Markers, where
-it used to vanish for a plate centred across the window. `Dialog::anchor` holds
+chord or through the palette. **Add Node is the first row** instead, a PAGE
+row (see "Page rows" below): a press, or a side swipe forward over it, turns
+the menu into the same palette ON THE MENU'S CORNER (since 2026-10-01), and a
+swipe back turns the palette back into the menu. `Dialog::anchor` holds
 the corner and `dialog::layout_at` places the plate there, giving up height
 (down to `ANCHORED_MIN_H`) before it moves up and pulling in from the right
 edge; every other opening clears the anchor and centres, Tab's Add Node
 included.
+
+### Page rows: a menu turns into what a row names (since 2026-10-02)
+
+`src/menu_page.rs`. A row of a context menu that leads to another plate is a
+PAGE row (cce-ui's `context_menu::set_row_page`; see its CLAUDE.md, "A row
+can lead to a page"): it wears `›`, and a press on it, or a two-finger swipe
+to the side with the pointer on it, TURNS the menu into what it names with
+the new plate's top-left where the menu's was. A swipe the other way, from
+anywhere on the new plate, turns back; a page of rows also has a back band
+(`‹ Viewport`) for a press. Under natural scrolling forward is the fingers
+going LEFT, as the content goes (cce-ui's `side_swipe`). Until this the
+viewport menu's Style and Markers flew a second menu out on hover while the
+other rows below swapped the plate on a click — some with a Back row, most
+with no way back — two gestures for one idea.
+
+The page rows: the viewport menu's **Style** and **Markers** (pages of rows)
+and **Attribute Visualizers** (the dialog); the network menu's **Add Node**
+(the dialog); the plate rows' **Add Tab** (a page, wherever the plate rows
+are); the node menu's **Rename** (the dialog). Inside the dialog the rows
+that turn it into another list are marked `›` in the chord column and take
+the forward swipe too (`dialog::dialog_row_leads`): the palette's Group
+Markers and Attribute Visualizers, a visualizer and Add Visualizer.
+
+- **`State::run_menu_turn` is the one dispatch**, reached by a left press
+  (`press_menu_turn`, ahead of every menu's own click handler) and by a swipe
+  (`take_menu_turn`, from the wheel arm, which now routes the wheel to ANY
+  open menu, not only the slider menus). `MenuOrigin` names the menu a turn
+  came from; `reopen_menu` shows it again at a corner (each menu's opener
+  takes an `at`, through `put_up_menu`). The wheel arm first asks cce-ui's
+  `side_swipe::swallow`: what is left of a swipe that turned is dropped,
+  so the end of a swipe back from the wide Add Node list does not orbit
+  the scene the narrower menu uncovers.
+- **A page of the viewport menu stays up while its rows run**: a switch
+  flips and is re-marked in place (`refill_viewport_menu`, cce-ui's
+  `refill`), a slider is worked; a row of the menu itself runs and closes
+  it, as before.
+- **The dialog remembers where it was turned from**: `State::dialog_from`,
+  the menu (shown again at the dialog's corner by a swipe back), and
+  `State::dialog_trail`, the modes it turned through while up — a mode
+  opened while the dialog is up keeps the plate where it stands and puts
+  the mode it leaves on the trail, and turning to the trail's last (by a
+  swipe back, Escape out of a visualizer or its Back row) takes it off.
+  The palette's Group Markers and Attribute Visualizers rows now run with
+  the palette still up, so it is on the trail. Opened afresh, the dialog
+  has neither. A swipe back with neither does nothing.
+
+`the_viewport_menu_turns_into_its_pages_and_back` drives the viewport
+menu's pages, the back band and both swipes, into the dialog and back.
 
 Rows are `NETWORK_MENU_COMMANDS` — a list of COMMAND IDS, `None` for a
 separator — resolved through `command::by_id`, so a label is the registry's
@@ -2959,7 +3009,8 @@ as `step_buttons` in `get_state`'s playbar block.
 
 ### Display mode: the viewport menu, and smooth shading
 
-The viewport's right-click menu has two SUBMENUS (since 2026-09-29;
+The viewport's right-click menu has two PAGES (since 2026-09-29, as
+flyout submenus until 2026-10-02 — see "Page rows";
 until then it was one list of some twenty rows). The menu itself holds
 what is done — Frame All, View 1:1 — the guides (Show Grid, Show Origin,
 and since 2026-09-29 Show Camera Pivot with a Camera Pivot Size slider
@@ -2971,7 +3022,7 @@ the reference CUBE guide was removed on 2026-09-25 — its command, mesh,
 RT-scene copy, settings field and menubar item, with the Guides menubar
 addressed through `GUIDES_MENU` / `GUIDE_*` so no item slid onto another's
 action, while old files carrying `show_cube_enabled` still load), and a
-row for each submenu: **Style** (how the geometry is drawn: the
+row for each page: **Style** (how the geometry is drawn: the
 wireframe's switch, thickness and opacity, then the surface's shading,
 opacity and Show Occluded) and **Markers** (what is drawn on it: Group
 Marker Size and Pull Arrow Scale; then the
@@ -2979,25 +3030,15 @@ overlays a class at a time — Show Point Markers and its size, Show Point
 Numbers, Show Point Normals; Show Primitive Numbers, Show Primitive
 Normals; Show Vertex Markers, Show Vertex Numbers, Show Vertex Normals).
 
-**The submenus are cce-ui's** (`context_menu::set_row_submenu`, see its
-CLAUDE.md, "A row can open a submenu"): a second menu in its own popup
-that flies out beside the row under the pointer, which the toolkit opens,
-closes and places. What this app does is fill and dispatch.
+**The pages are turned to in place** (see "Page rows"):
 `viewport_menu_rows_of(page)` is the rows of the menu (`None`) or of a
-submenu; `fill_viewport_submenus` hands each `ViewportMenuAction::Submenu`
-row its rows and sliders, read from the live state, at the open and again
-after anything a submenu row did — the toolkit changes an open submenu
-where it stands, which is how a mark follows its switch — and
-`open_viewport_submenu_actions` is the open submenu's actions, by
-`submenu::parent_row`. **A row of a submenu keeps both menus up**: a
-submenu is a panel of settings, opened to set several, so they close on a
-press outside or Escape; a row of the menu itself closes it as before.
-The slider hooks are unchanged, the toolkit's pointer calls answering for
-both menus; `drain_viewport_menu_slider` drains the menu's sliders and
-then the submenu's. For one day the two were PAGES of the one popup,
-entered by a row and left by a Back row, because the toolkit had no
-submenu. `the_viewport_menu_flies_its_settings_out_beside_it` drives it
-by pointer.
+page, `show_viewport_menu_page` puts either up — at the pointer, or at the
+corner of the plate it replaces with a back band to the menu — and
+`State::viewport_menu_page` says which is up. `viewport_menu_actions` is
+always the shown rows' actions, so the slider hooks and
+`drain_viewport_menu_slider` need nothing per page. History: on
+2026-09-29 the two were pages of the one popup with a Back row, then the
+same day flyout submenus (cce-ui's, retired with this), then pages again.
 
 **The primitive and vertex overlays** (`toggle_prim_numbers`,
 `toggle_prim_normals`, `toggle_vertex_numbers`, the same day) are
@@ -3236,7 +3277,7 @@ the later over the earlier, as a chain of Visualize nodes composites.
   display settings.
 - **They are edited in the dialog**, two modes: `Mode::Visualizers` (the
   `attribute_visualizers` command — the palette, and a row of the viewport
-  menu under its submenus) lists them, a switch each, and Add Visualizer;
+  menu under its pages, a page row turning the menu into the list) lists them, a switch each, and Add Visualizer;
   a press on a row's SWITCH turns it on or off and a press on the rest of
   the row, or Enter, opens it (`Dialog::activated_on_control`,
   `take_dialog_pick_at`). `Mode::VisualizerEdit` (`State::vis_editing`) is
