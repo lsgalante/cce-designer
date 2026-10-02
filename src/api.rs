@@ -110,7 +110,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool(
             "add_node",
-            "Add a node from a template (e.g. \"Sphere\") at grid position (x, y) in the current network level.",
+            "Add a node from a template (e.g. \"Sphere\") at grid position (x, y) in the current network level. The root holds Geometry nodes, cameras and pages; every operator goes inside a Geometry node, and a template that does not belong at the level is refused.",
             json!({
                 "type": "object",
                 "properties": {

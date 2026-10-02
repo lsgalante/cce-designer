@@ -169,7 +169,7 @@ impl FsNode {
     /// of them learned about new container types: subnet-like types by name,
     /// otherwise anything that actually has children.
     pub fn is_enterable(&self) -> bool {
-        matches!(self.node_type.as_str(), "node" | "simnet" | "repeat")
+        matches!(self.node_type.as_str(), "node" | "simnet" | "repeat" | crate::context::GEOMETRY)
             || !self.children.is_empty()
     }
 
@@ -184,13 +184,23 @@ impl FsNode {
     /// geometry nodes each have a display flag of their own, so a level shows
     /// one image and one geometry — a picture behind the model drawn over
     /// it. Until then a page took the viewport's pane whole and one flag did.
+    ///
+    /// A GEOMETRY CONTAINER's flag is its own (since 2026-10-02): the root is
+    /// the object level, where each geometry node is shown or not, as
+    /// Houdini's objects are, and several draw at once. Showing one leaves
+    /// its siblings as they are, and showing anything else leaves it.
     pub fn set_child_geometry_visible(&mut self, slot: usize, visible: bool) {
         if slot >= self.children.len() {
             return;
         }
-        if visible {
+        if visible && crate::context::is_geometry_container(&self.children[slot].node_type) {
+            self.children[slot].geometry_visible = true;
+        } else if visible {
             let page = crate::page::is_page_node(&self.children[slot].node_type);
             for (i, child) in self.children.iter_mut().enumerate() {
+                if crate::context::is_geometry_container(&child.node_type) {
+                    continue;
+                }
                 if crate::page::is_page_node(&child.node_type) == page {
                     child.geometry_visible = i == slot;
                 }
@@ -369,7 +379,10 @@ pub struct Project {
     /// when a bare `ch("Name")` meant the PARENT's parameter; 1 is Houdini's
     /// semantics, where it means the node's own; 2 (2026-10-01) is the
     /// generators' normal attribute called `N` where it was `Norm`, and 3
-    /// (the same day) their texture coordinates `uv` where they were `UV`.
+    /// (the same day) their texture coordinates `uv` where they were `UV`;
+    /// 4 (the same day) parameter names as identifiers; 5 (2026-10-02) the
+    /// root as the object level, its geometry inside a `geometry` node
+    /// (`context::wrap_root_geometry`).
     /// `migrate_format` takes a file through each step it is behind, and a
     /// step must not run twice.
     #[serde(default)]
@@ -377,7 +390,7 @@ pub struct Project {
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 4;
+pub const PROJECT_FORMAT: u32 = 5;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -1256,6 +1269,9 @@ impl Project {
         }
         if self.format < 4 {
             self.migrate_param_names();
+        }
+        if self.format < 5 {
+            crate::context::wrap_root_geometry(self);
         }
         self.format = PROJECT_FORMAT;
     }
@@ -3637,7 +3653,7 @@ impl State {
         let fmt3 = |v: Vec3| format!("{:.4}:{:.4}:{:.4}", v.x, v.y, v.z);
         let exact = self.pan_exact.take();
         let node = (active != "Default Camera")
-            .then(|| self.current_dir_mut().children.iter_mut().find(|c| c.node_type == "camera" && c.name == active))
+            .then(|| self.camera_level_mut().children.iter_mut().find(|c| c.node_type == "camera" && c.name == active))
             .flatten();
         match node {
             Some(node) => {
@@ -3797,12 +3813,25 @@ impl State {
         self.active_camera = name;
     }
 
-    /// The cameras this level offers, the Default Camera first: what the
+    /// The level camera nodes stand on: the root, the object level
+    /// (`context`). One level for every view, since 2026-10-02 — a camera
+    /// was looked up on the CURRENT level until then, so diving into a
+    /// subnet lost it, and with the geometry inside a Geometry node that
+    /// would be every working view.
+    pub fn camera_level(&self) -> &FsNode {
+        &self.fs_root
+    }
+
+    pub fn camera_level_mut(&mut self) -> &mut FsNode {
+        &mut self.fs_root
+    }
+
+    /// The cameras the scene offers, the Default Camera first: what the
     /// camera commands step through and the palette's camera rows list.
     pub fn camera_names(&self) -> Vec<String> {
         let mut names = vec!["Default Camera".to_string()];
         names.extend(
-            self.current_dir()
+            self.camera_level()
                 .children
                 .iter()
                 .filter(|c| c.node_type == "camera")
@@ -5451,14 +5480,13 @@ impl State {
         // touching the pane edges.
         let dist = (radius / half.sin()) * 1.25;
 
-        // A camera node applies in the directory it lives in (the render
-        // looks it up there): a named camera that is not in THIS directory
-        // is the Default Camera view, and is framed as one. Before, this
-        // silently did nothing — inside a subnet, Frame All was a no-op.
+        // A camera node stands at the root and applies from every level;
+        // a named camera that is not there is the Default Camera view, and
+        // is framed as one.
         let camera_name = self.active_camera.clone();
         let mut framed_node = false;
         if self.active_camera != "Default Camera" {
-            let dir = self.current_dir_mut();
+            let dir = self.camera_level_mut();
             if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
                 framed_node = true;
                 let parse3 = |s: &str| -> Option<Vec3> {
@@ -5549,12 +5577,12 @@ impl State {
     /// very large or small unit — then the readout shows what was reached.
     pub fn view_one_to_one(&mut self) {
         let dist = self.one_to_one_distance();
-        // As in `frame_all`: a named camera not in this directory is the
+        // As in `frame_all`: a named camera that is not there is the
         // Default Camera view, and is fitted as one.
         let camera_name = self.active_camera.clone();
         let mut fitted_node = false;
         if self.active_camera != "Default Camera" {
-            let dir = self.current_dir_mut();
+            let dir = self.camera_level_mut();
             if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
                 fitted_node = true;
                 let parse3 = |s: &str| -> Option<Vec3> {
@@ -6743,10 +6771,10 @@ impl State {
     pub fn rename_node(&mut self, id: &str, typed: &str) -> Result<String, String> {
         let new = self.rename_check(id, typed)?;
         let old = crate::viewer_state::find_node_by_id(&self.fs_root, id).map(|n| n.name.clone()).unwrap_or_default();
-        // The active camera is looked up where it applies, the current
-        // level, and is this node only if this node is there.
+        // The active camera is looked up where it stands, the root, and is
+        // this node only if this node is there.
         let is_camera = self
-            .current_dir()
+            .camera_level()
             .children
             .iter()
             .any(|c| c.id == id && c.node_type == "camera" && c.name == self.active_camera);
@@ -6906,7 +6934,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             return false;
         }
         let camera_name = self.active_camera.clone();
-        let dir = self.current_dir_mut();
+        let dir = self.camera_level_mut();
         if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
             // The camera's base pitch above the horizon (Position vs Pivot): the
             // Rotation.x clamp below is on the TOTAL pitch, matching get_matrices'
@@ -6967,7 +6995,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             return false;
         }
         let camera_name = self.active_camera.clone();
-        let dir = self.current_dir_mut();
+        let dir = self.camera_level_mut();
         if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
             if let Some(p) = node.params.iter_mut().find(|p| p.name == "rotation") {
                 p.set_text("0.00:0.00:0.00".to_string());
@@ -7161,7 +7189,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         use cce_ui::widget::PathController as _;
         self.slots.breadcrumb2.set_path(&names2);
 
-        let camera_nodes: Vec<String> = self.current_dir().children.iter()
+        let camera_nodes: Vec<String> = self.camera_level().children.iter()
             .filter(|c| c.node_type == "camera")
             .map(|c| c.name.clone())
             .collect();
@@ -9275,6 +9303,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// chain with one head and one tail, goes in whole.
     pub(crate) fn paste_nodes(&mut self) -> bool {
         if self.node_clipboard.is_empty() {
+            return false;
+        }
+        // Whole or not at all: a set that half belongs here is pasted
+        // nowhere, rather than as the part that does with its wires cut.
+        let here = crate::context::context_at(&self.current_path);
+        if let Some(why) = self
+            .node_clipboard
+            .iter()
+            .find_map(|n| crate::context::refusal(&n.name, &n.node_type, here))
+        {
+            self.update_status_text(&format!("Not pasted: {why}"));
             return false;
         }
         let origin = self.node_clipboard.iter().fold((f32::MAX, f32::MAX), |(x, y), n| {
@@ -12093,7 +12132,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let mut ry = 0.0f32;
         let mut rz = 0.0f32;
         if self.active_camera != "Default Camera" {
-            if let Some(node) = self.current_dir().children.iter().find(|c| c.node_type == "camera" && c.name == self.active_camera) {
+            if let Some(node) = self.camera_level().children.iter().find(|c| c.node_type == "camera" && c.name == self.active_camera) {
                 let mut cx = 2.5f32;
                 let mut cy = 1.8f32;
                 let mut cz = 2.5f32;

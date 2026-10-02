@@ -29,6 +29,7 @@ pub mod viewport_3d;
 pub mod api;
 pub mod window;
 pub mod geometry;
+pub mod context;
 pub mod project;
 pub mod render;
 pub mod shortcut;
@@ -52,6 +53,22 @@ mod test_prelude {
     pub use glam::{Mat4, Vec3};
     pub use cce_ui::widget::{Key, NamedKey};
     pub use crate::app::{State, McpAction, ModifiersState};
+
+    /// The root's first Geometry node: where a loaded save's geometry
+    /// stands since the root became the object level (format 5).
+    pub fn geo(root: &crate::app::FsNode) -> &crate::app::FsNode {
+        root.children
+            .iter()
+            .find(|c| crate::context::is_geometry_container(&c.node_type))
+            .expect("a geometry node at the root")
+    }
+
+    pub fn geo_mut(root: &mut crate::app::FsNode) -> &mut crate::app::FsNode {
+        root.children
+            .iter_mut()
+            .find(|c| crate::context::is_geometry_container(&c.node_type))
+            .expect("a geometry node at the root")
+    }
 }
 
 fn main() {
@@ -667,12 +684,14 @@ mod tests {
 
         proj.migrate_format();
 
-        let names: Vec<&str> = proj.root.children.iter().map(|c| c.name.as_str()).collect();
-        assert!(names.contains(&"camera1"));
+        // The camera stays at the root; the rest is geometry, and went into
+        // a Geometry node (format 5) with its names and wires.
+        assert!(proj.root.children.iter().any(|c| c.name == "camera1"));
+        let names: Vec<&str> = geo(&proj.root).children.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"my_region"));
         assert!(names.contains(&"sphere1"), "the hand-named sibling keeps its name");
         assert!(names.contains(&"sphere1_2"), "the migrated sphere steps aside from it: {names:?}");
-        let by_name = |n: &str| proj.root.children.iter().find(|c| c.name == n).unwrap();
+        let by_name = |n: &str| geo(&proj.root).children.iter().find(|c| c.name == n).unwrap();
         assert_eq!(by_name("my_region").params[0].text(), "sphere1_2", "the wire followed the rename");
         assert_eq!(by_name("sphere1").params[0].text(), "camera1");
         assert_eq!(proj.view_state.active_camera, "camera1");
@@ -755,12 +774,13 @@ mod tests {
         let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 3 };
         proj.migrate_format();
         let names = |n: &FsNode| n.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&proj.root.children[0]), ["base_resolution", "center"]);
-        assert_eq!(proj.root.children[1].params[0].name, "size_x");
-        assert_eq!(proj.root.children[1].params[0].text(), "ch(\"../ball/base_resolution\") * 2 + chf(\"../ball/center.y\")");
-        assert!(proj.root.children[1].params[0].is_expr());
-        assert_eq!(proj.root.children[2].params[0].text(), "@P.y += chv(\"../ball/center\").y; // ch(\"base_resolution\")");
-        assert_eq!(names(&proj.root.children[3]), ["Show Grid"], "a retired settings node keeps what its own migration reads");
+        let g = geo(&proj.root);
+        assert_eq!(names(&g.children[0]), ["base_resolution", "center"]);
+        assert_eq!(g.children[1].params[0].name, "size_x");
+        assert_eq!(g.children[1].params[0].text(), "ch(\"../ball/base_resolution\") * 2 + chf(\"../ball/center.y\")");
+        assert!(g.children[1].params[0].is_expr());
+        assert_eq!(g.children[2].params[0].text(), "@P.y += chv(\"../ball/center\").y; // ch(\"base_resolution\")");
+        assert_eq!(names(&proj.root.children[0]), ["Show Grid"], "a retired settings node keeps what its own migration reads, at the root");
         let p = ParamDef::new("radius", "slider", "1").with_label("Radius");
         assert_eq!((p.shown_name(), p.name.as_str()), ("Radius", "radius"));
     }
@@ -799,17 +819,17 @@ mod tests {
         let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 1 };
         proj.migrate_format();
         assert_eq!(proj.format, PROJECT_FORMAT);
-        let text = |proj: &Project, i: usize| proj.root.children[i].params[0].text().to_string();
+        let text = |proj: &Project, i: usize| geo(&proj.root).children[i].params[0].text().to_string();
         assert_eq!(text(&proj, 0), "N");
         assert_eq!(text(&proj, 1), "Cd, N,uv", "every step a file is behind: N, then uv");
         assert_eq!(text(&proj, 2), "@P += @N * 0.1; @Normal = 1;");
         assert_eq!(text(&proj, 3), "Normx", "only the whole name");
-        let names: Vec<&str> = proj.root.children.iter().map(|c| c.params[0].name.as_str()).collect();
+        let names: Vec<&str> = geo(&proj.root).children.iter().map(|c| c.params[0].name.as_str()).collect();
         assert_eq!(names, ["attribute", "attributes", "code", "attribute"], "and then every name is one (format 4)");
 
         // Once: a format-2 file's Norm is its own attribute.
         let mut again = proj.clone();
-        again.root.children[0].params[0].set_text("Norm".to_string());
+        geo_mut(&mut again.root).children[0].params[0].set_text("Norm".to_string());
         again.migrate_format();
         assert_eq!(text(&again, 0), "Norm");
 
@@ -1229,17 +1249,19 @@ mod tests {
         state.migrate_meta_settings_node();
 
         assert!(!state.fs_root.children.iter().any(|c| c.node_type == "meta"));
-        let kept = state
-            .fs_root
+        // A subnet is a geometry node, so it is re-homed in the root's
+        // Geometry node rather than at the root itself.
+        let level = geo(&state.fs_root);
+        let kept = level
             .children
             .iter()
             .find(|c| c.id == "mine")
             .expect("the user's node was eaten with the meta subnet");
         assert_eq!(kept.name, "my_notes");
-        // Re-homed onto a free cell — the root may already have something
+        // Re-homed onto a free cell — the level may already have something
         // standing where it was.
         assert!(
-            state.fs_root.children.iter().filter(|c| c.position == kept.position).count() == 1,
+            level.children.iter().filter(|c| c.position == kept.position).count() == 1,
             "it landed on top of another node"
         );
     }
@@ -1387,16 +1409,17 @@ mod tests {
         assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX);
         assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Left));
 
+        let start = state.current_path.clone();
         let sphere = state
-            .fs_root
+            .current_dir()
             .children
             .iter()
             .position(|c| c.name == "sphere1")
             .expect("default project has sphere1");
-        state.current_path2 = vec![sphere];
+        state.current_path2 = [start.clone(), vec![sphere]].concat();
         state.sync_nodes();
-        assert!(state.current_path.is_empty(), "primary path must not follow");
-        assert_eq!(state.path_names_at(&state.current_path2), vec!["sphere1".to_string()]);
+        assert_eq!(state.current_path, start, "primary path must not follow");
+        assert_eq!(state.path_names_at(&state.current_path2), vec!["geometry1".to_string(), "sphere1".to_string()]);
 
         state.current_path2 = vec![99];
         state.sync_nodes();
@@ -1420,8 +1443,17 @@ mod tests {
         let mut state = State::new(false);
         state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
 
-        let sphere = state.fs_root.children.iter().position(|c| c.name == "sphere1").unwrap();
-        let camera = state.fs_root.children.iter().position(|c| c.name == "camera1").unwrap();
+        // Both editors in the bundled project's Geometry node, where the
+        // sphere is; a second node there for the other editor to pick.
+        state.current_path2 = state.current_path.clone();
+        let mut other = state.current_dir().children.iter().find(|c| c.name == "sphere1").unwrap().clone();
+        crate::app::regenerate_node_ids(&mut other);
+        other.name = "sphere2".into();
+        other.position.0 += 2.0;
+        state.current_dir_mut().children.push(other);
+        state.sync_nodes();
+        let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
+        let camera = state.current_dir().children.iter().position(|c| c.name == "sphere2").unwrap();
 
         // Pane 1 selects the sphere; the spreadsheet pins to pane 1.
         state.graph_mut().set_selected_node(Some(sphere));
@@ -1453,7 +1485,7 @@ mod tests {
         // And the spreadsheet refresh keys off the pinned selection.
         state.show_spreadsheet = true;
         state.sync_nodes();
-        let sphere_id = state.fs_root.children[sphere].id.clone();
+        let sphere_id = state.current_dir().children[sphere].id.clone();
         assert_eq!(
             state.last_spreadsheet_node_name.as_deref(),
             Some(sphere_id.as_str()),
@@ -1487,12 +1519,12 @@ mod tests {
         // fronted), dived one level down its own path.
         a.add_dock_tab(crate::app::Dock::Left, crate::slots::NETWORK_PANEL2_IDX);
         let sphere = a
-            .fs_root
+            .current_dir()
             .children
             .iter()
             .position(|c| c.name == "sphere1")
             .expect("default project has sphere1");
-        a.current_path2 = vec![sphere];
+        a.current_path2 = [a.current_path.clone(), vec![sphere]].concat();
         a.save_to_file(&dir).expect("save");
 
         let mut b = State::new(false);
@@ -1516,7 +1548,7 @@ mod tests {
             Some(crate::app::Dock::Left),
             "the primary must load as the waiting tab"
         );
-        assert_eq!(b.current_path2, vec![sphere], "the second editor's path must round-trip");
+        assert_eq!(b.current_path2, [a.current_path.clone(), vec![sphere]].concat(), "the second editor's path must round-trip");
 
         // A detached pane window must ignore the same file's pane state.
         let mut d = State::new(true);
@@ -3467,7 +3499,7 @@ mod tests {
         // a hundred small moves come to what one large one does.
         state.set_active_camera("camera1");
         let read = |state: &State, name: &str| {
-            let node = state.current_dir().children.iter().find(|c| c.name == "camera1").unwrap();
+            let node = state.camera_level().children.iter().find(|c| c.name == "camera1").unwrap();
             crate::geometry::node_param_vec3(node, name, Vec3::ZERO)
         };
         let (pivot0, pos0, rot0) = (read(&state, "pivot"), read(&state, "position"), read(&state, "rotation"));
@@ -4639,7 +4671,8 @@ mod tests {
         };
 
         let mut state = State::new(false);
-        state.fs_root.children = vec![
+        // Inside the bundled project's Geometry node, where geometry goes.
+        state.current_dir_mut().children = vec![
             instance(find("Sphere"), "s", "Sphere 1", &[]),
             instance(find("Group"), "g", "Group 1", &[
                 ("input", "Sphere 1"),
@@ -4671,7 +4704,7 @@ mod tests {
         edited.iter_mut().find(|r| r.0 == "Name").unwrap().1 = "weight".into();
         state.param_mut().set_display_params(&edited);
         state.sync_parameters_to_project();
-        let attr = &state.fs_root.children[2];
+        let attr = &state.current_dir().children[2];
         assert_eq!(attr.params.iter().find(|p| p.name == "attribute_name").unwrap().text(), "weight");
         state.sync_parameters_pane();
         let rows = state.param_mut().node_params();
@@ -6493,8 +6526,8 @@ mod tests {
             .expect("a Scatter template")
             .node
             .clone();
-        state.fs_root.children.push(scatter);
-        let idx = state.fs_root.children.len() - 1;
+        state.current_dir_mut().children.push(scatter);
+        let idx = state.current_dir().children.len() - 1;
         state.graph_mut().set_selected_node(Some(idx));
         state.sync_parameters_pane();
 
@@ -7150,16 +7183,22 @@ mod tests {
     /// do nothing at all; now that view is the Default Camera view and is
     /// framed as one — its pivot moves to the geometry's centre and the
     /// fixed eye ray is fitted with zoom.
+    /// A camera stands at the root and is seen from every level (since
+    /// 2026-10-02): Frame All from inside a subnet inside the Geometry node
+    /// frames the active camera NODE, where until then a camera not on the
+    /// current level was the Default Camera view and the node was left.
     #[test]
-    fn frame_all_frames_off_centre_geometry_without_a_camera_node_in_the_dir() {
-        use crate::geometry::Vertex3D;
+    fn frame_all_frames_the_root_camera_from_inside_a_subnet() {
+        use crate::geometry::{node_param_vec3, Vertex3D};
         let mut state = State::new(false);
-        // The root holds Camera 1; a subnet holds no camera at all.
-        state.active_camera = "camera1".to_string();
-        let sub = state.current_dir().children.iter().position(|c| c.name == "sphere1").expect("sphere1 at the root");
+        state.set_active_camera("camera1");
+        let sub = state.current_dir().children.iter().position(|c| c.name == "sphere1").expect("sphere1 in geometry1");
         state.current_path.push(sub);
         state.on_path_changed();
         assert!(!state.current_dir().children.iter().any(|c| c.node_type == "camera"), "no camera in the subnet");
+        assert!(state.camera_names().contains(&"camera1".to_string()), "the root's camera is offered here");
+        let camera = |state: &State| state.camera_level().children.iter().find(|c| c.name == "camera1").unwrap().clone();
+        let before = camera(&state);
         // Displayed geometry: a small cluster centred well off the origin.
         let c = [3.0f32, 0.5, -2.0];
         state.rt_sphere_verts = (0..12)
@@ -7171,16 +7210,17 @@ mod tests {
         state.last_viewport_width = 800;
         state.last_viewport_height = 600;
         let zoom_before = state.viewport().zoom;
-        assert_eq!(state.viewport().pivot, Vec3::ZERO);
 
         state.frame_all();
 
-        let piv = state.viewport().pivot;
+        let after = camera(&state);
+        let piv = node_param_vec3(&after, "pivot", Vec3::ZERO);
         for k in 0..3 {
-            assert!((piv[k] - c[k]).abs() < 0.2, "pivot {piv:?} is not on the geometry's centre {c:?}");
+            assert!((piv[k] - c[k]).abs() < 0.2, "the camera's pivot {piv:?} is not on the geometry's centre {c:?}");
         }
-        assert!(state.viewport().zoom != zoom_before, "the fixed ray was fitted");
-        assert!(state.viewport().zoom < 1.0, "a 0.25 sphere frames closer than the stock view: zoom {}", state.viewport().zoom);
+        let reach = |n: &FsNode| (node_param_vec3(n, "position", Vec3::ZERO) - node_param_vec3(n, "pivot", Vec3::ZERO)).length();
+        assert!(reach(&after) < reach(&before), "a 0.25 cluster frames closer than the stock camera");
+        assert_eq!(state.viewport().zoom, zoom_before, "the node was framed, not the Default Camera");
     }
 
     /// The scene file carries the Default Camera VIEW (square aspect, pivot
@@ -7762,10 +7802,11 @@ mod tests {
             .apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
             .unwrap();
         let slot = state.current_dir().children.len() - 1;
-        state.current_path = vec![slot];
+        let level = state.current_path.clone();
+        state.current_path.push(slot);
         state.sync_nodes();
         assert!(state.history_step(true));
-        assert!(state.current_path.is_empty(), "the editor is inside a node that is gone");
+        assert_eq!(state.current_path, level, "the editor is inside a node that is gone");
 
         // A wire, made as the graph makes one and as the pane does: each is
         // one step, and the second is not noticed a second time.
@@ -7838,8 +7879,9 @@ mod tests {
             p.set_text(reference.clone());
             p.set_expr(true);
         }
-        let camera = state.current_dir().children.iter().position(|c| c.node_type == "camera").unwrap();
-        let camera_name = state.current_dir().children[camera].name.clone();
+        // The camera stands at the root, the sphere in its Geometry node.
+        let camera = state.camera_level().children.iter().find(|c| c.node_type == "camera").unwrap();
+        let (camera_id, camera_name) = (camera.id.clone(), camera.name.clone());
         state.set_active_camera(camera_name.clone());
         state.record_structure_changes();
         state.edit_history.clear();
@@ -7858,7 +7900,8 @@ mod tests {
         assert_eq!(before.2, reference);
 
         state.apply_action(McpAction::RenameNode { slot: sphere, new_name: "Ball".into() }, &mut redraw).unwrap();
-        state.apply_action(McpAction::RenameNode { slot: camera, new_name: "lens".into() }, &mut redraw).unwrap();
+        state.rename_node(&camera_id, "lens").unwrap();
+        state.record_structure_changes();
         let after = names(&state);
         assert_eq!(after.0, "ball");
         assert_eq!(after.1, "ball", "the wire followed the rename");
@@ -8084,11 +8127,15 @@ mod tests {
     fn a_node_is_renamed_from_its_menu() {
         use crate::dialog::{Mode, RENAME_ROW_ID};
         let mut state = State::new(false);
+        // A sibling for the sphere, whose name is taken.
+        state
+            .apply_action(McpAction::AddNode { template_name: "Box".into(), name: None, x: 9.0, y: 9.0 }, &mut false)
+            .unwrap();
         state.record_structure_changes();
         let sphere = state.current_dir().children.iter().position(|c| c.node_type == "sphere").unwrap();
-        let camera = state.current_dir().children.iter().position(|c| c.node_type == "camera").unwrap();
+        let sibling = state.current_dir().children.iter().position(|c| c.node_type == "box").unwrap();
         let old = state.current_dir().children[sphere].name.clone();
-        let other = state.current_dir().children[camera].name.clone();
+        let other = state.current_dir().children[sibling].name.clone();
         let row = |state: &State| state.slots.dialog.rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
         let retype = |state: &mut State, name: &str| {
             while !state.slots.dialog.query.is_empty() {
@@ -8679,8 +8726,8 @@ mod tests {
     #[test]
     fn every_wire_is_drawn_into_its_own_port() {
         use cce_ui::widget::node_wires;
+        // In the bundled project's Geometry node, where it opens.
         let mut state = State::new(false);
-        state.current_path.clear();
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Remesh".into(), name: Some("remesh1".into()), x: 3.0, y: 8.0 }, &mut redraw).unwrap();
         let slot = state.current_dir().children.iter().position(|c| c.name == "remesh1").unwrap();
@@ -9445,6 +9492,118 @@ mod tests {
         assert_eq!(rewrite_paths("touch(\"x\")", |_| Some("no".into())), "touch(\"x\")", "only channel calls are paths");
     }
 
+    /// Format 4 → 5: the root is the object level, and an older save's
+    /// geometry goes into one new Geometry node there, in its order and
+    /// with its wires — while cameras, pages and an export of a page stay.
+    /// What names a moved node across the move is re-pointed (an absolute
+    /// path into it, a relative path between it and the root, both ways),
+    /// what does not cross is left as written, and the view follows: an
+    /// editor at the root looks into the new node at the node it had
+    /// selected, and a path into a moved subnet goes through it. Once.
+    #[test]
+    fn an_older_save_puts_its_geometry_in_a_geometry_node() {
+        use crate::app::{Project, PROJECT_FORMAT};
+        let at = |mut n: FsNode, x: f32, y: f32| {
+            n.position = (x, y);
+            n
+        };
+        let root = ref_node("root", "root", "node", vec![], vec![
+            at(ref_node("cam", "camera1", "camera", vec![("pivot", "float3", "1:2:3")], vec![]), 0.0, 0.0),
+            at(ref_node("pg", "page1", "page", vec![("width", "float", "ch(\"../sphere1/radius\")")], vec![]), 1.0, 0.0),
+            at(ref_node("xp", "export_page", "export", vec![("input", "node", "page1")], vec![]), 1.0, 1.0),
+            at(ref_node("sp", "sphere1", "sphere", vec![("radius", "slider", "ch(\"../camera1/pivot.x\")")], vec![]), 4.0, 2.0),
+            at(ref_node("xf", "xform1", "transform", vec![
+                ("input", "node", "sphere1"),
+                ("scale", "float", "ch(\"/sphere1/radius\") * 2 + ch(\"../sphere1/radius\")"),
+            ], vec![]), 4.0, 3.0),
+            at(ref_node("xg", "export1", "export", vec![("input", "node", "xform1")], vec![]), 4.0, 4.0),
+            at(ref_node("sub", "sub1", "node", vec![], vec![ref_node("in", "input1", "input", vec![], vec![])]), 6.0, 2.0),
+        ]);
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 4 };
+        proj.view_state.selected_node = Some(4);
+        proj.view_state.current_path2 = vec![6, 0];
+        proj.migrate_format();
+        assert_eq!(proj.format, PROJECT_FORMAT);
+
+        let names = |n: &FsNode| n.children.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&proj.root), ["camera1", "page1", "export_page", "geometry1"]);
+        let g = geo(&proj.root);
+        assert_eq!((g.node_type.as_str(), g.geometry_visible), ("geometry", true));
+        assert_eq!(names(g), ["sphere1", "xform1", "export1", "sub1"]);
+        assert!(!proj.root.children[..3].iter().any(|c| c.position == g.position), "it stands on a free cell");
+        assert_eq!(g.children[1].params[0].text(), "sphere1", "a wire between moved nodes is left alone");
+
+        let text = |n: &FsNode, p: &str| n.params.iter().find(|q| q.name == p).unwrap().text().to_string();
+        assert_eq!(text(&g.children[1], "scale"), "ch(\"/geometry1/sphere1/radius\") * 2 + ch(\"../sphere1/radius\")");
+        assert_eq!(text(&g.children[0], "radius"), "ch(\"../../camera1/pivot.x\")", "out of the node to the root");
+        assert_eq!(text(&proj.root.children[1], "width"), "ch(\"../geometry1/sphere1/radius\")", "from the root into it");
+        let mut err = None;
+        let resolved = crate::geometry::resolve_param_refs(&proj.root, &g.children[0], 0, &mut err).unwrap();
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(text(&resolved, "radius"), "1");
+
+        // The view: the root editor is inside, on xform1; the second editor's
+        // path into sub1 goes through the new node.
+        assert_eq!(proj.view_state.current_path, vec![3]);
+        assert_eq!(proj.view_state.selected_node, Some(1));
+        assert_eq!(proj.view_state.current_path2, vec![3, 3, 0]);
+
+        // Once.
+        let before = serde_json::to_string(&proj).unwrap();
+        proj.migrate_format();
+        assert_eq!(serde_json::to_string(&proj).unwrap(), before);
+
+        // A save with nothing to move is left as it was.
+        let root = ref_node("root", "root", "node", vec![], vec![ref_node("cam", "camera1", "camera", vec![], vec![])]);
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 4 };
+        proj.migrate_format();
+        assert_eq!(names(&proj.root), ["camera1"]);
+        assert!(proj.view_state.current_path.is_empty());
+    }
+
+    /// The root is the object level: each Geometry node there is shown or
+    /// not by its own flag, and several draw at once, where inside one the
+    /// flag is exclusive as it always was. A Geometry node resolves to what
+    /// its flag inside shows, as a Houdini object is its display SOP.
+    #[test]
+    fn geometry_nodes_at_the_root_each_show_their_own() {
+        use crate::geometry::{generate_single_node_geometry_with_errors, network_sphere_vertices, EvalSim, SimCache};
+        let sphere = |id: &str, r: &str| {
+            ref_node(id, id, "sphere", vec![("radius", "slider", r), ("center", "float3", "0:0:0"), ("rows", "spinbox", "4"), ("columns", "spinbox", "6")], vec![])
+        };
+        let box_ = |id: &str| ref_node(id, id, "box", vec![("size", "float3", "1:1:1"), ("center", "float3", "3:0:0")], vec![]);
+        let mut a = ref_node("ga", "geometry1", "geometry", vec![], vec![sphere("s1", "0.5"), box_("b1")]);
+        a.set_child_geometry_visible(0, true);
+        assert!(!a.children[1].geometry_visible, "inside, the flag is exclusive");
+        let mut root = ref_node("root", "root", "node", vec![], vec![
+            a,
+            ref_node("gb", "geometry2", "geometry", vec![], vec![box_("b2")]),
+            ref_node("cam", "camera1", "camera", vec![], vec![]),
+        ]);
+        let count = |root: &FsNode| network_sphere_vertices(root).num_points();
+        let (n_sphere, n_box) = {
+            let mut cache = SimCache::default();
+            let mut sim = EvalSim::new(0, 0, &mut cache);
+            let mut err = None;
+            let s = generate_single_node_geometry_with_errors(&root, &root.children[0], &mut Vec::new(), &mut err, &mut sim).unwrap();
+            let b = generate_single_node_geometry_with_errors(&root, &root.children[1], &mut Vec::new(), &mut err, &mut sim).unwrap();
+            assert!(err.is_none(), "{err:?}");
+            (s.num_points(), b.num_points())
+        };
+        assert_eq!(n_box, 8, "geometry2 is its box");
+        assert!(n_sphere > 8, "geometry1 is its shown sphere, not its box");
+
+        root.set_child_geometry_visible(0, true);
+        root.set_child_geometry_visible(1, true);
+        assert!(root.children[0].geometry_visible && root.children[1].geometry_visible, "both stay shown");
+        assert_eq!(count(&root), n_sphere + n_box, "and both draw");
+        root.set_child_geometry_visible(1, false);
+        assert_eq!(count(&root), n_sphere);
+        root.set_child_geometry_visible(1, true);
+        root.set_child_geometry_visible(2, true);
+        assert!(root.children[0].geometry_visible && root.children[1].geometry_visible, "a camera's flag turns no object off");
+    }
+
     /// The pre-expression reference migrates to Houdini's semantics: a bare
     /// name meant the parent and gains `../`, an explicit `../` is kept, and
     /// anything else is not a legacy reference.
@@ -9474,16 +9633,17 @@ mod tests {
         };
         proj.root.children[0].children[0].params[0].set_expr(false);
         proj.migrate_format();
-        let r = &proj.root.children[0].children[0].params[0];
+        // Format 4 → 5 put the subnet inside a Geometry node.
+        let r = &geo(&proj.root).children[0].children[0].params[0];
         // Format 0 → 1 gives the reference its parent; 3 → 4 the name.
         assert_eq!(r.text(), "chf(\"../size\")");
         assert_eq!(r.name, "radius");
         assert!(r.is_expr());
         assert_eq!(proj.format, crate::app::PROJECT_FORMAT);
         // A NEW file's bare name is the node's own parameter and stays.
-        proj.root.children[0].children[0].params[0].set_text("chf(\"radius\")");
+        geo_mut(&mut proj.root).children[0].children[0].params[0].set_text("chf(\"radius\")");
         proj.migrate_format();
-        assert_eq!(proj.root.children[0].children[0].params[0].text(), "chf(\"radius\")");
+        assert_eq!(geo(&proj.root).children[0].children[0].params[0].text(), "chf(\"radius\")");
     }
 
     #[test]
@@ -9896,7 +10056,7 @@ mod tests {
 
         // Absolute paste, then Delete Expression bakes the current value.
         state.run_param_action(&ball_id, "radius", ParamMenuAction::PasteAbsolute);
-        assert_eq!(radius(&state, ball).text(), "ch(\"/sphere1/radius\")");
+        assert_eq!(radius(&state, ball).text(), "ch(\"/geometry1/sphere1/radius\")");
         state.run_param_action(&ball_id, "radius", ParamMenuAction::DeleteExpression);
         assert_eq!(radius(&state, ball).text(), "0.9");
         assert!(!radius(&state, ball).is_expr());
@@ -13346,11 +13506,10 @@ mod tests {
     #[test]
     fn bypass_is_one_flag_however_it_is_asked_for() {
         use crate::app::McpAction;
+        // An empty Geometry node: the bundled project's, emptied.
         let mut state = State::new(false);
         let mut redraw = false;
-        while !state.current_path.is_empty() {
-            state.apply_action(McpAction::Up, &mut redraw).unwrap();
-        }
+        assert_eq!(state.current_path.len(), 1, "the bundled project opens in its Geometry node");
         state.current_dir_mut().children.clear();
         state.sync_nodes();
         state.apply_action(McpAction::AddNode { template_name: "Sphere".into(), name: Some("ball".into()), x: 3.0, y: 3.0 }, &mut redraw).unwrap();
@@ -13391,7 +13550,7 @@ mod tests {
         assert_eq!(state.set_bypassed(&[ball], false), 1);
 
         // It is saved with the project and comes back with it.
-        let saved = serde_json::to_string(&state.fs_root).unwrap();
+        let saved = serde_json::to_string(state.current_dir()).unwrap();
         let back: FsNode = serde_json::from_str(&saved).unwrap();
         assert!(back.children[pull].bypassed && !back.children[ball].bypassed);
     }
@@ -16024,7 +16183,9 @@ mod tests {
 
         assert!(state.dialog_visible());
         assert_eq!(state.slots.dialog.mode, Mode::AddNode);
-        assert_eq!(state.slots.dialog.rows.len(), state.node_templates.len());
+        // Inside the bundled project's Geometry node: every template but the
+        // two that stand at the root.
+        assert_eq!(state.slots.dialog.rows.len(), state.node_templates.len() - 2);
         assert!(
             state.slots.dialog.rows.iter().all(|r| r.chord.is_empty()),
             "a template has no chord to teach"
@@ -16110,34 +16271,77 @@ mod tests {
         assert_eq!(input_of(&state, "c").as_deref(), Some(mid.as_str()), "{gen} did not cut the wire");
     }
 
-    /// The Add Node list offers every template, everywhere.
+    /// The Add Node list offers what may stand at the level (since
+    /// 2026-10-02, `context`): at the root, the object level, the Geometry
+    /// node, cameras and the page nodes, and no operator; inside a Geometry
+    /// node, and in a subnet inside one, every operator and the pages, and
+    /// neither the Geometry node nor a camera. The same rule refuses MCP's
+    /// `add_node` and a paste, so no way in gets around it.
     ///
-    /// It used to hide the geometry ones inside a "utility dir" — the root
-    /// meta node and its `main`/`view`/`guides`/`render` subnets, where
-    /// placing geometry was refused. Those nodes are gone with the settings
-    /// they held, so there is no such directory left to be in and no filter
-    /// to apply.
+    /// It once hid the geometry templates inside a "utility dir" — the root
+    /// meta node's subnets — and then, those gone, offered everything
+    /// everywhere.
     #[test]
-    fn dialog_add_node_hides_geometry_templates_in_a_utility_dir() {
+    fn the_add_node_list_offers_what_belongs_at_the_level() {
         let mut state = State::new(false);
+        let labels = |state: &State| state.slots.dialog.rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
+        let inside = state.current_path.clone();
+        assert_eq!(state.path_names_at(&inside), ["geometry1"]);
+
+        // Inside the Geometry node.
         state.open_node_palette();
-        let at_root = state.slots.dialog.rows.len();
-        assert_eq!(at_root, state.node_templates.len(), "the palette dropped templates");
-        assert!(state.slots.dialog.rows.iter().any(|r| r.label == "Grid"));
-        assert!(state.slots.dialog.rows.iter().any(|r| r.label == "Box"));
+        let here = labels(&state);
+        for operator in ["Sphere", "Box", "Grid", "Subnet", "Simnet", "Embryo", "Page", "Export"] {
+            assert!(here.iter().any(|l| l == operator), "{operator} missing inside: {here:?}");
+        }
+        assert!(!here.iter().any(|l| l == "Geometry" || l == "Camera"), "{here:?}");
         state.close_dialog();
 
-        // Inside a subnet, the same list.
-        let sphere = state
-            .fs_root
-            .children
-            .iter()
-            .position(|c| c.name.starts_with("sphere"))
-            .expect("a sphere at the root");
-        state.current_path.push(sphere);
+        // At the root.
+        state.current_path.clear();
         state.on_path_changed();
         state.open_node_palette();
-        assert_eq!(state.slots.dialog.rows.len(), at_root);
+        let mut root = labels(&state);
+        root.sort();
+        assert_eq!(root, ["Camera", "Export", "Geometry", "Page", "Page Border", "Page Grid", "Page Shape", "Page Text"]);
+        state.close_dialog();
+
+        // MCP: an operator at the root is refused, with why.
+        let mut redraw = false;
+        let count = state.fs_root.children.len();
+        let said = state
+            .apply_action(McpAction::AddNode { template_name: "Sphere".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
+            .unwrap_err();
+        assert!(said.contains("inside a Geometry node"), "{said}");
+        assert_eq!(state.fs_root.children.len(), count);
+        // A Geometry node there is fine, and is entered as a subnet is.
+        state
+            .apply_action(McpAction::AddNode { template_name: "Geometry".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
+            .unwrap();
+        let geo2 = state.fs_root.children.iter().position(|c| c.name == "geometry2").expect("geometry2");
+        assert!(state.fs_root.children[geo2].is_enterable());
+        state.apply_action(McpAction::Enter { slot: geo2 }, &mut redraw).unwrap();
+        state
+            .apply_action(McpAction::AddNode { template_name: "Box".into(), name: None, x: 1.0, y: 1.0 }, &mut redraw)
+            .unwrap();
+        let said = state
+            .apply_action(McpAction::AddNode { template_name: "Camera".into(), name: None, x: 2.0, y: 1.0 }, &mut redraw)
+            .unwrap_err();
+        assert!(said.contains("at the root"), "{said}");
+
+        // A paste: the box copied into the root is refused whole.
+        let boxed = state.current_dir().children.iter().position(|c| c.node_type == "box").unwrap();
+        state.node_clipboard = vec![state.current_dir().children[boxed].clone()];
+        state.current_path.clear();
+        state.on_path_changed();
+        let count = state.fs_root.children.len();
+        assert!(!state.paste_nodes());
+        assert_eq!(state.fs_root.children.len(), count);
+        assert!(state.last_status_text.contains("Not pasted"), "{}", state.last_status_text);
+        // And into the other Geometry node it goes.
+        state.current_path = inside;
+        state.on_path_changed();
+        assert!(state.paste_nodes());
     }
 
     /// Ctrl+P opens the list rather than toggling, which is the one thing
@@ -16936,7 +17140,8 @@ mod tests {
             inst
         };
         let mut state = State::new(false);
-        state.fs_root.children = vec![
+        // Inside the bundled project's Geometry node, where geometry goes.
+        state.current_dir_mut().children = vec![
             instance(find("Sphere"), "s", "Sphere 1", &[]),
             instance(find("Attribute"), "a", "pull1", &[
                 ("input", "Sphere 1"),
@@ -16958,7 +17163,7 @@ mod tests {
         assert_eq!(value_row(&mut state), wide, "Modify on Pos");
 
         let set = |state: &mut State, name: &str, val: &str| {
-            state.fs_root.children[1].params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
+            state.current_dir_mut().children[1].params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
         };
         set(&mut state, "attribute_name", "N");
         assert_eq!(value_row(&mut state), wide, "Modify on an input Float3");
@@ -16994,7 +17199,7 @@ mod tests {
         // Read back unchanged, the spread number is not an edit.
         let steps = state.edit_history.undo_len();
         state.sync_parameters_to_project();
-        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "value").unwrap().text(), "1.00");
+        assert_eq!(state.current_dir().children[1].params.iter().find(|p| p.name == "value").unwrap().text(), "1.00");
         assert_eq!(state.edit_history.undo_len(), steps);
 
         set(&mut state, "type", "Float3");
@@ -17012,9 +17217,9 @@ mod tests {
         // Far inside, it comes back down.
         set(&mut state, "value", "1.00:2.00:3.00");
         assert_eq!(value_row(&mut state), "float3:-10:10:trackball:soft");
-        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "value").unwrap().set_expr(true);
+        state.current_dir_mut().children[1].params.iter_mut().find(|p| p.name == "value").unwrap().set_expr(true);
         assert_eq!(value_row(&mut state), "text", "an expression is shown as its text");
-        state.fs_root.children[1].params.iter_mut().find(|p| p.name == "value").unwrap().set_expr(false);
+        state.current_dir_mut().children[1].params.iter_mut().find(|p| p.name == "value").unwrap().set_expr(false);
 
         // Read from an attribute: no Value row, and the source is picked
         // from the input's attributes.
@@ -17027,7 +17232,7 @@ mod tests {
         set(&mut state, "value_from", "Constant");
 
         // The parameter itself never changed kind: it is text in the node.
-        assert_eq!(state.fs_root.children[1].params.iter().find(|p| p.name == "value").unwrap().kind(), crate::param::ParamKind::Text);
+        assert_eq!(state.current_dir().children[1].params.iter().find(|p| p.name == "value").unwrap().kind(), crate::param::ParamKind::Text);
     }
 
     /// A trackpad swipe over a band of the pull node's float3 Value row
@@ -18058,7 +18263,7 @@ mod tests {
 
         // A camera node is rewritten, whatever orbit the widget holds.
         let mut state = state_showing_image(300, 200, 100);
-        assert!(state.current_dir().children.iter().any(|c| c.name == "camera1"), "the bundled project has no camera1");
+        assert!(state.camera_level().children.iter().any(|c| c.name == "camera1"), "the bundled project has no camera1");
         state.set_active_camera("camera1");
         state.viewport_mut().rotation_x = 0.2;
         state.viewport_mut().rotation_y = 0.7;

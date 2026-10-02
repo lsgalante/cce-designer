@@ -107,7 +107,7 @@ impl State {
         let (orbit_x, orbit_y) = (self.viewport().rotation_x, self.viewport().rotation_y);
         let mut reached = None;
         if camera_name != "Default Camera" {
-            let dir = self.current_dir_mut();
+            let dir = self.camera_level_mut();
             if let Some(node) =
                 dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name)
             {

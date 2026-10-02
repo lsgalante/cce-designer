@@ -463,7 +463,15 @@ impl State {
                     t.label.to_lowercase() == template_name.to_lowercase()
                         || t.node.name.to_lowercase() == template_name.to_lowercase()
                 });
-                if let Some(idx) = template_idx {
+                let here = crate::context::context_at(&state.current_path);
+                let refused = template_idx.and_then(|idx| {
+                    let t = &state.node_templates[idx];
+                    crate::context::refusal(&t.label, &t.node.node_type, here)
+                });
+                if let Some(why) = refused {
+                    state.update_status_text(&why);
+                    Err(why)
+                } else if let Some(idx) = template_idx {
                     let mut node = state.node_templates[idx].node.clone();
                     // Fresh ids, like paste: a verbatim clone shares the
                     // template's ids across every instance.

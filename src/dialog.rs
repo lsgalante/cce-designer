@@ -1871,11 +1871,18 @@ impl State {
                     .collect()
             }
             Mode::AddNode => {
-                // Every template, everywhere. The settings directories that
-                // refused geometry were the root meta node's utility subnets,
-                // and they are gone.
-                let offered: Vec<&str> =
-                    self.node_templates.iter().map(|t| t.label.as_str()).collect();
+                // The templates that may stand at this level: at the root
+                // the Geometry node, cameras and pages; inside a geometry
+                // node everything but the first two (`context::placement`).
+                // The settings directories that refused geometry once were
+                // the root meta node's utility subnets, and they are gone.
+                let here = crate::context::context_at(&self.current_path);
+                let offered: Vec<&str> = self
+                    .node_templates
+                    .iter()
+                    .filter(|t| crate::context::fits(crate::context::placement(&t.node.node_type), here))
+                    .map(|t| t.label.as_str())
+                    .collect();
                 crate::command::fuzzy_rank(&query, &offered)
                     .into_iter()
                     .map(|i| Row::plain(offered[i], offered[i], ""))
@@ -2824,10 +2831,11 @@ impl State {
                             self.splice_new_node(&src_id, &dest_id);
                         }
                     }
-                    // The one refusal this can hit is a geometry template in
-                    // a utility dir, which `refresh_dialog_rows` already
-                    // filters out — but the rule lives in `apply_action`, so
-                    // say what it said rather than assume it cannot fire.
+                    // The one refusal this can hit is a template that does
+                    // not belong at this level, which `refresh_dialog_rows`
+                    // already filters out — but the rule lives in
+                    // `apply_action`, so say what it said rather than assume
+                    // it cannot fire.
                     Err(e) => self.update_status_text(&e),
                 }
             }

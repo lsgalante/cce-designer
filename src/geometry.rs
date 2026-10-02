@@ -780,6 +780,16 @@ fn split_ref_path(path: &str) -> (bool, Vec<&str>, &str) {
     (absolute, segs, param)
 }
 
+/// What a channel path on `holder` names: the node's id, whether the path
+/// is absolute, and its parameter segment as written. None when it names
+/// no node.
+pub fn ref_path_target(root: &FsNode, holder: &FsNode, path: &str) -> Option<(String, bool, String)> {
+    let (absolute, segs, param) = split_ref_path(path);
+    let start = if absolute { root } else { holder };
+    let target = walk_ref_path(root, start, &segs).ok()?;
+    Some((target.id.clone(), absolute, param.to_string()))
+}
+
 /// A parameter named by the last path segment, with an optional `.x` / `.y`
 /// / `.z` component for a float3 — tried as a whole name first, so a
 /// parameter that really is called `Size.x` still resolves.
@@ -1458,6 +1468,17 @@ pub fn generate_single_node_geometry_with_errors(
         } else {
             None
         }
+    } else if crate::context::is_geometry_container(&target.node_type) {
+        // A geometry node is what its display flag shows, as a Houdini
+        // object is its display SOP: what an export at the root reads, and
+        // `--export --node`. The scene walk does not come here — it goes
+        // into the container and draws its children by their flags, as it
+        // goes into a subnet.
+        target
+            .children
+            .iter()
+            .find(|c| c.geometry_visible && crate::context::placement(&c.node_type) != crate::context::Placement::Object && !crate::page::is_page_node(&c.node_type))
+            .and_then(|shown| generate_single_node_geometry_with_errors(root, shown, visited, ocl_error, sim))
     } else if target.node_type.eq_ignore_ascii_case("output") {
         // Sibling-first, then anywhere — `find_input_node`'s own rule,
         // which this arm spelled out by hand before that function existed.
@@ -6564,6 +6585,7 @@ mod tests {
             let ty = t.node_type.as_str();
             let resolvable = is_geometry_node_type(ty)
                 || ty.eq_ignore_ascii_case("node")
+                || crate::context::is_geometry_container(ty)
                 || crate::page::is_page_node(ty)
                 || ty.eq_ignore_ascii_case("camera");
             if !resolvable {

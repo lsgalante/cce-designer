@@ -115,7 +115,7 @@ matches, ran the wrong item (the header's Save opened a project).
 **The cameras and the parameter reset are commands too** (the same day),
 so the palette reaches them and a chord can: `next_camera` /
 `previous_camera` step through `State::camera_names` (the Default Camera,
-then the level's camera nodes) and wrap, `default_camera` goes back to it,
+then the root's camera nodes — see "The root is the object level") and wrap, `default_camera` goes back to it,
 and each camera NODE is a row of the palette — `Camera: camera1`, id under
 `CAMERA_ROW_PREFIX`, ranked among the commands as the viewport's, with
 `active` in the chord column of the one in use. They are rows and not
@@ -374,6 +374,9 @@ gone from cce-ui with the wgpu path).
   its top edge, so a mode line there lands under the collapsed stubs. It exists
   because a viewer state changes what every click does and snapping silently
   changes what a drag does.
+- `src/context.rs` — where a node may stand: the object level and the
+  geometry context, the placement rule Add Node, paste and MCP hold, and
+  the format-5 migration. See "The root is the object level".
 - `src/param.rs` — node parameters: `ParamDef` (text and parsed value kept
   together, both private), `ParamKind`, `ParamValue`, `ParamSlot`. See
   "Parameter kinds and typed values".
@@ -388,6 +391,68 @@ gone from cce-ui with the wgpu path).
 The `zcce_inspector_v1` integration (window-position tracking + widget-state
 streaming to cce-test-interface) was dropped in the engine migration; the HTTP API
 is the introspection surface.
+
+### The root is the object level; geometry goes in a Geometry node (since 2026-10-02)
+
+Houdini's `/obj` and its geometry objects. The root holds **Geometry**
+nodes (`nodes/geometry.json`, type `geometry`), cameras and pages; every
+operator — generators, modifiers, subnets, simnets, repeats, the subnet
+templates — stands inside a Geometry node, at any depth. Until this every
+node could stand anywhere and the root was one big geometry level.
+`src/context.rs` is the whole rule.
+
+- **Placement is by node type** (`context::placement`): Object (the
+  `geometry` container and `camera`, root only), Any (the page nodes, which
+  are a 2D context of their own and stay where they always could, and
+  `export`, which writes a page or a mesh), Geometry (everything else, so a
+  new node type is a geometry operator without a line anywhere). A level's
+  context is `context_at(path)`: the root is Object, every level under it
+  Geometry — since a subnet is an operator, the root's only enterable nodes
+  are Geometry nodes. No Geometry node inside a Geometry node.
+- **Held where a node arrives**: the Add Node list shows only what fits the
+  level (`refresh_dialog_rows`), MCP's `add_node` refuses with the reason on
+  the status line (`context::refusal`), and a paste that does not fit is
+  refused WHOLE ("Not pasted: …") rather than pasted in part with its wires
+  cut. NOT held by the evaluator: a hand-built tree with a sphere at the
+  root still draws, which is what keeps the suite's fixtures meaning what
+  they meant.
+- **A Geometry node draws like a subnet seen from outside**: the scene walk
+  goes in and draws its children by their flags, so dived in or not it shows
+  its displayed node. Evaluated directly (an export at the root, `--export
+  --node`, the spreadsheet) it is its displayed child, as a Houdini object
+  is its display SOP. Its own flag is exclusive with nothing: several
+  objects show at once at the root, and showing one turns no other off.
+- **Cameras stand at the root and are seen from every level**
+  (`State::camera_level`). Until this a camera was looked up on the
+  CURRENT level — `camera_names`, the pose, Frame All, the orbit and pan
+  write-back, the rename — so diving into a subnet silently dropped to the
+  Default Camera view; with all geometry one level down that would have
+  been every working view. `frame_all_frames_the_root_camera_from_inside_a_subnet`.
+- **Format 5 migrates an older save** (`context::wrap_root_geometry`, in
+  `Project::migrate_format`, so on every load path): every root child that
+  is an operator goes, in order, with its position, flags and wires, into
+  one new `geometry1` at the root on a free cell, shown. Cameras, pages, the
+  retired `meta` / `session` / `utility` nodes (whose own migration runs
+  after and finds them there) and an export reading a root page stay. A
+  wire needs nothing — wires look among siblings first and the siblings came
+  along — but a CHANNEL PATH does: one that reaches into the moved nodes
+  absolutely (`/sphere1/radius` → `/geometry1/sphere1/radius`), or crosses
+  between them and the root relatively (`../camera1/pivot.x` from a moved
+  node → `../../camera1/pivot.x`), is resolved in the old tree and written
+  again from where its holder now stands; paths that do not cross are left
+  as written. The view follows: an editor at the root opens inside the new
+  node on the node it had selected (unless that was a camera or a page), and
+  a path into a moved subnet goes through it. The meta migration re-homes a
+  subnet it finds in the root's first Geometry node (`context::geometry_home`).
+  The bundled `default_project.json` and `project.json` are NOT rewritten on
+  disk: they carry no format and migrate on every load, so the suite's
+  `State::new` opens inside `geometry1` (`test_prelude::geo` reaches it).
+  Checked on the user's project and both bundled ones: the old build and the
+  new export the same mesh at frames 1, 30 and 120.
+
+`an_older_save_puts_its_geometry_in_a_geometry_node`,
+`geometry_nodes_at_the_root_each_show_their_own` and
+`the_add_node_list_offers_what_belongs_at_the_level` are the tests.
 
 ### There are no meta nodes (retired 2026-09-23)
 
@@ -466,7 +531,8 @@ inferring one would turn a single node's preference into a setting over the
 whole scene.
 
 Gone with them: `session_node()`, `in_settings_dir()` (there is no settings
-directory, so Add Node offers every template everywhere), `write_meta_toggle`
+directory; what Add Node offers is now the level's CONTEXT — see "The root
+is the object level"), `write_meta_toggle`
 and its two wrappers, `refresh_main_node_live_toggles`,
 `update_recent_files_layout`, the `utility` / `session` / `meta` node types,
 the undeletable-node gate in `delete_node`, and `layout.rs`'s pinning (whose
@@ -1056,7 +1122,9 @@ not `@UVW`) — and never a choice row, so the Sphere's Method keeps its
 `UV` option. Once, by the version, so an attribute someone names `Norm` or
 `UV` afterwards is theirs (`a_save_naming_norm_or_uv_names_n_or_uv`).
 **Format 4** (the same day): parameter names are identifiers — see "A
-parameter has a name and a label". Templates go through
+parameter has a name and a label". **Format 5** (2026-10-02): the root is
+the object level and an older save's geometry goes into a Geometry node —
+see "The root is the object level". Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
 (`embryo.json` says `chf("../radius")` now). The same inference applies to a
 value typed into a plain row or scripted through `set_param`: a reference
@@ -2230,7 +2298,9 @@ print first.
 **The display flag is exclusive within its CONTEXT**
 (`set_child_geometry_visible`): the page nodes and the geometry nodes each
 have one, so a level shows one image and one geometry. One flag over both
-is what made showing a picture hide the model.
+is what made showing a picture hide the model. A Geometry NODE's flag is
+its own and exclusive with nothing (since 2026-10-02): at the root several
+objects draw at once.
 
 **The image commands** (`src/image_tools.rs`, all registry rows):
 `frame_image` (Ctrl+Shift+F, and a viewport-menu row while an image shows)

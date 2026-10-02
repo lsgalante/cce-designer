@@ -514,7 +514,7 @@ impl State {
                     .map(|n| n.id.clone());
                 // The active camera is a name, which a rename changes.
                 let camera = self
-                    .current_dir()
+                    .camera_level()
                     .children
                     .iter()
                     .find(|c| c.node_type == "camera" && c.name == self.active_camera)

@@ -186,13 +186,13 @@ impl State {
     /// The saved Default Camera view onto the live state — after the
     /// active camera and the path are known. The orbit, zoom and pivot are
     /// the view and always restore; the square aspect, pivot marker and its
-    /// size are a camera NODE's own params when one is active in the
-    /// current directory, so those restore only for a view with no node.
+    /// size are a camera NODE's own params when one is active, so those
+    /// restore only for a view with no node.
     fn apply_default_view_from_project(&mut self, view: Option<crate::app::DefaultCameraView>) {
         let Some(v) = view else { return };
         let active = self.active_camera.clone();
         let has_node = active != "Default Camera"
-            && self.current_dir().children.iter().any(|c| c.node_type == "camera" && c.name == active);
+            && self.camera_level().children.iter().any(|c| c.node_type == "camera" && c.name == active);
         if !has_node {
             self.square_viewport = v.square;
             self.camera_pivot_size = v.pivot_size;
@@ -742,11 +742,19 @@ impl State {
         // Anything else that was living under the meta node is the user's,
         // not ours: adding a non-geometry node in there was allowed, so a
         // migration that quietly ate one would be eating their work. Re-home
-        // it at the root, where the level it was in used to be.
+        // it at the root, where the level it was in used to be — or, for
+        // what belongs inside a geometry node (a subnet), in the root's
+        // first one.
         let mut i = 0;
         while i < subnets.len() {
             if matches!(subnets[i].name.as_str(), "main" | "view" | "guides" | "render") {
                 i += 1;
+            } else if crate::context::placement(&subnets[i].node_type) == crate::context::Placement::Geometry {
+                let mut node = subnets.remove(i);
+                let home = crate::context::geometry_home(&mut self.fs_root);
+                let level = &mut self.fs_root.children[home];
+                node.position = crate::context::free_cell(level, node.position);
+                level.children.push(node);
             } else {
                 let mut node = subnets.remove(i);
                 let (nx, ny) = self.find_empty_cell(node.position.0, node.position.1, None);
