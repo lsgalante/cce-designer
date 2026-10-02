@@ -6531,9 +6531,11 @@ mod tests {
         let label_idx = text_pos("Points").expect("param label in display list");
         let option_idx = text_pos("Surface").expect("popover option text in display list");
         assert!(option_idx > label_idx, "popover text must draw after widget labels");
+        // The trigger's plate grown — its fill and relief, whatever prims
+        // those are — between the label and the option.
         let has_bg_between = list.items[label_idx..option_idx]
             .iter()
-            .any(|item| matches!(item.prim, cce_ui::scene::paint::Prim::Quad { .. }));
+            .any(|item| !matches!(item.prim, cce_ui::scene::paint::Prim::Text { .. }));
         assert!(has_bg_between, "popover background must draw after widget labels");
     }
 
@@ -14941,12 +14943,13 @@ mod tests {
         let (tx, ty, tw, th) = state.slots.dialog.dropdown.rect();
         assert!(vx >= tx && vx < tx + tw && vy >= ty - 4.0 && vy < ty + th, "laid out on the band its value was drawn in");
 
-        // The plate grows out of the trigger into the list.
+        // The plate grows out of the trigger into the list. Judged by where
+        // it ends, not by a reading taken as it opens: the growth runs on
+        // the wall clock, and a slow press had already finished it.
         let grown = |state: &State| state.slots.dialog.dropdown.popover_rect().map(|r| r.3).unwrap_or(0.0);
-        let first = grown(&state);
         std::thread::sleep(std::time::Duration::from_millis(250));
         state.tick_frame(0.25);
-        assert!(grown(&state) > first.max(th) + 24.0, "{} then {}", first, grown(&state));
+        assert!(grown(&state) > th + 24.0, "the trigger {th} grew to {}", grown(&state));
         // Registered after the dialog, so the rows under it are clamped
         // and its labels are not.
         let _ = state.collect_display_list();

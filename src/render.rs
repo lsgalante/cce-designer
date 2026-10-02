@@ -911,7 +911,7 @@ impl State {
     }
 
     /// Open popovers (the params pane's expanded dropdowns), background then
-    /// text per widget. Appended after `append_frame_text` so the popover
+    /// text per widget, in the widget's own drawing. Appended after `append_frame_text` so the popover
     /// occludes the widget labels underneath it — the display list is drawn
     /// strictly in order, so a popover background emitted in the geometry
     /// pass would sit under every label.
@@ -925,20 +925,14 @@ impl State {
             if is_menubar {
                 continue;
             }
+            // Into the frame's own PaintCtx, as cce-files and the palette
+            // paint theirs: a dropdown's expanded menu is its trigger's
+            // plate grown, relief and corners and all. Until 2026-10-01 it
+            // went through a `PopoverCollector`, which keeps fills as plain
+            // rects — the menu came out square-cornered and flat, a
+            // different thing from the control it grew out of.
             if self.focused_widget == Some(i) || i == PARAM_IDX {
-                let mut popover_pc = cce_ui::layout::PopoverCollector::new();
-                w.render_popover(&mut popover_pc);
-                for (color, px, py, pw, ph) in popover_pc.rects {
-                    pc.quad(rect(px, py, pw, ph), color);
-                }
-                for (t, size, x, y, tc, font_opt, label_bounds) in popover_pc.texts {
-                    let color = [
-                        (tc[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-                        (tc[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-                        (tc[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-                    ];
-                    pc.text_with(t, x, y, size, color, font_opt, label_bounds);
-                }
+                w.render_popover(pc);
             }
         }
     }

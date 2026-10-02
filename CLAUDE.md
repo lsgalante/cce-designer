@@ -2392,6 +2392,13 @@ The rules that took a day to settle, each with the wrong version it replaced:
   `highlight_primary_color` (`plate_focus_tint`); the flat `border_color`
   draws only with relief off.
 
+**An open dropdown in the params pane is painted into the frame**
+(`append_popovers`, since 2026-10-01): `render_popover` gets the frame's
+`PaintCtx`, as cce-files' does, so the menu is the trigger's plate grown,
+relief and corners included. It went through a `PopoverCollector` until
+then, which keeps fills as square rects, and the expanded plate came out
+flat and square-cornered.
+
 Two keys look like they apply and do not: `style.surface.plate.color`
 feeds `plate_color`, whose one consumer is the info box, and the finish's
 spec / shininess / curvature live as `relief.spec` / `.shininess` /
@@ -3534,7 +3541,10 @@ selection stays where it was:
   - **Closing the dialog shuts it outright** (`open = false`), so no
     shrinking plate is left reporting a popover over the panes.
   `Dropdown::is_expanded` (cce-ui, the same day) is what tells a
-  shrinking dropdown from one taking input. For one day before this the
+  shrinking dropdown from one taking input. The closed trigger is in the dropdown's
+  own font, not the dialog's: cce-ui's Dropdown names it on its text
+  (see its CLAUDE.md, "A dropdown's text names its font"), where a stamp
+  painted here took the dialog's and the list opened in another. For one day before this the
   choice was the context menu shown as a list under the row, and before
   that a click stepped the value between two chevrons.
   `a_choice_row_is_a_dropdown` is the test.
