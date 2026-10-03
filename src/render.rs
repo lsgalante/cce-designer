@@ -330,8 +330,10 @@ impl State {
                                 if let Some(c) = item.clip {
                                     pc.push_clip(c);
                                 }
-                                if let Some(Prim::Text { text, x, y, font_size, color, alpha, font, .. }) = pc.replay(item.prim) {
-                                    pc.text_faded(text, x, y, font_size, color, alpha * e * e, font, bounds);
+                                // Everything comes up with the turn, as a
+                                // menu page's rows do (`Prim::faded`).
+                                if let Some(Prim::Text { text, x, y, font_size, color, alpha, font, .. }) = pc.replay(item.prim.faded(e * e)) {
+                                    pc.text_faded(text, x, y, font_size, color, alpha, font, bounds);
                                 }
                                 if item.clip.is_some() {
                                     pc.pop_clip();

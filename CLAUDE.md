@@ -2680,8 +2680,9 @@ Markers and Attribute Visualizers, a visualizer and Add Visualizer.
   size off the hidden context menu), and a mode turned to while it is up
   (Group Markers, a visualizer and back) slides its rows in from the side
   it came from at the plate's own size. The render arm paints a turning
-  dialog's content aside and replays it moved and clipped, its text faded
-  and bounded by the plate as drawn, which is also the occluder the dialog
+  dialog's content aside and replays it moved, clipped and faded
+  (cce-ui's `Prim::faded`, geometry and text alike), its text bounded by
+  the plate as drawn, which is also the occluder the dialog
   claims meanwhile (`Dialog::drawn_rect` in `popover`), so the clamp still
   lets the labels through. A swipe back from the dialog shrinks the menu
   out of the dialog's size (`context_menu::turn_from_size`). Checked in a
