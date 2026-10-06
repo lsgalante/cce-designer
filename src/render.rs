@@ -376,11 +376,20 @@ impl State {
         } else if idx == SPREADSHEET_IDX {
             // Modern-paint pane: the plate from the designer (span-widened
             // radii + focus tint), then Spreadsheet::paint authors the grid —
-            // header band, zebra rows, separators, dividers, scrollbar. A
-            // subtree painter since cce-ui@f1cd939: its text passes through
-            // paint_self verbatim, carrying the per-column clamp bounds the
-            // own-labels bridge would drop; append_frame_text skips the slot.
+            // header band, zebra rows, separators, dividers, and the fore
+            // copy of its scrollbars. A subtree painter since cce-ui@f1cd939:
+            // its text passes through paint_self verbatim, carrying the
+            // per-column clamp bounds the own-labels bridge would drop;
+            // append_frame_text skips the slot.
             let (wx, wy, ww2, wh2) = w.rect();
+            // The scrollbar cross's idle copy, BEHIND the plate — the params
+            // pane's straddle: the frosted plate dims it, and the widget
+            // fades its fore copy in over the cells when a scroll raises it.
+            let sheet = self.slots.spreadsheet();
+            let sheet_rect = rect(wx, wy, ww2, wh2);
+            if sheet.scrollbars_shown(sheet_rect) {
+                sheet.paint_scrollbars(sheet_rect, pc, 1.0);
+            }
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {

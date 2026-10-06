@@ -2175,6 +2175,18 @@ selected row's marker, stood at the first frame while the scene beside
 them played. `rows_selected_inside_a_simnet_follow_the_simulation` is the
 test.
 
+**The spreadsheet's scrollbars are a cross behind its plate** (since
+2026-10-06; cce-ui's CLAUDE.md, "A spreadsheet's scrollbars are a cross
+behind its plate"): the vertical bar down the pane's centre line, the
+horizontal one across the body's, idling behind the frosted plate until a
+scroll raises them, held in front while the pointer is on a raised one.
+It is the params pane's straddle and the dialog's bar, which ride their
+centre lines the same way. The render arm draws the idle copy before the
+plate (`Spreadsheet::paint_scrollbars`, through `WidgetSlots::spreadsheet`);
+the widget paints the fore copy itself. A press on a sunk bar's lane is a
+press on the row under it. Checked in a shadow session: sunk, raised by a
+scroll, held by hover past the hold, sunk again once the pointer left.
+
 ### An edit is in from the next frame
 
 An edit inside a simnet's chain, or to its seed, does not restart the

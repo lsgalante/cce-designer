@@ -187,6 +187,12 @@ impl WidgetSlots {
         self.param.as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
+    /// The spreadsheet as itself, for what its controller trait does not
+    /// carry — the scrollbars the render arm straddles around the plate.
+    pub fn spreadsheet(&self) -> &Spreadsheet {
+        self.spreadsheet.as_any().downcast_ref::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
+    }
+
     pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController {
         self.spreadsheet.as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
     }
