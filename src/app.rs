@@ -4715,7 +4715,9 @@ impl State {
         let ss_x = (flush_left - self.floating_spreadsheet_inset_left.max(0.0)).max(gap);
         let ss_end = (flush_right + self.floating_spreadsheet_inset_right.max(0.0)).min(self.width - gap);
         let ss_w = (ss_end - ss_x).max(150.0);
-        let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
+        // The playbar is attached to the bottom edge: what stands above it
+        // stops a gap short of its top, the gap the bottom edge gives it.
+        let pb_off = if self.show_playbar { PLAYBAR_H } else { 0.0 };
         let ss_y_end = self.height - STATUS_H - pb_off - gap;
         let max_h = if self.spreadsheet_tucks_left() || self.spreadsheet_tucks_right() {
             ss_y_end - (gap + 100.0 + gap)
@@ -9486,7 +9488,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.slots.playbar.set_visible(self.show_playbar);
             } else {
                 let gap = 18.0_f32;
-                let pb_off = if self.show_playbar { PLAYBAR_H + gap } else { 0.0 };
+                // The playbar is attached to the bottom edge (below), so the
+                // plates above stop a gap short of its top.
+                let pb_off = if self.show_playbar { PLAYBAR_H } else { 0.0 };
                 // The stored widths and height are what the user ASKED for;
                 // the clamps below fit them to this window for drawing and are
                 // never written back. Storing the clamp made every transient
@@ -9635,7 +9639,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[PLAYBAR_IDX] = if self.show_playbar {
-                    (gap, self.height - STATUS_H - gap - PLAYBAR_H, self.width - 2.0 * gap, PLAYBAR_H)
+                    // Attached to the window's bottom edge, the full width:
+                    // its bottom corners are the window's (`pane_plate_radii`
+                    // reads them off the rect), and the plates above stop a
+                    // gap short of its top (`pb_off`). It floated a gap in
+                    // from the sides and the bottom until 2026-10-06.
+                    (0.0, self.height - STATUS_H - PLAYBAR_H, self.width, PLAYBAR_H)
                 } else {
                     (0.0, 0.0, 0.0, 0.0)
                 };

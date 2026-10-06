@@ -1184,7 +1184,7 @@ impl State {
             text.push_str("  ·  metric assumed");
         }
         pc.clip(rect(vx, vy, vw, vh), |pc| {
-            pc.text(text, vx + 8.0, vy + vh - 16.0, 10.0, [0xaa, 0xaa, 0xbb]);
+            pc.text(text, vx + 8.0, self.scene_text_floor(vy + vh) - 16.0, 10.0, [0xaa, 0xaa, 0xbb]);
         });
     }
 
@@ -1192,6 +1192,20 @@ impl State {
     /// through the cached scene mvp (like the point numbers above), drawn as
     /// a ringed dot with its index, the control cage as faint segments
     /// between them. Selected point draws larger and brighter.
+    /// Where the viewport's bottom-anchored text stands: the viewport's
+    /// bottom, or the playbar's top while it is shown — the playbar is
+    /// attached to the window's bottom edge, over the scene, and the scale
+    /// readout and the viewer-state line would otherwise sit on its
+    /// transport.
+    pub(crate) fn scene_text_floor(&self, bottom: f32) -> f32 {
+        let (_, py, pw, ph) = self.positions[crate::slots::PLAYBAR_IDX];
+        if self.show_playbar && pw > 0.0 && ph > 0.0 {
+            bottom.min(py)
+        } else {
+            bottom
+        }
+    }
+
     fn append_viewer_state_overlay(&self, pc: &mut PaintCtx) {
         let Some(tool) = &self.viewer_tool else { return };
         if !self.show_viewport {
@@ -1254,7 +1268,7 @@ impl State {
         let hud = tool.hud();
         let size = 11.0;
         let pad = 5.0;
-        let y = vy + vh - 16.0 - (size + pad * 2.0) - 4.0;
+        let y = self.scene_text_floor(vy + vh) - 16.0 - (size + pad * 2.0) - 4.0;
         let width = (hud.chars().count() as f32 * size * 0.52 + pad * 2.0).min(vw - 16.0);
         pc.clip(rect(vx, vy, vw, vh), |pc| {
             pc.quad(rect(vx + 8.0 - pad, y, width, size + pad * 2.0), [0.0, 0.0, 0.0, 0.55]);

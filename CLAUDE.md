@@ -3218,6 +3218,19 @@ Houdini uses: bare hjkl is the cursor, and shift+hjkl is reserved for the
 select family this app cannot implement until the Graph widget has
 multi-selection, so taking `Shift+L` now would have to be given back later.
 
+### The playbar is attached to the bottom edge (since 2026-10-06)
+
+The playbar is a bar along the window's bottom edge, the full width
+(`(0, height - STATUS_H - PLAYBAR_H, width, PLAYBAR_H)` in the floating
+layout), where it floated a gap in from the sides and the bottom like the
+other plates. Its bottom corners are the window's, read off the rect by
+`pane_plate_radii`; its top corners are a plate's. What stands above it —
+the docked plates (`pb_off`, now `PLAYBAR_H` without a gap of its own) and
+the params HUD — stops a gap short of its top, and the viewport's
+bottom-anchored text, the scale readout and a viewer state's line, stands
+on it (`State::scene_text_floor`) rather than on its transport.
+`the_playbar_is_attached_to_the_bottom_edge` is the test.
+
 ### The playbar's right-click menu
 
 A right press on the playbar's plate (`over_playbar`) opens the sixth

@@ -2081,6 +2081,34 @@ mod tests {
         assert_eq!(state.point_number_labels().len(), all.len());
     }
 
+    /// The playbar is attached to the window's bottom edge, the full width;
+    /// the plates above stop a gap short of its top, and the viewport's
+    /// bottom-anchored text stands on it rather than on its transport.
+    #[test]
+    fn the_playbar_is_attached_to_the_bottom_edge() {
+        use crate::app::{PLAYBAR_H, STATUS_H};
+        use crate::slots::{NETWORK_PANEL_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.execute_menu_action("Show Playbar Pane");
+        state.execute_menu_action("Show Spreadsheet Pane");
+        state.rebuild_positions();
+        state.apply_layout();
+        assert!(state.show_playbar && state.show_spreadsheet);
+        let pb = state.positions[PLAYBAR_IDX];
+        assert_eq!(pb, (0.0, 900.0 - STATUS_H - PLAYBAR_H, 1600.0, PLAYBAR_H), "flush to the bottom, the full width");
+        let flags = cce_ui::scene::paint::PlateSpec::window_corner_flags(cce_ui::scene::layout::Rect { x: pb.0, y: pb.1, width: pb.2, height: pb.3 }, 1600.0, 900.0);
+        assert_eq!(flags, (false, false, true, true), "its bottom corners are the window's");
+        for idx in [NETWORK_PANEL_IDX, SPREADSHEET_IDX] {
+            let (_, y, _, h) = state.positions[idx];
+            assert_eq!(y + h, pb.1 - 18.0, "the {idx} plate stops a gap above it");
+        }
+        assert_eq!(state.scene_text_floor(900.0), pb.1, "the scale readout stands on it");
+        state.execute_menu_action("Show Playbar Pane");
+        assert!(!state.show_playbar);
+        assert_eq!(state.scene_text_floor(900.0), 900.0);
+    }
+
     /// The params HUD lives on the scene: laid out from the viewport, under
     /// every plate, so where one covers it the plate takes the pointer and
     /// the HUD draws nothing — but it stops a gap above the spreadsheet and
