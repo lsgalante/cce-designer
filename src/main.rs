@@ -16142,6 +16142,99 @@ mod tests {
     /// selection with it, rigidly, and the region travels too. Dragging a node
     /// OUTSIDE the selection is the ordinary one-node drag, and collapses the
     /// selection onto what was grabbed.
+    /// A node dropped on another node swaps places with it, connections
+    /// and all: in sphere1 → a → b → c, dragging b onto a leaves b where a
+    /// was and a where b was, wired sphere1 → b → a → c. One undo puts both
+    /// the places and the wires back.
+    #[test]
+    fn dropping_a_node_on_a_node_swaps_their_places() {
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
+        let mut redraw = false;
+        for (name, y) in [("a", 5.0), ("b", 6.0), ("c", 7.0)] {
+            state
+                .apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some(name.into()), x: 1.0, y }, &mut redraw)
+                .unwrap();
+        }
+        let slot = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
+        for (name, from) in [("a", "sphere1"), ("b", "a"), ("c", "b")] {
+            let slot = slot(&state, name);
+            state.apply_action(McpAction::SetParam { slot, name: "input".into(), value: from.into() }, &mut redraw).unwrap();
+        }
+        state.edit_history.break_group();
+        state.rebuild_positions();
+        state.apply_layout();
+        let input = |state: &State, name: &str| {
+            crate::geometry::node_param_str(&state.current_dir().children[slot(state, name)], "input", "").to_string()
+        };
+        let at = |state: &State, name: &str| state.current_dir().children[slot(state, name)].position;
+        let move_to = |state: &mut State, (col, row): (i32, i32)| {
+            let (x, y) = state.cell_center(col, row);
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        };
+
+        // Grab b and drop it on a.
+        move_to(&mut state, (1, 6));
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        move_to(&mut state, (1, 5));
+        assert_eq!(state.slots.content.inner().swap_target_idx(), Some(slot(&state, "a")), "a is the swap target");
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+
+        assert_eq!((at(&state, "b"), at(&state, "a")), ((1.0, 5.0), (1.0, 6.0)), "the two traded places");
+        assert_eq!(
+            (input(&state, "b"), input(&state, "a"), input(&state, "c")),
+            ("sphere1".to_string(), "b".to_string(), "a".to_string()),
+            "and their connections: sphere1 → b → a → c"
+        );
+
+        // One step back.
+        state.edit_history.break_group();
+        assert!(state.history_step(true));
+        assert_eq!((at(&state, "a"), at(&state, "b")), ((1.0, 5.0), (1.0, 6.0)));
+        assert_eq!(
+            (input(&state, "a"), input(&state, "b"), input(&state, "c")),
+            ("sphere1".to_string(), "a".to_string(), "b".to_string())
+        );
+    }
+
+    /// The rule a swap trades wires by: a renaming of the two, applied to
+    /// every wire, with the two nodes' own wires traded port for port. A
+    /// port only one of them has keeps its own wire.
+    #[test]
+    fn swapping_places_trades_wires_port_for_port() {
+        use crate::app::{swap_places, FsNode, ParamDef};
+        let node = |name: &str, wires: &[(&str, &str)]| FsNode {
+            id: name.into(),
+            name: name.into(),
+            node_type: "attribute".into(),
+            children: vec![],
+            params: wires.iter().map(|(p, v)| ParamDef::new(*p, "node", *v)).collect(),
+            geometry_visible: true,
+            bypassed: false,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        let mut dir = node("dir", &[]);
+        dir.children = vec![
+            node("i", &[]),
+            node("a", &[("input", "i")]),
+            node("b", &[("input", "a"), ("rest", "i")]),
+            node("c", &[("input", "b"), ("with", "a")]),
+        ];
+        assert!(swap_places(&mut dir, "a", "b"));
+        let wires = |n: usize| dir.children[n].params.iter().map(|p| p.text().to_string()).collect::<Vec<_>>();
+        assert_eq!(wires(1), ["b"], "a reads b now, b standing where a stood");
+        assert_eq!(wires(2), ["i", "i"], "b takes a's input; its Rest, which a lacks, stays");
+        assert_eq!(wires(3), ["a", "b"], "c's wires follow the swap");
+        assert!(!swap_places(&mut dir, "a", "nope"));
+    }
+
     #[test]
     fn dragging_a_selected_node_carries_the_selection() {
         use crate::window::{LocalPosition, WindowEvent};

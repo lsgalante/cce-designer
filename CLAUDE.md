@@ -1389,6 +1389,33 @@ one, and the wires between pasted nodes follow; a wire to a node that was
 not copied still names that node.
 `a_paste_on_a_wire_is_spliced_into_its_chain` is the test.
 
+### Dropping a node on a node swaps their places (since 2026-10-06)
+
+A node dragged onto another node trades places with it, connections and
+all — the chain's ORDER changes, not just the picture: in I → A → B → C,
+B dropped on A gives I → B → A → C. Both network editors turn cce-ui's
+`Graph::set_swap_on_drop` on (see its CLAUDE.md, "A node dropped on a node
+can swap with it"); the widget trades the two cells, which the drag's
+position write-back carries into the tree, and the release drains
+`take_pending_swap` into `app::swap_places`, which trades the wires.
+
+- **The rule is a renaming σ (A ↔ B) of every wire**: a third node's wire
+  w becomes σ(w); A's k-th wire becomes σ of B's k-th and B's σ of A's,
+  port for port (`node` parameters in order, as `node_wires` numbers
+  them), so a wire between the two turns round. A port only one of them
+  has keeps its own wire, σ'd — a Relax dropped on a Pull keeps its Rest.
+  An expression wire moves as it is, unrewritten.
+- **One undo step**: positions and wires are both structure, noticed at
+  the end of the event (`record_structure_changes`).
+- **A multi-node drag does not swap** — `set_swap_on_drop(false)` while a
+  `NodeDragGroup` is armed — since the widget drags one node and the rest
+  follow by an offset.
+- **The swap wins over a splice**: a node's own wires run into its body,
+  so a ghost on a node always touches one.
+
+`dropping_a_node_on_a_node_swaps_their_places` drives it by pointer, undo
+included; `swapping_places_trades_wires_port_for_port` is the rule.
+
 ### Sibling-first inputs and the Switch node
 
 Two pieces added on 2026-09-21 so a node can be BUILT FROM other nodes

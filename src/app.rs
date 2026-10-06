@@ -940,6 +940,88 @@ pub(crate) fn splice_chain_into_wire(dir: &mut FsNode, head_id: &str, tail_id: &
     true
 }
 
+/// Swap the places of the children `a_id` and `b_id` of `dir` in the
+/// graph: each takes the other's wires, and every wire that named the one
+/// names the other. The positions are the widget's to trade (a node dropped
+/// on a node, `Graph::set_swap_on_drop`); this trades the connections, so
+/// in I → A → B → C dragging B onto A gives I → B → A → C — the chain's
+/// order, not just the picture of it. Written as a renaming σ (A ↔ B) of
+/// what each wire holds: a third node's wire w becomes σ(w); A's k-th wire
+/// becomes σ of B's k-th and B's σ of A's, port for port, so a wire between
+/// the two turns round. A port only one of them has keeps its own wire,
+/// σ'd. An expression wire is moved as it is, unrewritten: what it names
+/// is not a text to rename. False, and nothing written, when either is not
+/// there.
+pub(crate) fn swap_places(dir: &mut FsNode, a_id: &str, b_id: &str) -> bool {
+    let (Some(ai), Some(bi)) = (
+        dir.children.iter().position(|c| c.id == a_id),
+        dir.children.iter().position(|c| c.id == b_id),
+    ) else {
+        return false;
+    };
+    if ai == bi {
+        return false;
+    }
+    let (a, b) = (dir.children[ai].name.clone(), dir.children[bi].name.clone());
+    let sigma = |w: &str| -> String {
+        let t = w.trim();
+        if t == a {
+            b.clone()
+        } else if t == b {
+            a.clone()
+        } else {
+            w.to_string()
+        }
+    };
+    // Each wire port of a node, in order: (param index, text, expression).
+    let ports = |n: &FsNode| -> Vec<(usize, String, bool)> {
+        n.params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.kind() == ParamKind::Node)
+            .map(|(i, p)| (i, p.text().to_string(), p.is_expr()))
+            .collect()
+    };
+    let (pa, pb) = (ports(&dir.children[ai]), ports(&dir.children[bi]));
+    let moved = |(text, expr): (&String, bool)| if expr { (text.clone(), true) } else { (sigma(text), false) };
+    // What each of the two will hold, port for port, from the wires as
+    // they stood.
+    let new_for = |own: &[(usize, String, bool)], other: &[(usize, String, bool)]| -> Vec<(usize, String, bool)> {
+        own.iter()
+            .enumerate()
+            .map(|(k, (i, text, expr))| {
+                let (t, e) = match other.get(k) {
+                    Some((_, ot, oe)) => moved((ot, *oe)),
+                    None => moved((text, *expr)),
+                };
+                (*i, t, e)
+            })
+            .collect()
+    };
+    let (na, nb) = (new_for(&pa, &pb), new_for(&pb, &pa));
+    for (slot, child) in dir.children.iter_mut().enumerate() {
+        if slot == ai || slot == bi {
+            continue;
+        }
+        for p in child.params.iter_mut() {
+            if p.kind() == ParamKind::Node && !p.is_expr() {
+                let t = sigma(p.text());
+                if t != p.text() {
+                    p.set_text(t);
+                }
+            }
+        }
+    }
+    for (slot, wires) in [(ai, na), (bi, nb)] {
+        for (i, text, expr) in wires {
+            let p = &mut dir.children[slot].params[i];
+            p.set_text(text);
+            p.set_expr(expr);
+        }
+    }
+    true
+}
+
 /// [`node_wires_at`] with nothing evaluated: an expression wire names
 /// nothing.
 pub fn node_wires(node: &FsNode) -> Vec<(String, String)> {
@@ -8208,6 +8290,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let wire_style = cce_ui::widget::display::WireStyle::parse(&settings.viewport.node_wire_style);
         slots.content.inner_mut().set_wire_style(wire_style);
         slots.content2.inner_mut().set_wire_style(wire_style);
+        // A node dropped on a node swaps places with it, connections and all
+        // (`swap_places`).
+        slots.content.inner_mut().set_swap_on_drop(true);
+        slots.content2.inner_mut().set_swap_on_drop(true);
         slots.playbar.inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
         if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
             viewport.show_grid = settings.viewport.show_grid_enabled;
@@ -11697,7 +11783,13 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                                 from: (pos.0 as i32, pos.1 as i32),
                                                 others: cells,
                                             });
+                                            // A group does not swap: one of
+                                            // it trading places would leave
+                                            // the rest where the offset put
+                                            // them, the selection scattered.
+                                            self.slots.content.inner_mut().set_swap_on_drop(false);
                                         } else {
+                                            self.slots.content.inner_mut().set_swap_on_drop(true);
                                             self.grid_cursor_col = pos.0 as i32;
                                             self.grid_cursor_row = pos.1 as i32;
                                         }
@@ -11895,6 +11987,18 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     changed |= self.connect_port(&path, &input_node_id, output_node_name, port);
                 }
 
+                // A node dropped onto a node swaps places with it: the widget
+                // traded their cells (written back with the drag above), and
+                // the connections are traded here.
+                if let Some((a_id, b_id)) = self.graph_mut().take_pending_swap() {
+                    if swap_places(self.current_dir_mut(), &a_id, &b_id) {
+                        self.sync_nodes();
+                        self.rebuild_scene_geometry();
+                        self.sync_parameters_pane();
+                        changed = true;
+                    }
+                }
+
                 // A node dropped onto a wire splices in between its ends:
                 // the dragged node inherits the wire's upstream as its
                 // Input, and the wire's downstream node re-aims its Input
@@ -11930,6 +12034,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     {
                         let p2 = self.current_path2.clone();
                         changed |= self.connect_port(&p2, &input_node_id, output_node_name, port);
+                    }
+                    if let Some((a_id, b_id)) = self.slots.content2.take_pending_swap() {
+                        let p2 = self.current_path2.clone();
+                        if swap_places(self.dir_at_mut(&p2), &a_id, &b_id) {
+                            self.sync_nodes();
+                            self.rebuild_scene_geometry();
+                            self.sync_parameters_pane();
+                            changed = true;
+                        }
                     }
                     if let Some((mid_id, src_name, dest_id)) =
                         self.slots.content2.take_pending_splice()
