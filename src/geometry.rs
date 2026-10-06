@@ -5175,70 +5175,68 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // Fold a second attribute into this one, componentwise. Dot, Distance
         // and Length collapse to a scalar written into every component, since
         // the destination keeps its own type.
+        // Combine Name with Source B — and, for the operations that fold,
+        // Source C and D — into Result, or back into Name when Result is
+        // empty. Every operand is read before anything is written, since
+        // Result may be one of them.
         "composite" => {
-            let b_name = node_param_str(target, "source_b", "");
-            let b_name = b_name.trim().to_string();
-            if !geom.points().has(&b_name) {
-                fail = format!("Source B '{}' is not a point attribute", b_name);
+            let op = node_param_str(target, "combine_op", "Add").to_lowercase();
+            let reduces = matches!(op.as_str(), "dot" | "distance" | "length");
+            let folds = !reduces && op != "difference";
+            let mut sources = vec![("Source B", node_param_str(target, "source_b", "").trim().to_string())];
+            if folds {
+                for (label, row) in [("Source C", "source_c"), ("Source D", "source_d")] {
+                    let n = node_param_str(target, row, "").trim().to_string();
+                    if !n.is_empty() {
+                        sources.push((label, n));
+                    }
+                }
+            }
+            let result = node_param_str(target, "result", "").trim().to_string();
+            let result = if result.is_empty() { name.clone() } else { result };
+            let a_ty = geom.points().get(&name).map(|a| a.ty());
+            if let Some((label, n)) = sources.iter().find(|(_, n)| !geom.points().has(n)) {
+                fail = format!("{label} '{n}' is not a point attribute");
+            } else if a_ty.is_none() {
+                fail = format!("'{}' is missing", name);
+            } else if ["Pos", "Col", "P", "Cd"].iter().any(|b| b.eq_ignore_ascii_case(&result)) {
+                fail = format!("Result '{}' is built-in; Modify writes the position and the colour", result);
             } else {
-                let op = node_param_str(target, "combine_op", "Add").to_lowercase();
-                let Some(ty) = geom.points().get(&name).map(|a| a.ty()) else {
-                    *ocl_error = Some(format!("Attribute '{}': '{}' is missing", target.name, name));
-                    return;
+                let a_ty = a_ty.unwrap();
+                // A Result that does not exist yet is as wide as the widest
+                // operand — Name's own type when that is it, so an Int stays
+                // an Int — or one number when the operation reduces to one.
+                let widest = sources
+                    .iter()
+                    .filter_map(|(_, n)| geom.points().get(n).map(|a| a.ty().components()))
+                    .fold(a_ty.components(), usize::max);
+                let ty = match geom.points().get(&result).map(|a| a.ty()) {
+                    Some(ty) => ty,
+                    None if reduces => crate::detail::AttribType::Float,
+                    None if widest == a_ty.components() => a_ty,
+                    None => match widest {
+                        2 => crate::detail::AttribType::Float2,
+                        3 => crate::detail::AttribType::Float3,
+                        _ => crate::detail::AttribType::Float4,
+                    },
                 };
                 let k = ty.components();
-                for &p in &affected {
-                    let a = geom.points().value(&name, p).map(attrib_components).unwrap_or_default();
-                    let b = geom.points().value(&b_name, p).map(attrib_components).unwrap_or_default();
-                    let at = |v: &Vec<f32>, i: usize| v.get(i).copied().unwrap_or(0.0);
-                    let out: Vec<f32> = match op.as_str() {
-                        "dot" => {
-                            let d: f32 = (0..k.max(b.len())).map(|i| at(&a, i) * at(&b, i)).sum();
-                            vec![d; k]
-                        }
-                        "distance" => {
-                            let d: f32 = (0..k.max(b.len()))
-                                .map(|i| (at(&a, i) - at(&b, i)).powi(2))
-                                .sum::<f32>()
-                                .sqrt();
-                            vec![d; k]
-                        }
-                        "length" => {
-                            let d: f32 =
-                                (0..b.len()).map(|i| at(&b, i).powi(2)).sum::<f32>().sqrt();
-                            vec![d; k]
-                        }
-                        _ => (0..k)
-                            .map(|i| {
-                                // A single number is every component's:
-                                // a Float3 times a Float is the vector
-                                // scaled. Until 2026-09-29 the components
-                                // Source B lacked read zero, so that
-                                // product kept X and zeroed Y and Z — and
-                                // a sum or a minimum touched X alone. A
-                                // Source B of two or more components still
-                                // pairs off by position, the missing ones
-                                // zero: only ONE number has an obvious
-                                // meaning for all of them.
-                                let y = if b.len() == 1 { b[0] } else { at(&b, i) };
-                                let x = at(&a, i);
-                                match op.as_str() {
-                                    "subtract" => x - y,
-                                    "multiply" => x * y,
-                                    // Division by zero yields the numerator
-                                    // rather than an infinity that poisons
-                                    // every later frame of a solve.
-                                    "divide" => if y.abs() < 1e-9 { x } else { x / y },
-                                    "minimum" => x.min(y),
-                                    "maximum" => x.max(y),
-                                    "average" => (x + y) * 0.5,
-                                    "difference" => (x - y).abs(),
-                                    _ => x + y,
-                                }
-                            })
-                            .collect(),
-                    };
-                    let _ = geom.points_mut().set_value(&name, p, components_attrib(ty, &out));
+                let read = |p: usize, n: &str| geom.points().value(n, p).map(attrib_components).unwrap_or_default();
+                let outs: Vec<Vec<f32>> = affected
+                    .iter()
+                    .map(|&p| {
+                        let a = read(p, &name);
+                        let rest: Vec<Vec<f32>> = sources.iter().map(|(_, n)| read(p, n)).collect();
+                        composite_point(&op, &a, &rest, k)
+                    })
+                    .collect();
+                if !geom.points().has(&result) {
+                    // Points outside Group get the type's zero, as Create
+                    // leaves them: a column covers its whole class.
+                    geom.points_mut().create(&result, components_attrib(ty, &[]));
+                }
+                for (&p, out) in affected.iter().zip(&outs) {
+                    let _ = geom.points_mut().set_value(&result, p, components_attrib(ty, out));
                 }
             }
         }
@@ -5356,6 +5354,50 @@ pub fn remap_input_range(input: &Detail, target: &FsNode) -> Result<[f32; 2], St
         .filter(|&p| group.is_empty() || input.points().in_group(group, p))
         .collect();
     component_range(input, &name, &affected).ok_or_else(|| format!("'{}' has no values to measure", name))
+}
+
+/// One point of Composite: Name's value `a` combined with the sources' in
+/// order, at width `k`. A single-number operand is every component's — a
+/// Float3 times a Float is the vector scaled. Until 2026-09-29 the
+/// components a source lacked read zero, so that product kept X and zeroed
+/// Y and Z, and a sum or a minimum touched X alone. An operand of two or
+/// more components pairs off by position, the missing ones zero: only ONE
+/// number has an obvious meaning for all of them. Dot, Distance and Length
+/// reduce to one number, written into every component.
+fn composite_point(op: &str, a: &[f32], sources: &[Vec<f32>], k: usize) -> Vec<f32> {
+    let at = |v: &[f32], i: usize| if v.len() == 1 { v[0] } else { v.get(i).copied().unwrap_or(0.0) };
+    let b: &[f32] = sources.first().map_or(&[], |b| b.as_slice());
+    // Dot and Distance pair the two off by position over the wider, as a
+    // vector operation does; a spread number is not a vector.
+    let raw = |v: &[f32], i: usize| v.get(i).copied().unwrap_or(0.0);
+    match op {
+        "dot" => vec![(0..a.len().max(b.len())).map(|i| raw(a, i) * raw(b, i)).sum(); k],
+        "distance" => vec![(0..a.len().max(b.len())).map(|i| (raw(a, i) - raw(b, i)).powi(2)).sum::<f32>().sqrt(); k],
+        "length" => vec![b.iter().map(|c| c * c).sum::<f32>().sqrt(); k],
+        "average" => {
+            let n = (1 + sources.len()) as f32;
+            (0..k).map(|i| (at(a, i) + sources.iter().map(|s| at(s, i)).sum::<f32>()) / n).collect()
+        }
+        _ => (0..k)
+            .map(|i| {
+                sources.iter().fold(at(a, i), |x, s| {
+                    let y = at(s, i);
+                    match op {
+                        "subtract" => x - y,
+                        "multiply" => x * y,
+                        // Division by zero yields the numerator rather than
+                        // an infinity that poisons every later frame of a
+                        // solve.
+                        "divide" => if y.abs() < 1e-9 { x } else { x / y },
+                        "minimum" => x.min(y),
+                        "maximum" => x.max(y),
+                        "difference" => (x - y).abs(),
+                        _ => x + y,
+                    }
+                })
+            })
+            .collect(),
+    }
 }
 
 /// Apply a scalar function to every component of `name` on the given points.
@@ -7641,6 +7683,71 @@ mod simnet_tests {
         flat.points_mut().create("mass", AttribValue::Float(0.0));
         let (_, err) = run_attr(&flat, &[("operation", "Normalize")]);
         assert!(err.is_some(), "normalizing nothing must be reported");
+    }
+
+    /// Composite writes into Result when it names one, created as wide as
+    /// the widest operand (one number for Dot, Distance and Length), Name
+    /// and the sources left as they were; Source C and D fold in after B,
+    /// and Average is the mean of every operand given.
+    #[test]
+    fn composite_writes_a_result_and_folds_up_to_four_operands() {
+        let mut before = ramped_mass();
+        before.points_mut().create("b", AttribValue::Float(2.0));
+        before.points_mut().create("c", AttribValue::Float(4.0));
+        before.points_mut().create("d", AttribValue::Float(10.0));
+        before.points_mut().create("v", AttribValue::Float3([1.0, 2.0, 3.0]));
+        let get = |d: &Detail, n: &str, p: usize| attrib_components(d.points().value(n, p).unwrap());
+        let run = |extra: &[(&str, &str)]| {
+            let mut ps = vec![("operation", "Composite"), ("source_b", "b")];
+            ps.extend_from_slice(extra);
+            let (g, err) = run_attr(&before, &ps);
+            assert!(err.is_none(), "{extra:?}: {err:?}");
+            g
+        };
+
+        // A new attribute: Name and Source B untouched.
+        let g = run(&[("combine_op", "Add"), ("result", "sum")]);
+        assert_eq!(get(&g, "sum", 3), vec![5.0]);
+        assert_eq!(get(&g, "mass", 3), vec![3.0], "Name is an operand, not the target");
+        assert_eq!(get(&g, "b", 3), vec![2.0]);
+
+        // Folded left to right: ((3 - 2) - 4) - 10.
+        let g = run(&[("combine_op", "Subtract"), ("source_c", "c"), ("source_d", "d"), ("result", "r")]);
+        assert_eq!(get(&g, "r", 3), vec![-13.0]);
+        // Average is the mean of all four, not a pairwise fold.
+        let g = run(&[("combine_op", "Average"), ("source_c", "c"), ("source_d", "d"), ("result", "r")]);
+        assert_eq!(get(&g, "r", 3), vec![(3.0 + 2.0 + 4.0 + 10.0) / 4.0]);
+        // An empty Source C is left out; D still folds.
+        let g = run(&[("combine_op", "Multiply"), ("source_d", "d"), ("result", "r")]);
+        assert_eq!(get(&g, "r", 3), vec![60.0]);
+        // Without a Result the fold lands in Name, as Composite always did.
+        let g = run(&[("combine_op", "Add"), ("source_c", "c")]);
+        assert_eq!(get(&g, "mass", 3), vec![9.0]);
+        // The two-operand operations do not read C and D.
+        let g = run(&[("combine_op", "Difference"), ("source_c", "c"), ("result", "r")]);
+        assert_eq!(get(&g, "r", 3), vec![1.0]);
+
+        // Width: as the widest operand, a single number spread — mass
+        // times v is v scaled; Dot is one number.
+        let g = run(&[("source_b", "v"), ("combine_op", "Multiply"), ("result", "scaled")]);
+        assert_eq!(get(&g, "scaled", 3), vec![3.0, 6.0, 9.0]);
+        let g = run(&[("attribute_name", "v"), ("source_b", "v"), ("combine_op", "Dot"), ("result", "dd")]);
+        assert_eq!(get(&g, "dd", 3), vec![14.0]);
+        // An existing Result keeps its type.
+        let g = run(&[("combine_op", "Add"), ("result", "v")]);
+        assert_eq!(get(&g, "v", 3), vec![5.0, 5.0, 5.0]);
+
+        // Outside the Group a new Result is zero.
+        let mut grouped = before.clone();
+        grouped.points_mut().set_in_group("g", 3, true);
+        let (g, _) = run_attr(&grouped, &[("operation", "Composite"), ("source_b", "b"), ("result", "r"), ("group", "g")]);
+        assert_eq!((get(&g, "r", 3), get(&g, "r", 4)), (vec![5.0], vec![0.0]));
+
+        // A missing source names its row; a built-in Result is refused.
+        let (_, err) = run_attr(&before, &[("operation", "Composite"), ("source_b", "b"), ("source_c", "nope")]);
+        assert!(err.is_some_and(|e| e.contains("Source C 'nope'")));
+        let (_, err) = run_attr(&before, &[("operation", "Composite"), ("source_b", "b"), ("result", "P")]);
+        assert!(err.is_some_and(|e| e.contains("built-in")));
     }
 
     #[test]

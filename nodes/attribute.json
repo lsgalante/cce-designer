@@ -159,7 +159,25 @@
       "type": "attribute",
       "default": "",
       "show_when": "operation == Composite",
-      "description": "The second point attribute combined into this one, point by point. A single-number Source B applies to every component.",
+      "description": "The second point attribute combined with Name, point by point. A single-number source applies to every component.",
+      "group": "composite"
+    },
+    {
+      "name": "source_c",
+      "label": "Source C",
+      "type": "attribute",
+      "default": "",
+      "show_when": "operation == Composite && combine_op == Add|Subtract|Multiply|Divide|Minimum|Maximum|Average",
+      "description": "A third point attribute, folded in after Source B: (Name op B) op C. Empty leaves it out. Average takes the mean of every operand given.",
+      "group": "composite"
+    },
+    {
+      "name": "source_d",
+      "label": "Source D",
+      "type": "attribute",
+      "default": "",
+      "show_when": "operation == Composite && combine_op == Add|Subtract|Multiply|Divide|Minimum|Maximum|Average",
+      "description": "A fourth point attribute, folded in after Source C. Empty leaves it out.",
       "group": "composite"
     },
     {
@@ -168,8 +186,17 @@
       "type": "choice:Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
       "default": "Add",
       "show_when": "operation == Composite",
-      "description": "How Source B is folded in, componentwise. Dot, Distance and Length produce one number written into every component.",
+      "description": "How the sources are combined with Name, componentwise and left to right. Difference, Dot and Distance take Name and Source B alone; Length is the length of Source B. Dot, Distance and Length produce one number, written into every component.",
       "group": "composite"
+    },
+    {
+      "name": "result",
+      "label": "Result",
+      "type": "attribute",
+      "default": "",
+      "show_when": "operation == Composite",
+      "description": "The point attribute the result is written to, created when it does not exist: as wide as the widest operand, or one number for Dot, Distance and Length; points outside Group get zero. An existing attribute keeps its type. Empty writes the result back into Name.",
+      "group": "result"
     },
     {
       "name": "to_class",

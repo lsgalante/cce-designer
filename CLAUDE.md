@@ -3468,6 +3468,24 @@ kept X and zeroed Y and Z under Multiply and touched X alone under Add. A
 Source B of two or more components still pairs off by position; Dot,
 Distance and Length reduce to one number and did not change.
 
+**Composite writes a Result and folds up to four operands** (since
+2026-10-06). **Result** (an `attribute` row) names where the combination
+goes, created when it does not exist — as wide as the widest operand, Name's
+own type when Name is that wide (an Int stays an Int), one Float for Dot,
+Distance and Length; points outside Group get zero, as Create leaves them —
+and an existing one keeps its type. Empty is Name, in place, which is what
+every save from before has. Name is then the FIRST OPERAND, not the target.
+**Source C** and **Source D** fold in after B, left to right (`((Name op B)
+op C) op D`), for Add, Subtract, Multiply, Divide, Minimum, Maximum and
+Average, and are hidden and not read for the rest; an empty one is left
+out. Average is the mean of every operand given, not a pairwise fold. A
+Result of Pos / Col / P / Cd is refused: Modify writes those. Every operand
+is read before Result is written, since it may be one of them.
+`composite_point` is the per-point arithmetic, broadcasting a one-number
+operand (Name included) as above. Length is still the length of Source B,
+Name unread. `composite_writes_a_result_and_folds_up_to_four_operands` is
+the test.
+
 **Per Frame makes the amount a rate.** Inside a simnet the chain runs once
 per SUBSTEP, so a pull that lands whole each run pulls four times as far
 a frame at four substeps — the substep count, which is there to steady a
