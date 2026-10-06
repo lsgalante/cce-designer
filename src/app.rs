@@ -2797,6 +2797,13 @@ pub struct State {
     /// The page that image is of: what the scene pass places it by and the
     /// framing commands fit the camera to. None when the level shows none.
     pub page_shown: Option<crate::page::PageShown>,
+    /// What the page on show was composed from ([`crate::page::chain_key`])
+    /// and the status line that announced it. A geometry rebuild — any edit
+    /// at the level, every frame of a playing sim — recomposes the page, and
+    /// a Letter sheet at 300 DPI is ~90 ms of compose and conversion plus a
+    /// 34 MB upload; with this the ones that change nothing it reads cost a
+    /// hash of its chain.
+    pub page_composed: Option<(u64, String)>,
     /// Whether `renderer_init` has run before. There is no separate reconnect
     /// callback: the runner calls `renderer_init` once per renderer, so the
     /// first call is this process's own and every later one is a REPLACEMENT
@@ -8049,6 +8056,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             sim_cache: crate::geometry::SimCache::default(),
             page_image: None,
             page_shown: None,
+            page_composed: None,
             seen_renderer: false,
             deselected_cell: None,
             orbit_drag: None,

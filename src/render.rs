@@ -1218,6 +1218,21 @@ impl State {
     /// it as a quad standing in the scene (`stage_frame`), where until
     /// 2026-09-29 a pane of its own took the viewport's place.
     pub(crate) fn rebuild_page(&mut self) {
+        let key = crate::page::displayed_page_node(self.viewport_editor_dir())
+            .map(|n| crate::page::chain_key(&self.fs_root, n));
+        // Nothing the page reads has changed, and its picture is still up:
+        // say what it is again (the geometry pass just said something else)
+        // and leave the image alone.
+        if let (Some(key), Some((was, status)), Some(_), Some(_)) =
+            (key, self.page_composed.as_ref(), self.page_image, self.page_shown.as_ref())
+        {
+            if key == *was {
+                let status = status.clone();
+                self.update_status_text(&status);
+                return;
+            }
+        }
+        self.page_composed = None;
         let level = self.viewport_editor_dir();
         let node_id = crate::page::displayed_page_node(level).map(|n| n.id.clone());
         let page = crate::page::displayed_page(&self.fs_root, level);
@@ -1245,7 +1260,7 @@ impl State {
                 // of its size in an ordinary pane, and its hairlines crawl.
                 None => cce_ui::vk::upload_rgba_mipmapped(page.to_rgba8(), w, h),
             });
-            self.update_status_text(&format!(
+            let status = format!(
                 "Image: {} x {} {} at {} DPI ({}x{} px)",
                 trim_number(page.in_unit(page.size[0])),
                 trim_number(page.in_unit(page.size[1])),
@@ -1253,7 +1268,9 @@ impl State {
                 page.dpi,
                 w,
                 h
-            ));
+            );
+            self.update_status_text(&status);
+            self.page_composed = key.map(|k| (k, status));
             self.page_shown = Some(crate::page::PageShown {
                 node_id,
                 size: page.size,

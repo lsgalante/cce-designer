@@ -359,10 +359,14 @@ impl Page {
     /// The page as 8-bit sRGB RGBA, row-major from the top — what both the GPU
     /// upload and the PNG encoder want.
     pub fn to_rgba8(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.pixels.len() * 4);
-        for p in &self.pixels {
+        // Filled in place rather than pushed, and clamped by the cast: a
+        // float-to-int `as` saturates (NaN to 0), which is exactly what a
+        // clamp to 0..=1 then gave, and leaves the loop free to vectorize.
+        // The push-and-clamp version was ~40 ms for Letter at 300 DPI.
+        let mut out = vec![0u8; self.pixels.len() * 4];
+        for (o, p) in out.chunks_exact_mut(4).zip(&self.pixels) {
             for c in 0..4 {
-                out.push((p[c].clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+                o[c] = (p[c] * 255.0 + 0.5) as u8;
             }
         }
         out
@@ -1046,6 +1050,45 @@ fn with_fonts<R>(
     let mut guard = stack.lock().unwrap();
     let (fonts, cache) = &mut *guard;
     f(fonts, cache)
+}
+
+/// A fingerprint of everything [`resolve_page`] reads to compose `target`:
+/// each node on its input chain — id, type, whether it is bypassed, and its
+/// parameters as a save writes them — down to the sheet at the bottom. Two
+/// equal keys compose the same page. Nothing in the page context reads the
+/// frame or the scene — its parameters are read as written, never through
+/// `resolve_param_refs` — so nothing else needs to be in it; a page node
+/// that starts evaluating expressions must put the frame in here too.
+pub fn chain_key(root: &FsNode, target: &FsNode) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut visited: Vec<&str> = Vec::new();
+    let mut node = target;
+    loop {
+        if visited.contains(&node.id.as_str()) {
+            break;
+        }
+        visited.push(&node.id);
+        let kind = node.node_type.to_ascii_lowercase();
+        let bypassed = crate::geometry::is_bypassed(node);
+        (&node.id, &kind, bypassed).hash(&mut h);
+        if let Ok(json) = serde_json::to_string(&node.params) {
+            json.hash(&mut h);
+        }
+        // The sheet ends the chain; so does anything that is not a page
+        // node, which composes nothing whatever is under it.
+        if (kind == "page" && !bypassed) || (!is_page_node(&kind) && kind != "export") {
+            break;
+        }
+        match crate::geometry::param_node(root, node, "input") {
+            Some(input) => node = input,
+            None => {
+                "no input".hash(&mut h);
+                break;
+            }
+        }
+    }
+    h.finish()
 }
 
 /// The page a network level displays, if it displays one.

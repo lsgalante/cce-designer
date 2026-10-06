@@ -7103,6 +7103,73 @@ mod tests {
         assert!(border_ink(&shown) > 0.9, "a hidden node still displayed");
     }
 
+    /// The page cache's key moves with everything the page is composed from
+    /// and with nothing else: an edit beside the chain must not recompose a
+    /// 300 DPI sheet, and an edit inside it must.
+    #[test]
+    fn test_the_page_key_follows_the_chain_and_only_the_chain() {
+        use crate::page::chain_key;
+        fn pnode(id: &str, name: &str, ty: &str, params: &[(&str, &str)]) -> FsNode {
+            FsNode {
+                id: id.to_string(),
+                name: name.to_string(),
+                node_type: ty.to_string(),
+                children: vec![],
+                params: params
+                    .iter()
+                    .map(|(n, v)| crate::app::ParamDef::new(n.to_string(), "text".to_string(), v.to_string()))
+                    .collect(),
+                geometry_visible: true,
+                bypassed: false,
+                position: (0.0, 0.0),
+                inputs: 1,
+                outputs: 1,
+            }
+        }
+        let mut root = pnode("r", "root", "node", &[]);
+        root.children = vec![
+            pnode("p", "page1", "page", &[("preset", "Letter"), ("resolution", "72")]),
+            pnode("g", "grid1", "page_grid", &[("input", "page1"), ("cell_size", "0.5")]),
+            pnode("b", "border1", "page_border", &[("input", "grid1"), ("width", "0.1")]),
+            pnode("s", "sphere1", "sphere", &[("radius", "1")]),
+        ];
+        let key = |root: &FsNode| chain_key(root, &root.children[2]);
+        let base = key(&root);
+        assert_eq!(base, key(&root.clone()), "the same chain keys the same");
+
+        let mut beside = root.clone();
+        beside.children[3].params[0].set_text("2".to_string());
+        assert_eq!(base, key(&beside), "a geometry edit beside the page moved its key");
+
+        let mut edited = root.clone();
+        edited.children[1].params[1].set_text("0.25".to_string());
+        assert_ne!(base, key(&edited), "a grid edit under the border kept the key");
+
+        let mut sheet = root.clone();
+        sheet.children[0].params[1].set_text("300".to_string());
+        assert_ne!(base, key(&sheet), "the sheet's resolution kept the key");
+
+        let mut bypassed = root.clone();
+        bypassed.children[1].bypassed = true;
+        assert_ne!(base, key(&bypassed), "bypassing the grid kept the key");
+
+        let mut rewired = root.clone();
+        rewired.children[2].params[0].set_text("page1".to_string());
+        assert_ne!(base, key(&rewired), "rewiring the border past the grid kept the key");
+    }
+
+    /// The 8-bit conversion clamps through the cast now; out-of-range and
+    /// NaN channels must land where the explicit clamp put them.
+    #[test]
+    fn test_page_rgba8_clamps_and_rounds() {
+        let mut page = crate::page::Page::new([1.0, 1.0], 2, [0.0; 4]);
+        page.pixels[0] = [-1.0, 0.5, 2.0, f32::NAN];
+        page.pixels[1] = [0.0, 1.0, 0.0019, 0.002];
+        page.pixels[2] = [f32::INFINITY, f32::NEG_INFINITY, 0.999, 1.0001];
+        let out = page.to_rgba8();
+        assert_eq!(&out[..12], &[0, 128, 255, 0, 0, 255, 0, 1, 255, 0, 255, 255]);
+    }
+
     /// Text lands on the sheet, and alignment moves it.
     #[test]
     fn test_page_text_puts_ink_where_it_is_aligned() {
@@ -18931,7 +18998,13 @@ mod tests {
         let first = state.page_image.expect("nothing uploaded");
         state.rebuild_scene_geometry();
         assert_eq!(state.page_image, Some(first), "the same picture took a new image");
+        // New contents at the same size: recomposed into the same image.
         let page = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
+        state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "color").unwrap().set_text("0.50:0.20:0.10");
+        let version = state.page_version;
+        state.rebuild_scene_geometry();
+        assert!(state.page_version > version, "the colour edit was not recomposed");
+        assert_eq!(state.page_image, Some(first), "the same size took a new image");
         state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "width").unwrap().set_text("80");
         state.rebuild_scene_geometry();
         assert!(state.page_image.is_some_and(|id| id != first), "a picture of another size kept the old image");
@@ -18941,7 +19014,8 @@ mod tests {
 
     /// The traced scene is handed over again when the image changes: the
     /// image has a version as the geometry has, which a recomposition moves
-    /// and a rebuild with no image in it does not.
+    /// and a rebuild with no image in it does not — nor, since the page
+    /// cache (2026-10-06), one that changes nothing the image is made of.
     #[test]
     fn a_recomposed_image_is_a_new_traced_scene() {
         let mut state = State::new(false);
@@ -18952,6 +19026,10 @@ mod tests {
         let mut state = state_showing_image(64, 32, 100);
         let shown = state.page_version;
         assert!(shown > before, "showing an image did not move its version");
+        state.rebuild_scene_geometry();
+        assert_eq!(state.page_version, shown, "a rebuild that changed nothing in the image recomposed it");
+        let page = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
+        state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "color").unwrap().set_text("0.50:0.20:0.10");
         state.rebuild_scene_geometry();
         assert!(state.page_version > shown, "a recomposed image is the scene the tracer has");
 
