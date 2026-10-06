@@ -2824,6 +2824,13 @@ pub struct State {
     /// on in `renderer_init`, which runs before the frame has settled and
     /// where relaying the panes would be premature.
     pub page_dirty: bool,
+    /// The window title wants re-deriving (`update_window_title`), at most
+    /// once a frame: deriving it serializes the whole tree to compare with
+    /// the save, and the event path asked on every changed pointer event.
+    pub title_dirty: bool,
+    /// A dialog setting changed during a slider drag and is saved when the
+    /// drag ends (`apply_setting`), not on every motion of it.
+    pub settings_save_pending: bool,
     /// Frame the scene was last built at, so the timeline moving can invalidate it.
     pub last_sim_frame: i32,
     pub plate_menu_slot: Option<usize>,
@@ -8044,6 +8051,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             pan_drag: None,
             pan_exact: None,
             page_dirty: false,
+            title_dirty: false,
+            settings_save_pending: false,
             last_sim_frame: i32::MIN,
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
@@ -11885,6 +11894,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
     /// a rebuild. The render half lives in [`State::stage_frame`].
     pub fn tick_frame(&mut self, dt: f32) -> bool {
         let now = Instant::now();
+        // Work the event path deferred to once a frame.
+        if std::mem::take(&mut self.title_dirty) {
+            self.update_window_title();
+        }
+        if self.settings_save_pending && !self.slots.dialog.slider_dragging() {
+            self.settings_save_pending = false;
+            self.save_settings();
+        }
         let light_moved = self.sync_environment();
 
         // A replacement renderer left the page pane with no image; recompose
@@ -11966,7 +11983,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.rebuild_positions();
                 self.apply_layout();
             } else {
-                self.update_inertial_settings();
+                // Unchanged: nothing to re-read. Until 2026-10-06 this read
+                // and parsed config.kdl every two seconds regardless.
+                self.last_config_read = Instant::now();
             }
             let design_path = DesignSettings::file_path();
             if let Ok(m) = std::fs::metadata(&design_path) {

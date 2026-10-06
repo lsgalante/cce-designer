@@ -2573,7 +2573,12 @@ impl State {
         self.sync_grid_settings();
         self.rebuild_scene_geometry();
         self.sync_nodes();
-        self.save_settings();
+        // A slider drag saves once, when it ends (`tick_frame`).
+        if self.slots.dialog.slider_dragging() {
+            self.settings_save_pending = true;
+        } else {
+            self.save_settings();
+        }
         // The params pane may be showing one of these very nodes.
         self.sync_parameters_pane();
         self.refresh_dialog_controls();

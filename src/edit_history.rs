@@ -387,7 +387,15 @@ impl State {
     /// Whether a drag is held. The graph is not looked at until it is let
     /// go: a dragged node is one step, from where it was picked up.
     fn gesture_held(&self) -> bool {
-        self.drag_widget.is_some() || self.app_drag.is_some() || self.node_drag_group.is_some()
+        self.drag_widget.is_some()
+            || self.app_drag.is_some()
+            || self.node_drag_group.is_some()
+            // A camera orbit or a pan is not an edit, but an orbit with a
+            // camera node active writes its rotation every motion — and a
+            // changed parameter is a full-tree clone here (`rebase_structure`).
+            || self.orbit_drag.is_some()
+            || self.pan_drag.is_some()
+            || self.is_panning
     }
 
     /// Look at the tree, and record what of its structure has changed

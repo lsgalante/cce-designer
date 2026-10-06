@@ -191,7 +191,8 @@ impl State {
             }
 
             if changed {
-                state.update_window_title();
+                // Once a frame, not once an event: see `title_dirty`.
+                state.title_dirty = true;
                 if state.syncing_windows() {
                     state.needs_autosave = true;
                 }
