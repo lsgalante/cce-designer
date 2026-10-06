@@ -5110,16 +5110,32 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // Fit a range onto another range, optionally through a clamp. The
         // workhorse: a simulation attribute measured by Analysis is almost
         // always remapped before anything reads it.
+        //
+        // From Range Auto measures From off the input at every evaluation,
+        // so the range follows a simulation whose values move every frame.
+        // A Manual From is the row, which the Detect Range button can fill
+        // once from the same measure (`remap_input_range`).
         "remap" => {
-            let [f0, f1] = node_param_vec2(target, "from", [0.0, 1.0]);
+            let auto = node_param_str(target, "from_range", "Manual").trim().eq_ignore_ascii_case("auto");
             let [t0, t1] = node_param_vec2(target, "to", [0.0, 1.0]);
-            let span = f1 - f0;
-            if span.abs() < 1e-9 {
-                fail = format!("From's two ends are both {}", f0);
-            } else {
-                edit_components(geom, &name, &affected, |v| {
-                    t0 + (v - f0) / span * (t1 - t0)
-                });
+            let from = if auto { component_range(geom, &name, &affected) } else { Some(node_param_vec2(target, "from", [0.0, 1.0])) };
+            match from {
+                None => fail = format!("From Range is Auto and '{}' has no values to measure", name),
+                Some([f0, f1]) => {
+                    let span = f1 - f0;
+                    if span.abs() >= 1e-9 {
+                        edit_components(geom, &name, &affected, |v| t0 + (v - f0) / span * (t1 - t0));
+                    } else if auto {
+                        // Every value is the same: each is the lowest, and
+                        // maps to To's first end. Not an error, since a
+                        // measured attribute is often flat on a solve's
+                        // first frame and the status line would say so on
+                        // every evaluation until it moved.
+                        edit_components(geom, &name, &affected, |_| t0);
+                    } else {
+                        fail = format!("From's two ends are both {}", f0);
+                    }
+                }
             }
         }
         // Clamp into a range. From names the bounds, so Remap and Clip read
@@ -5305,6 +5321,41 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     if !fail.is_empty() && ocl_error.is_none() {
         *ocl_error = Some(format!("Attribute '{}': {}", target.name, fail));
     }
+}
+
+/// The lowest and highest value of `name` over `points`, every component
+/// counted — one range, as Remap's From is one range applied alike to every
+/// component. `None` when the attribute is not there or nothing is measured.
+fn component_range(geom: &Detail, name: &str, points: &[usize]) -> Option<[f32; 2]> {
+    geom.points().get(name)?;
+    let mut range: Option<[f32; 2]> = None;
+    for &p in points {
+        let Some(v) = geom.points().value(name, p) else { continue };
+        for c in attrib_components(v).into_iter().filter(|c| c.is_finite()) {
+            range = Some(match range {
+                None => [c, c],
+                Some([lo, hi]) => [lo.min(c), hi.max(c)],
+            });
+        }
+    }
+    range
+}
+
+/// What an Attribute node's Remap would measure as its From range off
+/// `input` — its Name over the points in its Group — for the Detect Range
+/// button, which writes it into From once. The same measure From Range
+/// Auto takes at every evaluation.
+pub fn remap_input_range(input: &Detail, target: &FsNode) -> Result<[f32; 2], String> {
+    let name = node_param_str(target, "attribute_name", "attr1").trim().to_string();
+    if !input.points().has(&name) {
+        return Err(format!("'{}' is not a point attribute of the input", name));
+    }
+    let group = node_param_str(target, "group", "");
+    let group = group.trim();
+    let affected: Vec<usize> = (0..input.num_points())
+        .filter(|&p| group.is_empty() || input.points().in_group(group, p))
+        .collect();
+    component_range(input, &name, &affected).ok_or_else(|| format!("'{}' has no values to measure", name))
 }
 
 /// Apply a scalar function to every component of `name` on the given points.
@@ -7450,6 +7501,67 @@ mod simnet_tests {
             &[("operation", "Remap"), ("from", "1.00:1.00")],
         );
         assert!(err.is_some(), "a zero-width source range must be reported");
+    }
+
+    /// From Range Auto measures From off the input — every component of
+    /// the points in Group — at each evaluation, so the range follows the
+    /// input; Detect Range's measure is the same one. A flat input maps
+    /// to To's first end rather than failing.
+    #[test]
+    fn a_remap_can_take_its_from_range_from_the_input() {
+        let before = ramped_mass();
+        let n = before.num_points();
+        let last = (n - 1) as f32;
+        let mass = |d: &Detail, p: usize| d.points().value("mass", p).unwrap().as_f32();
+        let auto = [("operation", "Remap"), ("from_range", "Auto"), ("from", "0.00:1.00"), ("to", "10.00:20.00")];
+
+        let (out, err) = run_attr(&before, &auto);
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(mass(&out, 0), 10.0, "the input's lowest maps to To's first end");
+        assert!((mass(&out, n - 1) - 20.0).abs() < 1e-4, "its highest to To's second, whatever From says");
+
+        // The range follows the input: scaled up, it still lands on 10..20.
+        let mut doubled = before.clone();
+        for p in 0..n {
+            doubled.points_mut().set_value("mass", p, AttribValue::Float(p as f32 * 2.0 + 5.0)).unwrap();
+        }
+        let (out, _) = run_attr(&doubled, &auto);
+        assert_eq!(mass(&out, 0), 10.0);
+        assert!((mass(&out, n - 1) - 20.0).abs() < 1e-4);
+
+        // Manual keeps reading the row.
+        let (out, _) = run_attr(&before, &[("operation", "Remap"), ("from_range", "Manual"), ("from", "0.00:1.00"), ("to", "10.00:20.00")]);
+        assert!((mass(&out, n - 1) - (10.0 + last * 10.0)).abs() < 1e-3);
+
+        // Measured over the Group only.
+        let mut grouped = before.clone();
+        for p in 2..5 {
+            grouped.points_mut().set_in_group("g", p, true);
+        }
+        let mut ps = auto.to_vec();
+        ps.push(("group", "g"));
+        let (out, _) = run_attr(&grouped, &ps);
+        assert_eq!((mass(&out, 2), mass(&out, 4)), (10.0, 20.0));
+        assert_eq!(mass(&out, 0), 0.0, "outside the Group nothing moves");
+        let measured = node("id-a", "A", "attribute", vec![param("attribute_name", "mass"), param("group", "g")], vec![]);
+        assert_eq!(remap_input_range(&grouped, &measured), Ok([2.0, 4.0]), "Detect Range measures what Auto does");
+
+        // A flat input is not an error under Auto; it is under Manual.
+        let mut flat = before.clone();
+        for p in 0..n {
+            flat.points_mut().set_value("mass", p, AttribValue::Float(3.0)).unwrap();
+        }
+        let (out, err) = run_attr(&flat, &auto);
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(mass(&out, n - 1), 10.0);
+        let (_, err) = run_attr(&flat, &[("operation", "Remap"), ("from", "3.00:3.00")]);
+        assert!(err.is_some());
+
+        // An attribute that is not there is said, by both.
+        let (_, err) = run_attr(&before, &[("attribute_name", "missing"), ("operation", "Remap"), ("from_range", "Auto")]);
+        assert!(err.is_some_and(|e| e.contains("no values to measure")));
+        let missing = node("id-b", "B", "attribute", vec![param("attribute_name", "missing")], vec![]);
+        assert!(remap_input_range(&before, &missing).is_err());
     }
 
     /// Value From Attribute: Create and Modify take each point's own value

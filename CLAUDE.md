@@ -973,7 +973,19 @@ old text Center a float3 from the load on. Tests build parameters with
   `range()`: the pane chooses the span. Read with `node_param_vec2`. Each
   component may be an expression, as a float3's are, and `.x` / `.y` read
   one. A text that is not two numbers shows as a text box, to be put
-  right. Normalize's goal was To Max and is a row of its own now,
+  right. **Remap's From can come from the input** (2026-10-06): the
+  **From Range** row (`from_range`, Manual / Auto, Remap only) set to Auto
+  measures the lowest and highest value of the Name over the Group — every
+  component counted, since From is one range applied to every component
+  (`geometry::component_range`) — at every evaluation, so the range follows
+  a simulation's values; From is hidden then, and a flat input maps to To's
+  first end rather than failing. Under Manual a **Detect Range** button
+  (`detect_range`) takes the same measure once (`remap_input_range`, off the
+  input as the scene shows it at the current frame) and writes it into From
+  as an undoable edit. A node from before has no row and is Manual.
+  `a_remap_can_take_its_from_range_from_the_input` and
+  `the_remap_from_range_is_detected_from_the_input` are the tests.
+  Normalize's goal was To Max and is a row of its own now,
   **Normalize To** (`float`). Format 6 joins an older save's pairs (see
   "Parameter expressions"). `a_range_is_one_float2_row` is the test.
 - **Toggles read through `node_param_bool`**: `true`/`1`/`on` and
@@ -1028,7 +1040,9 @@ the node's unnamed run, so a template names only the runs after the first.
 A `ParamDef` may carry `show_when`, a condition over its SIBLINGS' current
 values deciding whether the params pane shows it: `Mode == Twist`,
 `Mode == Twist|Bend` for any-of, `Mode != Bleed` for unless, ` && ` between
-clauses, compared case-insensitively. Empty means always, which is what most
+clauses, and ` || ` between alternatives, binding looser than ` && `
+(`operation == Clip || operation == Remap && from_range == Manual`; since
+2026-10-06), compared case-insensitively. Empty means always, which is what most
 parameters have. `param_visible` evaluates it and `param_display` filters on
 it.
 
@@ -1066,9 +1080,14 @@ The World Unit is a DECLARATION, not a conversion (see the Guides node), and
 export keeps that promise: geometry modelled at 20 units across writes as 20,
 and the slicer is told those are millimetres.
 
-Buttons dispatch through `execute_menu_action` by LABEL, which carries no node
-— `run_export` resolves the node from the current selection, which is sound
+A button row of the params pane dispatches through `State::run_param_button`
+by the parameter's NAME (`export`, `detect_range`), which carries no node —
+`run_export` resolves the node from the current selection, which is sound
 because the pressed button can only be on the node the pane is showing.
+Until 2026-10-06 the press went to `execute_menu_action` by the pane's key,
+which since the names became identifiers was `export` — a label nothing
+matches — so the Export button silently did nothing for five days.
+`execute_menu_action("Export")` stays for MCP's `menu_action`.
 
 ### Transfer carries groups, and Remesh has a copy of it
 

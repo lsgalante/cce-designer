@@ -99,12 +99,16 @@ pub fn shellexpand_home(path: &str) -> String {
 /// parameter that does not exist is treated as unmet: a template that
 /// misspells a name hides the row rather than showing it unconditionally, so
 /// the mistake is visible instead of silent.
+///
+/// ` || ` joins alternatives and binds looser than ` && `, so
+/// `operation == Clip || operation == Remap && from_range == Manual` is
+/// Clip, or a Manual Remap.
 pub fn param_visible(params: &[ParamDef], cond: &str) -> bool {
     let cond = cond.trim();
     if cond.is_empty() {
         return true;
     }
-    cond.split("&&").all(|clause| {
+    cond.split("||").any(|alt| alt.split("&&").all(|clause| {
         let clause = clause.trim();
         let (name, wanted, negated) = match clause.split_once("!=") {
             Some((n, v)) => (n.trim(), v.trim(), true),
@@ -122,7 +126,7 @@ pub fn param_visible(params: &[ParamDef], cond: &str) -> bool {
             .split('|')
             .any(|w| w.trim().eq_ignore_ascii_case(sibling.text().trim()));
         matches != negated
-    })
+    }))
 }
 
 static NODE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -4631,7 +4635,7 @@ impl State {
                                     p.set_expr(true);
                                 }
                                 if p.kind() == ParamKind::Button && p.text() == "clicked" {
-                                    triggered_buttons.push(p.name.clone());
+                                    triggered_buttons.push((p.name.clone(), p.shown_name().to_string()));
                                     p.set_text("".to_string());
                                 }
                                 if p.kind() == ParamKind::Toggle {
@@ -4696,7 +4700,7 @@ impl State {
 
                     if !triggered_buttons.is_empty() || !display_resets.is_empty() || !rejected.is_empty() {
                         let mut disp_params = self.param().node_params();
-                        for btn_name in triggered_buttons.iter().chain(display_resets.iter()) {
+                        for btn_name in triggered_buttons.iter().map(|(_, key)| key).chain(display_resets.iter()) {
                             if let Some(pos) = disp_params.iter().position(|p| p.0 == *btn_name) {
                                 disp_params[pos].1 = if btn_name == "Open" { "- Select -".to_string() } else { "".to_string() };
                             }
@@ -4721,8 +4725,8 @@ impl State {
                             self.sync_parameters_pane();
                         }
 
-                        for btn_name in triggered_buttons {
-                            self.execute_menu_action(&btn_name);
+                        for (btn_name, _) in triggered_buttons {
+                            self.run_param_button(&btn_name);
                         }
                         for pane_name in pane_actions {
                             self.execute_menu_action(&pane_name);
@@ -4834,11 +4838,82 @@ impl State {
         }
     }
 
+    /// A button row of the params pane, pressed. By the parameter's NAME:
+    /// the pane reports its label, and dispatching that — as this did until
+    /// the names became identifiers — sent `export` to `execute_menu_action`,
+    /// which knows no such label, and the Export button did nothing. A
+    /// button carries no node, but the pressed one can only be on the node
+    /// the pane is showing, so the selection is the node.
+    pub fn run_param_button(&mut self, name: &str) {
+        match name {
+            "export" => self.run_export(),
+            "detect_range" => self.detect_remap_range(),
+            _ => {
+                self.execute_menu_action(name);
+            }
+        }
+    }
+
+    /// The Attribute node's Detect Range: its input measured once, at the
+    /// current frame and as the scene shows it, and the lowest and highest
+    /// value of its Name over its Group written into From. An undoable
+    /// edit; From then stays as written, where From Range Auto follows the
+    /// input.
+    pub fn detect_remap_range(&mut self) {
+        let Some(slot) = self.param_editor_selected() else { return };
+        let Some(node) = self.param_editor_dir().children.get(slot).filter(|c| c.node_type == "attribute") else {
+            return;
+        };
+        let node = node.clone();
+        let (frame, start) = (self.sim_frame(), self.sim_start_frame());
+        let mut err = None;
+        // Name and Group may be expressions; read them as they evaluate.
+        let resolved = crate::geometry::resolve_param_refs(&self.fs_root, &node, frame, &mut err).unwrap_or_else(|| node.clone());
+        let Some(input) = crate::geometry::param_node(&self.fs_root, &node, "input") else {
+            self.update_status_text(&format!("{}: Detect Range needs an input", node.name));
+            return;
+        };
+        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let geom = {
+            let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
+            crate::geometry::node_geometry_as_shown(&self.fs_root, input, &mut err, &mut sim)
+        };
+        self.sim_cache = sim_cache;
+        let Some(geom) = geom else {
+            self.update_status_text(&format!("{}: Detect Range: the input has no geometry", node.name));
+            return;
+        };
+        let [lo, hi] = match crate::geometry::remap_input_range(&geom, &resolved) {
+            Ok(r) => r,
+            Err(why) => {
+                self.update_status_text(&format!("{}: Detect Range: {why}", node.name));
+                return;
+            }
+        };
+        let dir = self.param_editor_dir_mut();
+        let Some(p) = dir.children[slot].params.iter_mut().find(|p| p.name == "from") else { return };
+        let was = p.clone();
+        p.set_value(ParamValue::Vec2([lo, hi]));
+        p.set_expr(false);
+        let text = p.text().to_string();
+        if !crate::edit_history::same(&was, p) {
+            let before = crate::edit_history::ParamSnapshot {
+                node_id: node.id.clone(),
+                params: vec![was],
+                what: "Detect Range".to_string(),
+            };
+            self.record_params(before, false);
+        }
+        self.sync_nodes();
+        self.rebuild_scene_geometry();
+        self.sync_parameters_pane();
+        self.update_status_text(&format!("{}: From set to {}", node.name, text.replace(':', " .. ")));
+    }
+
     pub fn execute_menu_action(&mut self, label: &str) -> bool {
         match label {
-            // An Export node's button. Buttons dispatch by LABEL, which has no
-            // node attached to it — but the pressed button can only be on the
-            // node the pane is showing, so the selection is the node.
+            // An Export node's button, reached by its label from MCP's
+            // `menu_action`; the pane's press goes through `run_param_button`.
             "Export" => {
                 self.run_export();
             }

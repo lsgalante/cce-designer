@@ -6823,7 +6823,7 @@ mod tests {
         fn walk(node: &FsNode, checked: &mut usize) {
             let names: Vec<&str> = node.params.iter().map(|p| p.name.as_str()).collect();
             for p in &node.params {
-                for clause in p.show_when.split("&&") {
+                for clause in p.show_when.split("||").flat_map(|alt| alt.split("&&")) {
                     let clause = clause.trim();
                     if clause.is_empty() {
                         continue;
@@ -7723,6 +7723,65 @@ mod tests {
         state.run_command("reset_parameters");
         state.new_project();
         assert!(!state.history_step(true), "New Project kept the old project's undo");
+    }
+
+    /// The Attribute node's Remap takes its From range from the input two
+    /// ways: From Range Auto (the row hides, the measure is taken at every
+    /// evaluation) and the Detect Range button, pressed in the params pane,
+    /// which measures once and writes From as an undoable edit.
+    #[test]
+    fn the_remap_from_range_is_detected_from_the_input() {
+        use crate::app::{param_visible, McpAction};
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state
+            .apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
+            .unwrap();
+        let slot = state.current_dir().children.iter().position(|c| c.node_type == "attribute").unwrap();
+        for (name, value) in [("input", "sphere1"), ("attribute_name", "N"), ("operation", "Remap")] {
+            state
+                .apply_action(McpAction::SetParam { slot, name: name.into(), value: value.into() }, &mut redraw)
+                .unwrap();
+        }
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+        let shown = |state: &State, name: &str| {
+            let params = &state.current_dir().children[slot].params;
+            param_visible(params, &params.iter().find(|p| p.name == name).unwrap().show_when)
+        };
+        let from = |state: &State| state.current_dir().children[slot].params.iter().find(|p| p.name == "from").unwrap().text().to_string();
+        assert!(shown(&state, "from_range") && shown(&state, "detect_range") && shown(&state, "from"));
+        assert_eq!(from(&state), "0.00:1.00");
+
+        // The press, as the pane reports it.
+        let rows: Vec<(String, String, String)> = state
+            .param()
+            .node_params()
+            .into_iter()
+            .map(|(n, v, t)| if n == "Detect Range" { (n, "clicked".to_string(), t) } else { (n, v, t) })
+            .collect();
+        assert!(rows.iter().any(|r| r.0 == "Detect Range"), "the pane shows the button");
+        state.param_mut().set_display_params(&rows);
+        state.sync_parameters_to_project();
+        let [lo, hi] = crate::param::ParamDef::new("from", "float2", from(&state))
+            .value()
+            .and_then(|v| match v {
+                crate::app::ParamValue::Vec2(v) => Some(*v),
+                _ => None,
+            })
+            .expect("From holds two numbers");
+        assert!(lo < -0.9 && hi > 0.9, "a sphere's normals span -1..1, not {lo}..{hi}");
+        assert!(state.last_status_text.contains("From set to"), "{}", state.last_status_text);
+
+        // Undone, From is the row it was.
+        state.edit_history.break_group();
+        assert!(state.history_step(true));
+        assert_eq!(from(&state), "0.00:1.00");
+
+        // Auto hides From and the button; Clip shows From again.
+        state.apply_action(McpAction::SetParam { slot, name: "from_range".into(), value: "Auto".into() }, &mut redraw).unwrap();
+        assert!(!shown(&state, "from") && !shown(&state, "detect_range"));
+        state.apply_action(McpAction::SetParam { slot, name: "operation".into(), value: "Clip".into() }, &mut redraw).unwrap();
+        assert!(shown(&state, "from") && !shown(&state, "from_range"));
     }
 
     /// An edit to a parameter can be taken back however it was made: a row

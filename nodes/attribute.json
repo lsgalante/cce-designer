@@ -109,11 +109,29 @@
       "group": "where"
     },
     {
+      "name": "from_range",
+      "label": "From Range",
+      "type": "choice:Manual,Auto",
+      "default": "Manual",
+      "show_when": "operation == Remap",
+      "description": "Where Remap's input range comes from: Manual uses the From row; Auto measures the input's lowest and highest value (over every component of the points in Group) each time the node evaluates, so the range follows the input as it changes.",
+      "group": "range"
+    },
+    {
+      "name": "detect_range",
+      "label": "Detect Range",
+      "type": "button",
+      "default": "",
+      "show_when": "operation == Remap && from_range == Manual",
+      "description": "Measures the input's lowest and highest value once, at the current frame, and writes them into From. From then stays as written when the input changes; Auto is the range that follows.",
+      "group": "range"
+    },
+    {
       "name": "from",
       "label": "From",
       "type": "float2",
       "default": "0.00:1.00",
-      "show_when": "operation == Remap|Clip",
+      "show_when": "operation == Clip || operation == Remap && from_range == Manual",
       "description": "Remap: the input range, its first value mapping to To's first and its second to To's second; the two must differ. Clip: the bounds values are clamped to.",
       "group": "range"
     },
