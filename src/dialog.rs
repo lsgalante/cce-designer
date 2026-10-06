@@ -77,6 +77,11 @@ pub enum Control {
     /// over the band turns it, a press on the band jumps to the pointer.
     /// A `dec` of zero snaps to whole numbers — the spinbox shape.
     Slider { value: f32, min: f32, max: f32, dec: usize, step: f32, suffix: &'static str },
+    /// Two numbers over one range, `lo:hi` — the params pane's `float2`:
+    /// two sliders side by side, each with its readout ahead of it, worked
+    /// as a [`Control::Slider`] is, an end at a time. The arrows nudge the
+    /// first end, shift and the arrows the second.
+    Float2 { values: [f32; 2], min: f32, max: f32, dec: usize, step: f32 },
     /// One of a fixed set: picking the row opens a dropdown of the options
     /// under its value ([`State::open_dialog_dropdown`]); the arrows step
     /// either way without it.
@@ -93,6 +98,7 @@ impl Control {
         match self {
             Control::Toggle(on) => if *on { "true" } else { "false" }.to_string(),
             Control::Slider { value, dec, .. } => format!("{:.*}", dec, value),
+            Control::Float2 { values, dec, .. } => format!("{:.*}:{:.*}", dec, values[0], dec, values[1]),
             Control::Choice { options, index } => options.get(*index).cloned().unwrap_or_default(),
             Control::Color { hex, .. } => hex.clone(),
         }
@@ -102,11 +108,31 @@ impl Control {
     /// readout shows none.
     fn quantize(&self, v: f32) -> f32 {
         match self {
-            Control::Slider { min, max, dec, .. } => {
+            Control::Slider { min, max, dec, .. } | Control::Float2 { min, max, dec, .. } => {
                 let v = v.clamp(min.min(*max), max.max(*min));
                 if *dec == 0 { v.round() } else { v }
             }
             _ => v,
+        }
+    }
+
+    /// Slider `k` of the control, as (value, min, max): a slider's one, a
+    /// float2's two.
+    fn slider_part(&self, k: usize) -> Option<(f32, f32, f32)> {
+        match self {
+            Control::Slider { value, min, max, .. } if k == 0 => Some((*value, *min, *max)),
+            Control::Float2 { values, min, max, .. } if k < 2 => Some((values[k], *min, *max)),
+            _ => None,
+        }
+    }
+
+    /// Move slider `k` to `v`, clamped and snapped as the control says.
+    fn set_slider_part(&mut self, k: usize, v: f32) {
+        let q = self.quantize(v);
+        match self {
+            Control::Slider { value, .. } if k == 0 => *value = q,
+            Control::Float2 { values, .. } if k < 2 => values[k] = q,
+            _ => {}
         }
     }
 }
@@ -157,8 +183,10 @@ impl Row {
         }
     }
 
+    /// Whether the row's control is made of sliders: a slider, or a
+    /// float2's two.
     fn is_slider(&self) -> bool {
-        matches!(self.control, Some(Control::Slider { .. }))
+        matches!(self.control, Some(Control::Slider { .. } | Control::Float2 { .. }))
     }
 
     fn is_color(&self) -> bool {
@@ -202,6 +230,11 @@ pub const SLIDER_W: f32 = 180.0;
 /// would paint and never show.
 const READOUT_W: f32 = 60.0;
 const READOUT_GAP: f32 = 8.0;
+/// How far in from the row's right end a float2 row's control begins —
+/// twice a slider's, since it is two sliders, each with its readout.
+const FLOAT2_W: f32 = 2.0 * SLIDER_W;
+/// The gap between a float2's two halves.
+const FLOAT2_GAP: f32 = 12.0;
 /// Gap between the query line and the list.
 const GAP: f32 = 8.0;
 
@@ -363,11 +396,19 @@ pub struct Dialog {
     /// (`draggable` and the `drag_*` hooks), so the drag survives the
     /// pointer leaving the plate.
     slider_drag: Option<usize>,
+    /// Which of the dragged row's sliders the press took: 0 for a slider,
+    /// either end of a float2.
+    slider_part: usize,
+    /// The float2 end under the pointer, while its row's control is
+    /// hovered — the one that lifts.
+    hover_part: usize,
     /// The band's (x, width) captured at the press, so a drag keeps
     /// mapping the pointer while the row scrolls under it.
     slider_track: (f32, f32),
     /// The row and value the pointer moved a slider to, drained by the app.
     slider_change: Option<(String, f32)>,
+    /// The row and values the pointer moved a float2 to, drained by the app.
+    float2_change: Option<(String, [f32; 2])>,
     /// One toolkit colour selector per colour row, by row id — real widgets,
     /// not stamps, because each carries state of its own: a hex edit in
     /// progress, a picker process streaming values. Kept across
@@ -410,8 +451,11 @@ impl Dialog {
             toggle_stamps: RefCell::new([off, on]),
             slider_stamp: RefCell::new(slider_stamp),
             slider_drag: None,
+            slider_part: 0,
+            hover_part: 0,
             slider_track: (0.0, 1.0),
             slider_change: None,
+            float2_change: None,
             colors: Vec::new(),
             color_changes: Vec::new(),
         });
@@ -640,16 +684,32 @@ impl Dialog {
 
     /// Move a slider row to a value, clamped and snapped as the row says.
     pub fn set_slider_value(&mut self, i: usize, v: f32) {
+        self.set_slider_part(i, 0, v);
+    }
+
+    /// Move slider `k` of row `i` — a float2's either end — to a value.
+    pub fn set_slider_part(&mut self, i: usize, k: usize, v: f32) {
         if let Some(c) = self.rows.get_mut(i).and_then(|r| r.control.as_mut()) {
-            let q = c.quantize(v);
-            if let Control::Slider { value, .. } = c {
-                *value = q;
-            }
+            c.set_slider_part(k, v);
         }
     }
 
     pub fn take_slider_change(&mut self) -> Option<(String, f32)> {
         self.slider_change.take()
+    }
+
+    pub fn take_float2_change(&mut self) -> Option<(String, [f32; 2])> {
+        self.float2_change.take()
+    }
+
+    /// Say what row `i`'s sliders now hold, for the app to land.
+    fn note_slider_change(&mut self, i: usize) {
+        let Some(row) = self.rows.get(i) else { return };
+        match row.control {
+            Some(Control::Slider { value, .. }) => self.slider_change = Some((row.id.clone(), value)),
+            Some(Control::Float2 { values, .. }) => self.float2_change = Some((row.id.clone(), values)),
+            _ => {}
+        }
     }
 
     /// Whether a press has taken hold of a slider — the app arms its
@@ -753,6 +813,11 @@ impl Dialog {
                 height: TOGGLE_H,
             }),
             Some(Control::Slider { .. }) => Some(self.slider_rect(r)),
+            Some(Control::Float2 { .. }) => {
+                let parts = self.float2_parts(r);
+                let (a, b) = (parts[0].1, parts[1].1);
+                Some(Rect { width: b.x + b.width - a.x, ..a })
+            }
             Some(Control::Color { .. }) => Some(self.slider_band_rect(r)),
             Some(Control::Choice { .. }) => Some(self.slider_band_rect(r)),
             None => None,
@@ -772,27 +837,66 @@ impl Dialog {
         Rect { x: b.x - READOUT_W - READOUT_GAP, width: b.width + READOUT_W + READOUT_GAP, ..b }
     }
 
-    /// The band's (x, width), captured at a press for the drag.
-    fn slider_track_of(&self, r: Rect) -> (f32, f32) {
-        let b = self.slider_band_rect(r);
-        (b.x, b.width)
+    /// A float2 row's two sliders, each as (band, the band with its
+    /// readout lane ahead of it): the slider control's whole span — from
+    /// [`FLOAT2_W`] in from the row's right end out to the band's right
+    /// edge — halved, with [`FLOAT2_GAP`] between the halves.
+    fn float2_parts(&self, r: Rect) -> [(Rect, Rect); 2] {
+        let band = self.slider_band_rect(r);
+        let x0 = r.x + r.width - 8.0 - FLOAT2_W;
+        let half = ((band.x + band.width - x0 - FLOAT2_GAP) * 0.5).max(READOUT_W + READOUT_GAP + 10.0);
+        let part = |k: usize| {
+            let whole = Rect { x: x0 + k as f32 * (half + FLOAT2_GAP), width: half, ..band };
+            let lane = READOUT_W + READOUT_GAP;
+            (Rect { x: whole.x + lane, width: half - lane, ..whole }, whole)
+        };
+        [part(0), part(1)]
     }
 
-    /// Step a slider row by wheel notches: 2% of the range each, the toolkit
-    /// slider's own rate, up meaning more — the sign the viewport's zoom
-    /// wheel has.
-    fn scroll_slider(&mut self, i: usize, notches: f32) -> bool {
-        let Some(Control::Slider { value, min, max, .. }) = self.rows.get(i).and_then(|r| r.control.as_ref()) else {
+    /// A slider row's sliders, each as (band, the whole control): one for a
+    /// slider, two for a float2.
+    fn slider_parts(&self, r: Rect, row: &Row) -> Vec<(Rect, Rect)> {
+        match row.control {
+            Some(Control::Slider { .. }) => vec![(self.slider_band_rect(r), self.slider_rect(r))],
+            Some(Control::Float2 { .. }) => self.float2_parts(r).to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Which of row `i`'s sliders is under `x`, testing the band alone when
+    /// `band_only` (a press) and band and readout together otherwise (the
+    /// wheel, the hover).
+    fn slider_part_at(&self, r: Rect, i: usize, x: f32, band_only: bool) -> Option<(usize, Rect)> {
+        let row = self.rows.get(i)?;
+        self.slider_parts(r, row).into_iter().enumerate().find_map(|(k, (band, whole))| {
+            let s = if band_only { band } else { whole };
+            (x >= s.x && x < s.x + s.width).then_some((k, band))
+        })
+    }
+
+    /// Row `i`'s slider bands in window coordinates, while the row is in
+    /// view inside the dialog at `(x, y, w, h)` — for the suite to press
+    /// on where the pointer would.
+    #[cfg(test)]
+    pub fn slider_bands(&self, (x, y, w, h): (f32, f32, f32, f32), i: usize) -> Vec<Rect> {
+        let rect = Rect { x, y, width: w, height: h };
+        let Some(r) = self.row_rect(rect, i) else { return Vec::new() };
+        self.slider_parts(r, &self.rows[i]).into_iter().map(|(band, _)| band).collect()
+    }
+
+    /// Step slider `k` of row `i` by wheel notches: 2% of the range each,
+    /// the toolkit slider's own rate, up meaning more — the sign the
+    /// viewport's zoom wheel has.
+    fn scroll_slider(&mut self, i: usize, k: usize, notches: f32) -> bool {
+        let Some((cur, min, max)) = self.rows.get(i).and_then(|r| r.control.as_ref()).and_then(|c| c.slider_part(k)) else {
             return false;
         };
-        let (cur, min, max) = (*value, *min, *max);
-        let v = cur + notches * 0.02 * (max - min);
-        self.set_slider_value(i, v);
-        let Some(now) = self.rows[i].slider_value() else { return false };
+        self.set_slider_part(i, k, cur + notches * 0.02 * (max - min));
+        let Some((now, ..)) = self.rows[i].control.as_ref().and_then(|c| c.slider_part(k)) else { return false };
         if (now - cur).abs() < 1e-6 {
             return false;
         }
-        self.slider_change = Some((self.rows[i].id.clone(), now));
+        self.note_slider_change(i);
         true
     }
 
@@ -801,15 +905,15 @@ impl Dialog {
     /// to grab, and a click on a scale should mean "this much".
     fn slide_to(&mut self, px: f32) -> bool {
         let Some(i) = self.slider_drag else { return false };
-        let Some(Control::Slider { value, min, max, .. }) = self.rows.get(i).and_then(|r| r.control.as_ref()) else {
+        let k = self.slider_part;
+        let Some((old, min, max)) = self.rows.get(i).and_then(|r| r.control.as_ref()).and_then(|c| c.slider_part(k)) else {
             return false;
         };
-        let (old, min, max) = (*value, *min, *max);
         let (tx, tw) = self.slider_track;
         let t = ((px - tx) / tw).clamp(0.0, 1.0);
-        self.set_slider_value(i, min + t * (max - min));
-        let Some(now) = self.rows[i].slider_value() else { return false };
-        self.slider_change = Some((self.rows[i].id.clone(), now));
+        self.set_slider_part(i, k, min + t * (max - min));
+        let Some((now, ..)) = self.rows[i].control.as_ref().and_then(|c| c.slider_part(k)) else { return false };
+        self.note_slider_change(i);
         now != old
     }
 
@@ -1054,8 +1158,8 @@ impl Paint for Dialog {
             // state could not be read. On the plate it reads like the rest.
             // A slider or colour row's control is wider than the toggle
             // column and takes the chord column's place on that one row.
-            let ctl_col = if row.is_slider() {
-                (r.x + r.width) - self.slider_rect(r).x + 4.0
+            let ctl_col = if let Some(c) = row.is_slider().then(|| self.control_rect(r, row)).flatten() {
+                (r.x + r.width) - c.x + 4.0
             } else if row.is_color() {
                 (r.x + r.width) - self.slider_band_rect(r).x + 4.0
             } else {
@@ -1099,6 +1203,7 @@ impl Paint for Dialog {
             let chord_right = r.x + r.width - 8.0 - ctl_col;
             let label_right = match &row.control {
                 Some(Control::Choice { .. }) => self.slider_band_rect(r).x - 12.0,
+                Some(Control::Float2 { .. }) => self.float2_parts(r)[0].1.x - 12.0,
                 _ => chord_right - if right_w > 0.0 { right_w + 12.0 } else { 0.0 },
             };
             let glyph_y = r.y + (r.height - chev) * 0.5;
@@ -1163,6 +1268,21 @@ impl Paint for Dialog {
                         Some(family.clone()),
                         own,
                     );
+                }
+                Some(Control::Float2 { values, min, max, dec, .. }) => {
+                    // The Slider arm twice, an end each.
+                    for (k, (band, _)) in self.float2_parts(r).into_iter().enumerate() {
+                        {
+                            let mut stamp = self.slider_stamp.borrow_mut();
+                            stamp.set_range(*min, *max);
+                            stamp.set_scaled_value(values[k]);
+                            stamp.set_hovered(self.hover_ctl == Some(i) && self.hover_part == k);
+                            Paint::paint(&**stamp, band, ctx);
+                        }
+                        let readout = format!("{:.*}", *dec, values[k]);
+                        let rw = display::measure_text_width(&readout, &family, font_size);
+                        ctx.text_with(readout, band.x - READOUT_GAP - rw, ty, font_size, label_color, Some(family.clone()), own);
+                    }
                 }
                 Some(Control::Color { .. }) => {
                     if let Some(sel) = self.color_selector(&row.id) {
@@ -1301,13 +1421,11 @@ impl Input for Dialog {
                         // BAND rather than the whole control, or a click
                         // on the readout would jump the value to the end
                         // of the range nearest it.
-                        if let Some(r) = r {
-                            let s = self.slider_band_rect(r);
-                            if *x >= s.x && *x < s.x + s.width {
-                                self.slider_track = self.slider_track_of(r);
-                                self.slider_drag = Some(i);
-                                self.slide_to(*x);
-                            }
+                        if let Some((k, band)) = r.and_then(|r| self.slider_part_at(r, i, *x, true)) {
+                            self.slider_track = (band.x, band.width);
+                            self.slider_drag = Some(i);
+                            self.slider_part = k;
+                            self.slide_to(*x);
                         }
                         return true;
                     }
@@ -1358,8 +1476,12 @@ impl Input for Dialog {
                         .and_then(|r| self.control_rect(r, &self.rows[i]))
                         .is_some_and(|c| *x >= c.x && *x < c.x + c.width && *y >= c.y && *y < c.y + c.height)
                 });
-                let changed = row != self.hover_row || ctl != self.hover_ctl;
+                let part = ctl
+                    .and_then(|i| self.row_rect(rect, i).and_then(|r| self.slider_part_at(r, i, *x, false)))
+                    .map_or(0, |(k, _)| k);
+                let changed = row != self.hover_row || ctl != self.hover_ctl || part != self.hover_part;
                 self.hover_row = row;
+                self.hover_part = part;
                 if ctl != self.hover_ctl {
                     // A colour well is a widget of its own: told the way
                     // the runner tells any widget.
@@ -1383,15 +1505,10 @@ impl Input for Dialog {
                 // Over a slider row's control the wheel turns the slider,
                 // not the list — the rest of the row still scrolls.
                 if let Some(i) = self.row_at(rect, *x, *y) {
-                    if self.rows[i].is_slider() {
-                        if let Some(r) = self.row_rect(rect, i) {
-                            let s = self.slider_rect(r);
-                            if *x >= s.x && *x < s.x + s.width {
-                                // Up is more, for a wheel and for a
-                                // finger alike (`value_notches_y`).
-                                return self.scroll_slider(i, delta.value_notches_y());
-                            }
-                        }
+                    if let Some((k, _)) = self.row_rect(rect, i).and_then(|r| self.slider_part_at(r, i, *x, false)) {
+                        // Up is more, for a wheel and for a finger alike
+                        // (`value_notches_y`).
+                        return self.scroll_slider(i, k, delta.value_notches_y());
                     }
                 }
                 // The DE scroll model: a notch is one row and glides there, a
@@ -2580,8 +2697,9 @@ impl State {
                 }
             }
             // The arrows work the selected row's control in place: a
-            // slider by its step, a choice to the next or previous option.
-            // On any other row they mean nothing here.
+            // slider by its step, a choice to the next or previous option,
+            // a float2's first end — its second with shift. On any other
+            // row they mean nothing here.
             Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
                 let dir: i32 = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { 1 } else { -1 };
                 self.nudge_dialog_selection(dir);
@@ -2622,6 +2740,13 @@ impl State {
                 self.slots.dialog.set_slider_value(i, value + dir as f32 * step);
                 let Some(v) = self.slots.dialog.rows[i].slider_value() else { return };
                 self.land_dialog_slider(&id, v);
+            }
+            Control::Float2 { values, step, .. } => {
+                let i = self.slots.dialog.selected;
+                let k = self.modifiers.shift_key() as usize;
+                self.slots.dialog.set_slider_part(i, k, values[k] + dir as f32 * step);
+                let Some(Control::Float2 { values, .. }) = self.slots.dialog.selected_control().cloned() else { return };
+                self.land_dialog_float2(&id, values);
             }
             Control::Choice { options, index } => {
                 if options.is_empty() {
@@ -2795,6 +2920,18 @@ impl State {
     /// arrow key is a single landing and saves at once, as the menu's wheel
     /// does. A spin row lands its whole number over the row's unit. A row the landing
     /// does not know falls through to `apply_setting`.
+    /// A float2 row's new values, from the pointer or an arrow key. Only a
+    /// visualizer's Manual Range is one; it lands as its sliders do.
+    pub(crate) fn land_dialog_float2(&mut self, id: &str, v: [f32; 2]) {
+        let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) else { return };
+        let field = field.to_string();
+        let save = !self.slots.dialog.slider_dragging();
+        self.set_visualizer_field(i, &field, &format!("{}:{}", v[0], v[1]), save);
+        if let Some(row) = self.visualizer_edit_rows(i).into_iter().find(|r| r.id == id) {
+            self.slots.dialog.set_control(id, row.control);
+        }
+    }
+
     pub(crate) fn land_dialog_slider(&mut self, id: &str, v: f32) {
         if let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) {
             // In place: the rows do not change under a drag, and a rebuild
@@ -3026,6 +3163,10 @@ impl State {
         }
         if let Some((id, v)) = self.slots.dialog.take_slider_change() {
             self.land_dialog_slider(&id, v);
+            changed = true;
+        }
+        if let Some((id, v)) = self.slots.dialog.take_float2_change() {
+            self.land_dialog_float2(&id, v);
             changed = true;
         }
         for (id, hex) in self.slots.dialog.take_color_changes() {

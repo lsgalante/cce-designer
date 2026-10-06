@@ -8074,6 +8074,109 @@ mod tests {
         state.close_dialog();
     }
 
+    /// A visualizer's Manual Range is the node's float2, and the dialog
+    /// edits it as one: a row of two sliders side by side, each end worked
+    /// on its own — pressed and dragged, turned by the wheel, nudged by the
+    /// arrows (shift for the second). A drag lands live and saves on the
+    /// release. A settings file from before, which kept From and To, reads
+    /// as the range.
+    #[test]
+    fn a_visualizers_manual_range_is_one_float2_row() {
+        use crate::dialog::Control;
+        use crate::slots::DIALOG_IDX;
+        use crate::visualizer::{decode, VIS_ADD_ROW_ID, VIS_FIELD_PREFIX};
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        state.rebuild_scene_geometry();
+        assert!(state.run_command("attribute_visualizers"));
+        state.take_dialog_pick(VIS_ADD_ROW_ID.to_string());
+        state.set_visualizer_field(0, "attribute", "N", true);
+        state.set_visualizer_field(0, "range", "Manual", true);
+        state.refresh_dialog_controls();
+        let (lo, hi) = {
+            let a = state.scene_attributes.iter().find(|a| a.name == "N").unwrap();
+            (a.min, a.max)
+        };
+        assert_eq!(state.visualizers[0].manual_range, [lo, hi], "Manual starts at what Auto showed");
+
+        let id = format!("{VIS_FIELD_PREFIX}manual_range");
+        let i = state.slots.dialog.rows.iter().position(|r| r.id == id).expect("a Manual Range row");
+        let ids: Vec<&str> = state.slots.dialog.rows.iter().map(|r| r.id.as_str()).collect();
+        assert!(!ids.iter().any(|r| r.ends_with(":from") || r.ends_with(":to")), "no From and To rows: {ids:?}");
+        let control = |state: &State| match state.slots.dialog.rows[i].control.clone() {
+            Some(Control::Float2 { values, min, max, .. }) => (values, min, max),
+            other => panic!("not a float2: {other:?}"),
+        };
+        let (values, min, max) = control(&state);
+        assert_eq!(values, [lo, hi]);
+        let at = |t: f32| min + t * (max - min);
+
+        let bands = state.slots.dialog.slider_bands(state.positions[DIALOG_IDX], i);
+        assert_eq!(bands.len(), 2, "two sliders");
+        assert!(bands[0].x + bands[0].width < bands[1].x, "side by side");
+        let point = |state: &mut State, k: usize, t: f32| {
+            let b = bands[k];
+            let (px, py) = (b.x + b.width * t, b.y + b.height * 0.5);
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: px as f64, y: py as f64 } });
+        };
+        let saved = || {
+            let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
+            decode(&crate::app::DesignSettings::from_kdl_str(&kdl).viewport.visualizers)[0].manual_range
+        };
+        let close = |a: f32, b: f32| (a - b).abs() < (max - min) * 0.02;
+
+        // The first end, pressed and dragged: live, saved on the release.
+        point(&mut state, 0, 0.25);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(state.slots.dialog.slider_dragging());
+        point(&mut state, 0, 0.1);
+        let [a, b] = state.visualizers[0].manual_range;
+        assert!(close(a, at(0.1)) && b == hi, "{a} {b}");
+        assert_eq!(control(&state).0, state.visualizers[0].manual_range, "the row shows what the visualizer holds");
+        assert_eq!(saved(), [lo, hi], "not written mid-drag");
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert_eq!(saved(), state.visualizers[0].manual_range, "written on the release");
+
+        // The second end, on its own band; the first stays.
+        point(&mut state, 1, 0.9);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        let [a2, b2] = state.visualizers[0].manual_range;
+        assert!(a2 == a && close(b2, at(0.9)), "{a2} {b2}");
+
+        // The wheel over an end turns that end, up being more.
+        point(&mut state, 0, 0.5);
+        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 1.0) });
+        let [a3, b3] = state.visualizers[0].manual_range;
+        assert!(a3 > a2 && b3 == b2, "{a3} {b3}");
+
+        // The arrows nudge the first end; with shift, the second.
+        state.slots.dialog.selected = i;
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
+        let [a4, b4] = state.visualizers[0].manual_range;
+        assert!(a4 > a3 && b4 == b3, "{a4} {b4}");
+        state.modifiers = ModifiersState { shift: true, ..Default::default() };
+        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+        state.modifiers = ModifiersState::default();
+        let [a5, b5] = state.visualizers[0].manual_range;
+        assert!(a5 == a4 && b5 < b4, "{a5} {b5}");
+        assert_eq!(saved(), [a5, b5], "a key's landing saves at once");
+
+        // What it draws is the node's Manual Range.
+        let node = state.visualizers[0].as_node();
+        assert_eq!(crate::geometry::node_param_vec2(&node, "manual_range", [0.0, 0.0]), [a5, b5]);
+
+        // A settings file from before kept the two ends apart.
+        let old = decode("attribute=N|mode=Ramp|range=Manual|from=2|to=5");
+        assert_eq!(old[0].manual_range, [2.0, 5.0]);
+        assert_eq!(decode(&crate::visualizer::encode(&old)), old);
+        state.close_dialog();
+    }
+
     /// A visualizer is the Visualize node's reading: the same settings give
     /// the same colours as the node does, and the settings round-trip
     /// through their one string.

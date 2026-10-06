@@ -3330,11 +3330,9 @@ was checked in a shadow session before and after.
 a point attribute of whatever the viewport displays, coloured through a
 ramp or drawn as a line from each point, with NO node in the graph. A
 `Visualizer` is the Visualize node's settings under the node's own names
-and options (Attribute, Mode, Ramp, Range, From/To, Blend, Opacity, Scale,
-Group) plus a switch, and it runs through `geometry::apply_visualize` over
-a node built from them (`Visualizer::as_node`; From/To are the node's
-Manual Range, a float2, kept as two ends because the dialog edits each on
-a slider of its own and state.kdl names them so), so a visualizer and a
+and options (Attribute, Mode, Ramp, Range, Manual Range, Blend, Opacity,
+Scale, Group) plus a switch, and it runs through `geometry::apply_visualize`
+over a node built from them (`Visualizer::as_node`), so a visualizer and a
 Visualize node cannot disagree about what they draw
 (`a_visualizer_reads_as_the_visualize_node_does`). Several apply in order,
 the later over the earlier, as a chain of Visualize nodes composites.
@@ -3370,9 +3368,10 @@ the later over the earlier, as a chain of Visualize nodes composites.
   `take_dialog_pick_at`). `Mode::VisualizerEdit` (`State::vis_editing`) is
   that visualizer's settings as rows — the Visualize node's `show_when`
   applied, so Ramp's rows or Vector's; Attribute and Group are choices
-  over the scene's attributes and groups; a Manual range's From and To are
-  sliders over the attribute's range in the scene with a quarter to spare
-  — then Delete Visualizer and Back. Escape goes back to the list. Rows
+  over the scene's attributes and groups; a Manual range is one
+  `Control::Float2` row (since 2026-10-06; two slider rows, From and To,
+  until then) over the attribute's range in the scene with a quarter to
+  spare — then Delete Visualizer and Back. Escape goes back to the list. Rows
   re-read IN PLACE (`refresh_dialog_rows_in_place`, selection and scroll
   kept), since switching the mode swaps rows under the one selected.
   A new visualizer starts on the scene's first attribute that is not
@@ -3757,6 +3756,19 @@ selection stays where it was:
   pane's) is one of these over `State::zoom_percent` (100 = Reset Zoom,
   range the pitch limits), landing through `set_zoom_percent`, which zooms
   about the cursor cell and re-reads the row, since `zoom` clamps.
+- `Float2` — two numbers over one range, `lo:hi`: the params pane's
+  float2, as two sliders SIDE BY SIDE in the row (the rows are one
+  height, so not stacked as the pane stacks them), each with its readout
+  ahead of it. The control begins `FLOAT2_W` (two `SLIDER_W`) in from the
+  row's right end and the label is clipped short of it. Each end is worked
+  as a slider is — a press on its band jumps and drags it, the wheel over
+  it turns it — and the arrows nudge the FIRST end, shift and the arrows
+  the second. One `Slider` stamp paints both. A change comes out of
+  `take_float2_change` and lands through `land_dialog_float2`. Only the
+  visualizer's Manual Range is one; state.kdl keeps it as `manual_range=lo:hi`,
+  and a file from before, with `from=` and `to=`, reads as the range.
+  `a_visualizers_manual_range_is_one_float2_row` drives it by pointer,
+  wheel and keys.
 - `Choice` — a fixed set (World Unit, GPU, Node Wire Style, the
   visualizer settings): the PARAMS PANE'S DROPDOWN (since 2026-10-01,
   the toolkit `Dropdown`), in the control band the sliders and colour

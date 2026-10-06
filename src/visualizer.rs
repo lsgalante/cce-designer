@@ -55,12 +55,11 @@ pub struct Visualizer {
     pub mode: String,
     pub ramp: String,
     /// `Auto` spreads the ramp over the attribute's range in the scene;
-    /// `Manual` over From..To — the node's Manual Range, a float2, kept as
-    /// its two ends because the dialog edits each on a slider of its own
-    /// (it has no float2 control) and the stored form names them so.
+    /// `Manual` over Manual Range.
     pub range: String,
-    pub from: f32,
-    pub to: f32,
+    /// The ramp's two ends under a Manual range: the node's float2, edited
+    /// in the dialog as one (`Control::Float2`).
+    pub manual_range: [f32; 2],
     pub blend: String,
     pub opacity: f32,
     /// A Vector line's length per unit of the attribute.
@@ -78,8 +77,7 @@ impl Visualizer {
             mode: ramp_mode(),
             ramp: viridis(),
             range: auto(),
-            from: 0.0,
-            to: 1.0,
+            manual_range: [0.0, 1.0],
             blend: set(),
             opacity: 1.0,
             scale: fifth(),
@@ -116,7 +114,7 @@ impl Visualizer {
                 p("mode", "choice", self.mode.clone()),
                 p("ramp", "choice", self.ramp.clone()),
                 p("range", "choice", self.range.clone()),
-                p("manual_range", "float2", format!("{}:{}", self.from, self.to)),
+                p("manual_range", "float2", format!("{}:{}", self.manual_range[0], self.manual_range[1])),
                 p("blend", "choice", self.blend.clone()),
                 p("opacity", "float", self.opacity.to_string()),
                 p("scale", "float", self.scale.to_string()),
@@ -161,8 +159,7 @@ pub fn encode(visualizers: &[Visualizer]) -> String {
                 ("mode", v.mode.clone()),
                 ("ramp", v.ramp.clone()),
                 ("range", v.range.clone()),
-                ("from", v.from.to_string()),
-                ("to", v.to.to_string()),
+                ("manual_range", format!("{}:{}", v.manual_range[0], v.manual_range[1])),
                 ("blend", v.blend.clone()),
                 ("opacity", v.opacity.to_string()),
                 ("scale", v.scale.to_string()),
@@ -175,6 +172,12 @@ pub fn encode(visualizers: &[Visualizer]) -> String {
         })
         .collect::<Vec<_>>()
         .join(";")
+}
+
+/// `lo:hi` as two numbers.
+fn two(text: &str) -> Option<[f32; 2]> {
+    let (a, b) = text.split_once(':')?;
+    Some([a.trim().parse().ok()?, b.trim().parse().ok()?])
 }
 
 /// The visualizers out of the settings' one string; a record that names no
@@ -196,8 +199,10 @@ pub fn decode(text: &str) -> Vec<Visualizer> {
                     "mode" => v.mode = val,
                     "ramp" => v.ramp = val,
                     "range" => v.range = val,
-                    "from" => v.from = num(v.from),
-                    "to" => v.to = num(v.to),
+                    "manual_range" => v.manual_range = two(&val).unwrap_or(v.manual_range),
+                    // Its two ends, as a settings file from before kept them.
+                    "from" => v.manual_range[0] = num(v.manual_range[0]),
+                    "to" => v.manual_range[1] = num(v.manual_range[1]),
                     "blend" => v.blend = val,
                     "opacity" => v.opacity = num(v.opacity),
                     "scale" => v.scale = num(v.scale),
@@ -343,8 +348,7 @@ impl State {
             if v.is_manual() {
                 let (lo, hi) = self.visualizer_value_range(v);
                 let step = ((hi - lo) / 100.0).max(1e-4);
-                rows.push(row("from", "From", Some(Control::Slider { value: v.from, min: lo, max: hi, dec: 3, step, suffix: "" })));
-                rows.push(row("to", "To", Some(Control::Slider { value: v.to, min: lo, max: hi, dec: 3, step, suffix: "" })));
+                rows.push(row("manual_range", "Manual Range", Some(Control::Float2 { values: v.manual_range, min: lo, max: hi, dec: 3, step })));
             }
             rows.push(row("blend", "Blend", Some(choice(&BLENDS, &v.blend))));
             rows.push(row("opacity", "Opacity", Some(Control::Slider { value: v.opacity, min: 0.0, max: 1.0, dec: 2, step: 0.05, suffix: "" })));
@@ -373,8 +377,9 @@ impl State {
             }
             None => (0.0, 1.0),
         };
-        lo = lo.min(v.from).min(v.to);
-        hi = hi.max(v.from).max(v.to);
+        let [a, b] = v.manual_range;
+        lo = lo.min(a).min(b);
+        hi = hi.max(a).max(b);
         (lo, hi)
     }
 
@@ -424,17 +429,16 @@ impl State {
             "range" => v.range = value.to_string(),
             "blend" => v.blend = value.to_string(),
             "group" => v.group = if value == ALL_POINTS { String::new() } else { value.to_string() },
-            "from" => v.from = number().unwrap_or(v.from),
-            "to" => v.to = number().unwrap_or(v.to),
+            "manual_range" => v.manual_range = two(value).unwrap_or(v.manual_range),
             "opacity" => v.opacity = number().unwrap_or(v.opacity).clamp(0.0, 1.0),
             "scale" => v.scale = number().unwrap_or(v.scale).max(0.0),
             _ => return,
         }
-        // Switching to Manual starts From and To at the attribute's own
-        // range, which is what Auto was showing — not at 0..1.
-        if field == "range" && v.is_manual() && v.from == 0.0 && v.to == 1.0 {
+        // Switching to Manual starts the range at the attribute's own,
+        // which is what Auto was showing — not at 0..1.
+        if field == "range" && v.is_manual() && v.manual_range == [0.0, 1.0] {
             if let Some(a) = self.scene_attributes.iter().find(|a| a.name == v.attribute) {
-                (v.from, v.to) = (a.min, a.max);
+                v.manual_range = [a.min, a.max];
             }
         }
         self.visualizers_changed(save);
