@@ -871,8 +871,8 @@ old text Center a float3 from the load on. Tests build parameters with
   `With`, Collision's `Collider`, Relax's `Rest`, Suture's `Against`, Copy's
   and Distance's `To`, Transfer's `From`. Read them with `node_param_node`
   (trimmed, `None` when unconnected) or resolve them with `param_node`,
-  never by hand. By template, not by name: Visualize's `From`/`To` are
-  numbers.
+  never by hand. By template, not by name: the Attribute node's `From` /
+  `To` are ranges.
 - **`attribute` and `group` name a point attribute or a point group on the
   node's input** (since 2026-09-28) — read or written, it is the same kind:
   Visualize's `Attribute` and Normal's are both `attribute`, Relax's `Pin
@@ -921,7 +921,8 @@ old text Center a float3 from the load on. Tests build parameters with
   "the playbar's", Bounds' `Prefix` is a prefix, Curve's `Points` a list of
   positions, Export's `File` a path. The same day Attribute's `From Min` /
   `From Max` / `To Min` / `To Max` became `float` and Neighbour's `Constant`
-  a `float3`, the numbers phase 1 missed.
+  a `float3`, the numbers phase 1 missed (the four are one `float2` pair
+  since 2026-10-06, below).
   `template_params_carry_the_kind_they_hold` pins all of it, including the
   rows that stay text.
 - **A float3 row can carry a trackball** (since 2026-09-28): cce-ui's
@@ -960,6 +961,21 @@ old text Center a float3 from the load on. Tests build parameters with
   factor or a manual ramp end cannot be a slider without losing values
   outside it. `param_display` shows `float` and `node` as text rows — cce-ui
   is shared and has neither, and the conversion stays at this app's edge.
+- **`float2` is a range's two ends, `lo:hi`** (since 2026-10-06): the
+  Attribute node's From and To (Remap; Clip's bounds are From) and
+  Visualize's Manual Range, which were two `float` rows each. Shown as
+  cce-ui's two-slider `float2` group over a SOFT span around the value —
+  the Value row's rule (`value_row_span`): ± the smallest power of ten
+  whose middle half holds both ends, kept while the value stays in it and
+  through a drag in the pane (`State::present_float2_rows`, per
+  parameter, `State::float2_spans`), and widened rather than clamped by a
+  value typed past an end. So it holds what a `float` held. It has no
+  `range()`: the pane chooses the span. Read with `node_param_vec2`. Each
+  component may be an expression, as a float3's are, and `.x` / `.y` read
+  one. A text that is not two numbers shows as a text box, to be put
+  right. Normalize's goal was To Max and is a row of its own now,
+  **Normalize To** (`float`). Format 6 joins an older save's pairs (see
+  "Parameter expressions"). `a_range_is_one_float2_row` is the test.
 - **Toggles read through `node_param_bool`**: `true`/`1`/`on` and
   `false`/`0`/`off` in any case, else the fallback. The sites it replaced
   mixed `== "true"` and `!= "false"`, which disagreed about garbage.
@@ -1142,15 +1158,15 @@ the kernel path's parent read.
 
 **Paths are Houdini's.** Relative to the node holding the expression: a bare
 name is the node's OWN parameter, `..` its parent, `../sphere1/radius` a
-sibling's, a leading `/` the root. `.x` / `.y` / `.z` reads a float3
-component. `ch()` / `chf()` read a number (a toggle 1 or 0, a choice its
+sibling's, a leading `/` the root. `.x` / `.y` / `.z` reads a float2's
+or float3's component. `ch()` / `chf()` read a number (a toggle 1 or 0, a choice its
 option INDEX — `chi("../method")` is what lets a subnet's dropdown drive a
 child switch's Index), `chi()` truncates, `chb()` is 1 or 0, `chs()` the
 string (a choice's option text). The rest is `+ - * / % ^`, comparisons,
 `&& || !`, `$F` (the evaluation's frame), strings with `+`, and a fixed
 function set (`if(c, a, b)`, `clamp`, `fit`, `lerp`, `min`/`max`, `rand(seed)`,
-the usual math). No ternary — `:` separates a float3's components, which
-are three expressions each (`chf("../a/size.x"):0:0`). An expression that
+the usual math). No ternary — `:` separates a float2's or float3's
+components, which are an expression each (`chf("../a/size.x"):0:0`). An expression that
 reads an expression follows the chain; a circle is an error on the node,
 never a stack overflow. The written-back value is formatted for the
 TARGET row (`format_for_param`): a number into a toggle is `true`/`false`,
@@ -1177,7 +1193,18 @@ not `@UVW`) — and never a choice row, so the Sphere's Method keeps its
 **Format 4** (the same day): parameter names are identifiers — see "A
 parameter has a name and a label". **Format 5** (2026-10-02): the root is
 the object level and an older save's geometry goes into a Geometry node —
-see "The root is the object level". Templates go through
+see "The root is the object level". **Format 6** (2026-10-06): a range is
+one `float2` (`Project::migrate_range_rows`). The Attribute node's From
+Min / From Max join as From, To Min / To Max as To, and To Max is copied to
+Normalize To, which Normalize read it as; Visualize's From / To join as
+Manual Range. Each pair is joined as written, the whole an expression when
+either half was, a missing half the default. A channel path to an old row
+is RESOLVED from its holder and rewritten — `from_max` → `from.y`, `to_max`
+→ `to.y` or `normalize_to` on a node set to Normalize, Visualize's `to` →
+`manual_range.y` — since `from` and `to` are also wires on Transfer, Copy
+and Distance, which are left alone. Checked on the user's project (four
+Attribute nodes, none a Remap): the old build and the new export the same
+mesh at frames 1 and 30. Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
 (`embryo.json` says `chf("../radius")` now). The same inference applies to a
 value typed into a plain row or scripted through `set_param`: a reference
@@ -3305,7 +3332,9 @@ ramp or drawn as a line from each point, with NO node in the graph. A
 `Visualizer` is the Visualize node's settings under the node's own names
 and options (Attribute, Mode, Ramp, Range, From/To, Blend, Opacity, Scale,
 Group) plus a switch, and it runs through `geometry::apply_visualize` over
-a node built from them (`Visualizer::as_node`), so a visualizer and a
+a node built from them (`Visualizer::as_node`; From/To are the node's
+Manual Range, a float2, kept as two ends because the dialog edits each on
+a slider of its own and state.kdl names them so), so a visualizer and a
 Visualize node cannot disagree about what they draw
 (`a_visualizer_reads_as_the_visualize_node_does`). Several apply in order,
 the later over the earlier, as a chain of Visualize nodes composites.

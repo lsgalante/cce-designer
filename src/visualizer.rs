@@ -55,7 +55,9 @@ pub struct Visualizer {
     pub mode: String,
     pub ramp: String,
     /// `Auto` spreads the ramp over the attribute's range in the scene;
-    /// `Manual` over From..To.
+    /// `Manual` over From..To — the node's Manual Range, a float2, kept as
+    /// its two ends because the dialog edits each on a slider of its own
+    /// (it has no float2 control) and the stored form names them so.
     pub range: String,
     pub from: f32,
     pub to: f32,
@@ -114,8 +116,7 @@ impl Visualizer {
                 p("mode", "choice", self.mode.clone()),
                 p("ramp", "choice", self.ramp.clone()),
                 p("range", "choice", self.range.clone()),
-                p("from", "float", self.from.to_string()),
-                p("to", "float", self.to.to_string()),
+                p("manual_range", "float2", format!("{}:{}", self.from, self.to)),
                 p("blend", "choice", self.blend.clone()),
                 p("opacity", "float", self.opacity.to_string()),
                 p("scale", "float", self.scale.to_string()),

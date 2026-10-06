@@ -40,25 +40,16 @@
       "type": "choice:Auto,Manual",
       "default": "Auto",
       "show_when": "mode == Ramp",
-      "description": "Auto spreads the ramp from the attribute's lowest to highest value over all points; Manual uses From and To.",
+      "description": "Auto spreads the ramp from the attribute's lowest to highest value over all points; Manual uses Manual Range.",
       "group": "ramp"
     },
     {
-      "name": "from",
-      "label": "From",
-      "type": "float",
-      "default": "0.00",
+      "name": "manual_range",
+      "label": "Manual Range",
+      "type": "float2",
+      "default": "0.00:1.00",
       "show_when": "mode == Ramp && range == Manual",
-      "description": "The value shown at the low end of the ramp. Values below it are clamped to that end.",
-      "group": "ramp"
-    },
-    {
-      "name": "to",
-      "label": "To",
-      "type": "float",
-      "default": "1.00",
-      "show_when": "mode == Ramp && range == Manual",
-      "description": "The value shown at the high end of the ramp. Values above it are clamped to that end.",
+      "description": "The values shown at the low and high ends of the ramp. Values outside are clamped to the nearer end.",
       "group": "ramp"
     },
     {

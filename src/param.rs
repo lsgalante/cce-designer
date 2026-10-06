@@ -45,6 +45,11 @@ pub enum ParamKind {
     Slider,
     /// A whole number, stepped.
     Spin,
+    /// Two numbers, `x:y` — a range's two ends (a Remap's From and To,
+    /// Visualize's Manual Range). Shown as two sliders over a SOFT range
+    /// that adapts to the value (`app::value_row_span`), since like a
+    /// `float` it holds numbers no fixed range would.
+    Float2,
     /// Three numbers, `x:y:z`.
     Float3,
     /// One of a fixed set of options, stored as the option's text.
@@ -76,7 +81,7 @@ impl ParamKind {
     /// The type-string heads [`ParamKind::parse`] accepts, for messages.
     /// `string` is left out: it is an alias, not something to ask for.
     pub const NAMES: &'static [&'static str] =
-        &["text", "float", "slider", "spinbox", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group"];
+        &["text", "float", "slider", "spinbox", "float2", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group"];
 
     /// The kind's name — the type-string head that names it.
     pub fn name(self) -> &'static str {
@@ -85,6 +90,7 @@ impl ParamKind {
             Self::Float => "float",
             Self::Slider => "slider",
             Self::Spin => "spinbox",
+            Self::Float2 => "float2",
             Self::Float3 => "float3",
             Self::Choice => "choice",
             Self::Toggle => "toggle",
@@ -104,6 +110,7 @@ impl ParamKind {
             "float" => Self::Float,
             "slider" => Self::Slider,
             "spinbox" => Self::Spin,
+            "float2" => Self::Float2,
             "float3" => Self::Float3,
             "choice" => Self::Choice,
             "toggle" => Self::Toggle,
@@ -124,6 +131,7 @@ pub enum ParamValue {
     Number(f32),
     /// Spin: a whole number.
     Int(i64),
+    Vec2([f32; 2]),
     Vec3([f32; 3]),
     Bool(bool),
     /// The option, spelled as the options list spells it (the text may
@@ -141,6 +149,7 @@ impl ParamValue {
         match self {
             ParamValue::Number(n) => fmt_num(*n as f64),
             ParamValue::Int(i) => i.to_string(),
+            ParamValue::Vec2(v) => v.iter().map(|c| fmt_num(*c as f64)).collect::<Vec<_>>().join(":"),
             ParamValue::Vec3(v) => v.iter().map(|c| fmt_num(*c as f64)).collect::<Vec<_>>().join(":"),
             ParamValue::Bool(b) => b.to_string(),
             ParamValue::Choice(s) | ParamValue::Text(s) => s.clone(),
@@ -351,6 +360,16 @@ pub fn parse_value(kind: ParamKind, text: &str, options: &[String]) -> Result<Pa
             Ok(_) => Err(format!("'{text}' is not a whole number")),
             Err(_) => Err(format!("'{text}' is not a number")),
         },
+        ParamKind::Float2 => {
+            let parts: Vec<&str> = t.split(':').collect();
+            match parts[..] {
+                [x, y] => match (number(x.trim()), number(y.trim())) {
+                    (Some(x), Some(y)) => Ok(ParamValue::Vec2([x, y])),
+                    _ => Err(format!("'{text}' is not two numbers")),
+                },
+                _ => Err(format!("'{text}' is not x:y")),
+            }
+        }
         ParamKind::Float3 => {
             let parts: Vec<&str> = t.split(':').collect();
             match parts[..] {
@@ -521,7 +540,8 @@ impl ParamDef {
     }
 
     /// The range the pane holds this parameter to, as `(min, max, step)`,
-    /// for the kinds that have one — Slider, Float3 and Spin. An inline
+    /// for the kinds that have one — Slider, Float3 and Spin (a Float2's
+    /// adapts to its value, and is the pane's to choose). An inline
     /// detail (`slider:-2:2`) wins, then the template's `min` / `max`, then
     /// the pane's own defaults (0..2, -10..10, 1..10000), which are what a
     /// row with none declared clamps to. `param_display` builds the pane's

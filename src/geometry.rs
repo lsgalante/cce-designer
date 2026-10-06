@@ -575,6 +575,24 @@ pub fn node_param_vec3(node: &FsNode, name: &str, fallback: Vec3) -> Vec3 {
     fallback
 }
 
+/// A float2's two numbers — a range's two ends — read like
+/// [`node_param_vec3`]: the parsed value, else the text as `x:y`, else
+/// `fallback`.
+pub fn node_param_vec2(node: &FsNode, name: &str, fallback: [f32; 2]) -> [f32; 2] {
+    use crate::app::ParamValue;
+    let Some(p) = find_param(node, name) else { return fallback };
+    if let Some(ParamValue::Vec2(v)) = p.value() {
+        return *v;
+    }
+    let parts: Vec<&str> = p.text().split(':').collect();
+    if let [x, y] = parts[..] {
+        if let (Ok(x), Ok(y)) = (x.trim().parse::<f32>(), y.trim().parse::<f32>()) {
+            return [x, y];
+        }
+    }
+    fallback
+}
+
 /// A toggle's value. `true` / `false` in any case — and `1` / `0`, `on` /
 /// `off`, which a hand-edited file or an expression may leave — else
 /// `fallback`: absent, empty and unparseable all mean "the default", where
@@ -904,13 +922,18 @@ impl Evaluated {
     }
 }
 
-/// One parameter's expression evaluated. A float3 is three expressions
-/// separated by `:` — each component its own, as Houdini's channels are —
-/// so `chf("../a/size.x"):0:0` reads naturally.
+/// One parameter's expression evaluated. A float2 or float3 is two or
+/// three expressions separated by `:` — each component its own, as
+/// Houdini's channels are — so `chf("../a/size.x"):0:0` reads naturally.
 fn eval_param_value(scope: &mut TreeScope, p: &ParamDef) -> Result<Evaluated, String> {
-    if p.kind() == crate::app::ParamKind::Float3 {
+    let width = match p.kind() {
+        crate::app::ParamKind::Float2 => 2,
+        crate::app::ParamKind::Float3 => 3,
+        _ => 0,
+    };
+    if width > 0 {
         let parts: Vec<&str> = p.text().split(':').collect();
-        if parts.len() == 3 {
+        if parts.len() == width {
             let mut out = [0.0f32; 3];
             for (c, part) in out.iter_mut().zip(parts) {
                 let t = part.trim();
@@ -922,7 +945,10 @@ fn eval_param_value(scope: &mut TreeScope, p: &ParamDef) -> Result<Evaluated, St
                     }
                 };
             }
-            return Ok(Evaluated::Value(crate::app::ParamValue::Vec3(out)));
+            return Ok(Evaluated::Value(match width {
+                2 => crate::app::ParamValue::Vec2([out[0], out[1]]),
+                _ => crate::app::ParamValue::Vec3(out),
+            }));
         }
     }
     let e = crate::expr::parse(p.text()).map_err(|e| format!("{}: {} — {e}", scope.node.name, p.name))?;
@@ -4090,10 +4116,8 @@ pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     // colours should sit where they belong on the whole picture's scale, or
     // two Visualize nodes over two groups would each claim the full ramp.
     let (from, to) = if node_param_str(target, "range", "Auto").eq_ignore_ascii_case("manual") {
-        (
-            node_param_f32(target, "from", 0.0),
-            node_param_f32(target, "to", 1.0),
-        )
+        let [from, to] = node_param_vec2(target, "manual_range", [0.0, 1.0]);
+        (from, to)
     } else {
         let vals: Vec<f32> = (0..geom.num_points())
             .filter_map(|p| geom.points().value(&name, p))
@@ -5087,34 +5111,25 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // workhorse: a simulation attribute measured by Analysis is almost
         // always remapped before anything reads it.
         "remap" => {
-            let (f0, f1) = (
-                node_param_f32(target, "from_min", 0.0),
-                node_param_f32(target, "from_max", 1.0),
-            );
-            let (t0, t1) = (
-                node_param_f32(target, "to_min", 0.0),
-                node_param_f32(target, "to_max", 1.0),
-            );
+            let [f0, f1] = node_param_vec2(target, "from", [0.0, 1.0]);
+            let [t0, t1] = node_param_vec2(target, "to", [0.0, 1.0]);
             let span = f1 - f0;
             if span.abs() < 1e-9 {
-                fail = format!("From Min and From Max are both {}", f0);
+                fail = format!("From's two ends are both {}", f0);
             } else {
                 edit_components(geom, &name, &affected, |v| {
                     t0 + (v - f0) / span * (t1 - t0)
                 });
             }
         }
-        // Clamp into a range. From Min / From Max name the bounds, so Remap
-        // and Clip read the same way and chain without renaming anything.
+        // Clamp into a range. From names the bounds, so Remap and Clip read
+        // the same way and chain without renaming anything.
         "clip" => {
-            let (lo, hi) = (
-                node_param_f32(target, "from_min", 0.0),
-                node_param_f32(target, "from_max", 1.0),
-            );
+            let [lo, hi] = node_param_vec2(target, "from", [0.0, 1.0]);
             let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
             edit_components(geom, &name, &affected, |v| v.clamp(lo, hi));
         }
-        // Rescale so the attribute's sum, maximum or range hits To Max.
+        // Rescale so the attribute's sum, maximum or range hits Normalize To.
         // Unlike Remap this MEASURES first, so it needs no knowledge of what
         // the values happen to be — which is what makes it survive a
         // simulation whose range moves every frame.
@@ -5124,7 +5139,7 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                 .filter_map(|&p| geom.points().value(&name, p))
                 .map(|v| v.as_f32())
                 .collect();
-            let goal = node_param_f32(target, "to_max", 1.0);
+            let goal = node_param_f32(target, "normalize_to", 1.0);
             let measure = match node_param_str(target, "target", "Maximum").to_lowercase().as_str() {
                 "sum" => vals.iter().sum::<f32>(),
                 "range" => {
@@ -7415,24 +7430,15 @@ mod simnet_tests {
 
         let (remapped, err) = run_attr(
             &before,
-            &[
-                ("operation", "Remap"),
-                ("from_min", "0.00"),
-                ("from_max", &last.to_string()),
-                ("to_min", "0.00"),
-                ("to_max", "1.00"),
-            ],
+            &[("operation", "Remap"), ("from", &format!("0.00:{last}")), ("to", "0.00:1.00")],
         );
         assert!(err.is_none(), "{err:?}");
         assert_eq!(mass(&remapped, 0), 0.0);
         assert!((mass(&remapped, n - 1) - 1.0).abs() < 1e-5);
 
-        // Clip reads the same From Min / From Max, so the two chain without
-        // renaming anything between them.
-        let (clipped, err) = run_attr(
-            &before,
-            &[("operation", "Clip"), ("from_min", "2.00"), ("from_max", "5.00")],
-        );
+        // Clip reads the same From, so the two chain without renaming
+        // anything between them.
+        let (clipped, err) = run_attr(&before, &[("operation", "Clip"), ("from", "2.00:5.00")]);
         assert!(err.is_none(), "{err:?}");
         assert_eq!(mass(&clipped, 0), 2.0);
         assert_eq!(mass(&clipped, 3), 3.0);
@@ -7441,7 +7447,7 @@ mod simnet_tests {
         // A degenerate source range is refused rather than dividing by zero.
         let (_, err) = run_attr(
             &before,
-            &[("operation", "Remap"), ("from_min", "1.00"), ("from_max", "1.00")],
+            &[("operation", "Remap"), ("from", "1.00:1.00")],
         );
         assert!(err.is_some(), "a zero-width source range must be reported");
     }
@@ -7497,7 +7503,7 @@ mod simnet_tests {
         let (_, err) = run(&[("operation", "Create"), ("attribute_name", "w3")], "");
         assert!(err.is_some());
         // An operation that has no Value is untouched by the switch.
-        let (_, err) = run(&[("operation", "Clip"), ("from_min", "0"), ("from_max", "1")], "nope");
+        let (_, err) = run(&[("operation", "Clip"), ("from", "0:1")], "nope");
         assert!(err.is_none(), "{err:?}");
     }
 
@@ -7510,11 +7516,11 @@ mod simnet_tests {
 
         // Unlike Remap, Normalize needs no knowledge of the values — which is
         // what lets it sit in a solve whose range moves every frame.
-        let (by_max, err) = run_attr(&before, &[("operation", "Normalize"), ("target", "Maximum"), ("to_max", "1.00")]);
+        let (by_max, err) = run_attr(&before, &[("operation", "Normalize"), ("target", "Maximum"), ("normalize_to", "1.00")]);
         assert!(err.is_none(), "{err:?}");
         assert!((mass(&by_max, n - 1) - 1.0).abs() < 1e-5);
 
-        let (by_sum, _) = run_attr(&before, &[("operation", "Normalize"), ("target", "Sum"), ("to_max", "1.00")]);
+        let (by_sum, _) = run_attr(&before, &[("operation", "Normalize"), ("target", "Sum"), ("normalize_to", "1.00")]);
         assert!((sum(&by_sum) - 1.0).abs() < 1e-4, "sum is {}", sum(&by_sum));
 
         // An all-zero attribute has no scale to hit, and says so instead of
@@ -7871,7 +7877,7 @@ mod simnet_tests {
         }
 
         // Multiply darkens toward the ramp, Add brightens away from it.
-        let mid = run_vis(&before, &[("ramp", "Grayscale"), ("range", "Manual"), ("from", "0.00"), ("to", "2.00")]).0;
+        let mid = run_vis(&before, &[("ramp", "Grayscale"), ("range", "Manual"), ("manual_range", "0.00:2.00")]).0;
         let (mul, _) = run_vis(&mid, &[("attribute", "heat"), ("ramp", "Grayscale"), ("blend", "Multiply")]);
         let (add, _) = run_vis(&mid, &[("attribute", "heat"), ("ramp", "Grayscale"), ("blend", "Add")]);
         assert!(mul.color(0)[0] <= mid.color(0)[0] + 1e-6);

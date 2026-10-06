@@ -109,39 +109,30 @@
       "group": "where"
     },
     {
-      "name": "from_min",
-      "label": "From Min",
-      "type": "float",
-      "default": "0.00",
+      "name": "from",
+      "label": "From",
+      "type": "float2",
+      "default": "0.00:1.00",
       "show_when": "operation == Remap|Clip",
-      "description": "Remap: the input value that maps to To Min. Clip: the lower bound values are clamped to.",
+      "description": "Remap: the input range, its first value mapping to To's first and its second to To's second; the two must differ. Clip: the bounds values are clamped to.",
       "group": "range"
     },
     {
-      "name": "from_max",
-      "label": "From Max",
-      "type": "float",
-      "default": "1.00",
-      "show_when": "operation == Remap|Clip",
-      "description": "Remap: the input value that maps to To Max. Clip: the upper bound values are clamped to. Must differ from From Min for a remap.",
-      "group": "range"
-    },
-    {
-      "name": "to_min",
-      "label": "To Min",
-      "type": "float",
-      "default": "0.00",
+      "name": "to",
+      "label": "To",
+      "type": "float2",
+      "default": "0.00:1.00",
       "show_when": "operation == Remap",
-      "description": "The value that From Min maps to; values between map linearly, and values outside the From range extend past it.",
+      "description": "The output range From maps onto; values between map linearly, and values outside From extend past it.",
       "group": "range"
     },
     {
-      "name": "to_max",
-      "label": "To Max",
+      "name": "normalize_to",
+      "label": "Normalize To",
       "type": "float",
       "default": "1.00",
-      "show_when": "operation == Remap|Normalize",
-      "description": "Remap: the value that From Max maps to. Normalize: the value the chosen measure (sum, maximum or range) is scaled to hit.",
+      "show_when": "operation == Normalize",
+      "description": "The value the chosen measure (sum, maximum or range) is scaled to hit.",
       "group": "range"
     },
     {
@@ -186,7 +177,7 @@
       "type": "choice:Sum,Maximum,Range",
       "default": "Maximum",
       "show_when": "operation == Normalize",
-      "description": "What is measured before scaling: the values' sum, their maximum, or their range (max minus min). Every value is scaled so this measure equals To Max.",
+      "description": "What is measured before scaling: the values' sum, their maximum, or their range (max minus min). Every value is scaled so this measure equals Normalize To.",
       "group": "normalize"
     },
     {

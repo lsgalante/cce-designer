@@ -4754,7 +4754,7 @@ mod tests {
 
         // Visualize: its Attribute and Group rows are pickers because the
         // template says what they name, not because this node is listed
-        // anywhere; From and To are numbers and stay text boxes.
+        // anywhere; its Manual Range is a range's two ends, two sliders.
         state.graph_mut().set_selected_node(Some(3));
         state.sync_parameters_pane();
         let rows = state.param_mut().node_params();
@@ -4763,7 +4763,7 @@ mod tests {
         };
         assert!(row("Attribute").starts_with("textpick:") && row("Attribute").contains("Pos"), "got {}", row("Attribute"));
         assert_eq!(row("Group"), "textpick:group1");
-        assert_eq!(row("From"), "text");
+        assert_eq!(row("Manual Range"), "float2:-10:10:soft");
         assert_eq!(row("Input"), "text");
     }
 
@@ -5304,8 +5304,7 @@ mod tests {
             assert_eq!(kind(ty, name), K::Float3, "{ty}'s {name}");
         }
         for (ty, name) in [
-            ("cull", "threshold"), ("group", "threshold"), ("copy", "scale"), ("visualize", "from"), ("visualize", "to"),
-            ("attribute", "from_min"), ("attribute", "from_max"), ("attribute", "to_min"), ("attribute", "to_max"),
+            ("cull", "threshold"), ("group", "threshold"), ("copy", "scale"), ("attribute", "normalize_to"),
         ] {
             assert_eq!(kind(ty, name), K::Float, "{ty}'s {name}");
         }
@@ -6883,7 +6882,7 @@ mod tests {
         // find their numbers still there.
         let mut params = vec![
             pd("operation", "Remap", ""),
-            pd("to_max", "7.5", "operation == Remap"),
+            pd("to", "7.5", "operation == Remap"),
         ];
         assert_eq!(param_display(&params).len(), 2);
         params[0].set_text("Clip");
@@ -9611,6 +9610,127 @@ mod tests {
         proj.migrate_format();
         assert_eq!(names(&proj.root), ["camera1"]);
         assert!(proj.view_state.current_path.is_empty());
+    }
+
+    /// A range's two ends are one `float2` row (format 6, 2026-10-06): the
+    /// Attribute node's From and To, Normalize's own Normalize To, and
+    /// Visualize's Manual Range. An older save's pairs are joined as they
+    /// were written — an expression half makes the whole an expression,
+    /// each component its own — and a channel path to an old row follows,
+    /// RESOLVED, so a Transfer's `from` wire is not mistaken for one. The
+    /// pane shows two sliders over a soft span around the value, kept while
+    /// the value stays in it and through a drag; an expression is text.
+    #[test]
+    fn a_range_is_one_float2_row() {
+        use crate::app::{ParamKind, ParamValue, Project, PROJECT_FORMAT};
+        let templates_root = crate::app::load_fs_tree();
+        let kind = |ty: &str, name: &str| {
+            templates_root.children.iter().find(|t| t.node_type == ty).unwrap().params.iter().find(|p| p.name == name).map(|p| p.kind())
+        };
+        assert_eq!(kind("attribute", "from"), Some(ParamKind::Float2));
+        assert_eq!(kind("attribute", "to"), Some(ParamKind::Float2));
+        assert_eq!(kind("attribute", "normalize_to"), Some(ParamKind::Float));
+        assert_eq!(kind("visualize", "manual_range"), Some(ParamKind::Float2));
+        for gone in ["from_min", "from_max", "to_min", "to_max"] {
+            assert_eq!(kind("attribute", gone), None, "{gone} is retired");
+        }
+        assert_eq!((kind("visualize", "from"), kind("visualize", "to")), (None, None));
+
+        // An older save.
+        let attr = |id: &str, op: &str, rows: Vec<(&'static str, &'static str, &'static str)>| {
+            let mut params = vec![("input", "node", "sphere1"), ("operation", "choice:Remap,Normalize", op)];
+            params.extend(rows);
+            ref_node(id, id, "attribute", params, vec![])
+        };
+        let geometry = ref_node("g", "geometry1", "geometry", vec![], vec![
+            ref_node("sphere1", "sphere1", "sphere", vec![("radius", "slider", "0.5")], vec![]),
+            attr("remap1", "Remap", vec![
+                ("from_min", "float", "2.00"),
+                ("from_max", "float", "5.00"),
+                ("to_min", "float", "0.00"),
+                ("to_max", "float", "chf(\"../sphere1/radius\") * 4"),
+            ]),
+            attr("norm1", "Normalize", vec![("to_max", "float", "3.00")]),
+            ref_node("vis1", "vis1", "visualize", vec![("input", "node", "remap1"), ("from", "float", "-1.00"), ("to", "float", "1.00")], vec![]),
+            ref_node("xfer", "xfer", "transfer", vec![("input", "node", "remap1"), ("from", "node", "norm1")], vec![]),
+            ref_node("w", "w", "wrangle", vec![("code", "code", "@a = ch(\"../remap1/from_max\") + ch(\"../norm1/to_max\") + ch(\"../vis1/to\") + ch(\"../xfer/from\");")], vec![]),
+            ref_node("ball", "ball", "sphere", vec![("radius", "slider", "ch(\"../remap1/to_max\") + ch(\"../remap1/from_min\")")], vec![]),
+        ]);
+        let root = ref_node("root", "root", "node", vec![], vec![geometry]);
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 5 };
+        proj.migrate_format();
+        assert_eq!(proj.format, PROJECT_FORMAT);
+        let g = geo(&proj.root);
+        let node = |name: &str| g.children.iter().find(|c| c.name == name).unwrap();
+        let names = |n: &FsNode| n.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        let param = |n: &str, p: &str| node(n).params.iter().find(|q| q.name == p).unwrap().clone();
+
+        assert_eq!(names(node("remap1")), ["input", "operation", "from", "to", "normalize_to"]);
+        assert_eq!(param("remap1", "from").value(), Some(&ParamValue::Vec2([2.0, 5.0])));
+        let to = param("remap1", "to");
+        assert!(to.is_expr(), "a half that was an expression makes the whole one");
+        assert_eq!(to.text(), "0.00:chf(\"../sphere1/radius\") * 4");
+        assert!(param("remap1", "normalize_to").is_expr(), "To Max is Normalize To's too");
+        assert_eq!(param("norm1", "to").text(), "0.00:3.00", "a missing half is the default");
+        assert_eq!(param("norm1", "normalize_to").value(), Some(&ParamValue::Number(3.0)));
+        assert_eq!(names(node("vis1")), ["input", "manual_range"]);
+        assert_eq!(param("vis1", "manual_range").value(), Some(&ParamValue::Vec2([-1.0, 1.0])));
+        assert_eq!(param("xfer", "from").text(), "norm1", "a wire called from is not a range");
+
+        assert_eq!(
+            param("w", "code").text(),
+            "@a = ch(\"../remap1/from.y\") + ch(\"../norm1/normalize_to\") + ch(\"../vis1/manual_range.y\") + ch(\"../xfer/from\");",
+            "To Max is Normalize To on a Normalize node, and a path not to a range is left alone"
+        );
+        assert_eq!(param("ball", "radius").text(), "ch(\"../remap1/to.y\") + ch(\"../remap1/from.x\")");
+
+        // Each component evaluates on its own, and a path reads one.
+        let mut err = None;
+        let resolved = crate::geometry::resolve_param_refs(&proj.root, node("remap1"), 1, &mut err).unwrap();
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(resolved.params.iter().find(|p| p.name == "to").unwrap().value(), Some(&ParamValue::Vec2([0.0, 2.0])));
+        let resolved = crate::geometry::resolve_param_refs(&proj.root, node("ball"), 1, &mut err).unwrap();
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(resolved.params.iter().find(|p| p.name == "radius").unwrap().value(), Some(&ParamValue::Number(4.0)));
+
+        // Once.
+        let before = serde_json::to_string(&proj).unwrap();
+        proj.migrate_format();
+        assert_eq!(serde_json::to_string(&proj).unwrap(), before);
+
+        // The pane: two sliders over a soft span around the value.
+        let find = |name: &str| templates_root.children.iter().find(|t| t.name == name).unwrap();
+        let mut remap = find("Attribute").clone();
+        remap.id = "r".into();
+        remap.name = "remap1".into();
+        for (p, v) in [("operation", "Remap"), ("from", "2.00:5.00")] {
+            remap.params.iter_mut().find(|q| q.name == p).unwrap().set_text(v.to_string());
+        }
+        let mut state = State::new(false);
+        state.current_dir_mut().children = vec![remap];
+        state.sync_nodes();
+        state.graph_mut().set_selected_node(Some(0));
+        let row = |state: &mut State, key: &str| {
+            state.sync_parameters_pane();
+            state.param_mut().node_params().iter().find(|r| r.0 == key).unwrap_or_else(|| panic!("a {key} row")).2.clone()
+        };
+        let set = |state: &mut State, val: &str| {
+            state.current_dir_mut().children[0].params.iter_mut().find(|p| p.name == "from").unwrap().set_text(val.to_string());
+        };
+        assert_eq!(row(&mut state, "From"), "float2:-10:10:soft");
+        assert_eq!(row(&mut state, "To"), "float2:-10:10:soft");
+        set(&mut state, "300:400");
+        assert_eq!(row(&mut state, "From"), "float2:-1000:1000:soft", "the span follows the value");
+        state.drag_widget = Some(crate::slots::PARAM_IDX);
+        set(&mut state, "3000:4000");
+        assert_eq!(row(&mut state, "From"), "float2:-1000:1000:soft", "but not under the pointer");
+        state.drag_widget = None;
+        assert_eq!(row(&mut state, "From"), "float2:-10000:10000:soft", "and on the release it does");
+        state.current_dir_mut().children[0].params.iter_mut().find(|p| p.name == "from").unwrap().set_expr(true);
+        assert_eq!(row(&mut state, "From"), "text", "an expression is shown as its text");
+        state.current_dir_mut().children[0].params.iter_mut().find(|p| p.name == "from").unwrap().set_expr(false);
+        set(&mut state, "abc");
+        assert_eq!(row(&mut state, "From"), "text", "a text that is not two numbers is a text box, to be put right");
     }
 
     /// The root is the object level: each Geometry node there is shown or

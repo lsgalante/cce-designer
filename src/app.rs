@@ -382,7 +382,8 @@ pub struct Project {
     /// (the same day) their texture coordinates `uv` where they were `UV`;
     /// 4 (the same day) parameter names as identifiers; 5 (2026-10-02) the
     /// root as the object level, its geometry inside a `geometry` node
-    /// (`context::wrap_root_geometry`).
+    /// (`context::wrap_root_geometry`); 6 (2026-10-06) a range's two ends as
+    /// one `float2` (`Project::migrate_range_rows`).
     /// `migrate_format` takes a file through each step it is behind, and a
     /// step must not run twice.
     #[serde(default)]
@@ -390,7 +391,7 @@ pub struct Project {
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 5;
+pub const PROJECT_FORMAT: u32 = 6;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -686,6 +687,7 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
         _ => match kind {
             ParamKind::Slider | ParamKind::Float => "float",
             ParamKind::Spin => "integer",
+            ParamKind::Float2 => "float2",
             ParamKind::Float3 => "float3",
             ParamKind::Toggle => "boolean",
             ParamKind::Choice => "enum",
@@ -783,6 +785,13 @@ pub struct PickLists {
 /// ball beside the sliders (cce-ui's `Float3::set_trackball`).
 pub fn float3_row(min: f32, max: f32, trackball: bool) -> String {
     format!("float3:{}:{}{}", min, max, if trackball { ":trackball" } else { "" })
+}
+
+/// A `float2` parameter's display type over ± `span`: two sliders, with a
+/// soft range, so a value typed past an end widens it rather than being
+/// clamped.
+pub fn float2_row(span: f32) -> String {
+    format!("float2:{}:{}:soft", -span, span)
 }
 
 /// The control the Attribute node's Value row is presented as, for a target
@@ -993,6 +1002,15 @@ fn param_row(p: &ParamDef) -> (String, String, String) {
             // `textpick` row by `add_pick_lists` when the input has names
             // to offer.
             "text".to_string()
+        } else if kind == ParamKind::Float2 {
+            // Two sliders over a soft range around the value, as the
+            // Attribute node's Value row is; the pane's own pass keeps the
+            // span a row already has (`State::present_float2_rows`). A text
+            // that is not two numbers stays a text box, to be put right.
+            match p.value() {
+                Some(ParamValue::Vec2(v)) => float2_row(value_row_span(v, None)),
+                _ => "text".to_string(),
+            }
         } else if p.ty() == "slider" {
             let (min, max, _) = p.range().expect("a slider has a range");
             format!("slider:{}:{}", min, max)
@@ -1273,7 +1291,120 @@ impl Project {
         if self.format < 5 {
             crate::context::wrap_root_geometry(self);
         }
+        if self.format < 6 {
+            self.migrate_range_rows();
+        }
         self.format = PROJECT_FORMAT;
+    }
+
+    /// Format 5 → 6: a range is one `float2` row where it was two numbers.
+    /// The Attribute node's From Min / From Max become From, To Min / To
+    /// Max become To, and To Max is also Normalize To, the goal Normalize
+    /// read off it; Visualize's From / To become Manual Range. Each pair's
+    /// two texts are joined as they were written (`0.00:1.00`), and when
+    /// either was an expression so is the whole — a float2's components are
+    /// each an expression, as a float3's are. A half the save lacks takes
+    /// the default. What names the old rows follows: a channel path to
+    /// `from_min` reads `from.x`, to `to_max` `to.y` (or `normalize_to` on
+    /// a node set to Normalize, which is what it meant there), Visualize's
+    /// `from` `manual_range.x`. Paths are RESOLVED, from where their holder
+    /// stands — `from` and `to` are wires on Transfer, Copy and Distance,
+    /// and those are not touched.
+    fn migrate_range_rows(&mut self) {
+        // What a retired row is now, on the node that has it.
+        fn now(node: &FsNode, param: &str) -> Option<&'static str> {
+            if !node.params.iter().any(|p| p.name == param) {
+                return None;
+            }
+            let normalize = node_param_str(node, "operation", "").eq_ignore_ascii_case("normalize");
+            Some(match (node.node_type.to_ascii_lowercase().as_str(), param) {
+                ("attribute", "from_min") => "from.x",
+                ("attribute", "from_max") => "from.y",
+                ("attribute", "to_min") => "to.x",
+                ("attribute", "to_max") if normalize => "normalize_to",
+                ("attribute", "to_max") => "to.y",
+                ("visualize", "from") if visualize_pair(node) => "manual_range.x",
+                ("visualize", "to") if visualize_pair(node) => "manual_range.y",
+                _ => return None,
+            })
+        }
+        // Visualize's From and To are the numbers this step joins, not a
+        // later row of the same name.
+        fn visualize_pair(node: &FsNode) -> bool {
+            !node.params.iter().any(|p| p.name == "manual_range")
+        }
+        // Pass one, over the tree as it stands: every path that names one.
+        fn collect(root: &FsNode, node: &FsNode, edits: &mut Vec<(String, String, String)>) {
+            for p in node.params.iter().filter(|p| p.is_expr() || p.kind() == ParamKind::Code) {
+                let text = crate::expr::rewrite_paths(p.text(), |path| {
+                    let (id, _, param) = crate::geometry::ref_path_target(root, node, path)?;
+                    let target = crate::viewer_state::find_node_by_id(root, &id)?;
+                    let new = now(target, &param)?;
+                    Some(match path.trim().rsplit_once('/') {
+                        Some((head, _)) => format!("{head}/{new}"),
+                        None => new.to_string(),
+                    })
+                });
+                if text != p.text() {
+                    edits.push((node.id.clone(), p.name.clone(), text));
+                }
+            }
+            for c in &node.children {
+                collect(root, c, edits);
+            }
+        }
+        let mut edits = Vec::new();
+        collect(&self.root, &self.root, &mut edits);
+        for (id, name, text) in edits {
+            let node = if self.root.id == id { Some(&mut self.root) } else { crate::viewer_state::find_node_by_id_mut(&mut self.root, &id) };
+            if let Some(p) = node.and_then(|n| n.params.iter_mut().find(|p| p.name == name)) {
+                p.set_text(text);
+            }
+        }
+
+        // Pass two: the rows themselves.
+        fn join(node: &mut FsNode, lo: &str, hi: &str, name: &str, keep_hi: Option<&str>) {
+            let Some(at) = node.params.iter().position(|p| p.name == lo || p.name == hi) else { return };
+            let half = |node: &FsNode, n: &str, default: &str| {
+                node.params.iter().find(|p| p.name == n).map_or((default.to_string(), false), |p| (p.text().trim().to_string(), p.is_expr()))
+            };
+            let (a, ae) = half(node, lo, "0.00");
+            let (b, be) = half(node, hi, "1.00");
+            let mut joined = ParamDef::new(name, "float2", format!("{a}:{b}"));
+            if ae || be {
+                joined.set_expr(true);
+            }
+            let mut extra = None;
+            if let Some(extra_name) = keep_hi {
+                if let Some(p) = node.params.iter().find(|p| p.name == hi) {
+                    let mut q = ParamDef::new(extra_name, "float", p.text());
+                    q.set_expr(p.is_expr());
+                    extra = Some(q);
+                }
+            }
+            node.params.retain(|p| p.name != lo && p.name != hi);
+            let at = at.min(node.params.len());
+            node.params.insert(at, joined);
+            if let Some(q) = extra {
+                node.params.insert(at + 1, q);
+            }
+        }
+        fn walk(node: &mut FsNode) {
+            match node.node_type.to_ascii_lowercase().as_str() {
+                "attribute" => {
+                    join(node, "from_min", "from_max", "from", None);
+                    join(node, "to_min", "to_max", "to", Some("normalize_to"));
+                }
+                "visualize" if visualize_pair(node) && node.params.iter().any(|p| p.name == "from" || p.name == "to") => {
+                    join(node, "from", "to", "manual_range", None);
+                }
+                _ => {}
+            }
+            for c in &mut node.children {
+                walk(c);
+            }
+        }
+        walk(&mut self.root);
     }
 
     /// Format 3 → 4: a parameter's NAME is an identifier
@@ -3064,6 +3195,9 @@ pub struct State {
     /// node it is for (`value_row_span`): kept between pane syncs so the row
     /// re-scales only when its value leaves it.
     pub value_row_span: Option<(String, f32)>,
+    /// The same for the shown node's `float2` rows, by parameter name, with
+    /// the node they are for (`present_float2_rows`).
+    pub float2_spans: Option<(String, Vec<(String, f32)>)>,
     /// The displayed scene's point attributes as last built, with their
     /// ranges: what the visualizer editor offers.
     pub scene_attributes: Vec<crate::visualizer::SceneAttribute>,
@@ -4970,8 +5104,56 @@ impl State {
             vec![]
         };
         let params = self.add_pick_lists(params);
+        let params = self.present_float2_rows(params);
         self.param_mut().set_display_params(&params);
         self.param_pane_source = if self.is_detached_network { None } else { self.param_pane_target() };
+    }
+
+    /// The shown node's `float2` rows over the span each already has:
+    /// `param_display` chooses one from the value alone, and this keeps the
+    /// span in use while the value stays inside it, and outright through a
+    /// drag in the pane — a new span is a new row type, which rebuilds the
+    /// pane and would drop the slider being held. The Value row's rule
+    /// ([`value_row_span`]), kept per parameter.
+    fn present_float2_rows(&mut self, mut params: Vec<(String, String, String)>) -> Vec<(String, String, String)> {
+        let rows: Vec<(String, String, [f32; 2])> = {
+            if self.is_detached_network {
+                return params;
+            }
+            let Some(slot) = self.param_editor_selected() else { return params };
+            let Some(node) = self.param_editor_dir().children.get(slot) else { return params };
+            let rows = node
+                .params
+                .iter()
+                .filter(|p| !p.is_expr())
+                .filter_map(|p| match p.value() {
+                    Some(ParamValue::Vec2(v)) => Some((p.shown_name().to_string(), p.name.clone(), *v)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if rows.is_empty() {
+                return params;
+            }
+            let id = node.id.clone();
+            if self.float2_spans.as_ref().is_none_or(|(n, _)| *n != id) {
+                self.float2_spans = Some((id, Vec::new()));
+            }
+            rows
+        };
+        let held = self.drag_widget == Some(crate::slots::PARAM_IDX);
+        let Some((_, spans)) = self.float2_spans.as_mut() else { return params };
+        for (key, name, v) in rows {
+            let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2.starts_with("float2")) else { continue };
+            let kept = spans.iter().find(|(n, _)| *n == name).map(|(_, r)| *r);
+            let span = match (held, kept) {
+                (true, Some(r)) => r,
+                _ => value_row_span(&v, kept),
+            };
+            row.2 = float2_row(span);
+            spans.retain(|(n, _)| *n != name);
+            spans.push((name, span));
+        }
+        params
     }
 
     /// Upgrade the selected node's `attribute`- and `group`-kind text rows
@@ -8065,6 +8247,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
             vis_editing: None,
             value_row_span: None,
+            float2_spans: None,
             scene_attributes: Vec::new(),
             scene_base: None,
             scene_groups: Vec::new(),
