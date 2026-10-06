@@ -54,14 +54,6 @@ pub enum Mode {
     /// The palette TURNS INTO this list, the way it turns into the node
     /// list — one plate, one filter.
     Groups,
-    /// The `attribute_visualizers` command: the viewport's attribute
-    /// visualizers (`crate::visualizer`), a switch each, and Add
-    /// Visualizer. Picking a visualizer's row — off its switch — opens its
-    /// settings.
-    Visualizers,
-    /// One visualizer's settings (`State::vis_editing`) as rows: its
-    /// controls, Delete, and Back to the list, which Escape is too.
-    VisualizerEdit,
 }
 
 /// The control a row carries, drawn over its right end and worked in place —
@@ -77,11 +69,6 @@ pub enum Control {
     /// over the band turns it, a press on the band jumps to the pointer.
     /// A `dec` of zero snaps to whole numbers — the spinbox shape.
     Slider { value: f32, min: f32, max: f32, dec: usize, step: f32, suffix: &'static str },
-    /// Two numbers over one range, `lo:hi` — the params pane's `float2`:
-    /// two sliders side by side, each with its readout ahead of it, worked
-    /// as a [`Control::Slider`] is, an end at a time. The arrows nudge the
-    /// first end, shift and the arrows the second.
-    Float2 { values: [f32; 2], min: f32, max: f32, dec: usize, step: f32 },
     /// One of a fixed set: picking the row opens a dropdown of the options
     /// under its value ([`State::open_dialog_dropdown`]); the arrows step
     /// either way without it.
@@ -98,7 +85,6 @@ impl Control {
         match self {
             Control::Toggle(on) => if *on { "true" } else { "false" }.to_string(),
             Control::Slider { value, dec, .. } => format!("{:.*}", dec, value),
-            Control::Float2 { values, dec, .. } => format!("{:.*}:{:.*}", dec, values[0], dec, values[1]),
             Control::Choice { options, index } => options.get(*index).cloned().unwrap_or_default(),
             Control::Color { hex, .. } => hex.clone(),
         }
@@ -108,7 +94,7 @@ impl Control {
     /// readout shows none.
     fn quantize(&self, v: f32) -> f32 {
         match self {
-            Control::Slider { min, max, dec, .. } | Control::Float2 { min, max, dec, .. } => {
+            Control::Slider { min, max, dec, .. } => {
                 let v = v.clamp(min.min(*max), max.max(*min));
                 if *dec == 0 { v.round() } else { v }
             }
@@ -121,7 +107,6 @@ impl Control {
     fn slider_part(&self, k: usize) -> Option<(f32, f32, f32)> {
         match self {
             Control::Slider { value, min, max, .. } if k == 0 => Some((*value, *min, *max)),
-            Control::Float2 { values, min, max, .. } if k < 2 => Some((values[k], *min, *max)),
             _ => None,
         }
     }
@@ -131,7 +116,6 @@ impl Control {
         let q = self.quantize(v);
         match self {
             Control::Slider { value, .. } if k == 0 => *value = q,
-            Control::Float2 { values, .. } if k < 2 => values[k] = q,
             _ => {}
         }
     }
@@ -186,7 +170,7 @@ impl Row {
     /// Whether the row's control is made of sliders: a slider, or a
     /// float2's two.
     fn is_slider(&self) -> bool {
-        matches!(self.control, Some(Control::Slider { .. } | Control::Float2 { .. }))
+        matches!(self.control, Some(Control::Slider { .. }))
     }
 
     fn is_color(&self) -> bool {
@@ -234,11 +218,6 @@ pub const SLIDER_W: f32 = 180.0;
 /// would paint and never show.
 const READOUT_W: f32 = 60.0;
 const READOUT_GAP: f32 = 8.0;
-/// How far in from the row's right end a float2 row's control begins —
-/// twice a slider's, since it is two sliders, each with its readout.
-const FLOAT2_W: f32 = 2.0 * SLIDER_W;
-/// The gap between a float2's two halves.
-const FLOAT2_GAP: f32 = 12.0;
 /// Gap between the query line and the list.
 const GAP: f32 = 8.0;
 
@@ -355,9 +334,6 @@ pub struct Dialog {
     hover_ctl: Option<usize>,
     /// A row the pointer activated, drained by the app.
     activated: Option<String>,
-    /// Whether the press that set `activated` was on the row's control
-    /// (its switch) rather than on the rest of the row.
-    activated_control: bool,
     /// The choice rows' closed dropdowns: one toolkit `Dropdown`, handed
     /// each row's options and selection as the row is painted, as the
     /// toggle and slider stamps are.
@@ -411,8 +387,6 @@ pub struct Dialog {
     slider_track: (f32, f32),
     /// The row and value the pointer moved a slider to, drained by the app.
     slider_change: Option<(String, f32)>,
-    /// The row and values the pointer moved a float2 to, drained by the app.
-    float2_change: Option<(String, [f32; 2])>,
     /// One toolkit colour selector per colour row, by row id — real widgets,
     /// not stamps, because each carries state of its own: a hex edit in
     /// progress, a picker process streaming values. Kept across
@@ -446,7 +420,6 @@ impl Dialog {
             hover_row: None,
             hover_ctl: None,
             activated: None,
-            activated_control: false,
             dropdown_stamp: RefCell::new(Dropdown::new(Vec::new(), 0)),
             dropdown: Box::new(Dropdown::new(Vec::new(), 0)),
             dropdown_row: None,
@@ -459,7 +432,6 @@ impl Dialog {
             hover_part: 0,
             slider_track: (0.0, 1.0),
             slider_change: None,
-            float2_change: None,
             colors: Vec::new(),
             color_changes: Vec::new(),
         });
@@ -664,12 +636,6 @@ impl Dialog {
         self.activated.take()
     }
 
-    /// Whether the last activation was a press on the row's control —
-    /// read before [`Self::take_activated`] or after, it is the same press.
-    pub fn activated_on_control(&self) -> bool {
-        self.activated_control
-    }
-
     /// Put the scroll back where it was after a re-rank, clamped to the
     /// list the rows now make.
     pub fn restore_scroll_px(&mut self, px: f32) {
@@ -702,16 +668,11 @@ impl Dialog {
         self.slider_change.take()
     }
 
-    pub fn take_float2_change(&mut self) -> Option<(String, [f32; 2])> {
-        self.float2_change.take()
-    }
-
     /// Say what row `i`'s sliders now hold, for the app to land.
     fn note_slider_change(&mut self, i: usize) {
         let Some(row) = self.rows.get(i) else { return };
         match row.control {
             Some(Control::Slider { value, .. }) => self.slider_change = Some((row.id.clone(), value)),
-            Some(Control::Float2 { values, .. }) => self.float2_change = Some((row.id.clone(), values)),
             _ => {}
         }
     }
@@ -817,11 +778,6 @@ impl Dialog {
                 height: TOGGLE_H,
             }),
             Some(Control::Slider { .. }) => Some(self.slider_rect(r)),
-            Some(Control::Float2 { .. }) => {
-                let parts = self.float2_parts(r);
-                let (a, b) = (parts[0].1, parts[1].1);
-                Some(Rect { width: b.x + b.width - a.x, ..a })
-            }
             Some(Control::Color { .. }) => Some(self.slider_band_rect(r)),
             Some(Control::Choice { .. }) => Some(self.slider_band_rect(r)),
             None => None,
@@ -841,28 +797,11 @@ impl Dialog {
         Rect { x: b.x - READOUT_W - READOUT_GAP, width: b.width + READOUT_W + READOUT_GAP, ..b }
     }
 
-    /// A float2 row's two sliders, each as (band, the band with its
-    /// readout lane ahead of it): the slider control's whole span — from
-    /// [`FLOAT2_W`] in from the row's right end out to the band's right
-    /// edge — halved, with [`FLOAT2_GAP`] between the halves.
-    fn float2_parts(&self, r: Rect) -> [(Rect, Rect); 2] {
-        let band = self.slider_band_rect(r);
-        let x0 = r.x + r.width - 8.0 - FLOAT2_W;
-        let half = ((band.x + band.width - x0 - FLOAT2_GAP) * 0.5).max(READOUT_W + READOUT_GAP + 10.0);
-        let part = |k: usize| {
-            let whole = Rect { x: x0 + k as f32 * (half + FLOAT2_GAP), width: half, ..band };
-            let lane = READOUT_W + READOUT_GAP;
-            (Rect { x: whole.x + lane, width: half - lane, ..whole }, whole)
-        };
-        [part(0), part(1)]
-    }
-
     /// A slider row's sliders, each as (band, the whole control): one for a
     /// slider, two for a float2.
     fn slider_parts(&self, r: Rect, row: &Row) -> Vec<(Rect, Rect)> {
         match row.control {
             Some(Control::Slider { .. }) => vec![(self.slider_band_rect(r), self.slider_rect(r))],
-            Some(Control::Float2 { .. }) => self.float2_parts(r).to_vec(),
             _ => Vec::new(),
         }
     }
@@ -1102,8 +1041,6 @@ impl Paint for Dialog {
                     Mode::AddNode => "Add Node: type to filter nodes",
                     Mode::Rename => "Rename: type the node's name",
                     Mode::Groups => "Group Markers: type to filter groups",
-                    Mode::Visualizers => "Attribute Visualizers: type to filter",
-                    Mode::VisualizerEdit => "Visualizer: type to filter its settings",
                 },
                 q_w,
             );
@@ -1145,7 +1082,6 @@ impl Paint for Dialog {
                 Mode::AddNode => "No matching node",
                 Mode::Rename => "No node to rename",
                 Mode::Groups => "No point group in the scene",
-                Mode::Visualizers | Mode::VisualizerEdit => "No matching row",
             };
             ctx.text_with(empty, list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
             return;
@@ -1207,7 +1143,6 @@ impl Paint for Dialog {
             let chord_right = r.x + r.width - 8.0 - ctl_col;
             let label_right = match &row.control {
                 Some(Control::Choice { .. }) => self.slider_band_rect(r).x - 12.0,
-                Some(Control::Float2 { .. }) => self.float2_parts(r)[0].1.x - 12.0,
                 _ => chord_right - if right_w > 0.0 { right_w + 12.0 } else { 0.0 },
             };
             let glyph_y = r.y + (r.height - chev) * 0.5;
@@ -1272,21 +1207,6 @@ impl Paint for Dialog {
                         Some(family.clone()),
                         own,
                     );
-                }
-                Some(Control::Float2 { values, min, max, dec, .. }) => {
-                    // The Slider arm twice, an end each.
-                    for (k, (band, _)) in self.float2_parts(r).into_iter().enumerate() {
-                        {
-                            let mut stamp = self.slider_stamp.borrow_mut();
-                            stamp.set_range(*min, *max);
-                            stamp.set_scaled_value(values[k]);
-                            stamp.set_hovered(self.hover_ctl == Some(i) && self.hover_part == k);
-                            Paint::paint(&**stamp, band, ctx);
-                        }
-                        let readout = format!("{:.*}", *dec, values[k]);
-                        let rw = display::measure_text_width(&readout, &family, font_size);
-                        ctx.text_with(readout, band.x - READOUT_GAP - rw, ty, font_size, label_color, Some(family.clone()), own);
-                    }
                 }
                 Some(Control::Color { .. }) => {
                     if let Some(sel) = self.color_selector(&row.id) {
@@ -1446,9 +1366,6 @@ impl Input for Dialog {
                         return true;
                     }
                     self.activated = self.rows.get(i).map(|r| r.id.clone());
-                    self.activated_control = r
-                        .and_then(|r| self.control_rect(r, &self.rows[i]))
-                        .is_some_and(|c| *x >= c.x && *x < c.x + c.width && *y >= c.y && *y < c.y + c.height);
                     return true;
                 }
                 // Inside the plate but on no control: consumed anyway, so the
@@ -1561,7 +1478,6 @@ impl Input for Dialog {
 
 use crate::app::State;
 use crate::command::Context;
-use crate::visualizer::{VIS_ADD_ROW_ID, VIS_FIELD_PREFIX, VIS_ROW_PREFIX};
 use crate::slots::DIALOG_IDX;
 
 /// The list's zoom row: not a registry command but a control — a slider
@@ -1737,13 +1653,13 @@ pub use cce_ui::widget::context_menu::{BACK_MARK, PAGE_MARK};
 const GLYPH_GAP: f32 = 6.0;
 
 /// Whether a row of the dialog in `mode` turns it into another list: the
-/// palette's Group Markers and Attribute Visualizers, a visualizer of the
-/// list and Add Visualizer. A press runs it, as before; a side swipe forward
-/// with the pointer on it does too.
+/// palette's Group Markers. A press runs it, as before; a side swipe forward
+/// with the pointer on it does too. (Attribute Visualizers led into the
+/// dialog's visualizer list until 2026-10-06; they are edited in the params
+/// HUD now, and the row closes the palette and opens them there.)
 pub fn dialog_row_leads(mode: Mode, id: &str) -> bool {
     match mode {
-        Mode::Commands => matches!(id, "group_markers" | "attribute_visualizers"),
-        Mode::Visualizers => id.starts_with(VIS_ROW_PREFIX),
+        Mode::Commands => matches!(id, "group_markers"),
         _ => false,
     }
 }
@@ -1811,14 +1727,7 @@ impl State {
     /// Turn the open dialog to `mode`, as the row or key that leads there
     /// does.
     pub(crate) fn open_dialog_mode(&mut self, mode: Mode) {
-        match mode {
-            Mode::Visualizers => self.open_visualizers_dialog(),
-            Mode::VisualizerEdit => match self.vis_editing {
-                Some(i) => self.open_visualizer_editor(i),
-                None => self.open_visualizers_dialog(),
-            },
-            other => self.open_dialog_in(other),
-        }
+        self.open_dialog_in(mode);
     }
 
     /// Wire the node just added (the level's last) into the wire from the
@@ -1865,35 +1774,6 @@ impl State {
     /// groups where the commands were.
     pub fn open_group_markers_dialog(&mut self) {
         self.open_dialog_in(Mode::Groups);
-    }
-
-    /// The Attribute Visualizers list: the `attribute_visualizers` command.
-    pub fn open_visualizers_dialog(&mut self) {
-        self.vis_editing = None;
-        self.open_dialog_in(Mode::Visualizers);
-    }
-
-    /// Visualizer `i`'s settings, in the same plate — the list turned into
-    /// the one visualizer, as the palette turns into Group Markers.
-    pub fn open_visualizer_editor(&mut self, i: usize) {
-        if i >= self.visualizers.len() {
-            return;
-        }
-        self.vis_editing = Some(i);
-        self.open_dialog_in(Mode::VisualizerEdit);
-    }
-
-    /// Rebuild the rows for a change that adds or drops some — Mode flipping
-    /// Ramp's rows for Vector's — keeping the selected row and the scroll,
-    /// as a control edited in place does.
-    fn refresh_dialog_rows_in_place(&mut self) {
-        let selected = self.slots.dialog.selected_id().map(str::to_string);
-        let scroll = self.slots.dialog.scroll_px;
-        self.refresh_dialog_rows();
-        if let Some(i) = selected.and_then(|id| self.slots.dialog.rows.iter().position(|r| r.id == id)) {
-            self.slots.dialog.selected = i;
-        }
-        self.slots.dialog.restore_scroll_px(scroll);
     }
 
     /// What renaming the dialog's node to `typed` would do: the name it
@@ -1954,8 +1834,6 @@ impl State {
             Mode::AddNode => "Add Node: type to filter, Enter adds at the cursor, Escape closes.",
             Mode::Rename => "Rename: type the name, Enter renames, Escape closes.",
             Mode::Groups => "Group Markers: Enter or a click marks a group's points in the scene, Escape closes.",
-            Mode::Visualizers => "Attribute Visualizers: a switch turns one on or off, Enter or a click edits it, Escape closes.",
-            Mode::VisualizerEdit => "Visualizer: change a setting in place; Escape goes back to the list.",
         });
     }
 
@@ -2115,18 +1993,6 @@ impl State {
                     );
                 }
                 rows
-            }
-            // The visualizers, then one visualizer's settings, ranked by
-            // label as every list is.
-            Mode::Visualizers | Mode::VisualizerEdit => {
-                let all = if self.slots.dialog.mode == Mode::Visualizers {
-                    self.visualizer_rows()
-                } else {
-                    self.vis_editing.map(|i| self.visualizer_edit_rows(i)).unwrap_or_default()
-                };
-                let labels: Vec<&str> = all.iter().map(|r| r.label.as_str()).collect();
-                let order = crate::command::fuzzy_rank(&query, &labels);
-                order.into_iter().map(|i| all[i].clone()).collect()
             }
             // The scene's point groups, ranked by name, a switch each and the
             // member count in the chord column.
@@ -2312,12 +2178,6 @@ impl State {
     /// moved, and re-ranking would throw the selection back to the top of a
     /// list the user is still working down.
     pub(crate) fn refresh_dialog_controls(&mut self) {
-        if matches!(self.slots.dialog.mode, Mode::Visualizers | Mode::VisualizerEdit) {
-            // Labels follow the settings ("mass — Ramp, Heat"), and the edit
-            // page's rows follow its Mode and Range, so these re-read whole.
-            self.refresh_dialog_rows_in_place();
-            return;
-        }
         if self.slots.dialog.mode == Mode::Groups {
             let ids: Vec<String> = self.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
             for id in ids {
@@ -2661,13 +2521,7 @@ impl State {
         }
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
-                // A visualizer's settings are a page of the list: Escape
-                // goes back to it, and from there closes.
-                if self.slots.dialog.mode == Mode::VisualizerEdit {
-                    self.open_visualizers_dialog();
-                } else {
-                    self.close_dialog();
-                }
+                self.close_dialog();
                 return true;
             }
             Key::Named(NamedKey::Tab) => {
@@ -2751,13 +2605,6 @@ impl State {
                 let Some(v) = self.slots.dialog.rows[i].slider_value() else { return };
                 self.land_dialog_slider(&id, v);
             }
-            Control::Float2 { values, step, .. } => {
-                let i = self.slots.dialog.selected;
-                let k = self.modifiers.shift_key() as usize;
-                self.slots.dialog.set_slider_part(i, k, values[k] + dir as f32 * step);
-                let Some(Control::Float2 { values, .. }) = self.slots.dialog.selected_control().cloned() else { return };
-                self.land_dialog_float2(&id, values);
-            }
             Control::Choice { options, index } => {
                 if options.is_empty() {
                     return;
@@ -2771,15 +2618,11 @@ impl State {
     }
 
     /// A choice row's new option, from its dropdown or an arrow key: a
-    /// setting row writes its setting, a visualizer's row its field.
+    /// setting row writes its setting.
     pub(crate) fn land_dialog_choice(&mut self, id: &str, value: &str) {
         if let Some(label) = id.strip_prefix(SETTING_ROW_PREFIX) {
             let label = label.to_string();
             self.apply_setting(&label, value);
-        } else if let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) {
-            let field = field.to_string();
-            self.set_visualizer_field(i, &field, value, true);
-            self.refresh_dialog_controls();
         }
     }
 
@@ -2930,32 +2773,7 @@ impl State {
     /// arrow key is a single landing and saves at once, as the menu's wheel
     /// does. A spin row lands its whole number over the row's unit. A row the landing
     /// does not know falls through to `apply_setting`.
-    /// A float2 row's new values, from the pointer or an arrow key. Only a
-    /// visualizer's Manual Range is one; it lands as its sliders do.
-    pub(crate) fn land_dialog_float2(&mut self, id: &str, v: [f32; 2]) {
-        let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) else { return };
-        let field = field.to_string();
-        let save = !self.slots.dialog.slider_dragging();
-        self.set_visualizer_field(i, &field, &format!("{}:{}", v[0], v[1]), save);
-        if let Some(row) = self.visualizer_edit_rows(i).into_iter().find(|r| r.id == id) {
-            self.slots.dialog.set_control(id, row.control);
-        }
-    }
-
     pub(crate) fn land_dialog_slider(&mut self, id: &str, v: f32) {
-        if let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) {
-            // In place: the rows do not change under a drag, and a rebuild
-            // would drop the scroll it is being dragged at. The scene is
-            // re-presented, not re-evaluated; state.kdl is written on the
-            // release, or now for a wheel notch or an arrow.
-            let field = field.to_string();
-            let save = !self.slots.dialog.slider_dragging();
-            self.set_visualizer_field(i, &field, &v.to_string(), save);
-            if let Some(row) = self.visualizer_edit_rows(i).into_iter().find(|r| r.id == id) {
-                self.slots.dialog.set_control(id, row.control);
-            }
-            return;
-        }
         if id == ZOOM_ROW_ID {
             self.set_zoom_percent(v);
         } else if let Some(s) = setting_of_row(id) {
@@ -3000,50 +2818,8 @@ impl State {
     /// does nothing; the controls re-read, and the selection stays where it
     /// was — by Enter or by a click, since both arrive here.
     pub(crate) fn take_dialog_pick(&mut self, id: String) {
-        self.take_dialog_pick_at(id, false);
-    }
-
-    /// [`Self::take_dialog_pick`], told whether the press was on the row's
-    /// CONTROL: in the visualizer list the switch turns a visualizer on or
-    /// off, and the rest of the row opens it.
-    pub(crate) fn take_dialog_pick_at(&mut self, id: String, on_control: bool) {
         let mode = self.slots.dialog.mode;
         if mode == Mode::Commands && id == ZOOM_ROW_ID {
-            return;
-        }
-        if mode == Mode::Visualizers {
-            if id == VIS_ADD_ROW_ID {
-                let i = self.add_visualizer();
-                self.open_visualizer_editor(i);
-            } else if let Some(i) = id.strip_prefix(VIS_ROW_PREFIX).and_then(|i| i.parse::<usize>().ok()) {
-                if on_control {
-                    let on = !self.visualizers.get(i).is_some_and(|v| v.enabled);
-                    self.set_visualizer_enabled(i, on);
-                    self.refresh_dialog_controls();
-                } else {
-                    self.open_visualizer_editor(i);
-                }
-            }
-            return;
-        }
-        if mode == Mode::VisualizerEdit {
-            let (Some(field), Some(i)) = (id.strip_prefix(VIS_FIELD_PREFIX), self.vis_editing) else { return };
-            match field {
-                "back" => self.open_visualizers_dialog(),
-                "delete" => {
-                    self.delete_visualizer(i);
-                    self.open_visualizers_dialog();
-                }
-                _ => match self.slots.dialog.rows.iter().find(|r| r.id == id).and_then(|r| r.control.clone()) {
-                    Some(Control::Toggle(on)) => {
-                        let field = field.to_string();
-                        self.set_visualizer_field(i, &field, if on { "false" } else { "true" }, true);
-                        self.refresh_dialog_controls();
-                    }
-                    Some(Control::Choice { .. }) => self.open_dialog_dropdown(&id),
-                    _ => {}
-                },
-            }
             return;
         }
         // A group's row is its switch: flipped in place, the list stays up.
@@ -3130,7 +2906,7 @@ impl State {
                     Ok(said) | Err(said) => self.update_status_text(&said),
                 }
             }
-            Mode::Groups | Mode::Visualizers | Mode::VisualizerEdit => {}
+            Mode::Groups => {}
             Mode::AddNode => {
                 // A free cursor cell a wire runs through is a place in that
                 // chain: the new node is spliced into the wire, as a node
@@ -3167,16 +2943,11 @@ impl State {
     pub(crate) fn drain_dialog_clicks(&mut self) -> bool {
         let mut changed = false;
         if let Some(id) = self.slots.dialog.take_activated() {
-            let on_control = self.slots.dialog.activated_on_control();
-            self.take_dialog_pick_at(id, on_control);
+            self.take_dialog_pick(id);
             changed = true;
         }
         if let Some((id, v)) = self.slots.dialog.take_slider_change() {
             self.land_dialog_slider(&id, v);
-            changed = true;
-        }
-        if let Some((id, v)) = self.slots.dialog.take_float2_change() {
-            self.land_dialog_float2(&id, v);
             changed = true;
         }
         for (id, hex) in self.slots.dialog.take_color_changes() {

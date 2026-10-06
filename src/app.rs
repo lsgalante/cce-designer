@@ -3430,8 +3430,13 @@ pub struct State {
     /// The attribute visualizers, applied in order to the displayed scene
     /// (`crate::visualizer`). Persisted in the viewport block.
     pub visualizers: Vec<crate::visualizer::Visualizer>,
-    /// The visualizer the dialog's VisualizerEdit page is editing.
-    pub vis_editing: Option<usize>,
+    /// The params HUD shows the attribute visualizers, editing visualizer
+    /// `i` (0 with none yet), in place of the selected node's parameters —
+    /// `visualizer::State::open_visualizers_hud`. `None` is the node.
+    pub vis_hud: Option<usize>,
+    /// What the HUD would have shown when the visualizers took it: picking
+    /// another node hands the HUD back to that node's parameters.
+    pub(crate) vis_hud_from: Option<ParamPaneTarget>,
     /// The half-span the Attribute node's Value row runs over, with the
     /// node it is for (`value_row_span`): kept between pane syncs so the row
     /// re-scales only when its value leaves it.
@@ -4962,6 +4967,11 @@ impl State {
     /// rows that were not loaded from the selected node are stale, and
     /// writing nothing is the only right thing to do with them.
     pub fn sync_parameters_to_project(&mut self) {
+        // The HUD showing the visualizers writes back to them, not a node.
+        if self.vis_hud.is_some() {
+            self.sync_visualizer_hud_back();
+            return;
+        }
         let mut file_to_open = None;
         if !self.is_detached_network && self.param_pane_source == self.param_pane_target() {
             if let Some(slot_idx) = self.param_editor_selected() {
@@ -5316,7 +5326,7 @@ impl State {
                 self.reset_parameters();
             }
             "Group Markers" => self.open_group_markers_dialog(),
-            "Attribute Visualizers" => self.open_visualizers_dialog(),
+            "Attribute Visualizers" => self.open_visualizers_hud(),
             "Rename Node" => match self.selected_slots().first().copied() {
                 Some(slot) => self.open_rename_dialog(slot),
                 None => self.update_status_text("Select a node to rename."),
@@ -5562,6 +5572,17 @@ impl State {
     }
 
     pub fn sync_parameters_pane(&mut self) {
+        // The attribute visualizers, when the HUD shows them — until another
+        // node is picked, which takes the HUD back.
+        if self.vis_hud.is_some() && self.param_pane_target() != self.vis_hud_from {
+            self.vis_hud = None;
+        }
+        if self.vis_hud.is_some() && !self.is_detached_network {
+            let rows = param_display(&self.visualizer_hud_params());
+            self.param_mut().set_display_params(&rows);
+            self.param_pane_source = None;
+            return;
+        }
         // Selection reads through the param-editor accessors: whichever
         // network editor took the last node click feeds the pane, at ITS
         // level — no matter the tab.
@@ -8734,7 +8755,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             show_vertex_normals: settings.viewport.show_vertex_normals,
             marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
             visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
-            vis_editing: None,
+            vis_hud: None,
+            vis_hud_from: None,
             value_row_span: None,
             float2_spans: None,
             scene_attributes: Vec::new(),

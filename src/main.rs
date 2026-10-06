@@ -2669,8 +2669,8 @@ mod tests {
     /// it, turns the menu into the page where it stands, under a back band;
     /// a switch on the page flips, is re-marked in place and leaves the page
     /// up; a press on the band or a swipe back turns back. The visualizers'
-    /// row turns the menu into the dialog, which a swipe back turns back
-    /// into the menu at its corner. A row of the menu itself still closes it.
+    /// row is a row of the menu, not a page: it closes the menu and opens
+    /// them in the params HUD. A row of the menu itself still closes it.
     #[test]
     fn the_viewport_menu_turns_into_its_pages_and_back() {
         use crate::app::{ViewportMenuAction as A, ViewportMenuPage as P};
@@ -2702,7 +2702,8 @@ mod tests {
         };
         let (style, markers) = (row_of(&state, A::Page(P::Style)), row_of(&state, A::Page(P::Markers)));
         let vis = row_of(&state, A::Command("attribute_visualizers"));
-        assert!([style, markers, vis].iter().all(|&i| context_menu::leads_to_page(i)), "the three rows are page rows");
+        assert!([style, markers].iter().all(|&i| context_menu::leads_to_page(i)), "the two pages are page rows");
+        assert!(!context_menu::leads_to_page(vis), "the visualizers are the HUD's, not a page");
         assert!(!context_menu::leads_to_page(row_of(&state, A::FrameAll)));
 
         move_to(&mut state, corner.0 + 20.0, context_menu::row_y(markers) + 12.0);
@@ -2734,24 +2735,21 @@ mod tests {
         press(&mut state);
         assert_eq!(state.viewport_menu_page, None, "a press on the back band turns back");
 
-        // Into the dialog, and back.
-        move_to(&mut state, corner.0 + 20.0, context_menu::row_y(vis) + 12.0);
-        press(&mut state);
-        assert!(!state.viewport_menu_open());
-        assert!(state.dialog_visible() && state.slots.dialog.mode == crate::dialog::Mode::Visualizers);
-        assert_eq!(state.slots.dialog.anchor, Some(corner), "the dialog took the menu's corner");
-        let (dx, dy, _, _) = state.positions[crate::slots::DIALOG_IDX];
-        move_to(&mut state, dx + 30.0, dy + 30.0);
-        swipe(&mut state, 80.0);
-        assert!(!state.dialog_visible(), "a swipe back closes the dialog");
-        assert!(state.viewport_menu_open() && state.viewport_menu_page.is_none(), "and turns it back into the menu");
-        assert_eq!((context_menu::x(), context_menu::y()), (dx, dy), "at the dialog's corner");
-
         // A row of the menu itself runs and closes it.
         let grid = row_of(&state, A::Command("toggle_grid"));
         move_to(&mut state, context_menu::x() + 20.0, context_menu::row_y(grid) + 12.0);
         press(&mut state);
         assert!(!state.viewport_menu_open(), "a row of the menu closes it");
+
+        // The visualizers' row too, and the HUD shows them.
+        state.cursor_x = 300.0;
+        state.cursor_y = 200.0;
+        state.open_viewport_context_menu();
+        let vis = row_of(&state, A::Command("attribute_visualizers"));
+        move_to(&mut state, context_menu::x() + 20.0, context_menu::row_y(vis) + 12.0);
+        press(&mut state);
+        assert!(!state.viewport_menu_open() && !state.dialog_visible());
+        assert!(state.vis_hud.is_some(), "the visualizers are in the params HUD");
     }
 
     /// The primitive and vertex overlays read off the scene as the points'
@@ -8359,12 +8357,11 @@ mod tests {
     /// following the geometry through a rebuild and persisted with the
     /// display settings.
     /// Attribute visualizers: added, edited, switched and deleted in the
-    /// dialog, applied to the displayed scene with no node in the graph,
-    /// and kept with the display settings.
+    /// params HUD — the pane's own rows, worked as a node's are — applied
+    /// to the displayed scene with no node in the graph, kept with the
+    /// display settings, and handed back to the node by Done or a pick.
     #[test]
-    fn attribute_visualizers_are_edited_in_the_dialog_and_shown_on_the_scene() {
-        use crate::dialog::Mode;
-        use crate::visualizer::{VIS_ADD_ROW_ID, VIS_FIELD_PREFIX, VIS_ROW_PREFIX};
+    fn attribute_visualizers_are_edited_in_the_params_hud() {
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
@@ -8374,174 +8371,79 @@ mod tests {
         let colours = |state: &State| state.rt_sphere_verts.iter().map(|v| v.color).collect::<Vec<_>>();
         let plain = colours(&state);
         let nodes_before = serde_json::to_string(&state.fs_root).unwrap();
+        let keys = |state: &State| state.param().node_params().into_iter().map(|r| r.0).filter(|k| !k.is_empty()).collect::<Vec<_>>();
+        // The pane reporting a row at a value, as a press or a drag does.
+        let pane = |state: &mut State, key: &str, value: &str| {
+            let rows: Vec<(String, String, String)> = state
+                .param()
+                .node_params()
+                .into_iter()
+                .map(|(k, v, t)| if k == key { (k, value.to_string(), t) } else { (k, v, t) })
+                .collect();
+            assert!(rows.iter().any(|r| r.0 == key), "no {key} row in {:?}", rows.iter().map(|r| &r.0).collect::<Vec<_>>());
+            state.param_mut().set_display_params(&rows);
+            state.sync_parameters_to_project();
+        };
 
-        // The list, empty but for Add Visualizer.
+        // In the HUD, not the dialog: Add and Done, nothing to edit yet.
         assert!(state.run_command("attribute_visualizers"));
-        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
-        assert_eq!(state.slots.dialog.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec![VIS_ADD_ROW_ID]);
+        assert!(!state.dialog_visible());
+        assert_eq!(state.vis_hud, Some(0));
+        assert_eq!(keys(&state), ["Add Visualizer", "Done"]);
 
-        // Add one: the list turns into its settings.
-        state.take_dialog_pick(VIS_ADD_ROW_ID.to_string());
+        // Add one: it is edited, on the first attribute worth showing.
+        pane(&mut state, "Add Visualizer", "clicked");
         assert_eq!(state.visualizers.len(), 1);
-        assert_eq!(state.slots.dialog.mode, Mode::VisualizerEdit);
-        assert_eq!(state.vis_editing, Some(0));
-        let field = |f: &str| format!("{VIS_FIELD_PREFIX}{f}");
-        let has = |state: &State, f: &str| state.slots.dialog.rows.iter().any(|r| r.id == field(f));
-        assert!(has(&state, "ramp") && has(&state, "opacity") && !has(&state, "scale"), "Ramp's rows");
+        let k = keys(&state);
+        assert!(k.contains(&"Visualizer".to_string()) && k.contains(&"Ramp".to_string()) && !k.contains(&"Scale".to_string()), "Ramp's rows: {k:?}");
 
         // On N, a Ramp recolours the scene, which gained no node.
-        state.set_visualizer_field(0, "attribute", "N", true);
+        pane(&mut state, "Attribute", "N");
+        assert_eq!(state.visualizers[0].attribute, "N");
         assert_ne!(colours(&state), plain, "the ramp is on the scene");
         assert_eq!(serde_json::to_string(&state.fs_root).unwrap(), nodes_before, "no node in the graph");
 
-        // Mode's dropdown, Down, Enter: Vector's rows, and lines drawn.
-        let mode_row = state.slots.dialog.rows.iter().position(|r| r.id == field("mode")).unwrap();
-        state.slots.dialog.selected = mode_row;
-        let lines_before = state.overlay_normal_verts.len();
-        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
-        assert!(state.dialog_dropdown_open(), "a choice opens its dropdown");
-        assert_eq!(state.slots.dialog.dropdown.options, vec!["Ramp".to_string(), "Vector".to_string()]);
-        assert_eq!(state.slots.dialog.dropdown.selected, 0);
-        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
-        state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
+        // Manual range: its float2 row appears, and takes two ends.
+        pane(&mut state, "Range", "Manual");
+        assert!(keys(&state).contains(&"Manual Range".to_string()));
+        pane(&mut state, "Manual Range", "-0.5:0.5");
+        assert_eq!(state.visualizers[0].manual_range, [-0.5, 0.5]);
+
+        // Vector: Scale's row in place of Ramp's.
+        pane(&mut state, "Mode", "Vector");
         assert!(state.visualizers[0].is_vector());
-        assert!(has(&state, "scale") && !has(&state, "ramp"), "Vector's rows");
-        assert_eq!(state.slots.dialog.selected_id(), Some(field("mode").as_str()), "the selection stays");
-        assert!(state.overlay_normal_verts.len() > lines_before, "the vectors are drawn");
+        let k = keys(&state);
+        assert!(k.contains(&"Scale".to_string()) && !k.contains(&"Ramp".to_string()), "Vector's rows: {k:?}");
         assert_eq!(colours(&state), plain, "a Vector leaves the colours");
 
-        // Escape goes back to the list, which names it.
-        state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
-        assert!(state.dialog_visible());
-        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
-        let id = format!("{VIS_ROW_PREFIX}0");
-        let row = state.slots.dialog.rows.iter().find(|r| r.id == id).expect("its row").clone();
-        assert!(row.label.starts_with("N — Vector"), "{}", row.label);
-        assert_eq!(row.toggle(), Some(true));
+        // Its switch turns it off; a second one is picked from the list.
+        pane(&mut state, "Enabled", "false");
+        assert!(!state.visualizers[0].enabled);
+        pane(&mut state, "Add Visualizer", "clicked");
+        assert_eq!((state.visualizers.len(), state.vis_hud), (2, Some(1)));
+        pane(&mut state, "Visualizer", "#1 N");
+        assert_eq!(state.vis_hud, Some(0));
 
-        // Kept with the display settings.
+        // Kept with the display settings, at the frame.
+        state.save_settings();
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
         let kept = crate::visualizer::decode(&crate::app::DesignSettings::from_kdl_str(&kdl).viewport.visualizers);
         assert_eq!(kept, state.visualizers);
 
-        // Its switch turns it off; the rest of the row opens it.
-        state.take_dialog_pick_at(id.clone(), true);
-        assert!(!state.visualizers[0].enabled);
-        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
-        let lines_off = state.overlay_normal_verts.len();
-        assert!(lines_off < lines_before + 1, "off draws nothing");
-        state.take_dialog_pick_at(id, false);
-        assert_eq!(state.slots.dialog.mode, Mode::VisualizerEdit);
+        // Delete, then Done: the HUD is the node's again.
+        pane(&mut state, "Delete Visualizer", "clicked");
+        assert_eq!(state.visualizers.len(), 1);
+        pane(&mut state, "Done", "clicked");
+        assert_eq!(state.vis_hud, None);
 
-        // Delete, and the list is empty again.
-        state.take_dialog_pick(field("delete"));
-        assert!(state.visualizers.is_empty());
-        assert_eq!(state.slots.dialog.mode, Mode::Visualizers);
-        assert_eq!(colours(&state), plain);
-        state.close_dialog();
-    }
-
-    /// A visualizer's Manual Range is the node's float2, and the dialog
-    /// edits it as one: a row of two sliders side by side, each end worked
-    /// on its own — pressed and dragged, turned by the wheel, nudged by the
-    /// arrows (shift for the second). A drag lands live and saves on the
-    /// release. A settings file from before, which kept From and To, reads
-    /// as the range.
-    #[test]
-    fn a_visualizers_manual_range_is_one_float2_row() {
-        use crate::dialog::Control;
-        use crate::slots::DIALOG_IDX;
-        use crate::visualizer::{decode, VIS_ADD_ROW_ID, VIS_FIELD_PREFIX};
-        use crate::window::{LocalPosition, WindowEvent};
-        use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta};
-        let mut state = State::new(false);
-        state.resize(1600.0, 900.0, 1.0);
-        state.rebuild_positions();
-        state.apply_layout();
-        state.rebuild_scene_geometry();
+        // Picking a node also hands the HUD back.
         assert!(state.run_command("attribute_visualizers"));
-        state.take_dialog_pick(VIS_ADD_ROW_ID.to_string());
-        state.set_visualizer_field(0, "attribute", "N", true);
-        state.set_visualizer_field(0, "range", "Manual", true);
-        state.refresh_dialog_controls();
-        let (lo, hi) = {
-            let a = state.scene_attributes.iter().find(|a| a.name == "N").unwrap();
-            (a.min, a.max)
-        };
-        assert_eq!(state.visualizers[0].manual_range, [lo, hi], "Manual starts at what Auto showed");
-
-        let id = format!("{VIS_FIELD_PREFIX}manual_range");
-        let i = state.slots.dialog.rows.iter().position(|r| r.id == id).expect("a Manual Range row");
-        let ids: Vec<&str> = state.slots.dialog.rows.iter().map(|r| r.id.as_str()).collect();
-        assert!(!ids.iter().any(|r| r.ends_with(":from") || r.ends_with(":to")), "no From and To rows: {ids:?}");
-        let control = |state: &State| match state.slots.dialog.rows[i].control.clone() {
-            Some(Control::Float2 { values, min, max, .. }) => (values, min, max),
-            other => panic!("not a float2: {other:?}"),
-        };
-        let (values, min, max) = control(&state);
-        assert_eq!(values, [lo, hi]);
-        let at = |t: f32| min + t * (max - min);
-
-        let bands = state.slots.dialog.slider_bands(state.positions[DIALOG_IDX], i);
-        assert_eq!(bands.len(), 2, "two sliders");
-        assert!(bands[0].x + bands[0].width < bands[1].x, "side by side");
-        let point = |state: &mut State, k: usize, t: f32| {
-            let b = bands[k];
-            let (px, py) = (b.x + b.width * t, b.y + b.height * 0.5);
-            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: px as f64, y: py as f64 } });
-        };
-        let saved = || {
-            let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
-            decode(&crate::app::DesignSettings::from_kdl_str(&kdl).viewport.visualizers)[0].manual_range
-        };
-        let close = |a: f32, b: f32| (a - b).abs() < (max - min) * 0.02;
-
-        // The first end, pressed and dragged: live, saved on the release.
-        point(&mut state, 0, 0.25);
-        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-        assert!(state.slots.dialog.slider_dragging());
-        point(&mut state, 0, 0.1);
-        let [a, b] = state.visualizers[0].manual_range;
-        assert!(close(a, at(0.1)) && b == hi, "{a} {b}");
-        assert_eq!(control(&state).0, state.visualizers[0].manual_range, "the row shows what the visualizer holds");
-        assert_eq!(saved(), [lo, hi], "not written mid-drag");
-        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-        assert_eq!(saved(), state.visualizers[0].manual_range, "written on the release");
-
-        // The second end, on its own band; the first stays.
-        point(&mut state, 1, 0.9);
-        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-        let [a2, b2] = state.visualizers[0].manual_range;
-        assert!(a2 == a && close(b2, at(0.9)), "{a2} {b2}");
-
-        // The wheel over an end turns that end, up being more.
-        point(&mut state, 0, 0.5);
-        state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 1.0) });
-        let [a3, b3] = state.visualizers[0].manual_range;
-        assert!(a3 > a2 && b3 == b2, "{a3} {b3}");
-
-        // The arrows nudge the first end; with shift, the second.
-        state.slots.dialog.selected = i;
-        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
-        let [a4, b4] = state.visualizers[0].manual_range;
-        assert!(a4 > a3 && b4 == b3, "{a4} {b4}");
-        state.modifiers = ModifiersState { shift: true, ..Default::default() };
-        state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
-        state.modifiers = ModifiersState::default();
-        let [a5, b5] = state.visualizers[0].manual_range;
-        assert!(a5 == a4 && b5 < b4, "{a5} {b5}");
-        assert_eq!(saved(), [a5, b5], "a key's landing saves at once");
-
-        // What it draws is the node's Manual Range.
-        let node = state.visualizers[0].as_node();
-        assert_eq!(crate::geometry::node_param_vec2(&node, "manual_range", [0.0, 0.0]), [a5, b5]);
-
-        // A settings file from before kept the two ends apart.
-        let old = decode("attribute=N|mode=Ramp|range=Manual|from=2|to=5");
-        assert_eq!(old[0].manual_range, [2.0, 5.0]);
-        assert_eq!(decode(&crate::visualizer::encode(&old)), old);
-        state.close_dialog();
+        let mut redraw = false;
+        let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+        state.sync_parameters_pane();
+        assert_eq!(state.vis_hud, None);
+        assert!(keys(&state).contains(&"Radius".to_string()), "the sphere's rows");
     }
 
     /// A visualizer is the Visualize node's reading: the same settings give

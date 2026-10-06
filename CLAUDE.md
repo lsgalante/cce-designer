@@ -2849,16 +2849,16 @@ viewport menu's Style and Markers flew a second menu out on hover while the
 other rows below swapped the plate on a click — some with a Back row, most
 with no way back — two gestures for one idea.
 
-The page rows: the viewport menu's **Style** and **Markers** (pages of rows)
-and **Attribute Visualizers** (the dialog); the network menu's **Add Node**
+The page rows: the viewport menu's **Style** and **Markers** (pages of rows;
+its **Attribute Visualizers** row was one too, into the dialog, until
+2026-10-06 — it is a plain row now, opening them in the params HUD); the
+network menu's **Add Node**
 (the dialog); the plate rows' **Add Tab** (a page, wherever the plate rows
 are); the node menu's **Rename** (the dialog). Inside the dialog the rows
 that turn it into another list are marked `›` in the chord column and take
 the forward swipe too (`dialog::dialog_row_leads`): the palette's Group
-Markers and Attribute Visualizers, a visualizer and Add Visualizer. The
-mark rides the row's chord TEXT (cce-ui's `PAGE_MARK`), and a label that
-begins with `BACK_MARK` (the visualizer's Back to Visualizers) wears the
-other; the dialog's row painter draws them as the `chevron-right` /
+Markers. The mark rides the row's chord TEXT (cce-ui's `PAGE_MARK`), and a
+label that begins with `BACK_MARK` wears the other; the dialog's row painter draws them as the `chevron-right` /
 `chevron-left` glyphs, as the toolkit menu does, never as the characters
 (since 2026-10-05, the cce-icons rule: every symbol the app draws is a
 glyph). The menus' `● ` / `○ ` switch marks are cce-ui's `MARK_ON` /
@@ -2882,16 +2882,15 @@ glyph). The menus' `● ` / `○ ` switch marks are cce-ui's `MARK_ON` /
   `State::dialog_trail`, the modes it turned through while up — a mode
   opened while the dialog is up keeps the plate where it stands and puts
   the mode it leaves on the trail, and turning to the trail's last (by a
-  swipe back, Escape out of a visualizer or its Back row) takes it off.
-  The palette's Group Markers and Attribute Visualizers rows now run with
-  the palette still up, so it is on the trail. Opened afresh, the dialog
+  swipe back) takes it off. The palette's Group Markers row runs with the
+  palette still up, so it is on the trail. Opened afresh, the dialog
   has neither. A swipe back with neither does nothing.
 
 - **Every turn is animated** (cce-ui's `TURN_MS`, 180 ms): a page of rows
   by cce-ui itself; the dialog by `dialog::DialogTurn` the same way — the
   plate grows from the menu just put down (`open_dialog_from` reads its
   size off the hidden context menu), and a mode turned to while it is up
-  (Group Markers, a visualizer and back) slides its rows in from the side
+  (Group Markers and back) slides its rows in from the side
   it came from at the plate's own size. The render arm paints a turning
   dialog's content aside and replays it moved, clipped and faded
   (cce-ui's `Prim::faded`, geometry and text alike), its text bounded by
@@ -3511,25 +3510,31 @@ the later over the earlier, as a chain of Visualize nodes composites.
   "not in the scene" in the list; it is kept, since the scene it was made
   for may come back. Not in `--thumbnail` or `--export`, which have no
   display settings.
-- **They are edited in the dialog**, two modes: `Mode::Visualizers` (the
-  `attribute_visualizers` command — the palette, and a row of the viewport
-  menu under its pages, a page row turning the menu into the list) lists them, a switch each, and Add Visualizer;
-  a press on a row's SWITCH turns it on or off and a press on the rest of
-  the row, or Enter, opens it (`Dialog::activated_on_control`,
-  `take_dialog_pick_at`). `Mode::VisualizerEdit` (`State::vis_editing`) is
-  that visualizer's settings as rows — the Visualize node's `show_when`
-  applied, so Ramp's rows or Vector's; Attribute and Group are choices
-  over the scene's attributes and groups; a Manual range is one
-  `Control::Float2` row (since 2026-10-06; two slider rows, From and To,
-  until then) over the attribute's range in the scene with a quarter to
-  spare — then Delete Visualizer and Back. Escape goes back to the list. Rows
-  re-read IN PLACE (`refresh_dialog_rows_in_place`, selection and scroll
-  kept), since switching the mode swaps rows under the one selected.
-  A new visualizer starts on the scene's first attribute that is not
-  `P`, `Cd` or `N`.
+- **They are edited in the params HUD** (since 2026-10-06; until then in
+  the dialog, as its Visualizers and VisualizerEdit modes, which are gone
+  with the dialog's two-slider `Float2` control that only the Manual Range
+  used). The `attribute_visualizers` command — the palette's row, which
+  closes the palette, and a plain row of the viewport menu — sets
+  `State::vis_hud`, and the HUD shows, in place of the selected node's
+  parameters: a **Visualizer** dropdown picking the one edited (`#1 uv`),
+  **Add Visualizer** and **Delete Visualizer**, its settings — Enabled,
+  Attribute and Group as dropdowns over the scene's attributes and
+  groups, Mode, then Ramp, Range, a Manual Range `float2`, Blend and
+  Opacity, or Vector's Scale — and **Done**. The rows are a PSEUDO-NODE's
+  parameters (`visualizer_hud_params`), so `param_display`, the
+  `show_when` conditions, the separators and the controls are the HUD's
+  own; the write-back (`sync_visualizer_hud_back`, ahead of the node path
+  in `sync_parameters_to_project`) turns each changed row into the edit it
+  names, re-reading the rows when they change shape (another visualizer,
+  Mode, Range, Attribute, Add, Delete) and not during a slider drag, which
+  would drop the slider held. state.kdl is written at the frame
+  (`settings_save_pending`). Done hands the HUD back, and so does picking
+  another node (`vis_hud_from`, the node the HUD would have shown when it
+  opened). A new visualizer starts on the scene's first attribute that is
+  not `P`, `Cd` or `N`.
 
-`attribute_visualizers_are_edited_in_the_dialog_and_shown_on_the_scene`
-drives the dialog end to end.
+`attribute_visualizers_are_edited_in_the_params_hud` drives the rows end
+to end.
 
 ### The Normal node writes point or vertex normals
 
@@ -3873,9 +3878,6 @@ rather than two:
   A marked name the scene has no group for marks nothing and is kept, so
   a group that comes and goes with a frame does not lose its switch.
   `the_group_markers_dialog_marks_a_groups_points` is the test.
-- `Mode::Visualizers` / `Mode::VisualizerEdit` (the
-  `attribute_visualizers` command) — the attribute visualizers and one
-  visualizer's settings; see "Attribute visualizers".
 - `Mode::AddNode` (**Tab**, in the network pane) — one list of node
   templates, and a pick that instantiates at the grid cursor. Tab is what
   opened it, so Tab closes it again. The query hint names the mode; there
@@ -3930,21 +3932,8 @@ selection stays where it was:
   pane's) is one of these over `State::zoom_percent` (100 = Reset Zoom,
   range the pitch limits), landing through `set_zoom_percent`, which zooms
   about the cursor cell and re-reads the row, since `zoom` clamps.
-- `Float2` — two numbers over one range, `lo:hi`: the params pane's
-  float2, as two sliders SIDE BY SIDE in the row (the rows are one
-  height, so not stacked as the pane stacks them), each with its readout
-  ahead of it. The control begins `FLOAT2_W` (two `SLIDER_W`) in from the
-  row's right end and the label is clipped short of it. Each end is worked
-  as a slider is — a press on its band jumps and drags it, the wheel over
-  it turns it — and the arrows nudge the FIRST end, shift and the arrows
-  the second. One `Slider` stamp paints both. A change comes out of
-  `take_float2_change` and lands through `land_dialog_float2`. Only the
-  visualizer's Manual Range is one; state.kdl keeps it as `manual_range=lo:hi`,
-  and a file from before, with `from=` and `to=`, reads as the range.
-  `a_visualizers_manual_range_is_one_float2_row` drives it by pointer,
-  wheel and keys.
-- `Choice` — a fixed set (World Unit, GPU, Node Wire Style, the
-  visualizer settings): the PARAMS PANE'S DROPDOWN (since 2026-10-01,
+- `Choice` — a fixed set (World Unit, GPU, Node Wire Style): the PARAMS
+  PANE'S DROPDOWN (since 2026-10-01,
   the toolkit `Dropdown`), in the control band the sliders and colour
   wells use. Closed, a row draws `Dialog::dropdown_stamp` — one
   `Dropdown` handed each row's options and selection as it is painted,

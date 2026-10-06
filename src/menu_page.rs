@@ -67,7 +67,7 @@ impl ViewportMenuAction {
     /// Whether the row turns the menu: its pages, and the visualizers'
     /// editor, which is the dialog.
     pub fn leads_to_page(self) -> bool {
-        matches!(self, ViewportMenuAction::Page(_) | ViewportMenuAction::Command("attribute_visualizers"))
+        matches!(self, ViewportMenuAction::Page(_))
     }
 }
 
@@ -195,11 +195,6 @@ impl State {
             PageTurn::Into(n) => match origin {
                 MenuOrigin::Viewport => match self.viewport_menu_actions.get(n).copied() {
                     Some(ViewportMenuAction::Page(page)) => self.show_viewport_menu_page(Some(page), Some(at)),
-                    Some(ViewportMenuAction::Command("attribute_visualizers")) => {
-                        self.close_viewport_menu();
-                        self.vis_editing = None;
-                        self.open_dialog_from(Mode::Visualizers, origin, at);
-                    }
                     _ => return false,
                 },
                 MenuOrigin::Network => match self.network_menu_actions.get(n).copied() {

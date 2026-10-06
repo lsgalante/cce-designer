@@ -14,13 +14,15 @@
 //! `attribute_visualizers` command). Several apply in order, the later over
 //! the earlier, as a chain of Visualize nodes composites.
 //!
-//! They are edited in the dialog: [`crate::dialog::Mode::Visualizers`] lists
-//! them with a switch each, and [`crate::dialog::Mode::VisualizerEdit`] is
-//! one visualizer's settings as rows.
+//! They are edited in the params HUD (`State::vis_hud`, since 2026-10-06;
+//! they were the dialog's Visualizers / VisualizerEdit modes): a Visualizer
+//! dropdown picks the one edited, Add and Delete beside it, its settings as
+//! ordinary rows under it, and Done back to the selected node. The rows are
+//! a pseudo-node's parameters (`visualizer_hud_params`), so the HUD's own
+//! row building, `show_when` and controls serve them unchanged.
 
 use crate::app::{FsNode, ParamDef, State};
 use crate::detail::Detail;
-use crate::dialog::{Control, Row};
 
 pub const MODES: [&str; 2] = ["Ramp", "Vector"];
 pub const RAMPS: [&str; 4] = ["Grayscale", "Heat", "Spectrum", "Viridis"];
@@ -58,7 +60,7 @@ pub struct Visualizer {
     /// `Manual` over Manual Range.
     pub range: String,
     /// The ramp's two ends under a Manual range: the node's float2, edited
-    /// in the dialog as one (`Control::Float2`).
+    /// in the params HUD as one `float2` row.
     pub manual_range: [f32; 2],
     pub blend: String,
     pub opacity: f32,
@@ -290,110 +292,11 @@ pub fn scene_attributes(geom: &Detail) -> Vec<SceneAttribute> {
     out
 }
 
-/// A visualizer in [`crate::dialog::Mode::Visualizers`]: the prefix, then
-/// its index.
-pub const VIS_ROW_PREFIX: &str = "vis:";
-/// The list's Add Visualizer row.
-pub const VIS_ADD_ROW_ID: &str = "vis:add";
-/// A setting of the visualizer being edited, in
-/// [`crate::dialog::Mode::VisualizerEdit`]: the prefix, then the field.
-pub const VIS_FIELD_PREFIX: &str = "visfield:";
-
 /// The Attribute and Group choices' word for "nothing chosen".
 const NO_ATTRIBUTE: &str = "(none)";
 const ALL_POINTS: &str = "(all points)";
 
-fn choice(options: &[&str], current: &str) -> Control {
-    let options: Vec<String> = options.iter().map(|s| s.to_string()).collect();
-    let index = options.iter().position(|o| o.eq_ignore_ascii_case(current)).unwrap_or(0);
-    Control::Choice { options, index }
-}
-
-fn row(field: &str, label: &str, control: Option<Control>) -> Row {
-    Row { id: format!("{VIS_FIELD_PREFIX}{field}"), label: label.to_string(), chord: String::new(), control, truncate_head: false }
-}
-
 impl State {
-    /// The list's rows: each visualizer, a switch each, and Add Visualizer.
-    /// A visualizer whose attribute the scene does not have says so in the
-    /// chord column, since it draws nothing.
-    pub(crate) fn visualizer_rows(&self) -> Vec<Row> {
-        let mut rows: Vec<Row> = self
-            .visualizers
-            .iter()
-            .enumerate()
-            .map(|(i, v)| Row {
-                id: format!("{VIS_ROW_PREFIX}{i}"),
-                label: v.label(),
-                chord: if self.scene_attributes.iter().any(|a| a.name == v.attribute) { String::new() } else { "not in the scene".to_string() },
-                control: Some(Control::Toggle(v.enabled)),
-                truncate_head: false,
-            })
-            .collect();
-        rows.push(Row::plain(VIS_ADD_ROW_ID, "Add Visualizer", ""));
-        rows
-    }
-
-    /// The rows of visualizer `i`'s settings, those that apply to its mode:
-    /// Ramp's ramp, range and blend, Vector's scale — as the Visualize
-    /// node's `show_when` conditions have them.
-    pub(crate) fn visualizer_edit_rows(&self, i: usize) -> Vec<Row> {
-        let Some(v) = self.visualizers.get(i) else { return Vec::new() };
-        let mut rows = vec![row("enabled", "Enabled", Some(Control::Toggle(v.enabled)))];
-
-        let mut attrs: Vec<String> = self.scene_attributes.iter().map(|a| a.name.clone()).collect();
-        if !v.attribute.is_empty() && !attrs.contains(&v.attribute) {
-            attrs.push(v.attribute.clone());
-        }
-        if attrs.is_empty() {
-            attrs.push(NO_ATTRIBUTE.to_string());
-        }
-        let index = attrs.iter().position(|a| *a == v.attribute).unwrap_or(0);
-        rows.push(row("attribute", "Attribute", Some(Control::Choice { options: attrs, index })));
-        rows.push(row("mode", "Mode", Some(choice(&MODES, &v.mode))));
-        if v.is_vector() {
-            rows.push(row("scale", "Scale", Some(Control::Slider { value: v.scale, min: 0.0, max: 10.0f32.max(v.scale), dec: 2, step: 0.05, suffix: "" })));
-        } else {
-            rows.push(row("ramp", "Ramp", Some(choice(&RAMPS, &v.ramp))));
-            rows.push(row("range", "Range", Some(choice(&RANGES, &v.range))));
-            if v.is_manual() {
-                let (lo, hi) = self.visualizer_value_range(v);
-                let step = ((hi - lo) / 100.0).max(1e-4);
-                rows.push(row("manual_range", "Manual Range", Some(Control::Float2 { values: v.manual_range, min: lo, max: hi, dec: 3, step })));
-            }
-            rows.push(row("blend", "Blend", Some(choice(&BLENDS, &v.blend))));
-            rows.push(row("opacity", "Opacity", Some(Control::Slider { value: v.opacity, min: 0.0, max: 1.0, dec: 2, step: 0.05, suffix: "" })));
-        }
-
-        let mut groups: Vec<String> = vec![ALL_POINTS.to_string()];
-        groups.extend(self.scene_groups.iter().map(|(g, _)| g.clone()));
-        if !v.group.is_empty() && !groups.contains(&v.group) {
-            groups.push(v.group.clone());
-        }
-        let index = if v.group.is_empty() { 0 } else { groups.iter().position(|g| *g == v.group).unwrap_or(0) };
-        rows.push(row("group", "Group", Some(Control::Choice { options: groups, index })));
-        rows.push(row("delete", "Delete Visualizer", None));
-        rows.push(row("back", &format!("{} Back to Visualizers", crate::dialog::BACK_MARK), None));
-        rows
-    }
-
-    /// The span a Manual range's sliders cover: the attribute's range in the
-    /// scene with a quarter of it to spare each side, and the values in hand
-    /// whatever they are.
-    fn visualizer_value_range(&self, v: &Visualizer) -> (f32, f32) {
-        let (mut lo, mut hi) = match self.scene_attributes.iter().find(|a| a.name == v.attribute) {
-            Some(a) => {
-                let pad = ((a.max - a.min) * 0.25).max(if a.max > a.min { 0.0 } else { 1.0 });
-                (a.min - pad, a.max + pad)
-            }
-            None => (0.0, 1.0),
-        };
-        let [a, b] = v.manual_range;
-        lo = lo.min(a).min(b);
-        hi = hi.max(a).max(b);
-        (lo, hi)
-    }
-
     /// Add a visualizer, on, on the first attribute of the scene that is
     /// not its colour or its position — what is worth looking at — and
     /// return its index.
@@ -415,15 +318,6 @@ impl State {
         if i < self.visualizers.len() {
             self.visualizers.remove(i);
             self.visualizers_changed(true);
-        }
-    }
-
-    pub(crate) fn set_visualizer_enabled(&mut self, i: usize, on: bool) {
-        if let Some(v) = self.visualizers.get_mut(i) {
-            if v.enabled != on {
-                v.enabled = on;
-                self.visualizers_changed(true);
-            }
         }
     }
 
@@ -460,6 +354,148 @@ impl State {
         self.revisualize();
         if save {
             self.save_settings();
+        }
+    }
+}
+
+/// The HUD's visualizer view: its rows' parameter names.
+const HUD_PICK: &str = "visualizer";
+const HUD_ADD: &str = "add_visualizer";
+const HUD_DELETE: &str = "delete_visualizer";
+const HUD_DONE: &str = "done";
+
+impl State {
+    /// Show the attribute visualizers in the params HUD, editing the first
+    /// (or `i`), in place of the selected node's parameters.
+    pub(crate) fn open_visualizers_hud(&mut self) {
+        self.vis_hud = Some(self.vis_hud.unwrap_or(0).min(self.visualizers.len().saturating_sub(1)));
+        self.vis_hud_from = self.param_pane_target();
+        if !self.show_parameters {
+            self.execute_menu_action("Show Parameters Pane");
+        }
+        self.sync_parameters_pane();
+        self.update_status_text("Attribute Visualizers: in the parameters; Done goes back to the node.");
+    }
+
+    /// Back to the selected node's parameters.
+    pub(crate) fn close_visualizers_hud(&mut self) {
+        if self.vis_hud.take().is_some() {
+            self.sync_parameters_pane();
+        }
+    }
+
+    /// What the picker calls visualizer `i`.
+    fn visualizer_pick_label(&self, i: usize) -> String {
+        let v = &self.visualizers[i];
+        let attr = if v.attribute.is_empty() { NO_ATTRIBUTE } else { &v.attribute };
+        format!("#{} {attr}", i + 1)
+    }
+
+    /// The HUD's visualizer view as a pseudo-node's parameters: the picker,
+    /// Add and Delete, the edited visualizer's settings under the Visualize
+    /// node's names and `show_when` conditions, and Done. With none yet,
+    /// Add and Done alone.
+    pub(crate) fn visualizer_hud_params(&self) -> Vec<ParamDef> {
+        let p = |name: &str, ty: String, text: String, label: &str| ParamDef::new(name.to_string(), ty, text).with_label(label);
+        let grouped = |mut d: ParamDef, g: &str| {
+            d.group = g.to_string();
+            d
+        };
+        let mut out = Vec::new();
+        let editing = self.vis_hud.filter(|&i| i < self.visualizers.len());
+        if let Some(i) = editing {
+            let labels: Vec<String> = (0..self.visualizers.len()).map(|k| self.visualizer_pick_label(k)).collect();
+            out.push(grouped(p(HUD_PICK, format!("choice:{}", labels.join(",")), labels[i].clone(), "Visualizer"), "pick"));
+        }
+        out.push(grouped(p(HUD_ADD, "button".into(), String::new(), "Add Visualizer"), "pick"));
+        if let Some(i) = editing {
+            out.push(grouped(p(HUD_DELETE, "button".into(), String::new(), "Delete Visualizer"), "pick"));
+            let v = &self.visualizers[i];
+            out.push(grouped(p("enabled", "toggle".into(), v.enabled.to_string(), "Enabled"), "settings"));
+            let mut attrs: Vec<String> = self.scene_attributes.iter().map(|a| a.name.clone()).collect();
+            if !v.attribute.is_empty() && !attrs.contains(&v.attribute) {
+                attrs.push(v.attribute.clone());
+            }
+            if attrs.is_empty() {
+                attrs.push(NO_ATTRIBUTE.to_string());
+            }
+            let attr = if v.attribute.is_empty() { attrs[0].clone() } else { v.attribute.clone() };
+            out.push(grouped(p("attribute", format!("choice:{}", attrs.join(",")), attr, "Attribute"), "settings"));
+            out.push(grouped(p("mode", format!("choice:{}", MODES.join(",")), v.mode.clone(), "Mode"), "settings"));
+            out.push(grouped(p("ramp", format!("choice:{}", RAMPS.join(",")), v.ramp.clone(), "Ramp").with_show_when("mode == Ramp"), "settings"));
+            out.push(grouped(p("range", format!("choice:{}", RANGES.join(",")), v.range.clone(), "Range").with_show_when("mode == Ramp"), "settings"));
+            out.push(grouped(
+                p("manual_range", "float2".into(), format!("{}:{}", v.manual_range[0], v.manual_range[1]), "Manual Range").with_show_when("mode == Ramp && range == Manual"),
+                "settings",
+            ));
+            out.push(grouped(p("blend", format!("choice:{}", BLENDS.join(",")), v.blend.clone(), "Blend").with_show_when("mode == Ramp"), "settings"));
+            out.push(grouped(p("opacity", "slider:0:1".into(), format!("{:.2}", v.opacity), "Opacity").with_show_when("mode == Ramp"), "settings"));
+            out.push(grouped(p("scale", format!("slider:0:{}", 10.0f32.max(v.scale)), format!("{:.2}", v.scale), "Scale").with_show_when("mode == Vector"), "settings"));
+            let mut groups: Vec<String> = vec![ALL_POINTS.to_string()];
+            groups.extend(self.scene_groups.iter().map(|(g, _)| g.clone()));
+            if !v.group.is_empty() && !groups.contains(&v.group) {
+                groups.push(v.group.clone());
+            }
+            let group = if v.group.is_empty() { ALL_POINTS.to_string() } else { v.group.clone() };
+            out.push(grouped(p("group", format!("choice:{}", groups.join(",")), group, "Group"), "where"));
+        }
+        out.push(grouped(p(HUD_DONE, "button".into(), String::new(), "Done"), "done"));
+        out
+    }
+
+    /// The HUD's rows written back into the visualizers: each row whose
+    /// value differs from what the view shows becomes the edit it names.
+    /// A change that adds or drops rows (another visualizer, Mode, Range,
+    /// Add, Delete) re-reads the view; a slider being dragged does not,
+    /// which would drop the slider held.
+    pub(crate) fn sync_visualizer_hud_back(&mut self) {
+        let shown = self.visualizer_hud_params();
+        let rows = self.param().node_params();
+        let mut reread = false;
+        let mut changed = false;
+        for (key, value, _) in rows {
+            let Some(def) = shown.iter().find(|d| d.shown_name() == key) else { continue };
+            if def.text() == value {
+                continue;
+            }
+            let i = self.vis_hud.unwrap_or(0);
+            match def.name.as_str() {
+                HUD_PICK => {
+                    if let Some(k) = (0..self.visualizers.len()).find(|&k| self.visualizer_pick_label(k) == value) {
+                        self.vis_hud = Some(k);
+                    }
+                    reread = true;
+                }
+                HUD_ADD if value == "clicked" => {
+                    let k = self.add_visualizer();
+                    self.vis_hud = Some(k);
+                    reread = true;
+                }
+                HUD_DELETE if value == "clicked" => {
+                    self.delete_visualizer(i);
+                    self.vis_hud = Some(i.min(self.visualizers.len().saturating_sub(1)));
+                    reread = true;
+                }
+                HUD_DONE if value == "clicked" => {
+                    self.close_visualizers_hud();
+                    return;
+                }
+                HUD_ADD | HUD_DELETE | HUD_DONE => {}
+                field => {
+                    // Saved at the frame, not per motion of a drag.
+                    self.set_visualizer_field(i, field, &value, false);
+                    changed = true;
+                    if matches!(field, "mode" | "range" | "attribute") {
+                        reread = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            self.settings_save_pending = true;
+        }
+        if reread {
+            self.sync_parameters_pane();
         }
     }
 }
