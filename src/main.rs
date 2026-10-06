@@ -5557,7 +5557,7 @@ mod tests {
         assert_eq!(strength.text(), "1.00");
         for (ty, name) in [
             ("attribute", "attribute_name"), ("attribute", "source_b"), ("visualize", "attribute"), ("neighbour", "attribute"),
-            ("neighbour", "direction"), ("neighbour", "source"), ("distance", "direction"), ("develop", "source"),
+            ("neighbour", "direction"), ("neighbour", "source"), ("distance", "direction"), ("develop", "direction"),
             ("copy", "scale_attribute"), ("normal", "attribute"), ("suture", "counter"), ("time", "attribute"),
         ] {
             assert_eq!(kind(ty, name), K::Attribute, "{ty}'s {name}");
@@ -13151,7 +13151,7 @@ mod tests {
             name: "Develop 1".into(),
             node_type: "develop".into(),
             children: vec![],
-            params: [("attribute", "growth"), ("scale", "0.50"), ("direction", "Normal")]
+            params: [("attribute", "growth"), ("scale", "0.50"), ("direction", "N")]
                 .into_iter()
                 .map(|(name, default)| crate::app::ParamDef::new(name, "text", default))
                 .collect(),
@@ -13178,6 +13178,95 @@ mod tests {
         // Topology is remesh's business: Develop moves points and nothing else.
         assert_eq!(out.num_prims(), sphere.num_prims());
         assert_eq!(out.ids(), sphere.ids());
+    }
+
+    /// Develop's Direction names the attribute points move along: N is the
+    /// normal, worked out when the input carries none; any other vector
+    /// attribute is followed, its length scaling the move; a name the input
+    /// lacks is an error and moves nothing.
+    #[test]
+    fn develop_moves_along_the_attribute_its_direction_names() {
+        let mut sphere = sphere_detail(Vec3::ZERO, 1.0, 8, 12);
+        sphere.points_mut().create("growth", AttribValue::Float(1.0));
+        sphere.points_mut().create("up", AttribValue::Float3([0.0, 2.0, 0.0]));
+        let run = |geom: &Detail, dir: &str| {
+            let node = crate::app::FsNode {
+                id: "d".into(),
+                name: "develop1".into(),
+                node_type: "develop".into(),
+                children: vec![],
+                params: [("attribute", "growth"), ("scale", "0.50"), ("direction", dir)]
+                    .into_iter()
+                    .map(|(name, v)| crate::app::ParamDef::new(name, "text", v))
+                    .collect(),
+                geometry_visible: true,
+                bypassed: false,
+                position: (0.0, 0.0),
+                inputs: 1,
+                outputs: 1,
+            };
+            let mut out = geom.clone();
+            let mut err = None;
+            crate::geometry::apply_develop(&mut out, &node, &mut err);
+            (out, err)
+        };
+        // Along `up`, length 2: every point one unit up.
+        let (out, err) = run(&sphere, "up");
+        assert!(err.is_none(), "{err:?}");
+        for p in 0..out.num_points() {
+            assert!((out.pos(p) - sphere.pos(p) - Vec3::new(0.0, 1.0, 0.0)).length() < 1e-5);
+        }
+        // N on an input without one: the surface normals, outward.
+        let mut bare = sphere.clone();
+        bare.points_mut().remove("N");
+        assert!(!bare.points().has("N"));
+        let (out, err) = run(&bare, "N");
+        assert!(err.is_none(), "{err:?}");
+        assert!((0..out.num_points()).all(|p| (out.pos(p).length() - 1.5).abs() < 0.05));
+        // An N the input carries is followed as it is.
+        let mut with_n = sphere.clone();
+        with_n.points_mut().remove("N");
+        with_n.points_mut().create("N", AttribValue::Float3([1.0, 0.0, 0.0]));
+        let (out, err) = run(&with_n, "N");
+        assert!(err.is_none(), "{err:?}");
+        assert!((out.pos(0) - with_n.pos(0) - Vec3::new(0.5, 0.0, 0.0)).length() < 1e-5);
+        // A name the input lacks moves nothing and says so.
+        let (out, err) = run(&sphere, "nope");
+        assert!(err.is_some_and(|e| e.contains("nope")));
+        assert_eq!(out.pos(3), sphere.pos(3));
+    }
+
+    /// Format 8: an older Develop's Normal / Attribute choice and its Source
+    /// row become one Direction naming the attribute.
+    #[test]
+    fn an_older_develop_direction_becomes_an_attribute_name() {
+        use crate::app::{FsNode, ParamDef, Project};
+        let develop = |id: &str, dir: &str, src: &str| FsNode {
+            id: id.into(),
+            name: id.into(),
+            node_type: "develop".into(),
+            children: vec![],
+            params: vec![ParamDef::new("direction", "choice:Normal,Attribute", dir), ParamDef::new("source", "attribute", src)],
+            geometry_visible: true,
+            bypassed: false,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        let mut root = develop("root", "", "");
+        root.node_type = "subnet".into();
+        root.params.clear();
+        root.children = vec![develop("by_n", "Normal", "vel"), develop("by_attr", "Attribute", "vel"), develop("attr_empty", "Attribute", "")];
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 7 };
+        proj.migrate_format();
+        let dir = |i: usize| {
+            let n = &proj.root.children[i];
+            assert!(!n.params.iter().any(|p| p.name == "source"), "the Source row goes");
+            n.params.iter().find(|p| p.name == "direction").unwrap().text().to_string()
+        };
+        assert_eq!(dir(0), "N", "Normal is the normal");
+        assert_eq!(dir(1), "vel", "Attribute is what Source named");
+        assert_eq!(dir(2), "N", "an Attribute naming nothing moved along nothing; N is the sane reading");
     }
 
     fn phase3_node(ty: &str, params: &[(&str, &str)]) -> FsNode {

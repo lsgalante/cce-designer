@@ -3801,25 +3801,31 @@ pub(crate) fn apply_develop(geom: &mut Detail, target: &FsNode, ocl_error: &mut 
     let scale = node_param_f32(target, "scale", 0.1);
     let group = node_param_str(target, "group", "");
     let group = group.trim().to_string();
-    let by_attr = node_param_str(target, "direction", "Normal").eq_ignore_ascii_case("attribute");
-    let src = node_param_str(target, "source", "");
-    let src = src.trim().to_string();
+    // Direction names a vector point attribute, N for the normal (since
+    // 2026-10-06; it was a Normal/Attribute choice beside a Source row).
+    // Empty is N. An input without an N attribute moves along the normals
+    // of its surface, as a wrangle's `@N` reads them.
+    let dir = node_param_str(target, "direction", "N");
+    let dir = match dir.trim() {
+        "" => "N".to_string(),
+        d => d.to_string(),
+    };
 
-    // Normals come off the geometry as it arrives, so every point is displaced
+    // Read off the geometry as it arrives, so every point is displaced
     // along the surface it had BEFORE the displacement — otherwise the points
     // computed late would be following a surface the earlier ones had already
     // moved, and the result would depend on point order.
-    let dirs: Vec<Vec3> = if by_attr {
+    let dirs: Vec<Vec3> = if geom.points().has(&dir) {
         (0..geom.num_points())
-            .map(|p| {
-                geom.points()
-                    .value(&src, p)
-                    .map(|v| v.as_vec3())
-                    .unwrap_or(Vec3::ZERO)
-            })
+            .map(|p| geom.points().value(&dir, p).map(|v| v.as_vec3()).unwrap_or(Vec3::ZERO))
             .collect()
-    } else {
+    } else if dir == "N" {
         point_normals(geom)
+    } else {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!("Develop '{}': no point attribute named '{}' for the direction", target.name, dir));
+        }
+        return;
     };
 
     for p in 0..geom.num_points() {

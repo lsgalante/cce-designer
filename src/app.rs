@@ -398,7 +398,8 @@ pub struct Project {
     /// (`context::wrap_root_geometry`); 6 (2026-10-06) a range's two ends as
     /// one `float2` (`Project::migrate_range_rows`); 7 (the same day)
     /// Composite's Length as the length of Name, not of Source B
-    /// (`Project::migrate_composite_length`).
+    /// (`Project::migrate_composite_length`); 8 (the same day) Develop's
+    /// Direction as an attribute name (`Project::migrate_develop_direction`).
     /// `migrate_format` takes a file through each step it is behind, and a
     /// step must not run twice.
     #[serde(default)]
@@ -406,7 +407,7 @@ pub struct Project {
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 7;
+pub const PROJECT_FORMAT: u32 = 8;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -1401,7 +1402,41 @@ impl Project {
         if self.format < 7 {
             self.migrate_composite_length();
         }
+        if self.format < 8 {
+            self.migrate_develop_direction();
+        }
         self.format = PROJECT_FORMAT;
+    }
+
+    /// Format 7 → 8: Develop's Direction names the vector attribute points
+    /// move along, where it was a choice — Normal, or Attribute with the
+    /// attribute in a Source row. Normal becomes `N` (the normal, worked out
+    /// when the input carries no N, as before), Attribute becomes what Source
+    /// named, its text and expression flag both, and the Source row goes. A
+    /// node from before the choice, with neither row, is left to the merge,
+    /// which gives it `N`: what it moved along.
+    fn migrate_develop_direction(&mut self) {
+        fn walk(node: &mut FsNode) {
+            if node.node_type.eq_ignore_ascii_case("develop") {
+                if let Some(si) = node.params.iter().position(|p| p.name == "source") {
+                    let source = node.params.remove(si);
+                    if let Some(d) = node.params.iter_mut().find(|p| p.name == "direction") {
+                        let by_attr = !d.is_expr() && d.text().trim().eq_ignore_ascii_case("attribute");
+                        if by_attr && !source.text().trim().is_empty() {
+                            d.set_text(source.text().to_string());
+                            d.set_expr(source.is_expr());
+                        } else {
+                            d.set_text("N".to_string());
+                            d.set_expr(false);
+                        }
+                    }
+                }
+            }
+            for c in &mut node.children {
+                walk(c);
+            }
+        }
+        walk(&mut self.root);
     }
 
     /// Format 6 → 7: Composite's Length is the length of NAME, where it was

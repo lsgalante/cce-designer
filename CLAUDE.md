@@ -1225,7 +1225,18 @@ and Distance, which are left alone. Checked on the user's project (four
 Attribute nodes, none a Remap): the old build and the new export the same
 mesh at frames 1 and 30. **Format 7** (the same day): Composite's Length
 is the length of Name — see "Composite writes a Result" under "Pull
-arrows". Templates go through
+arrows". **Format 8** (the same day): Develop's **Direction** is an
+`attribute` row naming the vector points move along, `N` by default,
+where it was a Normal / Attribute choice beside a Source row
+(`Project::migrate_develop_direction`: Normal → `N`, Attribute → what
+Source named, the Source row dropped). `N` on an input that carries none
+is the surface's point normals, as a wrangle's `@N` reads it, so `N` is
+"along the normal" either way; any other name the input lacks is an error
+on the node. Checked on the user's project: the old build and the new
+export the same mesh at frames 1 and 30, and the develop node alone.
+`develop_moves_along_the_attribute_its_direction_names` and
+`an_older_develop_direction_becomes_an_attribute_name` are the tests.
+Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
 (`embryo.json` says `chf("../radius")` now). The same inference applies to a
 value typed into a plain row or scripted through `set_param`: a reference
