@@ -2023,13 +2023,64 @@ mod tests {
 
         // Put the params plate over the middle of the scene: the numbers
         // there go, the rest stay.
+        state.params_plate = true;
         state.positions[crate::slots::PARAM_IDX] = (700.0, 350.0, 200.0, 200.0);
         let fewer = state.point_number_labels();
         assert!(fewer.len() < all.len(), "{} of {} are left", fewer.len(), all.len());
         assert!(!fewer.is_empty());
-        assert!(fewer.iter().all(|(_, x, y, ..)| !(*x >= 700.0 && *x < 900.0 && *y + 6.0 >= 350.0 && *y + 6.0 < 550.0)));
+        let in_pane = |x: f32, y: f32| x >= 700.0 && x < 900.0 && y + 6.0 >= 350.0 && y + 6.0 < 550.0;
+        assert!(fewer.iter().all(|(_, x, y, ..)| !in_pane(*x, *y)));
+
+        // Without its plate the pane is its rows, which stand elsewhere:
+        // the numbers in the rest of its rect are the scene's, and drawn.
+        state.params_plate = false;
+        let (_, cy, _, ch) = state.params_claim();
+        assert!(ch <= crate::app::PARAMS_CLAIM_PAD && cy == 350.0, "no row stands in the moved rect");
+        assert!(
+            state.point_number_labels().iter().any(|(_, x, y, ..)| in_pane(*x, *y)),
+            "a plateless pane hides no number under its empty space"
+        );
         state.positions[crate::slots::PARAM_IDX] = (px, py, pw, ph);
         assert_eq!(state.point_number_labels().len(), all.len());
+    }
+
+    /// The params pane can drop its plate, and does by default: the rows
+    /// stand on the scene, and the pane claims only the band they cover —
+    /// a press or the wheel under the last row is the viewport's.
+    #[test]
+    fn a_plateless_params_pane_is_its_rows() {
+        let mut state = State::new(false);
+        assert!(!state.params_plate, "the plate is off by default");
+        assert_eq!(state.command_toggle_state("toggle_params_plate"), Some(false));
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        let mut redraw = false;
+        let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+        state.apply_layout();
+
+        let (px, py, pw, ph) = state.positions[crate::slots::PARAM_IDX];
+        let rows = state.param_row_rects();
+        let last = rows.iter().filter(|r| r.3 > 0.0).map(|r| r.1 + r.3).fold(py, f32::max);
+        assert!(last + crate::app::PARAMS_CLAIM_PAD < py + ph, "the sphere's rows leave room under them");
+        let (row_x, row_y) = (px + pw * 0.5, rows[0].1 + rows[0].3 * 0.5);
+        let under = (px + pw * 0.5, (last + py + ph) * 0.5);
+
+        // A row is the pane's; the space under the rows is the scene's.
+        assert!(state.params_claims(row_x, row_y));
+        assert!(!state.params_claims(under.0, under.1));
+        state.cursor_x = under.0;
+        state.cursor_y = under.1;
+        assert!(state.cursor_in_viewport(), "under the rows is the viewport");
+        assert!(!state.on_param_resize_edge(px, under.1), "and the pane's edge runs only as far as its rows");
+
+        // With the plate the whole rect is the pane again.
+        assert!(state.run_command("toggle_params_plate"));
+        assert!(state.params_plate);
+        assert!(state.params_claims(under.0, under.1));
+        assert!(!state.cursor_in_viewport());
+        assert!(state.on_param_resize_edge(px, under.1));
     }
 
     /// A scene rebuild leaves the numbers dimmed as they were: the 2D frame
@@ -15844,7 +15895,7 @@ mod tests {
             "toggle_grid", "toggle_origin", "toggle_wireframe",
             "toggle_wire_single_color", "toggle_ray_traced_preview",
             "toggle_circular_pane", "toggle_camera_pivot", "toggle_square_viewport",
-            "toggle_network_plate",
+            "toggle_network_plate", "toggle_params_plate",
         ] {
             assert!(crate::command::by_id(id).is_some(), "the toggle '{id}' has no command");
             assert!(state.command_toggle_state(id).is_some(), "the toggle '{id}' draws no switch");

@@ -667,14 +667,21 @@ impl State {
             };
             // Track and thumb are pills — half-width radius on the DE corner
             // family (squircle when corner_shape > 2), like the nodes.
-            if let Some((quads, _)) = &param_scrollbar {
-                for &(qx, qy, qw, qh, qc) in quads {
-                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+            //
+            // Without its plate (`params_plate` off, the default) the rows
+            // stand on the scene: no plate, and no idle copy of the bar,
+            // which only ever showed faintly through the frost — the bar
+            // is seen when a scroll raises it.
+            if self.params_plate {
+                if let Some((quads, _)) = &param_scrollbar {
+                    for &(qx, qy, qw, qh, qc) in quads {
+                        pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+                    }
                 }
-            }
 
-            let (wx, wy, ww2, wh2) = w.rect();
-            append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
+                let (wx, wy, ww2, wh2) = w.rect();
+                append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
+            }
 
             let (px, py, pw, ph) = self.positions[PARAM_IDX];
             let view = rect(px, py + 4.0, pw, (ph - 8.0).max(0.0));
@@ -865,7 +872,8 @@ impl State {
                 (0.0, 0.0, self.width, self.height)
             }
             PARAM_MENUBAR_IDX => {
-                if !self.show_parameters || relief {
+                // No plate, no edge to ring.
+                if !self.show_parameters || relief || !self.params_plate {
                     return;
                 }
                 self.positions[PARAM_IDX]

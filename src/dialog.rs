@@ -2290,6 +2290,7 @@ impl State {
             "toggle_ray_traced_preview" => self.viewport().rt_mode,
             "toggle_square_viewport" => self.square_viewport,
             "toggle_network_plate" => self.network_plate,
+            "toggle_params_plate" => self.params_plate,
             "toggle_circular_pane" => self.circular_network_pane,
             "detach_circular_window" => self.detached_circular_network,
             "toggle_spreadsheet" => self.show_spreadsheet,

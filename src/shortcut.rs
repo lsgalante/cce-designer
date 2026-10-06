@@ -79,6 +79,8 @@ pub enum Action {
     LayoutNodes,
     /// Draw the network pane's plate, or let the graph overlay the scene.
     ToggleNetworkPlate,
+    /// Draw the params pane's plate, or stand its controls on the scene.
+    ToggleParamsPlate,
     /// Clear the node selection.
     Deselect,
     /// Turn the camera square to the image the viewport shows and fit it.

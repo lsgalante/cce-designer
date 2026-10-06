@@ -582,6 +582,10 @@ pub struct NodeDragGroup {
 /// separator. Add Node leads because right-clicking empty space USED to open
 /// the add-node palette outright, and that is still the common reason to come
 /// here.
+/// How far under its last row a plateless params pane still claims the
+/// pointer: a press just below a row is the row's, not the scene's.
+pub const PARAMS_CLAIM_PAD: f32 = 8.0;
+
 pub const NETWORK_MENU_COMMANDS: &[Option<&'static str>] = &[
     Some("add_node"),
     None,
@@ -1988,6 +1992,11 @@ pub struct ViewportSettings {
     /// the project, but whether its surface is drawn is how you like to work.
     #[serde(default = "default_network_plate")]
     pub network_plate: bool,
+    /// Whether the params pane draws its plate. Off (the default, since
+    /// 2026-10-06): the rows stand on the scene, and the pane claims only
+    /// the band its rows cover, so the scene below them is the viewport's.
+    #[serde(default)]
+    pub params_plate: bool,
     /// How the network's node wires run (`cce_ui::widget::display::WireStyle`
     /// by name). Empty follows `style.surface.graph.node.wire_style` in
     /// config.kdl, which is every file from before the row.
@@ -2218,6 +2227,7 @@ impl Default for ViewportSettings {
             show_grid_enabled: true,
             show_origin_enabled: true,
             network_plate: true,
+            params_plate: false,
             node_wire_style: String::new(),
             show_point_markers: false,
             show_point_numbers: false,
@@ -2994,6 +3004,11 @@ pub struct State {
     /// it. The pane is still there: it keeps its rect, its focus, its corner
     /// menus and its clip; only the surface under it stops being drawn.
     pub network_plate: bool,
+    /// Whether the params pane draws its PLATE. With it off the rows stand
+    /// directly over the scene, and the pane claims only what its rows
+    /// cover (`params_claim`), so the scene under the rest of its rect
+    /// orbits, takes the wheel and shows its point numbers.
+    pub params_plate: bool,
     pub show_viewport: bool,
     pub show_parameters: bool,
     pub show_spreadsheet: bool,
@@ -3473,6 +3488,7 @@ impl State {
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
                 network_plate: self.network_plate,
+                params_plate: self.params_plate,
                 node_wire_style: self.slots.content.inner().chosen_wire_style().map(|w| w.name().to_string()).unwrap_or_default(),
                 show_point_markers: self.show_point_markers,
                 show_point_numbers: self.show_point_numbers,
@@ -3554,6 +3570,7 @@ impl State {
         self.origin_size = v.origin_size;
         self.grid_thickness = v.grid_thickness;
         self.network_plate = v.network_plate;
+        self.params_plate = v.params_plate;
         self.set_node_wire_style(cce_ui::widget::display::WireStyle::parse(&v.node_wire_style));
         self.circular_network_pane = self.is_detached_network || v.circular_pane;
         self.show_point_markers = v.show_point_markers;
@@ -3939,10 +3956,38 @@ impl State {
     /// which, when the network spans the whole window, is the only thing
     /// keeping a node drawn under the params pane from stealing its clicks.
     pub fn over_floating_pane_at(&self, px: f32, py: f32) -> bool {
-        [PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX].iter().any(|&idx| {
-            let (x, y, w, h) = self.positions[idx];
-            w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h
-        })
+        self.params_claims(px, py)
+            || [SPREADSHEET_IDX, PLAYBAR_IDX].iter().any(|&idx| {
+                let (x, y, w, h) = self.positions[idx];
+                w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h
+            })
+    }
+
+    /// The part of the params pane that is the pane's: its whole rect with
+    /// the plate on. With the plate off the ROWS are the pane — the band
+    /// from its top to just under its last row — and the scene below them
+    /// is the viewport's, to orbit, scroll and number, as the network's
+    /// overlay claims only its nodes. A pane overflowing its rows claims
+    /// all of it, the rows filling it.
+    pub fn params_claim(&self) -> (f32, f32, f32, f32) {
+        let (x, y, w, h) = self.positions[PARAM_IDX];
+        if self.params_plate || w <= 0.0 || h <= 0.0 {
+            return (x, y, w, h);
+        }
+        let last = self
+            .param_row_rects()
+            .iter()
+            .filter(|r| r.3 > 0.0)
+            .map(|r| r.1 + r.3)
+            .fold(y, f32::max);
+        (x, y, w, (last + PARAMS_CLAIM_PAD).min(y + h) - y)
+    }
+
+    /// Whether (px, py) is the params pane's: inside `params_claim`, or on
+    /// a dropdown it has open, which grows past its rows.
+    pub fn params_claims(&self, px: f32, py: f32) -> bool {
+        let inside = |(x, y, w, h): (f32, f32, f32, f32)| w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h;
+        inside(self.params_claim()) || self.slots.param.popover_rect().is_some_and(inside)
     }
 
     /// Whether (px, py) is under a plate drawn over the scene: a floating
@@ -4206,6 +4251,8 @@ impl State {
         let param_x = self.width - gap - param_w;
         let param_y = HEADER_H + gap;
         let param_h = (self.height - HEADER_H - STATUS_H - 2.0 * gap).max(100.0);
+        // Without its plate the pane's edge runs as far as its rows do.
+        let param_h = if self.params_plate { param_h } else { self.params_claim().3.min(param_h) };
         let margin = 8.0_f32;
         cx >= param_x - margin && cx <= param_x + margin && cy >= param_y - margin && cy <= param_y + param_h + margin
     }
@@ -8241,6 +8288,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             active_camera,
             show_network: true,
             network_plate: settings.viewport.network_plate,
+            params_plate: settings.viewport.params_plate,
             show_viewport: true,
             show_parameters: true,
             show_spreadsheet: false,
@@ -9965,6 +10013,15 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // viewport toggle uses, rather than a save call of its own.
                 settings_changed = true;
             }
+            Action::ToggleParamsPlate => {
+                self.params_plate = !self.params_plate;
+                self.update_status_text(if self.params_plate {
+                    "Parameters plate on."
+                } else {
+                    "Parameters plate off — the controls stand on the scene."
+                });
+                settings_changed = true;
+            }
             Action::Deselect => {
                 self.deselect_node();
             }
@@ -10540,6 +10597,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         if i == VIEWPORT_IDX {
                             continue;
                         }
+                        // Under its rows a plateless params pane is scene.
+                        if i == PARAM_IDX && !self.params_claims(self.cursor_x, self.cursor_y) {
+                            continue;
+                        }
                         let root = self.slots.get_dyn_mut(i).base().id();
                         if self.ui_context.propagate_event(&wheel_ev, root) {
                             handled = true;
@@ -10978,6 +11039,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                         } else {
                             false
                         }
+                    } else if i == PARAM_IDX && !state.params_plate {
+                        // Without its plate the pane is its rows: a press
+                        // under them is the scene's.
+                        state.params_claims(x, y) && state.slots.get_dyn(i).hit_test(x, y, &state.ui_context)
                     } else if state.network_overlay() && i == CONTENT_IDX {
                         // The graph's RECT spans the window in overlay mode,
                         // so the widget's own hit test would claim every press

@@ -2663,6 +2663,32 @@ network's — it ORBITS THE CAMERA instead (see below), which is what makes the
 overlay feel like a scene with a graph on it rather than a graph with a
 picture behind it. Deselecting is on Escape.
 
+### The params plate is optional, and off by default (since 2026-10-06)
+
+The params pane's plate can go too, as the network's can, and by default
+it has: the controls stand directly on the scene. `params_plate` on
+`State` and `ViewportSettings` (state.kdl and the project's display
+block; absent reads OFF), the `toggle_params_plate` command (**Parameters
+Plate**, a switch in the palette, unbound) and `Action::ToggleParamsPlate`.
+The PARAM_IDX render arm skips the plate and the scrollbar's idle copy —
+which only ever showed faintly through the frost; the bar is seen when a
+scroll raises it — and `append_context_border` draws no flat ring around a
+pane with no edge. The wells and labels are ParametersBg's own and are
+unchanged; with no enclosing plate the wells shade as overlays, which was
+checked in a shadow session and reads cleanly over the grid.
+
+**Without its plate the pane is its ROWS.** `State::params_claim` is the
+band from the pane's top to `PARAMS_CLAIM_PAD` under its last row (the
+whole rect with the plate on, or when the rows fill it), and
+`params_claims` adds an open dropdown, which grows past the rows. It is
+what `over_floating_pane_at` reads for the pane, so `cursor_in_viewport`,
+`under_a_plate` (a point number under the empty part draws) and the
+network overlay's claim follow it; the press cascade's `hits_widget` and
+the wheel loop ask it too, so a press or a scroll under the rows orbits
+and zooms the scene, and `on_param_resize_edge` runs only as far as the
+rows. `a_plateless_params_pane_is_its_rows` and
+`a_point_number_under_a_plate_is_not_drawn` are the tests.
+
 ### Deselecting has to stick
 
 The selection IS whatever sits in the grid cursor's cell — that is what
