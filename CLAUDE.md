@@ -2992,8 +2992,13 @@ edit reached the lattice.
 
 `State::grid_pitch_x` / `grid_pitch_y` and `node_w` / `node_h` are the
 zoomed geometry — `configured_grid_geometry` at 100%, scaled TOGETHER by
-`scale_grid_geometry`, which is the only relation between them; there is no
-other grid geometry on `State`. `cell_center`, `cell_rect` and `cell_at` are
+`scale_grid_geometry`, which is the only relation between them. **A
+config.kdl edit to the spacing or node size shows at once** (since
+2026-10-06): `State::grid_base` is the configured geometry the live one is
+a zoom of, and the config reload (`update_graph_settings_from_config`)
+re-applies a changed one at the zoom in hand — until then the live
+geometry was read at startup and only zoomed after, so an edit waited for
+Reset Zoom or a restart (`a_grid_spacing_edit_applies_at_the_zoom_in_hand`). `cell_center`, `cell_rect` and `cell_at` are
 the three derivations every consumer goes through — the cursor outline, the
 click-to-cell of an empty-space press (`round`, not `floor`, because a cell
 is centred on its crossing and a click between two nodes belongs to the

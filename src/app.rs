@@ -2358,6 +2358,7 @@ impl Default for ViewportSettings {
 /// never writes it back — the same split `../CLAUDE.md` describes for scroll
 /// behavior. Zoom scales all four in memory together; the configured values
 /// are the 100% baseline that Reset Zoom returns to.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridGeometry {
     pub pitch_x: f32,
     pub pitch_y: f32,
@@ -3070,6 +3071,11 @@ pub struct State {
     /// The network grid's pitch at the current zoom — centre of one grid
     /// line to the centre of the next, per axis. The grid's one size; a
     /// node's (col, row) is the intersection its centre sits on.
+    /// The configured grid geometry (`configured_grid_geometry`) the live
+    /// one is a zoom of — the 100% baseline as it was last read. A config
+    /// reload that moves it re-applies the grid at the zoom in hand
+    /// (`update_graph_settings_from_config`).
+    pub grid_base: GridGeometry,
     pub grid_pitch_x: f32,
     pub grid_pitch_y: f32,
     /// The node body's size at the current zoom — its own, not the pitch's;
@@ -8446,6 +8452,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
             network_grid_visible: true,
+            grid_base: cfg_grid,
             grid_pitch_x: cfg_grid.pitch_x,
             grid_pitch_y: cfg_grid.pitch_y,
             node_w: cfg_grid.node_w,
@@ -8969,7 +8976,23 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.grid_snap_enabled = snap_enabled;
             changed = true;
         }
-        
+        // The grid's spacing and node size: re-applied at the zoom in hand,
+        // so a config.kdl edit to `spacing_y` shows at once. Until
+        // 2026-10-06 the live geometry was set at startup and only zoomed
+        // after it, so an edit waited for Reset Zoom or a restart.
+        let base = configured_grid_geometry();
+        if base != self.grid_base {
+            let zoom = if self.grid_base.pitch_x > 0.0 { self.grid_pitch_x / self.grid_base.pitch_x } else { 1.0 };
+            self.set_grid_geometry(GridGeometry {
+                pitch_x: base.pitch_x * zoom,
+                pitch_y: base.pitch_y * zoom,
+                node_w: base.node_w * zoom,
+                node_h: base.node_h * zoom,
+            });
+            self.grid_base = base;
+            changed = true;
+        }
+
         if changed {
             self.sync_grid_settings();
             self.viewport_dirty = true;

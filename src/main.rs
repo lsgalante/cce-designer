@@ -16142,6 +16142,29 @@ mod tests {
     /// selection with it, rigidly, and the region travels too. Dragging a node
     /// OUTSIDE the selection is the ordinary one-node drag, and collapses the
     /// selection onto what was grabbed.
+    /// A config.kdl edit to the grid's spacing shows at once, at the zoom
+    /// in hand: the reload re-applies the configured geometry scaled as the
+    /// live one was. It used to be read at startup and only zoomed after.
+    #[test]
+    fn a_grid_spacing_edit_applies_at_the_zoom_in_hand() {
+        use crate::app::{configured_grid_geometry, GridGeometry};
+        let mut state = State::new(false);
+        let cfg = configured_grid_geometry();
+        assert_eq!(state.grid_base, cfg);
+        // As if the config had said 90 rows apart, and the view is at 150%.
+        state.grid_base = GridGeometry { pitch_y: 90.0, ..cfg };
+        state.set_grid_geometry(GridGeometry { pitch_x: cfg.pitch_x * 1.5, pitch_y: 135.0, node_w: cfg.node_w * 1.5, node_h: cfg.node_h * 1.5 });
+        // The file now says what `cfg` says.
+        state.update_graph_settings_from_config();
+        assert_eq!(state.grid_base, cfg);
+        assert_eq!(state.grid_pitch_y, cfg.pitch_y * 1.5, "the new spacing, at the same 150%");
+        assert_eq!(state.grid_pitch_x, cfg.pitch_x * 1.5);
+        assert_eq!((state.node_w, state.node_h), (cfg.node_w * 1.5, cfg.node_h * 1.5));
+        // A reload that changes nothing leaves the zoom alone.
+        state.update_graph_settings_from_config();
+        assert_eq!(state.grid_pitch_x, cfg.pitch_x * 1.5);
+    }
+
     /// A node dropped on another node swaps places with it, connections
     /// and all: in sphere1 → a → b → c, dragging b onto a leaves b where a
     /// was and a where b was, wired sphere1 → b → a → c. One undo puts both
