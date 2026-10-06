@@ -2511,9 +2511,23 @@ The rules that took a day to settle, each with the wrong version it replaced:
   is what says why. A named material's `frost` child spells its knob
   `compression` too.
 - **Focus is the bevel's tint.** With relief on (`window_manager.control_relief`,
-  default on), a plated pane marks focus by tinting its roll with
-  `highlight_primary_color` (`plate_focus_tint`); the flat `border_color`
-  draws only with relief off.
+  default on) AND the shader plates (`relief shader`, default on) —
+  `render::focus_by_tint` — a plated pane marks focus by tinting its roll
+  with `highlight_primary_color` (`plate_focus_tint`): the lit side in the
+  accent, the shadow as dark as an unfocused one in the accent's hue
+  (cce-ui's shader2d, `FOCUS_*`; until 2026-10-05 the shadow came out
+  BRIGHTER than the lit side for a bright accent on a dark plate, and the
+  ring read lit from the bottom-right). Otherwise
+  `append_context_border` draws the flat ring: the banded A/B path draws a
+  tinted bevel untinted, so with `shader=false` focus showed nowhere. The
+  roll itself takes a `border_color` (the plates reach the relief through
+  `solid_border`): without one there is no roll and no tint.
+- **The grid cursor is in the accent only while the network has focus**,
+  in the plates' neutral `border_color` otherwise (since 2026-10-05; it
+  was always the accent). With the network plate off it is the network's
+  ONLY focus cue — there is no plate to tint and no edge to ring, the pane
+  spanning the window — and with the shader off focus adds a flat accent
+  ring around it.
 
 **An open dropdown in the params pane is painted into the frame**
 (`append_popovers`, since 2026-10-01): `render_popover` gets the frame's

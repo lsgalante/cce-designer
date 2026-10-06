@@ -31,6 +31,15 @@ fn merge_bounds(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
     }
 }
 
+/// Whether focus is shown by tinting a roll (a plate's rim, the grid
+/// cursor's glint) rather than by a flat ring. It takes the relief AND the
+/// shader plates: the banded A/B path (`relief shader=false`) draws a tinted
+/// bevel untinted, so a pane that left its focus to the tint there showed
+/// none at all.
+fn focus_by_tint() -> bool {
+    cce_ui::layout::control_relief() && cce_ui::layout::bevel_shader()
+}
+
 /// What a bypassed node wears in the network: Houdini's bypass flag is
 /// this colour, and nothing else in the pane is.
 const BYPASS_TINT: [f32; 3] = [1.0, 0.74, 0.18];
@@ -590,17 +599,37 @@ impl State {
                 // line, so it traces the SAME superellipse silhouette, radius
                 // family, and inset as the nodes and panes. Depth = the
                 // plates' bevel width for a matching band.
-                let color = colors::highlight_primary_color();
-                let tint = [color[0], color[1], color[2]];
+                //
+                // In the accent only while the network has focus, as a
+                // focused plate's rim is; otherwise in the plates' neutral
+                // border colour. With the network plate off this is the
+                // network's ONLY focus cue — no plate, no rim to tint.
+                // Without the shader plates the glint is drawn untinted, so
+                // focus adds a flat ring in the accent over it.
+                let focused = self.focused_pane == LEFT_MENUBAR_IDX;
+                let accent = colors::highlight_primary_color();
+                let tint = if focused {
+                    [accent[0], accent[1], accent[2]]
+                } else {
+                    // Never pure white: a white tint is the untinted plate,
+                    // which a fill-less bevel draws as nothing.
+                    let n = cce_ui::colors::plate_border_color().unwrap_or([0.58, 0.58, 0.66, 1.0]);
+                    [n[0].min(0.99), n[1].min(0.99), n[2].min(0.99)]
+                };
+                let ring = (focused && !focus_by_tint()).then_some([accent[0], accent[1], accent[2], 0.9]);
                 let depth = cce_ui::colors::plate_bevel_width();
+                let paint_cursor = |pc: &mut PaintCtx, r: f32| {
+                    let cr = rect(cx, cy, cw, ch);
+                    pc.bevel_tinted(cr, (r, r, r, r), &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
+                    if let Some(c) = ring {
+                        pc.border(cr, (r, r, r, r), [0.0; 4], c, 2.0);
+                    }
+                };
                 if self.graph().is_node_rect(cx, cy, cw, ch) {
-                    let r = cce_ui::layout::graph_node_corner_radius();
-                    pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
+                    paint_cursor(pc, cce_ui::layout::graph_node_corner_radius());
                 } else {
                     let r = self.graph().cell_corner_radius();
-                    pc.clip(clip, |pc| {
-                        pc.bevel_tinted(rect(cx, cy, cw, ch), (r, r, r, r), &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
-                    });
+                    pc.clip(clip, |pc| paint_cursor(pc, r));
                 }
             }
         } else if idx == PARAM_IDX {
@@ -744,23 +773,19 @@ impl State {
     /// menubars are hidden in the floating layout, so this border is the
     /// only visual indicator of `focused_pane`.
     /// The focused pane's plate carries the highlight as its bevel's specular
-    /// tint under `control_relief` — the ring in `append_context_border` is the
-    /// flat-style treatment (the viewport's rim-only Boss overlay tints the
-    /// same way). Only the circular pane (arc ring) keeps the ring in both
-    /// styles.
+    /// tint while [`focus_by_tint`] — the ring in `append_context_border` is
+    /// the treatment otherwise (the viewport's fill-less glint tints the same
+    /// way). Only the circular pane (arc ring) keeps the ring in both styles.
     fn plate_focus_tint(&self, idx: usize) -> Option<[f32; 3]> {
-        if !cce_ui::layout::control_relief() {
+        if !focus_by_tint() {
             return None;
         }
         let focused = match idx {
-            NETWORK_PANEL_IDX | CONTENT_IDX => {
-                self.focused_pane == LEFT_MENUBAR_IDX && !self.circular_network_pane
-            }
+            NETWORK_PANEL_IDX => self.focused_pane == LEFT_MENUBAR_IDX && !self.circular_network_pane,
             // The second network editor shares the network focus domain —
-            // whichever of the two is FRONTED wears the ring when it holds.
-            crate::slots::NETWORK_PANEL2_IDX | crate::slots::CONTENT2_IDX => {
-                self.focused_pane == LEFT_MENUBAR_IDX
-            }
+            // whichever of the two is FRONTED wears the ring when it holds
+            // (a tab waiting behind the other has a zero rect, so no plate).
+            crate::slots::NETWORK_PANEL2_IDX => self.focused_pane == LEFT_MENUBAR_IDX,
             VIEWPORT_IDX => self.focused_pane == RIGHT_MENUBAR_IDX,
             PARAM_IDX => self.focused_pane == PARAM_MENUBAR_IDX,
             SPREADSHEET_IDX => self.focused_pane == SPREADSHEET_MENUBAR_IDX,
@@ -776,9 +801,10 @@ impl State {
         if self.is_detached_network {
             return;
         }
-        // Plated panes under control_relief mark focus through their bevel's
-        // specular tint (plate_focus_tint) — no ring on top of it.
-        let relief = cce_ui::layout::control_relief();
+        // Plated panes mark focus through their bevel's specular tint
+        // (plate_focus_tint) whenever the shader can draw one — no ring on
+        // top of it.
+        let relief = focus_by_tint();
 
         let thickness = 2.0;
         let mut color = colors::highlight_primary_color();
@@ -802,7 +828,9 @@ impl State {
                     );
                     return;
                 }
-                if relief {
+                // With its plate off the network spans the window and has no
+                // edge to ring: the grid cursor carries its focus instead.
+                if relief || !self.network_plate {
                     return;
                 }
                 color[3] *= self.network_opacity;
