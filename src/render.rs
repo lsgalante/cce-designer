@@ -86,6 +86,8 @@ impl State {
             crate::slots::CONTENT2_IDX | crate::slots::BREADCRUMB2_IDX => {
                 self.positions[crate::slots::NETWORK_PANEL2_IDX]
             }
+            // The plate fits the rows; without one, the HUD's rect.
+            PARAM_IDX if self.params_plate => self.params_claim(),
             PARAM_IDX => self.positions[PARAM_IDX],
             SPREADSHEET_IDX => self.positions[SPREADSHEET_IDX],
             _ => return None,
@@ -671,19 +673,21 @@ impl State {
             // Track and thumb are pills — half-width radius on the DE corner
             // family (squircle when corner_shape > 2), like the nodes.
             //
-            // Without its plate (`params_plate` off, the default) the rows
-            // stand on the scene: no plate, and no idle copy of the bar,
-            // which only ever showed faintly through the frost — the bar
-            // is seen when a scroll raises it.
-            if self.params_plate {
+            // The plate (`params_plate`, on by default) is FITTED to the
+            // rows (`params_claim`), not the HUD's rect, which runs the
+            // viewport's height. Without it the rows stand on the scene,
+            // and there is no idle copy of the bar, which only ever showed
+            // faintly through the frost — the bar is seen when a scroll
+            // raises it.
+            let fitted = self.params_claim();
+            if self.params_plate && fitted.2 > 0.0 && fitted.3 > 0.0 {
                 if let Some((quads, _)) = &param_scrollbar {
                     for &(qx, qy, qw, qh, qc) in quads {
                         pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
                     }
                 }
-
-                let (wx, wy, ww2, wh2) = w.rect();
-                append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
+                let (fx, fy, fw, fh) = fitted;
+                append_plate_at(w, pc, rect(fx, fy, fw, fh), self.plate_focus_tint(idx), self.pane_plate_radii(fx, fy, fw, fh));
             }
 
             let (px, py, pw, ph) = self.positions[PARAM_IDX];
@@ -886,11 +890,11 @@ impl State {
                 (0.0, 0.0, self.width, self.height)
             }
             PARAM_MENUBAR_IDX => {
-                // No plate, no edge to ring.
+                // No plate, no edge to ring; the plate is fitted to the rows.
                 if !self.show_parameters || relief || !self.params_plate {
                     return;
                 }
-                self.positions[PARAM_IDX]
+                self.params_claim()
             }
             SPREADSHEET_MENUBAR_IDX => {
                 if !self.show_spreadsheet || relief {
@@ -1817,4 +1821,23 @@ pub(crate) fn uncovered(r: Rect, covers: &[(f32, f32, f32, f32)]) -> Vec<Rect> {
     }
     pieces.retain(|p| p.width > 0.5 && p.height > 0.5);
     pieces
+}
+
+/// `append_widget_plate_radii` at `r` rather than the widget's own rect:
+/// the params HUD's plate is fitted to its rows, and the HUD's rect runs the
+/// viewport's height. The same material, relief and border as every pane.
+fn append_plate_at(w: &dyn WidgetHost, pc: &mut PaintCtx, r: Rect, tint: Option<[f32; 3]>, radii: (f32, f32, f32, f32)) {
+    let tint = tint.unwrap_or([1.0, 1.0, 1.0]);
+    let fill = cce_ui::scene::material::Material::from_fill(w.color());
+    if let Some(thickness) = w.plate_bevel() {
+        pc.bevel_tinted(r, radii, &fill, thickness, tint);
+    } else if let Some((border_color, thickness)) = w.solid_border() {
+        if cce_ui::layout::control_relief() {
+            pc.bevel_tinted(r, radii, &fill, cce_ui::colors::plate_bevel_width(), tint);
+        } else {
+            pc.border(r, radii, w.color(), border_color, thickness);
+        }
+    } else {
+        pc.border(r, radii, w.color(), [0.0; 4], 0.0);
+    }
 }

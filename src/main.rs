@@ -423,6 +423,11 @@ mod tests {
 
         // The params HUD, with its plate on, off a row and where no plate
         // covers it: its menu alone, which detaches and does not collapse.
+        // A node selected, so the HUD has rows and a plate fitted to them.
+        let mut redraw = false;
+        let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+        state.apply_action(crate::app::McpAction::Select { slot }, &mut redraw).unwrap();
+        state.apply_layout();
         state.params_plate = true;
         let (x, y, w, h) = state.slots.get_dyn(PARAM_IDX).rect();
         let free = (0..(h as i32))
@@ -2050,26 +2055,29 @@ mod tests {
         assert!(!all.is_empty());
         assert!(all.iter().all(|(_, x, y, ..)| !state.under_a_plate(*x, *y + 6.0)), "none stands under a plate");
 
-        // Put the params plate over the middle of the scene: the numbers
-        // there go, the rest stay.
+        // Put the HUD, with a node's rows on its plate, over the middle of
+        // the scene: the numbers under the plate go, the rest stay.
+        let mut redraw = false;
+        let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
         state.params_plate = true;
-        state.positions[crate::slots::PARAM_IDX] = (700.0, 350.0, 200.0, 200.0);
+        state.positions[crate::slots::PARAM_IDX] = (800.0, 200.0, 200.0, 690.0);
+        state.slots.get_dyn_mut(crate::slots::PARAM_IDX).set_rect(800.0, 200.0, 200.0, 690.0);
+        let plate = state.params_claim();
+        assert!(plate.1 == 200.0 && plate.3 > 100.0 && plate.3 < 690.0, "the plate fits the rows: {plate:?}");
+        let in_plate = |x: f32, y: f32| x >= 800.0 && x < 1000.0 && y + 6.0 >= plate.1 && y + 6.0 < plate.1 + plate.3;
         let fewer = state.point_number_labels();
         assert!(fewer.len() < all.len(), "{} of {} are left", fewer.len(), all.len());
         assert!(!fewer.is_empty());
-        let in_pane = |x: f32, y: f32| x >= 700.0 && x < 900.0 && y + 6.0 >= 350.0 && y + 6.0 < 550.0;
-        assert!(fewer.iter().all(|(_, x, y, ..)| !in_pane(*x, *y)));
+        assert!(fewer.iter().all(|(_, x, y, ..)| !in_plate(*x, *y)));
 
-        // Without its plate the pane is its rows, which stand elsewhere:
-        // the numbers in the rest of its rect are the scene's, and drawn.
+        // Without its plate the HUD hides only what its rows stand on: the
+        // band it claims is narrower, and more numbers show.
         state.params_plate = false;
-        let (_, cy, _, ch) = state.params_claim();
-        assert!(ch <= crate::app::PARAMS_CLAIM_PAD && cy == 350.0, "no row stands in the moved rect");
-        assert!(
-            state.point_number_labels().iter().any(|(_, x, y, ..)| in_pane(*x, *y)),
-            "a plateless pane hides no number under its empty space"
-        );
+        assert!(state.point_number_labels().len() >= fewer.len());
+        state.params_plate = true;
         state.positions[crate::slots::PARAM_IDX] = (px, py, pw, ph);
+        state.slots.get_dyn_mut(crate::slots::PARAM_IDX).set_rect(px, py, pw, ph);
         assert_eq!(state.point_number_labels().len(), all.len());
     }
 
@@ -2153,14 +2161,24 @@ mod tests {
         assert_eq!(area(&uncovered(r, &[(200.0, 0.0, 10.0, 10.0)])), 10000.0, "a cover elsewhere");
     }
 
-    /// The params pane can drop its plate, and does by default: the rows
-    /// stand on the scene, and the pane claims only the band they cover —
-    /// a press or the wheel under the last row is the viewport's.
+    /// The params HUD's plate is fitted to its rows — padded under the last
+    /// as the first is under the top — and on by default; without it the
+    /// rows stand on the scene. Either way the HUD claims only the band its
+    /// rows cover: a press or the wheel under it is the viewport's.
     #[test]
-    fn a_plateless_params_pane_is_its_rows() {
+    fn the_params_plate_fits_its_rows() {
         let mut state = State::new(false);
-        assert!(!state.params_plate, "the plate is off by default");
-        assert_eq!(state.command_toggle_state("toggle_params_plate"), Some(false));
+        assert!(state.params_plate, "the plate is on by default");
+        assert_eq!(state.command_toggle_state("toggle_params_plate"), Some(true));
+        // A HUD with no rows draws no plate and claims nothing.
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        if state.param_row_rects().iter().all(|r| r.3 <= 0.0) {
+            assert_eq!(state.params_claim().3, 0.0);
+        }
+        assert!(state.run_command("toggle_params_plate"));
+        assert!(!state.params_plate);
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -2184,12 +2202,19 @@ mod tests {
         assert!(state.cursor_in_viewport(), "under the rows is the viewport");
         assert!(!state.on_param_resize_edge(px, under.1), "and the pane's edge runs only as far as its rows");
 
-        // With the plate the whole rect is the pane again.
+        // With the plate: it runs as far under the last row as the first
+        // row stands under the HUD's top, and no further.
         assert!(state.run_command("toggle_params_plate"));
         assert!(state.params_plate);
-        assert!(state.params_claims(under.0, under.1));
-        assert!(!state.cursor_in_viewport());
-        assert!(state.on_param_resize_edge(px, under.1));
+        let (_, cy, _, ch) = state.params_claim();
+        let first = rows.iter().filter(|r| r.3 > 0.0).map(|r| r.1).fold(f32::INFINITY, f32::min);
+        assert_eq!(cy, py);
+        assert!((cy + ch - (last + (first - py))).abs() < 0.01, "padded alike: {} vs {}", cy + ch, last + first - py);
+        assert!(state.params_claims(px + pw * 0.5, last + 2.0), "the plate's bottom margin is the HUD's");
+        assert!(!state.params_claims(under.0, under.1), "under the plate is the scene's");
+        assert!(state.cursor_in_viewport());
+        assert!(!state.on_param_resize_edge(px, under.1));
+        assert!(state.on_param_resize_edge(px, row_y));
     }
 
     /// A scene rebuild leaves the numbers dimmed as they were: the 2D frame

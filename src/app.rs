@@ -2000,10 +2000,10 @@ pub struct ViewportSettings {
     /// the project, but whether its surface is drawn is how you like to work.
     #[serde(default = "default_network_plate")]
     pub network_plate: bool,
-    /// Whether the params pane draws its plate. Off (the default, since
-    /// 2026-10-06): the rows stand on the scene, and the pane claims only
-    /// the band its rows cover, so the scene below them is the viewport's.
-    #[serde(default)]
+    /// Whether the params HUD draws its plate — one FITTED to its rows,
+    /// not to the HUD's rect. On by default; off, the rows stand on the
+    /// scene. Either way the HUD claims only the band its rows cover.
+    #[serde(default = "default_params_plate")]
     pub params_plate: bool,
     /// How the network's node wires run (`cce_ui::widget::display::WireStyle`
     /// by name). Empty follows `style.surface.graph.node.wire_style` in
@@ -2225,6 +2225,10 @@ fn default_network_plate() -> bool {
     true
 }
 
+fn default_params_plate() -> bool {
+    true
+}
+
 impl Default for ViewportSettings {
     fn default() -> Self {
         Self {
@@ -2235,7 +2239,7 @@ impl Default for ViewportSettings {
             show_grid_enabled: true,
             show_origin_enabled: true,
             network_plate: true,
-            params_plate: false,
+            params_plate: true,
             node_wire_style: String::new(),
             show_point_markers: false,
             show_point_numbers: false,
@@ -3979,24 +3983,27 @@ impl State {
             })
     }
 
-    /// The part of the params pane that is the pane's: its whole rect with
-    /// the plate on. With the plate off the ROWS are the pane — the band
-    /// from its top to just under its last row — and the scene below them
-    /// is the viewport's, to orbit, scroll and number, as the network's
-    /// overlay claims only its nodes. A pane overflowing its rows claims
-    /// all of it, the rows filling it.
+    /// The part of the params HUD that is the HUD's: the band from its top
+    /// to just under its last row — the ROWS are the HUD, and the scene
+    /// below them is the viewport's, to orbit, scroll and number, as the
+    /// network's overlay claims only its nodes. With the plate on this is
+    /// the PLATE, fitted to the rows: as far under the last row as the
+    /// first row stands under the top, so it is padded alike above and
+    /// below; without it, `PARAMS_CLAIM_PAD` under. Rows overflowing the
+    /// HUD fill it, and a HUD with no rows (nothing selected) claims
+    /// nothing and draws no plate.
     pub fn params_claim(&self) -> (f32, f32, f32, f32) {
         let (x, y, w, h) = self.positions[PARAM_IDX];
-        if self.params_plate || w <= 0.0 || h <= 0.0 || self.pane_is_stubbed(PARAM_IDX) {
+        if w <= 0.0 || h <= 0.0 || self.pane_is_stubbed(PARAM_IDX) {
             return (x, y, w, h);
         }
-        let last = self
-            .param_row_rects()
-            .iter()
-            .filter(|r| r.3 > 0.0)
-            .map(|r| r.1 + r.3)
-            .fold(y, f32::max);
-        (x, y, w, (last + PARAMS_CLAIM_PAD).min(y + h) - y)
+        let rows: Vec<(f32, f32, f32, f32)> = self.param_row_rects().into_iter().filter(|r| r.3 > 0.0).collect();
+        let Some(first) = rows.iter().map(|r| r.1).reduce(f32::min) else {
+            return (x, y, w, 0.0);
+        };
+        let last = rows.iter().map(|r| r.1 + r.3).fold(y, f32::max);
+        let pad = if self.params_plate { (first - y).max(PARAMS_CLAIM_PAD) } else { PARAMS_CLAIM_PAD };
+        (x, y, w, (last + pad).min(y + h) - y)
     }
 
     /// Whether (px, py) is the params pane's: inside `params_claim` where
@@ -10101,7 +10108,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             Action::ToggleParamsPlate => {
                 self.params_plate = !self.params_plate;
                 self.update_status_text(if self.params_plate {
-                    "Parameters plate on."
+                    "Parameters plate on, fitted to the rows."
                 } else {
                     "Parameters plate off — the controls stand on the scene."
                 });
