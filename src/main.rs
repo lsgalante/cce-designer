@@ -6856,6 +6856,25 @@ mod tests {
     }
 
     #[test]
+    fn the_attribute_nodes_group_row_is_shown_where_it_is_read() {
+        // Delete removes the attribute's whole column — there is no deleting
+        // it from some points — and Promote reads every point, so neither
+        // reads Group, and a row shown there would be a filter that filters
+        // nothing. Every other operation limits its work to the group.
+        let root = crate::app::load_fs_tree();
+        let template = root.children.iter().find(|t| t.node_type == "attribute").expect("attribute template");
+        let group = template.params.iter().find(|p| p.name == "group").expect("attribute has a group row");
+        for (op, shown) in [
+            ("Create", true), ("Modify", true), ("Remap", true), ("Clip", true),
+            ("Normalize", true), ("Composite", true), ("Delete", false), ("Promote", false),
+        ] {
+            let mut params = template.params.clone();
+            params.iter_mut().find(|p| p.name == "operation").unwrap().set_text(op);
+            assert_eq!(crate::app::param_visible(&params, &group.show_when), shown, "Group on {op}");
+        }
+    }
+
+    #[test]
     fn test_hiding_a_row_does_not_lose_its_value() {
         use crate::app::param_display;
         // Write-back resolves a row by its display key, not by position, so a

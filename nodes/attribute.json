@@ -104,7 +104,7 @@
       "label": "Group",
       "type": "group",
       "default": "",
-      "show_when": "operation != Promote",
+      "show_when": "operation == Create|Modify|Remap|Clip|Normalize|Composite",
       "description": "A point group limiting which points are changed or measured. Empty means every point.",
       "group": "where"
     },
