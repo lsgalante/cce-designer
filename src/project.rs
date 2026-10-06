@@ -143,6 +143,7 @@ impl State {
                 spreadsheet_height: (self.floating_spreadsheet_height / self.height).min(1.0),
                 spreadsheet_inset_left: self.floating_spreadsheet_inset_left / self.width,
                 spreadsheet_inset_right: self.floating_spreadsheet_inset_right / self.width,
+                hud_width: Some((self.params_hud_width / self.width).min(1.0)),
             })
         } else {
             None
@@ -373,11 +374,19 @@ impl State {
             let all: Vec<usize> = resolved.iter().flatten().copied().collect();
             let n2 = crate::slots::NETWORK_PANEL2_IDX;
             let n2_count = all.iter().filter(|&&s| s == n2).count();
+            // The params pane is not docked since 2026-10-06 (it is a HUD
+            // on the scene): an older save lists it in a dock, and it is
+            // taken out — the dock it fronted fronts its next tab, or is
+            // empty.
+            let resolved: Vec<Vec<usize>> = resolved
+                .into_iter()
+                .map(|tabs| tabs.into_iter().filter(|&s| s != crate::slots::PARAM_IDX).collect())
+                .collect();
+            let all: Vec<usize> = all.into_iter().filter(|&s| s != crate::slots::PARAM_IDX).collect();
             let mut core: Vec<usize> = all.iter().copied().filter(|&s| s != n2).collect();
             core.sort_unstable();
             let mut expected = vec![
                 crate::slots::NETWORK_PANEL_IDX,
-                crate::slots::PARAM_IDX,
                 crate::slots::SPREADSHEET_IDX,
             ];
             expected.sort_unstable();
@@ -423,10 +432,12 @@ impl State {
     /// than loading half of one.
     pub(crate) fn apply_plate_geometry(&mut self, pg: crate::app::PlateGeometry) {
         let sane = |f: f32| f.is_finite() && (0.0..=1.0).contains(&f);
-        let all = [pg.network_width, pg.params_width, pg.spreadsheet_height, pg.spreadsheet_inset_left, pg.spreadsheet_inset_right];
+        let hud = pg.hud_width.unwrap_or(pg.params_width);
+        let all = [pg.network_width, pg.params_width, pg.spreadsheet_height, pg.spreadsheet_inset_left, pg.spreadsheet_inset_right, hud];
         if self.width > 1.0 && self.height > 1.0 && all.iter().all(|&f| sane(f)) {
             self.floating_network_layout.2 = pg.network_width * self.width;
             self.floating_param_width = pg.params_width * self.width;
+            self.params_hud_width = hud * self.width;
             self.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
             self.floating_spreadsheet_inset_left = pg.spreadsheet_inset_left * self.width;
             self.floating_spreadsheet_inset_right = pg.spreadsheet_inset_right * self.width;

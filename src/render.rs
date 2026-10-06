@@ -143,12 +143,15 @@ impl State {
 
         let mut draw_order: Vec<usize> = (0..WIDGET_COUNT).collect();
         draw_order.sort_by_key(|&i| {
-            let base_key = if i == VIEWPORT_IDX
-                || i == NETWORK_PANEL_IDX
-                || i == crate::slots::NETWORK_PANEL2_IDX
-            {
+            // The params HUD lives on the scene: right after the viewport
+            // and before every plate, so each plate is drawn over it.
+            let base_key = if i == VIEWPORT_IDX {
+                -7
+            } else if i == PARAM_IDX {
+                -6
+            } else if i == NETWORK_PANEL_IDX || i == crate::slots::NETWORK_PANEL2_IDX {
                 -5
-            } else if i == CONTENT_IDX || i == crate::slots::CONTENT2_IDX || i == PARAM_IDX {
+            } else if i == CONTENT_IDX || i == crate::slots::CONTENT2_IDX {
                 -4
             } else if i == HEADER_IDX
                 || i == LEFT_MENUBAR_IDX
@@ -685,9 +688,18 @@ impl State {
 
             let (px, py, pw, ph) = self.positions[PARAM_IDX];
             let view = rect(px, py + 4.0, pw, (ph - 8.0).max(0.0));
-            pc.clip(view, |pc| {
-                w.paint_self(&self.ui_context, pc);
-            });
+            // The HUD is under every plate, and its geometry is drawn
+            // before theirs, so they cover it — but the engine lays ALL
+            // text out after all geometry, and a label under a plate would
+            // stand on top of it. So the HUD is painted into what the
+            // plates leave of it, a rect at a time (`uncovered`); one, most
+            // of the time, and a handful at most.
+            let pieces = uncovered(view, &self.plates_over_params());
+            for &piece in &pieces {
+                pc.clip(piece, |pc| {
+                    w.paint_self(&self.ui_context, pc);
+                });
+            }
 
             // Expression rows carry Houdini's tint: a translucent green over
             // the row, so a driven parameter reads as driven before its text
@@ -703,13 +715,15 @@ impl State {
                 };
                 if rows.iter().any(|r| is_expr(&r.0)) {
                     let rects = self.param_row_rects();
-                    pc.clip(view, |pc| {
-                        for (row, &(rx, ry, rw, rh)) in rows.iter().zip(rects.iter()) {
-                            if rh > 0.0 && is_expr(&row.0) {
-                                pc.rounded_rect(rect(rx, ry, rw, rh), 6.0, (true, true, true, true), [0.35, 0.8, 0.45, 0.16]);
+                    for &piece in &pieces {
+                        pc.clip(piece, |pc| {
+                            for (row, &(rx, ry, rw, rh)) in rows.iter().zip(rects.iter()) {
+                                if rh > 0.0 && is_expr(&row.0) {
+                                    pc.rounded_rect(rect(rx, ry, rw, rh), 6.0, (true, true, true, true), [0.35, 0.8, 0.45, 0.16]);
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
             }
 
@@ -1767,4 +1781,40 @@ pub(crate) fn scene_edge_verts(geom: &crate::detail::Detail) -> Vec<crate::geome
 fn trim_number(v: f32) -> String {
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// What is left of `r` once `covers` are taken out of it, as rects that do
+/// not overlap: each cover splits every piece it meets into the bands
+/// above and below it and the strips beside it. Covers are taken as their
+/// bounding rects, so a plate's rounded corner hides the sliver it would
+/// have shown.
+pub(crate) fn uncovered(r: Rect, covers: &[(f32, f32, f32, f32)]) -> Vec<Rect> {
+    let mut pieces = vec![r];
+    for &(cx, cy, cw, ch) in covers {
+        let (cx1, cy1) = (cx + cw, cy + ch);
+        let mut next = Vec::with_capacity(pieces.len() + 3);
+        for p in pieces {
+            let (px1, py1) = (p.x + p.width, p.y + p.height);
+            let (ix0, iy0, ix1, iy1) = (p.x.max(cx), p.y.max(cy), px1.min(cx1), py1.min(cy1));
+            if ix0 >= ix1 || iy0 >= iy1 {
+                next.push(p);
+                continue;
+            }
+            if iy0 > p.y {
+                next.push(rect(p.x, p.y, p.width, iy0 - p.y));
+            }
+            if iy1 < py1 {
+                next.push(rect(p.x, iy1, p.width, py1 - iy1));
+            }
+            if ix0 > p.x {
+                next.push(rect(p.x, iy0, ix0 - p.x, iy1 - iy0));
+            }
+            if ix1 < px1 {
+                next.push(rect(ix1, iy0, px1 - ix1, iy1 - iy0));
+            }
+        }
+        pieces = next;
+    }
+    pieces.retain(|p| p.width > 0.5 && p.height > 0.5);
+    pieces
 }

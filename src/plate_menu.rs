@@ -28,9 +28,11 @@ pub const PLATE_SLOTS: [usize; 5] =
 
 /// The panes the tab rows offer — the dockable set. The playbar's strip is
 /// not a dock, and the second network editor joins as the first CLOSABLE
-/// pane: unplaced it simply does not exist.
-pub const TAB_CANDIDATES: [usize; 4] =
-    [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, NETWORK_PANEL2_IDX];
+/// pane: unplaced it simply does not exist. The params pane is not one
+/// (since 2026-10-06): it is a HUD on the scene, under the plates, laid out
+/// from the viewport alone (`State::params_hud_rect`).
+pub const TAB_CANDIDATES: [usize; 3] =
+    [NETWORK_PANEL_IDX, SPREADSHEET_IDX, NETWORK_PANEL2_IDX];
 
 /// What the plate menu can do to its plate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +103,11 @@ impl State {
             if !w.visible() {
                 return false;
             }
+            // The params HUD is under every plate and, without its own,
+            // only its rows: it is the plate there only where it claims.
+            if idx == PARAM_IDX && !self.pane_is_stubbed(idx) {
+                return self.params_claims(px, py);
+            }
             let (x, y, ww, h) = w.rect();
             ww > 0.0 && h > 0.0 && px >= x && px < x + ww && py >= y && py < y + h
         })
@@ -121,6 +128,11 @@ impl State {
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<PlateMenuAction> = Vec::new();
         for (label, action) in plate_dock::standard_menu(state, self.plate_can_detach(idx)) {
+            // The HUD does not collapse: it is not a plate with a stub to
+            // shrink to, and hiding it is Show Parameters Pane.
+            if idx == PARAM_IDX && matches!(action, PlateDockAction::Collapse | PlateDockAction::Expand) {
+                continue;
+            }
             options.push(label);
             actions.push(match action {
                 PlateDockAction::Collapse => PlateMenuAction::Collapse,
@@ -386,6 +398,8 @@ impl State {
     }
 
     pub fn set_pane_collapsed(&mut self, idx: usize, collapsed: bool) {
+        // The params HUD never collapses (see `plate_menu_rows`).
+        let collapsed = collapsed && idx != PARAM_IDX;
         if !PLATE_SLOTS.contains(&idx) || self.collapsed_panes[idx] == collapsed {
             return;
         }

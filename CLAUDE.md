@@ -223,7 +223,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~11.9k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~13.1k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
@@ -2688,6 +2688,46 @@ the wheel loop ask it too, so a press or a scroll under the rows orbits
 and zooms the scene, and `on_param_resize_edge` runs only as far as the
 rows. `a_plateless_params_pane_is_its_rows` and
 `a_point_number_under_a_plate_is_not_drawn` are the tests.
+
+### The params pane is a HUD on the scene (since 2026-10-06)
+
+The params pane is not a dock pane: it lives on the scene viewer, drawn
+right after it and under every plate, and its size has no relation to any
+plate. Until this it was the right dock's pane — as wide as that dock, its
+bottom raised by a spreadsheet tucked under it, tabbable and movable.
+
+- **Laid out from the viewport alone** (`State::params_hud_rect`): the
+  viewport's top-right corner a gap in, `params_hud_width` wide (its own
+  field, apart from the right dock's `floating_param_width`; saved as
+  `PlateGeometry::hud_width`, and an older save's `params_width` is read
+  as it), as tall as the viewport. The playbar and the spreadsheet cover
+  its bottom; nothing shortens it. Its left edge drags its width
+  (`AppDrag::HudResize`, `on_param_resize_edge`), as far down as it claims.
+  The right dock's own edge is `on_right_dock_resize_edge` /
+  `AppDrag::RightDockResize`, asked first, its plate being on top.
+- **Out of the docks.** The right dock starts EMPTY (`dock_panes`
+  `[network, NO_PANE, spreadsheet]`); `TAB_CANDIDATES` no longer lists
+  params, its plate menu has no tab, Move To or Collapse rows (Detach and
+  the pins stay), `set_pane_collapsed` refuses it, and the pane-state load
+  takes it out of an older save's tab lists — the dock it fronted fronts
+  its next tab or empties. A plate moved into the right dock is drawn over
+  the HUD. The legacy column branches (circular network, detached circular
+  window) still place it in their right column.
+- **Under every plate.** Draw order: viewport (-7), the HUD (-6), the
+  network plates (-5), then the rest. `plates_over_params` is the plates
+  over it (the network's while it has one, the second editor's, the
+  spreadsheet, the playbar, stubs included); `params_claims` takes them
+  out, so a press, the wheel, a row's right-click (`param_row_at`) and
+  `plate_at` there are the plate's. Text is the hard part: the engine lays
+  ALL text out after all geometry, so a HUD label under a plate would be
+  drawn over it. The render arm paints the HUD into what the plates leave
+  of it, a rect at a time (`render::uncovered`, one rect most of the
+  time), so its labels and controls stop at a plate's edge.
+
+`the_params_hud_is_under_the_plates_and_sized_by_none` and
+`uncovered_takes_the_covers_out_of_a_rect` are the tests. Checked in a
+shadow session: the spreadsheet and playbar over the HUD's lower rows, no
+label through them, the HUD's size unmoved.
 
 ### Deselecting has to stick
 
