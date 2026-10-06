@@ -37,8 +37,6 @@ pub struct Playbar {
 }
 
 const PAD: f32 = 8.0;
-/// Width of the play/pause button box (square-ish, clamped to pane height).
-const BTN_W: f32 = 28.0;
 /// Space between two transport buttons.
 const BTN_GAP: f32 = 4.0;
 /// Width reserved right of the track for the frame readout.
@@ -91,9 +89,11 @@ impl Playbar {
     }
 
     /// The transport's square buttons, left to right: Previous Frame, Play,
-    /// Next Frame with the step buttons on, Play alone with them off.
+    /// Next Frame with the step buttons on, Play alone with them off. Glyph
+    /// buttons, so square at the toolkit's button height (clamped to the
+    /// pane), centred in the strip.
     fn button_rects(&self, rect: Rect) -> Vec<(Btn, Rect)> {
-        let s = (rect.height - 2.0 * PAD).max(12.0).min(BTN_W);
+        let s = cce_ui::layout::button_height().min(rect.height).max(12.0);
         let y = rect.y + (rect.height - s) * 0.5;
         let order: &[Btn] = if self.step_buttons { &[Btn::Prev, Btn::Play, Btn::Next] } else { &[Btn::Play] };
         order

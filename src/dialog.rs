@@ -207,7 +207,11 @@ const DIALOG_W: f32 = 520.0;
 const DIALOG_H: f32 = 640.0;
 
 const PAD: f32 = 12.0;
-const QUERY_H: f32 = 30.0;
+/// The query line's height: the toolkit's text box height, since the line
+/// is the dialog's text field.
+fn query_h() -> f32 {
+    cce_ui::layout::textbox_height()
+}
 pub const ROW_H: f32 = 24.0;
 /// A toggle row's switch: the toolkit's `Toggle`, at the row's height less a
 /// hair of air, and about twice as wide as tall — the proportion the params
@@ -275,7 +279,7 @@ pub fn layout_at(width: f32, height: f32, ax: f32, ay: f32) -> (f32, f32, f32, f
 
 /// The query line, at the top of the plate.
 fn query_rect(rect: Rect) -> Rect {
-    Rect { x: rect.x + PAD, y: rect.y + PAD, width: (rect.width - 2.0 * PAD).max(0.0), height: QUERY_H }
+    Rect { x: rect.x + PAD, y: rect.y + PAD, width: (rect.width - 2.0 * PAD).max(0.0), height: query_h() }
 }
 
 /// The list's viewport.

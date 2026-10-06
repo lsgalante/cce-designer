@@ -71,7 +71,11 @@ pub const MENUBAR_H: f32 = 0.0;
 pub const SPLITTER_W: f32 = 6.0;
 
 pub const MIN_COLUMN: f32 = 120.0;
-pub const BREADCRUMB_H: f32 = 24.0;
+/// The network editor's breadcrumb strip: a run of segment buttons, so the
+/// toolkit's button height (the toolkit has no breadcrumb key of its own).
+pub fn breadcrumb_h() -> f32 {
+    cce_ui::layout::button_height()
+}
 pub const PLAYBAR_H: f32 = 36.0;
 
 pub use crate::param::{invalid_params, is_param_name, misnamed_params, param_name_of, unknown_param_kinds, ParamDef, ParamKind, ParamSlot, ParamValue};
@@ -3710,11 +3714,11 @@ impl State {
             let inside = free
                 && if self.circular_network_pane && is_network_part {
                     if i == CONTENT_IDX {
-                        self.circular_network_layout.hit_test_content(cx, cy, 0.0, BREADCRUMB_H)
+                        self.circular_network_layout.hit_test_content(cx, cy, 0.0, breadcrumb_h())
                     } else if i == LEFT_MENUBAR_IDX {
                         false
                     } else if i == BREADCRUMB_IDX {
-                        self.circular_network_layout.hit_test_breadcrumb(cx, cy, 0.0, BREADCRUMB_H)
+                        self.circular_network_layout.hit_test_breadcrumb(cx, cy, 0.0, breadcrumb_h())
                     } else if i == NETWORK_PANEL_IDX {
                         self.slots.network_panel.hit_test(cx, cy, &self.ui_context)
                     } else {
@@ -3887,7 +3891,7 @@ impl State {
             return false;
         }
         if self.circular_network_pane {
-            return self.circular_network_layout.hit_test_content(px, py, 0.0, BREADCRUMB_H);
+            return self.circular_network_layout.hit_test_content(px, py, 0.0, breadcrumb_h());
         }
         self.network_plate
             && [NETWORK_PANEL_IDX, crate::slots::NETWORK_PANEL2_IDX].iter().any(|&idx| {
@@ -3919,7 +3923,7 @@ impl State {
     /// stopped being drawn would be a strange thing to ship.
     pub fn in_network_area(&self, px: f32, py: f32) -> bool {
         if self.circular_network_pane {
-            return self.circular_network_layout.hit_test_content(px, py, 0.0, BREADCRUMB_H);
+            return self.circular_network_layout.hit_test_content(px, py, 0.0, breadcrumb_h());
         }
         let (cx, cy, cw, ch) = self.positions[CONTENT_IDX];
         px >= cx
@@ -3931,7 +3935,7 @@ impl State {
 
     pub fn in_network_pane(&self) -> bool {
         if self.circular_network_pane {
-            self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, BREADCRUMB_H)
+            self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, breadcrumb_h())
         } else if self.network_overlay() {
             // An overlay claims only what it DRAWS. The pane spans the window,
             // so a rect test would swallow every click meant for the scene
@@ -8709,8 +8713,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                 menubar.set_curved_circle(None);
             }
-            self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
-            self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
+            let bc_h = breadcrumb_h();
+            self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, bc_h);
+            self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + bc_h, 2.0 * r, 2.0 * r - (45.0 + bc_h));
             self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
             self.slots.network_panel.set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
             if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
@@ -8912,8 +8917,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
                 }
-                self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, BREADCRUMB_H);
-                self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + BREADCRUMB_H, 2.0 * r, 2.0 * r - (45.0 + BREADCRUMB_H));
+                let bc_h = breadcrumb_h();
+                self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, bc_h);
+                self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + bc_h, 2.0 * r, 2.0 * r - (45.0 + bc_h));
                 self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
                 self.slots.network_panel.set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
                 if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
@@ -9032,7 +9038,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 }
                 
                 let mb_h = 0.0;
-                let bc_h = if self.show_network { BREADCRUMB_H } else { 0.0 };
+                let bc_h = if self.show_network { breadcrumb_h() } else { 0.0 };
                 // The breadcrumb HOVERS over the graph: its strip rect stays
                 // (the widget lays its run out in it, and hit() claims only
                 // the segments), but the content spans the full plate — no
@@ -9058,7 +9064,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // roll, so the two shadings never overlap — flush at the corner
                 // they read as one clipped lump, not a part in front of a plate.
                 let bc_pad = cce_ui::layout::bevel_width()
-                    + cce_ui::layout::bevel_width().min(BREADCRUMB_H * 0.2);
+                    + cce_ui::layout::bevel_width().min(breadcrumb_h() * 0.2);
                 self.positions[BREADCRUMB_IDX] =
                     (px + bc_pad, py + mb_h + bc_pad, (pw - 2.0 * bc_pad).max(0.0), bc_h);
                 self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -9085,7 +9091,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     plate.set_curved_circle(None);
                 }
                 self.positions[crate::slots::CONTENT2_IDX] = (qx, qy, qw, qh);
-                let bc2 = if qw > 0.0 { BREADCRUMB_H } else { 0.0 };
+                let bc2 = if qw > 0.0 { breadcrumb_h() } else { 0.0 };
                 self.positions[crate::slots::BREADCRUMB2_IDX] =
                     (qx + bc_pad, qy + bc_pad, (qw - 2.0 * bc_pad).max(0.0), bc2);
                 for (slot, on) in [
@@ -10808,7 +10814,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 if *button == MouseButton::Middle
                     && *btn_state == ElementState::Pressed
                     && self.cursor_in_viewport()
-                    && !(self.circular_network_pane && self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, BREADCRUMB_H))
+                    && !(self.circular_network_pane && self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, breadcrumb_h()))
                     && self.app_drag.is_none()
                 {
                     self.pan_drag = Some((self.cursor_x, self.cursor_y));
@@ -10828,11 +10834,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let hits_widget = |state: &State, i: usize, x: f32, y: f32| -> bool {
                     if state.circular_network_pane && (i == CONTENT_IDX || i == LEFT_MENUBAR_IDX || i == BREADCRUMB_IDX) {
                         if i == CONTENT_IDX {
-                            state.circular_network_layout.hit_test_content(x, y, 0.0, BREADCRUMB_H)
+                            state.circular_network_layout.hit_test_content(x, y, 0.0, breadcrumb_h())
                         } else if i == LEFT_MENUBAR_IDX {
                             false
                         } else if i == BREADCRUMB_IDX {
-                            state.circular_network_layout.hit_test_breadcrumb(x, y, 0.0, BREADCRUMB_H)
+                            state.circular_network_layout.hit_test_breadcrumb(x, y, 0.0, breadcrumb_h())
                         } else {
                             false
                         }
@@ -10851,7 +10857,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 };
 
                 let in_circle_network_pane = if self.circular_network_pane {
-                    self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, BREADCRUMB_H)
+                    self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, breadcrumb_h())
                 } else {
                     in_network_pane
                 };
@@ -11019,7 +11025,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                                 self.slots.param.unfocus();
                                 self.sync_parameters_to_project();
                                 return true;
-                            } else if cx >= fx && cx < fx + fw && cy >= fy && cy < fy + (if self.show_network { BREADCRUMB_H } else { 0.0 }) {
+                            } else if cx >= fx && cx < fx + fw && cy >= fy && cy < fy + (if self.show_network { breadcrumb_h() } else { 0.0 }) {
                                 if self.slots.breadcrumb.mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context) {
                                     return true;
                                 }
