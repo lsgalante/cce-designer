@@ -357,7 +357,7 @@ impl State {
         let index = if v.group.is_empty() { 0 } else { groups.iter().position(|g| *g == v.group).unwrap_or(0) };
         rows.push(row("group", "Group", Some(Control::Choice { options: groups, index })));
         rows.push(row("delete", "Delete Visualizer", None));
-        rows.push(row("back", "‹ Back to Visualizers", None));
+        rows.push(row("back", &format!("{} Back to Visualizers", crate::dialog::BACK_MARK), None));
         rows
     }
 

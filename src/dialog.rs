@@ -1070,12 +1070,6 @@ impl Paint for Dialog {
             }
             let ty = cce_ui::layout::align_text_y(r.y, r.height, font_size, 0.0);
             let label_color = if i == self.selected { [0xf4, 0xf4, 0xfa] } else { [0xcc, 0xcc, 0xd4] };
-            // What the chord column shows: the chord, or a choice row's
-            // current option and its dropdown mark — a value, so it wears
-            // the label's colour rather than the chord's grey — in a well
-            // that reads as the dropdown's trigger and lifts under the
-            // pointer. The mark is cce-icons' chevron, left out if the icon
-            // set is missing (the font has no glyph for a triangle).
             // What the chord column shows: the chord. A choice row shows a
             // dropdown in the control band instead, as a slider or a colour
             // row does.
@@ -1083,8 +1077,22 @@ impl Paint for Dialog {
                 Some(Control::Choice { .. }) => (String::new(), label_color),
                 _ => (row.chord.clone(), [0x85, 0x85, 0x92]),
             };
+            // A row that leads to another list ends in the page mark
+            // (`refresh_dialog_rows`): drawn as the `chevron-right` glyph a
+            // menu's page row wears, never as the character. Likewise the
+            // back mark that leads a label (a visualizer's Back row) is the
+            // `chevron-left` glyph, as a menu page's back band is.
+            let (right_text, leads) = match right_text.strip_suffix(PAGE_MARK) {
+                Some(t) => (t.trim_end().to_string(), true),
+                None => (right_text, false),
+            };
+            let (label, back) = match row.label.strip_prefix(BACK_MARK) {
+                Some(rest) => (rest.trim_start(), true),
+                None => (row.label.as_str(), false),
+            };
+            let chev = (font_size * 0.8).round();
             let text_w = if right_text.is_empty() { 0.0 } else { shaped_width(&right_text, &family, font_size) };
-            let right_w = text_w;
+            let right_w = text_w + if !leads { 0.0 } else if text_w > 0.0 { chev + GLYPH_GAP } else { chev };
             // The label's clip stops short of the chord column so a long
             // label is cut by it rather than running under it — or short of
             // the band, for a choice row.
@@ -1093,12 +1101,18 @@ impl Paint for Dialog {
                 Some(Control::Choice { .. }) => self.slider_band_rect(r).x - 12.0,
                 _ => chord_right - if right_w > 0.0 { right_w + 12.0 } else { 0.0 },
             };
-            let label_x = r.x + 8.0;
+            let glyph_y = r.y + (r.height - chev) * 0.5;
+            let glyph_color = |c: [u8; 3]| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0];
+            if back {
+                let at = Rect { x: r.x + 8.0, y: glyph_y, width: chev, height: chev };
+                ctx.icon("chevron-left", at, glyph_color(label_color));
+            }
+            let label_x = r.x + 8.0 + if back { chev + GLYPH_GAP } else { 0.0 };
             ctx.text_with(
                 if row.truncate_head {
-                    fit_head(&row.label, label_right - label_x)
+                    fit_head(label, label_right - label_x)
                 } else {
-                    fit(&row.label, label_right - label_x)
+                    fit(label, label_right - label_x)
                 },
                 label_x,
                 ty,
@@ -1109,6 +1123,10 @@ impl Paint for Dialog {
             );
             if text_w > 0.0 {
                 ctx.text_with(right_text, chord_right - right_w, ty, font_size, right_color, Some(family.clone()), own);
+            }
+            if leads {
+                let at = Rect { x: chord_right - chev, y: glyph_y, width: chev, height: chev };
+                ctx.icon("chevron-right", at, glyph_color(right_color));
             }
             match &row.control {
                 Some(Control::Toggle(on)) => {
@@ -1588,8 +1606,14 @@ pub const SETTINGS: &[Setting] = &[
     Setting::field("Origin Size", "origin_size", Ctl::Spin { min: 1.0, max: 50.0, unit: 10.0 }),
 ];
 
-/// The page mark, as a menu's page row wears it.
-use cce_ui::widget::context_menu::PAGE_MARK;
+/// The page mark, as a menu's page row wears it, and the back mark a menu
+/// page's back band leads with. Both ride the row's TEXT (the chord and the
+/// label) and are drawn as cce-icons chevrons by the row painter.
+pub use cce_ui::widget::context_menu::{BACK_MARK, PAGE_MARK};
+
+/// The gap between a row's chevron glyph and the text beside it — the
+/// toolkit menu's own.
+const GLYPH_GAP: f32 = 6.0;
 
 /// Whether a row of the dialog in `mode` turns it into another list: the
 /// palette's Group Markers and Attribute Visualizers, a visualizer of the

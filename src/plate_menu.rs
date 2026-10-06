@@ -167,16 +167,16 @@ impl State {
         {
             separate(&mut options, &mut actions);
             let pin = if idx == PARAM_IDX { self.params_pin } else { self.spreadsheet_pin };
-            let mark = |on: bool| if on { "●" } else { "○" };
-            options.push(format!("{} Follow Active Editor", mark(pin.is_none())));
+            let mark = |on: bool| if on { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
+            options.push(format!("{}Follow Active Editor", mark(pin.is_none())));
             actions.push(PlateMenuAction::PinFollow);
             options.push(format!(
-                "{} Pin: Network",
+                "{}Pin: Network",
                 mark(pin == Some(crate::slots::CONTENT_IDX))
             ));
             actions.push(PlateMenuAction::PinTo(crate::slots::CONTENT_IDX));
             options.push(format!(
-                "{} Pin: Network 2",
+                "{}Pin: Network 2",
                 mark(pin == Some(crate::slots::CONTENT2_IDX))
             ));
             actions.push(PlateMenuAction::PinTo(crate::slots::CONTENT2_IDX));
@@ -193,8 +193,8 @@ impl State {
             // not just as actions.
             separate(&mut options, &mut actions);
             for &t in &self.dock_tabs[d as usize] {
-                let mark = if t == idx { "●" } else { "○" };
-                options.push(format!("{mark} {}", plate_title(t)));
+                let mark = if t == idx { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
+                options.push(format!("{mark}{}", plate_title(t)));
                 actions.push(PlateMenuAction::ShowTab(t));
             }
             let mut managed = false;

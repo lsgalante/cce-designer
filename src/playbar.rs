@@ -7,7 +7,7 @@
 
 use cce_ui::colors;
 use cce_ui::scene::layout::Rect;
-use cce_ui::scene::paint::{Cap, PaintCtx};
+use cce_ui::scene::paint::PaintCtx;
 use cce_ui::widget::*;
 
 #[derive(Debug, Clone)]
@@ -269,41 +269,25 @@ impl Paint for Playbar {
 }
 
 impl Playbar {
+    /// The play button's glyph: `pause` while playing, else `play`.
     fn paint_play_icon(&self, b: Rect, icon: [f32; 4], ctx: &mut PaintCtx) {
-        if self.playing {
-            // Pause: two bars.
-            let bw = b.width * 0.16;
-            let bh = b.height * 0.44;
-            let by = b.y + (b.height - bh) * 0.5;
-            ctx.quad(Rect { x: b.x + b.width * 0.32 - bw * 0.5, y: by, width: bw, height: bh }, icon);
-            ctx.quad(Rect { x: b.x + b.width * 0.68 - bw * 0.5, y: by, width: bw, height: bh }, icon);
-        } else {
-            // Play: triangle outline (no filled-triangle prim; the DE's line
-            // aesthetic reads fine here).
-            let (cx, cy) = (b.x + b.width * 0.54, b.y + b.height * 0.5);
-            let r = b.width * 0.24;
-            let (x0, y0) = (cx - r * 0.6, cy - r);
-            let (x1, y1) = (cx - r * 0.6, cy + r);
-            let (x2, y2) = (cx + r, cy);
-            ctx.vector(x0, y0, x1, y1, 1.5, icon, Cap::Round);
-            ctx.vector(x1, y1, x2, y2, 1.5, icon, Cap::Round);
-            ctx.vector(x2, y2, x0, y0, 1.5, icon, Cap::Round);
-        }
+        ctx.icon(if self.playing { "pause" } else { "play" }, glyph_rect(b), icon);
     }
 }
 
-/// A step button's icon: a triangle outline toward the step and a bar at
-/// its point, the transport's frame-step glyph (|◁ and ▷|).
+/// A step button's glyph: cce-icons' `step-back` / `step-forward`, the
+/// transport's frame-step pair.
 fn paint_step_icon(b: Rect, forward: bool, icon: [f32; 4], ctx: &mut PaintCtx) {
-    let dir = if forward { 1.0 } else { -1.0 };
-    let (cx, cy) = (b.x + b.width * 0.5, b.y + b.height * 0.5);
-    let r = b.width * 0.2;
-    let (x0, x1) = (cx - dir * r * 0.75, cx + dir * r * 0.65);
-    ctx.vector(x0, cy - r, x0, cy + r, 1.5, icon, Cap::Round);
-    ctx.vector(x0, cy + r, x1, cy, 1.5, icon, Cap::Round);
-    ctx.vector(x1, cy, x0, cy - r, 1.5, icon, Cap::Round);
-    let bx = x1 + dir * 1.5;
-    ctx.vector(bx, cy - r, bx, cy + r, 1.5, icon, Cap::Round);
+    ctx.icon(if forward { "step-forward" } else { "step-back" }, glyph_rect(b), icon);
+}
+
+/// Where a transport glyph stands in its button: a square half the
+/// button's shorter side, centred — the footprint the hand-drawn triangle
+/// and bars had. A missing icon set draws nothing; there is no character
+/// to fall back to that is not itself a symbol.
+fn glyph_rect(b: Rect) -> Rect {
+    let side = (b.width.min(b.height) * 0.5).round();
+    Rect { x: (b.x + (b.width - side) * 0.5).round(), y: (b.y + (b.height - side) * 0.5).round(), width: side, height: side }
 }
 
 impl Input for Playbar {

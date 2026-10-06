@@ -5878,11 +5878,11 @@ impl State {
     pub(crate) fn playbar_menu_rows(&self) -> (Vec<String>, Vec<PlaybarMenuAction>) {
         let mut options = Vec::new();
         let mut actions = Vec::new();
-        let mark = |on: bool| if on { "●" } else { "○" };
+        let mark = |on: bool| if on { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
         let mut command = |options: &mut Vec<String>, actions: &mut Vec<PlaybarMenuAction>, id: &'static str| {
             let Some(c) = crate::command::by_id(id) else { return };
             let label = match self.command_toggle_state(id) {
-                Some(on) => format!("{} {}", mark(on), c.label),
+                Some(on) => format!("{}{}", mark(on), c.label),
                 None => c.label.to_string(),
             };
             options.push(label);
@@ -6435,7 +6435,7 @@ impl State {
     pub(crate) fn viewport_menu_rows_of(&self, page: Option<ViewportMenuPage>) -> (Vec<String>, Vec<ViewportMenuAction>) {
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<ViewportMenuAction> = Vec::new();
-        let mark = |on: bool| if on { "●" } else { "○" };
+        let mark = |on: bool| if on { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
         let label = |id: &str, fallback: &'static str| crate::command::by_id(id).map(|c| c.label).unwrap_or(fallback);
         let row = |options: &mut Vec<String>, actions: &mut Vec<ViewportMenuAction>, text: String, a: ViewportMenuAction| {
             options.push(text);
@@ -6444,7 +6444,7 @@ impl State {
         let sep = ViewportMenuAction::Separator;
         let toggle = |options: &mut Vec<String>, actions: &mut Vec<ViewportMenuAction>, id: &'static str| {
             let on = self.command_toggle_state(id).unwrap_or(false);
-            options.push(format!("{} {}", mark(on), label(id, id)));
+            options.push(format!("{}{}", mark(on), label(id, id)));
             actions.push(ViewportMenuAction::Command(id));
         };
 
@@ -6457,8 +6457,8 @@ impl State {
 
                 // Surface.
                 row(&mut options, &mut actions, "-".into(), sep);
-                row(&mut options, &mut actions, format!("{} Flat Shading", mark(!self.smooth_shading)), ViewportMenuAction::Shading(false));
-                row(&mut options, &mut actions, format!("{} Smooth Shading", mark(self.smooth_shading)), ViewportMenuAction::Shading(true));
+                row(&mut options, &mut actions, format!("{}Flat Shading", mark(!self.smooth_shading)), ViewportMenuAction::Shading(false));
+                row(&mut options, &mut actions, format!("{}Smooth Shading", mark(self.smooth_shading)), ViewportMenuAction::Shading(true));
                 row(&mut options, &mut actions, "Opacity".into(), ViewportMenuAction::OpacitySlider);
                 toggle(&mut options, &mut actions, "toggle_show_occluded");
                 return (options, actions);
@@ -6524,16 +6524,16 @@ impl State {
         if self.tab_dock_of_pane(crate::slots::NETWORK_PANEL2_IDX).is_some() {
             options.push("-".to_string());
             actions.push(ViewportMenuAction::Separator);
-            let mark = |on: bool| if on { "●" } else { "○" };
-            options.push(format!("{} Follow Active Editor", mark(self.viewport_pin.is_none())));
+            let mark = |on: bool| if on { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
+            options.push(format!("{}Follow Active Editor", mark(self.viewport_pin.is_none())));
             actions.push(ViewportMenuAction::PinFollow);
             options.push(format!(
-                "{} Pin: Network",
+                "{}Pin: Network",
                 mark(self.viewport_pin == Some(CONTENT_IDX))
             ));
             actions.push(ViewportMenuAction::PinTo(CONTENT_IDX));
             options.push(format!(
-                "{} Pin: Network 2",
+                "{}Pin: Network 2",
                 mark(self.viewport_pin == Some(crate::slots::CONTENT2_IDX))
             ));
             actions.push(ViewportMenuAction::PinTo(crate::slots::CONTENT2_IDX));
@@ -6668,7 +6668,7 @@ impl State {
                 Some(id) => {
                     let Some(cmd) = crate::command::by_id(id) else { continue };
                     options.push(match self.command_toggle_state(id) {
-                        Some(on) => format!("{} {}", if on { "●" } else { "○" }, cmd.label),
+                        Some(on) => format!("{}{}", if on { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF }, cmd.label),
                         None => cmd.label.to_string(),
                     });
                     actions.push(NetworkMenuAction::Command(cmd.id));

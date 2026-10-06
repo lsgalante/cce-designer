@@ -2663,7 +2663,14 @@ and **Attribute Visualizers** (the dialog); the network menu's **Add Node**
 are); the node menu's **Rename** (the dialog). Inside the dialog the rows
 that turn it into another list are marked `›` in the chord column and take
 the forward swipe too (`dialog::dialog_row_leads`): the palette's Group
-Markers and Attribute Visualizers, a visualizer and Add Visualizer.
+Markers and Attribute Visualizers, a visualizer and Add Visualizer. The
+mark rides the row's chord TEXT (cce-ui's `PAGE_MARK`), and a label that
+begins with `BACK_MARK` (the visualizer's Back to Visualizers) wears the
+other; the dialog's row painter draws them as the `chevron-right` /
+`chevron-left` glyphs, as the toolkit menu does, never as the characters
+(since 2026-10-05, the cce-icons rule: every symbol the app draws is a
+glyph). The menus' `● ` / `○ ` switch marks are cce-ui's `MARK_ON` /
+`MARK_OFF`, which the toolkit draws as `circle` / `circle-outline`.
 
 - **`State::run_menu_turn` is the one dispatch**, reached by a left press
   (`press_menu_turn`, ahead of every menu's own click handler) and by a swipe
@@ -3025,7 +3032,7 @@ in its `playbar` block. `the_playbar_menu_sets_the_rate_and_the_range`
 drives it by pointer.
 
 **The step buttons** (since 2026-10-01): Previous Frame and Next Frame
-stand either side of the play button (|◁ ▷ ▷|), each a whole frame off
+stand either side of the play button, each a whole frame off
 the ROUNDED frame and inside the range, without pausing —
 `Playbar::step`, which the Left / Right chords (`frame_prev` /
 `frame_next`) share. Show Step Buttons (`toggle_playbar_step_buttons`,
@@ -3033,7 +3040,11 @@ unbound, a switch in the palette too) takes them away and the track
 widens into their room; on by default, persisted as top-level
 `playbar_step_buttons` in state.kdl beside `playbar_repeat`, and reported
 as `step_buttons` in `get_state`'s playbar block.
-`the_playbar_step_buttons_step_and_can_be_hidden` is the test.
+`the_playbar_step_buttons_step_and_can_be_hidden` is the test. The
+transport's symbols are cce-icons glyphs (`play` / `pause`,
+`step-back` / `step-forward`, since 2026-10-05) drawn through
+`PaintCtx::icon` on a square half the button's side; they were a
+triangle of vectors and bars built from quads.
 
 ### Display mode: the viewport menu, and smooth shading
 
