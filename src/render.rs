@@ -86,8 +86,12 @@ impl State {
             crate::slots::CONTENT2_IDX | crate::slots::BREADCRUMB2_IDX => {
                 self.positions[crate::slots::NETWORK_PANEL2_IDX]
             }
-            // The plate fits the rows; without one, the HUD's rect.
-            PARAM_IDX if self.params_plate => self.params_claim(),
+            // The plate as drawn — fitted to the rows, the circle, or on
+            // its way between them — so the rows are revealed as it grows.
+            PARAM_IDX if self.params_plate => match self.params_plate_drawn() {
+                Some(([x, y, w, h, _], r)) => return (w > 0.0 && h > 0.0).then_some((rect(x, y, w, h), r)),
+                None => return None,
+            },
             PARAM_IDX => self.positions[PARAM_IDX],
             SPREADSHEET_IDX => self.positions[SPREADSHEET_IDX],
             _ => return None,
@@ -679,15 +683,40 @@ impl State {
             // and there is no idle copy of the bar, which only ever showed
             // faintly through the frost — the bar is seen when a scroll
             // raises it.
-            let fitted = self.params_claim();
-            if self.params_plate && fitted.2 > 0.0 && fitted.3 > 0.0 {
-                if let Some((quads, _)) = &param_scrollbar {
-                    for &(qx, qy, qw, qh, qc) in quads {
-                        pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+            //
+            // With no rows to show it collapses into a small circle in the
+            // HUD's top right corner, and grows back out of it: the plate is
+            // drawn as `params_plate_drawn` has it, eased each tick, its
+            // corners rounding from the pane's toward half its side.
+            if let Some(([fx, fy, fw, fh, round], r)) = self.params_plate_drawn() {
+                if round < 0.5 {
+                    if let Some((quads, _)) = &param_scrollbar {
+                        for &(qx, qy, qw, qh, qc) in quads {
+                            pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+                        }
                     }
                 }
-                let (fx, fy, fw, fh) = fitted;
-                append_plate_at(w, pc, rect(fx, fy, fw, fh), self.plate_focus_tint(idx), self.pane_plate_radii(fx, fy, fw, fh));
+                if round <= 0.0 {
+                    // Settled on the rows: the plate every pane wears.
+                    append_plate_at(w, pc, rect(fx, fy, fw, fh), self.plate_focus_tint(idx), self.pane_plate_radii(fx, fy, fw, fh));
+                } else {
+                    // The circle, or on its way: the DE's corner exponent
+                    // eased toward 2 — circular arcs, so a plate whose
+                    // corners reach half its side IS a circle and not the
+                    // squircle the rest of the DE wears — and the rolled
+                    // edge eased toward a dot's, as cce-browser's bar
+                    // unfolds from its corner control.
+                    let cs = cce_ui::layout::corner_shape();
+                    let shape = cs + (2.0 - cs) * round;
+                    let depth = cce_ui::colors::plate_bevel_width() + (3.0 - cce_ui::colors::plate_bevel_width()) * round;
+                    pc.plate_shaped(
+                        rect(fx, fy, fw, fh),
+                        (r, r, r, r),
+                        &cce_ui::scene::material::Material::from_fill(w.color()),
+                        depth.max(0.0),
+                        Some(shape),
+                    );
+                }
             }
 
             let (px, py, pw, ph) = self.positions[PARAM_IDX];

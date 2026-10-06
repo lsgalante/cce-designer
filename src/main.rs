@@ -2170,15 +2170,19 @@ mod tests {
         let mut state = State::new(false);
         assert!(state.params_plate, "the plate is on by default");
         assert_eq!(state.command_toggle_state("toggle_params_plate"), Some(true));
-        // A HUD with no rows draws no plate and claims nothing.
+        // A HUD with no rows collapses its plate to the small circle, and
+        // claims that; with the plate off it claims nothing.
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
-        if state.param_row_rects().iter().all(|r| r.3 <= 0.0) {
-            assert_eq!(state.params_claim().3, 0.0);
+        if !state.params_have_rows() {
+            assert_eq!(state.params_claim(), state.params_dot_rect());
         }
         assert!(state.run_command("toggle_params_plate"));
         assert!(!state.params_plate);
+        if !state.params_have_rows() {
+            assert_eq!(state.params_claim().3, 0.0);
+        }
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -16231,6 +16235,59 @@ mod tests {
     /// selection with it, rigidly, and the region travels too. Dragging a node
     /// OUTSIDE the selection is the ordinary one-node drag, and collapses the
     /// selection onto what was grabbed.
+    /// The params plate collapses into a small circle in the HUD's top
+    /// right corner while there are no rows to show, and grows back into
+    /// the plate fitted to the rows — eased, a tick at a time.
+    #[test]
+    fn the_params_plate_collapses_to_a_circle_with_no_rows() {
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        let mut redraw = false;
+        let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+        state.apply_layout();
+        assert!(state.params_have_rows());
+        let fitted = state.params_plate_target().expect("a plate");
+        assert_eq!(fitted[4], 0.0, "the plate fitted to the rows");
+        // Settle on it.
+        while state.animate_params_plate(1.0 / 60.0) {}
+        assert_eq!(state.params_plate_shown, Some(fitted));
+
+        // Nothing selected: the target is the circle at the HUD's top right.
+        state.deselect_node();
+        state.sync_parameters_pane();
+        state.apply_layout();
+        assert!(!state.params_have_rows(), "no node, no rows");
+        let (hx, hy, hw, _) = state.positions[crate::slots::PARAM_IDX];
+        let dot = state.params_plate_target().expect("a circle");
+        let d = crate::app::PARAMS_DOT_D;
+        assert_eq!(dot, [hx + hw - d, hy, d, d, 1.0]);
+        assert_eq!(state.params_claim(), (dot[0], dot[1], dot[2], dot[3]), "the circle is the HUD's");
+        assert!(!state.on_param_resize_edge(hx, hy + 10.0), "a circle has no edge to drag");
+        // Eased: one tick goes part of the way, and it arrives.
+        assert!(state.animate_params_plate(1.0 / 60.0));
+        let mid = state.params_plate_shown.unwrap();
+        assert!(mid[2] < fitted[2] && mid[2] > dot[2], "on its way: {mid:?}");
+        let (_, r) = state.params_plate_drawn().unwrap();
+        assert!(r < mid[2].min(mid[3]) * 0.5 + 0.01);
+        let mut ticks = 0;
+        while state.animate_params_plate(1.0 / 60.0) {
+            ticks += 1;
+            assert!(ticks < 120, "it settles");
+        }
+        assert_eq!(state.params_plate_shown, Some(dot));
+        let (_, r) = state.params_plate_drawn().unwrap();
+        assert_eq!(r, d * 0.5, "a circle: corners half its side");
+
+        // The plate off: no plate at all.
+        state.params_plate = false;
+        assert!(state.params_plate_target().is_none());
+        state.animate_params_plate(1.0 / 60.0);
+        assert!(state.params_plate_shown.is_none());
+    }
+
     /// A config.kdl edit to the grid's spacing shows at once, at the zoom
     /// in hand: the reload re-applies the configured geometry scaled as the
     /// live one was. It used to be read at startup and only zoomed after.

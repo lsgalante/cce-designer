@@ -2706,8 +2706,21 @@ picture behind it. Deselecting is on Escape.
 The params HUD's plate is FITTED to its rows: from the HUD's top to as far
 under the last row as the first row stands under the top, so it is padded
 alike above and below, and it grows and shrinks with the node shown — not
-the HUD's rect, which runs the viewport's height. No rows (nothing
-selected), no plate. It can go, as the network's can, leaving the controls
+the HUD's rect, which runs the viewport's height. **With no rows to show
+(nothing selected, a node without parameters) it collapses into a small
+circle** (`PARAMS_DOT_D`, 36 px) in the HUD's top right corner, which the
+HUD claims, and grows back out of it when rows return. `params_plate_target`
+is where it is heading, `[x, y, w, h, round]` (round 1 the circle);
+`State::params_plate_shown` eases toward it each tick
+(`animate_params_plate`, exponential like the drop glow);
+`params_plate_drawn` is the frame's, its corners rounding toward half the
+side. Settled on the rows it is the bevelled plate every pane wears; the
+circle and the way between are `PaintCtx::plate_shaped` with the corner
+exponent eased toward 2 — circular arcs, since the DE's squircle at full
+radius is a rounded square and not a circle — and the rolled edge toward a
+dot's, cce-browser's bar-from-its-corner-control morph. The rows are
+clipped to the plate as drawn, so they are revealed as it grows. A circle
+has no edge to resize. `the_params_plate_collapses_to_a_circle_with_no_rows`. It can go, as the network's can, leaving the controls
 directly on the scene: `params_plate` on `State` and `ViewportSettings`
 (state.kdl and the project's display block; ON by default and when absent
 — it was off for an afternoon, so a state.kdl from then says `false`), the

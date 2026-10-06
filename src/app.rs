@@ -595,6 +595,10 @@ pub const PARAMS_CLAIM_PAD: f32 = 8.0;
 /// The narrowest the params HUD may be dragged.
 pub const PARAMS_HUD_MIN_W: f32 = 150.0;
 
+/// The params plate's size collapsed: a circle this wide at the HUD's top
+/// right corner, while there are no rows to show.
+pub const PARAMS_DOT_D: f32 = 36.0;
+
 pub const NETWORK_MENU_COMMANDS: &[Option<&'static str>] = &[
     Some("add_node"),
     None,
@@ -3193,6 +3197,11 @@ pub struct State {
     /// fading). None once fully faded. Advanced in [`State::tick_frame`],
     /// drawn by the CONTENT branch in render.rs.
     pub drop_glow: Option<DropGlow>,
+    /// The params plate as drawn: `[x, y, w, h, round]`, eased each tick
+    /// toward `params_plate_target` — `round` 0 is the plate fitted to the
+    /// rows, 1 the small circle it collapses to with no rows to show. `None`
+    /// with no plate, and before the first tick (the target is drawn then).
+    pub params_plate_shown: Option<[f32; 5]>,
     pub network_opacity: f32,
     /// Node-domain opacity (style.surface.graph.node.opacity) — independent of
     /// the pane's network_opacity; fades node bodies/wires/ports and node text.
@@ -4122,11 +4131,72 @@ impl State {
         }
         let rows: Vec<(f32, f32, f32, f32)> = self.param_row_rects().into_iter().filter(|r| r.3 > 0.0).collect();
         let Some(first) = rows.iter().map(|r| r.1).reduce(f32::min) else {
-            return (x, y, w, 0.0);
+            // No rows: the plate is the small circle it collapses to, and
+            // with no plate there is nothing at all.
+            return if self.params_plate { self.params_dot_rect() } else { (x, y, w, 0.0) };
         };
         let last = rows.iter().map(|r| r.1 + r.3).fold(y, f32::max);
         let pad = if self.params_plate { (first - y).max(PARAMS_CLAIM_PAD) } else { PARAMS_CLAIM_PAD };
         (x, y, w, (last + pad).min(y + h) - y)
+    }
+
+    /// The circle the params plate collapses to while there are no rows to
+    /// show: `PARAMS_DOT_D` wide, in the HUD's top right corner.
+    pub fn params_dot_rect(&self) -> (f32, f32, f32, f32) {
+        let (x, y, w, _) = self.positions[PARAM_IDX];
+        let d = PARAMS_DOT_D.min(w.max(0.0));
+        (x + w - d, y, d, d)
+    }
+
+    /// Whether the params HUD has rows to show.
+    pub fn params_have_rows(&self) -> bool {
+        self.param_row_rects().iter().any(|r| r.3 > 0.0)
+    }
+
+    /// Where the params plate is heading: `[x, y, w, h, round]`, the plate
+    /// fitted to the rows (`round` 0) or, with none, the circle (`round`
+    /// 1). `None` with the plate off or the HUD not shown.
+    pub fn params_plate_target(&self) -> Option<[f32; 5]> {
+        let (_, _, w, h) = self.positions[PARAM_IDX];
+        if !self.params_plate || w <= 0.0 || h <= 0.0 || self.pane_is_stubbed(PARAM_IDX) || !self.slots.param.visible() {
+            return None;
+        }
+        let (cx, cy, cw, ch) = self.params_claim();
+        let round = if self.params_have_rows() { 0.0 } else { 1.0 };
+        (cw > 0.0 && ch > 0.0).then_some([cx, cy, cw, ch, round])
+    }
+
+    /// Ease the drawn plate toward its target, as the drop glow eases:
+    /// exponential, so frame-rate independent. True while it moves.
+    pub fn animate_params_plate(&mut self, dt: f32) -> bool {
+        let Some(target) = self.params_plate_target() else {
+            return self.params_plate_shown.take().is_some();
+        };
+        let Some(shown) = self.params_plate_shown.as_mut() else {
+            self.params_plate_shown = Some(target);
+            return true;
+        };
+        let k = 1.0 - (-16.0 * dt.max(1e-4)).exp();
+        let mut moving = false;
+        for (s, t) in shown.iter_mut().zip(target) {
+            *s += (t - *s) * k;
+            if (t - *s).abs() > 0.3 {
+                moving = true;
+            }
+        }
+        if !moving {
+            *shown = target;
+        }
+        moving
+    }
+
+    /// The params plate as it is drawn this frame, and its corner radii.
+    pub fn params_plate_drawn(&self) -> Option<([f32; 5], f32)> {
+        let shown = self.params_plate_shown.or_else(|| self.params_plate_target())?;
+        let [_, _, w, h, round] = shown;
+        let plate_r = cce_ui::layout::plate_corner_radius();
+        let r = plate_r + ((w.min(h) * 0.5) - plate_r) * round.clamp(0.0, 1.0);
+        Some((shown, r.max(0.0)))
     }
 
     /// Whether (px, py) is the params pane's: inside `params_claim` where
@@ -4396,7 +4466,8 @@ impl State {
     /// the edge as far down as the HUD claims (its rows, without its
     /// plate), and nowhere a plate covers it.
     pub fn on_param_resize_edge(&self, cx: f32, cy: f32) -> bool {
-        if !self.show_parameters || self.pane_is_stubbed(PARAM_IDX) {
+        // Collapsed to its circle, the HUD has no edge to drag.
+        if !self.show_parameters || self.pane_is_stubbed(PARAM_IDX) || !self.params_have_rows() {
             return false;
         }
         let (x, y, w, h) = self.params_claim();
@@ -8544,6 +8615,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             // the cell tint): the checkerboard grout is off by design; the
             // drop-target glow (render.rs) carries the only cell highlight.
             drop_glow: None,
+            params_plate_shown: None,
             network_opacity: 0.95,
             node_opacity: 1.0,
             node_compression: None,
@@ -12407,6 +12479,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // target — the position GLIDES between cells, alpha fades in while a
         // drag is in flight and out after it ends (lingering at the last
         // cell). Exponential rates are frame-rate independent.
+        // The params plate eases between the plate fitted to its rows and
+        // the circle it collapses to with none.
+        let plate_animating = self.animate_params_plate(dt);
         let mut glow_animating = false;
         {
             let target = self.graph().drop_target_cell_rect();
@@ -12711,7 +12786,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.read_panel_offsets();
         }
 
-        tick_changed || panned || reclaimed || glow_animating || frame_moved || config_changed || light_moved
+        tick_changed || panned || reclaimed || glow_animating || plate_animating || frame_moved || config_changed || light_moved
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.
