@@ -404,7 +404,7 @@ mod tests {
     fn a_plates_rows_are_in_its_right_click_menu() {
         use crate::plate_menu::PlateMenuAction;
         use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
-        use cce_ui::widget::MouseButton;
+        use cce_ui::widget::{context_menu, MouseButton};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.show_spreadsheet = true;
@@ -442,29 +442,53 @@ mod tests {
         press_at(&mut state, 2.0, 2.0, MouseButton::Left);
         state.params_plate = false;
 
-        // The network: its own rows, then the plate's.
+        // The network: its own rows, then one Plate row, a page: the menu
+        // turns into the plate's rows, under a band back to it.
         let (cx, cy, cw, ch) = state.positions[crate::slots::CONTENT_IDX];
         let (px, py) = (cx + cw * 0.85, cy + ch * 0.2);
         assert!(state.graph().node_at(px, py).is_none());
         press_at(&mut state, px, py, MouseButton::Right);
         let options = cce_ui::widget::context_menu::options();
         assert_eq!(options.first().map(String::as_str), Some("Add Node"));
-        assert!(options.contains(&collapse), "{options:?}");
+        assert!(!options.contains(&collapse) && !options.iter().any(|o| o.starts_with("Move To")), "no plate rows inline: {options:?}");
+        let plate = options.iter().position(|o| o == "Plate").expect("a Plate row");
+        assert!(context_menu::leads_to_page(plate), "a page row");
+        let corner = (context_menu::x(), context_menu::y());
+        press_at(&mut state, corner.0 + 8.0, context_menu::row_y(plate) + 4.0, MouseButton::Left);
+        assert_eq!(state.plate_menu_slot, Some(NETWORK_PANEL_IDX), "turned into the plate's rows");
+        assert_eq!((context_menu::x(), context_menu::y()), corner, "where the menu stood");
+        assert_eq!(context_menu::back_title().as_deref(), Some("Network"));
+        let options = context_menu::options();
         assert!(options.iter().any(|o| o.starts_with("Move To")), "{options:?}");
-        // Picking Collapse there collapses the network plate.
-        let row = options.iter().position(|o| *o == collapse).unwrap();
-        let rx = cce_ui::widget::context_menu::x() + 8.0;
-        let ry = cce_ui::widget::context_menu::row_y(row) + 4.0;
-        press_at(&mut state, rx, ry, MouseButton::Left);
+        // Add Tab is a page off the page, and comes back to it; the page's
+        // band goes back to the network's menu.
+        if let Some(add) = state.plate_menu_actions.iter().position(|a| *a == PlateMenuAction::AddTabMenu) {
+            press_at(&mut state, corner.0 + 8.0, context_menu::row_y(add) + 4.0, MouseButton::Left);
+            assert_eq!(context_menu::back_title().as_deref(), Some(crate::plate_menu::plate_title(NETWORK_PANEL_IDX)));
+            press_at(&mut state, corner.0 + 20.0, corner.1 + context_menu::PAD + context_menu::ROW_H * 0.5, MouseButton::Left);
+            assert_eq!(context_menu::back_title().as_deref(), Some("Network"), "back on the plate page");
+        }
+        press_at(&mut state, corner.0 + 20.0, corner.1 + context_menu::PAD + context_menu::ROW_H * 0.5, MouseButton::Left);
+        assert!(state.network_menu_active && state.plate_menu_slot.is_none(), "back on the network's menu");
+        // Picking Collapse on the page collapses the network plate.
+        let plate = context_menu::options().iter().position(|o| o == "Plate").unwrap();
+        press_at(&mut state, corner.0 + 8.0, context_menu::row_y(plate) + 4.0, MouseButton::Left);
+        let row = context_menu::options().iter().position(|o| *o == collapse).unwrap();
+        press_at(&mut state, corner.0 + 8.0, context_menu::row_y(row) + 4.0, MouseButton::Left);
         assert!(state.pane_is_collapsed(NETWORK_PANEL_IDX));
         state.set_pane_collapsed(NETWORK_PANEL_IDX, false);
 
-        // The playbar: its transport, then the plate's.
+        // The playbar: its transport, then the Plate page row.
         let (x, y, w, h) = state.positions[PLAYBAR_IDX];
         press_at(&mut state, x + w * 0.5, y + h * 0.5, MouseButton::Right);
-        let options = cce_ui::widget::context_menu::options();
-        assert!(options.contains(&collapse), "{options:?}");
-        assert!(state.playbar_menu_actions.contains(&crate::app::PlaybarMenuAction::Plate(PlateMenuAction::Collapse)));
+        let options = context_menu::options();
+        assert!(!options.contains(&collapse), "{options:?}");
+        assert!(state.playbar_menu_actions.contains(&crate::app::PlaybarMenuAction::PlatePage));
+        let plate = options.iter().position(|o| o == "Plate").unwrap();
+        press_at(&mut state, context_menu::x() + 8.0, context_menu::row_y(plate) + 4.0, MouseButton::Left);
+        assert_eq!(state.plate_menu_slot, Some(PLAYBAR_IDX));
+        assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+        assert_eq!(context_menu::back_title().as_deref(), Some("Playbar"));
         press_at(&mut state, 2.0, 2.0, MouseButton::Left);
     }
 
@@ -3048,10 +3072,7 @@ mod tests {
                 vec![A::Command("play_pause"), A::Command("play_pause_reverse"), A::Command("frame_start")],
                 vec![A::Command("toggle_playbar_repeat"), A::Command("toggle_playbar_step_buttons")],
                 vec![A::FpsSlider, A::StartFrameSlider, A::EndFrameSlider],
-                vec![
-                    A::Plate(crate::plate_menu::PlateMenuAction::Collapse),
-                    A::Plate(crate::plate_menu::PlateMenuAction::Detach),
-                ],
+                vec![A::PlatePage],
             ]
         );
         let repeat = actions.iter().position(|a| *a == A::Command("toggle_playbar_repeat")).unwrap();

@@ -74,7 +74,7 @@ impl ViewportMenuAction {
 impl NetworkMenuAction {
     /// Add Node turns the menu into the add-node list; Add Tab into its page.
     pub fn leads_to_page(self) -> bool {
-        matches!(self, NetworkMenuAction::Command("add_node") | NetworkMenuAction::Plate(PlateMenuAction::AddTabMenu))
+        matches!(self, NetworkMenuAction::Command("add_node") | NetworkMenuAction::PlatePage)
     }
 }
 
@@ -150,7 +150,11 @@ impl State {
             MenuOrigin::Viewport => self.show_viewport_menu_page(None, at),
             MenuOrigin::Network => self.open_network_context_menu_at(at),
             MenuOrigin::Playbar => self.open_playbar_context_menu_at(at),
-            MenuOrigin::Plate(idx) => self.open_plate_menu_at(idx, at),
+            // A plate PAGE of another menu goes back to being that page.
+            MenuOrigin::Plate(idx) => match self.plate_page_root.filter(|(i, _)| *i == idx) {
+                Some((_, root)) => self.open_plate_page(idx, (x, y), root),
+                None => self.open_plate_menu_at(idx, at),
+            },
             MenuOrigin::Node(slot) => self.open_node_context_menu_at(slot, at),
         }
     }
@@ -187,6 +191,10 @@ impl State {
                 }
                 MenuOrigin::Plate(_) if self.plate_page_from.is_some() => {
                     let from = self.plate_page_from.take().unwrap();
+                    // Back out of a plate page to its menu: the page is done.
+                    if !matches!(from, MenuOrigin::Plate(_)) {
+                        self.plate_page_root = None;
+                    }
                     self.close_plate_menu();
                     self.reopen_menu(from, at.0, at.1);
                 }
@@ -202,16 +210,16 @@ impl State {
                         self.close_network_menu();
                         self.open_dialog_from(Mode::AddNode, origin, at);
                     }
-                    Some(NetworkMenuAction::Plate(PlateMenuAction::AddTabMenu)) => {
+                    Some(NetworkMenuAction::PlatePage) => {
                         self.close_network_menu();
-                        self.open_plate_add_tab_menu(NETWORK_PANEL_IDX, at, origin);
+                        self.open_plate_page(NETWORK_PANEL_IDX, at, origin);
                     }
                     _ => return false,
                 },
                 MenuOrigin::Playbar => match self.playbar_menu_actions.get(n).copied() {
-                    Some(PlaybarMenuAction::Plate(PlateMenuAction::AddTabMenu)) => {
+                    Some(PlaybarMenuAction::PlatePage) => {
                         self.close_playbar_menu();
-                        self.open_plate_add_tab_menu(PLAYBAR_IDX, at, origin);
+                        self.open_plate_page(PLAYBAR_IDX, at, origin);
                     }
                     _ => return false,
                 },

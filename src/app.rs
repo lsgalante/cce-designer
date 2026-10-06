@@ -544,8 +544,9 @@ pub enum PlaybarMenuAction {
     StartFrameSlider,
     /// The frame range's far end, 2–1000 by one; kept above the near end.
     EndFrameSlider,
-    /// A row of the playbar's plate menu (Collapse, Detach).
-    Plate(crate::plate_menu::PlateMenuAction),
+    /// The Plate row: a page turning the menu into the playbar's plate rows
+    /// (Collapse, Detach).
+    PlatePage,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -558,9 +559,9 @@ pub enum PlaybarMenuAction {
 pub enum NetworkMenuAction {
     /// Run `command::by_id(id)` — the row's label came from the same row.
     Command(&'static str),
-    /// A row of the network pane's plate menu: collapse, detach, its dock's
-    /// tabs, Move To.
-    Plate(crate::plate_menu::PlateMenuAction),
+    /// The Plate row: a page turning the menu into the network pane's
+    /// plate rows — collapse, detach, its dock's tabs, Move To.
+    PlatePage,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -2963,6 +2964,10 @@ pub struct State {
     pub dialog_trail: Vec<crate::dialog::Mode>,
     /// The menu the plate menu's Add Tab page was turned to from.
     pub plate_page_from: Option<crate::menu_page::MenuOrigin>,
+    /// The plate PAGE shown from another menu's Plate row: the plate's slot
+    /// and that menu. Add Tab turned to from the page goes back to the page,
+    /// and the page back to the menu (`open_plate_page`).
+    pub plate_page_root: Option<(usize, crate::menu_page::MenuOrigin)>,
     /// A parameter row's right-click menu — the same thread-local; the
     /// target is (node id, parameter name) rather than a slot and a row, so
     /// it holds across a re-layout of the pane.
@@ -6598,11 +6603,10 @@ impl State {
         row(&mut options, &mut actions, "Playback Rate", PlaybarMenuAction::FpsSlider);
         row(&mut options, &mut actions, "Start Frame", PlaybarMenuAction::StartFrameSlider);
         row(&mut options, &mut actions, "End Frame", PlaybarMenuAction::EndFrameSlider);
-        let (plate, plate_actions) = self.plate_menu_rows(PLAYBAR_IDX);
-        if !plate.is_empty() {
+        // The playbar's plate rows, as a page: one Plate row.
+        if !self.plate_menu_rows(PLAYBAR_IDX).0.is_empty() {
             row(&mut options, &mut actions, "-", PlaybarMenuAction::Separator);
-            options.extend(plate);
-            actions.extend(plate_actions.into_iter().map(PlaybarMenuAction::Plate));
+            row(&mut options, &mut actions, "Plate", PlaybarMenuAction::PlatePage);
         }
         (options, actions)
     }
@@ -6651,7 +6655,7 @@ impl State {
         let (options, actions) = self.playbar_menu_rows();
         let target = self.slots.get_dyn(PLAYBAR_IDX).base().id();
         self.put_up_menu(at, None, options, 0, target);
-        crate::menu_page::mark_page_rows(&actions, |a| a == PlaybarMenuAction::Plate(crate::plate_menu::PlateMenuAction::AddTabMenu));
+        crate::menu_page::mark_page_rows(&actions, |a| a == PlaybarMenuAction::PlatePage);
         for (i, a) in actions.iter().enumerate() {
             if let Some(slider) = self.playbar_menu_slider(*a) {
                 cce_ui::widget::context_menu::set_row_slider(i, slider);
@@ -6691,12 +6695,9 @@ impl State {
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = idx.and_then(|i| self.playbar_menu_actions.get(i).copied());
-            let at = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
             self.close_playbar_menu();
-            match picked {
-                Some(PlaybarMenuAction::Plate(a)) => self.run_plate_menu_action(PLAYBAR_IDX, a, at),
-                Some(action) => self.run_playbar_menu_action(action),
-                None => {}
+            if let Some(action) = picked {
+                self.run_playbar_menu_action(action);
             }
             return true;
         }
@@ -6709,7 +6710,6 @@ impl State {
             PlaybarMenuAction::Command(id) => {
                 self.run_command(id);
             }
-            PlaybarMenuAction::Plate(a) => self.run_plate_menu_action(PLAYBAR_IDX, a, (self.cursor_x, self.cursor_y)),
             _ => {}
         }
     }
@@ -7375,13 +7375,13 @@ impl State {
             options.pop();
             actions.pop();
         }
-        // The network pane's plate rows, below the graph's own.
-        let (plate, plate_actions) = self.plate_menu_rows(NETWORK_PANEL_IDX);
-        if !plate.is_empty() {
+        // The network pane's plate rows, below the graph's own, as a page:
+        // one Plate row the menu turns into them (`open_plate_page`).
+        if !self.plate_menu_rows(NETWORK_PANEL_IDX).0.is_empty() {
             options.push("-".to_string());
             actions.push(NetworkMenuAction::Separator);
-            options.extend(plate);
-            actions.extend(plate_actions.into_iter().map(NetworkMenuAction::Plate));
+            options.push("Plate".to_string());
+            actions.push(NetworkMenuAction::PlatePage);
         }
 
         let target = self.slots.get_dyn(CONTENT_IDX).base().id();
@@ -7412,16 +7412,13 @@ impl State {
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = idx.and_then(|i| self.network_menu_actions.get(i).copied());
-            // Where the menu stands, read before it is hidden. The rows
-            // that turn the menu (Add Node, Add Tab) were taken by the
-            // press's page turn ahead of this.
-            let corner = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
+            // The rows that turn the menu (Add Node, Plate) were taken by
+            // the press's page turn ahead of this.
             self.close_network_menu();
             match picked {
                 Some(NetworkMenuAction::Command(id)) => {
                     self.run_command(id);
                 }
-                Some(NetworkMenuAction::Plate(a)) => self.run_plate_menu_action(NETWORK_PANEL_IDX, a, corner),
                 _ => {}
             }
             return true;
@@ -8542,6 +8539,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             dialog_from: None,
             dialog_trail: Vec::new(),
             plate_page_from: None,
+            plate_page_root: None,
             param_menu_active: false,
             param_menu_actions: Vec::new(),
             playbar_menu_active: false,

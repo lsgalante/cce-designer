@@ -4,16 +4,18 @@
 //!
 //! Until 2026-10-01 these rows were a menu of their own, opened by a small
 //! circular trigger on the top-right of every plate (and that trigger, dragged,
-//! moved the pane to another dock). The trigger is gone: the rows are appended
-//! to the plate's own context menu where it has one (the network editor's,
-//! the playbar's) and make up the whole menu where it has none (the params
-//! pane off a row, the spreadsheet, the second network editor, and a
-//! collapsed or detached plate's stub). Moving a pane to another dock is a
-//! row too, `Move To …`, which swaps it with what is there as the drag did.
+//! moved the pane to another dock). The trigger is gone: where the plate's
+//! pane has a context menu of its own (the network editor's, the
+//! playbar's) the rows are a PAGE of it, its **Plate** row turning the menu
+//! into them (since 2026-10-06; they were appended inline until then), and
+//! they make up the whole menu where it has none (the params pane off a
+//! row, the spreadsheet, the second network editor, and a collapsed or
+//! detached plate's stub). Moving a pane to another dock is a row too,
+//! `Move To …`, which swaps it with what is there as the drag did.
 //!
 //! [`State::plate_menu_rows`] is the one list; [`State::open_plate_menu_at`]
-//! shows it alone, and a pane with a menu of its own appends it, dispatching
-//! a pick through [`State::run_plate_menu_action`].
+//! shows it alone and [`State::open_plate_page`] as another menu's page,
+//! dispatching a pick through [`State::run_plate_menu_action`].
 
 use crate::app::{Dock, State};
 use crate::slots::{
@@ -261,6 +263,8 @@ impl State {
         if options.is_empty() {
             return;
         }
+        // A menu of its own, not another menu's page.
+        self.plate_page_root = None;
         let target = self.slots.get_dyn(idx).base().id();
         self.put_up_menu(at, None, options, 0, target);
         crate::menu_page::mark_page_rows(&actions, |a| a == PlateMenuAction::AddTabMenu);
@@ -302,6 +306,24 @@ impl State {
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
         self.plate_page_from = Some(from);
+    }
+
+    /// `idx`'s plate rows as a PAGE of another menu — the network's or the
+    /// playbar's Plate row turned into them — at `at`, under a back band to
+    /// `from`. Add Tab turned to from here comes back here, and the band
+    /// here goes back to `from` (`State::plate_page_root`).
+    pub fn open_plate_page(&mut self, idx: usize, at: (f32, f32), from: crate::menu_page::MenuOrigin) {
+        let (options, actions) = self.plate_menu_rows(idx);
+        if options.is_empty() {
+            return;
+        }
+        let target = self.slots.get_dyn(idx).base().id();
+        self.put_up_menu(Some(at), Some(from), options, 0, target);
+        crate::menu_page::mark_page_rows(&actions, |a| a == PlateMenuAction::AddTabMenu);
+        self.plate_menu_slot = Some(idx);
+        self.plate_menu_actions = actions;
+        self.plate_page_from = Some(from);
+        self.plate_page_root = Some((idx, from));
     }
 
     pub fn plate_menu_open(&self) -> bool {

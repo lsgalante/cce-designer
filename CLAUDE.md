@@ -254,15 +254,19 @@ gone from cce-ui with the wgpu path).
   circle on each plate's top-right, which opened these rows as a menu of their
   own and, DRAGGED, moved the pane to another dock — the drag, its drop
   highlight and `AppDrag::DockDrag` went with it, and Move To is the rows'
-  replacement). The rows are in each plate's RIGHT-CLICK menu: appended under
-  the network editor's empty-space menu (`NetworkMenuAction::Plate`) and the
-  playbar's (`PlaybarMenuAction::Plate`), and the whole menu where a pane has
-  none of its own — the params pane off a row, the spreadsheet, the second
-  network editor (`open_plate_menu`, at the pointer). A row from any of them runs
-  through `run_plate_menu_action`. Add Tab is a PAGE row (see "Page rows"
-  below): the menu turns into the list of panes where it stood, under a back
-  band to whichever menu it turned from — the network's, the playbar's, or the
-  plate menu alone (`State::plate_page_from`). Collapse shrinks a plate to its title stub via
+  replacement). The rows are in each plate's RIGHT-CLICK menu: a **Plate**
+  PAGE row (see "Page rows" below) at the foot of the network editor's
+  empty-space menu (`NetworkMenuAction::PlatePage`) and the playbar's
+  (`PlaybarMenuAction::PlatePage`), which turns the menu into them under a
+  band back to it (`open_plate_page`; until 2026-10-06 they were appended
+  inline there), and the whole menu where a pane has none of its own — the
+  params pane off a row, the spreadsheet, the second network editor
+  (`open_plate_menu`, at the pointer). A row from any of them runs through
+  `run_plate_menu_action`. Add Tab is a page row too: the menu turns into
+  the list of panes where it stood, under a back band to whichever menu it
+  turned from (`State::plate_page_from`) — from a Plate page, back to that
+  page, whose band goes back to the network's or the playbar's menu
+  (`State::plate_page_root`). Collapse shrinks a plate to its title stub via
   `apply_collapsed_panes`, a post-pass over `positions[..]` (one place, all three
   branches); a LEFT press on a collapsed stub expands it, and a right press on any
   stub (collapsed or detached) opens its plate menu. `a_plates_rows_are_in_its_right_click_menu`
