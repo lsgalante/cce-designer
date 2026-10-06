@@ -1007,6 +1007,11 @@ impl Paint for Dialog {
             ctx.text_with(shown, qtx, qty, font_size, [0xe6, 0xe6, 0xee], Some(family.clone()), own);
         }
         let caret_x = qtx + display::measure_text_width(&self.query, &family, font_size) + 1.0;
+        // The query owns the keyboard while the palette is up: say so, so a
+        // touch raises the on-screen keyboard. The field stands in for the
+        // caret (and is off by the slide while the palette turns — brief, and
+        // the board does not care where).
+        cce_ui::text_input::claim(q.x, q.y, q.width, q.height);
         if caret_x < q.x + q.width - 4.0 {
             ctx.quad(
                 Rect { x: caret_x, y: q.y + 6.0, width: 1.0, height: q.height - 12.0 },
