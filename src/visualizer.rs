@@ -69,6 +69,11 @@ pub struct Visualizer {
 }
 
 impl Visualizer {
+    /// Whether this one does anything: on, and naming an attribute.
+    pub fn applies(&self) -> bool {
+        self.enabled && !self.attribute.trim().is_empty()
+    }
+
     /// A new visualizer on `attribute`, on, with the node's defaults.
     pub fn new(attribute: &str) -> Visualizer {
         Visualizer {
@@ -133,10 +138,16 @@ impl Visualizer {
 /// attribute the scene does not have does nothing: it is a display setting,
 /// and the scene it was made for may come back.
 pub fn apply_all(visualizers: &[Visualizer], geom: &mut Detail) {
-    for v in visualizers.iter().filter(|v| v.enabled && !v.attribute.trim().is_empty()) {
+    for v in visualizers.iter().filter(|v| v.applies()) {
         let mut ignored = None;
         crate::geometry::apply_visualize(geom, &v.as_node(), &mut ignored);
     }
+}
+
+/// Whether [`apply_all`] would change anything: some visualizer is on and
+/// names an attribute.
+pub fn any_applies(visualizers: &[Visualizer]) -> bool {
+    visualizers.iter().any(Visualizer::applies)
 }
 
 /// The visualizers as the settings hold them: one string, a visualizer per

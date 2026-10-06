@@ -1315,8 +1315,8 @@ impl State {
         // What the visualizers are applied to, kept so an edit to one
         // re-presents this scene rather than running the graph again.
         self.scene_attributes = crate::visualizer::scene_attributes(&geom);
-        self.scene_base = Some(geom.clone());
-        self.present_scene(geom);
+        self.present_scene(&geom);
+        self.scene_base = Some(geom);
 
         // The pull arrows measure the selected node against this new
         // geometry version; a playing simnet reaches here every frame.
@@ -1350,15 +1350,30 @@ impl State {
     }
 
     pub(crate) fn revisualize(&mut self) {
-        if let Some(base) = self.scene_base.clone() {
-            self.present_scene(base);
+        // Taken and put back, not cloned: `present_scene` only reads it.
+        if let Some(base) = self.scene_base.take() {
+            self.present_scene(&base);
+            self.scene_base = Some(base);
         }
     }
 
     /// Everything the viewport draws of an evaluated scene: the visualizers
     /// applied to it, then its fill, its groups, its overlays and its edges.
-    fn present_scene(&mut self, mut geom: crate::detail::Detail) {
-        crate::visualizer::apply_all(&self.visualizers, &mut geom);
+    ///
+    /// Borrowed: the visualizers are the only thing that writes to the
+    /// scene, so only they cost a copy of it. Until 2026-10-06 every rebuild
+    /// and every revisualize cloned the whole Detail to keep `scene_base`,
+    /// visualizers or not (~1 ms at 100k prims).
+    fn present_scene(&mut self, base: &crate::detail::Detail) {
+        let visualized;
+        let geom = if crate::visualizer::any_applies(&self.visualizers) {
+            let mut g = base.clone();
+            crate::visualizer::apply_all(&self.visualizers, &mut g);
+            visualized = g;
+            &visualized
+        } else {
+            base
+        };
 
         let verts = crate::geometry::detail_vertices(&geom);
         self.vertex_count_spheres = verts.len() as u32;
