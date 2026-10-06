@@ -2081,11 +2081,13 @@ mod tests {
         assert_eq!(state.point_number_labels().len(), all.len());
     }
 
-    /// The params HUD lives on the scene: laid out from the viewport alone,
-    /// so no plate moves or sizes it, and under every plate, so where one
-    /// covers it the plate takes the pointer and the HUD draws nothing.
+    /// The params HUD lives on the scene: laid out from the viewport, under
+    /// every plate, so where one covers it the plate takes the pointer and
+    /// the HUD draws nothing — but it stops a gap above the spreadsheet and
+    /// the playbar along the bottom, and scrolls what does not fit. A plate
+    /// in the right dock, over its top, sizes nothing.
     #[test]
-    fn the_params_hud_is_under_the_plates_and_sized_by_none() {
+    fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
         use crate::app::{Dock, NO_PANE};
         use crate::slots::{NETWORK_PANEL2_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
@@ -2094,10 +2096,13 @@ mod tests {
         state.apply_layout();
         let hud = state.positions[PARAM_IDX];
         assert_eq!(hud, state.params_hud_rect());
+        assert_eq!(hud.1 + hud.3, 900.0 - crate::app::STATUS_H - 18.0, "the viewport's height, a gap in");
         assert_eq!(state.dock_of_pane(PARAM_IDX), None, "the HUD is in no dock");
         assert_eq!(state.pane_in_dock(Dock::Right), NO_PANE);
 
-        // Plates coming, going and growing leave it where it is.
+        // The spreadsheet and the playbar below it: it stops a gap above
+        // the higher of them. A plate in the right dock, and the right
+        // dock's width, size nothing.
         state.execute_menu_action("Show Spreadsheet Pane");
         state.execute_menu_action("Show Playbar Pane");
         state.floating_spreadsheet_height = 500.0;
@@ -2106,28 +2111,50 @@ mod tests {
         state.floating_param_width = 700.0;
         state.rebuild_positions();
         state.apply_layout();
-        assert_eq!(state.positions[PARAM_IDX], hud, "no plate sizes the HUD");
-        assert!(state.slots.get_dyn(PARAM_IDX).visible());
-        // Its own width does.
+        let (hx, hy, hw, hh) = state.positions[PARAM_IDX];
+        let (sx, sy, sw, _) = state.positions[SPREADSHEET_IDX];
+        assert_eq!((hx, hy, hw), (hud.0, hud.1, hud.2), "only its bottom moved");
+        assert!(sx < hx + hw && sx + sw > hx, "the spreadsheet is under the HUD's span");
+        assert_eq!(hy + hh, sy - 18.0, "it stops a gap above the spreadsheet");
+        // Collapsed, the spreadsheet is a stub at its own top edge, and the
+        // HUD stops above that.
+        state.set_pane_collapsed(SPREADSHEET_IDX, true);
+        let stub = state.positions[SPREADSHEET_IDX];
+        assert_eq!(stub.1, sy);
+        let (_, hy2, _, hh2) = state.positions[PARAM_IDX];
+        assert_eq!(hy2 + hh2, stub.1 - 18.0);
+        state.set_pane_collapsed(SPREADSHEET_IDX, false);
+        // Hidden, the HUD stops above the playbar instead.
+        state.execute_menu_action("Show Spreadsheet Pane");
+        assert!(!state.show_spreadsheet);
+        let (_, hy3, _, hh3) = state.positions[PARAM_IDX];
+        assert_eq!(hy3 + hh3, state.positions[PLAYBAR_IDX].1 - 18.0, "above the playbar");
+        state.execute_menu_action("Show Spreadsheet Pane");
+        // Its own width still sizes it, about its right edge.
         state.params_hud_width = 420.0;
         state.rebuild_positions();
         assert_eq!(state.positions[PARAM_IDX].2, 420.0);
         assert_eq!(state.positions[PARAM_IDX].0 + 420.0, hud.0 + hud.2, "it keeps its right edge");
 
-        // Under every plate: where one covers the HUD, the HUD claims
-        // nothing — not with its own plate on either.
+        // Rows that do not fit scroll, and the plate fills the HUD.
+        let mut redraw = false;
+        let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
         state.params_plate = true;
-        let covers = state.plates_over_params();
-        for idx in [SPREADSHEET_IDX, PLAYBAR_IDX, NETWORK_PANEL2_IDX] {
-            assert!(covers.contains(&state.positions[idx]), "the {idx} plate is over the HUD");
-        }
+        state.rebuild_positions();
+        state.apply_layout();
         let (hx, hy, hw, hh) = state.positions[PARAM_IDX];
-        let (sx, sy, sw, sh) = state.positions[SPREADSHEET_IDX];
-        let over = (hx + hw * 0.5, (sy + sh * 0.5).min(hy + hh - 1.0));
-        assert!(over.0 >= sx && over.0 < sx + sw && over.1 >= hy, "the spreadsheet runs under the HUD");
+        let pb = state.slots.get_dyn(PARAM_IDX).as_any().downcast_ref::<cce_ui::widget::ParametersBg>().unwrap();
+        assert!(pb.scrollbar_visible(), "the sphere's rows overflow a {hh} px HUD and scroll");
+        assert_eq!(state.params_claim(), (hx, hy, hw, hh), "the plate fills the HUD");
+
+        // Under the plate in the right dock: it takes the pointer there.
+        assert!(state.plates_over_params().contains(&state.positions[NETWORK_PANEL2_IDX]));
+        let (nx, ny, nw, _) = state.positions[NETWORK_PANEL2_IDX];
+        let over = (nx.max(hx) + 5.0, ny.max(hy) + 30.0);
+        assert!(over.0 < nx + nw && over.0 < hx + hw);
         assert!(!state.params_claims(over.0, over.1), "a plate over the HUD takes the pointer");
-        assert!(state.params_claims(hx + hw * 0.5, hy + 30.0) || state.plate_over_params_at(hx + hw * 0.5, hy + 30.0));
-        assert_eq!(state.plate_at(over.0, over.1), Some(SPREADSHEET_IDX));
+        assert_eq!(state.plate_at(over.0, over.1), Some(NETWORK_PANEL2_IDX));
 
         // An older save docked the params pane; it loads out of the dock.
         let dir = std::env::temp_dir().join(format!("cce-designer-hud-dock-test-{}", std::process::id()));

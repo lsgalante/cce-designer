@@ -4500,16 +4500,29 @@ impl State {
         w > 0.0 && cx >= x - margin && cx <= x + margin && cy >= y - margin && cy <= y + h + margin
     }
 
-    /// The params HUD's rect: laid out from the VIEWPORT alone — its top
-    /// right corner, a gap in, as wide as `params_hud_width` asks and as
-    /// tall as the viewport. No plate moves or sizes it; plates are drawn
-    /// over it (`plates_over_params`).
+    /// The params HUD's rect: laid out from the VIEWPORT — its top right
+    /// corner, a gap in, as wide as `params_hud_width` asks — and as tall as
+    /// the viewport, except that it stops a gap above the spreadsheet or the
+    /// playbar when one lies below it (since 2026-10-06): rows under a plate
+    /// along the bottom could be neither seen nor reached, and with the HUD
+    /// stopped short the pane scrolls them instead. A plate beside or over
+    /// the HUD's top (the right dock's) sizes nothing; it is drawn over the
+    /// HUD (`plates_over_params`).
     pub fn params_hud_rect(&self) -> (f32, f32, f32, f32) {
         let gap = 18.0_f32;
         let (vx, vy, vw, vh) = self.positions[VIEWPORT_IDX];
         let (vx, vy, vw, vh) = if vw > 0.0 && vh > 0.0 { (vx, vy, vw, vh) } else { (0.0, 0.0, self.width, self.height - STATUS_H) };
         let w = self.params_hud_width.clamp(PARAMS_HUD_MIN_W, (vw - 2.0 * gap).max(PARAMS_HUD_MIN_W));
-        (vx + vw - gap - w, vy + gap, w, (vh - 2.0 * gap).max(100.0))
+        let (x, top) = (vx + vw - gap - w, vy + gap);
+        let mut bottom = vy + vh - gap;
+        for idx in [SPREADSHEET_IDX, PLAYBAR_IDX] {
+            let (px, py, pw, ph) = self.positions[idx];
+            let below = pw > 0.0 && ph > 0.0 && self.slots.get_dyn(idx).visible() && px < x + w && px + pw > x && py > top + PARAMS_DOT_D;
+            if below {
+                bottom = bottom.min(py - gap);
+            }
+        }
+        (x, top, w, (bottom - top).max(PARAMS_DOT_D))
     }
 
     /// The plates drawn over the params HUD, as rects: the network's
@@ -9684,6 +9697,20 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
         self.apply_detached_panes();
         self.apply_collapsed_panes();
+        // The params HUD stops above the spreadsheet and the playbar as
+        // they finally stand — a collapse or a detach above moved them —
+        // in the floating layout that lays it out from the viewport.
+        if !self.is_detached_network
+            && !self.detached_circular_network
+            && !self.circular_network_pane
+            && self.detached_pane.is_none()
+            && self.show_parameters
+            && !self.pane_is_stubbed(PARAM_IDX)
+        {
+            let r = self.params_hud_rect();
+            self.positions[PARAM_IDX] = r;
+            self.slots.param.set_rect(r.0, r.1, r.2, r.3);
+        }
         // Last of all: the dialog floats over whatever the branches above
         // produced, so its rect depends on the window and nothing else.
         self.layout_dialog();

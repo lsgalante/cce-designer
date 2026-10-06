@@ -2755,12 +2755,18 @@ right after it and under every plate, and its size has no relation to any
 plate. Until this it was the right dock's pane — as wide as that dock, its
 bottom raised by a spreadsheet tucked under it, tabbable and movable.
 
-- **Laid out from the viewport alone** (`State::params_hud_rect`): the
+- **Laid out from the viewport** (`State::params_hud_rect`): the
   viewport's top-right corner a gap in, `params_hud_width` wide (its own
   field, apart from the right dock's `floating_param_width`; saved as
   `PlateGeometry::hud_width`, and an older save's `params_width` is read
-  as it), as tall as the viewport. The playbar and the spreadsheet cover
-  its bottom; nothing shortens it. Its left edge drags its width
+  as it), as tall as the viewport — but **it stops a gap above the
+  spreadsheet or the playbar when one lies below it** (since later the
+  same day; for an afternoon they covered its bottom, and rows under them
+  could be neither seen nor reached). What does not fit then scrolls, the
+  pane's own scrolling, and the fitted plate fills the HUD. Laid out again
+  after the collapse and detach post-passes in `rebuild_positions`, so a
+  stubbed spreadsheet is what it stops above. A plate in the right dock,
+  over the HUD's top, sizes nothing and is drawn over it. Its left edge drags its width
   (`AppDrag::HudResize`, `on_param_resize_edge`), as far down as it claims.
   The right dock's own edge is `on_right_dock_resize_edge` /
   `AppDrag::RightDockResize`, asked first, its plate being on top.
@@ -2783,7 +2789,7 @@ bottom raised by a spreadsheet tucked under it, tabbable and movable.
   of it, a rect at a time (`render::uncovered`, one rect most of the
   time), so its labels and controls stop at a plate's edge.
 
-`the_params_hud_is_under_the_plates_and_sized_by_none` and
+`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones` and
 `uncovered_takes_the_covers_out_of_a_rect` are the tests. Checked in a
 shadow session: the spreadsheet and playbar over the HUD's lower rows, no
 label through them, the HUD's size unmoved.
