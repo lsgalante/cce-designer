@@ -2187,6 +2187,13 @@ the widget paints the fore copy itself. A press on a sunk bar's lane is a
 press on the row under it. Checked in a shadow session: sunk, raised by a
 scroll, held by hover past the hold, sunk again once the pointer left.
 
+**The params pane's bar fades too** (the same day; cce-ui's CLAUDE.md,
+"Every scrollbar rides a centre line, behind the plate", is the rule all
+of these follow). The PARAM_IDX arm draws the idle copy of
+`ParametersBg::scrollbar_quads` before the plate every frame and the fore
+copy after the rows at `scrollbar_fade()`, where it drew ONE copy on
+either side of the plate by the latch, so a raise and a sink were a flip.
+
 ### An edit is in from the next frame
 
 An edit inside a simnet's chain, or to its seed, does not restart the

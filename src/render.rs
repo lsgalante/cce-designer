@@ -649,8 +649,9 @@ impl State {
             // skips this slot. The pane keeps three designer-owned pieces:
             // the plate (span-widened radii + focus tint), the viewport clip
             // (a clip inside the widget would not survive paint_self's
-            // replay), and the scrollbar straddle — idle it sinks behind the
-            // translucent plate, active it rides above the content.
+            // replay), and the scrollbar straddle — its idle copy behind the
+            // translucent plate every frame, its fore copy over the content
+            // at the raise's fade, so a raise and a sink are a fade.
             let param_scrollbar = {
                 let pb = self
                     .slots
@@ -659,14 +660,14 @@ impl State {
                     .downcast_ref::<cce_ui::widget::ParametersBg>()
                     .expect("PARAM_IDX must be a ParametersBg");
                 if pb.scrollbar_visible() {
-                    Some((pb.scrollbar_quads(), pb.scrollbar_active()))
+                    Some((pb.scrollbar_quads(), pb.scrollbar_fade()))
                 } else {
                     None
                 }
             };
             // Track and thumb are pills — half-width radius on the DE corner
             // family (squircle when corner_shape > 2), like the nodes.
-            if let Some((quads, false)) = &param_scrollbar {
+            if let Some((quads, _)) = &param_scrollbar {
                 for &(qx, qy, qw, qh, qc) in quads {
                     pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
                 }
@@ -705,9 +706,12 @@ impl State {
                 }
             }
 
-            if let Some((quads, true)) = &param_scrollbar {
-                for &(qx, qy, qw, qh, qc) in quads {
-                    pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+            if let Some((quads, fade)) = &param_scrollbar {
+                if *fade > 0.001 {
+                    for &(qx, qy, qw, qh, mut qc) in quads {
+                        qc[3] *= fade;
+                        pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
+                    }
                 }
             }
         } else {

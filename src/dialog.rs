@@ -471,7 +471,7 @@ impl Dialog {
             return None;
         }
         let list = list_rect(rect);
-        let sb_w = cce_ui::layout::scrollbar_width() * 1.6;
+        let sb_w = cce_ui::layout::centred_scrollbar_width();
         let sb_x = rect.x + (rect.width - sb_w) * 0.5;
         let track_y = list.y + 4.0;
         let track_h = (list.height - 8.0).max(0.0);
