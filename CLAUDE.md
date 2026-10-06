@@ -1423,6 +1423,13 @@ position write-back carries into the tree, and the release drains
   follow by an offset.
 - **The swap wins over a splice**: a node's own wires run into its body,
   so a ghost on a node always touches one.
+- **A dragged node always snaps to a cell it could land on** (the same
+  day): `State::grid_snap_enabled` is always on, and config.kdl's
+  `style.surface.graph.grid_snap` is not read — off on the user's machine,
+  it let a dragged node float freely and land somewhere else. With swap on
+  every crossing is one it could land on (a free one moves it, a node's
+  swaps), so the ghost goes where the pointer is nearest; in a group drag,
+  where swap is off, it skips taken crossings (cce-ui's `drag_update`).
 
 `dropping_a_node_on_a_node_swaps_their_places` drives it by pointer, undo
 included; `swapping_places_trades_wires_port_for_port` is the rule.

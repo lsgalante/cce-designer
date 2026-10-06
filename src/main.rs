@@ -16276,9 +16276,17 @@ mod tests {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
         };
 
-        // Grab b and drop it on a.
+        // Grab b and drop it on a — the pointer between cells, not on a
+        // crossing: the node snaps, whatever the config's grid_snap says.
+        state.update_graph_settings_from_config();
+        assert!(state.grid_snap_enabled, "a dragged node always snaps");
         move_to(&mut state, (1, 6));
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        let (ax, ay) = state.cell_center(1, 5);
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (ax + 23.0) as f64, y: (ay + 11.0) as f64 } });
+        let ghost = state.slots.content.inner().node_rect(slot(&state, "b")).unwrap();
+        let cell = state.cell_rect(1, 5);
+        assert!((ghost.0 - cell.0).abs() < 0.5 && (ghost.1 - cell.1).abs() < 0.5, "the dragged node sits on a's cell: {ghost:?} vs {cell:?}");
         move_to(&mut state, (1, 5));
         assert_eq!(state.slots.content.inner().swap_target_idx(), Some(slot(&state, "a")), "a is the swap target");
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });

@@ -2435,9 +2435,8 @@ pub fn configured_grid_geometry() -> GridGeometry {
 /// change to what it checks, made for the sake of a number that is arbitrary
 /// either way. What matters is that the number is the suite's own.
 ///
-/// `graph_grid_snap` is NOT pinned here: it is read inside cce-ui's Graph
-/// widget rather than through this crate, so there is nothing to intercept —
-/// it is off both by cce-ui default and in practice.
+/// `graph_grid_snap` needs no pin: this app does not read it, a dragged node
+/// always snapping to a cell it can land on (`State::grid_snap_enabled`).
 #[cfg(test)]
 pub fn configured_grid_geometry() -> GridGeometry {
     GridGeometry { pitch_x: 140.0, pitch_y: 70.0, node_w: 80.0, node_h: 40.0 }
@@ -3105,6 +3104,9 @@ pub struct State {
     pub physical_height: u32,
     pub scale: f64,
     pub square_viewport: bool,
+    /// Whether a dragged node snaps to cells: always, in this app — to a
+    /// cell it can land on (cce-ui's `Graph::drag_update`). Not read from
+    /// `style.surface.graph.grid_snap`.
     pub grid_snap_enabled: bool,
     pub network_grid_visible: bool,
     /// The network grid's pitch at the current zoom — centre of one grid
@@ -9084,7 +9086,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let opacity = cce_ui::color::graph_opacity();
         let node_opacity = cce_ui::color::graph_node_opacity();
         let graph_grid_color = cce_ui::color::graph_grid_color();
-        let snap_enabled = cce_ui::layout::graph_grid_snap();
         let node_color = cce_ui::color::graph_node_color();
         let node_compression = cce_ui::config::cached_config()
             .pointer("/style/surface/graph/node_compression")
@@ -9114,10 +9115,10 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             colors::set_node_color(node_color);
             changed = true;
         }
-        if self.grid_snap_enabled != snap_enabled {
-            self.grid_snap_enabled = snap_enabled;
-            changed = true;
-        }
+        // `graph_grid_snap` is not read: a dragged node always snaps to a
+        // cell it can land on (`grid_snap_enabled`, always on — since
+        // 2026-10-06; the config's switch, off on the user's machine, had a
+        // dragged node float freely and land somewhere else).
         // The grid's spacing and node size: re-applied at the zoom in hand,
         // so a config.kdl edit to `spacing_y` shows at once. Until
         // 2026-10-06 the live geometry was set at startup and only zoomed
