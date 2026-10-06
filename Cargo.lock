@@ -437,7 +437,7 @@ dependencies = [
 [[package]]
 name = "cce-ui"
 version = "0.1.0"
-source = "git+https://github.com/lsgalante/cce-ui.git?rev=9afd4d8c634296572feaddc96ae7c7edd0582ce4#9afd4d8c634296572feaddc96ae7c7edd0582ce4"
+source = "git+https://github.com/lsgalante/cce-ui.git?rev=cef10a575724fc56d475723b661e8fd4548ea2a4#cef10a575724fc56d475723b661e8fd4548ea2a4"
 dependencies = [
  "ash",
  "bitflags 2.13.1",
@@ -445,12 +445,19 @@ dependencies = [
  "calloop",
  "calloop-wayland-source",
  "cosmic-text",
+ "cursor-icon",
+ "dispatch2",
  "glam",
  "gpu-allocator",
+ "js-sys",
  "kdl",
  "libc",
  "log",
  "naga",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-quartz-core",
  "png",
  "raw-window-handle",
  "resvg",
@@ -458,10 +465,14 @@ dependencies = [
  "serde",
  "serde_json",
  "smithay-client-toolkit",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols 0.31.2",
  "wayland-scanner",
+ "web-sys",
+ "web-time",
  "xkeysym",
 ]
 
@@ -1413,7 +1424,9 @@ dependencies = [
  "bitflags 2.13.1",
  "block2",
  "objc2",
+ "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-quartz-core",
 ]
 
 [[package]]
@@ -1442,6 +1455,18 @@ dependencies = [
  "bitflags 2.13.1",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-quartz-core"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96c1358452b371bf9f104e21ec536d37a650eb10f7ee379fff67d2e08d537f1f"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]
