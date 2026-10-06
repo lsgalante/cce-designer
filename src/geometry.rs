@@ -5183,7 +5183,11 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             let op = node_param_str(target, "combine_op", "Add").to_lowercase();
             let reduces = matches!(op.as_str(), "dot" | "distance" | "length");
             let folds = !reduces && op != "difference";
-            let mut sources = vec![("Source B", node_param_str(target, "source_b", "").trim().to_string())];
+            // Length is Name's own length and reads no source.
+            let mut sources = Vec::new();
+            if op != "length" {
+                sources.push(("Source B", node_param_str(target, "source_b", "").trim().to_string()));
+            }
             if folds {
                 for (label, row) in [("Source C", "source_c"), ("Source D", "source_d")] {
                     let n = node_param_str(target, row, "").trim().to_string();
@@ -5363,7 +5367,8 @@ pub fn remap_input_range(input: &Detail, target: &FsNode) -> Result<[f32; 2], St
 /// Y and Z, and a sum or a minimum touched X alone. An operand of two or
 /// more components pairs off by position, the missing ones zero: only ONE
 /// number has an obvious meaning for all of them. Dot, Distance and Length
-/// reduce to one number, written into every component.
+/// reduce to one number, written into every component; Length is Name's
+/// (Source B's until 2026-10-06, which format 7 carries a save across).
 fn composite_point(op: &str, a: &[f32], sources: &[Vec<f32>], k: usize) -> Vec<f32> {
     let at = |v: &[f32], i: usize| if v.len() == 1 { v[0] } else { v.get(i).copied().unwrap_or(0.0) };
     let b: &[f32] = sources.first().map_or(&[], |b| b.as_slice());
@@ -5373,7 +5378,7 @@ fn composite_point(op: &str, a: &[f32], sources: &[Vec<f32>], k: usize) -> Vec<f
     match op {
         "dot" => vec![(0..a.len().max(b.len())).map(|i| raw(a, i) * raw(b, i)).sum(); k],
         "distance" => vec![(0..a.len().max(b.len())).map(|i| (raw(a, i) - raw(b, i)).powi(2)).sum::<f32>().sqrt(); k],
-        "length" => vec![b.iter().map(|c| c * c).sum::<f32>().sqrt(); k],
+        "length" => vec![a.iter().map(|c| c * c).sum::<f32>().sqrt(); k],
         "average" => {
             let n = (1 + sources.len()) as f32;
             (0..k).map(|i| (at(a, i) + sources.iter().map(|s| at(s, i)).sum::<f32>()) / n).collect()
@@ -7821,8 +7826,11 @@ mod simnet_tests {
         // third has nothing to meet.
         assert_eq!(with("uv", "Add"), [11.0, 22.0, 3.0]);
         assert_eq!(with("uv", "Multiply"), [10.0, 40.0, 0.0]);
-        // The reductions are not componentwise, and did not change.
-        assert_eq!(with("w", "Length"), [0.5, 0.5, 0.5]);
+        // The reductions are not componentwise. Length is Name's own —
+        // |(1, 2, 3)| — and reads no Source B.
+        let l = 14f32.sqrt();
+        assert_eq!(with("w", "Length"), [l, l, l]);
+        assert_eq!(with("", "Length"), [l, l, l], "Length needs no Source B");
         assert_eq!(with("w", "Dot"), [0.5, 0.5, 0.5]);
 
         // A per-point weight scales a vector per point: the ramped mass,

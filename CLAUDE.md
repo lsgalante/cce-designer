@@ -1223,7 +1223,9 @@ is RESOLVED from its holder and rewritten — `from_max` → `from.y`, `to_max`
 `manual_range.y` — since `from` and `to` are also wires on Transfer, Copy
 and Distance, which are left alone. Checked on the user's project (four
 Attribute nodes, none a Remap): the old build and the new export the same
-mesh at frames 1 and 30. Templates go through
+mesh at frames 1 and 30. **Format 7** (the same day): Composite's Length
+is the length of Name — see "Composite writes a Result" under "Pull
+arrows". Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
 (`embryo.json` says `chf("../radius")` now). The same inference applies to a
 value typed into a plain row or scripted through `set_param`: a reference
@@ -3482,9 +3484,14 @@ out. Average is the mean of every operand given, not a pairwise fold. A
 Result of Pos / Col / P / Cd is refused: Modify writes those. Every operand
 is read before Result is written, since it may be one of them.
 `composite_point` is the per-point arithmetic, broadcasting a one-number
-operand (Name included) as above. Length is still the length of Source B,
-Name unread. `composite_writes_a_result_and_folds_up_to_four_operands` is
-the test.
+operand (Name included) as above. **Length is the length of Name** (the
+same day; it was Source B's, Name unread) and reads no source, so Source B
+is hidden for it. **Format 7** (`Project::migrate_composite_length`) carries
+a save across: a Length node's Source B moves into Name and the attribute it
+wrote (Name, or Result when set) becomes Result, which, existing, keeps its
+type — the same numbers. A Length with no Source B failed before and is left
+alone. `composite_writes_a_result_and_folds_up_to_four_operands` and
+`a_saved_composite_length_keeps_its_result` are the tests.
 
 **Per Frame makes the amount a rate.** Inside a simnet the chain runs once
 per SUBSTEP, so a pull that lands whole each run pulls four times as far

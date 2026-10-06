@@ -795,6 +795,58 @@ mod tests {
     /// list of attributes, `@Norm` in a wrangle (not `@Normal`) — once: a
     /// format-2 file naming `Norm` is left alone, since that attribute is
     /// someone's own.
+    /// Format 7: Composite's Length is the length of Name. A save from
+    /// before, which wrote |Source B| into Name (or Result), has Source B
+    /// moved into Name and the written attribute named as Result, and
+    /// computes what it computed.
+    #[test]
+    fn a_saved_composite_length_keeps_its_result() {
+        use crate::app::{FsNode, ParamDef, Project};
+        use crate::detail::AttribValue;
+        let node = |id: &str, params: &[(&str, &str)]| FsNode {
+            id: id.into(),
+            name: id.into(),
+            node_type: "attribute".into(),
+            children: vec![],
+            params: params.iter().map(|(k, v)| ParamDef::new(*k, "text", *v)).collect(),
+            geometry_visible: true,
+            bypassed: false,
+            position: (0.0, 0.0),
+            inputs: 1,
+            outputs: 1,
+        };
+        let length = [("attribute_name", "a"), ("operation", "Composite"), ("source_b", "b"), ("combine_op", "Length")];
+        let mut with_result = length.to_vec();
+        with_result.push(("result", "r"));
+        let mut root = node("root", &[]);
+        root.node_type = "subnet".into();
+        root.children = vec![
+            node("in_place", &length),
+            node("into_r", &with_result),
+            node("no_b", &[("attribute_name", "a"), ("operation", "Composite"), ("combine_op", "Length")]),
+            node("add", &[("attribute_name", "a"), ("operation", "Composite"), ("source_b", "b"), ("combine_op", "Add")]),
+        ];
+        let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 6 };
+        proj.migrate_format();
+        let row = |i: usize, r: &str| {
+            proj.root.children[i].params.iter().find(|p| p.name == r).map(|p| p.text().to_string()).unwrap_or_default()
+        };
+        assert_eq!((row(0, "attribute_name"), row(0, "result"), row(0, "source_b")), ("b".into(), "a".into(), "".into()));
+        assert_eq!((row(1, "attribute_name"), row(1, "result")), ("b".into(), "r".into()), "a Result is kept");
+        assert_eq!((row(2, "attribute_name"), row(2, "result")), ("a".into(), "".into()), "no Source B: left alone");
+        assert_eq!(row(3, "source_b"), "b", "only Length moves");
+
+        // It computes what it did: |b| in every component of a.
+        let mut geom = crate::geometry::sphere_detail(glam::Vec3::ZERO, 0.5, 4, 6);
+        geom.points_mut().create("a", AttribValue::Float3([1.0, 1.0, 1.0]));
+        geom.points_mut().create("b", AttribValue::Float3([3.0, 4.0, 0.0]));
+        let mut err = None;
+        crate::geometry::apply_attribute(&mut geom, &proj.root.children[0], &mut err);
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(geom.points().value("a", 2), Some(AttribValue::Float3([5.0, 5.0, 5.0])));
+        assert_eq!(geom.points().value("b", 2), Some(AttribValue::Float3([3.0, 4.0, 0.0])));
+    }
+
     #[test]
     fn a_save_naming_norm_or_uv_names_n_or_uv() {
         use crate::app::{FsNode, ParamDef, Project, PROJECT_FORMAT};

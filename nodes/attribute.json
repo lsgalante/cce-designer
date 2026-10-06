@@ -158,7 +158,7 @@
       "label": "Source B",
       "type": "attribute",
       "default": "",
-      "show_when": "operation == Composite",
+      "show_when": "operation == Composite && combine_op != Length",
       "description": "The second point attribute combined with Name, point by point. A single-number source applies to every component.",
       "group": "composite"
     },
@@ -186,7 +186,7 @@
       "type": "choice:Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
       "default": "Add",
       "show_when": "operation == Composite",
-      "description": "How the sources are combined with Name, componentwise and left to right. Difference, Dot and Distance take Name and Source B alone; Length is the length of Source B. Dot, Distance and Length produce one number, written into every component.",
+      "description": "How the sources are combined with Name, componentwise and left to right. Difference, Dot and Distance take Name and Source B alone; Length is the length of Name and reads no source. Dot, Distance and Length produce one number, written into every component.",
       "group": "composite"
     },
     {

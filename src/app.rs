@@ -391,7 +391,9 @@ pub struct Project {
     /// 4 (the same day) parameter names as identifiers; 5 (2026-10-02) the
     /// root as the object level, its geometry inside a `geometry` node
     /// (`context::wrap_root_geometry`); 6 (2026-10-06) a range's two ends as
-    /// one `float2` (`Project::migrate_range_rows`).
+    /// one `float2` (`Project::migrate_range_rows`); 7 (the same day)
+    /// Composite's Length as the length of Name, not of Source B
+    /// (`Project::migrate_composite_length`).
     /// `migrate_format` takes a file through each step it is behind, and a
     /// step must not run twice.
     #[serde(default)]
@@ -399,7 +401,7 @@ pub struct Project {
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 6;
+pub const PROJECT_FORMAT: u32 = 7;
 
 /// One entry in a node's right-click context menu, parallel to the visible
 /// labels shown via `context_menu::show`.
@@ -1302,7 +1304,58 @@ impl Project {
         if self.format < 6 {
             self.migrate_range_rows();
         }
+        if self.format < 7 {
+            self.migrate_composite_length();
+        }
         self.format = PROJECT_FORMAT;
+    }
+
+    /// Format 6 → 7: Composite's Length is the length of NAME, where it was
+    /// the length of Source B written into Name (or into Result, for the
+    /// day Result existed before this). So a saved Length node computes
+    /// what it did with Source B moved into Name and the attribute it wrote
+    /// named as Result — which, existing, keeps its type and takes the
+    /// length in every component, as before. Text and expression flag move
+    /// together. A node whose Source B is empty failed before and is left
+    /// as it is. A channel path elsewhere that reads one of these rows is
+    /// not followed: they hold attribute names, which nothing reads that way.
+    fn migrate_composite_length(&mut self) {
+        fn walk(node: &mut FsNode) {
+            let is = |n: &FsNode, row: &str, v: &str| node_param_str(n, row, "").trim().eq_ignore_ascii_case(v);
+            if node.node_type.eq_ignore_ascii_case("attribute")
+                && is(node, "operation", "composite")
+                && is(node, "combine_op", "length")
+            {
+                let row = |n: &FsNode, r: &str| n.params.iter().find(|p| p.name == r).cloned();
+                if let (Some(name), Some(b)) = (row(node, "attribute_name"), row(node, "source_b")) {
+                    if !b.text().trim().is_empty() {
+                        let result_empty = row(node, "result").is_none_or(|r| r.text().trim().is_empty());
+                        let set = |node: &mut FsNode, r: &str, from: &ParamDef| {
+                            match node.params.iter_mut().find(|p| p.name == r) {
+                                Some(p) => {
+                                    p.set_text(from.text().to_string());
+                                    p.set_expr(from.is_expr());
+                                }
+                                None => {
+                                    let mut p = ParamDef::new(r, "attribute", from.text());
+                                    p.set_expr(from.is_expr());
+                                    node.params.push(p);
+                                }
+                            }
+                        };
+                        set(node, "attribute_name", &b);
+                        if result_empty {
+                            set(node, "result", &name);
+                        }
+                        set(node, "source_b", &ParamDef::new("source_b", "attribute", ""));
+                    }
+                }
+            }
+            for c in &mut node.children {
+                walk(c);
+            }
+        }
+        walk(&mut self.root);
     }
 
     /// Format 5 → 6: a range is one `float2` row where it was two numbers.
