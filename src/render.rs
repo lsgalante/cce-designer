@@ -227,17 +227,17 @@ impl State {
         // root plate container DISSOLVED (Phase 6as): register the widgets (registry consumers:
         // coverage/parent walks) and paint each top-level widget directly in sorted order.
         self.ui_context.clear_hierarchy();
-        let widget_ptrs: Vec<*mut (dyn WidgetHost + 'static)> = (0..WIDGET_COUNT)
-            .map(|i| self.slots.get_dyn(i) as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static))
-            .collect();
         // Register ALL slots, visible or not (id-rooted router): the wheel loop and the
         // hidden-widget broadcasts dispatch by id over the whole roster, and visibility
         // gates behavior inside the widget — an unregistered hidden root would drop the
-        // event before that gate.
+        // event before that gate. Before the paint pointers below are taken, so the
+        // `&mut` each registration borrows does not outlive them.
         for i in 0..WIDGET_COUNT {
-            let w = self.slots.get_dyn(i);
-            self.ui_context.register_widget(w.base().id(), w as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static));
+            self.ui_context.register_host(self.slots.get_dyn_mut(i));
         }
+        let widget_ptrs: Vec<*mut (dyn WidgetHost + 'static)> = (0..WIDGET_COUNT)
+            .map(|i| self.slots.get_dyn(i) as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static))
+            .collect();
         // The dialog's open dropdown, AFTER the dialog and after the wipe
         // above (which would drop it from the tree, leaving an id the
         // engine's clamp cannot resolve): the clamp lets an occluder's own

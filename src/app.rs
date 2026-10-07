@@ -8598,10 +8598,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         state.sync_cursor_and_selection();
         state.sync_parameters_pane();
         for i in 0..WIDGET_COUNT {
-            let w = state.slots.get_dyn_mut(i);
-            let id = w.base().id();
-            let ptr = w as *mut (dyn WidgetHost + 'static);
-            state.ui_context.register_widget(id, ptr);
+            state.ui_context.register_host(state.slots.get_dyn_mut(i));
         }
         // The layout baseline waits for the layout pass above (it clamps the
         // plate fields), and the title computed earlier must be re-read

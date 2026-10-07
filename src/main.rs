@@ -15445,8 +15445,7 @@ mod tests {
         let mut d = Dialog::new();
         d.set_visible(true);
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
-        let (id, ptr) = (d.id(), d.as_ptr_mut());
-        ctx.register_widget(id, ptr);
+        ctx.register_host(&mut d);
         let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), control: None, truncate_head: false };
         d.set_rows(vec![
             Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), control: Some(Control::Slider { value: 100.0, min: 20.0, max: 320.0, dec: 0, step: 10.0, suffix: "%" }), truncate_head: false },
@@ -15519,8 +15518,7 @@ mod tests {
         let mut d = Dialog::new();
         d.set_visible(true);
         WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
-        let (id, ptr) = (d.id(), d.as_ptr_mut());
-        ctx.register_widget(id, ptr);
+        ctx.register_host(&mut d);
         d.set_rows(vec![
             Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), control: Some(Control::Slider { value: 100.0, min: 20.0, max: 320.0, dec: 0, step: 10.0, suffix: "%" }), truncate_head: false },
             Row { id: "show_grid".into(), label: "Show Grid".into(), chord: "Ctrl+G".into(), control: Some(Control::Toggle(true)), truncate_head: false },
