@@ -577,6 +577,21 @@ pub enum NetworkMenuAction {
     Separator,
 }
 
+/// The target a scroll gesture over the plateless network was given at its
+/// first event (`State::overlay_wheel_to_graph`).
+#[derive(Debug, Clone, Copy)]
+pub struct OverlayWheel {
+    /// The graph pans; otherwise the scene's camera orbits.
+    pub graph: bool,
+    pub at: (f32, f32),
+    pub last: Instant,
+}
+
+/// How long a pause ends a scroll gesture for `OverlayWheel`: longer than
+/// the gap between a trackpad's events, shorter than a deliberate second
+/// swipe.
+pub const OVERLAY_WHEEL_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// A mouse drag that moves the whole selection, not just the node under the
 /// pointer.
 ///
@@ -3094,6 +3109,12 @@ pub struct State {
     /// grid cursor goes if the menu is turned to the network's, so Add Node
     /// places at the cell pointed at, as the plated network's press does.
     pub network_menu_cell: Option<(i32, i32)>,
+    /// Which of the two a scroll gesture over the plateless network goes
+    /// to — the graph (a node was under the pointer when it began) or the
+    /// scene — with where and when its last event came. Held for the whole
+    /// gesture: a pan slides the node out from under a pointer that does
+    /// not move, and the rest of the swipe must not become an orbit.
+    pub overlay_wheel: Option<OverlayWheel>,
     /// The plate corner menu — same `context_menu` thread-local again; the slot
     /// says which plate's control opened it (and doubles as the pressed state
     /// the corner control paints with).
@@ -4401,6 +4422,27 @@ impl State {
     /// floating pane covers it.
     pub fn overlay_claims(&self, px: f32, py: f32) -> bool {
         !self.over_floating_pane_at(px, py) && self.graph().node_at(px, py).is_some()
+    }
+
+    /// Whether this wheel event over the plateless network is the graph's
+    /// (it pans) or the scene's (the camera orbits): the graph's when a
+    /// node was under the pointer as the GESTURE began, as a click is.
+    /// Decided at the gesture's first event and held to its end — the lift,
+    /// a pause of `OVERLAY_WHEEL_GAP`, or the pointer moving off where it
+    /// was — since panning slides the node from under the pointer.
+    pub(crate) fn overlay_wheel_to_graph(&mut self, phase: cce_ui::widget::scroll_motion::ScrollPhase) -> bool {
+        let now = Instant::now();
+        let at = (self.cursor_x, self.cursor_y);
+        let held = self.overlay_wheel.filter(|w| {
+            now.duration_since(w.last) < OVERLAY_WHEEL_GAP && (w.at.0 - at.0).abs() < 4.0 && (w.at.1 - at.1).abs() < 4.0
+        });
+        let graph = held.map_or_else(|| self.overlay_claims(at.0, at.1), |w| w.graph);
+        self.overlay_wheel = if phase == cce_ui::widget::scroll_motion::ScrollPhase::FingerEnd {
+            None
+        } else {
+            Some(OverlayWheel { graph, at, last: now })
+        };
+        graph
     }
 
     /// Whether (px, py) is inside the network's AREA — the region it is laid
@@ -8714,6 +8756,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             network_menu_actions: Vec::new(),
             network_menu_from: None,
             network_menu_cell: None,
+            overlay_wheel: None,
             sim_cache: crate::geometry::SimCache::default(),
             playbar_cache_key: None,
             page_image: None,
@@ -11091,7 +11134,16 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     }
                     return true;
                 }
-                let in_network_pane = self.in_network_pane();
+                // Over the plateless network the gesture's target decides,
+                // not what is under the pointer now (`overlay_wheel_to_graph`):
+                // a scroll begun on a node pans the graph, one begun on empty
+                // space orbits the camera.
+                let overlay = self.network_overlay();
+                let in_network_pane = if overlay {
+                    self.overlay_wheel_to_graph(cce_ui::widget::scroll_motion::current_scroll_phase())
+                } else {
+                    self.in_network_pane()
+                };
                 // eprintln!("DEBUG MOUSEWHEEL: delta={:?}, phase={:?}, cursor=({}, {}), in_network_pane={}", delta, phase, self.cursor_x, self.cursor_y, in_network_pane);
                 let node_area_y = self.positions[CONTENT_IDX].1;
 
@@ -11142,6 +11194,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     };
                     for i in 0..WIDGET_COUNT {
                         if i == VIEWPORT_IDX {
+                            continue;
+                        }
+                        // The plateless network spans the window: it takes
+                        // only a gesture begun on one of its nodes.
+                        if overlay && !in_network_pane && (i == CONTENT_IDX || i == NETWORK_PANEL_IDX) {
                             continue;
                         }
                         // Under its rows a plateless params pane is scene.

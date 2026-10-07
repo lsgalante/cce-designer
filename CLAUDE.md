@@ -2789,6 +2789,16 @@ That makes the pane's RECT useless as a hit test, and three things route off it:
   and space+left mean nothing to the scene, so the network keeps them across
   its whole span; a graph you could not pan by dragging because its own surface
   stopped being drawn would be a strange thing to ship.
+- **The wheel** is decided per GESTURE (since 2026-10-06,
+  `State::overlay_wheel_to_graph`): one begun on a node pans the graph, one
+  begun anywhere else orbits the camera, as a click would. Until then the
+  graph took every scroll by its window-wide rect, so with the plate off a
+  trackpad could not orbit at all. The target is held (`State::overlay_wheel`)
+  to the finger's lift, a pause of `OVERLAY_WHEEL_GAP` or the pointer
+  moving: a pan slides the node out from under a pointer that does not
+  move, and the rest of the swipe would otherwise turn the camera. The
+  ctrl zoom follows the same target.
+  `a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node`.
 - **`cursor_in_viewport`** becomes the complement: the body, minus what the
   network holds, minus the floating panes.
 

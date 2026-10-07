@@ -710,6 +710,73 @@ mod tests {
         assert!(!state.viewport_menu_rows_of(None).1.contains(&A::NetworkPage));
     }
 
+    /// With the network's plate off its graph spans the window, so a scroll
+    /// cannot go to it by rect: a gesture begun on empty space orbits the
+    /// camera, one begun on a node pans the graph, and the target is held
+    /// to the gesture's end — a pan slides the node out from under the
+    /// pointer, and the rest of the swipe must not become an orbit.
+    #[test]
+    fn a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node() {
+        use crate::slots::{LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX};
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::scroll_motion::ScrollPhase;
+        use cce_ui::widget::{MouseScrollDelta, Position};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        assert!(state.network_overlay(), "the plate is off by default");
+        state.set_active_camera("Default Camera");
+        let at = |state: &mut State, x: f32, y: f32| {
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        };
+        let wheel = |state: &mut State| {
+            state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
+        };
+        let orbit = |state: &State| (state.viewport().rotation_x, state.viewport().rotation_y);
+
+        // Empty space: the camera turns and the graph stays.
+        let (cx, cy, cw, ch) = state.positions[crate::slots::CONTENT_IDX];
+        let (ex, ey) = (cx + cw * 0.3, cy + ch * 0.6);
+        assert!(state.graph().node_at(ex, ey).is_none() && !state.over_floating_pane_at(ex, ey));
+        at(&mut state, ex, ey);
+        let (turned, pan) = (orbit(&state), (state.pan_x, state.pan_y));
+        wheel(&mut state);
+        assert_ne!(orbit(&state), turned, "a scroll over empty space orbits");
+        assert_eq!((state.pan_x, state.pan_y), pan, "and does not pan the graph");
+        assert_eq!(state.focused_pane, RIGHT_MENUBAR_IDX);
+
+        // On a node: the graph's, not the camera's.
+        state.overlay_wheel = None;
+        let find_node = |state: &State| state
+            .current_dir()
+            .children
+            .iter()
+            .map(|n| state.cell_center(n.position.0 as i32, n.position.1 as i32))
+            .find(|&(x, y)| !state.over_floating_pane_at(x, y) && state.graph().node_at(x, y).is_some())
+            .expect("a node in the clear");
+        let (nx, ny) = find_node(&state);
+        at(&mut state, nx, ny);
+        let turned = orbit(&state);
+        wheel(&mut state);
+        assert_eq!(orbit(&state), turned, "a scroll on a node does not orbit");
+        assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX, "it is the network's");
+
+        // The latch: the node slides from under the pointer, and the
+        // gesture is still the graph's to its lift; the next one is not.
+        // (That scroll panned the graph: find the node again.)
+        let (nx, ny) = find_node(&state);
+        at(&mut state, nx, ny);
+        state.overlay_wheel = None;
+        assert!(state.overlay_wheel_to_graph(ScrollPhase::Finger));
+        state.pan_x += cw;
+        state.sync_grid_settings();
+        assert!(state.graph().node_at(nx, ny).is_none(), "the node moved away");
+        assert!(state.overlay_wheel_to_graph(ScrollPhase::Finger), "held mid-gesture");
+        assert!(state.overlay_wheel_to_graph(ScrollPhase::FingerEnd), "held to the lift");
+        assert!(!state.overlay_wheel_to_graph(ScrollPhase::Finger), "a new gesture over empty space is the scene's");
+    }
+
     #[test]
     fn spreadsheet_header_press_reaches_the_widget_not_the_camera() {
         use crate::slots::{SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, VIEWPORT_IDX};
