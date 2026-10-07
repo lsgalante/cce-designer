@@ -382,8 +382,8 @@ gone from cce-ui with the wgpu path).
   are joined in order. Handle labels draw on a dark tab, since a handle
   can stand over a white image.
 
-  The HUD draws at the viewport's bottom left — not
-  at the top, because the viewport is full-bleed and the pane plates float over
+  The HUD draws one line up from the viewport's bottom left (the row it had
+  above the scale readout, which is gone) — not at the top, because the viewport is full-bleed and the pane plates float over
   its top edge, so a mode line there lands under the collapsed stubs. It exists
   because a viewer state changes what every click does and snapping silently
   changes what a drag does.

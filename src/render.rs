@@ -1256,11 +1256,11 @@ impl State {
             }
         });
 
-        // The HUD sits at the viewport's bottom left. Not at the top: the
-        // viewport is full-bleed and the pane plates float over its top edge,
-        // so a mode line there lands under the collapsed stubs and their
-        // titles read through it. (It stood a line above the scale readout
-        // until that was removed on 2026-10-06.)
+        // The HUD sits one line up from the viewport's bottom left, the row
+        // it had above the scale readout, kept when the readout went
+        // (2026-10-06). Not at the top: the viewport is full-bleed and the
+        // pane plates float over its top edge, so a mode line there lands
+        // under the collapsed stubs and their titles read through it.
         //
         // It exists because a viewer state changes what every click does and
         // snapping silently changes what a drag does. A mode you cannot see is
@@ -1269,7 +1269,7 @@ impl State {
         let hud = tool.hud();
         let size = 11.0;
         let pad = 5.0;
-        let y = self.scene_text_floor(vy + vh) - (size + pad * 2.0) - 8.0;
+        let y = self.scene_text_floor(vy + vh) - 16.0 - (size + pad * 2.0) - 4.0;
         let width = (hud.chars().count() as f32 * size * 0.52 + pad * 2.0).min(vw - 16.0);
         pc.clip(rect(vx, vy, vw, vh), |pc| {
             pc.quad(rect(vx + 8.0 - pad, y, width, size + pad * 2.0), [0.0, 0.0, 0.0, 0.55]);
