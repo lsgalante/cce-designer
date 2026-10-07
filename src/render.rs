@@ -422,22 +422,34 @@ impl State {
             let (wx, wy, ww2, wh2) = w.rect();
             if self.slots.playbar.inner().frame > 0.0 {
                 // A SHELF of the window's bottom edge, not a plate laid on
-                // it: the plate runs out past the window's sides and bottom
-                // with square corners, so only its TOP is rolled on screen,
-                // and the window's own lip is drawn again over its band —
-                // the side lips run down unbroken into the bottom corners
-                // and along the bottom, as they do around a window with no
-                // bar. Until this the bar was a plate rolled all round,
-                // its top corners rounded in from the side lips, and the
-                // two rolls stood side by side at its ends and its bottom.
-                // The lip goes on AFTER the transport: a quad between a
-                // plate and its carves drops them to the overlay shading,
-                // and the transport stands clear of the lip
-                // (`Playbar::frame`), so nothing it draws is under it.
+                // it: a plate turned inside out (cce-ui's `frame`), whose
+                // face is everything below the scene's opening and whose
+                // rolled edge runs round the opening's outline. So the top
+                // edge meets each side lip in a COVE — the opening's bottom
+                // corner, at the plates' corner radius — one outline with
+                // the top, where a straight edge running into the lip
+                // crossed it and stacked the two rolls. The face runs out
+                // past the window's sides and bottom, so it has no other
+                // edge on screen, and the window's own lip is drawn again
+                // over the shelf and its coves: the side lips run down
+                // unbroken into the bottom corners, as they do around a
+                // window with no bar. The lip goes on AFTER the transport —
+                // a quad between a plate and its carves drops them to the
+                // overlay shading — which stands clear of it
+                // (`Playbar::frame`).
                 let e = cce_ui::colors::plate_bevel_width() + 1.0;
-                append_plate_at(w, pc, rect(wx - e, wy, ww2 + 2.0 * e, wh2 + e), None, (0.0, 0.0, 0.0, 0.0));
+                let cove = cce_ui::layout::plate_corner_radius().min(wh2);
+                let face = rect(wx - e, wy - cove, ww2 + 2.0 * e, wh2 + cove + e);
+                let opening = rect(wx, wy - self.height, ww2, self.height);
+                let material = cce_ui::scene::material::Material::from_fill(w.color());
+                let depth = if cce_ui::layout::control_relief() {
+                    w.plate_bevel().unwrap_or_else(cce_ui::colors::plate_bevel_width)
+                } else {
+                    0.0
+                };
+                pc.frame(face, opening, (0.0, 0.0, cove, cove), &material, depth);
                 w.paint_self(&self.ui_context, pc);
-                pc.clip(rect(wx, wy, ww2, wh2), |pc| self.append_window_lip(pc));
+                pc.clip(rect(wx, wy - cove, ww2, wh2 + cove), |pc| self.append_window_lip(pc));
             } else {
                 append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
                 w.paint_self(&self.ui_context, pc);

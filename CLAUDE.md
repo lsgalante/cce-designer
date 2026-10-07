@@ -3278,16 +3278,22 @@ bottom like the other plates. Its height is `PLAYBAR_H` over the window's
 bottom lip (`playbar_shelf_h`, `PLAYBAR_H + bevel_width`): the shelf runs
 down INTO the lip, and only its top edge is a plate's.
 
-- **Drawn as part of the window's edge** (the PLAYBAR_IDX render arm):
-  its plate runs out past the window's sides and bottom with square
-  corners, so only the TOP is rolled on screen, and the window's own lip
-  (`State::append_window_lip`, the viewport's) is drawn again over the
-  shelf, clipped to it — so the side lips run down unbroken into the
-  bottom corners and along the bottom, as around a window with no bar.
-  For its first hours it was a plate rolled all round, its top corners
-  rounded in from the side lips, and the two rolls stood side by side at
-  its ends and along its bottom. The lip goes on after the transport (a
-  quad between a plate and its carves drops them to the overlay shading).
+- **Drawn as part of the window's edge** (the PLAYBAR_IDX render arm): a
+  plate turned inside out (cce-ui's `PaintCtx::frame`, see its CLAUDE.md),
+  whose face is everything below the scene's opening and whose rolled edge
+  runs round the opening's outline. So the top edge meets each side lip in
+  a COVE — the opening's bottom corner, at `plate_corner_radius` in the
+  DE's corner family — one outline with the top. The face runs out past
+  the window's sides and bottom, so it has no other edge on screen, and
+  the window's own lip (`State::append_window_lip`, the viewport's) is
+  drawn again over the shelf and its coves, clipped to them, so the side
+  lips run down unbroken into the bottom corners. For its first hours the
+  bar was a plate rolled all round, its top corners rounded in from the
+  side lips, the two rolls side by side at its ends and along its bottom;
+  then for an hour its top edge ran straight into the side lips, crossing
+  them, the two rolls stacked in a square at each end. The lip goes on
+  after the transport (a quad between a plate and its carves drops them to
+  the overlay shading); the transport's carves group into the frame.
 - **The transport stands clear of the lip**: `Playbar::frame` is the lip's
   width, and the widget lays its buttons, track and readout out in its
   rect less that on the left, right and bottom (`Playbar::content`). Zero
