@@ -374,22 +374,19 @@ impl State {
             let all: Vec<usize> = resolved.iter().flatten().copied().collect();
             let n2 = crate::slots::NETWORK_PANEL2_IDX;
             let n2_count = all.iter().filter(|&&s| s == n2).count();
-            // The params pane is not docked since 2026-10-06 (it is a HUD
-            // on the scene): an older save lists it in a dock, and it is
-            // taken out — the dock it fronted fronts its next tab, or is
+            // Neither the params pane nor the network is docked since
+            // 2026-10-06 (the one a HUD on the scene, the other an overlay
+            // spanning it): an older save lists them in docks, and they are
+            // taken out — a dock one fronted fronts its next tab, or is
             // empty.
+            let undocked = |s: usize| s == crate::slots::PARAM_IDX || s == crate::slots::NETWORK_PANEL_IDX;
             let resolved: Vec<Vec<usize>> = resolved
                 .into_iter()
-                .map(|tabs| tabs.into_iter().filter(|&s| s != crate::slots::PARAM_IDX).collect())
+                .map(|tabs| tabs.into_iter().filter(|&s| !undocked(s)).collect())
                 .collect();
-            let all: Vec<usize> = all.into_iter().filter(|&s| s != crate::slots::PARAM_IDX).collect();
-            let mut core: Vec<usize> = all.iter().copied().filter(|&s| s != n2).collect();
-            core.sort_unstable();
-            let mut expected = vec![
-                crate::slots::NETWORK_PANEL_IDX,
-                crate::slots::SPREADSHEET_IDX,
-            ];
-            expected.sort_unstable();
+            let all: Vec<usize> = all.into_iter().filter(|&s| !undocked(s)).collect();
+            let core: Vec<usize> = all.iter().copied().filter(|&s| s != n2).collect();
+            let expected = vec![crate::slots::SPREADSHEET_IDX];
             if core == expected && n2_count <= 1 {
                 for d in 0..3 {
                     self.dock_tabs[d] = resolved[d].clone();

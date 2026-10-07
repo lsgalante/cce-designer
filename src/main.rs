@@ -464,25 +464,11 @@ mod tests {
         assert_eq!(state.plate_menu_slot, Some(NETWORK_PANEL_IDX), "turned into the plate's rows");
         assert_eq!((context_menu::x(), context_menu::y()), corner, "where the menu stood");
         assert_eq!(context_menu::back_title().as_deref(), Some("Network"));
-        let options = context_menu::options();
-        assert!(options.iter().any(|o| o.starts_with("Move To")), "{options:?}");
-        // Add Tab is a page off the page, and comes back to it; the page's
-        // band goes back to the network's menu.
-        if let Some(add) = state.plate_menu_actions.iter().position(|a| *a == PlateMenuAction::AddTabMenu) {
-            press_at(&mut state, corner.0 + 8.0, context_menu::row_y(add) + 4.0, MouseButton::Left);
-            assert_eq!(context_menu::back_title().as_deref(), Some(crate::plate_menu::plate_title(NETWORK_PANEL_IDX)));
-            press_at(&mut state, corner.0 + 20.0, corner.1 + context_menu::PAD + context_menu::ROW_H * 0.5, MouseButton::Left);
-            assert_eq!(context_menu::back_title().as_deref(), Some("Network"), "back on the plate page");
-        }
+        // The network is in no dock and does not collapse: Detach alone.
+        assert_eq!(context_menu::options(), vec!["Detach".to_string()]);
         press_at(&mut state, corner.0 + 20.0, corner.1 + context_menu::PAD + context_menu::ROW_H * 0.5, MouseButton::Left);
         assert!(state.network_menu_active && state.plate_menu_slot.is_none(), "back on the network's menu");
-        // Picking Collapse on the page collapses the network plate.
-        let plate = context_menu::options().iter().position(|o| o == "Plate").unwrap();
-        press_at(&mut state, corner.0 + 8.0, context_menu::row_y(plate) + 4.0, MouseButton::Left);
-        let row = context_menu::options().iter().position(|o| *o == collapse).unwrap();
-        press_at(&mut state, corner.0 + 8.0, context_menu::row_y(row) + 4.0, MouseButton::Left);
-        assert!(state.pane_is_collapsed(NETWORK_PANEL_IDX));
-        state.set_pane_collapsed(NETWORK_PANEL_IDX, false);
+        press_at(&mut state, 2.0, 2.0, MouseButton::Left);
 
         // The playbar: its transport, then the Plate page row.
         let (x, y, w, h) = state.positions[PLAYBAR_IDX];
@@ -504,21 +490,26 @@ mod tests {
     fn move_to_swaps_a_pane_into_another_dock() {
         use crate::app::Dock;
         use crate::plate_menu::PlateMenuAction;
-        use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX};
+        use crate::slots::{NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.show_spreadsheet = true;
+        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
         state.open_plate_menu(SPREADSHEET_IDX);
         assert!(state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Right)));
         assert!(!state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Bottom)), "not to its own dock");
         state.close_plate_menu();
         state.run_plate_menu_action(SPREADSHEET_IDX, PlateMenuAction::MoveTo(Dock::Left), (0.0, 0.0));
         assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Left));
-        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Bottom));
-        // The params HUD is in no dock and moves to none.
-        state.open_plate_menu(PARAM_IDX);
-        assert!(!state.plate_menu_actions.iter().any(|a| matches!(a, PlateMenuAction::MoveTo(_))));
-        assert_eq!(state.dock_of_pane(PARAM_IDX), None);
+        assert_eq!(state.dock_of_pane(NETWORK_PANEL2_IDX), Some(Dock::Bottom));
+        // Neither the params HUD nor the network is in a dock, and neither
+        // moves to one.
+        for idx in [PARAM_IDX, NETWORK_PANEL_IDX] {
+            state.open_plate_menu(idx);
+            assert!(!state.plate_menu_actions.iter().any(|a| matches!(a, PlateMenuAction::MoveTo(_))));
+            assert_eq!(state.dock_of_pane(idx), None);
+            state.close_plate_menu();
+        }
     }
 
     /// Collapse must actually reclaim the plate AND take its body with it, and
@@ -527,9 +518,14 @@ mod tests {
     #[test]
     fn test_collapse_shrinks_the_plate_and_restores_it() {
         use crate::plate_menu::STUB_H;
-        use crate::slots::{CONTENT_IDX, NETWORK_PANEL_IDX};
+        // The second network editor, docked: the network itself is in no
+        // dock and does not collapse.
+        use crate::slots::{CONTENT2_IDX as CONTENT_IDX, NETWORK_PANEL2_IDX as NETWORK_PANEL_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
+        state.set_pane_collapsed(crate::slots::NETWORK_PANEL_IDX, true);
+        assert!(!state.pane_is_collapsed(crate::slots::NETWORK_PANEL_IDX), "the network does not collapse");
+        state.add_dock_tab(crate::app::Dock::Left, NETWORK_PANEL_IDX);
 
         let (_, _, _, full_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
         assert!(full_h > STUB_H, "network plate starts taller than a stub");
@@ -620,7 +616,7 @@ mod tests {
         assert!(state.network_overlay(), "the network overlays the scene");
         // Spanning the window, it has no edge to drag where its dock's was.
         let (fx, fy, _, fh) = state.floating_network_layout;
-        assert!(state.network_resize_edge_at(fx + state.left_dock_width(), fy + fh * 0.5).is_none());
+        assert!(!state.on_left_dock_resize_edge(fx + state.left_dock_width(), fy + fh * 0.5));
         let press = |state: &mut State, x: f32, y: f32, b: MouseButton| {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: b });
@@ -1133,8 +1129,10 @@ mod tests {
         assert!(!state.spreadsheet_tucks_left() && !state.spreadsheet_tucks_right());
 
         state.set_spreadsheet_full_width(true);
-        assert!(state.spreadsheet_tucks_left() && state.spreadsheet_tucks_right(),
-            "full width must tuck under both neighbors");
+        // Under the neighbour there is: the left dock is empty, the
+        // network being in no dock.
+        assert!(state.spreadsheet_tucks_right() && !state.spreadsheet_tucks_left(),
+            "full width must tuck under the right dock's plate");
         let (ss_x, _, ss_w, _) = state.floating_spreadsheet_rect();
         assert!(ss_x <= 18.5 && ss_x + ss_w >= 1600.0 - 18.5, "not actually full width: x={ss_x} w={ss_w}");
 
@@ -1228,8 +1226,12 @@ mod tests {
         use crate::plate_menu::{PlateMenuAction, PLATE_SLOTS};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
+        state.execute_menu_action("Show Spreadsheet Pane");
 
+        // A plate that collapses: not the network nor the params HUD,
+        // which are on the scene and not plates of a dock.
         let idx = PLATE_SLOTS.iter().copied()
+            .filter(|&i| i != crate::slots::NETWORK_PANEL_IDX && i != crate::slots::PARAM_IDX)
             .find(|&i| state.slots.get_dyn(i).visible())
             .expect("some plate is shown at this size");
 
@@ -1586,45 +1588,116 @@ mod tests {
         assert!(vs.dock_tabs[1].contains(&"spreadsheet".to_string()));
         assert!(vs.dock_tabs[2].is_empty());
 
-        // Splitting moves the active pane to the empty dock; the tab left
-        // behind fronts.
+        // Splitting moves the active pane to the first empty dock — the
+        // left, which the network does not hold; the tab left behind fronts.
         state.split_dock_tab(NETWORK_PANEL2_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Bottom), NETWORK_PANEL2_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX);
         assert_eq!(state.pane_in_dock(Dock::Right), SPREADSHEET_IDX);
     }
 
-    /// Move To Own Plate is offered only while a dock is free to take the
-    /// pane. With the params pane out of the docks, three tab candidates
-    /// share three docks, so a dock holding two always leaves one empty —
-    /// the row is offered, and the split lands there.
+    /// The network is in no dock (since 2026-10-07): it spans the body
+    /// whatever the docks hold, the left dock starts empty — so the
+    /// spreadsheet runs flush to the left — and the network neither
+    /// collapses nor moves. The left dock's edge resizes the plate docked
+    /// there, and a press in the band the network's dock had along the
+    /// top, off the breadcrumb's segments, is the scene's.
+    #[test]
+    fn the_network_is_in_no_dock() {
+        use crate::app::{Dock, NO_PANE, HEADER_H};
+        use crate::plate_menu::PlateMenuAction;
+        use crate::slots::{BREADCRUMB_IDX, LEFT_MENUBAR_IDX, NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, SPREADSHEET_IDX};
+        use crate::window::{LocalPosition, WindowEvent};
+        use cce_ui::widget::{ElementState, MouseButton};
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.execute_menu_action("Show Spreadsheet Pane");
+        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), None);
+        assert_eq!(state.pane_in_dock(Dock::Left), NO_PANE);
+        assert_eq!(state.positions[NETWORK_PANEL_IDX], (0.0, HEADER_H, 1600.0, state.body_h()));
+        assert!(state.slots.get_dyn(crate::slots::CONTENT_IDX).visible(), "shown though it fronts no dock");
+        assert_eq!(state.positions[SPREADSHEET_IDX].0, 18.0, "flush left, a gap in");
+
+        state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
+        assert!(!state.pane_is_collapsed(NETWORK_PANEL_IDX));
+        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Bottom);
+        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), None);
+        state.open_plate_menu(NETWORK_PANEL_IDX);
+        assert_eq!(state.plate_menu_actions, vec![PlateMenuAction::Detach]);
+        state.close_plate_menu();
+
+        let at = |state: &mut State, x: f32, y: f32| {
+            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+        };
+        let press = |state: &mut State, s: ElementState| {
+            state.handle_event(&WindowEvent::MouseInput { state: s, button: MouseButton::Left });
+        };
+
+        // The old dock's top band, off the crumbs and off every node: the
+        // scene's, where it used to focus the network and go nowhere.
+        let (bx, by, _, bh) = state.positions[BREADCRUMB_IDX];
+        let y = by + bh * 0.5;
+        let x = (0..40)
+            .map(|k| bx + 200.0 + k as f32 * 5.0)
+            .find(|&x| {
+                !state.slots.get_dyn(BREADCRUMB_IDX).hit_test(x, y, &state.ui_context)
+                    && state.graph().node_at(x, y).is_none()
+                    && !state.over_floating_pane_at(x, y)
+            })
+            .expect("a point in the band off the crumbs");
+        assert!(x < 18.0 + 400.0, "inside the old dock's band");
+        state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
+        at(&mut state, x, y);
+        press(&mut state, ElementState::Pressed);
+        assert!(state.orbit_drag.is_some(), "the press orbits");
+        press(&mut state, ElementState::Released);
+        assert_ne!(state.focused_pane, LEFT_MENUBAR_IDX);
+
+        // A plate in the left dock: its right edge resizes the dock.
+        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
+        let (qx, qy, qw, qh) = state.positions[NETWORK_PANEL2_IDX];
+        assert!(qw > 0.0);
+        let w0 = state.left_dock_width();
+        let edge = (qx + qw, qy + qh * 0.5);
+        assert!(state.on_left_dock_resize_edge(edge.0, edge.1));
+        at(&mut state, edge.0, edge.1);
+        press(&mut state, ElementState::Pressed);
+        at(&mut state, edge.0 + 40.0, edge.1);
+        press(&mut state, ElementState::Released);
+        assert!((state.left_dock_width() - (w0 + 40.0)).abs() < 0.5, "{} against {}", state.left_dock_width(), w0 + 40.0);
+        assert_eq!(state.positions[NETWORK_PANEL2_IDX].2, state.left_dock_width());
+    }
+
+    /// Move To Own Plate is offered only on a dock holding more than one
+    /// tab. With neither the params pane nor the network in the docks, the
+    /// two tab candidates share three docks, so a dock holding both always
+    /// leaves another empty — the row is offered, and the split lands there.
     #[test]
     fn move_to_own_plate_needs_an_empty_dock() {
         use crate::app::Dock;
         use crate::plate_menu::PlateMenuAction;
-        use crate::slots::{NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX};
+        use crate::slots::{NETWORK_PANEL2_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
+        state.show_spreadsheet = true;
 
-        // Every dock held, none shared: no split to offer.
-        state.add_dock_tab(Dock::Right, NETWORK_PANEL2_IDX);
-        assert_eq!(state.first_empty_dock(), None);
-        state.open_plate_menu(NETWORK_PANEL_IDX);
+        // A dock of its own: no split to offer.
+        state.open_plate_menu(SPREADSHEET_IDX);
         assert!(!state.plate_menu_actions.contains(&PlateMenuAction::SplitTab), "its dock is its own");
         state.close_plate_menu();
 
-        // The second editor tabs in beside the first: the right dock frees,
-        // and the row is offered on the shared dock.
-        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
-        state.show_dock_tab(Dock::Left, NETWORK_PANEL_IDX);
-        assert_eq!(state.first_empty_dock(), Some(Dock::Right));
-        state.open_plate_menu(NETWORK_PANEL_IDX);
+        // The second editor tabs in beside the spreadsheet: the row is
+        // offered on the shared dock.
+        state.add_dock_tab(Dock::Bottom, NETWORK_PANEL2_IDX);
+        state.show_dock_tab(Dock::Bottom, SPREADSHEET_IDX);
+        assert_eq!(state.first_empty_dock(), Some(Dock::Left));
+        state.open_plate_menu(SPREADSHEET_IDX);
         assert!(state.plate_menu_actions.contains(&PlateMenuAction::SplitTab));
         assert!(state.plate_menu_actions.contains(&PlateMenuAction::ShowTab(NETWORK_PANEL2_IDX)));
         state.close_plate_menu();
 
         // And the split lands there.
-        state.split_dock_tab(NETWORK_PANEL_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Right), NETWORK_PANEL_IDX);
+        state.split_dock_tab(SPREADSHEET_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Left), SPREADSHEET_IDX);
     }
 
     /// The second network editor: joins a dock from nowhere through the tab
@@ -1639,7 +1712,7 @@ mod tests {
 
         state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
         assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX);
-        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Left));
+        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), None, "the network is in no dock");
 
         let start = state.current_path.clone();
         let sphere = state
@@ -1659,7 +1732,7 @@ mod tests {
 
         state.close_dock_tab(NETWORK_PANEL2_IDX);
         assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL2_IDX), None);
-        assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL_IDX);
+        assert_eq!(state.pane_in_dock(Dock::Left), crate::app::NO_PANE);
     }
 
 
@@ -1749,8 +1822,8 @@ mod tests {
         assert!(!a.collapsed_panes[PARAM_IDX], "the params HUD does not collapse");
         a.splitter_layout.splitter1_x = 400.0;
         a.splitter_layout.splitter2_x = 1200.0;
-        // Tab state: a second network editor tabbed beside the first (and
-        // fronted), dived one level down its own path.
+        // Tab state: a second network editor in the left dock (which the
+        // network does not hold), dived one level down its own path.
         a.add_dock_tab(crate::app::Dock::Left, crate::slots::NETWORK_PANEL2_IDX);
         let sphere = a
             .current_dir()
@@ -1772,17 +1845,13 @@ mod tests {
             "splitters restore as fractions: 400/1600 of an 800-wide window = 200, got {}",
             b.splitter_layout.splitter1_x);
         // The tab arrangement rides the file: the second editor exists,
-        // fronted in the left dock with the primary waiting, on its own path.
+        // fronted in the left dock, on its own path; the network is in none.
         assert_eq!(
             b.pane_in_dock(crate::app::Dock::Left),
             crate::slots::NETWORK_PANEL2_IDX,
             "the fronted second editor must load fronted"
         );
-        assert_eq!(
-            b.tab_dock_of_pane(crate::slots::NETWORK_PANEL_IDX),
-            Some(crate::app::Dock::Left),
-            "the primary must load as the waiting tab"
-        );
+        assert_eq!(b.tab_dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None, "the network loads in no dock");
         assert_eq!(b.current_path2, [a.current_path.clone(), vec![sphere]].concat(), "the second editor's path must round-trip");
 
         // A detached pane window must ignore the same file's pane state.
@@ -1807,7 +1876,8 @@ mod tests {
         a.resize(1600.0, 900.0, 1.0);
         a.execute_menu_action("Show Spreadsheet Pane");
         assert!(a.show_spreadsheet);
-        a.add_dock_tab(crate::app::Dock::Right, crate::slots::NETWORK_PANEL2_IDX);
+        // A plate in the left dock to tuck under (the network is in none).
+        a.add_dock_tab(crate::app::Dock::Left, crate::slots::NETWORK_PANEL2_IDX);
         a.floating_network_layout.2 = 520.0;
         a.floating_param_width = 360.0;
         a.params_hud_width = 420.0;
@@ -1831,7 +1901,7 @@ mod tests {
         assert!((b.floating_spreadsheet_height - 300.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
         assert!((b.floating_spreadsheet_inset_left - insets.0).abs() < 0.5 && (b.floating_spreadsheet_inset_right - insets.1).abs() < 0.5,
             "tucks: {:?} vs {:?}", (b.floating_spreadsheet_inset_left, b.floating_spreadsheet_inset_right), insets);
-        assert!(b.spreadsheet_tucks_left() && b.spreadsheet_tucks_right(), "the full-width tuck must load tucked");
+        assert!(b.spreadsheet_tucks_left(), "the full-width tuck must load tucked");
 
         // Half the window: the same fractions land at half the pixels.
         let mut c = State::new(false);
@@ -1913,7 +1983,7 @@ mod tests {
         // What was unsaved before the configure still is after it.
         let mut c = State::new(false);
         c.load_from_file(&dir).expect("load");
-        c.set_pane_collapsed(crate::slots::NETWORK_PANEL_IDX, true);
+        c.set_pane_collapsed(crate::slots::SPREADSHEET_IDX, true);
         c.resize(1400.0, 1080.0, 1.0);
         assert!(c.has_unsaved_changes(), "the configure must not hide an edit");
 
@@ -2061,7 +2131,7 @@ mod tests {
         state.update_window_title(); // the event loop's refresh, after the save event
         assert!(!state.title.ends_with('*'), "title: {}", state.title);
 
-        state.set_pane_collapsed(crate::slots::NETWORK_PANEL_IDX, true);
+        state.set_pane_collapsed(crate::slots::SPREADSHEET_IDX, true);
         assert!(state.has_unsaved_changes(), "a collapse is saved state too");
         state.save_to_file(&dir).expect("save");
         state.params_hud_width += 40.0;
@@ -2357,7 +2427,8 @@ mod tests {
         assert!(!state.params_claims(over.0, over.1), "a plate over the HUD takes the pointer");
         assert_eq!(state.plate_at(over.0, over.1), Some(SPREADSHEET_IDX));
 
-        // An older save docked the params pane; it loads out of the dock.
+        // An older save docked the params pane and the network; both load
+        // out of the docks.
         let dir = std::env::temp_dir().join(format!("cce-designer-hud-dock-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut a = State::new(false);
@@ -2369,8 +2440,10 @@ mod tests {
         let mut b = State::new(false);
         b.load_from_file(&dir).expect("load");
         assert_eq!(b.pane_in_dock(Dock::Left), NO_PANE, "the dock the params fronted is empty");
-        assert_eq!(b.pane_in_dock(Dock::Right), crate::slots::NETWORK_PANEL_IDX, "the rest of the arrangement loads");
+        assert_eq!(b.pane_in_dock(Dock::Right), NO_PANE, "the dock the network fronted is empty");
+        assert_eq!(b.pane_in_dock(Dock::Bottom), SPREADSHEET_IDX, "the rest of the arrangement loads");
         assert_eq!(b.tab_dock_of_pane(PARAM_IDX), None);
+        assert_eq!(b.tab_dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None);
         let _ = fs::remove_dir_all(&dir);
     }
 

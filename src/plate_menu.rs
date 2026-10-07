@@ -33,8 +33,7 @@ pub const PLATE_SLOTS: [usize; 5] =
 /// pane: unplaced it simply does not exist. The params pane is not one
 /// (since 2026-10-06): it is a HUD on the scene, under the plates, laid out
 /// from the viewport alone (`State::params_hud_rect`).
-pub const TAB_CANDIDATES: [usize; 3] =
-    [NETWORK_PANEL_IDX, SPREADSHEET_IDX, NETWORK_PANEL2_IDX];
+pub const TAB_CANDIDATES: [usize; 2] = [SPREADSHEET_IDX, NETWORK_PANEL2_IDX];
 
 /// What the plate menu can do to its plate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +104,11 @@ impl State {
             if !w.visible() {
                 return false;
             }
+            // The network spans the window and has no plate: it is not the
+            // plate under anything.
+            if idx == NETWORK_PANEL_IDX && !self.pane_is_stubbed(idx) {
+                return false;
+            }
             // The params HUD is under every plate and, without its own,
             // only its rows: it is the plate there only where it claims.
             if idx == PARAM_IDX && !self.pane_is_stubbed(idx) {
@@ -130,9 +134,11 @@ impl State {
         let mut options: Vec<String> = Vec::new();
         let mut actions: Vec<PlateMenuAction> = Vec::new();
         for (label, action) in plate_dock::standard_menu(state, self.plate_can_detach(idx)) {
-            // The HUD does not collapse: it is not a plate with a stub to
-            // shrink to, and hiding it is Show Parameters Pane.
-            if idx == PARAM_IDX && matches!(action, PlateDockAction::Collapse | PlateDockAction::Expand) {
+            // Neither the HUD nor the network collapses: neither is a plate
+            // with a stub to shrink to, and hiding one is its Show … Pane.
+            if (idx == PARAM_IDX || idx == NETWORK_PANEL_IDX)
+                && matches!(action, PlateDockAction::Collapse | PlateDockAction::Expand)
+            {
                 continue;
             }
             options.push(label);
@@ -420,8 +426,9 @@ impl State {
     }
 
     pub fn set_pane_collapsed(&mut self, idx: usize, collapsed: bool) {
-        // The params HUD never collapses (see `plate_menu_rows`).
-        let collapsed = collapsed && idx != PARAM_IDX;
+        // The params HUD and the network never collapse (see
+        // `plate_menu_rows`).
+        let collapsed = collapsed && idx != PARAM_IDX && idx != NETWORK_PANEL_IDX;
         if !PLATE_SLOTS.contains(&idx) || self.collapsed_panes[idx] == collapsed {
             return;
         }

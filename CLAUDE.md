@@ -249,7 +249,8 @@ gone from cce-ui with the wgpu path).
   (`PLATE_SLOTS` — network, params, spreadsheet, playbar, network 2; NOT the
   viewport, whose plate is the window-spanning lip) — Collapse/Expand, Detach/
   Reattach, Full Width, the selection pins, the dock's tabs, Add Tab, Move To Own
-  Plate, **Move To Left/Right/Bottom** and Close Tab. `plate_menu_rows(idx)` is the
+  Plate, **Move To Left/Right/Bottom** and Close Tab. The network and the params
+  HUD are in no dock, so theirs are Detach (and the HUD's pins) alone. `plate_menu_rows(idx)` is the
   one list. **There is no corner trigger** (since 2026-10-01; it was a small
   circle on each plate's top-right, which opened these rows as a menu of their
   own and, DRAGGED, moved the pane to another dock — the drag, its drop
@@ -2776,18 +2777,33 @@ What only the plate reached went with it: the network's flat focus ring
 params HUD (`plates_over_params`) and over a point number (`under_a_plate`).
 The SECOND network editor has no plate either; it keeps its dock rect.
 
-The pane itself is untouched. It keeps its focus domain, its menus, its clip
-and its keyboard navigation, and it is still a dock occupant (its plate menu
-still lists tabs and Move To, which change nothing that is seen while it
-spans the window).
+The pane keeps its focus domain, its menus, its clip and its keyboard
+navigation.
+
+**The network is in no dock** (since 2026-10-07), as the params HUD is in
+none. The left dock starts EMPTY (`dock_panes` `[NO_PANE, NO_PANE,
+spreadsheet]`), so the spreadsheet runs flush to the window's left, where
+it stopped short of the network's invisible dock until then;
+`TAB_CANDIDATES` is the spreadsheet and the second editor; the network's
+plate menu is Detach alone (no tab, Move To or Collapse rows), and
+`set_pane_collapsed` refuses it; the pane-state load takes it out of an
+older save's tab lists, the dock it fronted fronting its next tab or
+emptying (`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones`
+loads one). `plate_at` never answers the network. The left dock's right edge
+resizes whatever plate is docked there (`on_left_dock_resize_edge`,
+`AppDrag::LeftDockResize`, writing `floating_network_layout.2`, which kept
+its name and its place in the save as the left dock's width) — it was the
+network's own edge (`network_resize_edge_at`, `NetworkResize`). And a press
+on the network's breadcrumb is asked where the breadcrumb is drawn: it was
+asked in the old dock's top strip, so a press in that band of the scene
+focused the network and went nowhere. `the_network_is_in_no_dock`.
 
 **The pane spans the whole window** (`network_overlay`, which is true while
-the network is shown, not circular and not a detached window). The dock rect
-is overridden at its source in `rebuild_positions` — one
-`let (px, py, pw, ph)`, so content, panel and breadcrumb all follow — because
-there is no surface to bound the graph, and one confined to a rectangle you
-cannot see is worse than one that spans what it is drawn over. Its right-edge
-resize hotspot is off for the same reason (`network_resize_edge_at`).
+the network is shown, not circular and not a detached window), laid out in
+`rebuild_positions` as one `let (px, py, pw, ph)` — the body, or nothing
+while hidden — so content, panel and breadcrumb all follow: there is no
+surface to bound the graph, and one confined to a rectangle you cannot see
+is worse than one that spans what it is drawn over.
 
 That makes the pane's RECT useless as a hit test, and these route off it:
 
@@ -2899,8 +2915,8 @@ bottom raised by a spreadsheet tucked under it, tabbable and movable.
   The right dock's own edge is `on_right_dock_resize_edge` /
   `AppDrag::RightDockResize`, asked first, its plate being on top.
 - **Out of the docks.** The right dock starts EMPTY (`dock_panes`
-  `[network, NO_PANE, spreadsheet]`); `TAB_CANDIDATES` no longer lists
-  params, its plate menu has no tab, Move To or Collapse rows (Detach and
+  `[NO_PANE, NO_PANE, spreadsheet]` — the network left the left dock the
+  next day); `TAB_CANDIDATES` no longer lists params, its plate menu has no tab, Move To or Collapse rows (Detach and
   the pins stay), `set_pane_collapsed` refuses it, and the pane-state load
   takes it out of an older save's tab lists — the dock it fronted fronts
   its next tab or empties. A plate moved into the right dock is drawn over

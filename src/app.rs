@@ -2892,7 +2892,8 @@ pub const NO_PANE: usize = usize::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AppDrag {
-    NetworkResize { dir: ResizeDirection, start_rect: (f32, f32, f32, f32), start_mouse: (f32, f32) },
+    /// The left dock's right edge — the plate docked there, if any.
+    LeftDockResize { start_w: f32, start_mouse_x: f32 },
     /// The right dock's left edge — the plate docked there, if any.
     RightDockResize { start_w: f32, start_mouse_x: f32 },
     /// The params HUD's left edge: its own width, which no plate shares.
@@ -4667,22 +4668,21 @@ impl State {
     // the press handlers arm the matching `AppDrag` off it, and `pane_resize_cursor`
     // shows the resize cursor over it, so the two can't drift apart.
 
-    /// The floating network pane's edge-resize hotspot at (cx, cy) — only the right
-    /// edge resizes. `None` while the pane is circular or hidden.
-    pub fn network_resize_edge_at(&self, cx: f32, cy: f32) -> Option<ResizeDirection> {
-        // The overlay spans the window and has no edge to drag.
-        if self.circular_network_pane || !self.show_network || self.network_overlay() {
-            return None;
+    /// Whether (cx, cy) is on the left dock's right edge-resize hotspot —
+    /// the edge of whatever plate is docked there. The network is not one
+    /// (since 2026-10-06; it spans the window), so the dock is empty unless
+    /// a plate was moved into it.
+    pub fn on_left_dock_resize_edge(&self, cx: f32, cy: f32) -> bool {
+        if self.circular_network_pane || !self.dock_shown(Dock::Left) {
+            return false;
         }
-        let (fx, fy, _, fh) = self.floating_network_layout;
-        let fw = self.left_dock_width();
+        let pane = self.pane_in_dock(Dock::Left);
+        if self.pane_is_stubbed(pane) {
+            return false;
+        }
+        let (x, y, w, h) = self.positions[pane];
         let margin = 8.0_f32;
-        let on_right = cx >= fx + fw - margin && cx <= fx + fw + margin && cy >= fy - margin && cy <= fy + fh + margin;
-        if on_right {
-            Some(ResizeDirection { left: false, right: true, top: false, bottom: false })
-        } else {
-            None
-        }
+        w > 0.0 && cx >= x + w - margin && cx <= x + w + margin && cy >= y - margin && cy <= y + h + margin
     }
 
     /// Whether (cx, cy) is on the params HUD's left edge-resize hotspot:
@@ -4998,16 +4998,15 @@ impl State {
         };
         if let Some(drag) = self.app_drag {
             return Some(match drag {
-                AppDrag::NetworkResize { dir, .. } => dir_cursor(dir),
-                AppDrag::RightDockResize { .. } | AppDrag::HudResize { .. } => CursorIcon::EwResize,
+                AppDrag::LeftDockResize { .. } | AppDrag::RightDockResize { .. } | AppDrag::HudResize { .. } => CursorIcon::EwResize,
                 AppDrag::SpreadsheetResize { .. } => CursorIcon::NsResize,
                 AppDrag::SpreadsheetResizeLeft { .. } | AppDrag::SpreadsheetResizeRight { .. } => {
                     CursorIcon::EwResize
                 }
             });
         }
-        if let Some(dir) = self.network_resize_edge_at(cx, cy) {
-            return Some(dir_cursor(dir));
+        if self.on_left_dock_resize_edge(cx, cy) {
+            return Some(CursorIcon::EwResize);
         }
         if self.on_right_dock_resize_edge(cx, cy) || self.on_param_resize_edge(cx, cy) {
             return Some(CursorIcon::EwResize);
@@ -8790,11 +8789,12 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
             collapsed_panes: [false; WIDGET_COUNT],
-            // The right dock starts empty: the params HUD is not a dock
-            // pane, and a plate moved there is drawn over it.
-            dock_panes: [NETWORK_PANEL_IDX, NO_PANE, SPREADSHEET_IDX],
+            // The left and right docks start empty: neither the network nor
+            // the params HUD is a dock pane (both live on the scene), and a
+            // plate moved into either is drawn over them.
+            dock_panes: [NO_PANE, NO_PANE, SPREADSHEET_IDX],
             dock_tabs: [
-                vec![NETWORK_PANEL_IDX],
+                Vec::new(),
                 Vec::new(),
                 vec![SPREADSHEET_IDX],
             ],
@@ -9786,18 +9786,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                     }
                 };
 
-                let (px, py, pw, ph) = rect_for(NETWORK_PANEL_IDX, self);
-                // The network has no plate (since 2026-10-06): it is an
-                // overlay on the scene, so it takes the whole body instead of
-                // its dock — there is no surface to bound it, and a graph confined to a
-                // rectangle you cannot see is worse than one that spans what
-                // it is drawn over. Everything below derives from these four
-                // numbers — content, panel, breadcrumb — so overriding them
-                // here keeps the pane's parts agreeing with each other.
-                let (px, py, pw, ph) = if self.network_overlay() {
+                // The network is in no dock (since 2026-10-06): it has no
+                // plate, and is an overlay on the scene spanning the whole
+                // body — there is no surface to bound it, and a graph
+                // confined to a rectangle you cannot see is worse than one
+                // that spans what it is drawn over. Everything below derives
+                // from these four numbers — content, panel, breadcrumb — so
+                // the pane's parts agree with each other.
+                let (px, py, pw, ph) = if self.show_network {
                     (0.0, HEADER_H, self.width, self.body_h())
                 } else {
-                    (px, py, pw, ph)
+                    (0.0, 0.0, 0.0, 0.0)
                 };
 
                 if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
@@ -9894,15 +9893,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 // is hidden regardless of its View flag — a zero rect alone
                 // does not stop the text pass, so a waiting editor's labels
                 // would paint over whichever pane fronted.
-                let net_active = self.dock_of_pane(NETWORK_PANEL_IDX).is_some();
                 let ss_active = self.dock_of_pane(SPREADSHEET_IDX).is_some();
                 self.slots.header.set_visible(false);
                 self.slots.status.set_visible(false);
                 self.slots.playbar.set_visible(self.show_playbar);
-                self.slots.content.set_visible(self.show_network && net_active);
-                self.slots.network_panel.set_visible(self.show_network && net_active);
+                self.slots.content.set_visible(self.show_network);
+                self.slots.network_panel.set_visible(self.show_network);
                 self.slots.left_menubar.set_visible(false);
-                self.slots.breadcrumb.set_visible(self.show_network && net_active);
+                self.slots.breadcrumb.set_visible(self.show_network);
                 self.slots.splitter1.set_visible(false);
                 self.slots.splitter2.set_visible(false);
                 self.slots.viewport.set_visible(viewport_visible);
@@ -11407,33 +11405,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 } else {
                     if let Some(drag) = self.app_drag {
                         match drag {
-                            AppDrag::NetworkResize { dir, start_rect, start_mouse } => {
-                                let dx = self.cursor_x - start_mouse.0;
-                                let dy = self.cursor_y - start_mouse.1;
-                                let (sx, sy, sw, sh) = start_rect;
-
-                                let mut fx = sx;
-                                let mut fy = sy;
-                                let mut fw = sw;
-                                let mut fh = sh;
-
-                                if dir.left {
-                                    let new_w = (sw - dx).max(150.0);
-                                    fx = sx + sw - new_w;
-                                    fw = new_w;
-                                } else if dir.right {
-                                    fw = (sw + dx).max(150.0);
-                                }
-
-                                if dir.top {
-                                    let new_h = (sh - dy).max(100.0);
-                                    fy = sy + sh - new_h;
-                                    fh = new_h;
-                                } else if dir.bottom {
-                                    fh = (sh + dy).max(100.0);
-                                }
-
-                                self.floating_network_layout = (fx, fy, fw, fh);
+                            AppDrag::LeftDockResize { start_w, start_mouse_x } => {
+                                let dx = self.cursor_x - start_mouse_x;
+                                self.floating_network_layout.2 = (start_w + dx).max(150.0);
                                 // A drag commits the width it SHOWS: storing an
                                 // overshoot past the window's limit would leave
                                 // the edge dead on the way back until the pointer
@@ -11824,40 +11798,29 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             }
                         }
 
+                        // The left dock's edge: the plate docked there, if any.
+                        if *button == MouseButton::Left && self.on_left_dock_resize_edge(self.cursor_x, self.cursor_y) {
+                            self.app_drag = Some(AppDrag::LeftDockResize {
+                                start_w: self.left_dock_width(),
+                                start_mouse_x: self.cursor_x,
+                            });
+                            if let Some(old) = self.focused_widget {
+                                self.slots.get_dyn_mut(old).unfocus();
+                                self.focused_widget = None;
+                            }
+                            return true;
+                        }
+                        // The network's breadcrumb hovers over the graph and
+                        // claims its segments only. Asked where it is drawn:
+                        // until 2026-10-07 this tested the old left dock's
+                        // top strip, so a press in that band of the scene
+                        // focused the network and went nowhere.
                         if *button == MouseButton::Left && !self.circular_network_pane && self.show_network {
-                            let (fx, fy, _, _fh) = self.floating_network_layout;
-                            let fw = self.left_dock_width();
-                            let cx = self.cursor_x;
-                            let cy = self.cursor_y;
-
-                            if let Some(dir) = self.network_resize_edge_at(cx, cy) {
-                                self.app_drag = Some(AppDrag::NetworkResize {
-                                    dir,
-                                    start_rect: (fx, fy, fw, self.floating_network_layout.3),
-                                    start_mouse: (cx, cy),
-                                });
-                                self.focused_pane = LEFT_MENUBAR_IDX;
-                                if let Some(old) = self.focused_widget {
-                                    self.slots.get_dyn_mut(old).unfocus();
-                                    self.focused_widget = None;
-                                }
-                                self.slots.param.unfocus();
-                                self.sync_parameters_to_project();
-                                return true;
-                            } else if cx >= fx && cx < fx + fw && cy >= fy && cy < fy + (if self.show_network { breadcrumb_h() } else { 0.0 }) {
-                                if self.slots.breadcrumb.mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context) {
-                                    return true;
-                                }
-                                // A strip press off the crumbs focuses the pane and consumes.
-                                // The NETWORK_PANEL_IDX drag it used to arm was inert (see the
-                                // circular-border note above).
-                                self.focused_pane = LEFT_MENUBAR_IDX;
-                                if let Some(old) = self.focused_widget {
-                                    self.slots.get_dyn_mut(old).unfocus();
-                                    self.focused_widget = None;
-                                }
-                                self.slots.param.unfocus();
-                                self.sync_parameters_to_project();
+                            let (bx, by, bw, bh) = self.positions[BREADCRUMB_IDX];
+                            let (cx, cy) = (self.cursor_x, self.cursor_y);
+                            if cx >= bx && cx < bx + bw && cy >= by && cy < by + bh
+                                && self.slots.breadcrumb.mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context)
+                            {
                                 return true;
                             }
                         }
@@ -12304,7 +12267,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             // shared teardown for faithfulness — the pane widget never began
                             // a drag in resize mode, so its commit/cancel hook is a no-op.
                             let idx = match drag {
-                                AppDrag::NetworkResize { .. } => NETWORK_PANEL_IDX,
+                                AppDrag::LeftDockResize { .. } => self.pane_in_dock(Dock::Left),
                                 AppDrag::HudResize { .. } => PARAM_IDX,
                                 AppDrag::RightDockResize { .. } => self.pane_in_dock(Dock::Right),
                                 AppDrag::SpreadsheetResize { .. }
@@ -12320,7 +12283,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             // offsets need the same refresh.
                             if matches!(
                                 drag,
-                                AppDrag::NetworkResize { .. }
+                                AppDrag::LeftDockResize { .. }
                                     | AppDrag::SpreadsheetResizeLeft { .. }
                             ) {
                                 self.read_panel_offsets();
