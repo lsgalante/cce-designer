@@ -1102,7 +1102,12 @@ struct SimSolve {
     key: u64,
     /// The frame `state` is the solution FOR.
     frame: i32,
-    state: Detail,
+    /// Shared (`Arc`) with the checkpoints that hold the same frame and
+    /// with a resume taken from it: a replay hands states out of the cache
+    /// by reference count, where until 2026-10-07 it copied each one three
+    /// times over — out of its checkpoint, into the entry, and the frame
+    /// left behind into a checkpoint that already held it.
+    state: std::sync::Arc<Detail>,
     /// What the LAST substep that produced `state` consumed — the seed until
     /// a step has run — derivatives cleared and `dt` set, exactly as the
     /// chain saw it. What a visible child inside the simnet is evaluated
@@ -1112,7 +1117,7 @@ struct SimSolve {
     /// that is the chain's last mover draws where the output draws. Until
     /// 2026-09-28 it was the state at the START of the frame, which under
     /// substeps showed one substep of a frame that took several.
-    prev: Detail,
+    prev: std::sync::Arc<Detail>,
     /// Earlier frames of the same solve, kept so a backward scrub resumes
     /// from the nearest one behind it instead of the seed. See
     /// [`Checkpoint`].
@@ -1149,8 +1154,8 @@ struct SimSolve {
 #[derive(Clone)]
 struct Checkpoint {
     frame: i32,
-    state: Detail,
-    prev: Detail,
+    state: std::sync::Arc<Detail>,
+    prev: std::sync::Arc<Detail>,
 }
 
 // Every run of a chain on this thread, through whichever cache — so a
@@ -5968,7 +5973,7 @@ pub fn network_sphere_vertices_with_errors(
         if display_on {
             let mut visited = Vec::new();
             if let Some(geom) = generate_single_node_geometry_with_errors(root, start, &mut visited, ocl_error, sim) {
-                out.merge(&geom);
+                out.merge_owned(geom);
             }
         }
         // A subnet inside draws too, as its output: the Remesh subnet in a
@@ -5989,7 +5994,7 @@ pub fn network_sphere_vertices_with_errors(
                 for child in shown {
                     let mut visited = Vec::new();
                     if let Some(geom) = generate_single_node_geometry_with_errors(root, child, &mut visited, ocl_error, sim) {
-                        out.merge(&geom);
+                        out.merge_owned(geom);
                     }
                 }
                 sim.feedback.pop();
@@ -6020,7 +6025,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             }
             if parent_visible && node.geometry_visible {
                 if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut Vec::new(), ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
             return;
@@ -6053,7 +6058,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_extrude_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("line") {
@@ -6097,7 +6102,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_transform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("scatter") {
@@ -6106,7 +6111,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_scatter_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("group") {
@@ -6115,7 +6120,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_group_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("attribute") {
@@ -6124,7 +6129,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_attribute_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("relax") {
@@ -6133,7 +6138,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_relax_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("neighbour") {
@@ -6142,7 +6147,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_neighbour_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("time") {
@@ -6151,7 +6156,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_time_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("normal") {
@@ -6160,7 +6165,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_normal_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("bounds") {
@@ -6169,7 +6174,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_bounds_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("distance") {
@@ -6178,7 +6183,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_distance_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("connectivity") {
@@ -6187,7 +6192,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_connectivity_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("cull") {
@@ -6196,7 +6201,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_cull_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("copy") {
@@ -6205,7 +6210,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_copy_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("soft_transform") {
@@ -6214,7 +6219,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_soft_transform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("transfer") {
@@ -6223,7 +6228,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_transfer_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("valence") {
@@ -6232,7 +6237,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_valence_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("deform") {
@@ -6241,7 +6246,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_deform_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("volume") {
@@ -6250,7 +6255,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_volume_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("boolean") {
@@ -6259,7 +6264,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_boolean_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("mold_shell") {
@@ -6268,7 +6273,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_mold_shell_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("hull") {
@@ -6277,7 +6282,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_hull_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("wrangle") {
@@ -6286,7 +6291,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_wrangle_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("switch") {
@@ -6295,7 +6300,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_switch_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("export") {
@@ -6304,7 +6309,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_export_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("subdivide") {
@@ -6313,7 +6318,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_subdivide_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("detangle") {
@@ -6322,7 +6327,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_detangle_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("suture") {
@@ -6331,7 +6336,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_suture_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("remesh") {
@@ -6340,7 +6345,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_remesh_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("develop") {
@@ -6349,7 +6354,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_develop_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("visualize") {
@@ -6358,7 +6363,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_visualize_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("analysis") {
@@ -6367,7 +6372,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_analysis_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("collision") {
@@ -6376,7 +6381,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = resolve_collision_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if node.node_type.eq_ignore_ascii_case("opencl") {
@@ -6385,7 +6390,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = retired_opencl_node(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if is_loop(node) {
@@ -6394,7 +6399,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
             // The chain inside a simnet is the simulation STEP, and inside a
@@ -6412,7 +6417,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
         } else if top
@@ -6429,7 +6434,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             if is_visible {
                 let mut visited = Vec::new();
                 if let Some(geom) = generate_single_node_geometry_with_errors(root, node, &mut visited, ocl_error, sim) {
-                    out.merge(&geom);
+                    out.merge_owned(geom);
                 }
             }
             return;
@@ -7505,7 +7510,7 @@ pub fn resolve_simnet_geometry_with_errors(
     });
     let edited_at = prior.as_ref().and_then(|e| e.edited_at);
     let mut checkpoints = Checkpoints::default();
-    let mut cached: Option<(Detail, Detail, i32)> = None;
+    let mut cached: Option<(std::sync::Arc<Detail>, std::sync::Arc<Detail>, i32)> = None;
     if let Some(prior) = prior {
         checkpoints = prior.checkpoints;
         if prior.frame <= due {
@@ -7539,10 +7544,10 @@ pub fn resolve_simnet_geometry_with_errors(
     // seed for that frame — the interior view and the pull arrows drawn from
     // where the sim started, once per app launch with Cache on.
     let disk = if cached.is_none() && caching { read_sim_cache(&target.id, key, due) } else { None };
-    let (mut state, mut prev_frame, mut done) = match (cached, disk) {
+    let (held, held_prev, mut done) = match (cached, disk) {
         (Some(hit), _) => hit,
-        (None, Some(hit)) => hit,
-        (None, None) => (seed.clone(), seed.clone(), 0),
+        (None, Some((state, prev, frame))) => (std::sync::Arc::new(state), std::sync::Arc::new(prev), frame),
+        (None, None) => (std::sync::Arc::new(seed.clone()), std::sync::Arc::new(seed.clone()), 0),
     };
 
     // Substeps run the chain more than once per frame. A step's size is what
@@ -7562,6 +7567,16 @@ pub fn resolve_simnet_geometry_with_errors(
     let dt = 1.0 / substeps as f32;
 
     let resumed_at = done;
+    // A frame in hand needs no copy of its own; stepping on from it does,
+    // unless nothing else holds it.
+    let mut state = Detail::new();
+    let mut prev_frame = Detail::new();
+    let (held, held_prev) = if done < due {
+        state = std::sync::Arc::unwrap_or_clone(held);
+        (None, None)
+    } else {
+        (Some(held), Some(held_prev))
+    };
     while done < due {
         for _ in 0..substeps {
             // The step boundary, and the contract that makes a chain
@@ -7605,7 +7620,11 @@ pub fn resolve_simnet_geometry_with_errors(
         // frame asked for, which is the entry itself.
         if done % checkpoints.every == 0 && done < due {
             state.topology();
-            checkpoints.keep(Checkpoint { frame: done, state: state.clone(), prev: prev_frame.clone() });
+            checkpoints.keep(Checkpoint {
+                frame: done,
+                state: std::sync::Arc::new(state.clone()),
+                prev: std::sync::Arc::new(prev_frame.clone()),
+            });
         }
     }
 
@@ -7616,6 +7635,13 @@ pub fn resolve_simnet_geometry_with_errors(
     // simulation wrote its whole state to disk several times a frame,
     // even replaying frames solved long before — at ten thousand points
     // most of what the spreadsheet's refresh cost.
+    if done > resumed_at {
+        state.topology();
+    }
+    let (state, prev_frame) = match (held, held_prev) {
+        (Some(state), Some(prev)) => (state, prev),
+        _ => (std::sync::Arc::new(state), std::sync::Arc::new(prev_frame)),
+    };
     if caching && due > 0 && done > resumed_at {
         write_sim_cache(&target.id, key, due, &state, &prev_frame);
     }
@@ -7624,15 +7650,15 @@ pub fn resolve_simnet_geometry_with_errors(
     // Detail`): the wireframe's edges and anything else that asks of the
     // scene are free on a replay, where they were built again every frame.
     // It costs about 1% of a step and is counted in the checkpoints' budget.
-    if done > resumed_at {
-        state.topology();
-    }
+    // The one copy a frame costs: what is handed back, the entry keeping
+    // the shared state.
+    let out = Detail::clone(&state);
     sim.cache.entries.insert(
         target.id.clone(),
-        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame, checkpoints, edited_at, start: start_frame, chain },
+        SimSolve { key, frame: due, state, prev: prev_frame, checkpoints, edited_at, start: start_frame, chain },
     );
     sim.cache.revision += 1;
-    Some(state)
+    Some(out)
 }
 
 /// The state the LAST substep of a simnet's current frame was stepped FROM:
@@ -7648,7 +7674,7 @@ pub fn simnet_step_feedback(
     sim: &mut EvalSim,
 ) -> Option<Detail> {
     resolve_simnet_geometry_with_errors(root, target, visited, ocl_error, sim)?;
-    sim.cache.entries.get(&target.id).map(|e| e.prev.clone())
+    sim.cache.entries.get(&target.id).map(|e| Detail::clone(&e.prev))
 }
 
 /// Where a simnet's solved state is parked between runs.
@@ -7783,7 +7809,7 @@ mod simnet_tests {
     fn checkpoints_are_budgeted_by_what_each_holds() {
         // Frame f's state has 10 f points: the history grows as a solve's does.
         let state = |f: i32| sphere_detail(Vec3::ZERO, 1.0, 2, 5 * f as usize);
-        let at = |f: i32| Checkpoint { frame: f, state: state(f), prev: Detail::default() };
+        let at = |f: i32| Checkpoint { frame: f, state: std::sync::Arc::new(state(f)), prev: std::sync::Arc::new(Detail::default()) };
         let all: usize = (1..=60).map(|f| checkpoint_bytes(&state(f))).sum();
         let latest = checkpoint_bytes(&state(60));
         assert!(60 * latest > all * 3 / 2, "the latest times the count overstates the history");

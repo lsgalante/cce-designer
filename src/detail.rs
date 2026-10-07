@@ -368,6 +368,12 @@ pub struct AttribStore {
 }
 
 impl AttribStore {
+    /// Whether the store holds nothing at all: no elements, attributes,
+    /// kinds or groups — what appending into is the same as being `other`.
+    fn is_bare(&self) -> bool {
+        self.len == 0 && self.attribs.is_empty() && self.kinds.is_empty() && self.groups.is_empty()
+    }
+
     pub fn with_len(len: usize) -> Self {
         Self { len, attribs: HashMap::new(), kinds: HashMap::new(), groups: HashMap::new() }
     }
@@ -1566,6 +1572,38 @@ impl Detail {
         if let Some(t) = shared {
             let _ = self.topo.set(t);
         }
+    }
+
+    /// [`merge`](Self::merge) of a detail the caller is done with. Into an
+    /// EMPTY detail — which is how the scene is assembled, each level's
+    /// displayed node into a fresh one — it takes `other`'s arrays instead
+    /// of copying them: the same result to the last value, the identities
+    /// renumbered and the detail attributes left behind as `merge` leaves
+    /// them (`merge_owned_is_merge`). Until 2026-10-07 the scene walk copied
+    /// a 57k-point simulation's whole state twice a frame this way. Into
+    /// anything else it is `merge`.
+    pub fn merge_owned(&mut self, other: Detail) {
+        let empty = self.pos.is_empty()
+            && self.vert_point.is_empty()
+            && self.prim_start.len() <= 1
+            && self.points.is_bare()
+            && self.verts.is_bare()
+            && self.prims.is_bare();
+        if !empty {
+            self.merge(&other);
+            return;
+        }
+        let Detail { pos, vert_point, prim_start, points, verts, prims, topo, .. } = other;
+        let first = self.next_id;
+        self.ids = (0..pos.len() as PointId).map(|i| first + i).collect();
+        self.next_id = first + pos.len() as PointId;
+        self.pos = pos;
+        self.points = points;
+        self.vert_point = vert_point;
+        self.verts = verts;
+        self.prim_start = prim_start;
+        self.prims = prims;
+        self.topo = topo;
     }
 
     // ---- convenience ----

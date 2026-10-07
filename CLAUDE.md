@@ -3525,6 +3525,19 @@ of edges a thread into one buffer. The wire edges at 57k points: 4.9 ms
 a frame to 0.6. `a_copy_shares_the_topology_until_it_is_edited`,
 `the_wire_vertices_are_the_edges_in_order`.
 
+**A replayed frame copies the mesh once** (the same day). It copied the
+cached simulation state about seven times: out of its checkpoint (the
+state and what its last substep consumed), into the cache entry, into a
+checkpoint that already held the frame, and twice more as the scene walk
+merged it into an empty detail at the geometry node's level and at the
+root's. The solve's stored states are `Arc<Detail>` now (`SimSolve`,
+`Checkpoint`), handed out by reference count and copied once, for what
+the resolver returns, and `Detail::merge_owned` — what the scene walk
+merges with — takes a detail's arrays rather than copying them when it
+merges into an empty one, giving `merge`'s result to the last identity
+(`merge_owned_is_merge`). The graph's evaluation at 57k points: 2.7 ms a
+frame to 0.5.
+
 **The markers are instanced** (the same day, cce-ui's
 `SceneDraw::instances`): every kind — Show Point Markers, Show Vertex
 Markers, the selected group's, the marked groups' and the spreadsheet

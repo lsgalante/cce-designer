@@ -18079,6 +18079,42 @@ mod tests {
         assert_eq!(state.positions[SPREADSHEET_IDX].2, 1600.0 - 36.0, "a table wider than the window fills its room");
     }
 
+    /// `merge_owned` takes a detail's arrays where `merge` copies them,
+    /// and the result is `merge`'s: every point, identity (renumbered),
+    /// attribute, kind and group, the detail attributes left behind, and
+    /// the topology carried when built — into an empty detail, and into one
+    /// that is not, where it is `merge` itself.
+    #[test]
+    fn merge_owned_is_merge() {
+        use crate::detail::{AttribData, AttribKind, AttribValue, Detail};
+        let mut other = crate::geometry::sphere_detail(Vec3::new(0.3, 0.1, -0.2), 0.8, 6, 9);
+        let n = other.num_points();
+        other.points_mut().insert("mass", AttribData::Float((0..n).map(|p| p as f32 * 0.5).collect())).unwrap();
+        other.points_mut().create_kind("vel", AttribValue::Float3([0.0, 1.0, 0.0]), AttribKind::Derivative);
+        other.points_mut().create_group("tip");
+        other.points_mut().add_to_group("tip", 3);
+        other.prims_mut().create("pid", AttribValue::Int(7));
+        other.detail_mut().create("note", AttribValue::Float(9.0));
+        for built in [false, true] {
+            if built {
+                other.edges();
+            }
+            let mut copied = Detail::new();
+            copied.merge(&other);
+            let mut moved = Detail::new();
+            moved.merge_owned(other.clone());
+            assert!(moved == copied, "into an empty detail (topology built: {built})");
+            assert_eq!(moved.has_topology(), copied.has_topology());
+            assert_eq!((0..moved.num_points()).map(|p| moved.id(p)).collect::<Vec<_>>(), (0..copied.num_points()).map(|p| copied.id(p)).collect::<Vec<_>>());
+
+            let mut into_copy = crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 3, 4);
+            let mut into_move = into_copy.clone();
+            into_copy.merge(&other);
+            into_move.merge_owned(other.clone());
+            assert!(into_move == into_copy, "into a detail that is not empty");
+        }
+    }
+
     /// The playbar's cache strip, as a rule: a frame is cached when every
     /// simnet in the tree holds it, stale when one of them holds it from
     /// the chain as it was — before an edit the solve went on across, or
