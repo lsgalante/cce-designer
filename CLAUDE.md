@@ -2291,7 +2291,7 @@ wears and at Group Marker Size.
 
 - **Nothing is evaluated by a selection.** `State::spreadsheet_points` is
   where the rows' points were when the table was last filled, kept from
-  that evaluation; `rebuild_row_marker_verts` builds the markers from it,
+  that evaluation; `rebuild_row_markers` builds the markers from it,
   and runs from the press, from every refill of the table and from a
   change of Group Marker Size.
 - **The selection stands across a frame and an edit**, since the rows are
@@ -3402,9 +3402,26 @@ both got cheaper without changing what they show — the table looks each
 column up once and formats through `app::fmt4` (`{:.4}` to the
 character, `fmt4_is_format_4`), and `points_vertices` works the marker
 sphere out once and moves it to each point. A replayed frame went from
-140 ms to 24 there. What is left grows with the mesh: the markers'
-vertices (240 a point, uploaded every frame — instancing in cce-ui's
-renderer is the fix), the visualizers' copy of the scene, and the table.
+140 ms to 24 there. What is left grows with the mesh: the visualizers'
+copy of the scene, and the table.
+
+**The markers are instanced** (the same day, cce-ui's
+`SceneDraw::instances`): every kind — Show Point Markers, Show Vertex
+Markers, the selected group's, the marked groups' and the spreadsheet
+rows' — is one white `geometry::marker_sphere` (240 vertices) drawn over
+a list of instances, a marker's place and colour
+(`geometry::marker_instances`), where each marker was the sphere copied
+to its point and the whole list uploaded every frame (46 MB at ten
+thousand points; 240 KB instanced). The spheres are three meshes —
+the group markers' at Group Marker Size, shared by the selected group,
+the marked groups and the rows; the points' at Point Marker Size; the
+vertices' at `VERTEX_MARKER_SCALE` of it — re-uploaded by the flush when
+a size moves (`State::marker_sphere_radii`), so a size slider uploads 240
+vertices and builds nothing else. `State::drawn_markers` (tests) expands
+instances over their sphere as the shader does;
+`instanced_markers_draw_what_the_copied_spheres_drew` holds that to the
+old per-point copies bit for bit, and shadow captures of the old and new
+builds with point markers and with vertex markers on differ in no pixel.
 
 ### The playbar shows what is cached, and what is stale (since 2026-10-06)
 
@@ -3527,7 +3544,7 @@ number does, so all three of a vertex's overlays name one place. The
 markers are the point markers' spheres at `VERTEX_MARKER_SCALE` (0.6) of
 Point Marker Size, in the vertex green, smaller so a point's marker is not
 lost among the markers of the vertices around it; they share the point
-markers' mesh, and `rebuild_overlay_marker_verts` builds both lists, so
+markers' mesh, and `rebuild_overlay_markers` builds both lists, so
 the size slider re-sizes both without an evaluation. **A vertex's normal
 is its `N` attribute where the detail carries a Float3 one on its
 vertices, and its primitive's normal where it does not** — the normal of
@@ -3569,10 +3586,10 @@ anywhere over the open menu is swallowed rather than orbiting the scene.
 it feeds: opacity and wire thickness are draw-time, and group marker size
 re-bakes the Selected-Group
 markers — re-sized from `State::group_members`, the positions `sync_nodes`
-keeps from its evaluation, by `rebuild_group_marker_verts`; point marker
+keeps from its evaluation, by `rebuild_group_markers`; point marker
 size re-sizes the Show Point Markers overlay from the scene positions
 `rebuild_scene_geometry` keeps while it is on (`overlay_marker_points`,
-`rebuild_overlay_marker_verts`). None of it
+`rebuild_overlay_markers`). None of it
 re-evaluates the graph, which `apply_setting`'s regenerate pass would do per
 pixel of drag. `sync_nodes` also re-sizes the markers when only the size
 moved (`last_group_marker_size`), so the palette's Group
@@ -4105,7 +4122,7 @@ rather than two:
   that fails to parse reads as the defaults), so it rides the project
   file too. `State::scene_groups` is every point group of the scene as
   last built with its members' positions, kept by `rebuild_scene_geometry`
-  so the list and the markers (`rebuild_marked_group_verts`,
+  so the list and the markers (`rebuild_marked_group_markers`,
   `meshes.marked_points`) come from what is on screen and a switch
   evaluates nothing; the markers follow the geometry through a rebuild.
   A marked name the scene has no group for marks nothing and is kept, so

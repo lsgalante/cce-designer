@@ -3057,16 +3057,18 @@ mod tests {
         state.show_point_markers = false;
         state.show_vertex_markers = false;
         state.rebuild_scene_geometry();
-        assert!(state.overlay_marker_verts.is_empty());
+        let drawn = |state: &State| state.drawn_markers(crate::app::MarkerKind::Overlay);
+        assert!(drawn(&state).is_empty());
         state.run_command("toggle_vertex_markers");
-        let built = state.overlay_marker_verts.clone();
+        let built = drawn(&state);
         assert!(!built.is_empty() && !state.overlay_vertex_marker_points.is_empty());
+        assert_eq!(built.len(), state.vertex_marker_instances.len() * 240, "a sphere drawn over each instance");
         state.point_marker_size *= 2.0;
-        state.rebuild_overlay_marker_verts();
-        assert_eq!(state.overlay_marker_verts.len(), built.len());
-        assert_ne!(state.overlay_marker_verts[0].position, built[0].position, "re-sized");
+        state.rebuild_overlay_markers();
+        assert_eq!(drawn(&state).len(), built.len());
+        assert_ne!(drawn(&state)[0].position, built[0].position, "re-sized");
         state.run_command("toggle_vertex_markers");
-        assert!(state.overlay_marker_verts.is_empty(), "and gone with the switch");
+        assert!(drawn(&state).is_empty(), "and gone with the switch");
 
         // And the app collects them by its switches, and persists those.
         let mut state = State::new(false);
@@ -3423,11 +3425,11 @@ mod tests {
         };
         let label = crate::command::by_id("toggle_point_markers").unwrap().label;
         assert_eq!(row(&state), format!("○ {label}"));
-        assert!(state.overlay_marker_verts.is_empty());
+        assert!(state.overlay_marker_instances.is_empty());
         state.run_viewport_menu_action(A::Command("toggle_point_markers"));
         assert!(state.show_point_markers);
         assert_eq!(row(&state), format!("● {label}"));
-        assert!(!state.overlay_marker_verts.is_empty(), "the overlay was built");
+        assert!(!state.overlay_marker_instances.is_empty(), "the overlay was built");
         assert!(!state.overlay_marker_points.is_empty(), "and its positions kept for re-sizing");
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
         assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_markers, "persisted");
@@ -3551,12 +3553,12 @@ mod tests {
         assert!((state.point_marker_size - 0.04).abs() < 1e-5, "{}", state.point_marker_size);
         assert_eq!(state.rt_geometry_version, version, "no rebuild ran");
         assert!(state.overlay_dirty);
-        let resized: Vec<[f32; 3]> = state.overlay_marker_verts.iter().map(|v| v.position).collect();
+        let resized: Vec<[f32; 3]> = state.drawn_markers(crate::app::MarkerKind::Overlay).iter().map(|v| v.position).collect();
         context_menu::hide();
 
         // The full path at the same size draws the same spheres.
         state.rebuild_scene_geometry();
-        let rebuilt: Vec<[f32; 3]> = state.overlay_marker_verts.iter().map(|v| v.position).collect();
+        let rebuilt: Vec<[f32; 3]> = state.drawn_markers(crate::app::MarkerKind::Overlay).iter().map(|v| v.position).collect();
         assert_eq!(resized, rebuilt);
 
         // Off, nothing is kept to re-size.
@@ -3617,9 +3619,9 @@ mod tests {
         state.group_marker_size = 0.025;
         let centre = [0.0f32, 1.0, 0.0];
         state.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
-        state.rebuild_group_marker_verts();
+        state.rebuild_group_markers();
         let radius = |state: &State| {
-            state.group_point_verts.iter().map(|v| (v.position[1] - centre[1]).abs()).fold(0.0f32, f32::max)
+            state.drawn_markers(crate::app::MarkerKind::Group).iter().map(|v| (v.position[1] - centre[1]).abs()).fold(0.0f32, f32::max)
         };
         assert!((radius(&state) - 0.025).abs() < 1e-5);
 
@@ -4984,6 +4986,56 @@ mod tests {
         assert_eq!(markers.len() % 240, 0);
     }
 
+    /// A marker draw instances one white sphere over a marker a point
+    /// (cce-ui's `SceneDraw::instances`). What that draws — each instance's
+    /// position added to the sphere, its colour multiplying the white — is
+    /// the sphere copied to every point as markers were built until
+    /// 2026-10-06, to the bit: the reference below is that code.
+    #[test]
+    fn instanced_markers_draw_what_the_copied_spheres_drew() {
+        use crate::geometry::{expand_instances, marker_instances, marker_sphere, Vertex3D};
+        let reference = |src: &[Vertex3D], size: f32, color: [f32; 3]| -> Vec<Vertex3D> {
+            let mut seen = std::collections::HashSet::new();
+            let mut out = Vec::new();
+            let r = size.max(0.001);
+            let pi = std::f32::consts::PI;
+            for v in src {
+                let key = ((v.position[0] * 1000.0).round() as i32, (v.position[1] * 1000.0).round() as i32, (v.position[2] * 1000.0).round() as i32);
+                if !seen.insert(key) {
+                    continue;
+                }
+                let [cx, cy, cz] = v.position;
+                let sp = |theta: f32, phi: f32| [cx + r * theta.sin() * phi.cos(), cy + r * theta.cos(), cz + r * theta.sin() * phi.sin()];
+                for lat in 0..4 {
+                    let (t0, t1) = (pi * lat as f32 / 4.0, pi * (lat + 1) as f32 / 4.0);
+                    for lon in 0..10 {
+                        let (p0, p1) = (2.0 * pi * lon as f32 / 10.0, 2.0 * pi * (lon + 1) as f32 / 10.0);
+                        let (p00, p10, p11, p01) = (sp(t0, p0), sp(t1, p0), sp(t1, p1), sp(t0, p1));
+                        for position in [p00, p11, p10, p00, p01, p11] {
+                            out.push(Vertex3D { position, color });
+                        }
+                    }
+                }
+            }
+            out
+        };
+        let src: Vec<Vertex3D> = (0..200)
+            .map(|i| {
+                let t = i as f32 * 0.37;
+                Vertex3D { position: [t.sin() * 3.1, (t * 0.7).cos() * -2.3 + 0.001 * (i % 3) as f32, t * 0.05 - 4.0], color: [0.0; 3] }
+            })
+            .collect();
+        for (size, color) in [(0.02f32, [1.0, 0.5, 0.0]), (0.0005, [0.2, 0.9, 0.3]), (0.137, [0.11, 0.22, 0.33])] {
+            let drawn = expand_instances(&marker_sphere(size), &marker_instances(&src, color));
+            let want = reference(&src, size, color);
+            assert_eq!(drawn.len(), want.len());
+            for (a, b) in drawn.iter().zip(&want) {
+                assert_eq!(a.position.map(f32::to_bits), b.position.map(f32::to_bits));
+                assert_eq!(a.color.map(f32::to_bits), b.color.map(f32::to_bits));
+            }
+        }
+    }
+
     /// A marker sphere winds counter-clockwise seen from OUTSIDE — the
     /// raster fill's culling convention, and what `sphere_detail` does.
     /// Until 2026-09-24 `points_vertices` kept the retired soup's inward
@@ -5415,12 +5467,13 @@ mod tests {
             crate::render::scene_point_overlays(&geom, false, false, false, 0.02, [1.0, 0.5, 0.0]);
         assert!(markers.is_empty() && labels.is_empty() && normals.is_empty());
 
-        // …and all three off the one Detail: 240 marker verts per POINT, one
-        // label per point, one whisker pair per point.
+        // …and all three off the one Detail: one marker instance per POINT
+        // (drawn over the marker sphere), one label per point, one whisker
+        // pair per point.
         let (markers, labels, normals) =
             crate::render::scene_point_overlays(&geom, true, true, true, 0.02, [1.0, 0.5, 0.0]);
         assert_eq!(labels.len(), points, "one label per point");
-        assert_eq!(markers.len(), points * 240);
+        assert_eq!(markers.len(), points);
         assert!(labels.iter().any(|(_, i)| *i > 0));
         // The marker color parameter flows into the vertices (linearized).
         let expect = cce_ui::colors::to_linear_rgb([1.0, 0.5, 0.0]);
@@ -8797,7 +8850,7 @@ mod tests {
         state.current_dir_mut().set_child_geometry_visible(tagged, true);
         state.rebuild_scene_geometry();
         assert!(state.scene_groups.iter().any(|(n, m)| n == "five" && m.len() == 5), "{:?}", state.scene_groups.iter().map(|(n, m)| (n.clone(), m.len())).collect::<Vec<_>>());
-        assert!(state.marked_group_verts.is_empty(), "nothing is marked yet");
+        assert!(state.marked_group_instances.is_empty(), "nothing is marked yet");
 
         // From the palette: the command turns it into the groups list.
         state.run_command("command_palette");
@@ -8815,12 +8868,12 @@ mod tests {
         assert!(state.dialog_visible(), "a switch is worked in place");
         assert_eq!(state.slots.dialog.rows[row].toggle(), Some(true));
         assert!(state.group_marked("five"));
-        assert!(!state.marked_group_verts.is_empty() && state.marked_groups_dirty, "the markers are staged");
-        let one = state.marked_group_verts.len();
+        assert!(!state.marked_group_instances.is_empty() && state.marked_groups_dirty, "the markers are staged");
+        let one = state.marked_group_instances.len();
         // On the group's points, at Group Marker Size.
         let members: Vec<[f32; 3]> = state.scene_groups.iter().find(|(n, _)| n == "five").unwrap().1.clone();
         for m in &members {
-            assert!(state.marked_group_verts.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.group_marker_size + 1e-4)), "a marker at {m:?}");
+            assert!(state.marked_group_instances.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.group_marker_size + 1e-4)), "a marker at {m:?}");
         }
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
         assert_eq!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.marked_groups, "five", "persisted");
@@ -8828,16 +8881,16 @@ mod tests {
 
         // The markers follow the geometry: a bigger sphere, farther points.
         let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
-        let far = |state: &State| state.marked_group_verts.iter().map(|v| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt()).fold(0.0f32, f32::max);
+        let far = |state: &State| state.marked_group_instances.iter().map(|v| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt()).fold(0.0f32, f32::max);
         let before = far(&state);
         state.apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "2.0".into() }, &mut redraw).unwrap();
         assert!(far(&state) > before * 1.5, "{} against {before}", far(&state));
-        assert_eq!(state.marked_group_verts.len(), one);
+        assert_eq!(state.marked_group_instances.len(), one);
 
         // Enter again unmarks; Escape closes; a query filters the names.
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert!(!state.group_marked("five"));
-        assert!(state.marked_group_verts.is_empty());
+        assert!(state.marked_group_instances.is_empty());
         state.dialog_key_input(&typed("z"));
         assert!(state.slots.dialog.rows.is_empty(), "no group matches");
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
@@ -8845,7 +8898,7 @@ mod tests {
 
         // A marked name the scene has no group for marks nothing and is kept.
         state.set_group_marked("gone", true);
-        assert!(state.marked_group_verts.is_empty());
+        assert!(state.marked_group_instances.is_empty());
         assert!(state.group_marked("gone"));
     }
 
@@ -18755,7 +18808,7 @@ mod tests {
         state.apply_action(McpAction::Select { slot: a }, &mut redraw).unwrap();
         state.sync_nodes();
         assert_eq!(state.spreadsheet_points.len(), 8, "a box has eight points, a row each");
-        assert!(state.row_marker_verts.is_empty());
+        assert!(state.row_marker_instances.is_empty());
 
         let (sx, sy, sw, sh) = state.positions[SPREADSHEET_IDX];
         assert!(sw > 0.0 && sh > 60.0, "the spreadsheet is laid out: {sw} x {sh}");
@@ -18769,19 +18822,19 @@ mod tests {
         let version = state.rt_geometry_version;
         press(&mut state, 1);
         assert_eq!(state.selected_spreadsheet_points(), vec![1]);
-        assert!(!state.row_marker_verts.is_empty() && state.row_markers_dirty, "the marker is staged");
-        let one = state.row_marker_verts.len();
+        assert!(!state.row_marker_instances.is_empty() && state.row_markers_dirty, "the marker is staged");
+        let one = state.row_marker_instances.len();
         // The marker stands on the row's point.
         let p = state.spreadsheet_points[1];
         let n = one as f32;
-        let mid = state.row_marker_verts.iter().fold([0.0f32; 3], |m, v| [m[0] + v.position[0] / n, m[1] + v.position[1] / n, m[2] + v.position[2] / n]);
+        let mid = state.row_marker_instances.iter().fold([0.0f32; 3], |m, v| [m[0] + v.position[0] / n, m[1] + v.position[1] / n, m[2] + v.position[2] / n]);
         assert!((0..3).all(|k| (mid[k] - p[k]).abs() < 1e-3), "{mid:?} is not at {p:?}");
 
         state.modifiers.ctrl = true;
         press(&mut state, 0);
         state.modifiers.ctrl = false;
         assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
-        assert_eq!(state.row_marker_verts.len(), 2 * one, "a marker a row");
+        assert_eq!(state.row_marker_instances.len(), 2 * one, "a marker a row");
         assert_eq!(state.rt_geometry_version, version, "selecting evaluates nothing");
 
         // A refresh of the same node's table keeps it.
@@ -18789,7 +18842,7 @@ mod tests {
         state.sync_nodes();
         assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
         let moved = state.spreadsheet_points[1];
-        let mid = state.row_marker_verts[one..].iter().chain(&state.row_marker_verts[..one]).fold([0.0f32; 3], |m, v| [m[0] + v.position[0], m[1] + v.position[1], m[2] + v.position[2]]);
+        let mid = state.row_marker_instances[one..].iter().chain(&state.row_marker_instances[..one]).fold([0.0f32; 3], |m, v| [m[0] + v.position[0], m[1] + v.position[1], m[2] + v.position[2]]);
         let both = [moved, state.spreadsheet_points[0]];
         let want = [both[0][0] + both[1][0], both[0][1] + both[1][1], both[0][2] + both[1][2]];
         assert!((0..3).all(|k| (mid[k] / one as f32 - want[k]).abs() < 1e-2), "the markers followed the points");
@@ -18798,7 +18851,7 @@ mod tests {
         state.apply_action(McpAction::Select { slot: b }, &mut redraw).unwrap();
         state.sync_nodes();
         assert!(state.selected_spreadsheet_points().is_empty());
-        assert!(state.row_marker_verts.is_empty());
+        assert!(state.row_marker_instances.is_empty());
     }
 
     /// A node INSIDE a simnet is read as the scene draws it there: as the
@@ -18839,10 +18892,10 @@ mod tests {
         state.sync_nodes();
         assert!(!state.spreadsheet_points.is_empty());
         state.spreadsheet_mut().set_selected_rows(&[3]);
-        state.rebuild_row_marker_verts();
+        state.rebuild_row_markers();
         let middle = |state: &State| {
-            let n = state.row_marker_verts.len() as f32;
-            state.row_marker_verts.iter().fold(0.0f32, |m, v| m + v.position[0] / n)
+            let n = state.row_marker_instances.len() as f32;
+            state.row_marker_instances.iter().fold(0.0f32, |m, v| m + v.position[0] / n)
         };
         let (row_at, marker_at) = (state.spreadsheet_points[3][0], middle(&state));
         assert!((row_at - marker_at).abs() < 1e-3);

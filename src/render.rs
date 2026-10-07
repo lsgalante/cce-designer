@@ -1544,7 +1544,7 @@ impl State {
             .iter()
             .map(|g| (g.to_string(), geom.points().group_members(g).iter().map(|&p| geom.positions()[p as usize]).collect()))
             .collect();
-        self.rebuild_marked_group_verts();
+        self.rebuild_marked_group_markers();
 
         // The point overlays ride the same rebuild, off the same `geom`:
         // they annotate what is on screen, and what is on screen is exactly
@@ -1557,9 +1557,9 @@ impl State {
             self.point_marker_size,
             self.point_marker_color,
         );
-        self.overlay_marker_verts = markers;
+        self.overlay_marker_instances = markers;
         // Kept for re-sizing the markers without this evaluation — see
-        // `State::rebuild_overlay_marker_verts`.
+        // `State::rebuild_overlay_markers`.
         self.overlay_marker_points = if self.show_point_markers {
             geom.positions()
                 .iter()
@@ -1588,10 +1588,10 @@ impl State {
         self.overlay_vertex_alpha.clear();
         self.overlay_normal_verts.extend(elements.normals);
         self.overlay_vertex_marker_points = elements.vertex_markers;
-        if !self.overlay_vertex_marker_points.is_empty() {
-            // Both marker lists, by the one builder the size slider uses.
-            self.rebuild_overlay_marker_verts();
-        }
+        self.vertex_marker_instances = crate::geometry::marker_instances(
+            &self.overlay_vertex_marker_points,
+            cce_ui::colors::to_linear_rgb(VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
+        );
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.
         self.scene_edge_verts =
@@ -1658,8 +1658,8 @@ impl State {
     }
 }
 
-/// The point overlays on the displayed scene: marker geometry for Show
-/// Point Markers, `(position, index)` labels for Show Point Numbers, and
+/// The point overlays on the displayed scene: marker INSTANCES for Show
+/// Point Markers (one a point, drawn over `geometry::marker_sphere`), `(position, index)` labels for Show Point Numbers, and
 /// normal whiskers for Show Point Normals — each read straight off the
 /// merged scene `Detail` the geometry rebuild has already produced.
 ///
@@ -1686,17 +1686,13 @@ pub(crate) fn scene_point_overlays(
     let mut normals = Vec::new();
     if markers_on {
         // One marker per point. The soup emitted one per corner and leaned
-        // on points_vertices deduping by position.
+        // on the instances deduping by position.
         let src: Vec<crate::geometry::Vertex3D> = geom
             .positions()
             .iter()
             .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
             .collect();
-        markers.extend(crate::geometry::points_vertices(
-            &src,
-            point_size,
-            cce_ui::colors::to_linear_rgb(marker_color),
-        ));
+        markers = crate::geometry::marker_instances(&src, cce_ui::colors::to_linear_rgb(marker_color));
     }
     if normals_on {
         // Smooth point normals: for each point, the normalized sum of the

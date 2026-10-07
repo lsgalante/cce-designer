@@ -6541,18 +6541,20 @@ pub fn origin_vectors_vertices(scale: f32) -> Vec<Vertex3D> {
 /// sphere kernel's exactly — that winding is the one the raster pass's
 /// backface cull is known to keep.
 pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vertex3D> {
+    expand_instances(&marker_sphere(size), &marker_instances(src, color))
+}
+
+/// The sphere every point marker is, about the origin at radius `size`, in
+/// white: the mesh a marker draw instances ([`marker_instances`], cce-ui's
+/// `SceneDraw::instances`), each instance moving it to a point and giving
+/// it its colour. 240 corners — 4 bands of 10 quads.
+pub fn marker_sphere(size: f32) -> Vec<Vertex3D> {
     let r = size.max(0.001);
     const LAT_STEPS: usize = 4;
     const LON_STEPS: usize = 10;
     let pi = std::f32::consts::PI;
-    // The sphere's corners about the origin, worked out once: every marker
-    // is the same sphere moved, and each is its centre plus these. Until
-    // 2026-10-06 each of a marker's 240 corners took its own sines and
-    // cosines, which at ten thousand points was most of a playing frame.
-    // The same arithmetic in the same order, so the corners are the same
-    // to the bit.
     let off = |theta: f32, phi: f32| [r * theta.sin() * phi.cos(), r * theta.cos(), r * theta.sin() * phi.sin()];
-    let mut unit = Vec::with_capacity(LAT_STEPS * LON_STEPS * 6);
+    let mut out = Vec::with_capacity(LAT_STEPS * LON_STEPS * 6);
     for lat in 0..LAT_STEPS {
         let theta0 = pi * lat as f32 / LAT_STEPS as f32;
         let theta1 = pi * (lat + 1) as f32 / LAT_STEPS as f32;
@@ -6571,22 +6573,51 @@ pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vert
             // surface showed only where that far half poked out of the
             // mesh, vanishing from the views where it did not.
             // `point_markers_wind_outward` holds the sign.
-            unit.extend([p00, p11, p10, p00, p01, p11]);
+            for position in [p00, p11, p10, p00, p01, p11] {
+                out.push(Vertex3D { position, color: [1.0; 3] });
+            }
         }
     }
+    out
+}
+
+/// One marker instance per distinct point of `src` — where the marker
+/// stands and its colour — for a draw of [`marker_sphere`]. Points within
+/// a thousandth of a unit of each other share one marker. Until 2026-10-06
+/// every marker was the sphere's 240 corners copied to its point, so the
+/// markers on ten thousand points were 2.4 million vertices built and
+/// uploaded on every frame of a playing simulation; instanced, they are
+/// ten thousand of these.
+pub fn marker_instances(src: &[Vertex3D], color: [f32; 3]) -> Vec<Vertex3D> {
     let mut seen = std::collections::HashSet::with_capacity(src.len());
-    let mut out = Vec::with_capacity(src.len() * unit.len());
+    let mut out = Vec::with_capacity(src.len());
     for v in src {
         let key = (
             (v.position[0] * 1000.0).round() as i32,
             (v.position[1] * 1000.0).round() as i32,
             (v.position[2] * 1000.0).round() as i32,
         );
-        if !seen.insert(key) {
-            continue;
+        if seen.insert(key) {
+            out.push(Vertex3D { position: v.position, color });
         }
-        let [cx, cy, cz] = v.position;
-        out.extend(unit.iter().map(|o| Vertex3D { position: [cx + o[0], cy + o[1], cz + o[2]], color }));
+    }
+    out
+}
+
+/// What a renderer draws for `mesh` instanced over `instances` (cce-ui's
+/// `SceneDraw::instances`): the mesh once per instance, each instance's
+/// position added to every vertex and its colour multiplying theirs — the
+/// same arithmetic as the shader, so the same to the bit. For tests, and
+/// for reading what a marker draw shows.
+pub fn expand_instances(mesh: &[Vertex3D], instances: &[Vertex3D]) -> Vec<Vertex3D> {
+    let mut out = Vec::with_capacity(mesh.len() * instances.len());
+    for i in instances {
+        let [cx, cy, cz] = i.position;
+        let [r, g, b] = i.color;
+        out.extend(mesh.iter().map(|v| Vertex3D {
+            position: [v.position[0] + cx, v.position[1] + cy, v.position[2] + cz],
+            color: [v.color[0] * r, v.color[1] * g, v.color[2] * b],
+        }));
     }
     out
 }
