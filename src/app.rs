@@ -1267,38 +1267,6 @@ pub fn strip_meta_children(root: &mut FsNode) {
 /// lowercased, as Houdini names its nodes (`sphere1`, `camera1`), since a
 /// path convention with exceptions is two conventions. Empty comes back as
 /// `node`, since a node with no name has no path at all.
-/// One attribute value as spreadsheet cells: a cell a component, `-` for
-/// each when there is none.
-fn push_cells(row: &mut Vec<String>, value: Option<crate::detail::AttribValue>, components: usize) {
-    match value {
-        Some(crate::detail::AttribValue::Float(f)) => row.push(fmt4(f)),
-        Some(crate::detail::AttribValue::Int(i)) => row.push(i.to_string()),
-        Some(crate::detail::AttribValue::Float2(a)) => row.extend(a.iter().map(|v| fmt4(*v))),
-        Some(crate::detail::AttribValue::Float3(a)) => row.extend(a.iter().map(|v| fmt4(*v))),
-        Some(crate::detail::AttribValue::Float4(a)) => row.extend(a.iter().map(|v| fmt4(*v))),
-        None => row.extend(std::iter::repeat("-".to_string()).take(components)),
-    }
-}
-
-/// `format!("{:.4}", x)`, character for character, several times faster:
-/// an f32 times ten thousand is exact in an f64 (24 bits of mantissa and
-/// 14), so rounding it half to even is rounding the exact decimal value,
-/// which is what the formatter does. What does not fit an integer goes to
-/// the formatter. `fmt4_is_format_4` holds the two equal.
-pub(crate) fn fmt4(x: f32) -> String {
-    if !x.is_finite() || x.abs() >= 1.0e14 {
-        return format!("{:.4}", x);
-    }
-    use std::fmt::Write;
-    let y = (x.abs() as f64 * 10000.0).round_ties_even() as u64;
-    let mut s = String::with_capacity(12);
-    if x.is_sign_negative() {
-        s.push('-');
-    }
-    let _ = write!(s, "{}.{:04}", y / 10000, y % 10000);
-    s
-}
-
 /// The playbar's cache strip, frame by frame over `start..=end` and run
 /// together: a frame is CACHED when every simnet in the tree has it in hand
 /// (at or before its start it shows its seed, which every simnet has), STALE
@@ -7736,7 +7704,7 @@ impl State {
     }
 
 
-pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<Vec<String>>) {
+pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Vec<cce_ui::widget::SheetColumn>) {
     // One row per POINT, not per triangle corner. The soup listed the same
     // place once for every face touching it — a sphere came to 2304 rows for
     // 362 places — and the row number meant nothing a user could point at.
@@ -7815,37 +7783,59 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
     }
 
-    // Each column's store looked up once, not once a row: a playing
-    // simulation refills the table every frame, and at ten thousand points
-    // the lookups and `format!` were most of a frame (see `fmt4`).
-    let point_cols: Vec<(Option<&crate::detail::AttribData>, usize)> =
-        attribs.iter().map(|(name, ty)| (geom.points().get(name), ty.components())).collect();
-    let detail_cells: Vec<String> = {
-        let mut cells = Vec::new();
-        for (name, ty) in &detail {
-            push_cells(&mut cells, geom.detail().value(name, 0), ty.components());
+    // The table as COLUMNS of values (cce-ui's `SheetColumn`): the widget
+    // writes the cells it paints, so a refill is a copy of the values. A
+    // playing simulation refills the table every frame, and until
+    // 2026-10-07 every cell of every row was formatted into a String here
+    // for a pane that shows thirty rows — at ten thousand points most of
+    // what the table cost a frame.
+    use cce_ui::widget::SheetColumn;
+    let n = geom.num_points();
+    let float = |values: Vec<f32>| SheetColumn::Float { values, decimals: 4 };
+    // A value's components, a column each, `rows` long.
+    let value_columns = |value: crate::detail::AttribValue, rows: usize| -> Vec<SheetColumn> {
+        use crate::detail::AttribValue as V;
+        match value {
+            V::Float(f) => vec![float(vec![f; rows])],
+            V::Int(i) => vec![SheetColumn::Int(vec![i as i64; rows])],
+            V::Float2(a) => a.iter().map(|&v| float(vec![v; rows])).collect(),
+            V::Float3(a) => a.iter().map(|&v| float(vec![v; rows])).collect(),
+            V::Float4(a) => a.iter().map(|&v| float(vec![v; rows])).collect(),
         }
-        cells
     };
-    let width = headers.len();
-    let mut rows = Vec::with_capacity(geom.num_points());
-    for p in 0..geom.num_points() {
-        let pos = geom.positions()[p];
-        let col = geom.color(p);
-        let mut row = Vec::with_capacity(width);
-        row.push(p.to_string());
-        row.extend(groups.iter().map(|g| if geom.points().in_group(g, p) { "1" } else { "0" }.to_string()));
-        row.extend([fmt4(pos[0]), fmt4(pos[1]), fmt4(pos[2]), fmt4(col[0]), fmt4(col[1]), fmt4(col[2])]);
-        // A column covers its whole class, so there is no "this element
-        // does not have it" case left to render as a dash.
-        for (data, components) in &point_cols {
-            push_cells(&mut row, data.and_then(|d| d.get(p)), *components);
+    let mut columns = Vec::with_capacity(headers.len());
+    columns.push(SheetColumn::Int((0..n as i64).collect()));
+    for g in &groups {
+        columns.push(SheetColumn::Int((0..n).map(|p| geom.points().in_group(g, p) as i64).collect()));
+    }
+    for k in 0..3 {
+        columns.push(float(geom.positions().iter().map(|p| p[k]).collect()));
+    }
+    let colors: Vec<[f32; 3]> = (0..n).map(|p| geom.color(p)).collect();
+    for k in 0..3 {
+        columns.push(float(colors.iter().map(|c| c[k]).collect()));
+    }
+    // A column covers its whole class, so there is no "this element does not
+    // have it" case left to render as a dash.
+    for (name, _) in &attribs {
+        use crate::detail::AttribData as D;
+        match geom.points().get(name) {
+            Some(D::Float(v)) => columns.push(float(v.clone())),
+            Some(D::Int(v)) => columns.push(SheetColumn::Int(v.iter().map(|&i| i as i64).collect())),
+            Some(D::Float2(v)) => columns.extend((0..2).map(|k| float(v.iter().map(|c| c[k]).collect()))),
+            Some(D::Float3(v)) => columns.extend((0..3).map(|k| float(v.iter().map(|c| c[k]).collect()))),
+            Some(D::Float4(v)) => columns.extend((0..4).map(|k| float(v.iter().map(|c| c[k]).collect()))),
+            None => {}
         }
-        row.extend(detail_cells.iter().cloned());
-        rows.push(row);
+    }
+    for (name, ty) in &detail {
+        match geom.detail().value(name, 0) {
+            Some(value) => columns.extend(value_columns(value, n)),
+            None => columns.extend((0..ty.components()).map(|_| SheetColumn::Text(vec!["-".to_string(); n]))),
+        }
     }
 
-    (headers, rows)
+    (headers, columns)
 }
 
     pub fn update_active_camera_rotation(&mut self, d_yaw: f32, d_pitch: f32) -> bool {
@@ -8200,7 +8190,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         let mut spreadsheet_update = None;
         if self.show_spreadsheet && !cache_hit {
             let mut headers = Vec::new();
-            let mut rows = Vec::new();
+            let mut columns = Vec::new();
             // Where each row's point is: a row is a point, by index.
             let mut points: Vec<[f32; 3]> = Vec::new();
 
@@ -8208,13 +8198,11 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let mut ocl_error = None;
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
                 if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.fs_root, node, &mut ocl_error, &mut sim) {
-                    let (h, r) = Self::geometry_to_spreadsheet_data(&geom);
-                    headers = h;
-                    rows = r;
+                    (headers, columns) = Self::geometry_to_spreadsheet_columns(&geom);
                     points = geom.positions().to_vec();
                 }
             }
-            spreadsheet_update = Some((headers, rows, points));
+            spreadsheet_update = Some((headers, columns, points));
         }
 
         // Selected-Group viewport markers: while the selection is a Group
@@ -8248,14 +8236,14 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         // `selected_node` is not read past here.
         self.sim_cache = sim_cache;
 
-        if let Some((headers, rows, points)) = spreadsheet_update {
+        if let Some((headers, columns, points)) = spreadsheet_update {
             // The selection is of rows by index, which are points of ONE
             // node's output: it stands across a frame or an edit, and goes
             // when the table becomes another node's.
             if current_name != self.last_spreadsheet_node_name {
                 self.spreadsheet_mut().set_selected_rows(&[]);
             }
-            self.spreadsheet_mut().set_spreadsheet_data(headers, rows);
+            self.spreadsheet_mut().set_spreadsheet_columns(headers, columns);
             self.spreadsheet_points = points;
             self.rebuild_row_markers();
             self.last_spreadsheet_node_name = current_name;

@@ -1360,6 +1360,7 @@ impl<'a> EvalSim<'a> {
 /// Hash of everything a simnet's solve depends on: its own subtree (so editing any
 /// node in the chain restarts the sim) and the seed geometry (so an upstream change
 /// does too).
+#[cfg(test)]
 fn sim_solve_key(simnet: &FsNode, seed: &Detail) -> u64 {
     sim_solve_key_of(chain_hash(simnet), seed)
 }
@@ -7411,6 +7412,7 @@ pub fn resolve_simnet_geometry_with_errors(
     // speed control.
     let dt = 1.0 / substeps as f32;
 
+    let resumed_at = done;
     while done < due {
         for _ in 0..substeps {
             // The step boundary, and the contract that makes a chain
@@ -7457,7 +7459,14 @@ pub fn resolve_simnet_geometry_with_errors(
         }
     }
 
-    if caching && due > 0 {
+    // Written when this call SOLVED something — a frame the disk cannot
+    // already hold. Until 2026-10-07 it was written on every evaluation,
+    // a resume from memory included: the scene, the spreadsheet and the
+    // pull arrows each evaluate the simnet every frame, so a Cache-on
+    // simulation wrote its whole state to disk several times a frame,
+    // even replaying frames solved long before — at ten thousand points
+    // most of what the spreadsheet's refresh cost.
+    if caching && due > 0 && done > resumed_at {
         write_sim_cache(&target.id, key, due, &state, &prev_frame);
     }
     sim.cache.entries.insert(
@@ -10167,6 +10176,42 @@ mod simnet_tests {
         let mut err = None;
         let fed = simnet_step_feedback(&root, &root.children[1], &mut visited, &mut err, &mut sim).expect("solved");
         assert!((min_x(&fed) - (min_x(&shown) - 1.0)).abs() < 1e-4, "the feedback is one pull short of the display");
+    }
+
+    /// A Cache-on simnet writes its state to disk when it SOLVES a frame,
+    /// and not when it is evaluated again at a frame it holds — which the
+    /// scene, the spreadsheet and the pull arrows each do every frame, and
+    /// which until 2026-10-07 wrote the whole state to disk each time.
+    #[test]
+    fn a_cached_simnet_writes_to_disk_only_when_it_solves() {
+        let sphere = node("id-sphere", "Sphere 1", "sphere", vec![param("radius", "0.5")], vec![]);
+        let inner_input = node("id-in", "input1", "input", vec![], vec![]);
+        let pull = node("id-pull", "pull1", "attribute", vec![
+            param("input", "input1"), param("operation", "Modify"), param("attribute_name", "Pos"),
+            param("value", "1.00:0.00:0.00"), param("combine", "Add"), param("group", ""),
+        ], vec![]);
+        let inner_output = node("id-out", "output1", "output", vec![param("input", "pull1")], vec![]);
+        let sim_node = node("id-sim-disk-writes", "Simnet 1", "simnet",
+            vec![param("input", "Sphere 1"), param("cache", "true")], vec![inner_input, pull, inner_output]);
+        let root = node("id-root", "root", "node", vec![], vec![sphere, sim_node]);
+        let simnet = &root.children[1];
+        let path = sim_cache_path(&simnet.id).expect("a cache path");
+        let _ = std::fs::remove_file(&path);
+        let mut cache = SimCache::default();
+        let mut at = |frame: i32| {
+            let mut sim = EvalSim::new(frame, 1, &mut cache);
+            resolve_simnet_geometry_with_errors(&root, simnet, &mut Vec::new(), &mut None, &mut sim).expect("solves");
+        };
+        at(5);
+        assert!(path.exists(), "solving wrote the file");
+        std::fs::remove_file(&path).unwrap();
+        at(5);
+        at(3);
+        at(5);
+        assert!(!path.exists(), "frames already solved are not written again");
+        at(6);
+        assert!(path.exists(), "a frame solved is");
+        let _ = std::fs::remove_file(&path);
     }
 
     /// A Cache-on simnet resumed from DISK exactly at the frame asked for

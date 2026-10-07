@@ -6685,7 +6685,11 @@ mod tests {
         let render_verts = crate::geometry::detail_vertices(&geom);
         assert!(render_verts.is_empty(), "two loose points make no triangles");
 
-        let (headers, rows) = State::geometry_to_spreadsheet_data(&geom);
+        let (headers, columns) = State::geometry_to_spreadsheet_columns(&geom);
+        // The cells as the table writes them when it paints them.
+        let rows: Vec<Vec<String>> = (0..geom.num_points()).map(|r| columns.iter().map(|c| c.cell(r)).collect()).collect();
+        assert_eq!(columns.len(), headers.len(), "a column a header");
+        assert!(columns.iter().all(|c| c.len() == geom.num_points()), "a cell a row");
         assert_eq!(
             headers,
             vec![
@@ -18192,31 +18196,6 @@ mod tests {
             assert!(state.tick_frame(1.0 / 60.0), "a playing tick asks for a redraw");
             assert_eq!(state.sim_frame(), start + i, "the playbar advanced a frame");
             assert_eq!(state.last_sim_frame, state.sim_frame(), "and the scene was built for that frame, not the last one");
-        }
-    }
-
-    /// The spreadsheet's fast float formatter writes what `{:.4}` writes:
-    /// over every exponent, the exact ties (multiples of 1/2^k that land
-    /// on a fifth decimal of 5), negative zero and what rounds to it, and
-    /// the values too large for the integer path.
-    #[test]
-    fn fmt4_is_format_4() {
-        let mut check = |x: f32| assert_eq!(crate::app::fmt4(x), format!("{:.4}", x), "{x:e} ({:#x})", x.to_bits());
-        for x in [0.0, -0.0, 0.00005, -0.00005, 0.03125, -0.03125, 0.15625, 1.00005, 2.5e-5, 1.0e13, 9.9e13, 1.0e14, 3.0e38, f32::MIN_POSITIVE, 1.0e-45, f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
-            check(x);
-        }
-        // Ties: k/2^n with a 5 in the fifth decimal.
-        for n in 1..=24 {
-            for k in 0..2000u32 {
-                check(k as f32 / (1u32 << n) as f32);
-                check(-(k as f32) / (1u32 << n) as f32);
-            }
-        }
-        // And a sweep through the bit patterns.
-        let mut bits = 0u32;
-        while bits < u32::MAX - 997 {
-            check(f32::from_bits(bits));
-            bits += 997;
         }
     }
 

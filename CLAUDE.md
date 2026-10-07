@@ -2280,7 +2280,13 @@ selection left it showing the values from before. A refresh keeps the
 spreadsheet's scroll and sort. On the project this was measured on, a scrub
 back over sixty frames from frame 120 went from a mean of 15 ms a frame
 to 1.3, and from frame 240 from 67 to 4. The disk cache (`Cache` on the
-simnet) is unchanged and still holds the one latest frame.
+simnet) still holds one frame: the last one SOLVED. It is written only
+when an evaluation steps (since 2026-10-07): until then every evaluation
+wrote it, a resume from memory included, and since the scene, the
+spreadsheet and the pull arrows each evaluate the simnet every frame, a
+Cache-on simulation wrote its whole state to disk several times a frame
+even while replaying frames solved long before — 4 ms of each of those
+evaluations at 11k points. `a_cached_simnet_writes_to_disk_only_when_it_solves`.
 
 ### Selected spreadsheet rows are marked in the scene
 
@@ -2309,7 +2315,7 @@ wears and at Group Marker Size.
 `selected_spreadsheet_rows_are_marked_in_the_scene` drives it by pointer.
 
 **The point groups are the spreadsheet's first columns** after the
-point's number (`geometry_to_spreadsheet_data`, since 2026-09-29):
+point's number (`geometry_to_spreadsheet_columns`, since 2026-09-29):
 `group:<name>`, 1 for a member and 0 for the rest. They were `g:` columns
 after every attribute, the thirteenth column of a sphere's table and off
 the right of any pane, and blank for a point outside the group — so a
@@ -3417,12 +3423,23 @@ over the start. With Repeat off, landing on the far end stops there.
 What a replayed frame costs past the solve (measured 2026-10-06 on the
 user's project, 8k points, markers, two visualizers and the spreadsheet
 on): the spreadsheet's refill and the point markers were most of it, and
-both got cheaper without changing what they show — the table looks each
-column up once and formats through `app::fmt4` (`{:.4}` to the
-character, `fmt4_is_format_4`), and `points_vertices` works the marker
-sphere out once and moves it to each point. A replayed frame went from
-140 ms to 24 there. What is left grows with the mesh: the visualizers'
-copy of the scene, and the table.
+both got cheaper without changing what they show — `points_vertices`
+works the marker sphere out once and moves it to each point (and then
+the markers were instanced, below). A replayed frame went from 140 ms to
+24 there. What is left grows with the mesh: the visualizers' copy of the
+scene.
+
+**The spreadsheet is columns of values** (2026-10-07, cce-ui's
+`SheetColumn` and `set_spreadsheet_columns`): `geometry_to_spreadsheet_columns`
+copies each attribute's values into a typed column (`Int` for the point
+number, the groups and int attributes; `Float` at four decimals for the
+rest; a detail attribute repeated down its column), and the widget writes
+the cells it PAINTS — thirty rows, not ten thousand — and sorts by value.
+Until then every cell of every row was a `String` formatted on every
+refill, which a playing simulation does every frame. With the disk-cache
+fix above, a refresh of the table on a selected simnet at 11k points went
+from about 9 ms to 1.1 (evaluation 0.37, the columns 0.7, the widget
+0.01); the cells read as they did (`{:.4}`, the same strings).
 
 **The markers are instanced** (the same day, cce-ui's
 `SceneDraw::instances`): every kind — Show Point Markers, Show Vertex
