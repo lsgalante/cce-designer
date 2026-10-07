@@ -7392,12 +7392,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     let mut columns = Vec::with_capacity(headers.len());
     columns.push(SheetColumn::Int((0..n as i64).collect()));
     for g in &groups {
-        columns.push(SheetColumn::Int((0..n).map(|p| geom.points().in_group(g, p) as i64).collect()));
+        // The membership found once: `in_group` at every point looked the
+        // group up by name each time, most of what the table cost a frame.
+        let members = geom.points().group(g).unwrap_or(&[]);
+        columns.push(SheetColumn::Int((0..n).map(|p| members.get(p).copied().unwrap_or(false) as i64).collect()));
     }
     for k in 0..3 {
         columns.push(float(geom.positions().iter().map(|p| p[k]).collect()));
     }
-    let colors: Vec<[f32; 3]> = (0..n).map(|p| geom.color(p)).collect();
+    let colors = geom.point_colors();
     for k in 0..3 {
         columns.push(float(colors.iter().map(|c| c[k]).collect()));
     }

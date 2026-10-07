@@ -3552,6 +3552,16 @@ markers (1.0) and the visualizers' copy and apply (1.0) are what is left,
 with the point markers' duplicate check (0.8 of their 1.1). A fresh 8 MB
 buffer a frame costs 0.2 ms, so reusing buffers was not worth it.
 
+**The spreadsheet's refill, every frame of a replay with it shown**
+(the same day): `geometry_to_spreadsheet_columns` read each point's colour
+and each group's membership by name (`color(p)`, `in_group(g, p)`); it
+reads the columns once now (`point_colors`, `AttribStore::group`). And
+cce-ui's `SheetColumn::max_chars`, the width pass the widget runs over
+every value of every column, is branch-free and spread over the columns
+on several threads for a large table. A refill with a simnet selected at
+57k points: 3.0 ms a frame to 1.6 — the evaluation of the selected node,
+which copies its state out of the cache, the 0.6 left.
+
 **The markers are instanced** (the same day, cce-ui's
 `SceneDraw::instances`): every kind — Show Point Markers, Show Vertex
 Markers, the selected group's, the marked groups' and the spreadsheet

@@ -567,6 +567,12 @@ impl AttribStore {
         }
     }
 
+    /// A group's membership, an element a flag: what [`in_group`](Self::in_group)
+    /// reads, the group found once — for a reader walking every element.
+    pub fn group(&self, name: &str) -> Option<&[bool]> {
+        self.groups.get(name).map(Vec::as_slice)
+    }
+
     pub fn in_group(&self, name: &str, i: usize) -> bool {
         self.groups.get(name).and_then(|m| m.get(i)).copied().unwrap_or(false)
     }
