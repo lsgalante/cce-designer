@@ -2729,8 +2729,10 @@ spec / shininess / curvature live as `relief.spec` / `.shininess` /
 `.curvature`, not under `plate`. The network pane is two layers: the
 `PassivePlate` above (no longer drawn: the network has no plate) and the
 Graph on top, which has NO fill of its own (since 2026-09-29): its cells
-are whatever it is painted on — the scene — and `style.surface.graph` sets
-only the lines (`grid_color`, `line_width`), their `opacity`, and `blur`.
+are whatever it is painted on — the scene. `style.surface.graph` set only
+its lines (`grid_color`, `line_width`), their `opacity`, and `blur` — and
+the lines are not drawn since 2026-10-07 (below), so in this app the first
+two do nothing.
 Until then the graph filled itself with `cell_color` (chosen by a
 `uniform_background` flag this app hard-coded true) and drew its lines in
 `gap_color`; all three keys are retired, reported by path at load and not
@@ -3220,10 +3222,14 @@ baseline Reset Zoom returns to and Frame All scales down from (never past
 100%); `MIN_PITCH_*` / `MAX_PITCH_*` are the old node-body zoom limits
 expressed on the pitch.
 
-The widget paints the lattice as lines (`paint_grid`: `grid_color`, network
-opacity, `style.surface.graph.line_width` px, each line centred on its
-coordinate so the width changes nothing about where anything sits) with the
-two lines through the (0, 0) crossing heavier as the origin axes. Its
+**The lattice is not drawn** (since 2026-10-07, at the user's request).
+cce-ui's `Graph::paint_grid` — lines in `grid_color` at the network
+opacity, `style.surface.graph.line_width` px, with the two through the
+(0, 0) crossing heavier as the origin axes — is not called, the widget is
+told `set_show_network_grid(false)`, and the always-true
+`network_grid_visible` flag and the `graph_grid_color` plumbing that fed it
+are gone. Everything the lattice MEANS stays: where a node stands, the
+snap, the pitch and zoom, the grid cursor and its region. Its
 cell-and-gap setters (`set_grid_sizes` / `set_skipped_sizes`) survive as a
 description of the same lattice for cce-files and cce-graph, which still
 speak it; this app sets the pitch.
@@ -3232,10 +3238,10 @@ speak it; this app sets the pitch.
 
 The network's wires are drawn by cce-ui's `Graph::paint_wires` (see its
 CLAUDE.md, "A graph's wires are strokes in a style"), called in
-`render.rs` right after `paint_grid`, and come in four styles: Orthogonal,
+`render.rs` under the node bodies, and come in four styles: Orthogonal,
 Rounded, Bezier, Straight. **Node Wire Style** is a dialog Settings row
-(Alt+D, "wire"), a `Ctl::Choice` whose value lives on the two Graph widgets
-themselves (`State::set_node_wire_style` sets both); it persists as
+(Alt+D, "wire"), a `Ctl::Choice` whose value lives on the Graph widget
+itself (`State::set_node_wire_style`); it persists as
 `ViewportSettings::node_wire_style`, so in state.kdl and with the project's
 display block. Empty — every file from before the row — hands the choice
 to config.kdl's `style.surface.graph.node.wire_style`, and the row then

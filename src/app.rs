@@ -2928,9 +2928,6 @@ pub struct State {
     pub vertex_count_spheres: u32,
     pub node_color: [f32; 4],
     pub grid_color: [f32; 3],
-    /// The network lattice's line colour (`style.surface.graph.grid_color`);
-    /// `grid_color` above is the viewport's ground grid.
-    pub graph_grid_color: [f32; 3],
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
@@ -3140,7 +3137,6 @@ pub struct State {
     /// cell it can land on (cce-ui's `Graph::drag_update`). Not read from
     /// `style.surface.graph.grid_snap`.
     pub grid_snap_enabled: bool,
-    pub network_grid_visible: bool,
     /// The network grid's pitch at the current zoom — centre of one grid
     /// line to the centre of the next, per axis. The grid's one size; a
     /// node's (col, row) is the intersection its centre sits on.
@@ -8263,7 +8259,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             vertex_count_spheres: 0,
             node_color: cce_ui::color::graph_node_color(),
             grid_color: settings.viewport.grid_color,
-            graph_grid_color: cce_ui::color::graph_grid_color(),
             origin_size: settings.viewport.origin_size,
             camera_pivot_size: settings.viewport.camera_pivot_size,
             fs_root: fs_root.clone(),
@@ -8336,7 +8331,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             scale,
             square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
-            network_grid_visible: true,
             grid_base: cfg_grid,
             grid_pitch_x: cfg_grid.pitch_x,
             grid_pitch_y: cfg_grid.pitch_y,
@@ -8735,7 +8729,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let active_node_area_y = self.positions[CONTENT_IDX].1;
         let active_node_area_x = self.positions[CONTENT_IDX].0;
 
-        let network_grid_visible = self.network_grid_visible;
         let grid_pitch_x = self.grid_pitch_x;
         let grid_pitch_y = self.grid_pitch_y;
         let (node_w, node_h) = self.node_size();
@@ -8743,7 +8736,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let pan_y = self.pan_y;
         let grid_snap_enabled = self.grid_snap_enabled;
         let graph = self.graph_mut();
-        graph.set_show_network_grid(network_grid_visible);
+        // The lattice is not drawn (since 2026-10-07): the widget is told
+        // so, though the designer never asks it to paint the grid either.
+        graph.set_show_network_grid(false);
         graph.set_grid_pitch(grid_pitch_x, grid_pitch_y);
         graph.set_node_size(node_w, node_h);
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
@@ -8751,7 +8746,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
             graph.set_network_opacity(self.network_opacity);
             graph.set_node_opacity(self.node_opacity);
-            graph.set_grid_color(self.graph_grid_color);
         }
         if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
             menubar.set_network_opacity(self.network_opacity);
@@ -8807,7 +8801,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         
         let opacity = cce_ui::color::graph_opacity();
         let node_opacity = cce_ui::color::graph_node_opacity();
-        let graph_grid_color = cce_ui::color::graph_grid_color();
         let node_color = cce_ui::color::graph_node_color();
         let node_compression = cce_ui::config::cached_config()
             .pointer("/style/surface/graph/node_compression")
@@ -8835,10 +8828,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
         if (self.node_opacity - node_opacity).abs() > 0.001 {
             self.node_opacity = node_opacity;
-            changed = true;
-        }
-        if self.graph_grid_color != graph_grid_color {
-            self.graph_grid_color = graph_grid_color;
             changed = true;
         }
         if self.node_color != node_color {
@@ -12073,7 +12062,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                          self.viewport_mut().grid_color = settings.viewport.grid_color;
                          self.origin_size = settings.viewport.origin_size;
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
-                         self.graph_grid_color = cce_ui::color::graph_grid_color();
 
                         colors::set_node_color(self.node_color);
 

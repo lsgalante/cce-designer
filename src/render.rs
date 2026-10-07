@@ -548,11 +548,12 @@ impl State {
                 let mut bodies: Vec<(f32, f32, f32, f32, bool, bool)> = Vec::new();
                 let mut overlays: Vec<(f32, f32, f32, f32, [f32; 4])> = Vec::new();
                 let mut seen_node = false;
-                // The grid lines (flat, gap colour at the network opacity)
-                // and the origin axes, under the wires and nodes; the cells
-                // are the pane plate itself. Then the wires, which are
-                // strokes in the node wire style and not among the quads.
-                g.paint_grid(clip, pc);
+                // The wires, strokes in the node wire style and not among
+                // the quads, under the nodes. (The lattice's lines and its
+                // origin axes were drawn under them, by `paint_grid`, until
+                // 2026-10-07, when the grid's visual was removed; the lattice
+                // itself — where nodes stand, snapping, the grid cursor — is
+                // unchanged.)
                 g.paint_wires(clip, pc);
                 for (qx, qy, qw, qh, qc, cell) in g.geometry_quads_tagged(clip) {
                     if g.is_node_rect(qx, qy, qw, qh) {
