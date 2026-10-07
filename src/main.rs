@@ -18019,6 +18019,83 @@ mod tests {
         }
     }
 
+    /// The playbar's cache strip, as a rule: a frame is cached when every
+    /// simnet in the tree holds it, stale when one of them holds it from
+    /// the chain as it was — before an edit the solve went on across, or
+    /// anywhere in a solve whose simnet was edited since — and in no run
+    /// otherwise. A solve of a simnet no longer in the tree counts for
+    /// nothing.
+    #[test]
+    fn the_playbar_cache_runs_say_what_is_cached_and_what_is_stale() {
+        use crate::geometry::SolvedRange;
+        use crate::playbar::{CacheRun, CacheState::*};
+        let run = |from, to, state| CacheRun { from, to, state };
+        let solve = |id: &str, start, reach, stale_to| SolvedRange { id: id.into(), start, reach, stale_to, chain: 7 };
+        let chains = |ids: &[&str]| ids.iter().map(|i| (i.to_string(), 7u64)).collect::<std::collections::HashMap<_, _>>();
+        let runs = crate::app::playbar_cache_runs;
+
+        assert_eq!(runs(&[solve("a", 1, 20, None)], &chains(&["a"]), 1, 100), vec![run(1, 20, Cached)]);
+        assert_eq!(runs(&[solve("a", 1, 30, Some(20))], &chains(&["a"]), 1, 100), vec![run(1, 1, Cached), run(2, 20, Stale), run(21, 30, Cached)]);
+        // Edited since it was solved: stale up to where it reached; the seed is the seed.
+        let mut edited = chains(&["a"]);
+        edited.insert("a".into(), 8);
+        assert_eq!(runs(&[solve("a", 1, 30, None)], &edited, 1, 100), vec![run(1, 1, Cached), run(2, 30, Stale)]);
+        // Two simnets: a frame is held when both hold it, and before a
+        // simnet's start it holds its seed.
+        assert_eq!(
+            runs(&[solve("a", 1, 30, None), solve("b", 10, 20, Some(15))], &chains(&["a", "b"]), 1, 100),
+            vec![run(1, 10, Cached), run(11, 15, Stale), run(16, 20, Cached)]
+        );
+        // Deleted: not in the tree, nothing to show; and the range clips.
+        assert!(runs(&[solve("gone", 1, 30, None)], &chains(&["a"]), 1, 100).is_empty());
+        assert_eq!(runs(&[solve("a", 1, 30, None)], &chains(&["a"]), 5, 12), vec![run(5, 12, Cached)]);
+    }
+
+    /// The playbar shows what a simnet's solve holds as it is played, edited
+    /// and scrubbed: the frames played are cached; an edit at frame 20 makes
+    /// 2–20 stale (the solve goes on from the frame in hand); playing on
+    /// caches the frames after it; and a scrub back clears the stale frames,
+    /// the solve beginning again from the seed.
+    #[test]
+    fn the_playbar_shows_the_cached_and_the_stale_frames() {
+        use crate::playbar::{CacheRun, CacheState::*};
+        let run = |from, to, state| CacheRun { from, to, state };
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        state.rebuild_positions();
+        state.apply_layout();
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        let slot = state.current_dir().children.iter().position(|c| c.name == "sim").unwrap();
+        if !state.current_dir().children[slot].geometry_visible {
+            state.apply_action(McpAction::ToggleGeometry { slot }, &mut redraw).unwrap();
+        }
+        let go = |state: &mut State, frame: f32| {
+            state.slots.playbar.inner_mut().current_frame = frame;
+            state.tick_frame(1.0 / 60.0);
+        };
+        let strip = |state: &State| state.slots.playbar.inner().cache.clone();
+        for f in 1..=20 {
+            go(&mut state, f as f32);
+        }
+        assert_eq!(strip(&state), vec![run(1, 20, Cached)]);
+
+        state.apply_action(McpAction::SetParam { slot, name: "substeps".into(), value: "2".into() }, &mut redraw).unwrap();
+        state.tick_frame(1.0 / 60.0);
+        assert_eq!(strip(&state), vec![run(1, 1, Cached), run(2, 20, Stale)], "the frames solved before the edit are stale");
+
+        for f in 21..=25 {
+            go(&mut state, f as f32);
+        }
+        assert_eq!(strip(&state), vec![run(1, 1, Cached), run(2, 20, Stale), run(21, 25, Cached)]);
+
+        go(&mut state, 10.0);
+        assert_eq!(strip(&state), vec![run(1, 10, Cached)], "a scrub back solves again from the seed");
+        // A scrub back in a clean solve keeps the frame it left.
+        go(&mut state, 5.0);
+        assert_eq!(strip(&state), vec![run(1, 10, Cached)]);
+    }
+
     /// Repeat off: playback stops ON the last frame instead of wrapping,
     /// in either direction, and a play press on a timeline stopped at its
     /// far end restarts from the near one. The setting is a palette toggle

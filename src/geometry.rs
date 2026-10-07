@@ -1117,11 +1117,18 @@ struct SimSolve {
     /// from the nearest one behind it instead of the seed. See
     /// [`Checkpoint`].
     checkpoints: Checkpoints,
-    /// Whether the solve went on across an edit (a key change) from the
-    /// frame then in hand, so its earlier frames are of the chain as it
-    /// was: a scrub back does not keep the frame it leaves, and the solve
-    /// begins again from the seed.
-    mixed: bool,
+    /// Where the solve went on across an edit (a key change): the frame
+    /// then in hand, so it and the frames before it are of the chain as it
+    /// was — STALE, which the playbar shows. `None` for a solve of one key
+    /// throughout. A scrub back from a mixed solve does not keep the frame
+    /// it leaves, and the solve begins again from the seed.
+    edited_at: Option<i32>,
+    /// The timeline frame the solve shows its seed at (its Start Frame),
+    /// so what it holds can be put on the timeline.
+    start: i32,
+    /// [`chain_hash`] of the simnet as solved: what the app compares the
+    /// tree with to see that an edit has not been solved yet.
+    chain: u64,
 }
 
 /// A frame of a solve, kept in memory: its state and what its last substep
@@ -1217,6 +1224,9 @@ impl Checkpoints {
 #[derive(Default)]
 pub struct SimCache {
     entries: std::collections::HashMap<String, SimSolve>,
+    /// Moved by every solve put back, so a reader of [`SimCache::solved`]
+    /// can tell when to read again.
+    revision: u64,
     /// Runs of a chain since this cache was made — every substep of every
     /// simnet. What a solve COST, for the tests that a scrub resumes and
     /// does not re-solve.
@@ -1226,6 +1236,7 @@ pub struct SimCache {
 impl SimCache {
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.revision += 1;
     }
 
     /// See [`SimCache::steps_run`].
@@ -1233,11 +1244,53 @@ impl SimCache {
         self.steps_run
     }
 
+    /// See [`SimCache::revision`].
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// What each simnet's solve holds, on the timeline: every frame from
+    /// its start up to the furthest one in hand or kept as a checkpoint is
+    /// cached — the latest state and the checkpoints between them put any
+    /// of those frames within an interval's steps — and the frames up to
+    /// an edit taken in mid-solve are stale.
+    pub fn solved(&self) -> Vec<SolvedRange> {
+        self.entries
+            .iter()
+            .map(|(id, e)| {
+                let reach = e.checkpoints.kept.last().map_or(e.frame, |c| c.frame.max(e.frame));
+                SolvedRange {
+                    id: id.clone(),
+                    start: e.start,
+                    reach: e.start + reach,
+                    stale_to: e.edited_at.map(|f| e.start + f),
+                    chain: e.chain,
+                }
+            })
+            .collect()
+    }
+
     /// The frames simnet `id` has checkpoints at, ascending — relative to
     /// its start frame, as the solve counts them.
     pub fn checkpoint_frames(&self, id: &str) -> Vec<i32> {
         self.entries.get(id).map(|e| e.checkpoints.kept.iter().map(|c| c.frame).collect()).unwrap_or_default()
     }
+}
+
+/// One simnet's solve as [`SimCache::solved`] reads it, in timeline frames.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SolvedRange {
+    /// The simnet's node id.
+    pub id: String,
+    /// The frame it shows its seed at.
+    pub start: i32,
+    /// The furthest frame cached.
+    pub reach: i32,
+    /// The last stale frame: the solve went on across an edit there, so
+    /// the frames after `start` up to this one are of the chain as it was.
+    pub stale_to: Option<i32>,
+    /// [`chain_hash`] of the simnet as solved.
+    pub chain: u64,
 }
 
 /// The simulation half of an evaluation: which frame the graph is being evaluated
@@ -1304,16 +1357,31 @@ impl<'a> EvalSim<'a> {
 /// node in the chain restarts the sim) and the seed geometry (so an upstream change
 /// does too).
 fn sim_solve_key(simnet: &FsNode, seed: &Detail) -> u64 {
+    sim_solve_key_of(chain_hash(simnet), seed)
+}
+
+/// [`sim_solve_key`] from a [`chain_hash`] already in hand.
+fn sim_solve_key_of(chain: u64, seed: &Detail) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    if let Ok(json) = serde_json::to_string(simnet) {
-        json.hash(&mut h);
-    }
+    chain.hash(&mut h);
     seed.num_points().hash(&mut h);
     for p in seed.positions() {
         for c in p {
             c.to_bits().hash(&mut h);
         }
+    }
+    h.finish()
+}
+
+/// Hash of a simnet's own subtree, the half of [`sim_solve_key`] that needs
+/// no evaluation: a solve whose chain differs from the tree's is of a chain
+/// that has been edited since, and is stale until it is solved again.
+pub fn chain_hash(simnet: &FsNode) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(json) = serde_json::to_string(simnet) {
+        json.hash(&mut h);
     }
     h.finish()
 }
@@ -7211,7 +7279,8 @@ pub fn resolve_simnet_geometry_with_errors(
             .unwrap_or_default()
     };
 
-    let key = sim_solve_key(target, &seed);
+    let chain = chain_hash(target);
+    let key = sim_solve_key_of(chain, &seed);
     // The frame this sim shows its seed at. Empty means "follow the timeline",
     // which is what every sim did before this parameter existed; a number
     // decouples when a simulation starts from when the shot does, so two sims
@@ -7242,14 +7311,14 @@ pub fn resolve_simnet_geometry_with_errors(
             // after it is not resumed from by a scrub BACK: the frame it
             // leaves is not kept, so what was solved before the edit is
             // gone and the solve begins again from the seed.
-            if e.mixed && e.frame > due { None } else { Some(e) }
+            if e.edited_at.is_some() && e.frame > due { None } else { Some(e) }
         } else if e.frame > 0 && e.frame <= due {
-            Some(SimSolve { key, frame: e.frame, state: e.state, prev: e.prev, checkpoints: Checkpoints::default(), mixed: true })
+            Some(SimSolve { key, frame: e.frame, state: e.state, prev: e.prev, checkpoints: Checkpoints::default(), edited_at: Some(e.frame), start: e.start, chain: e.chain })
         } else {
             None
         }
     });
-    let mixed = prior.as_ref().is_some_and(|e| e.mixed);
+    let edited_at = prior.as_ref().and_then(|e| e.edited_at);
     let mut checkpoints = Checkpoints::default();
     let mut cached: Option<(Detail, Detail, i32)> = None;
     if let Some(prior) = prior {
@@ -7358,8 +7427,9 @@ pub fn resolve_simnet_geometry_with_errors(
     }
     sim.cache.entries.insert(
         target.id.clone(),
-        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame, checkpoints, mixed },
+        SimSolve { key, frame: due, state: state.clone(), prev: prev_frame, checkpoints, edited_at, start: start_frame, chain },
     );
+    sim.cache.revision += 1;
     Some(state)
 }
 

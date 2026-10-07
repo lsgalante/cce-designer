@@ -39,8 +39,34 @@ pub struct Playbar {
     /// and bottom, and the lip is drawn over that band. Zero where the
     /// playbar is laid out anywhere else.
     pub frame: f32,
+    /// The frames the simulations hold, as runs: drawn as a strip along
+    /// the foot of the track, in the accent where they are cached and in
+    /// amber where they are stale. Set by the app from the sim cache
+    /// (`State::sync_playbar_cache`); empty with no simulation.
+    pub cache: Vec<CacheRun>,
     dragging: bool,
 }
+
+/// What the simulations hold of a run of frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheState {
+    /// Solved, of the chain as it is: playing or scrubbing here costs at
+    /// most a checkpoint interval's steps.
+    Cached,
+    /// Solved, but of the chain as it was before an edit.
+    Stale,
+}
+
+/// Frames `from..=to` and what is held of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheRun {
+    pub from: i32,
+    pub to: i32,
+    pub state: CacheState,
+}
+
+/// The stale strip's colour: the amber a bypassed node wears.
+const STALE_COLOR: [f32; 4] = [1.0, 0.74, 0.18, 0.85];
 
 const PAD: f32 = 8.0;
 /// Space between two transport buttons.
@@ -67,6 +93,7 @@ impl Playbar {
             repeat: true,
             step_buttons: true,
             frame: 0.0,
+            cache: Vec::new(),
             dragging: false,
         })
     }
@@ -233,6 +260,28 @@ impl Paint for Playbar {
             band_color,
             &|x| cce_ui::widget::input::slider::band_profile(track.x, track.width, track.height, x, &[px], None),
         );
+
+        // What the simulations hold: a strip along the foot of the track,
+        // under the ticks. A frame k is the span k ± 0.5, so a run of one
+        // frame is as wide as a frame and the runs meet edge to edge.
+        if !self.cache.is_empty() {
+            let range = (self.end_frame - self.start_frame).max(1.0);
+            let at = |f: f32| track.x + ((f - self.start_frame) / range * track.width).clamp(0.0, track.width);
+            let accent = colors::highlight_primary_color();
+            let h = 3.0f32.min(track.height * 0.25);
+            for run in &self.cache {
+                let x0 = at(run.from as f32 - 0.5);
+                let x1 = at(run.to as f32 + 0.5);
+                if x1 - x0 <= 0.0 {
+                    continue;
+                }
+                let color = match run.state {
+                    CacheState::Cached => [accent[0], accent[1], accent[2], 0.85],
+                    CacheState::Stale => STALE_COLOR,
+                };
+                ctx.quad(Rect { x: x0, y: track.y + track.height - h, width: x1 - x0, height: h }, color);
+            }
+        }
 
         // Tick marks: frame steps on the 1-2-5 ladder, grown until minors sit
         // >=6px apart. Every 5th step is a major — taller, brighter, and

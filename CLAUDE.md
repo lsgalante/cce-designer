@@ -2354,7 +2354,8 @@ being frames of the solve as it was. So:
 
 - the frame in hand stands as it is, and the edit shows from the next
   frame forward, the solve going on from the state in hand;
-- such a solve is MIXED (`SimSolve::mixed`): its earlier frames are of
+- such a solve is MIXED (`SimSolve::edited_at`, the frame in hand at the
+  edit): its earlier frames are of
   the chain as it was. A scrub BACK from it has no checkpoint to resume
   from and does not keep the frame it leaves (which a scrub back from a
   clean solve does), so it re-solves from the seed with the edit in from
@@ -3338,6 +3339,37 @@ start in either direction; it was a loop of `end - start` that gave the
 end and the start half a frame each, and with the cap would have stepped
 over the start. With Repeat off, landing on the far end stops there.
 `playback_plays_every_frame_however_late_the_tick` is the test.
+
+### The playbar shows what is cached, and what is stale (since 2026-10-06)
+
+A strip along the foot of the playbar's track says what the simulations
+hold: the accent where frames are CACHED, amber (the bypass tint) where
+they are STALE, nothing where they are not held. `SimCache::solved` reads
+each simnet's solve onto the timeline (`SolvedRange`): every frame from
+its start up to the furthest one in hand or kept as a checkpoint is
+cached, since the latest state and the checkpoints put any of them within
+an interval's steps; the frames up to an edit the solve went on across
+(`SimSolve::edited_at` — see "An edit is in from the next frame") are
+stale. `app::playbar_cache_runs` combines the simnets frame by frame —
+a frame is held when every simnet in the tree holds it (at or before its
+start it holds its seed), stale when any holds it stale — and runs it
+together; `State::sync_playbar_cache` hands the runs to
+`Playbar::cache` from the tick, worked out again only when the cache's
+`revision`, the geometry version or the frame range moves. A solve whose
+simnet has been edited since it ran is stale WHOLE: the simnet's
+`chain_hash` (its subtree, the half of the solve key that needs no
+evaluation) differs from the solve's, which is the case of a simnet
+nothing on screen reads, so the edit is in the tree and not yet solved.
+An upstream edit to an unsolved simnet's SEED is not seen that way (the
+seed needs an evaluation); the disk cache is not shown. A solve of a
+simnet deleted since counts for nothing.
+
+So: play to 60, cyan 1–60; edit the chain, amber 2–60 (the seed frame is
+the seed); play on to 100, cyan 61–100 after it; scrub back, and the
+mixed solve begins again from the seed — cyan up to where it stands.
+`the_playbar_cache_runs_say_what_is_cached_and_what_is_stale` is the
+rule, `the_playbar_shows_the_cached_and_the_stale_frames` a simnet
+played, edited and scrubbed. Checked in a shadow session.
 
 ### The playbar's right-click menu
 

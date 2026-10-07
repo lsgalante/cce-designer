@@ -1252,6 +1252,54 @@ pub fn strip_meta_children(root: &mut FsNode) {
 /// lowercased, as Houdini names its nodes (`sphere1`, `camera1`), since a
 /// path convention with exceptions is two conventions. Empty comes back as
 /// `node`, since a node with no name has no path at all.
+/// The playbar's cache strip, frame by frame over `start..=end` and run
+/// together: a frame is CACHED when every simnet in the tree has it in hand
+/// (at or before its start it shows its seed, which every simnet has), STALE
+/// when every one has it and one of them has it from the chain as it was —
+/// before an edit it went on across (`stale_to`), or before an edit not yet
+/// solved (`chains` differing from the solve's) — and in no run otherwise.
+/// A solve of a simnet not in `chains` (deleted since) does not count, and
+/// with none that does there is nothing to show.
+pub fn playbar_cache_runs(
+    solved: &[crate::geometry::SolvedRange],
+    chains: &std::collections::HashMap<String, u64>,
+    start: i32,
+    end: i32,
+) -> Vec<crate::playbar::CacheRun> {
+    use crate::playbar::{CacheRun, CacheState};
+    let sims: Vec<(&crate::geometry::SolvedRange, bool)> =
+        solved.iter().filter_map(|r| chains.get(&r.id).map(|c| (r, *c != r.chain))).collect();
+    let mut runs: Vec<CacheRun> = Vec::new();
+    if sims.is_empty() {
+        return runs;
+    }
+    for f in start..=end {
+        let mut held = Some(CacheState::Cached);
+        for (r, edited) in &sims {
+            let this = if f <= r.start {
+                Some(CacheState::Cached)
+            } else if f > r.reach {
+                None
+            } else if *edited || r.stale_to.is_some_and(|t| f <= t) {
+                Some(CacheState::Stale)
+            } else {
+                Some(CacheState::Cached)
+            };
+            held = match (held, this) {
+                (None, _) | (_, None) => None,
+                (Some(CacheState::Stale), _) | (_, Some(CacheState::Stale)) => Some(CacheState::Stale),
+                _ => Some(CacheState::Cached),
+            };
+        }
+        let Some(state) = held else { continue };
+        match runs.last_mut() {
+            Some(last) if last.state == state && last.to == f - 1 => last.to = f,
+            _ => runs.push(CacheRun { from: f, to: f, state }),
+        }
+    }
+    runs
+}
+
 pub fn sanitize_node_name(name: &str) -> String {
     let lowered = name.to_lowercase();
     let trimmed = lowered.trim();
@@ -3006,6 +3054,11 @@ pub struct State {
     /// Solved simulation states, kept across frames so playing forward costs one
     /// step per frame instead of re-solving from the start frame every redraw.
     pub sim_cache: crate::geometry::SimCache,
+    /// What the playbar's cache strip was last worked out from: the sim
+    /// cache's revision, the geometry version (an edit moves it, and may
+    /// make what is cached stale without solving anything) and the frame
+    /// range. See [`State::sync_playbar_cache`].
+    pub playbar_cache_key: Option<(u64, u64, i32, i32)>,
     /// The GPU image of the page the viewport shows. Owned here, so
     /// replacing a page frees the one it replaces.
     pub page_image: Option<u32>,
@@ -3842,6 +3895,44 @@ impl State {
     /// The timeline's first frame: where every sim sits at its seed.
     pub fn sim_start_frame(&self) -> i32 {
         self.slots.playbar.inner().start_frame.round() as i32
+    }
+
+    /// Hand the playbar what the simulations hold ([`playbar_cache_runs`]),
+    /// worked out again only when the cache, the geometry or the frame
+    /// range has moved. Only simnets still in the tree count, and a
+    /// solve whose simnet has been edited since it ran is stale whole —
+    /// the edit is in the tree but not solved, as for a simnet nothing on
+    /// screen reads. Returns whether the strip changed.
+    pub fn sync_playbar_cache(&mut self) -> bool {
+        let (start, end) = {
+            let pb = self.slots.playbar.inner();
+            (pb.start_frame.round() as i32, pb.end_frame.round() as i32)
+        };
+        let key = (self.sim_cache.revision(), self.rt_geometry_version, start, end);
+        if self.playbar_cache_key == Some(key) {
+            return false;
+        }
+        self.playbar_cache_key = Some(key);
+        let solved = self.sim_cache.solved();
+        let mut chains = std::collections::HashMap::new();
+        if !solved.is_empty() {
+            fn walk(n: &FsNode, solved: &[crate::geometry::SolvedRange], out: &mut std::collections::HashMap<String, u64>) {
+                if n.node_type.eq_ignore_ascii_case("simnet") && solved.iter().any(|r| r.id == n.id) {
+                    out.insert(n.id.clone(), crate::geometry::chain_hash(n));
+                }
+                for c in &n.children {
+                    walk(c, solved, out);
+                }
+            }
+            walk(&self.fs_root, &solved, &mut chains);
+        }
+        let runs = playbar_cache_runs(&solved, &chains, start, end);
+        let pb = self.slots.playbar.inner_mut();
+        if pb.cache == runs {
+            return false;
+        }
+        pb.cache = runs;
+        true
     }
 
     pub fn get_col_geometries(&self) -> (f32, f32, f32, f32, f32, f32) {
@@ -8559,6 +8650,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             network_menu_active: false,
             network_menu_actions: Vec::new(),
             sim_cache: crate::geometry::SimCache::default(),
+            playbar_cache_key: None,
             page_image: None,
             page_shown: None,
             page_composed: None,
@@ -12858,7 +12950,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.read_panel_offsets();
         }
 
-        tick_changed || panned || reclaimed || glow_animating || plate_animating || frame_moved || config_changed || light_moved
+        let cache_moved = self.sync_playbar_cache();
+
+        tick_changed || panned || reclaimed || glow_animating || plate_animating || frame_moved || config_changed || light_moved || cache_moved
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.
