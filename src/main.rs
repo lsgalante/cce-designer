@@ -2255,6 +2255,25 @@ mod tests {
     /// rows stand on the scene. Either way the HUD claims only the band its
     /// rows cover: a press or the wheel under it is the viewport's.
     #[test]
+    fn a_node_name_on_a_light_floor_is_written_dark() {
+        let mut state = State::new(false);
+        let light = cce_ui::color::parse_hex_rgba_linear("#d8dae4cc").unwrap();
+        let dark = cce_ui::color::parse_hex_rgba_linear("#202028cc").unwrap();
+        // No floor: a name stands on the bare scene and keeps the widget's
+        // light ink, whatever the tint.
+        state.node_compression = None;
+        state.node_tint = Some(light);
+        assert_eq!(state.node_ink(), None);
+        // A floor in a dark tint keeps it too; a floor in a light one is
+        // written dark.
+        state.node_compression = Some(0.85);
+        state.node_tint = Some(dark);
+        assert_eq!(state.node_ink(), None);
+        state.node_tint = Some(light);
+        assert!(state.node_ink().is_some_and(|ink| ink.iter().all(|&c| c < 0x40)));
+    }
+
+    #[test]
     fn the_params_plate_fits_its_rows() {
         let mut state = State::new(false);
         assert!(state.params_plate, "the plate is on by default");

@@ -2732,6 +2732,17 @@ shows and a dark key under light ink: the mid-grey `#6c6c7b` it replaced
 capped full compression at about 3.3:1 against `#ccccd4`. 0.85 was where
 labels read over a bright model in a shadow session; 0.6 left them grey
 on grey.
+**The other way round is a light node with dark names** (since
+2026-10-06): `style.surface.graph.node_tint` (rgba, absent = the pane
+colour) tints the node bodies and the name floors alone, so a light
+tint under compression is a light node on a faint plate.
+`State::node_ink` writes the names dark (`NODE_DARK_INK`) when there
+are floors and the tint's linear luminance is past 0.179, where black
+and white ink contrast it equally; without floors a name stands on the
+bare scene and keeps the widget's light grey. Dark ink reads LIGHTER than
+its colour at label sizes: the glyph pass blends coverage in linear
+space, which thins dark-on-light strokes (a 14 px stem bottoms out near
+`#5c` on `#e6e8f0`). `a_node_name_on_a_light_floor_is_written_dark`.
 The params widget alone also reads `style.surface.param.backdrop_compression`.
 The rules live in cce-ui's CLAUDE.md ("There is one roll width", "The
 relief is two shapes", "Frost is one block"); this is the designer's view of

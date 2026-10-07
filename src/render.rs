@@ -46,6 +46,11 @@ const BYPASS_TINT: [f32; 3] = [1.0, 0.74, 0.18];
 
 /// The point numbers' font size, logical px.
 const POINT_NUMBER_PX: f32 = 10.0;
+/// The linear luminance above which a node name's floor takes dark ink
+/// (State::node_ink): where black and white text contrast it equally.
+const NODE_INK_CROSSOVER: f32 = 0.179;
+/// The dark ink a node name on a light floor is written in, sRGB.
+const NODE_DARK_INK: [u8; 3] = [0x1a, 0x1a, 0x22];
 
 
 impl State {
@@ -536,17 +541,7 @@ impl State {
                 // so the plate's full bevel width would eat most of the body —
                 // a tighter lip keeps the flat face reading.
                 let node_bevel = cce_ui::colors::plate_bevel_width() * 0.5;
-                let node_fill = cce_ui::colors::param_plate_fill();
-                // The pane material, with the nodes' own compression when
-                // configured (State::node_compression): the one knob that
-                // differs between a node body and the plate it sits on.
-                let node_mat = {
-                    let mut m = cce_ui::scene::Material::from_fill(node_fill);
-                    if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.node_compression, &mut m.frost) {
-                        *compression = k;
-                    }
-                    m
-                };
+                let node_mat = self.node_material();
                 let sel = cce_ui::colors::node_selected_color();
                 let drag = cce_ui::colors::node_drag_color();
                 let hl = cce_ui::colors::highlight_primary_color();
@@ -1035,6 +1030,36 @@ impl State {
             .collect()
     }
 
+    /// The node bodies' material: the pane material, with the nodes' own
+    /// compression (State::node_compression) and tint (State::node_tint)
+    /// where configured — the knobs that differ between a node body and the
+    /// plate it sits on. The name floors wear it too.
+    fn node_material(&self) -> cce_ui::scene::Material {
+        let mut m = cce_ui::scene::Material::from_fill(cce_ui::colors::param_plate_fill());
+        if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.node_compression, &mut m.frost) {
+            *compression = k;
+        }
+        if let Some(t) = self.node_tint {
+            m.tint = t;
+        }
+        m
+    }
+
+    /// The ink a node name is written in, where it is not the widget's own
+    /// light grey: dark, when the name stands on a floor (node_compression
+    /// set) whose key is light. Compression pulls the backdrop's luminance
+    /// toward the tint's, and the tint is laid over that at its alpha, so
+    /// the floor's luminance is the tint's to within the (1 - k) the
+    /// compression leaves of the backdrop. 0.179 linear is where black and
+    /// white ink have the same contrast against it. Without a floor a name
+    /// stands on the bare scene, and stays light.
+    pub(crate) fn node_ink(&self) -> Option<[u8; 3]> {
+        self.node_compression?;
+        let t = self.node_material().tint;
+        let key = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
+        (key > NODE_INK_CROSSOVER).then_some(NODE_DARK_INK)
+    }
+
     fn append_frame_text(&self, pc: &mut PaintCtx) {
         let circular = self.circular_network_pane;
         let ncx = self.circular_network_layout.x;
@@ -1092,6 +1117,12 @@ impl State {
                     }
                     // Node text belongs to the node domain: it fades with
                     // node_opacity, not the pane's network_opacity.
+                    // A name on a light floor is written dark (node_ink).
+                    let color = if is_node || i == crate::slots::CONTENT2_IDX {
+                        self.node_ink().unwrap_or(color)
+                    } else {
+                        color
+                    };
                     let alpha = if is_node {
                         self.node_opacity.clamp(0.0, 1.0)
                     } else if is_network_part {

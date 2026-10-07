@@ -3279,6 +3279,12 @@ pub struct State {
     /// pull the view toward the tint's key and read as solid. None = the
     /// pane's.
     pub node_compression: Option<f32>,
+    /// The node bodies' own tint (`style.surface.graph.node_tint`, rgba,
+    /// LINEAR once read), overriding the pane material's for the bodies and
+    /// the name floors — what compression pulls the backdrop toward, so a
+    /// light tint is a light node. None = the pane's. See
+    /// [`State::node_ink`] for what it does to the names.
+    pub node_tint: Option<[f32; 4]>,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     pub floating_network_layout: (f32, f32, f32, f32),
@@ -8754,6 +8760,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             network_opacity: 0.95,
             node_opacity: 1.0,
             node_compression: None,
+            node_tint: None,
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -9190,8 +9197,17 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             .pointer("/style/surface/graph/node_compression")
             .and_then(|v| v.as_f64())
             .map(|k| (k as f32).clamp(0.0, 1.0));
+        let node_tint = cce_ui::config::cached_config()
+            .pointer("/style/surface/graph/node_tint")
+            .and_then(|v| v.as_str())
+            .and_then(cce_ui::color::parse_hex_rgba_linear);
 
         let mut changed = false;
+
+        if self.node_tint != node_tint {
+            self.node_tint = node_tint;
+            changed = true;
+        }
 
         if self.node_compression != node_compression {
             self.node_compression = node_compression;
