@@ -201,7 +201,6 @@ impl Paint for Playbar {
         }
         let rect = self.content(rect);
         let relief = cce_ui::layout::control_relief();
-        let accent = colors::highlight_primary_color();
 
         // The transport buttons: raised plates under the DE relief styling
         // (the Button transparent-fill degradation — edges only, the pane
@@ -271,8 +270,8 @@ impl Paint for Playbar {
             f += step;
         }
 
-        // Playhead: a full-height line over the swell, in the DE accent.
-        ctx.quad(Rect { x: px - 1.0, y: track.y - 3.0, width: 2.0, height: track.height + 6.0 }, accent);
+        // No playhead line: the band's swell already stands at the current
+        // frame (until 2026-10-06 an accent line was drawn over it too).
 
         // Frame readout.
         let text = format!("{:>4} / {}", self.current_frame.round() as i64, self.end_frame.round() as i64);
