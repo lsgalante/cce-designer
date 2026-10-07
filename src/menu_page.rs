@@ -19,9 +19,9 @@
 //! content, as a horizontal list does: see `cce_ui::widget::side_swipe`.
 //!
 //! - A page of rows is shown by the menu that owns it (`put_up_menu` with
-//!   an `at`): the viewport menu's Style and Markers, the plate rows' Add
-//!   Tab — whose back band returns to whichever menu it was turned from,
-//!   the playbar menu or a stub's plate menu.
+//!   an `at`): the viewport menu's Style, Markers and Network, the
+//!   playbar menu's Plate. (The plate rows' Add Tab was one until docks
+//!   lost their tabs, 2026-10-07.)
 //! - The dialog turned to from a row (`State::dialog_from`) goes back to
 //!   that menu, shown again at the dialog's corner; inside the dialog, a
 //!   mode turned to from another (Group Markers from the palette, one
@@ -33,7 +33,7 @@
 
 use crate::app::{NetworkMenuAction, NodeMenuAction, PlaybarMenuAction, State, ViewportMenuAction};
 use crate::dialog::Mode;
-use crate::plate_menu::{plate_title, PlateMenuAction};
+use crate::plate_menu::plate_title;
 use crate::slots::{DIALOG_IDX, PLAYBAR_IDX};
 use cce_ui::widget::context_menu::{self, PageTurn};
 use cce_ui::widget::WidgetId;
@@ -51,16 +51,6 @@ pub enum MenuOrigin {
     Node(usize),
 }
 
-impl MenuOrigin {
-    /// The menu a plate's rows are part of: the playbar menu carries its
-    /// plate's rows, every other plate's are a menu alone.
-    pub fn of_plate(idx: usize) -> MenuOrigin {
-        match idx {
-            PLAYBAR_IDX => MenuOrigin::Playbar,
-            other => MenuOrigin::Plate(other),
-        }
-    }
-}
 
 impl ViewportMenuAction {
     /// Whether the row turns the menu: its pages, and the visualizers'
@@ -149,11 +139,7 @@ impl State {
             MenuOrigin::Viewport => self.show_viewport_menu_page(None, at),
             MenuOrigin::Network => self.open_network_context_menu_at(at),
             MenuOrigin::Playbar => self.open_playbar_context_menu_at(at),
-            // A plate PAGE of another menu goes back to being that page.
-            MenuOrigin::Plate(idx) => match self.plate_page_root.filter(|(i, _)| *i == idx) {
-                Some((_, root)) => self.open_plate_page(idx, (x, y), root),
-                None => self.open_plate_menu_at(idx, at),
-            },
+            MenuOrigin::Plate(idx) => self.open_plate_menu_at(idx, at),
             MenuOrigin::Node(slot) => self.open_node_context_menu_at(slot, at),
         }
     }
@@ -197,10 +183,6 @@ impl State {
                 }
                 MenuOrigin::Plate(_) if self.plate_page_from.is_some() => {
                     let from = self.plate_page_from.take().unwrap();
-                    // Back out of a plate page to its menu: the page is done.
-                    if !matches!(from, MenuOrigin::Plate(_)) {
-                        self.plate_page_root = None;
-                    }
                     self.close_plate_menu();
                     self.reopen_menu(from, at.0, at.1);
                 }
@@ -229,13 +211,9 @@ impl State {
                     }
                     _ => return false,
                 },
-                MenuOrigin::Plate(idx) => match self.plate_menu_actions.get(n).copied() {
-                    Some(PlateMenuAction::AddTabMenu) => {
-                        self.close_plate_menu();
-                        self.open_plate_add_tab_menu(idx, at, origin);
-                    }
-                    _ => return false,
-                },
+                // A plate menu has no page rows (Add Tab was one, until
+                // docks lost their tabs).
+                MenuOrigin::Plate(_) => return false,
                 MenuOrigin::Node(slot) => match self.node_menu_actions.get(n).copied() {
                     Some(NodeMenuAction::Rename) => {
                         self.close_node_menu();

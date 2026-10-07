@@ -247,8 +247,12 @@ gone from cce-ui with the wgpu path).
 - `src/plate_menu.rs` — the plate menu: what can be done to a pane's PLATE
   (`PLATE_SLOTS` — network, params, spreadsheet, playbar; NOT the viewport,
   whose plate is the window-spanning lip) — Collapse/Expand, Detach/Reattach,
-  Full Width (only with a plate in a side dock to tuck under), the dock's tabs,
-  Add Tab, Move To Own Plate and **Move To Left/Right/Bottom**. The network and
+  Full Width (only with a plate in a side dock to tuck under) and **Move To
+  Left/Right/Bottom**. (Docks held TABS until 2026-10-07 — several panes to a
+  dock, with tab rows, Add Tab and Move To Own Plate here — retired once the
+  spreadsheet was the one pane a dock could hold; a save keeps the
+  `dock_tabs` field and its list shape, one name to a dock, and an older
+  save's tab group loads as its first dockable name.) The network and
   the params HUD are in no dock, so theirs are Detach alone, and the
   network's are in no menu: its Plate page went on 2026-10-07, Detach being the
   `detach_circular_window` command in the palette. `plate_menu_rows(idx)` is the
@@ -263,11 +267,8 @@ gone from cce-ui with the wgpu path).
   inline there), and the whole menu where a pane has none of its own — the
   params pane off a row, the spreadsheet (`open_plate_menu`, at the
   pointer). A row from any of them runs through
-  `run_plate_menu_action`. Add Tab is a page row too: the menu turns into
-  the list of panes where it stood, under a back band to whichever menu it
-  turned from (`State::plate_page_from`) — from a Plate page, back to that
-  page, whose band goes back to the playbar's menu
-  (`State::plate_page_root`). Collapse shrinks a plate to its title stub via
+  `run_plate_menu_action`; a Plate page's band goes back to the menu it was
+  turned from (`State::plate_page_from`). Collapse shrinks a plate to its title stub via
   `apply_collapsed_panes`, a post-pass over `positions[..]` (one place, all three
   branches); a LEFT press on a collapsed stub expands it, and a right press on any
   stub (collapsed or detached) opens its plate menu. `a_plates_rows_are_in_its_right_click_menu`
@@ -2779,8 +2780,7 @@ An older save's `"network2"` in its dock lists names no pane and is dropped
 wherever it stood, its `current_path2` and pins ignored
 (`an_older_saves_second_network_editor_is_dropped`). With the network and
 the params HUD out of the docks too, the spreadsheet is the one dockable
-pane: Move To still moves it between the three docks, the tab rows have
-nothing to offer, and its Full Width row is shown only while a side dock
+pane: Move To still moves it between the three docks, and its Full Width row is shown only while a side dock
 holds a plate to tuck under — which, with nothing else dockable, is never.
 
 ### The network has no plate (since 2026-10-06)
@@ -2809,7 +2809,7 @@ navigation.
 none. The left dock starts EMPTY (`dock_panes` `[NO_PANE, NO_PANE,
 spreadsheet]`), so the spreadsheet runs flush to the window's left, where
 it stopped short of the network's invisible dock until then;
-`TAB_CANDIDATES` is the spreadsheet alone; the network's
+the network's
 plate menu is Detach alone (no tab, Move To or Collapse rows) — and is in
 no menu: the network menu's Plate page went the next day, Detach being the
 palette's `detach_circular_window` — and
@@ -2943,7 +2943,7 @@ bottom raised by a spreadsheet tucked under it, tabbable and movable.
   `AppDrag::RightDockResize`, asked first, its plate being on top.
 - **Out of the docks.** The right dock starts EMPTY (`dock_panes`
   `[NO_PANE, NO_PANE, spreadsheet]` — the network left the left dock the
-  next day); `TAB_CANDIDATES` no longer lists params, its plate menu has no tab, Move To or Collapse rows (Detach
+  next day); the tab candidates (tabs went 2026-10-07) no longer listed params, its plate menu has no tab, Move To or Collapse rows (Detach
   stays), `set_pane_collapsed` refuses it, and the pane-state load
   takes it out of an older save's tab lists — the dock it fronted fronts
   its next tab or empties. A plate moved into the right dock is drawn over
@@ -3022,8 +3022,8 @@ and **Network**, the network menu, while the network overlays the scene
 its **Attribute Visualizers** row was one too, into the dialog, until
 2026-10-06 — it is a plain row now, opening them in the params HUD); the
 network menu's **Add Node**
-(the dialog); the plate rows' **Add Tab** (a page, wherever the plate rows
-are); the node menu's **Rename** (the dialog). Inside the dialog the rows
+(the dialog); the playbar menu's **Plate** (its plate rows); the node
+menu's **Rename** (the dialog). Inside the dialog the rows
 that turn it into another list are marked `›` in the chord column and take
 the forward swipe too (`dialog::dialog_row_leads`): the palette's Group
 Markers. The mark rides the row's chord TEXT (cce-ui's `PAGE_MARK`), and a

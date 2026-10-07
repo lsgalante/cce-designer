@@ -1,6 +1,5 @@
 //! The plate menu: what can be done to a pane's PLATE — collapse, detach,
-//! its dock's tabs, where it is docked — as rows of that pane's right-click
-//! menu.
+//! where it is docked — as rows of that pane's right-click menu.
 //!
 //! Until 2026-10-01 these rows were a menu of their own, opened by a small
 //! circular trigger on the top-right of every plate (and that trigger, dragged,
@@ -26,14 +25,6 @@ use cce_ui::widget::plate_dock::{self, PlateDockAction, PlateDockState};
 /// its "plate" is the window-spanning lip, not a pane.
 pub const PLATE_SLOTS: [usize; 4] = [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX];
 
-/// The panes the tab rows offer — the dockable set. The playbar's strip is
-/// not a dock. The params pane is not one (since 2026-10-06): it is a HUD
-/// on the scene, under the plates, laid out from the viewport alone
-/// (`State::params_hud_rect`); nor is the network (since 2026-10-07), which
-/// spans the window. The second network editor, the one closable pane, was
-/// removed the same day.
-pub const TAB_CANDIDATES: [usize; 1] = [SPREADSHEET_IDX];
-
 /// What the plate menu can do to its plate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlateMenuAction {
@@ -49,18 +40,8 @@ pub enum PlateMenuAction {
     FullWidth,
     /// Spreadsheet: back to the strip between the network and params panes.
     BetweenPanes,
-    /// Bring this dock's named tab to the front.
-    ShowTab(usize),
-    /// Pull the named pane out of its dock and tab it into this one, active.
-    AddTab(usize),
-    /// Turn the menu into the Add Tab page — the list of panes that can be
-    /// pulled in ([`State::open_plate_add_tab_menu`]). A page row: its back
-    /// band, or a swipe back, returns to the menu it was turned from.
-    AddTabMenu,
-    /// Move this pane out of its shared dock into the first empty one.
-    SplitTab,
-    /// Move this pane, and the tabs riding it, to another dock, swapping
-    /// with what is there — what dragging the plate's corner used to do.
+    /// Move this pane to another dock, swapping with what is there — what
+    /// dragging the plate's corner used to do.
     MoveTo(Dock),
     /// A "-" row: engraved, inert — keeps the action list aligned with the
     /// option rows so a click on the line dispatches nothing.
@@ -146,8 +127,7 @@ impl State {
         }
 
         // Group boundaries are engraved separators ("-" rows — the toolkit
-        // convention): window actions | layout spans | tab switching | tab
-        // management. Pushed lazily so a group that contributes nothing
+        // convention): window actions | layout spans | Move To. Pushed lazily so a group that contributes nothing
         // leaves no orphaned line.
         let separate = |options: &mut Vec<String>, actions: &mut Vec<PlateMenuAction>| {
             if !options.is_empty() && options.last().map(String::as_str) != Some("-") {
@@ -177,47 +157,16 @@ impl State {
             }
         }
 
-        // Tabs — only on docked plates (the playbar's strip is not a dock).
-        // The dock's other tabs switch to the front; panes docked elsewhere
-        // can be pulled in as tabs; a pane sharing its dock can move back
-        // out to the empty dock its arrival left behind.
+        // Move To — only on docked plates (the playbar's strip is not a
+        // dock): every other dock, swapping with what is there, the drag the
+        // corner trigger used to start, as rows. (Docks held TABS until
+        // 2026-10-07 — several panes to a dock, switched, added and split
+        // from here — retired when the spreadsheet became the one pane a
+        // dock could hold.)
         if let Some(d) = self.dock_of_pane(idx) {
-            // The dock's tabs as a RADIO group: every tab listed, the front
-            // one marked. Clicking the marked row is a no-op (show_dock_tab
-            // declines the already-active slot), so the list reads as state,
-            // not just as actions.
             separate(&mut options, &mut actions);
-            for &t in &self.dock_tabs[d as usize] {
-                let mark = if t == idx { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
-                options.push(format!("{mark}{}", plate_title(t)));
-                actions.push(PlateMenuAction::ShowTab(t));
-            }
-            let mut managed = false;
-            let mut manage_row = |options: &mut Vec<String>, actions: &mut Vec<PlateMenuAction>| {
-                if !managed {
-                    separate(options, actions);
-                    managed = true;
-                }
-            };
-            // ONE "Add Tab" row: clicking it swaps the menu for the page of
-            // addable panes, instead of one row per candidate here.
-            if !self.plate_add_tab_candidates(idx, d).is_empty() {
-                manage_row(&mut options, &mut actions);
-                options.push("Add Tab".to_string());
-                actions.push(PlateMenuAction::AddTabMenu);
-            }
-            // Only while a dock is free to take it: with none, the split
-            // has nowhere to go and the row would do nothing.
-            if self.dock_tabs[d as usize].len() > 1 && self.first_empty_dock().is_some() {
-                manage_row(&mut options, &mut actions);
-                options.push("Move To Own Plate".to_string());
-                actions.push(PlateMenuAction::SplitTab);
-            }
-            // Every other dock, swapping with what is there — the drag the
-            // corner trigger used to start, as rows.
             for other in [Dock::Left, Dock::Right, Dock::Bottom] {
                 if other != d {
-                    manage_row(&mut options, &mut actions);
                     options.push(format!("Move To {}", dock_title(other)));
                     actions.push(PlateMenuAction::MoveTo(other));
                 }
@@ -239,55 +188,15 @@ impl State {
         if options.is_empty() {
             return;
         }
-        // A menu of its own, not another menu's page.
-        self.plate_page_root = None;
         let target = self.slots.get_dyn(idx).base().id();
         self.put_up_menu(at, None, options, 0, target);
-        crate::menu_page::mark_page_rows(&actions, |a| a == PlateMenuAction::AddTabMenu);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
         self.plate_page_from = None;
     }
 
-    /// The panes a plate's Add Tab page can offer: docked (or dockable)
-    /// elsewhere, not already in this dock's list, not detached.
-    fn plate_add_tab_candidates(&self, idx: usize, d: crate::app::Dock) -> Vec<usize> {
-        TAB_CANDIDATES
-            .into_iter()
-            .filter(|&other| {
-                other != idx
-                    && !self.dock_tabs[d as usize].contains(&other)
-                    && !self.pane_is_detached(other)
-            })
-            .collect()
-    }
-
-    /// The Add Tab page: the menu `from` turned in place into the list of
-    /// addable panes, under a dimmed header row, its top-left at `at` —
-    /// where that menu stood — and a back band to it across the top.
-    pub fn open_plate_add_tab_menu(&mut self, idx: usize, at: (f32, f32), from: crate::menu_page::MenuOrigin) {
-        let Some(d) = self.dock_of_pane(idx) else { return };
-        let candidates = self.plate_add_tab_candidates(idx, d);
-        if candidates.is_empty() {
-            return;
-        }
-        let mut options = vec!["Add Tab".to_string()];
-        let mut actions = vec![PlateMenuAction::Separator];
-        for other in candidates {
-            options.push(plate_title(other).to_string());
-            actions.push(PlateMenuAction::AddTab(other));
-        }
-        let target = self.slots.get_dyn(idx).base().id();
-        self.put_up_menu(Some(at), Some(from), options, 1, target);
-        self.plate_menu_slot = Some(idx);
-        self.plate_menu_actions = actions;
-        self.plate_page_from = Some(from);
-    }
-
-    /// `idx`'s plate rows as a PAGE of another menu — the network's or the
-    /// playbar's Plate row turned into them — at `at`, under a back band to
-    /// `from`. Add Tab turned to from here comes back here, and the band
-    /// here goes back to `from` (`State::plate_page_root`).
+    /// `idx`'s plate rows as a PAGE of another menu — the playbar's Plate
+    /// row turned into them — at `at`, under a back band to `from`.
     pub fn open_plate_page(&mut self, idx: usize, at: (f32, f32), from: crate::menu_page::MenuOrigin) {
         let (options, actions) = self.plate_menu_rows(idx);
         if options.is_empty() {
@@ -295,11 +204,9 @@ impl State {
         }
         let target = self.slots.get_dyn(idx).base().id();
         self.put_up_menu(Some(at), Some(from), options, 0, target);
-        crate::menu_page::mark_page_rows(&actions, |a| a == PlateMenuAction::AddTabMenu);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
         self.plate_page_from = Some(from);
-        self.plate_page_root = Some((idx, from));
     }
 
     pub fn plate_menu_open(&self) -> bool {
@@ -322,10 +229,9 @@ impl State {
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let row = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
             let picked = self.plate_menu_slot.zip(row.and_then(|r| self.plate_menu_actions.get(r).copied()));
-            let at = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
             self.close_plate_menu();
             if let Some((idx, action)) = picked {
-                self.run_plate_menu_action(idx, action, at);
+                self.run_plate_menu_action(idx, action);
             }
             return true;
         }
@@ -333,10 +239,8 @@ impl State {
         false
     }
 
-    /// Run a plate row for `idx`, picked from a menu whose top-left was `at`
-    /// — where the Add Tab page goes, turned from the menu the plate's rows
-    /// are part of.
-    pub fn run_plate_menu_action(&mut self, idx: usize, action: PlateMenuAction, at: (f32, f32)) {
+    /// Run a plate row for `idx`.
+    pub fn run_plate_menu_action(&mut self, idx: usize, action: PlateMenuAction) {
         match action {
             PlateMenuAction::Collapse => self.set_pane_collapsed(idx, true),
             PlateMenuAction::Expand => self.set_pane_collapsed(idx, false),
@@ -344,20 +248,6 @@ impl State {
             PlateMenuAction::Reattach => self.reattach_plate(idx),
             PlateMenuAction::FullWidth => self.set_spreadsheet_full_width(true),
             PlateMenuAction::BetweenPanes => self.set_spreadsheet_full_width(false),
-            PlateMenuAction::ShowTab(t) => {
-                if let Some(d) = self.dock_of_pane(idx) {
-                    self.show_dock_tab(d, t);
-                }
-            }
-            PlateMenuAction::AddTab(o) => {
-                if let Some(d) = self.dock_of_pane(idx) {
-                    self.add_dock_tab(d, o);
-                }
-            }
-            PlateMenuAction::AddTabMenu => {
-                self.open_plate_add_tab_menu(idx, at, crate::menu_page::MenuOrigin::of_plate(idx))
-            }
-            PlateMenuAction::SplitTab => self.split_dock_tab(idx),
             PlateMenuAction::MoveTo(d) => self.move_pane_to_dock(idx, d),
             PlateMenuAction::Separator => {}
         }

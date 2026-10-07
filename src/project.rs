@@ -114,23 +114,13 @@ impl State {
         } else {
             None
         };
-        // Each dock's tabs by name, active first — the order the loader
-        // reads back (first = front).
+        // What each dock holds, by name: a list of at most one, the shape
+        // the save has kept since docks held tabs.
         let dock_tabs = (0..3)
             .map(|d| {
-                let active = self.dock_panes[d];
-                let mut names: Vec<String> = Vec::new();
-                if let Some(n) = crate::plate_menu::pane_name_from_slot(active) {
-                    names.push(n.to_string());
-                }
-                for &t in &self.dock_tabs[d] {
-                    if t != active {
-                        if let Some(n) = crate::plate_menu::pane_name_from_slot(t) {
-                            names.push(n.to_string());
-                        }
-                    }
-                }
-                names
+                crate::plate_menu::pane_name_from_slot(self.dock_panes[d])
+                    .map(|n| vec![n.to_string()])
+                    .unwrap_or_default()
             })
             .collect();
         // A plate's stored size is what was asked for and may exceed a window
@@ -328,10 +318,11 @@ impl State {
                 .map_or(false, |n| vs.collapsed_panes.iter().any(|c| c == n));
             self.set_pane_collapsed(idx, desired);
         }
-        // Dock tab groups: accepted only whole — three lists whose names
-        // resolve and cover each CORE docked pane exactly once. Anything
-        // else (older saves' empty list included) keeps the current layout
-        // rather than loading half of one.
+        // What the docks hold: accepted only whole — three lists whose names
+        // resolve and cover each dockable pane exactly once. Anything else
+        // (older saves' empty list included) keeps the current layout rather
+        // than loading half of one. A list of an older save is a tab group,
+        // active first; its first dockable name is what the dock holds.
         if vs.dock_tabs.len() == 3 {
             let resolved: Vec<Vec<usize>> = vs
                 .dock_tabs
@@ -349,7 +340,7 @@ impl State {
             // Neither the params pane nor the network is docked since
             // 2026-10-06 (the one a HUD on the scene, the other an overlay
             // spanning it): an older save lists them in docks, and they are
-            // taken out — a dock one fronted fronts its next tab, or is
+            // taken out — a dock one fronted holds its next tab, or is
             // empty.
             let undocked = |s: usize| s == crate::slots::PARAM_IDX || s == crate::slots::NETWORK_PANEL_IDX;
             let resolved: Vec<Vec<usize>> = resolved
@@ -360,9 +351,7 @@ impl State {
             let expected = vec![crate::slots::SPREADSHEET_IDX];
             if all == expected {
                 for d in 0..3 {
-                    self.dock_tabs[d] = resolved[d].clone();
-                    self.dock_panes[d] =
-                        resolved[d].first().copied().unwrap_or(crate::app::NO_PANE);
+                    self.dock_panes[d] = resolved[d].first().copied().unwrap_or(crate::app::NO_PANE);
                 }
                 self.rebuild_positions();
                 self.apply_layout();

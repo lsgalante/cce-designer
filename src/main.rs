@@ -486,7 +486,7 @@ mod tests {
         assert!(state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Right)));
         assert!(!state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Bottom)), "not to its own dock");
         state.close_plate_menu();
-        state.run_plate_menu_action(SPREADSHEET_IDX, PlateMenuAction::MoveTo(Dock::Left), (0.0, 0.0));
+        state.run_plate_menu_action(SPREADSHEET_IDX, PlateMenuAction::MoveTo(Dock::Left));
         assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Left));
         assert_eq!(state.pane_in_dock(Dock::Bottom), NO_PANE, "it swapped with the empty dock");
         let (x, _, w, _) = state.positions[SPREADSHEET_IDX];
@@ -1514,7 +1514,7 @@ mod tests {
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.execute_menu_action("Show Spreadsheet Pane");
-        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), None);
+        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), None);
         assert_eq!(state.pane_in_dock(Dock::Left), NO_PANE);
         assert_eq!(state.positions[NETWORK_PANEL_IDX], (0.0, HEADER_H, 1600.0, state.body_h()));
         assert!(state.slots.get_dyn(crate::slots::CONTENT_IDX).visible(), "shown though it fronts no dock");
@@ -1523,7 +1523,7 @@ mod tests {
         state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
         assert!(!state.pane_is_collapsed(NETWORK_PANEL_IDX));
         state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Bottom);
-        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), None);
+        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), None);
         state.open_plate_menu(NETWORK_PANEL_IDX);
         assert_eq!(state.plate_menu_actions, vec![PlateMenuAction::Detach]);
         state.close_plate_menu();
@@ -1643,7 +1643,7 @@ mod tests {
             b.splitter_layout.splitter1_x);
         // The dock arrangement rides the file; the network is in none.
         assert_eq!(b.pane_in_dock(crate::app::Dock::Left), crate::slots::SPREADSHEET_IDX, "the spreadsheet loads where it was moved");
-        assert_eq!(b.tab_dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None, "the network loads in no dock");
+        assert_eq!(b.dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None, "the network loads in no dock");
 
         // A detached pane window must ignore the same file's pane state.
         let mut d = State::new(true);
@@ -2224,8 +2224,8 @@ mod tests {
         assert_eq!(b.pane_in_dock(Dock::Left), NO_PANE, "the dock the params fronted is empty");
         assert_eq!(b.pane_in_dock(Dock::Right), NO_PANE, "the dock the network fronted is empty");
         assert_eq!(b.pane_in_dock(Dock::Bottom), SPREADSHEET_IDX, "the rest of the arrangement loads");
-        assert_eq!(b.tab_dock_of_pane(PARAM_IDX), None);
-        assert_eq!(b.tab_dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None);
+        assert_eq!(b.dock_of_pane(PARAM_IDX), None);
+        assert_eq!(b.dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None);
         let _ = fs::remove_dir_all(&dir);
     }
 
