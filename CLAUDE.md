@@ -2223,7 +2223,13 @@ now keeps CHECKPOINTS in memory (`geometry::Checkpoint`, on the
 substep consumed, which is everything a resume and the interior view
 need.
 
-- **One every `CHECKPOINT_EVERY` (10) frames**, kept as the solve passes
+- **One every `CHECKPOINT_EVERY` frames — every frame since
+  2026-10-06**, so a frame once solved plays back with no step at all.
+  It was ten until then, and playing back through what had been solved
+  (the playbar's cyan) stepped nine frames in ten again, a whole step
+  each, growing with the mesh: on the user's project at 8k points the
+  evaluation of a replayed frame was 100 ms and is 1 ms. Kept as the
+  solve passes
   it — and as it LEAVES it, which is the case that is easy to miss:
   played a frame at a time the solve is always asked for the very next
   frame, so it never passes a frame on the interval, it arrives on one
@@ -2236,8 +2242,9 @@ need.
 - **They belong to one key.** An edit to the chain or the seed changes
   the key and they go with the solve they were frames of; the frame in
   hand does not (the next section).
-- **Within a count and a budget** (`CHECKPOINTS_MAX` 48,
-  `CHECKPOINT_BUDGET` 512 MB by an estimate of a state's size). With no
+- **Within a count and a budget** (`CHECKPOINTS_MAX` 1024,
+  `CHECKPOINT_BUDGET` 2 GB per simnet by an estimate of a state's size;
+  48 and 512 MB until every frame was kept). With no
   room the SPACING doubles and stays doubled — what is off the wider
   interval goes, and what arrives after arrives that far apart. Not the
   oldest: a scrub is as likely to land near the start. And not every
@@ -3371,6 +3378,17 @@ start in either direction; it was a loop of `end - start` that gave the
 end and the start half a frame each, and with the cap would have stepped
 over the start. With Repeat off, landing on the far end stops there.
 `playback_plays_every_frame_however_late_the_tick` is the test.
+
+What a replayed frame costs past the solve (measured 2026-10-06 on the
+user's project, 8k points, markers, two visualizers and the spreadsheet
+on): the spreadsheet's refill and the point markers were most of it, and
+both got cheaper without changing what they show — the table looks each
+column up once and formats through `app::fmt4` (`{:.4}` to the
+character, `fmt4_is_format_4`), and `points_vertices` works the marker
+sphere out once and moves it to each point. A replayed frame went from
+140 ms to 24 there. What is left grows with the mesh: the markers'
+vertices (240 a point, uploaded every frame — instancing in cce-ui's
+renderer is the fix), the visualizers' copy of the scene, and the table.
 
 ### The playbar shows what is cached, and what is stale (since 2026-10-06)
 

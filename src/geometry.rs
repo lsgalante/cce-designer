@@ -1160,14 +1160,18 @@ thread_local! {
     pub static STEPS_ON_THIS_THREAD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many frames apart checkpoints start out.
-pub const CHECKPOINT_EVERY: i32 = 10;
-/// The most kept for one simnet, however large its states.
-pub const CHECKPOINTS_MAX: usize = 48;
+/// How many frames apart checkpoints start out: every frame, so a frame
+/// once solved is played back without a step. Until 2026-10-06 it was ten,
+/// and playing back through what had been solved stepped nine frames in
+/// ten again — a frame's whole step, growing with the mesh.
+pub const CHECKPOINT_EVERY: i32 = 1;
+/// The most kept for one simnet, however small its states.
+pub const CHECKPOINTS_MAX: usize = 1024;
 /// What one simnet's checkpoints may hold, by [`checkpoint_bytes`]. A state
 /// is kept twice over (itself and what its last substep consumed), so a
-/// hundred-thousand-point surface is tens of megabytes a checkpoint.
-pub const CHECKPOINT_BUDGET: usize = 512 * 1024 * 1024;
+/// hundred-thousand-point surface is tens of megabytes a checkpoint; past
+/// the budget the spacing doubles.
+pub const CHECKPOINT_BUDGET: usize = 2048 * 1024 * 1024;
 
 /// About what a checkpoint of `state` holds: positions, ids and a handful
 /// of attributes a point, the primitives' indices, twice. An estimate — the
@@ -6537,12 +6541,41 @@ pub fn origin_vectors_vertices(scale: f32) -> Vec<Vertex3D> {
 /// sphere kernel's exactly — that winding is the one the raster pass's
 /// backface cull is known to keep.
 pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vertex3D> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
     let r = size.max(0.001);
     const LAT_STEPS: usize = 4;
     const LON_STEPS: usize = 10;
     let pi = std::f32::consts::PI;
+    // The sphere's corners about the origin, worked out once: every marker
+    // is the same sphere moved, and each is its centre plus these. Until
+    // 2026-10-06 each of a marker's 240 corners took its own sines and
+    // cosines, which at ten thousand points was most of a playing frame.
+    // The same arithmetic in the same order, so the corners are the same
+    // to the bit.
+    let off = |theta: f32, phi: f32| [r * theta.sin() * phi.cos(), r * theta.cos(), r * theta.sin() * phi.sin()];
+    let mut unit = Vec::with_capacity(LAT_STEPS * LON_STEPS * 6);
+    for lat in 0..LAT_STEPS {
+        let theta0 = pi * lat as f32 / LAT_STEPS as f32;
+        let theta1 = pi * (lat + 1) as f32 / LAT_STEPS as f32;
+        for lon in 0..LON_STEPS {
+            let phi0 = 2.0 * pi * lon as f32 / LON_STEPS as f32;
+            let phi1 = 2.0 * pi * (lon + 1) as f32 / LON_STEPS as f32;
+            let p00 = off(theta0, phi0);
+            let p10 = off(theta1, phi0);
+            let p11 = off(theta1, phi1);
+            let p01 = off(theta0, phi1);
+            // Counter-clockwise seen from OUTSIDE, as `sphere_detail`
+            // winds and as the raster fill's back-face cull expects.
+            // This kept the retired soup's inward order until
+            // 2026-09-24, so the cull drew the INSIDE of each marker's
+            // far half and nothing of its near half — and a marker on a
+            // surface showed only where that far half poked out of the
+            // mesh, vanishing from the views where it did not.
+            // `point_markers_wind_outward` holds the sign.
+            unit.extend([p00, p11, p10, p00, p01, p11]);
+        }
+    }
+    let mut seen = std::collections::HashSet::with_capacity(src.len());
+    let mut out = Vec::with_capacity(src.len() * unit.len());
     for v in src {
         let key = (
             (v.position[0] * 1000.0).round() as i32,
@@ -6553,36 +6586,7 @@ pub fn points_vertices(src: &[Vertex3D], size: f32, color: [f32; 3]) -> Vec<Vert
             continue;
         }
         let [cx, cy, cz] = v.position;
-        let sp = |theta: f32, phi: f32| {
-            [
-                cx + r * theta.sin() * phi.cos(),
-                cy + r * theta.cos(),
-                cz + r * theta.sin() * phi.sin(),
-            ]
-        };
-        for lat in 0..LAT_STEPS {
-            let theta0 = pi * lat as f32 / LAT_STEPS as f32;
-            let theta1 = pi * (lat + 1) as f32 / LAT_STEPS as f32;
-            for lon in 0..LON_STEPS {
-                let phi0 = 2.0 * pi * lon as f32 / LON_STEPS as f32;
-                let phi1 = 2.0 * pi * (lon + 1) as f32 / LON_STEPS as f32;
-                let p00 = sp(theta0, phi0);
-                let p10 = sp(theta1, phi0);
-                let p11 = sp(theta1, phi1);
-                let p01 = sp(theta0, phi1);
-                // Counter-clockwise seen from OUTSIDE, as `sphere_detail`
-                // winds and as the raster fill's back-face cull expects.
-                // This kept the retired soup's inward order until
-                // 2026-09-24, so the cull drew the INSIDE of each marker's
-                // far half and nothing of its near half — and a marker on a
-                // surface showed only where that far half poked out of the
-                // mesh, vanishing from the views where it did not.
-                // `point_markers_wind_outward` holds the sign.
-                for p in [p00, p11, p10, p00, p01, p11] {
-                    out.push(Vertex3D { position: p, color });
-                }
-            }
-        }
+        out.extend(unit.iter().map(|o| Vertex3D { position: [cx + o[0], cy + o[1], cz + o[2]], color }));
     }
     out
 }
@@ -10237,12 +10241,12 @@ mod simnet_tests {
         // Out to frame 101: a hundred frames of two substeps.
         let (_, _, cost) = at(&mut cache, 101);
         assert_eq!(cost, 200);
-        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        assert_eq!(cache.checkpoint_frames(&simnet.id), (1..=99).collect::<Vec<_>>(), "every frame passed");
 
-        // Back, forward, back again, onto a checkpoint, to the start and to
-        // where it came from: each arrives where a solve from the seed
-        // does, and costs the frames from the checkpoint behind it.
-        for (frame, frames_stepped) in [(100, 9), (38, 7), (84, 3), (37, 6), (61, 0), (1, 0), (101, 0), (96, 5), (99, 3)] {
+        // Back, forward, back again, to the start and to where it came
+        // from: each arrives where a solve from the seed does, and every
+        // frame solved is kept, so none costs a step.
+        for (frame, frames_stepped) in [(100, 0), (38, 0), (84, 0), (37, 0), (61, 0), (1, 0), (101, 0), (96, 0), (99, 0)] {
             let (state, fed, cost) = at(&mut cache, frame);
             let (want, want_fed) = fresh(frame);
             assert_eq!(state.positions(), want.positions(), "frame {frame}: the state");
@@ -10261,9 +10265,9 @@ mod simnet_tests {
         for frame in 1..=35 {
             at(&mut cache, frame);
         }
-        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![10, 20, 30]);
+        assert_eq!(cache.checkpoint_frames(&simnet.id), (1..=33).collect::<Vec<_>>());
         let (state, _, cost) = at(&mut cache, 24);
-        assert_eq!((cost, state.positions() == fresh(24).0.positions()), (3 * 2, true));
+        assert_eq!((cost, state.positions() == fresh(24).0.positions()), (0, true));
 
         // An edit goes on from the frame in hand (24): the frames before
         // it stand, and none of the old solve's checkpoints are resumed
@@ -10275,7 +10279,7 @@ mod simnet_tests {
         let state = resolve_simnet_geometry_with_errors(&edited, &edited.children[1], &mut Vec::new(), &mut err, &mut sim).unwrap();
         assert_eq!(sim.cache.steps_run() - before, 27 * 2, "twenty-seven frames on from the one in hand");
         assert_ne!(state.positions(), fresh(51).0.positions());
-        assert_eq!(cache.checkpoint_frames(&simnet.id), vec![30, 40], "and its own checkpoints, kept as it passed them");
+        assert_eq!(cache.checkpoint_frames(&simnet.id), (23..=49).collect::<Vec<_>>(), "the frame it went on from, and its own, kept as it passed them");
         // Back to the start it is the seed, and the edit is in from the
         // first frame: frame 51 is then the edited chain's own fifty.
         let mut sim = EvalSim::new(1, 1, &mut cache);
@@ -10297,7 +10301,7 @@ mod simnet_tests {
         assert!(kept.len() <= CHECKPOINTS_MAX && kept.len() > CHECKPOINTS_MAX / 3, "{}", kept.len());
         assert!(kept[0] <= 100 && *kept.last().unwrap() >= 1900, "{kept:?}");
         let widest = kept.windows(2).map(|w| w[1] - w[0]).max().unwrap();
-        assert!(widest <= 80, "no gap wider than the spacing the cap asks for: {widest}");
+        assert!(widest as usize <= 2 * (2000 / CHECKPOINTS_MAX + 1), "no gap wider than the spacing the cap asks for: {widest}");
     }
 
     /// A Relax's `Rest` wire resolves to its OWN sibling. It was a

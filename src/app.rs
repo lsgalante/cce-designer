@@ -1256,6 +1256,38 @@ pub fn strip_meta_children(root: &mut FsNode) {
 /// lowercased, as Houdini names its nodes (`sphere1`, `camera1`), since a
 /// path convention with exceptions is two conventions. Empty comes back as
 /// `node`, since a node with no name has no path at all.
+/// One attribute value as spreadsheet cells: a cell a component, `-` for
+/// each when there is none.
+fn push_cells(row: &mut Vec<String>, value: Option<crate::detail::AttribValue>, components: usize) {
+    match value {
+        Some(crate::detail::AttribValue::Float(f)) => row.push(fmt4(f)),
+        Some(crate::detail::AttribValue::Int(i)) => row.push(i.to_string()),
+        Some(crate::detail::AttribValue::Float2(a)) => row.extend(a.iter().map(|v| fmt4(*v))),
+        Some(crate::detail::AttribValue::Float3(a)) => row.extend(a.iter().map(|v| fmt4(*v))),
+        Some(crate::detail::AttribValue::Float4(a)) => row.extend(a.iter().map(|v| fmt4(*v))),
+        None => row.extend(std::iter::repeat("-".to_string()).take(components)),
+    }
+}
+
+/// `format!("{:.4}", x)`, character for character, several times faster:
+/// an f32 times ten thousand is exact in an f64 (24 bits of mantissa and
+/// 14), so rounding it half to even is rounding the exact decimal value,
+/// which is what the formatter does. What does not fit an integer goes to
+/// the formatter. `fmt4_is_format_4` holds the two equal.
+pub(crate) fn fmt4(x: f32) -> String {
+    if !x.is_finite() || x.abs() >= 1.0e14 {
+        return format!("{:.4}", x);
+    }
+    use std::fmt::Write;
+    let y = (x.abs() as f64 * 10000.0).round_ties_even() as u64;
+    let mut s = String::with_capacity(12);
+    if x.is_sign_negative() {
+        s.push('-');
+    }
+    let _ = write!(s, "{}.{:04}", y / 10000, y % 10000);
+    s
+}
+
 /// The playbar's cache strip, frame by frame over `start..=end` and run
 /// together: a frame is CACHED when every simnet in the tree has it in hand
 /// (at or before its start it shows its seed, which every simnet has), STALE
@@ -7740,57 +7772,33 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
         }
     }
 
-    let mut rows = Vec::new();
+    // Each column's store looked up once, not once a row: a playing
+    // simulation refills the table every frame, and at ten thousand points
+    // the lookups and `format!` were most of a frame (see `fmt4`).
+    let point_cols: Vec<(Option<&crate::detail::AttribData>, usize)> =
+        attribs.iter().map(|(name, ty)| (geom.points().get(name), ty.components())).collect();
+    let detail_cells: Vec<String> = {
+        let mut cells = Vec::new();
+        for (name, ty) in &detail {
+            push_cells(&mut cells, geom.detail().value(name, 0), ty.components());
+        }
+        cells
+    };
+    let width = headers.len();
+    let mut rows = Vec::with_capacity(geom.num_points());
     for p in 0..geom.num_points() {
         let pos = geom.positions()[p];
         let col = geom.color(p);
-        let mut row = vec![p.to_string()];
+        let mut row = Vec::with_capacity(width);
+        row.push(p.to_string());
         row.extend(groups.iter().map(|g| if geom.points().in_group(g, p) { "1" } else { "0" }.to_string()));
-        row.extend([
-            format!("{:.4}", pos[0]),
-            format!("{:.4}", pos[1]),
-            format!("{:.4}", pos[2]),
-            format!("{:.4}", col[0]),
-            format!("{:.4}", col[1]),
-            format!("{:.4}", col[2]),
-        ]);
-
-        for (name, ty) in &attribs {
-            // A column covers its whole class, so there is no "this element
-            // does not have it" case left to render as a dash.
-            match geom.points().value(name, p) {
-                Some(crate::detail::AttribValue::Float(f)) => row.push(format!("{:.4}", f)),
-                Some(crate::detail::AttribValue::Int(i)) => row.push(i.to_string()),
-                Some(crate::detail::AttribValue::Float2(a)) => {
-                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
-                }
-                Some(crate::detail::AttribValue::Float3(a)) => {
-                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
-                }
-                Some(crate::detail::AttribValue::Float4(a)) => {
-                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
-                }
-                None => row.extend(std::iter::repeat("-".to_string()).take(ty.components())),
-            }
+        row.extend([fmt4(pos[0]), fmt4(pos[1]), fmt4(pos[2]), fmt4(col[0]), fmt4(col[1]), fmt4(col[2])]);
+        // A column covers its whole class, so there is no "this element
+        // does not have it" case left to render as a dash.
+        for (data, components) in &point_cols {
+            push_cells(&mut row, data.and_then(|d| d.get(p)), *components);
         }
-
-        for (name, ty) in &detail {
-            match geom.detail().value(name, 0) {
-                Some(crate::detail::AttribValue::Float(f)) => row.push(format!("{:.4}", f)),
-                Some(crate::detail::AttribValue::Int(i)) => row.push(i.to_string()),
-                Some(crate::detail::AttribValue::Float2(a)) => {
-                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
-                }
-                Some(crate::detail::AttribValue::Float3(a)) => {
-                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
-                }
-                Some(crate::detail::AttribValue::Float4(a)) => {
-                    row.extend(a.iter().map(|v| format!("{:.4}", v)))
-                }
-                None => row.extend(std::iter::repeat("-".to_string()).take(ty.components())),
-            }
-        }
-
+        row.extend(detail_cells.iter().cloned());
         rows.push(row);
     }
 
