@@ -475,10 +475,13 @@ impl State {
             // The scrollbar cross's idle copy, BEHIND the plate — the params
             // pane's straddle: the frosted plate dims it, and the widget
             // fades its fore copy in over the cells when a scroll raises it.
+            // The idle copy fades OUT as the fore copy fades in: left at full
+            // strength it showed through the plate under the raised bar and
+            // the two stacked, so a raised bar read nearly opaque.
             let sheet = self.slots.spreadsheet();
             let sheet_rect = rect(wx, wy, ww2, wh2);
             if sheet.scrollbars_shown(sheet_rect) {
-                sheet.paint_scrollbars(sheet_rect, pc, 1.0);
+                sheet.paint_scrollbars(sheet_rect, pc, 1.0 - sheet.scrollbar_fade());
             }
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
@@ -739,8 +742,11 @@ impl State {
             // corners rounding from the pane's toward half its side.
             if let Some(([fx, fy, fw, fh, round], r)) = self.params_plate_drawn() {
                 if round < 0.5 {
-                    if let Some((quads, _)) = &param_scrollbar {
-                        for &(qx, qy, qw, qh, qc) in quads {
+                    // The idle copy fades out as the fore copy fades in, as
+                    // the spreadsheet's does, so the two never stack.
+                    if let Some((quads, fade)) = &param_scrollbar {
+                        for &(qx, qy, qw, qh, mut qc) in quads {
+                            qc[3] *= 1.0 - fade;
                             pc.rounded_rect(rect(qx, qy, qw, qh), qw.min(qh) * 0.5, (true, true, true, true), qc);
                         }
                     }

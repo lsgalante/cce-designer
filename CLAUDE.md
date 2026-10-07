@@ -2337,6 +2337,9 @@ of these follow). The PARAM_IDX arm draws the idle copy of
 `ParametersBg::scrollbar_quads` before the plate every frame and the fore
 copy after the rows at `scrollbar_fade()`, where it drew ONE copy on
 either side of the plate by the latch, so a raise and a sink were a flip.
+Both panes draw the idle copy at `1 - fade` (since 2026-10-06): at full
+strength it showed through the plate under a raised bar, and the two
+stacked into a bar that read nearly opaque.
 
 ### An edit is in from the next frame
 
