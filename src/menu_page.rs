@@ -21,7 +21,7 @@
 //! - A page of rows is shown by the menu that owns it (`put_up_menu` with
 //!   an `at`): the viewport menu's Style and Markers, the plate rows' Add
 //!   Tab — whose back band returns to whichever menu it was turned from,
-//!   the network or playbar menu or a stub's plate menu.
+//!   the playbar menu or a stub's plate menu.
 //! - The dialog turned to from a row (`State::dialog_from`) goes back to
 //!   that menu, shown again at the dialog's corner; inside the dialog, a
 //!   mode turned to from another (Group Markers from the palette, one
@@ -34,7 +34,7 @@
 use crate::app::{NetworkMenuAction, NodeMenuAction, PlaybarMenuAction, State, ViewportMenuAction};
 use crate::dialog::Mode;
 use crate::plate_menu::{plate_title, PlateMenuAction};
-use crate::slots::{DIALOG_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX};
+use crate::slots::{DIALOG_IDX, PLAYBAR_IDX};
 use cce_ui::widget::context_menu::{self, PageTurn};
 use cce_ui::widget::WidgetId;
 
@@ -52,11 +52,10 @@ pub enum MenuOrigin {
 }
 
 impl MenuOrigin {
-    /// The menu a plate's rows are part of: the network and playbar menus
-    /// carry their plates' rows, every other plate's are a menu alone.
+    /// The menu a plate's rows are part of: the playbar menu carries its
+    /// plate's rows, every other plate's are a menu alone.
     pub fn of_plate(idx: usize) -> MenuOrigin {
         match idx {
-            NETWORK_PANEL_IDX => MenuOrigin::Network,
             PLAYBAR_IDX => MenuOrigin::Playbar,
             other => MenuOrigin::Plate(other),
         }
@@ -72,9 +71,9 @@ impl ViewportMenuAction {
 }
 
 impl NetworkMenuAction {
-    /// Add Node turns the menu into the add-node list; Add Tab into its page.
+    /// Add Node turns the menu into the add-node list.
     pub fn leads_to_page(self) -> bool {
-        matches!(self, NetworkMenuAction::Command("add_node") | NetworkMenuAction::PlatePage)
+        matches!(self, NetworkMenuAction::Command("add_node"))
     }
 }
 
@@ -220,10 +219,6 @@ impl State {
                     Some(NetworkMenuAction::Command("add_node")) => {
                         self.close_network_menu();
                         self.open_dialog_from(Mode::AddNode, origin, at);
-                    }
-                    Some(NetworkMenuAction::PlatePage) => {
-                        self.close_network_menu();
-                        self.open_plate_page(NETWORK_PANEL_IDX, at, origin);
                     }
                     _ => return false,
                 },

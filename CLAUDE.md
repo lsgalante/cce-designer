@@ -250,14 +250,15 @@ gone from cce-ui with the wgpu path).
   viewport, whose plate is the window-spanning lip) — Collapse/Expand, Detach/
   Reattach, Full Width, the selection pins, the dock's tabs, Add Tab, Move To Own
   Plate, **Move To Left/Right/Bottom** and Close Tab. The network and the params
-  HUD are in no dock, so theirs are Detach (and the HUD's pins) alone. `plate_menu_rows(idx)` is the
+  HUD are in no dock, so theirs are Detach (and the HUD's pins) alone, and the
+  network's are in no menu: its Plate page went on 2026-10-07, Detach being the
+  `detach_circular_window` command in the palette. `plate_menu_rows(idx)` is the
   one list. **There is no corner trigger** (since 2026-10-01; it was a small
   circle on each plate's top-right, which opened these rows as a menu of their
   own and, DRAGGED, moved the pane to another dock — the drag, its drop
   highlight and `AppDrag::DockDrag` went with it, and Move To is the rows'
   replacement). The rows are in each plate's RIGHT-CLICK menu: a **Plate**
-  PAGE row (see "Page rows" below) at the foot of the network editor's
-  empty-space menu (`NetworkMenuAction::PlatePage`) and the playbar's
+  PAGE row (see "Page rows" below) at the foot of the playbar's menu
   (`PlaybarMenuAction::PlatePage`), which turns the menu into them under a
   band back to it (`open_plate_page`; until 2026-10-06 they were appended
   inline there), and the whole menu where a pane has none of its own — the
@@ -266,7 +267,7 @@ gone from cce-ui with the wgpu path).
   `run_plate_menu_action`. Add Tab is a page row too: the menu turns into
   the list of panes where it stood, under a back band to whichever menu it
   turned from (`State::plate_page_from`) — from a Plate page, back to that
-  page, whose band goes back to the network's or the playbar's menu
+  page, whose band goes back to the playbar's menu
   (`State::plate_page_root`). Collapse shrinks a plate to its title stub via
   `apply_collapsed_panes`, a post-pass over `positions[..]` (one place, all three
   branches); a LEFT press on a collapsed stub expands it, and a right press on any
@@ -2785,7 +2786,9 @@ none. The left dock starts EMPTY (`dock_panes` `[NO_PANE, NO_PANE,
 spreadsheet]`), so the spreadsheet runs flush to the window's left, where
 it stopped short of the network's invisible dock until then;
 `TAB_CANDIDATES` is the spreadsheet and the second editor; the network's
-plate menu is Detach alone (no tab, Move To or Collapse rows), and
+plate menu is Detach alone (no tab, Move To or Collapse rows) — and is in
+no menu: the network menu's Plate page went the next day, Detach being the
+palette's `detach_circular_window` — and
 `set_pane_collapsed` refuses it; the pane-state load takes it out of an
 older save's tab lists, the dock it fronted fronting its next tab or
 emptying (`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones`

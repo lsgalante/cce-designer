@@ -570,9 +570,6 @@ pub enum PlaybarMenuAction {
 pub enum NetworkMenuAction {
     /// Run `command::by_id(id)` — the row's label came from the same row.
     Command(&'static str),
-    /// The Plate row: a page turning the menu into the network pane's
-    /// plate rows — collapse, detach, its dock's tabs, Move To.
-    PlatePage,
     /// A "-" row: engraved, inert.
     Separator,
 }
@@ -7610,14 +7607,9 @@ impl State {
             options.pop();
             actions.pop();
         }
-        // The network pane's plate rows, below the graph's own, as a page:
-        // one Plate row the menu turns into them (`open_plate_page`).
-        if !self.plate_menu_rows(NETWORK_PANEL_IDX).0.is_empty() {
-            options.push("-".to_string());
-            actions.push(NetworkMenuAction::Separator);
-            options.push("Plate".to_string());
-            actions.push(NetworkMenuAction::PlatePage);
-        }
+        // No Plate page (since 2026-10-07): the network has no plate and is
+        // in no dock, so its plate rows were Detach alone, which is the
+        // `detach_circular_window` command in the palette.
 
         let target = self.slots.get_dyn(CONTENT_IDX).base().id();
         let back = self.network_menu_from.filter(|_| at.is_some());

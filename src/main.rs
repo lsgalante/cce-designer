@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn a_plates_rows_are_in_its_right_click_menu() {
         use crate::plate_menu::PlateMenuAction;
-        use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
+        use crate::slots::{PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         use cce_ui::widget::{context_menu, MouseButton};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
@@ -444,9 +444,8 @@ mod tests {
         state.params_plate = false;
 
         // The network: its menu is the viewport menu's Network page (empty
-        // graph space is the scene's), and in it its own rows, then one
-        // Plate row, a page: the menu turns into the plate's rows, under a
-        // band back to it.
+        // graph space is the scene's), and it has no Plate page — the
+        // network has no plate and is in no dock.
         let (cx, cy, cw, ch) = state.positions[crate::slots::CONTENT_IDX];
         let (px, py) = (cx + cw * 0.3, cy + ch * 0.6);
         assert!(state.graph().node_at(px, py).is_none() && !state.over_floating_pane_at(px, py));
@@ -456,18 +455,7 @@ mod tests {
         assert!(state.network_menu_active, "the Network row turned the menu into the network's");
         let options = cce_ui::widget::context_menu::options();
         assert_eq!(options.first().map(String::as_str), Some("Add Node"));
-        assert!(!options.contains(&collapse) && !options.iter().any(|o| o.starts_with("Move To")), "no plate rows inline: {options:?}");
-        let plate = options.iter().position(|o| o == "Plate").expect("a Plate row");
-        assert!(context_menu::leads_to_page(plate), "a page row");
-        let corner = (context_menu::x(), context_menu::y());
-        press_at(&mut state, corner.0 + 8.0, context_menu::row_y(plate) + 4.0, MouseButton::Left);
-        assert_eq!(state.plate_menu_slot, Some(NETWORK_PANEL_IDX), "turned into the plate's rows");
-        assert_eq!((context_menu::x(), context_menu::y()), corner, "where the menu stood");
-        assert_eq!(context_menu::back_title().as_deref(), Some("Network"));
-        // The network is in no dock and does not collapse: Detach alone.
-        assert_eq!(context_menu::options(), vec!["Detach".to_string()]);
-        press_at(&mut state, corner.0 + 20.0, corner.1 + context_menu::PAD + context_menu::ROW_H * 0.5, MouseButton::Left);
-        assert!(state.network_menu_active && state.plate_menu_slot.is_none(), "back on the network's menu");
+        assert!(!options.iter().any(|o| o == "Plate" || *o == collapse || o.starts_with("Move To")), "no plate rows: {options:?}");
         press_at(&mut state, 2.0, 2.0, MouseButton::Left);
 
         // The playbar: its transport, then the Plate page row.
