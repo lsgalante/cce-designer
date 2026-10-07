@@ -18115,6 +18115,47 @@ mod tests {
         }
     }
 
+    /// The fill's vertices are `triangulate`'s, vertex for vertex, written
+    /// a stretch of primitives a thread on a mesh large enough to share
+    /// out and on one thread below that — with polygons, segments and a
+    /// primitive naming a point past the end among them; and the vector
+    /// markers are what one thread writes, in order.
+    #[test]
+    fn detail_vertices_are_the_triangulation() {
+        use crate::geometry::{detail_vertices, Vertex3D};
+        let bits = |v: &[Vertex3D]| v.iter().map(|v| (v.position.map(f32::to_bits), v.color.map(f32::to_bits))).collect::<Vec<_>>();
+        let mut meshes = vec![crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 5, 7), crate::geometry::sphere_detail(Vec3::new(0.1, 0.2, 0.3), 2.0, 140, 280)];
+        let mut odd = crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 4, 6);
+        odd.add_prim(&[0, 1]);
+        odd.add_prim(&[2, 3, 4, 5, 6]);
+        odd.add_prim(&[1, 2, 999]);
+        meshes.push(odd);
+        for d in &mut meshes {
+            let n = d.num_points();
+            d.points_mut().insert(crate::detail::CD, crate::detail::AttribData::Float3((0..n).map(|p| [p as f32 / n as f32, 0.25, 0.5]).collect())).unwrap();
+            let want = d.triangulate(|position, color| Vertex3D { position, color });
+            assert_eq!(bits(&detail_vertices(d)), bits(&want), "{} prims", d.num_prims());
+
+            d.points_mut().create(&format!("{}dir", crate::detail::VIS_PREFIX), crate::detail::AttribValue::Float3([0.0; 3]));
+            let name = format!("{}dir", crate::detail::VIS_PREFIX);
+            for p in (0..n).step_by(3) {
+                d.points_mut().set_value(&name, p, crate::detail::AttribValue::Float3([0.1, p as f32 * 0.001, -0.2])).unwrap();
+            }
+            let lin = cce_ui::colors::to_linear_rgb;
+            let mut want = Vec::new();
+            for p in 0..n {
+                let dir = d.points().value(&name, p).unwrap().as_vec3();
+                if dir.length_squared() < 1e-12 {
+                    continue;
+                }
+                let color = lin(d.color(p));
+                want.push(Vertex3D { position: d.positions()[p], color });
+                want.push(Vertex3D { position: (d.pos(p) + dir).to_array(), color });
+            }
+            assert_eq!(bits(&crate::geometry::vis_marker_vertices(d, lin)), bits(&want));
+        }
+    }
+
     /// The playbar's cache strip, as a rule: a frame is cached when every
     /// simnet in the tree holds it, stale when one of them holds it from
     /// the chain as it was — before an edit the solve went on across, or

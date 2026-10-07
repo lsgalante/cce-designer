@@ -3538,6 +3538,20 @@ merges into an empty one, giving `merge`'s result to the last identity
 (`merge_owned_is_merge`). The graph's evaluation at 57k points: 2.7 ms a
 frame to 0.5.
 
+**The viewport's meshes, rebuilt every frame of a replay** (the same day):
+`geometry::detail_vertices` — the fill — writes its triangles a stretch of
+primitives a thread into one buffer, each primitive's place worked out by
+a first pass (`triangulate`'s vertices, bit for bit:
+`detail_vertices_are_the_triangulation`); `vis_marker_vertices` builds a
+piece of points a thread, joined in order; and `marker_instances` checks
+for coincident points with a plain multiplicative hasher
+(`geometry::QuickHash`) in place of the default one. At 57k points
+`present_scene` went from 6.5 ms a frame to 4.7: the fill 2.2 to 0.9, the
+point markers' instances 1.4 to 1.1, the wire 1.0 to 0.8; the vector
+markers (1.0) and the visualizers' copy and apply (1.0) are what is left,
+with the point markers' duplicate check (0.8 of their 1.1). A fresh 8 MB
+buffer a frame costs 0.2 ms, so reusing buffers was not worth it.
+
 **The markers are instanced** (the same day, cce-ui's
 `SceneDraw::instances`): every kind — Show Point Markers, Show Vertex
 Markers, the selected group's, the marked groups' and the spreadsheet

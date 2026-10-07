@@ -952,7 +952,7 @@ fn solve_surface(geom: &mut Detail, before: Option<&[Vec3]>, target: &FsNode, to
 ///
 /// Threads and not a pool, since the crate has none: a thread costs tens
 /// of microseconds to start, which is what `least` is for.
-fn in_pieces<R: Send>(count: usize, least: usize, run: impl Fn(std::ops::Range<usize>) -> R + Sync) -> Vec<R> {
+pub(crate) fn in_pieces<R: Send>(count: usize, least: usize, run: impl Fn(std::ops::Range<usize>) -> R + Sync) -> Vec<R> {
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(count / least.max(1)).max(1);
     if threads == 1 {
         return vec![run(0..count)];

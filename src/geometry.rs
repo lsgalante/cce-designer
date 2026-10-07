@@ -64,8 +64,70 @@ pub fn rt_scene_from_verts(
 
 /// A [`Detail`]'s triangles as renderer vertices — the one place the 3D scene
 /// crosses out of the geometry model.
+///
+/// What `Detail::triangulate` makes, vertex for vertex, written a stretch
+/// of primitives a thread (`detail_vertices_are_the_triangulation`): a
+/// first pass places each primitive's triangles in the buffer, and the
+/// threads fill their own stretches of it. The fill is rebuilt on every
+/// frame of a playing simulation, and at 57k points it was the largest
+/// part of what the viewport's meshes cost (until 2026-10-07).
 pub fn detail_vertices(d: &Detail) -> Vec<Vertex3D> {
-    d.triangulate(|position, color| Vertex3D { position, color })
+    let colors = d.point_colors();
+    let positions = d.positions();
+    let n = d.num_prims();
+    let mut start = Vec::with_capacity(n + 1);
+    let mut total = 0usize;
+    start.push(0);
+    for prim in 0..n {
+        let k = d.prim_points(prim).len();
+        if k >= 3 {
+            total += (k - 2) * 3;
+        }
+        start.push(total);
+    }
+    let corner = |p: u32| {
+        let p = p as usize;
+        Vertex3D {
+            position: positions.get(p).copied().unwrap_or([0.0; 3]),
+            color: colors.get(p).copied().unwrap_or(crate::detail::DEFAULT_COLOR),
+        }
+    };
+    let fill = |out: &mut [Vertex3D], prims: std::ops::Range<usize>| {
+        let mut i = 0;
+        for prim in prims {
+            let pts = d.prim_points(prim);
+            if pts.len() < 3 {
+                continue;
+            }
+            for k in 1..pts.len() - 1 {
+                for &p in &[pts[0], pts[k], pts[k + 1]] {
+                    out[i] = corner(p);
+                    i += 1;
+                }
+            }
+        }
+    };
+    // A thread costs tens of microseconds to start: a piece is at least
+    // this many primitives, so a small mesh stays on one.
+    const PIECE: usize = 8192;
+    let mut out = vec![Vertex3D { position: [0.0; 3], color: [0.0; 3] }; total];
+    let threads = std::thread::available_parallelism().map_or(1, |t| t.get()).min(n / PIECE).max(1);
+    if threads == 1 {
+        fill(&mut out, 0..n);
+        return out;
+    }
+    let per = n.div_ceil(threads);
+    std::thread::scope(|scope| {
+        let mut rest: &mut [Vertex3D] = &mut out;
+        for t in 0..threads {
+            let (a, b) = ((t * per).min(n), ((t + 1) * per).min(n));
+            let (mine, tail) = rest.split_at_mut(start[b] - start[a]);
+            rest = tail;
+            let fill = &fill;
+            scope.spawn(move || fill(mine, a..b));
+        }
+    });
+    out
 }
 
 /// The fill's triangles reordered FARTHEST FIRST from `eye` (mesh space),
@@ -3998,30 +4060,36 @@ pub fn ramp_color(name: &str, t: f32) -> [f32; 3] {
 /// overlay walk keeps a marker a property of the geometry that reached the
 /// viewport rather than of a node's display prefs, and costs one pass over
 /// geometry already in hand.
-pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<Vertex3D> {
+pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 3] + Sync) -> Vec<Vertex3D> {
     let mut out = Vec::new();
+    let colors = geom.point_colors();
+    let positions = geom.positions();
     for name in geom.points().names() {
         if !name.starts_with(crate::detail::VIS_PREFIX) {
             continue;
         }
         let Some(data) = geom.points().get(name) else { continue };
-        let cd = geom.points().get(crate::detail::CD);
-        for p in 0..geom.num_points() {
-            let Some(v) = data.get(p) else { continue };
-            let dir = v.as_vec3();
-            if dir.length_squared() < 1e-12 {
-                continue;
+        // A piece of points a thread, the pieces joined in order: the
+        // colour conversion a point is most of the cost, and every point's
+        // is its own (since 2026-10-07).
+        let pieces = crate::detangle::in_pieces(geom.num_points(), 8192, |range| {
+            let mut piece = Vec::new();
+            for p in range {
+                let Some(v) = data.get(p) else { continue };
+                let dir = v.as_vec3();
+                if dir.length_squared() < 1e-12 {
+                    continue;
+                }
+                // Drawn in the point's own colour, so a Ramp Visualize upstream
+                // colours the markers too and one chain says two things at once.
+                let color = linearize(colors.get(p).copied().unwrap_or(crate::detail::DEFAULT_COLOR));
+                piece.push(Vertex3D { position: positions[p], color });
+                piece.push(Vertex3D { position: (Vec3::from_array(positions[p]) + dir).to_array(), color });
             }
-            // Drawn in the point's own colour, so a Ramp Visualize upstream
-            // colours the markers too and one chain says two things at once.
-            // Read as `Detail::color` does, off the column found once.
-            let color = linearize(match cd.and_then(|c| c.get(p)) {
-                Some(AttribValue::Float3(c)) => c,
-                Some(other) => other.as_vec3().to_array(),
-                None => crate::detail::DEFAULT_COLOR,
-            });
-            out.push(Vertex3D { position: geom.positions()[p], color });
-            out.push(Vertex3D { position: (geom.pos(p) + dir).to_array(), color });
+            piece
+        });
+        for piece in pieces {
+            out.extend(piece);
         }
     }
     out
@@ -6744,7 +6812,11 @@ pub fn marker_sphere(size: f32) -> Vec<Vertex3D> {
 /// uploaded on every frame of a playing simulation; instanced, they are
 /// ten thousand of these.
 pub fn marker_instances(src: &[Vertex3D], color: [f32; 3]) -> Vec<Vertex3D> {
-    let mut seen = std::collections::HashSet::with_capacity(src.len());
+    // Membership is all the set is asked; the default hasher's protection
+    // against chosen keys is wasted on quantized positions and was most of
+    // what building the instances cost (until 2026-10-07).
+    let mut seen: std::collections::HashSet<(i32, i32, i32), std::hash::BuildHasherDefault<QuickHash>> =
+        std::collections::HashSet::with_capacity_and_hasher(src.len(), Default::default());
     let mut out = Vec::with_capacity(src.len());
     for v in src {
         let key = (
@@ -6757,6 +6829,28 @@ pub fn marker_instances(src: &[Vertex3D], color: [f32; 3]) -> Vec<Vertex3D> {
         }
     }
     out
+}
+
+/// A plain multiplicative hasher for small integer keys, where the set is
+/// the program's own and nothing chooses its keys.
+#[derive(Default)]
+pub(crate) struct QuickHash(u64);
+
+impl std::hash::Hasher for QuickHash {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_i32(&mut self, i: i32) {
+        self.write_u64(i as u32 as u64);
+    }
+    fn write_u64(&mut self, i: u64) {
+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
 }
 
 /// What a renderer draws for `mesh` instanced over `instances` (cce-ui's
