@@ -2749,7 +2749,7 @@ relief is two shapes", "Frost is one block"); this is the designer's view of
 them, written because the question "what are the style parameters of the
 plates" took a session to answer from the code.
 
-### The network plate is optional
+### The network plate is optional, and off by default (since 2026-10-06)
 
 The network pane can drop its PLATE — the filled, frosted surface its graph
 sits on — so the nodes and wires overlay the 3D scene directly. The viewport is
@@ -2904,6 +2904,14 @@ are more immediate than a selection. There is also a `deselect` command, shipped
 UNBOUND so it is findable in the palette — deliberately not Ctrl+D, which the
 plugin uses for deselect-all but which this app already gives to Circular Pane.
 
+**Off is the default** (since 2026-10-06; `default_network_plate`, and
+what a state.kdl or a project display block without the key reads). A
+project saved with the plate on still opens with it on, its display block
+saying so. The suite's tests written against the plated layout — the dock
+geometry, the grid drags, a pointer at the viewport's middle — pin
+`state.network_plate = true` after `State::new`, which keeps what they
+check what it was.
+
 `ViewportSettings::network_plate` persists it, beside the viewport toggles
 rather than in the project's pane-state list: a pane's VISIBILITY belongs to
 the project, but whether its surface is drawn is how you like to work, and it
@@ -2945,6 +2953,7 @@ other rows below swapped the plate on a click — some with a Back row, most
 with no way back — two gestures for one idea.
 
 The page rows: the viewport menu's **Style** and **Markers** (pages of rows;
+and **Network**, the network menu, while the network has no plate;
 its **Attribute Visualizers** row was one too, into the dialog, until
 2026-10-06 — it is a plain row now, opening them in the params HUD); the
 network menu's **Add Node**
@@ -3015,7 +3024,19 @@ here would duplicate a key the loop claims.
 
 With the plate OFF the press never gets here — `in_network_pane` narrows to the
 nodes in overlay mode, so empty space is the scene's and opens the VIEWPORT
-menu. That is the overlay's whole rule, and it predates this menu.
+menu. That is the overlay's whole rule, and it predates this menu. So in
+overlay mode (the default since 2026-10-06) **this menu is a page of the
+viewport's**: a **Network** row heads the viewport menu
+(`ViewportMenuAction::NetworkPage`) and turns it into this one under a
+`‹ Viewport` band (`State::network_menu_from`). The viewport menu's press
+remembers the cell under it when it lands in the network's area
+(`State::network_menu_cell`), and the turn (`open_network_menu_from_viewport`)
+puts the grid cursor there and focuses the network — so Add Node places
+where the menu was opened, and Frame Cursor, gated on the network's focus,
+acts. Merely opening the viewport menu moves no cursor: the cursor is the
+selection, and a right-click to flip a display switch must not deselect.
+`the_network_menu_is_a_page_of_the_viewport_menu_without_the_plate` is the
+test.
 
 The press moves the grid cursor to the clicked cell BEFORE the menu goes up,
 because that cell is where Add Node will place what it adds — the cursor is the

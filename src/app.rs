@@ -490,6 +490,10 @@ impl ViewportMenuPage {
 pub enum ViewportMenuAction {
     /// A row that turns the menu into one of its pages.
     Page(ViewportMenuPage),
+    /// The Network row, while the network has no plate: a page turning the
+    /// menu into the network's own menu, which a right press on empty graph
+    /// space can no longer reach — that space is the scene's.
+    NetworkPage,
     /// Move the active camera so the visible node geometry fills the view.
     FrameAll,
     /// Put the pivot plane at true size: one world unit (the Guides "World
@@ -2175,6 +2179,7 @@ pub struct ViewportSettings {
     /// settings rather than in a pane-state list because it is an appearance
     /// choice that outlives any one project — a pane's VISIBILITY belongs to
     /// the project, but whether its surface is drawn is how you like to work.
+    /// Off by default (since 2026-10-06): the nodes stand on the scene.
     #[serde(default = "default_network_plate")]
     pub network_plate: bool,
     /// Whether the params HUD draws its plate — one FITTED to its rows,
@@ -2399,7 +2404,7 @@ impl Default for RenderSettings {
 }
 
 fn default_network_plate() -> bool {
-    true
+    false
 }
 
 fn default_params_plate() -> bool {
@@ -2415,7 +2420,7 @@ impl Default for ViewportSettings {
             camera_pivot_size: 1.0,
             show_grid_enabled: true,
             show_origin_enabled: true,
-            network_plate: true,
+            network_plate: false,
             params_plate: true,
             node_wire_style: String::new(),
             show_point_markers: false,
@@ -3048,6 +3053,15 @@ pub struct State {
     /// with the flag saying the open menu is this one.
     pub network_menu_active: bool,
     pub network_menu_actions: Vec<NetworkMenuAction>,
+    /// The menu the network menu was turned to from — the viewport's, with
+    /// the plate off — which its back band returns to. None when a right
+    /// press on the graph opened it.
+    pub network_menu_from: Option<crate::menu_page::MenuOrigin>,
+    /// The grid cell under the viewport menu's right press, while the
+    /// network has no plate and the press was over its area: where the
+    /// grid cursor goes if the menu is turned to the network's, so Add Node
+    /// places at the cell pointed at, as the plated network's press does.
+    pub network_menu_cell: Option<(i32, i32)>,
     /// The plate corner menu — same `context_menu` thread-local again; the slot
     /// says which plate's control opened it (and doubles as the pressed state
     /// the corner control paints with).
@@ -7288,6 +7302,13 @@ impl State {
             None => {}
         }
 
+        // With the network's plate off, empty graph space is the scene's,
+        // so the network's menu is a page of this one, at its head.
+        if self.network_overlay() {
+            row(&mut options, &mut actions, "Network".into(), ViewportMenuAction::NetworkPage);
+            row(&mut options, &mut actions, "-".into(), sep);
+        }
+
         row(&mut options, &mut actions, "Frame All".into(), ViewportMenuAction::FrameAll);
         row(&mut options, &mut actions, "View 1:1".into(), ViewportMenuAction::OneToOne);
 
@@ -7354,6 +7375,11 @@ impl State {
             ViewportMenuAction::Page(page) => {
                 let at = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
                 self.show_viewport_menu_page(Some(page), Some(at));
+            }
+            ViewportMenuAction::NetworkPage => {
+                let at = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
+                self.close_viewport_menu();
+                self.open_network_menu_from_viewport(at);
             }
             ViewportMenuAction::PinFollow => {
                 self.viewport_pin = None;
@@ -7448,7 +7474,29 @@ impl State {
     /// the viewport menu's radio rows use, read through
     /// `command_toggle_state` — the one table the dialog's switches read too.
     fn open_network_context_menu(&mut self) {
+        self.network_menu_from = None;
         self.open_network_context_menu_at(None);
+    }
+
+    /// Turn the viewport menu, standing at `at`, into the network's: what
+    /// its Network row does while the network has no plate. The network
+    /// takes focus — its menu's commands are the network's, and the
+    /// cursor ones act only on a focused network — and the grid cursor goes
+    /// to the cell the menu was opened over, when it was opened over one.
+    pub(crate) fn open_network_menu_from_viewport(&mut self, at: (f32, f32)) {
+        if let Some((col, row)) = self.network_menu_cell.take() {
+            self.grid_cursor_col = col;
+            self.grid_cursor_row = row;
+        }
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            self.focused_pane = LEFT_MENUBAR_IDX;
+            if let Some(old) = self.focused_widget.take() {
+                self.slots.get_dyn_mut(old).unfocus();
+            }
+            self.sync_pane_focus();
+        }
+        self.network_menu_from = Some(crate::menu_page::MenuOrigin::Viewport);
+        self.open_network_context_menu_at(Some(at));
     }
 
     /// The network menu at the pointer, or with its top-left at `at` in
@@ -7489,7 +7537,8 @@ impl State {
         }
 
         let target = self.slots.get_dyn(CONTENT_IDX).base().id();
-        self.put_up_menu(at, None, options, 0, target);
+        let back = self.network_menu_from.filter(|_| at.is_some());
+        self.put_up_menu(at, back, options, 0, target);
         crate::menu_page::mark_page_rows(&actions, |a| a.leads_to_page());
         self.network_menu_active = true;
         self.network_menu_actions = actions;
@@ -8655,6 +8704,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             structure_base: None,
             network_menu_active: false,
             network_menu_actions: Vec::new(),
+            network_menu_from: None,
+            network_menu_cell: None,
             sim_cache: crate::geometry::SimCache::default(),
             playbar_cache_key: None,
             page_image: None,
@@ -11857,6 +11908,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             self.close_network_menu();
                             self.close_param_menu();
                             if self.cursor_in_viewport() && !in_circle_network_pane {
+                                self.network_menu_cell = (self.network_overlay()
+                                    && self.in_network_area(self.cursor_x, self.cursor_y))
+                                .then(|| self.cell_at(self.cursor_x, self.cursor_y));
                                 self.open_viewport_context_menu();
                                 return true;
                             }

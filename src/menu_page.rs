@@ -67,7 +67,7 @@ impl ViewportMenuAction {
     /// Whether the row turns the menu: its pages, and the visualizers'
     /// editor, which is the dialog.
     pub fn leads_to_page(self) -> bool {
-        matches!(self, ViewportMenuAction::Page(_))
+        matches!(self, ViewportMenuAction::Page(_) | ViewportMenuAction::NetworkPage)
     }
 }
 
@@ -189,6 +189,13 @@ impl State {
                 MenuOrigin::Viewport if self.viewport_menu_page.is_some() => {
                     self.show_viewport_menu_page(None, Some(at));
                 }
+                // The network menu turned to from the viewport's (the plate
+                // off) goes back to it.
+                MenuOrigin::Network if self.network_menu_from.is_some() => {
+                    let from = self.network_menu_from.take().unwrap();
+                    self.close_network_menu();
+                    self.reopen_menu(from, at.0, at.1);
+                }
                 MenuOrigin::Plate(_) if self.plate_page_from.is_some() => {
                     let from = self.plate_page_from.take().unwrap();
                     // Back out of a plate page to its menu: the page is done.
@@ -203,6 +210,10 @@ impl State {
             PageTurn::Into(n) => match origin {
                 MenuOrigin::Viewport => match self.viewport_menu_actions.get(n).copied() {
                     Some(ViewportMenuAction::Page(page)) => self.show_viewport_menu_page(Some(page), Some(at)),
+                    Some(ViewportMenuAction::NetworkPage) => {
+                        self.close_viewport_menu();
+                        self.open_network_menu_from_viewport(at);
+                    }
                     _ => return false,
                 },
                 MenuOrigin::Network => match self.network_menu_actions.get(n).copied() {
