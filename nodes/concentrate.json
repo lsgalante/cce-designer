@@ -1,0 +1,70 @@
+{
+  "name": "Concentrate",
+  "type": "concentrate",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    {
+      "name": "input",
+      "label": "Input",
+      "type": "node",
+      "default": "",
+      "description": "The surface whose point attribute gathers into peaks over it."
+    },
+    {
+      "name": "attribute",
+      "label": "Attribute",
+      "type": "attribute",
+      "default": "mass",
+      "description": "The point attribute that concentrates; must already exist. Floats, integers and vectors, each component on its own; integers stay whole. Nothing is taken below zero, or below the lowest value where some are negative, so a point can be emptied but not overdrawn."
+    },
+    {
+      "name": "follow",
+      "label": "Follow",
+      "type": "attribute",
+      "default": "",
+      "description": "The point attribute whose higher values draw the value in. Empty follows the attribute itself, so where there is more, more gathers. Must be one number, or as wide as Attribute.",
+      "group": "rate"
+    },
+    {
+      "name": "response",
+      "label": "Response",
+      "type": "choice:Difference,Amount",
+      "default": "Difference",
+      "description": "How hard a point is drawn on. Difference: by how much higher its neighbour is, the reverse of Diffuse. Amount: that times how much the giving point holds, so sparse regions barely move and dense ones gather fast; against a Diffuse at the same Rate it gathers where the value is above one and spreads where it is below.",
+      "group": "rate"
+    },
+    {
+      "name": "rate",
+      "label": "Rate",
+      "type": "float",
+      "default": "0.01",
+      "description": "How fast the value gathers, in square world units per frame, measured over the surface as Diffuse's Rate is. The same Rate in a Diffuse and a Concentrate with Response Difference cancels.",
+      "group": "rate"
+    },
+    {
+      "name": "rate_by",
+      "label": "Rate By",
+      "type": "attribute",
+      "default": "",
+      "description": "A point attribute that scales Rate where it lies. Empty gathers evenly; a name that is not an attribute is an error.",
+      "group": "rate"
+    },
+    {
+      "name": "per_frame",
+      "label": "Per Frame",
+      "type": "toggle",
+      "default": "true",
+      "description": "Inside a simulation, makes Rate a rate per frame, so the substep count does not change how far a frame gathers. Off gathers a whole frame's worth every substep.",
+      "group": "rate"
+    },
+    {
+      "name": "group",
+      "label": "Group",
+      "type": "group",
+      "default": "",
+      "description": "Only points in this group change. Points outside it hold their values and give to or take from the ones beside them. Empty changes every point.",
+      "group": "where"
+    }
+  ]
+}

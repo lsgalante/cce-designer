@@ -1415,6 +1415,10 @@ pub fn generate_single_node_geometry_with_errors(
         resolve_relax_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("neighbour") {
         resolve_neighbour_geometry_with_errors(root, target, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("diffuse") {
+        crate::surface_flow::resolve(root, target, crate::surface_flow::Flow::Diffuse, visited, ocl_error, sim)
+    } else if target.node_type.eq_ignore_ascii_case("concentrate") {
+        crate::surface_flow::resolve(root, target, crate::surface_flow::Flow::Concentrate, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("time") {
         resolve_time_geometry_with_errors(root, target, visited, ocl_error, sim)
     } else if target.node_type.eq_ignore_ascii_case("normal") {
@@ -5646,6 +5650,8 @@ pub fn is_geometry_node_type(node_type: &str) -> bool {
         || nt == "collision"
         || nt == "relax"
         || nt == "neighbour"
+        || nt == "diffuse"
+        || nt == "concentrate"
         || nt == "time"
         || nt == "analysis"
         || nt == "visualize"
@@ -6175,7 +6181,7 @@ fn walk_level(root: &FsNode, start: &FsNode, ocl_error: &mut Option<String>, sim
             // the chain alongside the result — the loop would draw itself
             // twice, once wrong.
             return;
-        } else if ["seed", "split_edges", "collapse_edges", "flip_edges", "project"]
+        } else if ["seed", "split_edges", "collapse_edges", "flip_edges", "project", "diffuse", "concentrate"]
             .iter()
             .any(|ty| node.node_type.eq_ignore_ascii_case(ty))
         {

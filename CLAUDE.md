@@ -382,7 +382,7 @@ gone from cce-ui with the wgpu path).
   are joined in order. Handle labels draw on a dark tab, since a handle
   can stand over a white image.
 
-  The HUD draws one line ABOVE the scale readout, sharing its left margin — not
+  The HUD draws at the viewport's bottom left — not
   at the top, because the viewport is full-bleed and the pane plates float over
   its top edge, so a mode line there lands under the collapsed stubs. It exists
   because a viewer state changes what every click does and snapping silently
@@ -597,15 +597,14 @@ only pinned nodes were these).
 
 **"World Unit"** (mm / cm / m / in, `State::world_unit`) survives as a
 Settings row — what one world unit IS. Geometry never converts; the
-declaration feeds two things through the display metric (`cce_ui::units`):
-the viewport's bottom-left **scale readout** (`append_scale_readout`:
-`1:2.3`, `1 mm = 0.43 mm on screen`, marked when the metric is only assumed)
-and the viewport context menu's **View 1:1** (`view_one_to_one`), which moves
+declaration feeds the viewport context menu's **View 1:1**
+(`view_one_to_one`) through the display metric (`cce_ui::units`), which moves
 the active camera along its eye ray so the pivot plane shows one world unit
 at its true length — the default camera by zoom, a camera node by rewriting
 its Position, as Frame All does. The projection is a perspective (vertical
 FOV 0.9 rad), so 1:1 holds on the pivot plane only; `view_scale_ratio` is the
-readout's number.
+view's scale there. The viewport's bottom-left **scale readout** (`1:2.3 ·
+1 mm = 0.43 mm on screen`) that showed it was removed on 2026-10-06.
 
 ### App-written settings: `~/.config/cce/cce-designer/state.kdl`
 
@@ -1124,6 +1123,54 @@ the Relax node for an hour, from its Rest — the user's slip, taken back
 the same day.) `transfer_carries_groups_and_remesh_has_a_copy` is the
 test, the rule on hand-built points and both nodes through their rows —
 the Remesh both ways, native and subnet.
+
+### Diffuse and Concentrate (since 2026-10-06)
+
+`src/surface_flow.rs`, `nodes/diffuse.json`, `nodes/concentrate.json`: a
+point attribute flowing over the SURFACE of a mesh, as a step of a
+simulation. The Neighbour node's modes of the same names stay as they were
+— a filter toward or away from the plain average of the neighbours, which
+depends on the tessellation, conserves nothing and (Concentrate) grows
+without bound. These two are the simulation's versions:
+
+- **Both run on the surface's Laplacian** (`Surface::of`): each point's
+  area (a third of each triangle around it) and each edge's cotangent
+  weight, polygons fan-triangulated. A negative weight is taken as zero —
+  exactness on obtuse triangles traded for the maximum principle. So
+  **Rate is in square world units per frame** and means the same on any
+  mesh: height on a unit sphere is the Laplacian's eigenfunction, and one
+  step of Rate 0.1 scales it by 0.840 / 0.836 / 0.834 at 12x16 / 24x32 /
+  48x64 against the exact 1/1.2
+  (`diffuse_is_a_rate_over_the_surface_and_not_the_tessellation`).
+- **Both are flux**: what leaves a point along an edge arrives at the
+  other, so the total (value times area) is conserved exactly and an open
+  boundary lets nothing out. Points outside the Group hold their values and
+  feed or drain their neighbours (a fixed temperature at a plate's edge),
+  so the total is conserved only over the whole mesh.
+- **Diffuse is one implicit step** (backward Euler, Jacobi-preconditioned
+  CG in f64): stable at any Rate.
+- **Concentrate flows UP a gradient** — of the attribute itself, or of
+  **Follow** (one number, or as wide as the attribute: chemotaxis).
+  **Response** Difference is the heat equation run backward; Amount
+  multiplies by what the giver holds (Keller–Segel aggregation: against a
+  Diffuse at the same Rate it gathers above one and spreads below). Run
+  backward the equation has no stable form; what holds it is a LIMITER: a
+  point gives at most what it holds above the floor — zero, or the lowest
+  value if some are negative — so a point is emptied, never overdrawn.
+  Zero and not the lowest value, or a uniform density could not follow
+  anything. Explicit, cut into internal steps by its stiffness (at most
+  `CONCENTRATE_STEPS_MAX`).
+- **Per Frame** (on in the templates) reads the simnet's `dt`, as the
+  Attribute node's does: one substep of Rate 0.1 leaves the pole at 0.836,
+  four at 0.826, four without it at 0.484
+  (`a_diffuse_in_a_simnet_spreads_a_frame_whatever_the_substeps`). **Rate
+  By** scales the rate per point, by the mean of an edge's two ends so the
+  flux stays symmetric. Integers round on the way back.
+- A mesh with no triangles is an error on the node ("no surface to flow
+  over"), as is a missing attribute, Rate By or Follow; the geometry then
+  passes through untouched.
+
+The tests are in the module itself.
 
 ### Mold tooling
 
@@ -3248,7 +3295,7 @@ down INTO the lip, and only its top edge is a plate's.
 
 What stands above it — the docked plates (`pb_off`, `playbar_shelf_h()`)
 and the params HUD — stops a gap short of its top, and the viewport's
-bottom-anchored text, the scale readout and a viewer state's line, stands
+bottom-anchored text, a viewer state's line, stands
 on it (`State::scene_text_floor`) rather than on its transport.
 `the_playbar_is_attached_to_the_bottom_edge` is the test.
 
@@ -3516,7 +3563,7 @@ is when the frame is painted** (`State::refresh_scene_view`, at the top of
 `collect_display_list`, since 2026-09-29). The runner paints the 2D frame
 and THEN stages the scene, and the stage pass was the one place
 `last_scene_mvp`, the pane's rect and the eye were set — so the numbers,
-a viewer state's handles and the scale readout were placed by the camera
+and a viewer state's handles were placed by the camera
 of the frame before. They trailed the geometry and its markers, which
 are meshes drawn by the frame's own matrix, by a frame whenever the
 camera moved, and stood a frame's move off their points once it stopped.
@@ -4129,7 +4176,7 @@ opacity, while the dialog is in-window and the in-app frost pass
 compresses as configured.
 
 **The dialog is painted after the overlay passes, not in the widget walk.** A
-high `z_order` is not enough: `append_frame_text`, `append_scale_readout` and the
+high `z_order` is not enough: `append_frame_text` and the
 point-number overlay all run AFTER the whole walk, so the graph's node labels drew
 straight over a dialog that had already covered them. `append_dialog` runs
 after the popovers, before the context menu, instead.

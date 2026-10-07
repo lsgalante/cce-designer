@@ -1,0 +1,54 @@
+{
+  "name": "Diffuse",
+  "type": "diffuse",
+  "inputs": 1,
+  "outputs": 1,
+  "params": [
+    {
+      "name": "input",
+      "label": "Input",
+      "type": "node",
+      "default": "",
+      "description": "The surface whose point attribute spreads out over it."
+    },
+    {
+      "name": "attribute",
+      "label": "Attribute",
+      "type": "attribute",
+      "default": "mass",
+      "description": "The point attribute that diffuses; must already exist. Floats, integers and vectors, each component on its own; integers stay whole."
+    },
+    {
+      "name": "rate",
+      "label": "Rate",
+      "type": "float",
+      "default": "0.01",
+      "description": "How fast the value spreads, in square world units per frame: a spike widens by about the square root of four times Rate each frame. Measured over the surface, so it does not change when the mesh is retessellated.",
+      "group": "rate"
+    },
+    {
+      "name": "rate_by",
+      "label": "Rate By",
+      "type": "attribute",
+      "default": "",
+      "description": "A point attribute that scales Rate where it lies, so the value spreads faster in some places than in others. Empty spreads it evenly; a name that is not an attribute is an error.",
+      "group": "rate"
+    },
+    {
+      "name": "per_frame",
+      "label": "Per Frame",
+      "type": "toggle",
+      "default": "true",
+      "description": "Inside a simulation, makes Rate a rate per frame, so the substep count does not change how far a frame spreads. Off spreads a whole frame's worth every substep.",
+      "group": "rate"
+    },
+    {
+      "name": "group",
+      "label": "Group",
+      "type": "group",
+      "default": "",
+      "description": "Only points in this group change. Points outside it hold their values and feed or drain the ones beside them, like a fixed temperature at the edge of a plate. Empty changes every point.",
+      "group": "where"
+    }
+  ]
+}
