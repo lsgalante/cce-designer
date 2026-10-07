@@ -4600,10 +4600,18 @@ impl State {
             .any(|&(x, y, w, h)| px >= x && px < x + w && py >= y && py < y + h)
     }
 
+    /// The narrowest the spreadsheet's plate is, an empty table's.
+    pub const SPREADSHEET_MIN_W: f32 = 150.0;
+
     /// The spreadsheet's rect — the single derivation the layout pass and
     /// the edge hotspot share: the strip along the bottom, a gap in from
-    /// the window's sides, standing a gap above the playbar, as tall as
-    /// `floating_spreadsheet_height` asks within the window. (Until
+    /// the window's left, standing a gap above the playbar, as tall as
+    /// `floating_spreadsheet_height` asks within the window, and as WIDE AS
+    /// ITS TABLE (since 2026-10-07; `Spreadsheet::content_width`, the
+    /// columns as wide as their content) up to the window less a gap each
+    /// side, where a wider table scrolls — it spanned the window, and a
+    /// narrow table left most of the plate empty over the scene. Never
+    /// narrower than `Self::SPREADSHEET_MIN_W`, which an empty table is. (Until
     /// 2026-10-07 it was the bottom DOCK's rect: panes were assigned to a
     /// left, right and bottom dock, swapped by Move To, and the
     /// spreadsheet's sides could tuck under a side dock's plate.)
@@ -4614,7 +4622,9 @@ impl State {
         let pb_off = if self.show_playbar { playbar_shelf_h() } else { 0.0 };
         let ss_y_end = self.height - STATUS_H - pb_off - gap;
         let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
-        (gap, ss_y_end - ss_h, (self.width - 2.0 * gap).max(150.0), ss_h)
+        let room = (self.width - 2.0 * gap).max(Self::SPREADSHEET_MIN_W);
+        let w = self.slots.spreadsheet().content_width().ceil().clamp(Self::SPREADSHEET_MIN_W, room);
+        (gap, ss_y_end - ss_h, w, ss_h)
     }
 
     /// Whether (cx, cy) is on the spreadsheet's top edge, which resizes its
@@ -7823,6 +7833,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // Same members, new size (the palette's Group Marker Size):
             // re-size without re-evaluating.
             self.rebuild_group_markers();
+        }
+        // The plate is as wide as the table: a table that came out wider or
+        // narrower lays the panes out again — last, once everything this
+        // refresh read is in, since the layout pass can come back here.
+        // Positions only: `sync_layout` also moves the grid cursor and with
+        // it the selection, which a refresh of what is selected must not.
+        if self.show_spreadsheet && self.positions[SPREADSHEET_IDX].2 > 0.0 && self.positions[SPREADSHEET_IDX].2 != self.floating_spreadsheet_rect().2 {
+            self.rebuild_positions();
+            self.apply_layout();
         }
     }
 

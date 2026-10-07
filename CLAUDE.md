@@ -2808,9 +2808,18 @@ the spreadsheet the one pane a dock could hold, and the model went whole:
 tabs first, then the docks.
 
 What is left is two plate edges. The **spreadsheet** is the strip along
-the bottom, a gap in from the window's sides and a gap above the playbar,
+the bottom, a gap in from the window's left and a gap above the playbar,
 as tall as `floating_spreadsheet_height` asks (`floating_spreadsheet_rect`,
-the one derivation); its TOP edge resizes it (`on_spreadsheet_resize_edge`
+the one derivation) and **as wide as its table** (since 2026-10-07,
+cce-ui's `Spreadsheet::content_width`: its columns, each as wide as its
+content), never narrower than `SPREADSHEET_MIN_W` (an empty table) and no
+wider than the window less a gap each side, where the table scrolls. It
+spanned the window, and a narrow table left most of the plate empty over
+the scene; now the params HUD runs down past a plate that stops short of
+it. A refill that changes the table's width lays out positions again at
+the end of `sync_selection_readouts` — positions only, since
+`sync_layout` also moves the grid cursor and with it the selection
+(`the_spreadsheet_plate_is_as_wide_as_its_table`). Its TOP edge resizes it (`on_spreadsheet_resize_edge`
 — its sides tucked it under a side dock's plate). The **params HUD**'s left
 edge sets `params_hud_width`. The plate menus hold the window actions alone
 — Collapse / Expand, Detach / Reattach. `PlateGeometry` saves those two

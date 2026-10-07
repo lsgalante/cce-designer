@@ -488,7 +488,8 @@ mod tests {
             state.execute_menu_action("Show Playbar Pane");
         }
         let (x, y, w, h) = state.positions[SPREADSHEET_IDX];
-        assert_eq!((x, w), (18.0, 1600.0 - 36.0), "the window's width, a gap in");
+        let table = state.slots.spreadsheet().content_width().ceil();
+        assert_eq!((x, w), (18.0, table.clamp(State::SPREADSHEET_MIN_W, 1600.0 - 36.0)), "as wide as its table, within the window");
         assert_eq!(y + h, state.positions[PLAYBAR_IDX].1 - 18.0, "a gap above the playbar");
 
         for idx in [SPREADSHEET_IDX, PARAM_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX] {
@@ -523,7 +524,7 @@ mod tests {
         b.resize(1600.0, 900.0, 1.0);
         b.load_from_file(&dir).expect("load");
         let (bx, _, bw, _) = b.positions[SPREADSHEET_IDX];
-        assert_eq!((bx, bw), (18.0, 1600.0 - 36.0), "along the bottom");
+        assert_eq!((bx, bw), (18.0, b.floating_spreadsheet_rect().2), "along the bottom");
         assert!((b.params_hud_width - 400.0).abs() < 0.5, "an older save's params width is the HUD's: {}", b.params_hud_width);
         assert!((b.floating_spreadsheet_height - 270.0).abs() < 0.5);
         let _ = fs::remove_dir_all(&dir);
@@ -2106,10 +2107,21 @@ mod tests {
         assert_eq!(hud.1 + hud.3, 900.0 - crate::app::STATUS_H - 18.0, "the viewport's height, a gap in");
 
         // The spreadsheet and the playbar below it: it stops a gap above
-        // the higher of them.
+        // the higher of them. The plate is as wide as its table: a narrow
+        // one, along the left, is not under the HUD and leaves it be.
         state.execute_menu_action("Show Spreadsheet Pane");
         state.execute_menu_action("Show Playbar Pane");
         state.floating_spreadsheet_height = 500.0;
+        state.spreadsheet_mut().set_spreadsheet_data(vec!["a".into()], vec![vec!["1".into()]]);
+        state.rebuild_positions();
+        state.apply_layout();
+        let (sx, _, sw, _) = state.positions[SPREADSHEET_IDX];
+        assert!(sx + sw < hud.0, "a narrow table's plate stops short of the HUD");
+        let below_playbar = state.positions[PARAM_IDX];
+        assert!(below_playbar.1 + below_playbar.3 > state.positions[SPREADSHEET_IDX].1, "and the HUD runs past its top");
+        // A table as wide as the window reaches under the HUD.
+        let headers: Vec<String> = (0..40).map(|i| format!("column{i}")).collect();
+        state.spreadsheet_mut().set_spreadsheet_data(headers.clone(), vec![headers.iter().map(|_| "0.0000".to_string()).collect()]);
         state.rebuild_positions();
         state.apply_layout();
         let (hx, hy, hw, hh) = state.positions[PARAM_IDX];
@@ -2137,7 +2149,10 @@ mod tests {
         assert_eq!(state.positions[PARAM_IDX].2, 420.0);
         assert_eq!(state.positions[PARAM_IDX].0 + 420.0, hud.0 + hud.2, "it keeps its right edge");
 
-        // Rows that do not fit scroll, and the plate fills the HUD.
+        // Rows that do not fit scroll, and the plate fills the HUD. (A
+        // short window: the sphere's table is narrow, its plate stops short
+        // of the HUD and the HUD runs down to the playbar.)
+        state.resize(1600.0, 360.0, 1.0);
         let mut redraw = false;
         let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
         state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
@@ -18029,6 +18044,39 @@ mod tests {
             let solved = crate::geometry::resolve_simnet_geometry_with_errors(&state.fs_root, &simnet, &mut Vec::new(), &mut None, &mut sim).unwrap();
             assert!(solved.has_topology(), "frame {frame} comes with its topology");
         }
+    }
+
+    /// The spreadsheet's plate is as wide as its table — the columns, each
+    /// as wide as its content — along the left, never narrower than an
+    /// empty table's, and no wider than the window less a gap each side,
+    /// where the table scrolls. A refill that changes the table's width
+    /// lays the plate out again, and leaves the selection alone.
+    #[test]
+    fn the_spreadsheet_plate_is_as_wide_as_its_table() {
+        use crate::slots::SPREADSHEET_IDX;
+        let mut state = State::new(false);
+        state.resize(1600.0, 900.0, 1.0);
+        if !state.show_spreadsheet {
+            state.execute_menu_action("Show Spreadsheet Pane");
+        }
+        let mut redraw = false;
+        let slot = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
+        state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+        state.sync_nodes();
+        let table = state.slots.spreadsheet().content_width();
+        let (x, _, w, _) = state.positions[SPREADSHEET_IDX];
+        assert!(table > State::SPREADSHEET_MIN_W && table < 1600.0 - 36.0, "a sphere's table: {table}");
+        assert_eq!((x, w), (18.0, table.ceil()), "the plate is the table's width, on the left");
+        assert_eq!(cce_ui::widget::WidgetHost::rect(&state.slots.spreadsheet).2, w, "and the widget has it");
+        assert_eq!(state.param_editor_selected(), Some(slot), "the selection is as it was");
+
+        state.spreadsheet_mut().set_spreadsheet_data(vec![], vec![]);
+        state.rebuild_positions();
+        assert_eq!(state.positions[SPREADSHEET_IDX].2, State::SPREADSHEET_MIN_W, "an empty table");
+        let headers: Vec<String> = (0..60).map(|i| format!("column{i}")).collect();
+        state.spreadsheet_mut().set_spreadsheet_data(headers, vec![]);
+        state.rebuild_positions();
+        assert_eq!(state.positions[SPREADSHEET_IDX].2, 1600.0 - 36.0, "a table wider than the window fills its room");
     }
 
     /// The playbar's cache strip, as a rule: a frame is cached when every
