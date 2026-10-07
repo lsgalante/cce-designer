@@ -3562,7 +3562,7 @@ any case. `a_point_number_under_a_plate_is_not_drawn` is the test.
 is when the frame is painted** (`State::refresh_scene_view`, at the top of
 `collect_display_list`, since 2026-09-29). The runner paints the 2D frame
 and THEN stages the scene, and the stage pass was the one place
-`last_scene_mvp`, the pane's rect and the eye were set — so the numbers,
+`last_scene_mvp`, the pane's rect and the eye were set — so the numbers
 and a viewer state's handles were placed by the camera
 of the frame before. They trailed the geometry and its markers, which
 are meshes drawn by the frame's own matrix, by a frame whenever the

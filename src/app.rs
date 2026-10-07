@@ -2182,7 +2182,7 @@ pub struct ViewportSettings {
     #[serde(default = "default_point_marker_color")]
     pub point_marker_color: [f32; 3],
     /// What one world unit IS (mm / cm / m / in). A DECLARATION — geometry
-    /// never converts; it feeds the scale readout and `View 1:1`.
+    /// never converts; it feeds `View 1:1`.
     #[serde(default = "default_world_unit")]
     pub world_unit: String,
     /// The path-traced preview.
@@ -4030,7 +4030,7 @@ impl State {
     /// The 2D frame is painted BEFORE the stage pass stages the scene, and
     /// until 2026-09-29 the stage pass was the one place these were set: so
     /// everything the 2D frame draws over the scene — the point, primitive
-    /// and vertex numbers, a viewer state's handles, the scale readout —
+    /// and vertex numbers, a viewer state's handles —
     /// was placed by the camera of the frame BEFORE, and trailed the
     /// geometry and its markers by a frame whenever the camera moved. When
     /// it stopped they stood a frame's move off their points until

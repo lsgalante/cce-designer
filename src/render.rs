@@ -256,7 +256,7 @@ impl State {
             // The dialog is painted after the overlay passes below, not in the
             // walk. A high z_index is not enough: `append_frame_text` and the
             // viewport overlays run AFTER the whole walk, so the graph's node
-            // labels and the scale readout drew straight over a dialog that
+            // labels drew straight over a dialog that
             // had already covered them.
             if i == DIALOG_IDX {
                 continue;
@@ -269,7 +269,6 @@ impl State {
         self.append_context_border(&mut pc);
         self.append_frame_text(&mut pc);
         self.append_point_numbers(&mut pc);
-        self.append_scale_readout(&mut pc);
         self.append_viewer_state_overlay(&mut pc);
         self.append_popovers(&mut pc);
         // Above every pane AND every overlay text pass, below only the context
@@ -1054,7 +1053,7 @@ impl State {
     ///
     /// Out of the widget walk entirely, because the walk is not the end of the
     /// frame — `append_frame_text` and the viewport overlays follow it, and
-    /// they drew the graph's node labels and the scale readout straight over
+    /// they drew the graph's node labels straight over
     /// a dialog whose z_index had already put it on top of the same panes.
     /// Only the context menu goes above this, and it can be opened from inside
     /// the dialog.
@@ -1180,50 +1179,14 @@ impl State {
         out
     }
 
-    /// The view's scale on the pivot plane, bottom-left of the pane: `1:2.3`
-    /// (the world shown at less than true size), `2.3:1` (magnified), or
-    /// `1:1`, with what one world unit is and how long it shows. Marked when
-    /// the display metric is only assumed — then the millimetres are the
-    /// CSS 96 ppi guess, not a measurement.
-    fn append_scale_readout(&self, pc: &mut PaintCtx) {
-        if !self.show_viewport {
-            return;
-        }
-        let (vx, vy, vw, vh) = self.last_scene_view_rect;
-        if vw <= 0.0 || vh <= 0.0 {
-            return;
-        }
-        let r = self.view_scale_ratio();
-        if !r.is_finite() || r <= 0.0 {
-            return;
-        }
-        let ratio = if (r - 1.0).abs() < 0.01 {
-            "1:1".to_string()
-        } else if r > 1.0 {
-            format!("1:{}", cce_ui::units::fmt_num((r * 100.0).round() / 100.0))
-        } else {
-            format!("{}:1", cce_ui::units::fmt_num((100.0 / r).round() / 100.0))
-        };
-        let m = cce_ui::units::metric();
-        let shown_mm = self.world_unit_mm() / r;
-        let mut text = format!("{ratio}  ·  1 {} = {} mm on screen", self.world_unit.suffix(), cce_ui::units::fmt_num((shown_mm * 100.0).round() / 100.0));
-        if !m.is_real() {
-            text.push_str("  ·  metric assumed");
-        }
-        pc.clip(rect(vx, vy, vw, vh), |pc| {
-            pc.text(text, vx + 8.0, self.scene_text_floor(vy + vh) - 16.0, 10.0, [0xaa, 0xaa, 0xbb]);
-        });
-    }
-
     /// The curve viewer state's handles: each control point projected
     /// through the cached scene mvp (like the point numbers above), drawn as
     /// a ringed dot with its index, the control cage as faint segments
     /// between them. Selected point draws larger and brighter.
     /// Where the viewport's bottom-anchored text stands: the viewport's
     /// bottom, or the playbar's top while it is shown — the playbar is
-    /// attached to the window's bottom edge, over the scene, and the scale
-    /// readout and the viewer-state line would otherwise sit on its
-    /// transport.
+    /// attached to the window's bottom edge, over the scene, and the
+    /// viewer-state line would otherwise sit on its transport.
     pub(crate) fn scene_text_floor(&self, bottom: f32) -> f32 {
         let (_, py, pw, ph) = self.positions[crate::slots::PLAYBAR_IDX];
         if self.show_playbar && pw > 0.0 && ph > 0.0 {
@@ -1281,12 +1244,11 @@ impl State {
             }
         });
 
-        // The HUD sits one line ABOVE the scale readout, sharing its left
-        // margin. Not at the top: the viewport is full-bleed and the pane
-        // plates float over its top edge, so a mode line there lands under the
-        // collapsed stubs and their titles read through it. Not at the very
-        // bottom either — that row belongs to the scale readout, and two
-        // sentences on one line read as one garbled sentence.
+        // The HUD sits at the viewport's bottom left. Not at the top: the
+        // viewport is full-bleed and the pane plates float over its top edge,
+        // so a mode line there lands under the collapsed stubs and their
+        // titles read through it. (It stood a line above the scale readout
+        // until that was removed on 2026-10-06.)
         //
         // It exists because a viewer state changes what every click does and
         // snapping silently changes what a drag does. A mode you cannot see is
@@ -1295,7 +1257,7 @@ impl State {
         let hud = tool.hud();
         let size = 11.0;
         let pad = 5.0;
-        let y = self.scene_text_floor(vy + vh) - 16.0 - (size + pad * 2.0) - 4.0;
+        let y = self.scene_text_floor(vy + vh) - (size + pad * 2.0) - 8.0;
         let width = (hud.chars().count() as f32 * size * 0.52 + pad * 2.0).min(vw - 16.0);
         pc.clip(rect(vx, vy, vw, vh), |pc| {
             pc.quad(rect(vx + 8.0 - pad, y, width, size + pad * 2.0), [0.0, 0.0, 0.0, 0.55]);

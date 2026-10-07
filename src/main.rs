@@ -2137,7 +2137,7 @@ mod tests {
             let (_, y, _, h) = state.positions[idx];
             assert_eq!(y + h, pb.1 - 18.0, "the {idx} plate stops a gap above it");
         }
-        assert_eq!(state.scene_text_floor(900.0), pb.1, "the scale readout stands on it");
+        assert_eq!(state.scene_text_floor(900.0), pb.1, "the viewport's bottom text stands on it");
         state.execute_menu_action("Show Playbar Pane");
         assert!(!state.show_playbar);
         assert_eq!(state.scene_text_floor(900.0), 900.0);
