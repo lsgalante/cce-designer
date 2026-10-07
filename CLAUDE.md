@@ -2250,7 +2250,10 @@ need.
   history to every fourth frame while holding about 0.4 GB, and a replay
   of the cached frames 120–240 re-solved three in four at 690 ms a frame;
   counted by size, all 240 are kept at 1.5 GB (1.37 GB resident in a
-  shadow session) and the replay runs no step at 34 ms a frame.
+  shadow session) and the replay runs no step at 34 ms a frame. Each
+  checkpoint carries its frame's topology since later the same day (see
+  "A copy of a mesh shares its topology"), which brings the 240 to 1.9 GB:
+  a simulation larger or longer than that one begins to thin.
   `checkpoints_are_budgeted_by_what_each_holds`. With no
   room the SPACING doubles and stays doubled — what is off the wider
   interval goes, and what arrives after arrives that far apart. Not the
@@ -3493,6 +3496,20 @@ point markers' instances 1.6, the 2D frame 1.5. In a shadow session the
 markers cost nothing on the GPU, being instanced; frames are paced to
 the display, so a frame of 8 ms CPU shows on the next 16.7 ms, and one
 over shows on the one after.
+
+**A copy of a mesh shares its topology** (the same day, `Clone for
+Detail`, an `Arc`): it was dropped by every clone, so every frame's scene
+— a copy of the cached simulation state, merged into an empty detail —
+built a topology again for the wire pass. Every structural writer of a
+`Detail` drops it (`invalidate`), and moving points or writing attributes
+leaves a topology that is still true, so a shared one is never stale.
+`merge` into an empty detail keeps the merged one's, the solve builds the
+topology of each frame it stores (about 1% of a step; counted in the
+checkpoints' budget, `Detail::topology_bytes`), and so a replayed scene's
+edges cost nothing; `scene_edge_verts` writes the wire vertices a piece
+of edges a thread into one buffer. The wire edges at 57k points: 4.9 ms
+a frame to 0.6. `a_copy_shares_the_topology_until_it_is_edited`,
+`the_wire_vertices_are_the_edges_in_order`.
 
 **The markers are instanced** (the same day, cce-ui's
 `SceneDraw::instances`): every kind — Show Point Markers, Show Vertex

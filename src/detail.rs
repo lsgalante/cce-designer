@@ -1053,7 +1053,8 @@ pub struct Detail {
     prim_start: Vec<u32>,
     prims: AttribStore,
     detail: AttribStore,
-    topo: OnceLock<Topology>,
+    /// Shared by a clone (`Arc`): see [`Clone for Detail`](#impl-Clone-for-Detail).
+    topo: OnceLock<std::sync::Arc<Topology>>,
 }
 
 impl Default for Detail {
@@ -1081,9 +1082,16 @@ impl PartialEq for Detail {
 }
 
 impl Clone for Detail {
-    /// The topology cache is deliberately *not* cloned. It is derived, the
-    /// clone exists to be modified, and rebuilding is cheaper than reasoning
-    /// about whether a stale cache came along.
+    /// The topology, when built, is SHARED with the clone (since
+    /// 2026-10-07; until then it was deliberately dropped). It is derived
+    /// from the primitives and the point count alone, every edit of either
+    /// drops it (`invalidate`, called by every structural writer: `add_point`,
+    /// `add_points`, `add_prim`, the gathers, `fuse_points`, `merge`), and
+    /// moving points or writing attributes does not touch it — so a clone
+    /// edited structurally builds its own, and one that is not keeps a
+    /// topology that is still true. Dropping it cost every copy of a cached
+    /// simulation state its whole topology again, a frame at a time:
+    /// 6 ms at 57k points for the wireframe's edges alone.
     fn clone(&self) -> Self {
         Self {
             pos: self.pos.clone(),
@@ -1095,7 +1103,10 @@ impl Clone for Detail {
             prim_start: self.prim_start.clone(),
             prims: self.prims.clone(),
             detail: self.detail.clone(),
-            topo: OnceLock::new(),
+            topo: match self.topo.get() {
+                Some(t) => OnceLock::from(t.clone()),
+                None => OnceLock::new(),
+            },
         }
     }
 }
@@ -1331,7 +1342,16 @@ impl Detail {
     /// drops it.
     pub fn topology(&self) -> &Topology {
         self.topo
-            .get_or_init(|| Topology::build(self.num_points(), &self.vert_point, &self.prim_start))
+            .get_or_init(|| std::sync::Arc::new(Topology::build(self.num_points(), &self.vert_point, &self.prim_start)))
+    }
+
+    /// About what the topology holds when it is built, in bytes; 0 when it
+    /// is not. For the simulation checkpoints' budget.
+    pub fn topology_bytes(&self) -> usize {
+        self.topo.get().map_or(0, |t| {
+            4 * (t.point_prim_start.len() + t.point_prim.len() + t.point_nbr_start.len() + t.point_nbr.len())
+                + 8 * t.edges.len()
+        })
     }
 
     /// The points sharing an edge with point `p`.
@@ -1377,6 +1397,11 @@ impl Detail {
     /// Drop the derived topology. Called by every structural edit; public
     /// because an operator writing `vert_point` through a future bulk path
     /// must be able to say so.
+    /// Whether the topology is built (and so free to ask for).
+    pub fn has_topology(&self) -> bool {
+        self.topo.get().is_some()
+    }
+
     pub fn invalidate(&mut self) {
         self.topo.take();
     }
@@ -1513,6 +1538,11 @@ impl Detail {
     /// of geometry that were generated independently — and therefore both
     /// number their points from zero — do not collide.
     pub fn merge(&mut self, other: &Detail) {
+        // Merged into nothing, the result has `other`'s structure exactly —
+        // the same points and primitives, only the identities renumbered —
+        // so its topology is `other`'s, built or not. The scene is
+        // assembled this way, one displayed node into an empty detail.
+        let shared = if self.num_points() == 0 && self.num_prims() == 0 { other.topo.get().cloned() } else { None };
         let point_offset = self.num_points() as u32;
         let vert_offset = self.vert_point.len() as u32;
 
@@ -1533,6 +1563,9 @@ impl Detail {
         self.prims.append(&other.prims);
 
         self.invalidate();
+        if let Some(t) = shared {
+            let _ = self.topo.set(t);
+        }
     }
 
     // ---- convenience ----

@@ -1856,17 +1856,37 @@ pub(crate) fn scene_element_overlays(
 /// colour up by name at both ends of every edge — the largest part of a
 /// replayed frame at 57k points.
 pub(crate) fn scene_edge_verts(geom: &crate::detail::Detail) -> Vec<crate::geometry::Vertex3D> {
+    use crate::geometry::Vertex3D;
     let edges = geom.edge_list();
     let colors = geom.point_colors();
-    let mut wires = Vec::with_capacity(edges.len() * 2);
-    for e in edges.iter() {
-        for &p in e {
-            let p = p as usize;
-            wires.push(crate::geometry::Vertex3D {
-                position: geom.positions()[p],
-                color: colors.get(p).copied().unwrap_or(crate::detail::DEFAULT_COLOR),
-            });
+    let positions = geom.positions();
+    let vertex = |p: u32| {
+        let p = p as usize;
+        Vertex3D { position: positions[p], color: colors.get(p).copied().unwrap_or(crate::detail::DEFAULT_COLOR) }
+    };
+    // Written into one buffer a piece of edges a thread, each piece its own
+    // stretch of it, so the result is the one a single thread writes. A
+    // thread costs tens of microseconds to start, so a piece is at least
+    // `PIECE` edges and a small mesh stays on one.
+    const PIECE: usize = 16_384;
+    let mut wires = vec![Vertex3D { position: [0.0; 3], color: [0.0; 3] }; edges.len() * 2];
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(edges.len() / PIECE).max(1);
+    let per = edges.len().div_ceil(threads).max(1);
+    let fill = |out: &mut [Vertex3D], edges: &[[u32; 2]]| {
+        for (pair, e) in out.chunks_exact_mut(2).zip(edges) {
+            pair[0] = vertex(e[0]);
+            pair[1] = vertex(e[1]);
         }
+    };
+    if threads == 1 {
+        fill(&mut wires, &edges);
+    } else {
+        std::thread::scope(|scope| {
+            for (out, edges) in wires.chunks_mut(per * 2).zip(edges.chunks(per)) {
+                let fill = &fill;
+                scope.spawn(move || fill(out, edges));
+            }
+        });
     }
     wires
 }

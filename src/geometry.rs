@@ -1177,7 +1177,7 @@ pub const CHECKPOINT_BUDGET: usize = 2048 * 1024 * 1024;
 /// of attributes a point, the primitives' indices, twice. An estimate — the
 /// budget is a guard against a runaway, not an accounting.
 fn checkpoint_bytes(state: &Detail) -> usize {
-    2 * (state.num_points() * 96 + state.num_verts() * 8 + state.num_prims() * 8 + 256)
+    2 * (state.num_points() * 96 + state.num_verts() * 8 + state.num_prims() * 8 + 256) + state.topology_bytes()
 }
 
 /// One solve's checkpoints, in frame order, how far apart they are being
@@ -7603,6 +7603,7 @@ pub fn resolve_simnet_geometry_with_errors(
         // A frame on the interval is kept as the solve passes it — not the
         // frame asked for, which is the entry itself.
         if done % checkpoints.every == 0 && done < due {
+            state.topology();
             checkpoints.keep(Checkpoint { frame: done, state: state.clone(), prev: prev_frame.clone() });
         }
     }
@@ -7616,6 +7617,14 @@ pub fn resolve_simnet_geometry_with_errors(
     // most of what the spreadsheet's refresh cost.
     if caching && due > 0 && done > resumed_at {
         write_sim_cache(&target.id, key, due, &state, &prev_frame);
+    }
+    // A frame solved has its topology built here, once, and every copy of
+    // the state taken from the cache from now on shares it (`Clone for
+    // Detail`): the wireframe's edges and anything else that asks of the
+    // scene are free on a replay, where they were built again every frame.
+    // It costs about 1% of a step and is counted in the checkpoints' budget.
+    if done > resumed_at {
+        state.topology();
     }
     sim.cache.entries.insert(
         target.id.clone(),

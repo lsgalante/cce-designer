@@ -17967,6 +17967,70 @@ mod tests {
         }
     }
 
+    /// The wire pass's vertices are written a piece of edges a thread, into
+    /// one buffer: what one thread writes, vertex for vertex, on a mesh too
+    /// small to share out and on one large enough to.
+    #[test]
+    fn the_wire_vertices_are_the_edges_in_order() {
+        for (lat, lon) in [(6, 9), (120, 240)] {
+            let mut g = crate::geometry::sphere_detail(Vec3::new(0.2, -0.1, 0.3), 1.0, lat, lon);
+            let n = g.num_points();
+            g.points_mut().insert(crate::detail::CD, crate::detail::AttribData::Float3((0..n).map(|p| [p as f32 / n as f32, 0.5, 0.1]).collect())).unwrap();
+            let want: Vec<[f32; 6]> = g
+                .edges()
+                .iter()
+                .flat_map(|e| e.iter().map(|&p| { let (a, c) = (g.pos(p as usize).to_array(), g.color(p as usize)); [a[0], a[1], a[2], c[0], c[1], c[2]] }).collect::<Vec<_>>())
+                .collect();
+            let got: Vec<[f32; 6]> = crate::render::scene_edge_verts(&g)
+                .iter()
+                .map(|v| [v.position[0], v.position[1], v.position[2], v.color[0], v.color[1], v.color[2]])
+                .collect();
+            assert_eq!(got, want, "{} edges", g.edges().len());
+        }
+    }
+
+    /// A copy of a Detail shares its topology, built once; an edit that
+    /// moves points or writes attributes keeps it, a structural edit drops
+    /// it; a Detail merged into an empty one keeps it; and a simulation's
+    /// solved frame comes out of the cache with it built, so the scene's
+    /// edges cost nothing on a replay.
+    #[test]
+    fn a_copy_shares_the_topology_until_it_is_edited() {
+        let mut g = crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 5, 8);
+        assert!(!g.has_topology());
+        let edges = g.edges().to_vec();
+        let mut copy = g.clone();
+        assert!(copy.has_topology(), "shared by the copy");
+        copy.positions_mut()[0][0] += 1.0;
+        copy.points_mut().create("mass", crate::detail::AttribValue::Float(2.0));
+        assert!(copy.has_topology(), "moving points and writing attributes keep it");
+        assert_eq!(copy.edges(), edges.as_slice());
+        let mut merged = crate::detail::Detail::new();
+        merged.merge(&g);
+        assert!(merged.has_topology(), "merged into nothing keeps it");
+        assert_eq!(merged.edges(), edges.as_slice());
+        merged.merge(&g);
+        assert!(!merged.has_topology(), "merged into something does not");
+        copy.add_prim(&[0, 1, 2]);
+        assert!(!copy.has_topology(), "a structural edit drops it");
+        assert_ne!(copy.edges().len(), 0);
+        assert!(g.has_topology(), "and the original's is its own");
+
+        // A simnet's solved frame, taken back out of the cache, has it.
+        let mut state = State::new(false);
+        let mut redraw = false;
+        state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
+        let slot = state.current_dir().children.iter().position(|c| c.name == "sim").unwrap();
+        state.apply_action(McpAction::SetParam { slot, name: "input".into(), value: "sphere1".into() }, &mut redraw).unwrap();
+        let simnet = state.current_dir().children[slot].clone();
+        let mut cache = crate::geometry::SimCache::default();
+        for frame in [4, 4, 2] {
+            let mut sim = crate::geometry::EvalSim::new(frame, 1, &mut cache);
+            let solved = crate::geometry::resolve_simnet_geometry_with_errors(&state.fs_root, &simnet, &mut Vec::new(), &mut None, &mut sim).unwrap();
+            assert!(solved.has_topology(), "frame {frame} comes with its topology");
+        }
+    }
+
     /// The playbar's cache strip, as a rule: a frame is cached when every
     /// simnet in the tree holds it, stale when one of them holds it from
     /// the chain as it was — before an edit the solve went on across, or
