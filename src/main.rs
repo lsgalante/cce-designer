@@ -476,20 +476,21 @@ mod tests {
     /// other dock — what dragging the corner used to do.
     #[test]
     fn move_to_swaps_a_pane_into_another_dock() {
-        use crate::app::Dock;
+        use crate::app::{Dock, NO_PANE};
         use crate::plate_menu::PlateMenuAction;
-        use crate::slots::{NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX};
+        use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.show_spreadsheet = true;
-        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
         state.open_plate_menu(SPREADSHEET_IDX);
         assert!(state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Right)));
         assert!(!state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Bottom)), "not to its own dock");
         state.close_plate_menu();
         state.run_plate_menu_action(SPREADSHEET_IDX, PlateMenuAction::MoveTo(Dock::Left), (0.0, 0.0));
         assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Left));
-        assert_eq!(state.dock_of_pane(NETWORK_PANEL2_IDX), Some(Dock::Bottom));
+        assert_eq!(state.pane_in_dock(Dock::Bottom), NO_PANE, "it swapped with the empty dock");
+        let (x, _, w, _) = state.positions[SPREADSHEET_IDX];
+        assert_eq!((x, w), (18.0, state.left_dock_width()), "it wears the left dock's rect");
         // Neither the params HUD nor the network is in a dock, and neither
         // moves to one.
         for idx in [PARAM_IDX, NETWORK_PANEL_IDX] {
@@ -506,32 +507,27 @@ mod tests {
     #[test]
     fn test_collapse_shrinks_the_plate_and_restores_it() {
         use crate::plate_menu::STUB_H;
-        // The second network editor, docked: the network itself is in no
-        // dock and does not collapse.
-        use crate::slots::{CONTENT2_IDX as CONTENT_IDX, NETWORK_PANEL2_IDX as NETWORK_PANEL_IDX};
+        use crate::slots::{NETWORK_PANEL_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
-        state.set_pane_collapsed(crate::slots::NETWORK_PANEL_IDX, true);
-        assert!(!state.pane_is_collapsed(crate::slots::NETWORK_PANEL_IDX), "the network does not collapse");
-        state.add_dock_tab(crate::app::Dock::Left, NETWORK_PANEL_IDX);
-
-        let (_, _, _, full_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
-        assert!(full_h > STUB_H, "network plate starts taller than a stub");
-        assert!(state.slots.get_dyn(CONTENT_IDX).visible(), "graph starts visible");
-
         state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
-        let (_, _, _, stub_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        assert!(!state.pane_is_collapsed(NETWORK_PANEL_IDX), "the network does not collapse");
+        state.execute_menu_action("Show Spreadsheet Pane");
+
+        let (_, _, _, full_h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        assert!(full_h > STUB_H, "the plate starts taller than a stub");
+
+        state.set_pane_collapsed(SPREADSHEET_IDX, true);
+        let (_, _, _, stub_h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
         assert_eq!(stub_h, STUB_H, "collapsed plate is not the stub height");
-        assert!(!state.slots.get_dyn(CONTENT_IDX).visible(), "graph survived the collapse");
         // A right press on the stub offers Expand; a left press expands it.
-        let (x, y, w, h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        let (x, y, w, h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
         press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Right);
         assert!(state.plate_menu_actions.contains(&crate::plate_menu::PlateMenuAction::Expand));
         state.close_plate_menu();
         press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Left);
-        let (_, _, _, back_h) = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
+        let (_, _, _, back_h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
         assert_eq!(back_h, full_h, "expanding did not restore the plate height");
-        assert!(state.slots.get_dyn(CONTENT_IDX).visible(), "graph did not come back");
     }
 
     /// Both sides of a detach. The child must show ONE pane and nothing else —
@@ -1065,67 +1061,29 @@ mod tests {
         assert!(s.points().has("uv") && !s.points().has("UV"));
     }
 
-    /// Dock swap: Move To another dock swaps occupants, and the dock-owned
-    /// dimensions stay put — the second network editor lands in the bottom
-    /// strip's rect, the spreadsheet in the right dock's.
-    #[test]
-    fn test_dock_swap_repositions_plates() {
-        use crate::app::Dock;
-        use crate::slots::{NETWORK_PANEL2_IDX as NETWORK_PANEL_IDX, SPREADSHEET_IDX};
-        // The second network editor: the first spans the window, whatever
-        // dock it is in, since it has no plate.
-        let mut state = State::new(false);
-        state.resize(1600.0, 900.0, 1.0);
-        state.show_spreadsheet = true;
-        state.add_dock_tab(Dock::Right, NETWORK_PANEL_IDX);
-        state.rebuild_positions();
-        state.apply_layout();
-
-        let net_before = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
-        let ss_before = state.slots.get_dyn(SPREADSHEET_IDX).rect();
-        assert!(net_before.2 > 0.0 && ss_before.2 > 0.0);
-        assert!(net_before.1 < ss_before.1, "network starts above the bottom strip");
-
-        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Bottom);
-        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Bottom));
-        assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Right));
-
-        let net_after = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
-        let ss_after = state.slots.get_dyn(SPREADSHEET_IDX).rect();
-        // The network now wears (approximately) the strip geometry and the
-        // spreadsheet the left column's; exact equality is not required
-        // because the strip derivation reads dock occupancy, but the vertical
-        // order must have inverted and both must remain visible.
-        assert!(net_after.1 > ss_after.1, "network did not move below the spreadsheet");
-        assert!(net_after.2 > 0.0 && ss_after.2 > 0.0, "a pane vanished in the swap");
-
-        // Dropping it back restores the original arrangement.
-        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Right);
-        assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Bottom));
-    }
-
     /// Full width tucks the spreadsheet under BOTH neighbors (their bottoms
     /// rise via the tuck interlock); between-panes clears both tucks.
     #[test]
     fn test_spreadsheet_full_width_round_trip() {
+        use crate::plate_menu::PlateMenuAction;
+        use crate::slots::SPREADSHEET_IDX;
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.show_spreadsheet = true;
-        // A plate in the right dock to tuck under: the params HUD is in none.
-        state.add_dock_tab(crate::app::Dock::Right, crate::slots::NETWORK_PANEL2_IDX);
         state.rebuild_positions();
-        assert!(!state.spreadsheet_tucks_left() && !state.spreadsheet_tucks_right());
-
-        state.set_spreadsheet_full_width(true);
-        // Under the neighbour there is: the left dock is empty, the
-        // network being in no dock.
-        assert!(state.spreadsheet_tucks_right() && !state.spreadsheet_tucks_left(),
-            "full width must tuck under the right dock's plate");
+        // No plate beside it to tuck under (the spreadsheet is the one
+        // dockable pane): it spans the window already, and Full Width is not
+        // offered.
         let (ss_x, _, ss_w, _) = state.floating_spreadsheet_rect();
-        assert!(ss_x <= 18.5 && ss_x + ss_w >= 1600.0 - 18.5, "not actually full width: x={ss_x} w={ss_w}");
-
-        state.set_spreadsheet_full_width(false);
+        assert!(ss_x <= 18.5 && ss_x + ss_w >= 1600.0 - 18.5, "not full width: x={ss_x} w={ss_w}");
+        state.open_plate_menu(SPREADSHEET_IDX);
+        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::FullWidth));
+        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::BetweenPanes));
+        state.close_plate_menu();
+        state.set_spreadsheet_full_width(true);
         assert!(!state.spreadsheet_tucks_left() && !state.spreadsheet_tucks_right());
+        let (ss_x, _, ss_w, _) = state.floating_spreadsheet_rect();
+        assert!(ss_x <= 18.5 && ss_x + ss_w >= 1600.0 - 18.5);
     }
 
     /// The way back. A detached pane's menu offers Reattach and nothing else,
@@ -1295,7 +1253,6 @@ mod tests {
             SPLITTER2_IDX, PARAM_IDX, CANVAS_IDX, LEFT_MENUBAR_IDX,
             RIGHT_MENUBAR_IDX, PARAM_MENUBAR_IDX, STATUS_IDX, BREADCRUMB_IDX,
             SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
-            NETWORK_PANEL2_IDX, CONTENT2_IDX, BREADCRUMB2_IDX,
             DIALOG_IDX,
         ];
         assert_eq!(roster.len(), WIDGET_COUNT, "roster length vs WIDGET_COUNT");
@@ -1541,48 +1498,6 @@ mod tests {
         assert_eq!(m.match_command(&ctrl_shift, &lower), Some("save_document_as"));
     }
 
-    /// Plates support tabs: a pane pulled into another dock rides it as a
-    /// tab (one laid out, the rest waiting), switching fronts a waiting tab,
-    /// splitting moves the active one back out to the empty dock, and the
-    /// arrangement rides the project view state active-first.
-    #[test]
-    fn test_plate_tabs_share_a_dock() {
-        use crate::app::{Dock, NO_PANE};
-        use crate::slots::{NETWORK_PANEL2_IDX, SPREADSHEET_IDX};
-        let mut state = State::new(false);
-        assert_eq!(state.pane_in_dock(Dock::Right), NO_PANE, "the right dock starts empty");
-
-        // The second editor takes the right dock; pulling the spreadsheet in
-        // beside it fronts it, the editor waits as a tab, and the bottom
-        // dock empties.
-        state.add_dock_tab(Dock::Right, NETWORK_PANEL2_IDX);
-        state.add_dock_tab(Dock::Right, SPREADSHEET_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Right), SPREADSHEET_IDX);
-        assert!(state.dock_tabs[Dock::Right as usize].contains(&NETWORK_PANEL2_IDX));
-        assert_eq!(state.pane_in_dock(Dock::Bottom), NO_PANE);
-        // The waiting tab is laid out nowhere but keeps its home dock.
-        assert_eq!(state.dock_of_pane(NETWORK_PANEL2_IDX), None);
-        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL2_IDX), Some(Dock::Right));
-
-        // Switching fronts the waiting tab without evicting the other.
-        state.show_dock_tab(Dock::Right, NETWORK_PANEL2_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Right), NETWORK_PANEL2_IDX);
-        assert!(state.dock_tabs[Dock::Right as usize].contains(&SPREADSHEET_IDX));
-
-        // The view state carries the groups, active first.
-        let vs = state.project_view_state();
-        let name = crate::plate_menu::pane_name_from_slot(NETWORK_PANEL2_IDX).unwrap();
-        assert_eq!(vs.dock_tabs[1][0], name);
-        assert!(vs.dock_tabs[1].contains(&"spreadsheet".to_string()));
-        assert!(vs.dock_tabs[2].is_empty());
-
-        // Splitting moves the active pane to the first empty dock — the
-        // left, which the network does not hold; the tab left behind fronts.
-        state.split_dock_tab(NETWORK_PANEL2_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Right), SPREADSHEET_IDX);
-    }
-
     /// The network is in no dock (since 2026-10-07): it spans the body
     /// whatever the docks hold, the left dock starts empty — so the
     /// spreadsheet runs flush to the left — and the network neither
@@ -1593,7 +1508,7 @@ mod tests {
     fn the_network_is_in_no_dock() {
         use crate::app::{Dock, NO_PANE, HEADER_H};
         use crate::plate_menu::PlateMenuAction;
-        use crate::slots::{BREADCRUMB_IDX, LEFT_MENUBAR_IDX, NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, SPREADSHEET_IDX};
+        use crate::slots::{BREADCRUMB_IDX, LEFT_MENUBAR_IDX, NETWORK_PANEL_IDX, SPREADSHEET_IDX};
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{ElementState, MouseButton};
         let mut state = State::new(false);
@@ -1641,8 +1556,8 @@ mod tests {
         assert_ne!(state.focused_pane, LEFT_MENUBAR_IDX);
 
         // A plate in the left dock: its right edge resizes the dock.
-        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
-        let (qx, qy, qw, qh) = state.positions[NETWORK_PANEL2_IDX];
+        state.move_pane_to_dock(SPREADSHEET_IDX, Dock::Left);
+        let (qx, qy, qw, qh) = state.positions[SPREADSHEET_IDX];
         assert!(qw > 0.0);
         let w0 = state.left_dock_width();
         let edge = (qx + qw, qy + qh * 0.5);
@@ -1652,18 +1567,17 @@ mod tests {
         at(&mut state, edge.0 + 40.0, edge.1);
         press(&mut state, ElementState::Released);
         assert!((state.left_dock_width() - (w0 + 40.0)).abs() < 0.5, "{} against {}", state.left_dock_width(), w0 + 40.0);
-        assert_eq!(state.positions[NETWORK_PANEL2_IDX].2, state.left_dock_width());
+        assert_eq!(state.positions[SPREADSHEET_IDX].2, state.left_dock_width());
     }
 
-    /// An older save docked the network, the second editor sometimes waiting
-    /// behind it as a tab. Both load out of sight: the network in no dock,
-    /// and the second editor CLOSED, since it was hidden — fronting it would
-    /// put a second graph where the network's plate was. A second editor
-    /// that was in front stays where it was.
+    /// An older save docked the network and sometimes the second network
+    /// editor (removed 2026-10-07), in front of it or waiting behind it as a
+    /// tab. Neither is a dock pane now: both are dropped wherever they stood,
+    /// and the rest of the arrangement loads.
     #[test]
-    fn a_second_editor_hidden_behind_the_network_loads_closed() {
+    fn an_older_saves_second_network_editor_is_dropped() {
         use crate::app::{Dock, NO_PANE};
-        use crate::slots::{NETWORK_PANEL2_IDX, SPREADSHEET_IDX};
+        use crate::slots::SPREADSHEET_IDX;
         let dir = std::env::temp_dir().join(format!("cce-designer-hidden-editor-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut a = State::new(false);
@@ -1672,157 +1586,26 @@ mod tests {
         let load_with = |tabs: serde_json::Value| {
             let mut json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
             json["view_state"]["dock_tabs"] = tabs;
+            json["view_state"]["current_path2"] = serde_json::json!([0]);
+            json["view_state"]["params_pin"] = serde_json::json!("network2");
             fs::write(&file, serde_json::to_string(&json).unwrap()).unwrap();
             let mut b = State::new(false);
             b.load_from_file(&dir).expect("load");
             b
         };
-
-        let b = load_with(serde_json::json!([["network", "network2"], [], ["spreadsheet"]]));
-        assert_eq!(b.tab_dock_of_pane(NETWORK_PANEL2_IDX), None, "the hidden editor loads closed");
-        assert_eq!(b.pane_in_dock(Dock::Left), NO_PANE);
-        assert_eq!(b.pane_in_dock(Dock::Bottom), SPREADSHEET_IDX);
-
-        let b = load_with(serde_json::json!([["network2", "network"], [], ["spreadsheet"]]));
-        assert_eq!(b.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX, "a fronted editor stays");
-
+        for tabs in [
+            serde_json::json!([["network", "network2"], [], ["spreadsheet"]]),
+            serde_json::json!([["network2", "network"], [], ["spreadsheet"]]),
+            serde_json::json!([[], ["network2"], ["spreadsheet"]]),
+        ] {
+            let b = load_with(tabs.clone());
+            assert_eq!(b.pane_in_dock(Dock::Left), NO_PANE, "{tabs}");
+            assert_eq!(b.pane_in_dock(Dock::Right), NO_PANE, "{tabs}");
+            assert_eq!(b.pane_in_dock(Dock::Bottom), SPREADSHEET_IDX, "{tabs}");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Move To Own Plate is offered only on a dock holding more than one
-    /// tab. With neither the params pane nor the network in the docks, the
-    /// two tab candidates share three docks, so a dock holding both always
-    /// leaves another empty — the row is offered, and the split lands there.
-    #[test]
-    fn move_to_own_plate_needs_an_empty_dock() {
-        use crate::app::Dock;
-        use crate::plate_menu::PlateMenuAction;
-        use crate::slots::{NETWORK_PANEL2_IDX, SPREADSHEET_IDX};
-        let mut state = State::new(false);
-        state.resize(1600.0, 900.0, 1.0);
-        state.show_spreadsheet = true;
-
-        // A dock of its own: no split to offer.
-        state.open_plate_menu(SPREADSHEET_IDX);
-        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::SplitTab), "its dock is its own");
-        state.close_plate_menu();
-
-        // The second editor tabs in beside the spreadsheet: the row is
-        // offered on the shared dock.
-        state.add_dock_tab(Dock::Bottom, NETWORK_PANEL2_IDX);
-        state.show_dock_tab(Dock::Bottom, SPREADSHEET_IDX);
-        assert_eq!(state.first_empty_dock(), Some(Dock::Left));
-        state.open_plate_menu(SPREADSHEET_IDX);
-        assert!(state.plate_menu_actions.contains(&PlateMenuAction::SplitTab));
-        assert!(state.plate_menu_actions.contains(&PlateMenuAction::ShowTab(NETWORK_PANEL2_IDX)));
-        state.close_plate_menu();
-
-        // And the split lands there.
-        state.split_dock_tab(SPREADSHEET_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Left), SPREADSHEET_IDX);
-    }
-
-    /// The second network editor: joins a dock from nowhere through the tab
-    /// machinery, dives on its OWN path while the primary stays put, clamps
-    /// a stale path instead of panicking, and Close removes it entirely.
-    #[test]
-    fn test_second_network_editor_has_its_own_path() {
-        use crate::app::Dock;
-        use crate::slots::{NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX};
-        let mut state = State::new(false);
-        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL2_IDX), None, "starts unplaced");
-
-        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
-        assert_eq!(state.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX);
-        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL_IDX), None, "the network is in no dock");
-
-        let start = state.current_path.clone();
-        let sphere = state
-            .current_dir()
-            .children
-            .iter()
-            .position(|c| c.name == "sphere1")
-            .expect("default project has sphere1");
-        state.current_path2 = [start.clone(), vec![sphere]].concat();
-        state.sync_nodes();
-        assert_eq!(state.current_path, start, "primary path must not follow");
-        assert_eq!(state.path_names_at(&state.current_path2), vec!["geometry1".to_string(), "sphere1".to_string()]);
-
-        state.current_path2 = vec![99];
-        state.sync_nodes();
-        assert!(state.current_path2.is_empty(), "a stale path clamps, never indexes");
-
-        state.close_dock_tab(NETWORK_PANEL2_IDX);
-        assert_eq!(state.tab_dock_of_pane(NETWORK_PANEL2_IDX), None);
-        assert_eq!(state.pane_in_dock(Dock::Left), crate::app::NO_PANE);
-    }
-
-
-    /// Pinning: the spreadsheet bound to pane 1 keeps reading pane 1's
-    /// selection while clicks land in the second editor, and the cursor-
-    /// selection sync no longer wipes pane 1's selection on second-editor
-    /// interactions (the regression that made pins look broken).
-    #[test]
-    fn test_pane_pins_bind_selection_sources() {
-        use crate::app::Dock;
-        use crate::slots::{CONTENT2_IDX, CONTENT_IDX, LEFT_MENUBAR_IDX, NETWORK_PANEL2_IDX};
-        use cce_ui::widget::GraphController as _;
-        let mut state = State::new(false);
-        state.add_dock_tab(Dock::Left, NETWORK_PANEL2_IDX);
-
-        // Both editors in the bundled project's Geometry node, where the
-        // sphere is; a second node there for the other editor to pick.
-        state.current_path2 = state.current_path.clone();
-        let mut other = state.current_dir().children.iter().find(|c| c.name == "sphere1").unwrap().clone();
-        crate::app::regenerate_node_ids(&mut other);
-        other.name = "sphere2".into();
-        other.position.0 += 2.0;
-        state.current_dir_mut().children.push(other);
-        state.sync_nodes();
-        let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
-        let camera = state.current_dir().children.iter().position(|c| c.name == "sphere2").unwrap();
-
-        // Pane 1 selects the sphere; the spreadsheet pins to pane 1.
-        state.graph_mut().set_selected_node(Some(sphere));
-        state.spreadsheet_pin = Some(CONTENT_IDX);
-        // A click in the second editor selects the camera and takes the
-        // active-editor role.
-        state.slots.content2.set_selected_node(Some(camera));
-        state.param_editor = CONTENT2_IDX;
-
-        // The params pane (unpinned) follows the second editor...
-        assert_eq!(state.param_editor_selected(), Some(camera));
-        // ...the spreadsheet's binding stays on pane 1's sphere.
-        let se = state.spreadsheet_editor();
-        assert_eq!(se, CONTENT_IDX);
-        assert_eq!(state.editor_selected_of(se), Some(sphere));
-
-        // The cursor-selection sync must NOT wipe pane 1's selection while
-        // the second editor is active — the grid cursor is pane 1's concept.
-        state.focused_pane = LEFT_MENUBAR_IDX;
-        state.grid_cursor_col = -50;
-        state.grid_cursor_row = -50;
-        state.sync_cursor_and_selection();
-        assert_eq!(
-            state.graph().selected_node(),
-            Some(sphere),
-            "second-editor activity must not clear pane 1's selection"
-        );
-
-        // And the spreadsheet refresh keys off the pinned selection.
-        state.show_spreadsheet = true;
-        state.sync_nodes();
-        let sphere_id = state.current_dir().children[sphere].id.clone();
-        assert_eq!(
-            state.last_spreadsheet_node_name.as_deref(),
-            Some(sphere_id.as_str()),
-            "spreadsheet must refresh against the PINNED editor's selection"
-        );
-
-        // A params pin binds the pane the other way.
-        state.params_pin = Some(CONTENT_IDX);
-        assert_eq!(state.param_editor_selected(), Some(sphere));
-    }
 
     /// Pane state rides save files: visibility through the meta→View subnet
     /// params (synced at save, applied on load), collapse and splitter
@@ -1844,16 +1627,8 @@ mod tests {
         assert!(!a.collapsed_panes[PARAM_IDX], "the params HUD does not collapse");
         a.splitter_layout.splitter1_x = 400.0;
         a.splitter_layout.splitter2_x = 1200.0;
-        // Tab state: a second network editor in the left dock (which the
-        // network does not hold), dived one level down its own path.
-        a.add_dock_tab(crate::app::Dock::Left, crate::slots::NETWORK_PANEL2_IDX);
-        let sphere = a
-            .current_dir()
-            .children
-            .iter()
-            .position(|c| c.name == "sphere1")
-            .expect("default project has sphere1");
-        a.current_path2 = [a.current_path.clone(), vec![sphere]].concat();
+        // Dock state: the spreadsheet moved to the left dock.
+        a.move_pane_to_dock(crate::slots::SPREADSHEET_IDX, crate::app::Dock::Left);
         a.save_to_file(&dir).expect("save");
 
         let mut b = State::new(false);
@@ -1866,15 +1641,9 @@ mod tests {
         assert!((b.splitter_layout.splitter1_x - 200.0).abs() < 1.0,
             "splitters restore as fractions: 400/1600 of an 800-wide window = 200, got {}",
             b.splitter_layout.splitter1_x);
-        // The tab arrangement rides the file: the second editor exists,
-        // fronted in the left dock, on its own path; the network is in none.
-        assert_eq!(
-            b.pane_in_dock(crate::app::Dock::Left),
-            crate::slots::NETWORK_PANEL2_IDX,
-            "the fronted second editor must load fronted"
-        );
+        // The dock arrangement rides the file; the network is in none.
+        assert_eq!(b.pane_in_dock(crate::app::Dock::Left), crate::slots::SPREADSHEET_IDX, "the spreadsheet loads where it was moved");
         assert_eq!(b.tab_dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None, "the network loads in no dock");
-        assert_eq!(b.current_path2, [a.current_path.clone(), vec![sphere]].concat(), "the second editor's path must round-trip");
 
         // A detached pane window must ignore the same file's pane state.
         let mut d = State::new(true);
@@ -1898,8 +1667,6 @@ mod tests {
         a.resize(1600.0, 900.0, 1.0);
         a.execute_menu_action("Show Spreadsheet Pane");
         assert!(a.show_spreadsheet);
-        // A plate in the left dock to tuck under (the network is in none).
-        a.add_dock_tab(crate::app::Dock::Left, crate::slots::NETWORK_PANEL2_IDX);
         a.floating_network_layout.2 = 520.0;
         a.floating_param_width = 360.0;
         a.params_hud_width = 420.0;
@@ -1923,7 +1690,6 @@ mod tests {
         assert!((b.floating_spreadsheet_height - 300.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
         assert!((b.floating_spreadsheet_inset_left - insets.0).abs() < 0.5 && (b.floating_spreadsheet_inset_right - insets.1).abs() < 0.5,
             "tucks: {:?} vs {:?}", (b.floating_spreadsheet_inset_left, b.floating_spreadsheet_inset_right), insets);
-        assert!(b.spreadsheet_tucks_left(), "the full-width tuck must load tucked");
 
         // Half the window: the same fractions land at half the pixels.
         let mut c = State::new(false);
@@ -2255,7 +2021,6 @@ mod tests {
         let mut state = State::new(false);
         state.apply_setting("Node Wire Style", "Bezier");
         assert_eq!(state.slots.content.inner().wire_style(), WireStyle::Bezier);
-        assert_eq!(state.slots.content2.inner().wire_style(), WireStyle::Bezier, "both editors");
         assert_eq!(state.display_settings().viewport.node_wire_style, "bezier");
         state.save_to_file(&dir).expect("save");
 
@@ -2374,7 +2139,7 @@ mod tests {
     #[test]
     fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
         use crate::app::{Dock, NO_PANE};
-        use crate::slots::{NETWORK_PANEL2_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
+        use crate::slots::{PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
@@ -2386,13 +2151,11 @@ mod tests {
         assert_eq!(state.pane_in_dock(Dock::Right), NO_PANE);
 
         // The spreadsheet and the playbar below it: it stops a gap above
-        // the higher of them. A plate in the right dock, and the right
-        // dock's width, size nothing.
+        // the higher of them. The right dock's width sizes nothing.
         state.execute_menu_action("Show Spreadsheet Pane");
         state.execute_menu_action("Show Playbar Pane");
         state.floating_spreadsheet_height = 500.0;
         state.set_spreadsheet_full_width(true);
-        state.add_dock_tab(Dock::Right, NETWORK_PANEL2_IDX);
         state.floating_param_width = 700.0;
         state.rebuild_positions();
         state.apply_layout();
@@ -2433,9 +2196,6 @@ mod tests {
         assert!(pb.scrollbar_visible(), "the sphere's rows overflow a {hh} px HUD and scroll");
         assert_eq!(state.params_claim(), (hx, hy, hw, hh), "the plate fills the HUD");
 
-        // A network editor in the right dock has no plate, so it covers
-        // nothing of the HUD.
-        assert!(!state.plates_over_params().contains(&state.positions[NETWORK_PANEL2_IDX]));
         // Under a plate in the right dock: it takes the pointer there.
         state.set_spreadsheet_full_width(false);
         state.move_pane_to_dock(SPREADSHEET_IDX, Dock::Right);
@@ -8938,7 +8698,6 @@ mod tests {
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         // A group of five points on the sphere, shown.
         state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("tagged".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
@@ -9394,7 +9153,6 @@ mod tests {
                 .unwrap();
         }
         s.focused_pane = LEFT_MENUBAR_IDX;
-        s.param_editor = crate::slots::CONTENT_IDX;
         s.grid_cursor_col = 13;
         s.grid_cursor_row = 7;
         s.sync_cursor_and_selection();
@@ -9438,7 +9196,6 @@ mod tests {
         assert_eq!(state.current_dir().children[slot].position, (3.0, 2.0));
 
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         state.grid_cursor_col = 3;
         state.grid_cursor_row = 2;
         state.sync_cursor_and_selection();
@@ -9710,7 +9467,7 @@ mod tests {
     /// The command end to end, on a real project.
     #[test]
     fn test_the_layout_command_arranges_the_current_level() {
-        use crate::slots::{CONTENT_IDX, LEFT_MENUBAR_IDX};
+        use crate::slots::LEFT_MENUBAR_IDX;
         let mut state = State::new(false);
         let mut redraw = false;
         for (template, x, y) in
@@ -9746,7 +9503,6 @@ mod tests {
         set_input(&mut state, subdiv, &names[remesh]);
 
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = CONTENT_IDX;
         assert!(state.layout_current_level());
 
         let pos = |state: &State, slot: usize| state.current_dir().children[slot].position;
@@ -10022,7 +9778,7 @@ mod tests {
     /// that one cell alone.
     #[test]
     fn test_deselect_sticks_until_the_cursor_moves() {
-        use crate::slots::{CONTENT_IDX, LEFT_MENUBAR_IDX};
+        use crate::slots::LEFT_MENUBAR_IDX;
         let mut state = State::new(false);
         let mut redraw = false;
         state
@@ -10034,7 +9790,6 @@ mod tests {
         let slot = state.current_dir().children.len() - 1;
 
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = CONTENT_IDX;
         state.grid_cursor_col = 6;
         state.grid_cursor_row = 6;
         state.sync_cursor_and_selection();
@@ -10355,7 +10110,6 @@ mod tests {
         ]);
         let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 4 };
         proj.view_state.selected_node = Some(4);
-        proj.view_state.current_path2 = vec![6, 0];
         proj.migrate_format();
         assert_eq!(proj.format, PROJECT_FORMAT);
 
@@ -10376,11 +10130,9 @@ mod tests {
         assert!(err.is_none(), "{err:?}");
         assert_eq!(text(&resolved, "radius"), "1");
 
-        // The view: the root editor is inside, on xform1; the second editor's
-        // path into sub1 goes through the new node.
+        // The view: the editor is inside, on xform1.
         assert_eq!(proj.view_state.current_path, vec![3]);
         assert_eq!(proj.view_state.selected_node, Some(1));
-        assert_eq!(proj.view_state.current_path2, vec![3, 3, 0]);
 
         // Once.
         let before = serde_json::to_string(&proj).unwrap();
@@ -10810,7 +10562,6 @@ mod tests {
         assert!(wrap_words("", 10).is_empty());
 
         let mut state = State::new(false);
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
         // sphere1 comes from the bundled project, whose file has no
@@ -10870,7 +10621,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         state
             .apply_action(McpAction::AddNode { template_name: "Sphere".into(), name: Some("ball".into()), x: 1.0, y: 8.0 }, &mut redraw)
@@ -16745,7 +16495,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
 
         let mut redraw = false;
         for (name, x, y) in [("a", 1.0, 5.0), ("b", 2.0, 7.0), ("c", 1.0, 11.0)] {
@@ -16827,7 +16576,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
 
         // Two nodes well inside a box drawn from (0, 3) to (3, 9).
         let mut redraw = false;
@@ -16968,7 +16716,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
 
         let mut redraw = false;
         for (name, x, y) in [("a", 1.0, 4.0), ("b", 2.0, 4.0), ("c", 3.0, 4.0)] {
@@ -17597,7 +17344,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         // Clear the bundled level so only these two nodes are framed.
         let existing = state.current_dir().children.len();
         for slot in (0..existing).rev() {
@@ -18163,7 +17909,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").expect("sphere1");
         state.graph_mut().set_selected_node(Some(sphere));
         state.sync_parameters_pane();
@@ -18528,7 +18273,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
@@ -18579,7 +18323,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("group1".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
@@ -18662,7 +18405,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
@@ -18716,7 +18458,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
         let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
@@ -18801,7 +18542,6 @@ mod tests {
         main.rebuild_positions();
         main.apply_layout();
         main.focused_pane = LEFT_MENUBAR_IDX;
-        main.param_editor = crate::slots::CONTENT_IDX;
         main.set_active_camera("Default Camera");
         let mut redraw = false;
         main.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
@@ -18873,7 +18613,6 @@ mod tests {
         state.execute_menu_action("Show Spreadsheet Pane");
         state.rebuild_positions();
         state.apply_layout();
-        state.param_editor = crate::slots::CONTENT_IDX;
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Box".into(), name: Some("rows_a".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
         state.apply_action(McpAction::AddNode { template_name: "Box".into(), name: Some("rows_b".into()), x: 7.0, y: 8.0 }, &mut redraw).unwrap();
@@ -18938,7 +18677,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         state.show_spreadsheet = true;
         let mut redraw = false;
         state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
@@ -18995,7 +18733,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         state.show_spreadsheet = true;
         let mut redraw = false;
         // sphere1 -> sim (a pull inside) -> tagged (a Group reading the sim).
@@ -19061,7 +18798,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         state.focused_pane = LEFT_MENUBAR_IDX;
-        state.param_editor = crate::slots::CONTENT_IDX;
         state.show_spreadsheet = true;
         let mut redraw = false;
         let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);

@@ -106,18 +106,11 @@ widget_roster! {
     SPREADSHEET_MENUBAR_IDX: spreadsheet_menubar: MenuBar,
     NETWORK_PANEL_IDX:       network_panel:       PassivePlate,
     PLAYBAR_IDX:             playbar:             Playbar,
-    // The second network editor (plate + graph + breadcrumb): an independent
-    // VIEW of the same project with its own current path, created and placed
-    // through the plate corner menus' tab rows. Appended so the established
-    // slot indexes stay stable.
-    NETWORK_PANEL2_IDX:      network_panel2:      PassivePlate,
-    CONTENT2_IDX:            content2:            Graph,
-    BREADCRUMB2_IDX:         breadcrumb2:         Breadcrumb,
+    // (The second network editor's three slots — plate, graph, breadcrumb —
+    // stood here until 2026-10-07, when the editor was removed.)
     // The Alt+D dialog: plate, query line and the one list of commands and
-    // settings, its controls painted from the toolkit's own stamps. Appended,
-    // like every slot since the second network editor, so established
-    // indexes stay stable. (A second ParametersBg slot for a Settings half
-    // sat after it until 2026-09-24.)
+    // settings, its controls painted from the toolkit's own stamps. (A second
+    // ParametersBg slot for a Settings half sat after it until 2026-09-24.)
     DIALOG_IDX:              dialog:              crate::dialog::Dialog,
 }
 

@@ -226,7 +226,6 @@ pub fn wrap_root_geometry(project: &mut Project) {
     } else {
         view.current_path = remap(&view.current_path);
     }
-    view.current_path2 = remap(&view.current_path2);
 }
 
 /// One channel path as it resolved before a move.

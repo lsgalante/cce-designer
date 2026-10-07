@@ -163,10 +163,6 @@ impl State {
             collapsed_panes,
             splitters,
             dock_tabs,
-            current_path2: self.current_path2.clone(),
-            viewport_pin: Self::pin_name(self.viewport_pin),
-            params_pin: Self::pin_name(self.params_pin),
-            spreadsheet_pin: Self::pin_name(self.spreadsheet_pin),
             plates,
             frame_range: {
                 let pb = self.slots.playbar.inner();
@@ -207,27 +203,6 @@ impl State {
         vp.reset_velocity();
     }
 
-    /// A pin as its saved pane name.
-    fn pin_name(pin: Option<usize>) -> Option<String> {
-        match pin {
-            Some(crate::slots::CONTENT2_IDX) => Some("network2".to_string()),
-            Some(_) => Some("network".to_string()),
-            None => None,
-        }
-    }
-
-    /// The inverse: a saved pin name, honored only when its editor exists.
-    fn pin_from_name(&self, name: Option<&str>) -> Option<usize> {
-        match name {
-            Some("network") => Some(crate::slots::CONTENT_IDX),
-            Some("network2")
-                if self.tab_dock_of_pane(crate::slots::NETWORK_PANEL2_IDX).is_some() =>
-            {
-                Some(crate::slots::CONTENT2_IDX)
-            }
-            _ => None,
-        }
-    }
 
     /// The view state a DETACHED window writes into the sync channel: the
     /// file's own (the main window's layout, display settings and camera,
@@ -354,10 +329,7 @@ impl State {
             self.set_pane_collapsed(idx, desired);
         }
         // Dock tab groups: accepted only whole — three lists whose names
-        // resolve, cover each CORE docked pane exactly once, and carry the
-        // second network editor at most once (its presence in a list is what
-        // recreates it; absent, it stays closed — including replacing a live
-        // one, since the file's arrangement is the arrangement). Anything
+        // resolve and cover each CORE docked pane exactly once. Anything
         // else (older saves' empty list included) keeps the current layout
         // rather than loading half of one.
         if vs.dock_tabs.len() == 3 {
@@ -371,39 +343,22 @@ impl State {
                         .collect()
                 })
                 .collect();
+            // "network2", the second network editor (removed 2026-10-07),
+            // names no pane and is dropped wherever an older save had it.
             let all: Vec<usize> = resolved.iter().flatten().copied().collect();
-            let n2 = crate::slots::NETWORK_PANEL2_IDX;
-            let n2_count = all.iter().filter(|&&s| s == n2).count();
             // Neither the params pane nor the network is docked since
             // 2026-10-06 (the one a HUD on the scene, the other an overlay
             // spanning it): an older save lists them in docks, and they are
             // taken out — a dock one fronted fronts its next tab, or is
             // empty.
             let undocked = |s: usize| s == crate::slots::PARAM_IDX || s == crate::slots::NETWORK_PANEL_IDX;
-            // A dock the network FRONTED showed the network alone: what
-            // waited behind it was hidden. The second editor waiting there
-            // is closed, not brought to the front where the network's plate
-            // was — it would appear as a second graph in the old dock's
-            // place, which is what a save of 2026-10-06 did on 2026-10-07.
-            // (The spreadsheet cannot be closed, and fronts.)
-            let resolved: Vec<Vec<usize>> = resolved
-                .into_iter()
-                .map(|tabs| {
-                    if tabs.first() == Some(&crate::slots::NETWORK_PANEL_IDX) {
-                        tabs.into_iter().filter(|&s| s != n2).collect()
-                    } else {
-                        tabs
-                    }
-                })
-                .collect();
             let resolved: Vec<Vec<usize>> = resolved
                 .into_iter()
                 .map(|tabs| tabs.into_iter().filter(|&s| !undocked(s)).collect())
                 .collect();
             let all: Vec<usize> = all.into_iter().filter(|&s| !undocked(s)).collect();
-            let core: Vec<usize> = all.iter().copied().filter(|&s| s != n2).collect();
             let expected = vec![crate::slots::SPREADSHEET_IDX];
-            if core == expected && n2_count <= 1 {
+            if all == expected {
                 for d in 0..3 {
                     self.dock_tabs[d] = resolved[d].clone();
                     self.dock_panes[d] =
@@ -413,15 +368,6 @@ impl State {
                 self.apply_layout();
             }
         }
-        // The second editor's own path, clamped against the loaded tree —
-        // a stale save must degrade to the deepest valid ancestor.
-        self.current_path2 = vs.current_path2.clone();
-        self.clamp_path2();
-        // Pins: "network2" only holds if the loaded arrangement actually
-        // carries the second editor.
-        self.viewport_pin = self.pin_from_name(vs.viewport_pin.as_deref());
-        self.params_pin = self.pin_from_name(vs.params_pin.as_deref());
-        self.spreadsheet_pin = self.pin_from_name(vs.spreadsheet_pin.as_deref());
         if let Some((f1, f2)) = vs.splitters {
             if self.width > 1.0 && f1 > 0.02 && f2 < 0.98 && f1 < f2 {
                 self.splitter_layout.splitter1_x = f1 * self.width;

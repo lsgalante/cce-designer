@@ -889,8 +889,7 @@ impl Dialog {
 }
 
 impl Layout for Dialog {
-    /// Above every pane, and above the second network editor's plates: the
-    /// dialog is modal in practice — a press inside it never reaches what it
+    /// Above every pane: the dialog is modal in practice — a press inside it never reaches what it
     /// covers — so it has to be drawn that way too.
     fn z_order(&self) -> i32 {
         900
@@ -2404,12 +2403,11 @@ impl State {
         }
     }
 
-    /// The node wires' style on both network editors — `None` follows the
-    /// config's `wire_style`. The widgets hold it; the save reads it back
-    /// off the first.
+    /// The node wires' style on the network editor — `None` follows the
+    /// config's `wire_style`. The widget holds it; the save reads it back
+    /// off it.
     pub(crate) fn set_node_wire_style(&mut self, style: Option<cce_ui::widget::display::WireStyle>) {
         self.slots.content.inner_mut().set_wire_style(style);
-        self.slots.content2.inner_mut().set_wire_style(style);
     }
 
     /// Write one setting's value to whatever owns it.

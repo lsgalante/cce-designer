@@ -175,10 +175,9 @@ The rules:
   one step. The graph is not looked at while a drag is held
   (`gesture_held`), so a dragged node is one step from where it was picked
   up.
-- **Slots are held by id across a structure step**: the two editors'
-  paths and the selection, which a node coming or going would move. An
-  editor inside a node that an undo takes out comes up to where the node
-  was.
+- **Slots are held by id across a structure step**: the editor's path
+  and the selection, which a node coming or going would move. An editor
+  inside a node that an undo takes out comes up to where the node was.
 - **Undo and Redo consult it LAST** — a code row, then a viewer state,
   then this (`Application::undo` for the chord, `Action::Undo` for the
   palette) — so the order ACROSS the three is by owner and not by time. A
@@ -246,11 +245,11 @@ gone from cce-ui with the wgpu path).
   hard parts are about paint order and occlusion, none of which is guessable
   from the widget.
 - `src/plate_menu.rs` — the plate menu: what can be done to a pane's PLATE
-  (`PLATE_SLOTS` — network, params, spreadsheet, playbar, network 2; NOT the
-  viewport, whose plate is the window-spanning lip) — Collapse/Expand, Detach/
-  Reattach, Full Width, the selection pins, the dock's tabs, Add Tab, Move To Own
-  Plate, **Move To Left/Right/Bottom** and Close Tab. The network and the params
-  HUD are in no dock, so theirs are Detach (and the HUD's pins) alone, and the
+  (`PLATE_SLOTS` — network, params, spreadsheet, playbar; NOT the viewport,
+  whose plate is the window-spanning lip) — Collapse/Expand, Detach/Reattach,
+  Full Width (only with a plate in a side dock to tuck under), the dock's tabs,
+  Add Tab, Move To Own Plate and **Move To Left/Right/Bottom**. The network and
+  the params HUD are in no dock, so theirs are Detach alone, and the
   network's are in no menu: its Plate page went on 2026-10-07, Detach being the
   `detach_circular_window` command in the palette. `plate_menu_rows(idx)` is the
   one list. **There is no corner trigger** (since 2026-10-01; it was a small
@@ -262,8 +261,8 @@ gone from cce-ui with the wgpu path).
   (`PlaybarMenuAction::PlatePage`), which turns the menu into them under a
   band back to it (`open_plate_page`; until 2026-10-06 they were appended
   inline there), and the whole menu where a pane has none of its own — the
-  params pane off a row, the spreadsheet, the second network editor
-  (`open_plate_menu`, at the pointer). A row from any of them runs through
+  params pane off a row, the spreadsheet (`open_plate_menu`, at the
+  pointer). A row from any of them runs through
   `run_plate_menu_action`. Add Tab is a page row too: the menu turns into
   the list of panes where it stood, under a back band to whichever menu it
   turned from (`State::plate_page_from`) — from a Plate page, back to that
@@ -1402,9 +1401,8 @@ A bypassed node wears amber (`render::BYPASS_TINT`): its roll tinted
 through the bevel's own tint channel, and a flat bar down its left side,
 drawn after the bodies with the geometry toggles. The bar is what still
 says so while the node is selected and its roll is the selection's colour.
-The node is found by `GraphController::node_at` at the body's centre, so
-the second network editor marks its own level's. Nothing in cce-ui
-changed.
+The node is found by `GraphController::node_at` at the body's centre.
+Nothing in cce-ui changed.
 
 `a_bypassed_node_passes_its_input_through` covers the geometry resolver
 and the scene walk, `a_bypassed_page_node_passes_its_sheet_through` the
@@ -1437,7 +1435,7 @@ node dragged onto a wire uses, asked about the body the new node will have
 — so adding and dropping agree about what is on a wire, in every wire
 style. It is asked BEFORE the add, since the new node's own wires would
 touch the cell after. The rewiring is `app::splice_into_wire`, the one the
-drag drop runs (both editors): both Inputs or neither, so a node with no
+drag drop runs: both Inputs or neither, so a node with no
 Input — a generator — is added beside the wire and cuts nothing. MCP's
 `add_node` places at the coordinates it is given and does not splice.
 `a_node_added_on_a_wire_is_wired_into_its_chain` is the test.
@@ -1457,7 +1455,7 @@ not copied still names that node.
 
 A node dragged onto another node trades places with it, connections and
 all — the chain's ORDER changes, not just the picture: in I → A → B → C,
-B dropped on A gives I → B → A → C. Both network editors turn cce-ui's
+B dropped on A gives I → B → A → C. The network editor turns cce-ui's
 `Graph::set_swap_on_drop` on (see its CLAUDE.md, "A node dropped on a node
 can swap with it"); the widget trades the two cells, which the drag's
 position write-back carries into the tree, and the release drains
@@ -2764,6 +2762,27 @@ relief is two shapes", "Frost is one block"); this is the designer's view of
 them, written because the question "what are the style parameters of the
 plates" took a session to answer from the code.
 
+### There is one network editor (since 2026-10-07)
+
+A second network editor — its own plate, graph and breadcrumb
+(`NETWORK_PANEL2_IDX` / `CONTENT2_IDX` / `BREADCRUMB2_IDX`), its own path
+(`current_path2`), placed through the plate menus' tab rows and closed by
+Close Tab — was removed, with what existed only to choose between two:
+`param_editor` (the editor that took the last click, which the params pane,
+the spreadsheet and the viewport followed) and the three PINS
+(`viewport_pin`, `params_pin`, `spreadsheet_pin`, the "Follow Active Editor"
+/ "Pin: Network" radio rows of the viewport menu and the plate menus).
+`param_editor_selected`, `param_editor_dir` and `viewport_editor_dir` stay
+as names for what they read — the one editor's selection and level.
+
+An older save's `"network2"` in its dock lists names no pane and is dropped
+wherever it stood, its `current_path2` and pins ignored
+(`an_older_saves_second_network_editor_is_dropped`). With the network and
+the params HUD out of the docks too, the spreadsheet is the one dockable
+pane: Move To still moves it between the three docks, the tab rows have
+nothing to offer, and its Full Width row is shown only while a side dock
+holds a plate to tuck under — which, with nothing else dockable, is never.
+
 ### The network has no plate (since 2026-10-06)
 
 The network's nodes and wires stand directly on the 3D scene. The viewport is
@@ -2782,7 +2801,6 @@ settings structs ignore keys they do not know), and the next save drops it.
 What only the plate reached went with it: the network's flat focus ring
 (the grid cursor carries its focus), the network panels as plates over the
 params HUD (`plates_over_params`) and over a point number (`under_a_plate`).
-The SECOND network editor has no plate either; it keeps its dock rect.
 
 The pane keeps its focus domain, its menus, its clip and its keyboard
 navigation.
@@ -2791,16 +2809,13 @@ navigation.
 none. The left dock starts EMPTY (`dock_panes` `[NO_PANE, NO_PANE,
 spreadsheet]`), so the spreadsheet runs flush to the window's left, where
 it stopped short of the network's invisible dock until then;
-`TAB_CANDIDATES` is the spreadsheet and the second editor; the network's
+`TAB_CANDIDATES` is the spreadsheet alone; the network's
 plate menu is Detach alone (no tab, Move To or Collapse rows) — and is in
 no menu: the network menu's Plate page went the next day, Detach being the
 palette's `detach_circular_window` — and
 `set_pane_collapsed` refuses it; the pane-state load takes it out of an
 older save's tab lists, the dock it fronted fronting its next tab or
-emptying — except a second editor that waited behind it, which loads
-CLOSED: it was hidden, and fronting it put a second graph where the
-network's plate had been (`a_second_editor_hidden_behind_the_network_loads_closed`;
-the user's own project did exactly that the day the network left the docks) (`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones`
+emptying (`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones`
 loads one). `plate_at` never answers the network. The left dock's right edge
 resizes whatever plate is docked there (`on_left_dock_resize_edge`,
 `AppDrag::LeftDockResize`, writing `floating_network_layout.2`, which kept
@@ -2928,8 +2943,8 @@ bottom raised by a spreadsheet tucked under it, tabbable and movable.
   `AppDrag::RightDockResize`, asked first, its plate being on top.
 - **Out of the docks.** The right dock starts EMPTY (`dock_panes`
   `[NO_PANE, NO_PANE, spreadsheet]` — the network left the left dock the
-  next day); `TAB_CANDIDATES` no longer lists params, its plate menu has no tab, Move To or Collapse rows (Detach and
-  the pins stay), `set_pane_collapsed` refuses it, and the pane-state load
+  next day); `TAB_CANDIDATES` no longer lists params, its plate menu has no tab, Move To or Collapse rows (Detach
+  stays), `set_pane_collapsed` refuses it, and the pane-state load
   takes it out of an older save's tab lists — the dock it fronted fronts
   its next tab or empties. A plate moved into the right dock is drawn over
   the HUD. The legacy column branches (circular network, detached circular

@@ -71,22 +71,6 @@ impl State {
                 }
             }
 
-            // The second network editor's breadcrumb navigates ITS path.
-            {
-                use cce_ui::widget::PathController as _;
-                if let Some(seg) = state.slots.breadcrumb2.path_click() {
-                    if seg < state.current_path2.len() {
-                        state.current_path2.truncate(seg);
-                        state.sync_nodes();
-                        // The viewport tracks its editor's level.
-                        if state.viewport_editor() == crate::slots::CONTENT2_IDX {
-                            state.rebuild_scene_geometry();
-                        }
-                        changed = true;
-                    }
-                }
-            }
-
             if let Some(id) = state.pending_command.take() {
                 state.run_command(id);
                 changed = true;

@@ -38,7 +38,6 @@
 //! the step names, and what that is is in the step.
 
 use crate::app::{FsNode, State};
-use cce_ui::widget::GraphController as _;
 use crate::param::{ParamDef, ParamKind};
 use std::time::{Duration, Instant};
 
@@ -511,10 +510,9 @@ impl State {
                 self.update_status_text(&format!("{verb} {what}: {name}"));
             }
             Step::Structure(step) => {
-                // Where the editors are and what is selected are slots,
-                // which a node coming or going moves: held by id across it.
+                // Where the editor is and what is selected are slots, which
+                // a node coming or going moves: held by id across it.
                 let path = self.ids_along(&self.current_path.clone());
-                let path2 = self.ids_along(&self.current_path2.clone());
                 let selected = self
                     .graph()
                     .selected_node()
@@ -530,7 +528,6 @@ impl State {
                 let inverse = restore(&mut self.fs_root, step);
                 self.edit_history.file(undo, Step::Structure(inverse));
                 self.current_path = self.slots_along(&path);
-                self.current_path2 = self.slots_along(&path2);
                 let camera = camera
                     .and_then(|id| crate::viewer_state::find_node_by_id(&self.fs_root, &id))
                     .map(|n| n.name.clone());
@@ -539,7 +536,6 @@ impl State {
                 }
                 let slot = selected.and_then(|id| self.current_dir().children.iter().position(|n| n.id == id));
                 self.graph_mut().set_selected_node(slot);
-                self.slots.content2.set_selected_node(None);
                 self.grid_cursor_expanse = None;
                 let at = slot.and_then(|i| self.current_dir().children.get(i)).map(|n| n.position);
                 if let Some((col, row)) = at {

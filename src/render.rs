@@ -138,9 +138,6 @@ impl State {
             CONTENT_IDX | BREADCRUMB_IDX if !self.circular_network_pane => {
                 self.positions[NETWORK_PANEL_IDX]
             }
-            crate::slots::CONTENT2_IDX | crate::slots::BREADCRUMB2_IDX => {
-                self.positions[crate::slots::NETWORK_PANEL2_IDX]
-            }
             // The plate as drawn — fitted to the rows, the circle, or on
             // its way between them — so the rows are revealed as it grows.
             PARAM_IDX if self.params_plate => match self.params_plate_drawn() {
@@ -210,9 +207,9 @@ impl State {
                 -7
             } else if i == PARAM_IDX {
                 -6
-            } else if i == NETWORK_PANEL_IDX || i == crate::slots::NETWORK_PANEL2_IDX {
+            } else if i == NETWORK_PANEL_IDX {
                 -5
-            } else if i == CONTENT_IDX || i == crate::slots::CONTENT2_IDX {
+            } else if i == CONTENT_IDX {
                 -4
             } else if i == HEADER_IDX
                 || i == LEFT_MENUBAR_IDX
@@ -459,7 +456,7 @@ impl State {
                 append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
                 w.paint_self(&self.ui_context, pc);
             }
-        } else if idx == BREADCRUMB_IDX || idx == crate::slots::BREADCRUMB2_IDX {
+        } else if idx == BREADCRUMB_IDX {
             // Modern-paint control: Breadcrumb's whole look lives in its
             // Paint::paint() (the cce-ui restyle — per-segment plates on the
             // dropdown's relief, slanted seams) and it serves NO legacy views,
@@ -499,18 +496,7 @@ impl State {
             for (cx, cy, cr, cc) in w.extra_circles() {
                 pc.circle(cx, cy, cr, cc);
             }
-        } else if idx == CONTENT_IDX || idx == crate::slots::CONTENT2_IDX {
-            let second = idx == crate::slots::CONTENT2_IDX;
-            // The passed-in `clip` is PANE 1's content rect (computed once,
-            // before the walk) — zero whenever pane 1 waits as a tab. The
-            // second editor clips to its OWN rect or its whole graph
-            // vanishes with pane 1's.
-            let clip = if second {
-                let (cx2, cy2, cw2, ch2) = self.positions[crate::slots::CONTENT2_IDX];
-                rect(cx2, cy2, cw2, ch2)
-            } else {
-                clip
-            };
+        } else if idx == CONTENT_IDX {
             // No plate here, and none behind: the network has no plate
             // (since 2026-10-06), its nodes standing on the scene. Until 2026-09-20 this arm ALSO painted
             // the graph widget's own background over it — the cell colour
@@ -549,16 +535,14 @@ impl State {
 
                 // Grid cells arrive tagged with their surviving corners and draw
                 // as superellipse tiles, like the desktop grid; everything else
-                // stays a flat quad. `g` is THIS pane's graph — the second
-                // editor paints its own widget's geometry through the same body.
-                let g: &dyn cce_ui::widget::GraphController =
-                    if second { &*self.slots.content2 } else { self.graph() };
+                // stays a flat quad.
+                let g: &dyn cce_ui::widget::GraphController = self.graph();
                 let cell_r = g.cell_corner_radius();
                 // Which of this pane's nodes are bypassed, by slot: the
                 // widget knows a node's rect and its slot, the tree knows
                 // the flag.
                 let bypassed: Vec<bool> = {
-                    let level = if second { self.dir_at(&self.current_path2.clone()) } else { self.current_dir() };
+                    let level = self.current_dir();
                     level.children.iter().map(crate::geometry::is_bypassed).collect()
                 };
                 let mut bodies: Vec<(f32, f32, f32, f32, bool, bool)> = Vec::new();
@@ -579,10 +563,8 @@ impl State {
                         // so the rest are recognised here, by the cell the
                         // body is centred on: the same `grid_cursor_covers`
                         // the selection itself is derived from, rather than a
-                        // second rect test that could disagree with it. Pane
-                        // 1 only, the grid cursor being pane 1's concept.
-                        let in_region = !second
-                            && self.grid_cursor_expanded()
+                        // second rect test that could disagree with it.
+                        let in_region = self.grid_cursor_expanded()
                             && {
                                 let (col, row) = self.cell_at(qx + qw * 0.5, qy + qh * 0.5);
                                 self.grid_cursor_covers(col, row)
@@ -605,7 +587,7 @@ impl State {
                 // grid snap the glow reads as a soft aura around the dragged
                 // body.
                 if let Some(gl) = self.drop_glow {
-                    if !second {
+                    {
                         pc.glow(
                             rect(gl.x, gl.y, gl.w, gl.h),
                             cell_r,
@@ -651,7 +633,7 @@ impl State {
                 }
             }
 
-            if show_cursor && !second {
+            if show_cursor {
                 // A node-sized outline centred on the cursor's intersection —
                 // exactly where a node placed there would sit — or, after a
                 // drag across the grid, the union of the region it expanded
@@ -819,9 +801,7 @@ impl State {
             }
         } else {
             let (wx, wy, ww2, wh2) = w.rect();
-            let network_panel =
-                idx == NETWORK_PANEL_IDX || idx == crate::slots::NETWORK_PANEL2_IDX;
-            if !network_panel {
+            if idx != NETWORK_PANEL_IDX {
                 append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             }
 
@@ -898,10 +878,6 @@ impl State {
         }
         let focused = match idx {
             NETWORK_PANEL_IDX => self.focused_pane == LEFT_MENUBAR_IDX && !self.circular_network_pane,
-            // The second network editor shares the network focus domain —
-            // whichever of the two is FRONTED wears the ring when it holds
-            // (a tab waiting behind the other has a zero rect, so no plate).
-            crate::slots::NETWORK_PANEL2_IDX => self.focused_pane == LEFT_MENUBAR_IDX,
             VIEWPORT_IDX => self.focused_pane == RIGHT_MENUBAR_IDX,
             PARAM_IDX => self.focused_pane == PARAM_MENUBAR_IDX,
             SPREADSHEET_IDX => self.focused_pane == SPREADSHEET_MENUBAR_IDX,
@@ -1106,7 +1082,7 @@ impl State {
                     // Node text belongs to the node domain: it fades with
                     // node_opacity, not the pane's network_opacity.
                     // A name on a light floor is written dark (node_ink).
-                    let color = if is_node || i == crate::slots::CONTENT2_IDX {
+                    let color = if is_node {
                         self.node_ink().unwrap_or(color)
                     } else {
                         color
@@ -1431,10 +1407,8 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         let geom = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            // The viewport shows ITS editor's level — the pinned one when a
-            // pin is set, else whichever editor took the last node click —
-            // while name resolution stays rooted at fs_root. Navigation in
-            // the bound editor re-scopes this.
+            // The viewport shows the network editor's level, while name
+            // resolution stays rooted at fs_root. Navigation re-scopes this.
             network_sphere_vertices_with_errors(&self.fs_root, self.viewport_editor_dir(), &mut ocl_error, &mut sim)
         };
         self.sim_cache = sim_cache;

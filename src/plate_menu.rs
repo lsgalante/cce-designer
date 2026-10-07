@@ -9,8 +9,7 @@
 //! playbar's) the rows are a PAGE of it, its **Plate** row turning the menu
 //! into them (since 2026-10-06; they were appended inline until then), and
 //! they make up the whole menu where it has none (the params pane off a
-//! row, the spreadsheet, the second network editor, and a collapsed or
-//! detached plate's stub). Moving a pane to another dock is a row too,
+//! row, the spreadsheet, and a collapsed or detached plate's stub). Moving a pane to another dock is a row too,
 //! `Move To …`, which swaps it with what is there as the drag did.
 //!
 //! [`State::plate_menu_rows`] is the one list; [`State::open_plate_menu_at`]
@@ -19,21 +18,21 @@
 
 use crate::app::{Dock, State};
 use crate::slots::{
-    NETWORK_PANEL2_IDX, NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT,
+    NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT,
 };
 use cce_ui::widget::plate_dock::{self, PlateDockAction, PlateDockState};
 
 /// The plates that carry a plate menu. The viewport is deliberately absent:
 /// its "plate" is the window-spanning lip, not a pane.
-pub const PLATE_SLOTS: [usize; 5] =
-    [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX, NETWORK_PANEL2_IDX];
+pub const PLATE_SLOTS: [usize; 4] = [NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX, PLAYBAR_IDX];
 
 /// The panes the tab rows offer — the dockable set. The playbar's strip is
-/// not a dock, and the second network editor joins as the first CLOSABLE
-/// pane: unplaced it simply does not exist. The params pane is not one
-/// (since 2026-10-06): it is a HUD on the scene, under the plates, laid out
-/// from the viewport alone (`State::params_hud_rect`).
-pub const TAB_CANDIDATES: [usize; 2] = [SPREADSHEET_IDX, NETWORK_PANEL2_IDX];
+/// not a dock. The params pane is not one (since 2026-10-06): it is a HUD
+/// on the scene, under the plates, laid out from the viewport alone
+/// (`State::params_hud_rect`); nor is the network (since 2026-10-07), which
+/// spans the window. The second network editor, the one closable pane, was
+/// removed the same day.
+pub const TAB_CANDIDATES: [usize; 1] = [SPREADSHEET_IDX];
 
 /// What the plate menu can do to its plate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,12 +62,6 @@ pub enum PlateMenuAction {
     /// Move this pane, and the tabs riding it, to another dock, swapping
     /// with what is there — what dragging the plate's corner used to do.
     MoveTo(Dock),
-    /// Remove a closable pane (the second network editor) from the docks.
-    CloseTab,
-    /// Bind this pane to whichever editor takes the last node click.
-    PinFollow,
-    /// Bind this pane to one editor (CONTENT_IDX / CONTENT2_IDX).
-    PinTo(usize),
     /// A "-" row: engraved, inert — keeps the action list aligned with the
     /// option rows so a click on the line dispatches nothing.
     Separator,
@@ -81,7 +74,6 @@ pub fn plate_title(idx: usize) -> &'static str {
         PARAM_IDX => "Parameters",
         SPREADSHEET_IDX => "Spreadsheet",
         PLAYBAR_IDX => "Playbar",
-        NETWORK_PANEL2_IDX => "Network 2",
         _ => "Pane",
     }
 }
@@ -164,7 +156,14 @@ impl State {
             }
         };
 
-        if idx == SPREADSHEET_IDX && !self.collapsed_panes[idx] {
+        // Only with a plate beside it to tuck under: with neither side dock
+        // holding one (the spreadsheet being the one dockable pane, the
+        // usual case) it spans the window already, and the rows would do
+        // nothing.
+        if idx == SPREADSHEET_IDX
+            && !self.collapsed_panes[idx]
+            && (self.dock_shown(Dock::Left) || self.dock_shown(Dock::Right))
+        {
             separate(&mut options, &mut actions);
             // Layout spans: full-width is the playbar treatment; the neighbors'
             // bottoms rise to make room via the tuck interlock.
@@ -176,30 +175,6 @@ impl State {
                 options.push("Between Panes".to_string());
                 actions.push(PlateMenuAction::BetweenPanes);
             }
-        }
-
-        // Selection binding — the params pane and spreadsheet can pin to
-        // one editor (the viewport's right-click radio, on the plates that
-        // follow selection). Only while a second editor exists: with one,
-        // following IS pinned.
-        if (idx == PARAM_IDX || idx == SPREADSHEET_IDX)
-            && self.tab_dock_of_pane(NETWORK_PANEL2_IDX).is_some()
-        {
-            separate(&mut options, &mut actions);
-            let pin = if idx == PARAM_IDX { self.params_pin } else { self.spreadsheet_pin };
-            let mark = |on: bool| if on { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
-            options.push(format!("{}Follow Active Editor", mark(pin.is_none())));
-            actions.push(PlateMenuAction::PinFollow);
-            options.push(format!(
-                "{}Pin: Network",
-                mark(pin == Some(crate::slots::CONTENT_IDX))
-            ));
-            actions.push(PlateMenuAction::PinTo(crate::slots::CONTENT_IDX));
-            options.push(format!(
-                "{}Pin: Network 2",
-                mark(pin == Some(crate::slots::CONTENT2_IDX))
-            ));
-            actions.push(PlateMenuAction::PinTo(crate::slots::CONTENT2_IDX));
         }
 
         // Tabs — only on docked plates (the playbar's strip is not a dock).
@@ -246,11 +221,6 @@ impl State {
                     options.push(format!("Move To {}", dock_title(other)));
                     actions.push(PlateMenuAction::MoveTo(other));
                 }
-            }
-            if idx == NETWORK_PANEL2_IDX {
-                manage_row(&mut options, &mut actions);
-                options.push("Close Tab".to_string());
-                actions.push(PlateMenuAction::CloseTab);
             }
         }
         (options, actions)
@@ -389,27 +359,7 @@ impl State {
             }
             PlateMenuAction::SplitTab => self.split_dock_tab(idx),
             PlateMenuAction::MoveTo(d) => self.move_pane_to_dock(idx, d),
-            PlateMenuAction::CloseTab => self.close_dock_tab(idx),
-            PlateMenuAction::PinFollow => self.set_pane_pin(idx, None),
-            PlateMenuAction::PinTo(e) => self.set_pane_pin(idx, Some(e)),
             PlateMenuAction::Separator => {}
-        }
-    }
-
-    /// Apply a plate's selection-binding pick and refresh what it feeds.
-    fn set_pane_pin(&mut self, idx: usize, pin: Option<usize>) {
-        match idx {
-            PARAM_IDX => {
-                self.params_pin = pin;
-                self.sync_parameters_pane();
-            }
-            SPREADSHEET_IDX => {
-                self.spreadsheet_pin = pin;
-                // The spreadsheet refresh lives in sync_nodes, keyed by the
-                // bound selection's node id — rebinding changes the key.
-                self.sync_nodes();
-            }
-            _ => {}
         }
     }
 
@@ -541,7 +491,6 @@ pub fn pane_name_from_slot(idx: usize) -> Option<&'static str> {
         PARAM_IDX => Some("parameters"),
         SPREADSHEET_IDX => Some("spreadsheet"),
         PLAYBAR_IDX => Some("playbar"),
-        NETWORK_PANEL2_IDX => Some("network2"),
         _ => None,
     }
 }
@@ -553,7 +502,6 @@ pub fn pane_slot_from_name(name: &str) -> Option<usize> {
         "parameters" | "params" => Some(PARAM_IDX),
         "spreadsheet" => Some(SPREADSHEET_IDX),
         "playbar" => Some(PLAYBAR_IDX),
-        "network2" => Some(NETWORK_PANEL2_IDX),
         _ => None,
     }
 }
@@ -629,12 +577,6 @@ impl State {
         self.positions[idx] = (x, y, w, STUB_H.min(h));
         if idx == NETWORK_PANEL_IDX {
             for child in [crate::slots::CONTENT_IDX, crate::slots::BREADCRUMB_IDX] {
-                self.positions[child] = (0.0, 0.0, 0.0, 0.0);
-                self.slots.get_dyn_mut(child).set_visible(false);
-            }
-        }
-        if idx == NETWORK_PANEL2_IDX {
-            for child in [crate::slots::CONTENT2_IDX, crate::slots::BREADCRUMB2_IDX] {
                 self.positions[child] = (0.0, 0.0, 0.0, 0.0);
                 self.slots.get_dyn_mut(child).set_visible(false);
             }
