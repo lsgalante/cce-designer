@@ -17978,6 +17978,67 @@ mod tests {
         }
     }
 
+    /// The edge list is built by bucket, not by one sort of every edge, and
+    /// without the rest of the topology for the wire pass: the same edges in
+    /// the same order either way — on meshes of triangles, quads and
+    /// polygons, open segments, a primitive that names a point twice, and a
+    /// hand-built one naming a point past the end (which takes the sort).
+    #[test]
+    fn unique_edges_match_a_sort_of_every_edge() {
+        let reference = |d: &crate::detail::Detail| -> Vec<[u32; 2]> {
+            let mut all = Vec::new();
+            for prim in 0..d.num_prims() {
+                let pts = d.prim_points(prim);
+                let n = pts.len();
+                if n < 2 {
+                    continue;
+                }
+                let span = if n == 2 { 1 } else { n };
+                for i in 0..span {
+                    let (a, b) = (pts[i], pts[(i + 1) % n]);
+                    if a != b {
+                        all.push([a.min(b), a.max(b)]);
+                    }
+                }
+            }
+            all.sort_unstable();
+            all.dedup();
+            all
+        };
+        let mut meshes = vec![
+            crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 9, 14),
+            crate::geometry::box_detail(Vec3::ZERO, Vec3::ONE, 0.2),
+        ];
+        // A scramble of triangles, quads, pentagons, segments and a
+        // degenerate polygon over 60 points, numbered out of order.
+        let mut d = crate::detail::Detail::new();
+        for i in 0..60 {
+            d.add_point(Vec3::new(i as f32, (i * 7 % 11) as f32, 0.0));
+        }
+        let mut k = 17u32;
+        for prim in 0..120 {
+            let n = [2, 3, 3, 4, 5][prim % 5];
+            let pts: Vec<u32> = (0..n).map(|_| { k = (k * 31 + 7) % 60; k }).collect();
+            d.add_prim(&pts);
+        }
+        d.add_prim(&[5, 5, 9, 5]);
+        meshes.push(d);
+        let mut past = crate::detail::Detail::new();
+        for i in 0..5 {
+            past.add_point(Vec3::new(i as f32, 0.0, 0.0));
+        }
+        past.add_prim(&[0, 1, 2]);
+        past.add_prim(&[3, 99]);
+        meshes.push(past);
+        for d in &meshes {
+            let want = reference(d);
+            assert_eq!(d.edge_list().into_owned(), want, "built alone");
+            assert!(matches!(d.edge_list(), std::borrow::Cow::Owned(_)), "without building the topology");
+            assert_eq!(d.edges(), want.as_slice(), "built with the topology");
+            assert!(matches!(d.edge_list(), std::borrow::Cow::Borrowed(_)), "and taken from it once built");
+        }
+    }
+
     /// The playbar's cache strip, as a rule: a frame is cached when every
     /// simnet in the tree holds it, stale when one of them holds it from
     /// the chain as it was — before an edit the solve went on across, or

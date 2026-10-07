@@ -1848,14 +1848,22 @@ pub(crate) fn scene_element_overlays(
 /// The soup version was what the global Show Wireframe drew until
 /// 2026-09-23, while the per-node meta Wireframe drew this one; with the
 /// per-node flag retired there is one wireframe, and it is this one.
+///
+/// The edges without the rest of the topology (`Detail::edge_list`) and the
+/// colours as one column: a playing simulation's wireframe is built every
+/// frame, and until 2026-10-07 each built a whole topology and looked the
+/// colour up by name at both ends of every edge — the largest part of a
+/// replayed frame at 57k points.
 pub(crate) fn scene_edge_verts(geom: &crate::detail::Detail) -> Vec<crate::geometry::Vertex3D> {
-    let mut wires = Vec::new();
-    for e in geom.edges() {
+    let edges = geom.edge_list();
+    let colors = geom.point_colors();
+    let mut wires = Vec::with_capacity(edges.len() * 2);
+    for e in edges.iter() {
         for &p in e {
             let p = p as usize;
             wires.push(crate::geometry::Vertex3D {
                 position: geom.positions()[p],
-                color: geom.color(p),
+                color: colors.get(p).copied().unwrap_or(crate::detail::DEFAULT_COLOR),
             });
         }
     }

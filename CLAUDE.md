@@ -2245,7 +2245,17 @@ need.
   hand does not (the next section).
 - **Within a count and a budget** (`CHECKPOINTS_MAX` 1024,
   `CHECKPOINT_BUDGET` 2 GB per simnet by an estimate of a state's size;
-  48 and 512 MB until every frame was kept). With no
+  48 and 512 MB until every frame was kept). **The budget is the SUM of
+  what the kept checkpoints hold, each at its own size** (since
+  2026-10-07, `Checkpoints::bytes`); it was the budget over the size of
+  the checkpoint just kept, which charged every frame of a growing
+  simulation at the size of the latest. On the user's project, a surface
+  growing from 162 points to 57k over 240 frames, that thinned the whole
+  history to every fourth frame while holding about 0.4 GB, and a replay
+  of the cached frames 120–240 re-solved three in four at 690 ms a frame;
+  counted by size, all 240 are kept at 1.5 GB (1.37 GB resident in a
+  shadow session) and the replay runs no step at 34 ms a frame.
+  `checkpoints_are_budgeted_by_what_each_holds`. With no
   room the SPACING doubles and stays doubled — what is off the wider
   interval goes, and what arrives after arrives that far apart. Not the
   oldest: a scrub is as likely to land near the start. And not every
@@ -3458,6 +3468,26 @@ refill, which a playing simulation does every frame. With the disk-cache
 fix above, a refresh of the table on a selected simnet at 11k points went
 from about 9 ms to 1.1 (evaluation 0.37, the columns 0.7, the widget
 0.01); the cells read as they did (`{:.4}`, the same strings).
+
+**A replayed frame, profiled whole** (2026-10-07, the user's project,
+point markers, wireframe and two visualizers on, frames 120–240 replayed
+from the cache): the CPU half was 11 ms a frame at 33k points and 20 at
+57k, the wireframe's edge list most of it — every frame's scene is a
+fresh copy, whose topology is not kept, so the wire pass built a whole
+topology (point→prims, neighbours and edges, the edges by one sort of
+every edge) to draw its edges, and looked each end's colour up by name.
+`Detail::edge_list` builds the edges alone unless the topology is
+already built, `unique_edges` sorts them by bucket rather than as one
+list (the same edges in the same order,
+`unique_edges_match_a_sort_of_every_edge`; it also builds every
+topology's edges, so the solvers' too), and `Detail::point_colors` reads
+the colour column once, for the wire pass and `triangulate`'s fill. The
+CPU half is now 6 ms at 33k and 13 at 57k: the wire edges 4, the graph's
+evaluation (the simnet's cached state copied out) 2.5, the fill 2, the
+point markers' instances 1.6, the 2D frame 1.5. In a shadow session the
+markers cost nothing on the GPU, being instanced; frames are paced to
+the display, so a frame of 8 ms CPU shows on the next 16.7 ms, and one
+over shows on the one after.
 
 **The markers are instanced** (the same day, cce-ui's
 `SceneDraw::instances`): every kind — Show Point Markers, Show Vertex

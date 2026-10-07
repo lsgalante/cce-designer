@@ -1180,16 +1180,17 @@ fn checkpoint_bytes(state: &Detail) -> usize {
     2 * (state.num_points() * 96 + state.num_verts() * 8 + state.num_prims() * 8 + 256)
 }
 
-/// One solve's checkpoints, in frame order, and how far apart they are
-/// being kept.
+/// One solve's checkpoints, in frame order, how far apart they are being
+/// kept, and what they hold by [`checkpoint_bytes`], summed.
 struct Checkpoints {
     every: i32,
     kept: Vec<Checkpoint>,
+    bytes: usize,
 }
 
 impl Default for Checkpoints {
     fn default() -> Self {
-        Checkpoints { every: CHECKPOINT_EVERY, kept: Vec::new() }
+        Checkpoints { every: CHECKPOINT_EVERY, kept: Vec::new(), bytes: 0 }
     }
 }
 
@@ -1202,17 +1203,35 @@ impl Checkpoints {
     /// arriving at the old spacing thinned the start again and again — a
     /// scrub is as likely to land there as anywhere, and an even spacing
     /// is what bounds the steps from anywhere.
+    ///
+    /// The budget is the SUM of what the kept checkpoints hold, each by its
+    /// own size. Until 2026-10-07 it was a count — the budget over the size
+    /// of the checkpoint just kept — which charged every frame of a growing
+    /// simulation at the size of the latest: on the user's project, whose
+    /// surface grows from 162 points to 57k over 240 frames, it thinned the
+    /// whole history to every fourth frame while holding about 0.4 GB by
+    /// this estimate, and a replay stepped three frames in four again.
+    /// Counted by size, all 240 frames are kept at 1.5 GB.
     fn keep(&mut self, at: Checkpoint) {
-        let each = checkpoint_bytes(&at.state).max(1);
+        self.keep_within(at, CHECKPOINT_BUDGET, CHECKPOINTS_MAX);
+    }
+
+    /// [`keep`](Self::keep) under a given budget and count, for the tests.
+    fn keep_within(&mut self, at: Checkpoint, budget: usize, max: usize) {
+        let each = checkpoint_bytes(&at.state);
         match self.kept.binary_search_by_key(&at.frame, |c| c.frame) {
-            Ok(i) => self.kept[i] = at,
+            Ok(i) => {
+                self.bytes -= checkpoint_bytes(&self.kept[i].state);
+                self.kept[i] = at;
+            }
             Err(i) => self.kept.insert(i, at),
         }
-        let room = (CHECKPOINT_BUDGET / each).clamp(2, CHECKPOINTS_MAX);
-        while self.kept.len() > room {
+        self.bytes += each;
+        while self.kept.len() > max || (self.bytes > budget && self.kept.len() > 2) {
             self.every = self.every.saturating_mul(2);
             let every = self.every;
             self.kept.retain(|c| c.frame % every == 0);
+            self.bytes = self.kept.iter().map(|c| checkpoint_bytes(&c.state)).sum();
         }
     }
 
@@ -1272,6 +1291,11 @@ impl SimCache {
                 }
             })
             .collect()
+    }
+
+    /// What simnet `id`'s checkpoints hold, by [`checkpoint_bytes`].
+    pub fn checkpoint_bytes_held(&self, id: &str) -> usize {
+        self.entries.get(id).map_or(0, |e| e.checkpoints.bytes)
     }
 
     /// The frames simnet `id` has checkpoints at, ascending — relative to
@@ -7739,6 +7763,40 @@ mod simnet_tests {
             bypassed: false,
             position: (0.0, 0.0),
         }
+    }
+
+    /// Checkpoints are kept within a budget of what they HOLD, each counted
+    /// at its own size: a history whose states grow fits where charging
+    /// every frame at the size of the latest would have thinned it, and a
+    /// budget too small for it thins the spacing and stays within it.
+    #[test]
+    fn checkpoints_are_budgeted_by_what_each_holds() {
+        // Frame f's state has 10 f points: the history grows as a solve's does.
+        let state = |f: i32| sphere_detail(Vec3::ZERO, 1.0, 2, 5 * f as usize);
+        let at = |f: i32| Checkpoint { frame: f, state: state(f), prev: Detail::default() };
+        let all: usize = (1..=60).map(|f| checkpoint_bytes(&state(f))).sum();
+        let latest = checkpoint_bytes(&state(60));
+        assert!(60 * latest > all * 3 / 2, "the latest times the count overstates the history");
+
+        let mut kept = Checkpoints::default();
+        for f in 1..=60 {
+            kept.keep_within(at(f), all, 1024);
+        }
+        assert_eq!(kept.kept.len(), 60, "every frame fits a budget of what they hold");
+        assert_eq!(kept.bytes, all);
+
+        let mut thinned = Checkpoints::default();
+        for f in 1..=60 {
+            // Offered as a solve offers them: on the spacing in force.
+            if f % thinned.every != 0 {
+                continue;
+            }
+            thinned.keep_within(at(f), all / 3, 1024);
+            assert!(thinned.bytes <= all / 3, "within the budget at frame {f}");
+            assert_eq!(thinned.bytes, thinned.kept.iter().map(|c| checkpoint_bytes(&c.state)).sum::<usize>());
+        }
+        assert!(thinned.every > 1 && thinned.kept.iter().all(|c| c.frame % thinned.every == 0));
+        assert!(thinned.kept.len() > 4, "{} kept", thinned.kept.len());
     }
 
     /// The Visualize node reads columns and a group mask where it read a

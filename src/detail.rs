@@ -926,27 +926,7 @@ impl Topology {
             }
         }
 
-        // Edges: every consecutive pair around each primitive, closing the
-        // loop. A two-point primitive (an open line segment) contributes one
-        // edge, not two — closing it would invent a neighbour.
-        let mut edges: Vec<[u32; 2]> = Vec::new();
-        for prim in 0..num_prims {
-            let pts = &vert_point[prim_start[prim] as usize..prim_start[prim + 1] as usize];
-            let n = pts.len();
-            if n < 2 {
-                continue;
-            }
-            let span = if n == 2 { 1 } else { n };
-            for i in 0..span {
-                let (a, b) = (pts[i], pts[(i + 1) % n]);
-                if a == b {
-                    continue;
-                }
-                edges.push([a.min(b), a.max(b)]);
-            }
-        }
-        edges.sort_unstable();
-        edges.dedup();
+        let edges = unique_edges(num_points, vert_point, prim_start);
 
         // point -> neighbours, from the deduplicated edge list. Both endpoints
         // of every edge, counting-sorted the same way.
@@ -986,6 +966,71 @@ impl Topology {
 
         Topology { point_prim_start, point_prim, point_nbr_start, point_nbr, edges }
     }
+}
+
+/// The mesh's edges, each once as `[low, high]`, in ascending order: every
+/// consecutive pair around each primitive, closing the loop. A two-point
+/// primitive (an open line segment) contributes one edge, not two — closing
+/// it would invent a neighbour.
+///
+/// Sorted by bucket rather than as one list: the edges are counted into
+/// their low point's bucket and each bucket, a handful long, is sorted and
+/// deduplicated on its own — the order a sort of the whole list gives, and
+/// the same list (`unique_edges_match_a_sort_of_every_edge`). Until
+/// 2026-10-07 it was that whole sort, two thirds of building a 57k-point
+/// mesh's topology, and a playing simulation's wireframe built one every
+/// frame. A primitive naming a point past the end (a hand-built mesh) falls
+/// back to the whole sort.
+fn unique_edges(num_points: usize, vert_point: &[u32], prim_start: &[u32]) -> Vec<[u32; 2]> {
+    let num_prims = prim_start.len().saturating_sub(1);
+    let mut all: Vec<[u32; 2]> = Vec::with_capacity(vert_point.len());
+    for prim in 0..num_prims {
+        let pts = &vert_point[prim_start[prim] as usize..prim_start[prim + 1] as usize];
+        let n = pts.len();
+        if n < 2 {
+            continue;
+        }
+        let span = if n == 2 { 1 } else { n };
+        for i in 0..span {
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
+            if a == b {
+                continue;
+            }
+            all.push([a.min(b), a.max(b)]);
+        }
+    }
+    if all.iter().any(|e| e[0] as usize >= num_points) {
+        all.sort_unstable();
+        all.dedup();
+        return all;
+    }
+    let mut start = vec![0u32; num_points + 1];
+    for e in &all {
+        start[e[0] as usize + 1] += 1;
+    }
+    for p in 0..num_points {
+        start[p + 1] += start[p];
+    }
+    let mut cursor = start.clone();
+    let mut highs = vec![0u32; all.len()];
+    for e in &all {
+        let at = &mut cursor[e[0] as usize];
+        highs[*at as usize] = e[1];
+        *at += 1;
+    }
+    let mut edges = Vec::with_capacity(all.len() / 2 + 1);
+    for a in 0..num_points {
+        let bucket = &mut highs[start[a] as usize..start[a + 1] as usize];
+        bucket.sort_unstable();
+        let mut last = None;
+        for &b in bucket.iter() {
+            if last != Some(b) {
+                edges.push([a as u32, b]);
+                last = Some(b);
+            }
+        }
+    }
+    edges
 }
 
 /// Points, vertices, primitives and detail — one piece of geometry.
@@ -1302,6 +1347,31 @@ impl Detail {
     /// Every unique undirected edge.
     pub fn edges(&self) -> &[[u32; 2]] {
         self.topology().edges()
+    }
+
+    /// The edges, as [`Detail::edges`] lists them, without building the
+    /// rest of the topology when it is not already built: what the wire
+    /// pass needs, every frame of a playing simulation, of a scene nothing
+    /// else asks the topology of.
+    pub fn edge_list(&self) -> std::borrow::Cow<'_, [[u32; 2]]> {
+        match self.topo.get() {
+            Some(topo) => std::borrow::Cow::Borrowed(topo.edges()),
+            None => std::borrow::Cow::Owned(unique_edges(self.num_points(), &self.vert_point, &self.prim_start)),
+        }
+    }
+
+    /// Every point's colour as [`Detail::color`] reads it, the column found
+    /// once — for the readers that walk every point or corner, where a
+    /// lookup by name each time was most of what they cost.
+    pub fn point_colors(&self) -> std::borrow::Cow<'_, [[f32; 3]]> {
+        let n = self.num_points();
+        match self.points.get(CD) {
+            Some(AttribData::Float3(c)) => std::borrow::Cow::Borrowed(c),
+            Some(other) => std::borrow::Cow::Owned(
+                (0..n).map(|p| other.get(p).map_or(DEFAULT_COLOR, |v| v.as_vec3().to_array())).collect(),
+            ),
+            None => std::borrow::Cow::Owned(vec![DEFAULT_COLOR; n]),
+        }
     }
 
     /// Drop the derived topology. Called by every structural edit; public
@@ -1797,6 +1867,7 @@ impl Detail {
     /// renderer's vertex type so that this module stays free of anything that
     /// draws — the caller in `geometry.rs` supplies `Vertex3D`.
     pub fn triangulate<V>(&self, mut make: impl FnMut([f32; 3], [f32; 3]) -> V) -> Vec<V> {
+        let colors = self.point_colors();
         let mut out = Vec::new();
         for prim in 0..self.num_prims() {
             let pts = self.prim_points(prim);
@@ -1808,7 +1879,7 @@ impl Detail {
                     let p = p as usize;
                     out.push(make(
                         self.pos.get(p).copied().unwrap_or([0.0; 3]),
-                        self.color(p),
+                        colors.get(p).copied().unwrap_or(DEFAULT_COLOR),
                     ));
                 }
             }
