@@ -273,8 +273,11 @@ pub fn scene_attributes(geom: &Detail) -> Vec<SceneAttribute> {
         .filter(|n| !n.starts_with(crate::detail::VIS_PREFIX))
         .map(|name| {
             let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+            // The column found once, not by name at every point: this runs
+            // on every scene rebuild, every frame of a playing simulation.
+            let data = geom.points().get(name);
             for p in 0..geom.num_points() {
-                if let Some(v) = geom.points().value(name, p) {
+                if let Some(v) = data.and_then(|d| d.get(p)) {
                     let x = v.as_f32();
                     if x.is_finite() {
                         min = min.min(x);

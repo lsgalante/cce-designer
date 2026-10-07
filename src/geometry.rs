@@ -3975,6 +3975,7 @@ pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 
             continue;
         }
         let Some(data) = geom.points().get(name) else { continue };
+        let cd = geom.points().get(crate::detail::CD);
         for p in 0..geom.num_points() {
             let Some(v) = data.get(p) else { continue };
             let dir = v.as_vec3();
@@ -3983,7 +3984,12 @@ pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 
             }
             // Drawn in the point's own colour, so a Ramp Visualize upstream
             // colours the markers too and one chain says two things at once.
-            let color = linearize(geom.color(p));
+            // Read as `Detail::color` does, off the column found once.
+            let color = linearize(match cd.and_then(|c| c.get(p)) {
+                Some(AttribValue::Float3(c)) => c,
+                Some(other) => other.as_vec3().to_array(),
+                None => crate::detail::DEFAULT_COLOR,
+            });
             out.push(Vertex3D { position: geom.positions()[p], color });
             out.push(Vertex3D { position: (geom.pos(p) + dir).to_array(), color });
         }
@@ -4149,6 +4155,124 @@ pub fn resolve_visualize_geometry_with_errors(
 }
 
 pub(crate) fn apply_visualize(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
+    let name = node_param_str(target, "attribute", "").trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    if !geom.points().has(&name) {
+        if ocl_error.is_none() {
+            *ocl_error = Some(format!(
+                "Visualize '{}': no point attribute named '{}'",
+                target.name, name
+            ));
+        }
+        return;
+    }
+
+    // The points it touches: every one, or the group's, as a mask read by
+    // index. The attribute and the colours are read as whole columns. Until
+    // 2026-10-07 the group was a list of every affected point searched once
+    // a point — quadratic, 60 million comparisons a frame at 11k points for
+    // a Vector visualizer with no group — and every value went through a
+    // lookup by name. The arithmetic is unchanged, in the same order
+    // (`visualize_matches_its_reference`).
+    let n = geom.num_points();
+    let group = node_param_str(target, "group", "");
+    let group = group.trim().to_string();
+    let mask: Option<Vec<bool>> =
+        if group.is_empty() { None } else { Some((0..n).map(|p| geom.points().in_group(&group, p)).collect()) };
+    let affected = |p: usize| mask.as_ref().is_none_or(|m| m[p]);
+    let data = geom.points().get(&name).expect("checked above");
+
+    if node_param_str(target, "mode", "Ramp").eq_ignore_ascii_case("vector") {
+        let scale = node_param_f32(target, "scale", 0.2);
+        let staged: Vec<[f32; 3]> = (0..n)
+            .map(|p| {
+                if !affected(p) {
+                    return [0.0; 3];
+                }
+                (data.get(p).map(|v| v.as_vec3()).unwrap_or(Vec3::ZERO) * scale).to_array()
+            })
+            .collect();
+        // Derivative: a marker describes the state it was made from, and one
+        // left over from the previous step would draw a lie.
+        let vis = format!("{}{}", crate::detail::VIS_PREFIX, name);
+        let _ = geom
+            .points_mut()
+            .create_kind(&vis, AttribValue::Float3([0.0; 3]), crate::detail::AttribKind::Derivative);
+        let _ = geom.points_mut().insert(&vis, AttribData::Float3(staged));
+        return;
+    }
+
+    // Ramp. Auto measures across EVERY point, not just the group: a group's
+    // colours should sit where they belong on the whole picture's scale, or
+    // two Visualize nodes over two groups would each claim the full ramp.
+    let values: Vec<f32> = (0..n).map(|p| data.get(p).map(|v| v.as_f32()).unwrap_or(0.0)).collect();
+    let (from, to) = if node_param_str(target, "range", "Auto").eq_ignore_ascii_case("manual") {
+        let [from, to] = node_param_vec2(target, "manual_range", [0.0, 1.0]);
+        (from, to)
+    } else {
+        (
+            values.iter().copied().fold(f32::INFINITY, f32::min),
+            values.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        )
+    };
+    let span = to - from;
+
+    let ramp = node_param_str(target, "ramp", "Viridis").to_lowercase();
+    let blend = node_param_str(target, "blend", "Set").to_lowercase();
+    let opacity = node_param_f32(target, "opacity", 1.0).clamp(0.0, 1.0);
+
+    // The colours as `Detail::color` reads them, a column.
+    let old_colors: Vec<[f32; 3]> = match geom.points().get(crate::detail::CD) {
+        Some(AttribData::Float3(c)) => c.clone(),
+        Some(other) => (0..n).map(|p| other.get(p).map_or(crate::detail::DEFAULT_COLOR, |v| v.as_vec3().to_array())).collect(),
+        None => vec![crate::detail::DEFAULT_COLOR; n],
+    };
+    let mut written: Vec<(usize, [f32; 3])> = Vec::with_capacity(n);
+    for p in (0..n).filter(|&p| affected(p)) {
+        let v = values[p];
+        // A flat attribute has no range to spread across the ramp; showing it
+        // all at the bottom is the honest picture of "nothing varies here".
+        let t = if span.abs() < 1e-9 { 0.0 } else { (v - from) / span };
+        let c = ramp_color(&ramp, t);
+        let old = old_colors[p];
+        let mixed = match blend.as_str() {
+            "multiply" => [old[0] * c[0], old[1] * c[1], old[2] * c[2]],
+            "add" => [old[0] + c[0], old[1] + c[1], old[2] + c[2]],
+            _ => c,
+        };
+        // Opacity is applied the same way for every blend, so a stack of
+        // Visualize nodes fades uniformly. (A Mix blend was Set by another
+        // name, this fade being all it did; it is retired, and a save
+        // holding it loads as Set.)
+        written.push((
+            p,
+            [
+                old[0] + (mixed[0] - old[0]) * opacity,
+                old[1] + (mixed[1] - old[1]) * opacity,
+                old[2] + (mixed[2] - old[2]) * opacity,
+            ],
+        ));
+    }
+    // Written as `Detail::set_color` writes: `Cd` created at the first
+    // write, and nothing written into a `Cd` that is not three floats.
+    if written.is_empty() {
+        return;
+    }
+    geom.points_mut().get_or_create(crate::detail::CD, AttribValue::Float3(crate::detail::DEFAULT_COLOR));
+    if let Some(AttribData::Float3(cd)) = geom.points_mut().get_mut(crate::detail::CD) {
+        for (p, c) in written {
+            cd[p] = c;
+        }
+    }
+}
+
+/// The Visualize node as it was written until 2026-10-07, kept as the
+/// reference [`apply_visualize`] is held to bit for bit
+/// (`visualize_matches_its_reference`).
+#[cfg(test)]
+pub(crate) fn apply_visualize_reference(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
     let name = node_param_str(target, "attribute", "").trim().to_string();
     if name.is_empty() {
         return;
@@ -7615,6 +7739,71 @@ mod simnet_tests {
             bypassed: false,
             position: (0.0, 0.0),
         }
+    }
+
+    /// The Visualize node reads columns and a group mask where it read a
+    /// value by name at every point and searched a list of every point for
+    /// each one; what it writes is the reference's bit for bit, in every
+    /// mode: Vector and Ramp, a group or none, Auto and Manual ranges, the
+    /// three blends at part opacity, a flat attribute, an integer one, `Cd`
+    /// itself, a scene with no `Cd` and one whose `Cd` is not three floats.
+    #[test]
+    fn visualize_matches_its_reference() {
+        use crate::detail::{AttribData, CD};
+        use crate::visualizer::Visualizer;
+        let mut base = sphere_detail(Vec3::new(0.1, 0.2, -0.3), 0.7, 9, 13);
+        let n = base.num_points();
+        let wave: Vec<f32> = (0..n).map(|p| (p as f32 * 0.37).sin() * 2.5 + 0.25).collect();
+        base.points_mut().insert("wave", AttribData::Float(wave.clone())).unwrap();
+        base.points_mut().create("flat", AttribValue::Float(1.5));
+        base.points_mut().insert("count", AttribData::Int((0..n as i32).map(|i| i % 7 - 3).collect())).unwrap();
+        base.points_mut().insert("dir", AttribData::Float3(wave.iter().map(|w| [*w, -w * 0.5, 0.25]).collect())).unwrap();
+        base.points_mut().create_group("half");
+        for p in (0..n).step_by(2) {
+            base.points_mut().add_to_group("half", p);
+        }
+        let mut no_cd = base.clone();
+        no_cd.points_mut().remove(CD);
+        let mut odd_cd = base.clone();
+        odd_cd.points_mut().insert(CD, AttribData::Float4(vec![[0.2, 0.4, 0.6, 1.0]; n])).unwrap();
+        let mut colored = base.clone();
+        colored.points_mut().insert(CD, AttribData::Float3((0..n).map(|p| [p as f32 / n as f32, 0.5, 0.25]).collect())).unwrap();
+
+        let mut cases = Vec::new();
+        for attribute in ["wave", "flat", "count", "dir", "Cd"] {
+            for group in ["", "half"] {
+                let mut v = Visualizer::new(attribute);
+                v.group = group.to_string();
+                v.mode = "Vector".to_string();
+                v.scale = 0.37;
+                cases.push(v.clone());
+                v.mode = "Ramp".to_string();
+                for (ramp, range, blend, opacity) in
+                    [("Heat", "Auto", "Set", 1.0), ("Viridis", "Manual", "Multiply", 0.6), ("Spectrum", "Auto", "Add", 0.35)]
+                {
+                    v.ramp = ramp.to_string();
+                    v.range = range.to_string();
+                    v.manual_range = [-1.0, 2.0];
+                    v.blend = blend.to_string();
+                    v.opacity = opacity;
+                    cases.push(v.clone());
+                }
+            }
+        }
+        let mut checked = 0;
+        for scene in [&base, &no_cd, &odd_cd, &colored] {
+            for v in &cases {
+                let node = v.as_node();
+                let (mut got, mut want) = (scene.clone(), scene.clone());
+                let (mut e1, mut e2) = (None, None);
+                apply_visualize(&mut got, &node, &mut e1);
+                apply_visualize_reference(&mut want, &node, &mut e2);
+                assert_eq!(e1, e2);
+                assert!(got == want, "{v:?} differs from the reference");
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 4 * 5 * 2 * 4);
     }
 
     /// Apply one Attribute-node operation to geometry in hand.

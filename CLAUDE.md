@@ -3429,8 +3429,8 @@ on): the spreadsheet's refill and the point markers were most of it, and
 both got cheaper without changing what they show — `points_vertices`
 works the marker sphere out once and moves it to each point (and then
 the markers were instanced, below). A replayed frame went from 140 ms to
-24 there. What is left grows with the mesh: the visualizers' copy of the
-scene.
+24 there. The visualizers were most of what was left: see "Attribute
+visualizers".
 
 **The spreadsheet is columns of values** (2026-10-07, cce-ui's
 `SheetColumn` and `set_spreadsheet_columns`): `geometry_to_spreadsheet_columns`
@@ -3823,6 +3823,22 @@ the later over the earlier, as a chain of Visualize nodes composites.
 
 `attribute_visualizers_are_edited_in_the_params_hud` drives the rows end
 to end.
+
+**What a visualizer costs a frame** (2026-10-07). `apply_visualize`, which
+the node and every visualizer run, was QUADRATIC in Vector mode: the
+points it touches were a list of every point, searched once a point —
+some 60 million comparisons a frame at 11k points — and every value, in
+both modes, went through a lookup by name. It reads a group mask by index
+and the attribute and the colours as whole columns now, writing the
+colours back in one pass, with the arithmetic unchanged and in the same
+order; the old function is kept under `cfg(test)` and
+`visualize_matches_its_reference` holds the two equal bit for bit across
+160 cases (both modes, groups, ranges, blends, a flat, an integer and the
+`Cd` attribute, no `Cd`, a `Cd` of four floats). `scene_attributes` and
+`vis_marker_vertices`, which run on every scene rebuild, read their
+columns once too. On the user's project (an `N` Vector and a `val2` Ramp)
+at 11.5k points: 55.6 ms a frame to 1.3, the markers 1.5 and the
+attribute ranges 0.7 left.
 
 ### The Normal node writes point or vertex normals
 
