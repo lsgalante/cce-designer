@@ -1655,6 +1655,40 @@ mod tests {
         assert_eq!(state.positions[NETWORK_PANEL2_IDX].2, state.left_dock_width());
     }
 
+    /// An older save docked the network, the second editor sometimes waiting
+    /// behind it as a tab. Both load out of sight: the network in no dock,
+    /// and the second editor CLOSED, since it was hidden — fronting it would
+    /// put a second graph where the network's plate was. A second editor
+    /// that was in front stays where it was.
+    #[test]
+    fn a_second_editor_hidden_behind_the_network_loads_closed() {
+        use crate::app::{Dock, NO_PANE};
+        use crate::slots::{NETWORK_PANEL2_IDX, SPREADSHEET_IDX};
+        let dir = std::env::temp_dir().join(format!("cce-designer-hidden-editor-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut a = State::new(false);
+        a.save_to_file(&dir).expect("save");
+        let file = dir.join("state.json");
+        let load_with = |tabs: serde_json::Value| {
+            let mut json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+            json["view_state"]["dock_tabs"] = tabs;
+            fs::write(&file, serde_json::to_string(&json).unwrap()).unwrap();
+            let mut b = State::new(false);
+            b.load_from_file(&dir).expect("load");
+            b
+        };
+
+        let b = load_with(serde_json::json!([["network", "network2"], [], ["spreadsheet"]]));
+        assert_eq!(b.tab_dock_of_pane(NETWORK_PANEL2_IDX), None, "the hidden editor loads closed");
+        assert_eq!(b.pane_in_dock(Dock::Left), NO_PANE);
+        assert_eq!(b.pane_in_dock(Dock::Bottom), SPREADSHEET_IDX);
+
+        let b = load_with(serde_json::json!([["network2", "network"], [], ["spreadsheet"]]));
+        assert_eq!(b.pane_in_dock(Dock::Left), NETWORK_PANEL2_IDX, "a fronted editor stays");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Move To Own Plate is offered only on a dock holding more than one
     /// tab. With neither the params pane nor the network in the docks, the
     /// two tab candidates share three docks, so a dock holding both always

@@ -2797,7 +2797,10 @@ no menu: the network menu's Plate page went the next day, Detach being the
 palette's `detach_circular_window` — and
 `set_pane_collapsed` refuses it; the pane-state load takes it out of an
 older save's tab lists, the dock it fronted fronting its next tab or
-emptying (`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones`
+emptying — except a second editor that waited behind it, which loads
+CLOSED: it was hidden, and fronting it put a second graph where the
+network's plate had been (`a_second_editor_hidden_behind_the_network_loads_closed`;
+the user's own project did exactly that the day the network left the docks) (`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones`
 loads one). `plate_at` never answers the network. The left dock's right edge
 resizes whatever plate is docked there (`on_left_dock_resize_edge`,
 `AppDrag::LeftDockResize`, writing `floating_network_layout.2`, which kept

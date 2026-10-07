@@ -380,6 +380,22 @@ impl State {
             // taken out — a dock one fronted fronts its next tab, or is
             // empty.
             let undocked = |s: usize| s == crate::slots::PARAM_IDX || s == crate::slots::NETWORK_PANEL_IDX;
+            // A dock the network FRONTED showed the network alone: what
+            // waited behind it was hidden. The second editor waiting there
+            // is closed, not brought to the front where the network's plate
+            // was — it would appear as a second graph in the old dock's
+            // place, which is what a save of 2026-10-06 did on 2026-10-07.
+            // (The spreadsheet cannot be closed, and fronts.)
+            let resolved: Vec<Vec<usize>> = resolved
+                .into_iter()
+                .map(|tabs| {
+                    if tabs.first() == Some(&crate::slots::NETWORK_PANEL_IDX) {
+                        tabs.into_iter().filter(|&s| s != n2).collect()
+                    } else {
+                        tabs
+                    }
+                })
+                .collect();
             let resolved: Vec<Vec<usize>> = resolved
                 .into_iter()
                 .map(|tabs| tabs.into_iter().filter(|&s| !undocked(s)).collect())
