@@ -339,7 +339,7 @@ gone from cce-ui with the wgpu path).
   (`sync_nodes` + `rebuild_scene_geometry` + `sync_parameters_pane`).
   Input hooks live in `handle_event`: presses intercept in the MouseInput arm
   ahead of the viewport context menu (gated on `cursor_in_viewport() &&
-  !in_network_pane`, so the network plate keeps its clicks where they overlap),
+  !in_network_pane`, so the network keeps its clicks on its nodes),
   motion at the top of CursorMoved, Escape ahead of connection-cancel.
 
   What differs per tool is the `HandleSource` trait: which node types it
@@ -665,7 +665,7 @@ and render blocks of `DesignSettings` without the startup pointer, taken by
 `State::display_settings` (which `save_settings` builds from as well) — and
 both `load_from_file` paths apply it through `apply_display_settings`, before
 the Default Camera view so a camera node's own Pivot still wins. The apply sets every field, regenerates the baked meshes, relays
-the two pane-shaped ones (network plate, circular pane), re-checks the
+the pane-shaped one (the circular pane), re-checks the
 menubar marks, and saves state.kdl, so state.kdl holds the LAST-USED look:
 what New and an older save (no block, which changes nothing) open with.
 Main window only, as the pane state is: a detached window has no viewport
@@ -686,7 +686,7 @@ knowing. `State::new` loads the bundled project, whose meta subnets used to
 be copied over the live viewport flags after every parameter change (the
 meta node is retired, but the hazard was real and this redirect is what
 caught it); so any test that then reached `save_settings` —
-`run_command("toggle_network_plate")`, the dialog's toggle rows — wrote the
+`run_command("toggle_network_plate")` (retired since), the dialog's toggle rows — wrote the
 BUNDLED project's show_grid / show_cube / show_origin over the user's real
 state.kdl. `cargo test` reset three of the user's own toggles on every run,
 and the run was green either way. `Project::load_recent_files` /
@@ -2625,8 +2625,8 @@ answers `color()` with `cce_ui::colors::param_plate_fill`, which is
 `Material::pane()`: the toolkit's PANE rung. So there is ONE material for
 the designer's plates, configured in the `style.surface` block of
 `~/.config/cce/config.kdl` (a `~/.config/cce/cce-designer/config.kdl`
-merges over it key by key, when one exists), and the network plate and the
-params plate cannot be styled apart short of binding a named material
+merges over it key by key, when one exists), and the params plate and the
+spreadsheet's cannot be styled apart short of binding a named material
 (`plate material="…"`). The viewport has no plate of its own: its lip is the
 window's root-plate edge. What the block looks like after the 2026-09-28
 consolidation, and what each key is:
@@ -2698,8 +2698,8 @@ The rules that took a day to settle, each with the wrong version it replaced:
   `solid_border`): without one there is no roll and no tint.
 - **The grid cursor is in the accent only while the network has focus**,
   in the plates' neutral `border_color` otherwise (since 2026-10-05; it
-  was always the accent). With the network plate off it is the network's
-  ONLY focus cue — there is no plate to tint and no edge to ring, the pane
+  was always the accent). Outside the circular pane it is the network's
+  ONLY focus cue — the network has no plate to tint and no edge to ring,
   spanning the window — and with the shader off focus adds a flat accent
   ring around it.
 
@@ -2714,15 +2714,15 @@ Two keys look like they apply and do not: `style.surface.plate.color`
 feeds `plate_color`, whose one consumer is the info box, and the finish's
 spec / shininess / curvature live as `relief.spec` / `.shininess` /
 `.curvature`, not under `plate`. The network pane is two layers: the
-`PassivePlate` above and the Graph on top, which has NO fill of its own
-(since 2026-09-29): its cells are whatever it is painted on — the pane
-plate, or the scene with the plate off — and `style.surface.graph` sets
+`PassivePlate` above (no longer drawn: the network has no plate) and the
+Graph on top, which has NO fill of its own (since 2026-09-29): its cells
+are whatever it is painted on — the scene — and `style.surface.graph` sets
 only the lines (`grid_color`, `line_width`), their `opacity`, and `blur`.
 Until then the graph filled itself with `cell_color` (chosen by a
 `uniform_background` flag this app hard-coded true) and drew its lines in
 `gap_color`; all three keys are retired, reported by path at load and not
 read.
-The next section is about dropping the pane plate entirely.
+The network has no plate at all now: "The network has no plate" below.
 
 **Floors: a faint plate, compressed content** (since 2026-10-06). The way
 to make the plates recede and keep what is on them readable is to compress
@@ -2756,28 +2756,40 @@ relief is two shapes", "Frost is one block"); this is the designer's view of
 them, written because the question "what are the style parameters of the
 plates" took a session to answer from the code.
 
-### The network plate is optional, and off by default (since 2026-10-06)
+### The network has no plate (since 2026-10-06)
 
-The network pane can drop its PLATE — the filled, frosted surface its graph
-sits on — so the nodes and wires overlay the 3D scene directly. The viewport is
+The network's nodes and wires stand directly on the 3D scene. The viewport is
 full-bleed (`CANVAS_IDX` covers the window and the other panes float over it),
-so removing the plate is all it takes: what is behind the pane is the scene.
+so with no plate under the graph what is behind it is the scene. Node bodies
+keep their blur-behind fill, which is what keeps them legible: they frost the
+scene behind each node while the gaps stay clear.
 
-The pane itself is untouched. It keeps its rect, its focus domain, its corner
-menus, its clip and its keyboard navigation; only two `append_widget_plate_radii`
-calls are skipped — `CONTENT_IDX`'s (the graph's own plate) and
-`NETWORK_PANEL_IDX`'s (the panel behind it). Skipping one and not the other
-leaves a surface, so both are gated on the same flag. Node bodies keep their
-blur-behind fill, which is what makes the result legible: they frost the scene
-behind each node while the gaps stay clear.
+It was a switch for a while — `toggle_network_plate` (Shift+P), the
+`network_plate` field on `State` and in the viewport settings, a row of the
+network menu and the menubar — with the plate on until the morning of
+2026-10-06, off by default that afternoon, and gone that evening, with every
+branch it gated reduced to the plate-off one. A state.kdl or a project's
+display block that still says `network_plate` is read as if it did not (the
+settings structs ignore keys they do not know), and the next save drops it.
+What only the plate reached went with it: the network's flat focus ring
+(the grid cursor carries its focus), the network panels as plates over the
+params HUD (`plates_over_params`) and over a point number (`under_a_plate`).
+The SECOND network editor has no plate either; it keeps its dock rect.
 
-**With the plate off the pane spans the whole window.** The dock rect is
-overridden at its source in `rebuild_positions` — one `let (px, py, pw, ph)`,
-so content, panel and breadcrumb all follow — because there is no surface left
-to bound the graph, and one confined to a rectangle you cannot see is worse
-than one that spans what it is drawn over.
+The pane itself is untouched. It keeps its focus domain, its menus, its clip
+and its keyboard navigation, and it is still a dock occupant (its plate menu
+still lists tabs and Move To, which change nothing that is seen while it
+spans the window).
 
-That makes the pane's RECT useless as a hit test, and three things route off it:
+**The pane spans the whole window** (`network_overlay`, which is true while
+the network is shown, not circular and not a detached window). The dock rect
+is overridden at its source in `rebuild_positions` — one
+`let (px, py, pw, ph)`, so content, panel and breadcrumb all follow — because
+there is no surface to bound the graph, and one confined to a rectangle you
+cannot see is worse than one that spans what it is drawn over. Its right-edge
+resize hotspot is off for the same reason (`network_resize_edge_at`).
+
+That makes the pane's RECT useless as a hit test, and these route off it:
 
 - **Clicks** ask `in_network_pane`, which in overlay mode narrows to "a node is
   under the cursor, and no floating pane covers it" (`overlay_claims`). The
@@ -2792,20 +2804,30 @@ That makes the pane's RECT useless as a hit test, and three things route off it:
 - **The wheel** is decided per GESTURE (since 2026-10-06,
   `State::overlay_wheel_to_graph`): one begun on a node pans the graph, one
   begun anywhere else orbits the camera, as a click would. Until then the
-  graph took every scroll by its window-wide rect, so with the plate off a
+  graph took every scroll by its window-wide rect, so without the plate a
   trackpad could not orbit at all. The target is held (`State::overlay_wheel`)
   to the finger's lift, a pause of `OVERLAY_WHEEL_GAP` or the pointer
   moving: a pan slides the node out from under a pointer that does not
   move, and the rest of the swipe would otherwise turn the camera. The
   ctrl zoom follows the same target.
   `a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node`.
-- **`cursor_in_viewport`** becomes the complement: the body, minus what the
-  network holds, minus the floating panes.
+- **Box selection is ctrl+drag**: a ctrl+left press on empty space is the
+  network grid's empty-grid press — the cursor to the cell, an expansion drag
+  armed from it, settled on the release (see "The cursor is a region") —
+  where a plain press there orbits. The network takes focus with it.
+- **`cursor_in_viewport`** becomes the complement: the viewport's rect, minus
+  what the network holds, minus the floating panes, minus the second
+  editor's rect. Until 2026-10-06 it was bounded by the old column split
+  (`splitter2_x`) instead, so the scene under the params HUD's rows, right of
+  it, could be neither orbited nor right-clicked.
+- **A hidden network has no area** (`in_network_area`), so the middle
+  button over the scene pans the camera then; shown, it is the graph's
+  everywhere.
 
-What changes for the user: a plain click on empty space is no longer the
-network's — it ORBITS THE CAMERA instead (see below), which is what makes the
-overlay feel like a scene with a graph on it rather than a graph with a
-picture behind it. Deselecting is on Escape.
+What changes for the user: a plain click on empty space is not the network's
+— it ORBITS THE CAMERA instead (see below), which is what makes the overlay
+feel like a scene with a graph on it rather than a graph with a picture
+behind it. Deselecting is on Escape.
 
 ### The params plate fits its rows, and is optional (since 2026-10-06)
 
@@ -2885,9 +2907,9 @@ bottom raised by a spreadsheet tucked under it, tabbable and movable.
   the HUD. The legacy column branches (circular network, detached circular
   window) still place it in their right column.
 - **Under every plate.** Draw order: viewport (-7), the HUD (-6), the
-  network plates (-5), then the rest. `plates_over_params` is the plates
-  over it (the network's while it has one, the second editor's, the
-  spreadsheet, the playbar, stubs included); `params_claims` takes them
+  network panels (-5, drawn with no plate), then the rest.
+  `plates_over_params` is the plates over it (the spreadsheet, the
+  playbar, stubs included; the network editors have none); `params_claims` takes them
   out, so a press, the wheel, a row's right-click (`param_row_at`) and
   `plate_at` there are the plate's. Text is the hard part: the engine lays
   ALL text out after all geometry, so a HUD label under a plate would be
@@ -2921,24 +2943,6 @@ are more immediate than a selection. There is also a `deselect` command, shipped
 UNBOUND so it is findable in the palette — deliberately not Ctrl+D, which the
 plugin uses for deselect-all but which this app already gives to Circular Pane.
 
-**Off is the default** (since 2026-10-06; `default_network_plate`, and
-what a state.kdl or a project display block without the key reads). A
-project saved with the plate on still opens with it on, its display block
-saying so. The suite's tests written against the plated layout — the dock
-geometry, the grid drags, a pointer at the viewport's middle — pin
-`state.network_plate = true` after `State::new`, which keeps what they
-check what it was.
-
-`ViewportSettings::network_plate` persists it, beside the viewport toggles
-rather than in the project's pane-state list: a pane's VISIBILITY belongs to
-the project, but whether its surface is drawn is how you like to work, and it
-should outlive any one file. It is reachable three ways that cannot disagree,
-because all three run one `Action::ToggleNetworkPlate` — the View settings
-node's Network > Plate row, the network pane's View menu ("Network Plate"), and
-the `toggle_network_plate` command. The action marks `settings_changed` and
-lets `execute_action` save once at its end, like every other viewport toggle,
-rather than writing the file itself.
-
 ### The network editor's right-click menu
 
 A right press on EMPTY graph space opens the network's own context menu; a press
@@ -2970,7 +2974,8 @@ other rows below swapped the plate on a click — some with a Back row, most
 with no way back — two gestures for one idea.
 
 The page rows: the viewport menu's **Style** and **Markers** (pages of rows;
-and **Network**, the network menu, while the network has no plate;
+and **Network**, the network menu, while the network overlays the scene
+(not circular);
 its **Attribute Visualizers** row was one too, into the dialog, until
 2026-10-06 — it is a plain row now, opening them in the params HUD); the
 network menu's **Add Node**
@@ -3039,10 +3044,10 @@ palette used to be reachable only from Tab's inline handler. It ships UNBOUND,
 like `deselect`: Tab already opens it from the event loop, and a default chord
 here would duplicate a key the loop claims.
 
-With the plate OFF the press never gets here — `in_network_pane` narrows to the
-nodes in overlay mode, so empty space is the scene's and opens the VIEWPORT
+Outside the circular pane the press never gets here — `in_network_pane` narrows
+to the nodes in overlay mode, so empty space is the scene's and opens the VIEWPORT
 menu. That is the overlay's whole rule, and it predates this menu. So in
-overlay mode (the default since 2026-10-06) **this menu is a page of the
+overlay mode (always, outside the circular pane, since 2026-10-06) **this menu is a page of the
 viewport's**: a **Network** row heads the viewport menu
 (`ViewportMenuAction::NetworkPage`) and turns it into this one under a
 `‹ Viewport` band (`State::network_menu_from`). The viewport menu's press
@@ -3193,8 +3198,9 @@ test for the row.
 
 ### The cursor is a region, and dragging the grid grows it
 
-A left press on EMPTY grid puts the cursor on the pressed cell — on the press,
-not the release — and arms an expansion drag from it. Dragging grows the cursor
+A left press on EMPTY grid — with ctrl held, outside the circular pane, where
+a plain press on empty space orbits the camera (see "The network has no
+plate") — puts the cursor on the pressed cell — on the press, not the release — and arms an expansion drag from it. Dragging grows the cursor
 from that anchor to the cell under the pointer. `State::grid_cursor_region` is the one derivation,
 `(col, row, cols, rows)`, never smaller than one cell; `grid_cursor_rect` is the
 window-space union the outline is painted on, which for the usual one-cell
@@ -3938,7 +3944,8 @@ gestures, `pan_drag` beside `orbit_drag`:
 
 - **the middle button, dragged** over the scene. Armed after the
   network's own pan, which the middle button is wherever the network is
-  laid out — with its plate off that is the whole window — and AHEAD of
+  laid out — the whole window, the network having no plate, so the
+  camera has it only while the network is hidden or circular — and AHEAD of
   the press cascade's `button != Left && != Right` return, which is where
   the first cut put it and where it never ran;
 - **shift and the left button**, in the orbit's own arm, so a viewer

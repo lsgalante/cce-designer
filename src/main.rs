@@ -407,7 +407,6 @@ mod tests {
         use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         use cce_ui::widget::{context_menu, MouseButton};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.show_spreadsheet = true;
         state.show_playbar = true;
@@ -444,12 +443,17 @@ mod tests {
         press_at(&mut state, 2.0, 2.0, MouseButton::Left);
         state.params_plate = false;
 
-        // The network: its own rows, then one Plate row, a page: the menu
-        // turns into the plate's rows, under a band back to it.
+        // The network: its menu is the viewport menu's Network page (empty
+        // graph space is the scene's), and in it its own rows, then one
+        // Plate row, a page: the menu turns into the plate's rows, under a
+        // band back to it.
         let (cx, cy, cw, ch) = state.positions[crate::slots::CONTENT_IDX];
-        let (px, py) = (cx + cw * 0.85, cy + ch * 0.2);
-        assert!(state.graph().node_at(px, py).is_none());
+        let (px, py) = (cx + cw * 0.3, cy + ch * 0.6);
+        assert!(state.graph().node_at(px, py).is_none() && !state.over_floating_pane_at(px, py));
         press_at(&mut state, px, py, MouseButton::Right);
+        assert!(state.viewport_menu_open());
+        press_at(&mut state, context_menu::x() + 8.0, context_menu::row_y(0) + 4.0, MouseButton::Left);
+        assert!(state.network_menu_active, "the Network row turned the menu into the network's");
         let options = cce_ui::widget::context_menu::options();
         assert_eq!(options.first().map(String::as_str), Some("Add Node"));
         assert!(!options.contains(&collapse) && !options.iter().any(|o| o.starts_with("Move To")), "no plate rows inline: {options:?}");
@@ -593,58 +597,14 @@ mod tests {
         assert!(parent.slots.get_dyn(VIEWPORT_IDX).visible(), "the rest of the parent survived");
     }
 
-    /// Dock swap: Move To another dock swaps occupants,
-    /// and the dock-owned dimensions stay put — the network lands in the
-    /// bottom strip's rect, the spreadsheet in the left column's.
-    /// A left press on the spreadsheet's column header reaches the widget,
-    /// which sorts the column — it does not orbit the camera.
-    ///
-    /// `cursor_in_viewport` used to be the whole centre column, spreadsheet
-    /// included, and the orbit arm at the top of the left-press path returns
-    /// before any widget is asked. So the toolkit's header-click sort
-    /// (tested in cce-ui) never fired in this app: clicking a header
-    /// hovered it, tinted it, and did nothing.
-    /// The scene is everything in the viewport's rect that no plate covers
-    /// — right up to the network plate's edge. The test used to carve out
-    /// the old COLUMN layout, so the band between the floating plate's right
-    /// edge and `splitter1_x + SPLITTER_W`, and the strip above the network
-    /// content, were nobody's: a right-click there opened no menu.
-    #[test]
-    fn the_scene_starts_at_the_network_plates_edge() {
-        use crate::slots::{NETWORK_PANEL_IDX, VIEWPORT_IDX};
-        use crate::window::{LocalPosition, WindowEvent};
-        use cce_ui::widget::{ElementState, MouseButton};
-        let mut state = State::new(false);
-        state.resize(1600.0, 900.0, 1.0);
-        state.network_plate = true;
-        state.splitter_layout.splitter1_x = 700.0;
-        state.rebuild_positions();
-        state.apply_layout();
-        let (nx, ny, nw, nh) = state.positions[NETWORK_PANEL_IDX];
-        assert!(nw > 0.0 && nx + nw < 690.0, "the plate ends short of the old column split");
-        let at = |state: &mut State, x: f32, y: f32| {
-            state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
-            state.cursor_in_viewport()
-        };
-        assert!(!at(&mut state, nx + nw - 4.0, ny + nh * 0.5), "the plate is the network's");
-        assert!(at(&mut state, nx + nw + 4.0, ny + nh * 0.5), "just right of the plate is scene");
-        let (vx, vy, vw, _) = state.positions[VIEWPORT_IDX];
-        assert!(at(&mut state, vx + vw * 0.5, vy + 4.0), "the strip along the top is scene");
-
-        // And the right press there opens the viewport's menu.
-        at(&mut state, nx + nw + 4.0, ny + nh * 0.5);
-        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
-        assert!(state.viewport_menu_open(), "a right-click beside the plate opens the viewport menu");
-    }
-
-    /// With the network's plate off (the default) a right press on empty
+    /// The network has no plate, so a right press on empty
     /// graph space is the scene's and opens the VIEWPORT menu, so the
     /// network's own menu is a page of it: a Network row at its head that
     /// turns into the network menu under a band back to the viewport's.
     /// Turning there focuses the network and puts the grid cursor on the
     /// cell the menu was opened over, where Add Node will place; a menu
-    /// opened over no network area moves no cursor. With the plate on there
-    /// is no such row: the network's empty space opens its menu itself.
+    /// opened over no network area moves no cursor. In the circular pane
+    /// there is no such row: its empty space opens the network's menu itself.
     #[test]
     fn the_network_menu_is_a_page_of_the_viewport_menu_without_the_plate() {
         use crate::app::{NetworkMenuAction, ViewportMenuAction as A};
@@ -657,7 +617,10 @@ mod tests {
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
-        assert!(state.network_overlay(), "the plate is off by default");
+        assert!(state.network_overlay(), "the network overlays the scene");
+        // Spanning the window, it has no edge to drag where its dock's was.
+        let (fx, fy, _, fh) = state.floating_network_layout;
+        assert!(state.network_resize_edge_at(fx + state.left_dock_width(), fy + fh * 0.5).is_none());
         let press = |state: &mut State, x: f32, y: f32, b: MouseButton| {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: b });
@@ -703,10 +666,8 @@ mod tests {
         assert_eq!(state.open_menu_origin(), Some(MenuOrigin::Viewport));
         state.close_viewport_menu();
 
-        // With the plate on, the viewport menu has no Network row.
-        state.network_plate = true;
-        state.rebuild_positions();
-        state.apply_layout();
+        // The circular pane takes its own empty space: no Network row.
+        state.circular_network_pane = true;
         assert!(!state.viewport_menu_rows_of(None).1.contains(&A::NetworkPage));
     }
 
@@ -725,7 +686,7 @@ mod tests {
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
-        assert!(state.network_overlay(), "the plate is off by default");
+        assert!(state.network_overlay(), "the network overlays the scene");
         state.set_active_camera("Default Camera");
         let at = |state: &mut State, x: f32, y: f32| {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
@@ -777,6 +738,28 @@ mod tests {
         assert!(!state.overlay_wheel_to_graph(ScrollPhase::Finger), "a new gesture over empty space is the scene's");
     }
 
+    /// The network plate is retired; a settings file or a project display
+    /// block from when it was a switch still says `network_plate`, and must
+    /// still load — the key is ignored, not an error that would read the
+    /// whole block as the defaults.
+    #[test]
+    fn a_retired_network_plate_key_still_loads() {
+        let state = State::new(false);
+        let mut json = serde_json::to_value(state.display_settings()).unwrap();
+        json["viewport"]["network_plate"] = serde_json::json!(true);
+        json["viewport"]["params_plate"] = serde_json::json!(false);
+        let d: crate::app::DisplaySettings = serde_json::from_value(json).expect("a display block naming network_plate loads");
+        assert!(!d.viewport.params_plate, "and the rest of it is read");
+    }
+
+    /// A left press on the spreadsheet's column header reaches the widget,
+    /// which sorts the column — it does not orbit the camera.
+    ///
+    /// `cursor_in_viewport` used to be the whole centre column, spreadsheet
+    /// included, and the orbit arm at the top of the left-press path returns
+    /// before any widget is asked. So the toolkit's header-click sort
+    /// (tested in cce-ui) never fired in this app: clicking a header
+    /// hovered it, tinted it, and did nothing.
     #[test]
     fn spreadsheet_header_press_reaches_the_widget_not_the_camera() {
         use crate::slots::{SPREADSHEET_IDX, SPREADSHEET_MENUBAR_IDX, VIEWPORT_IDX};
@@ -1098,14 +1081,19 @@ mod tests {
         assert!(s.points().has("uv") && !s.points().has("UV"));
     }
 
+    /// Dock swap: Move To another dock swaps occupants, and the dock-owned
+    /// dimensions stay put — the second network editor lands in the bottom
+    /// strip's rect, the spreadsheet in the right dock's.
     #[test]
     fn test_dock_swap_repositions_plates() {
         use crate::app::Dock;
-        use crate::slots::{NETWORK_PANEL_IDX, SPREADSHEET_IDX};
+        use crate::slots::{NETWORK_PANEL2_IDX as NETWORK_PANEL_IDX, SPREADSHEET_IDX};
+        // The second network editor: the first spans the window, whatever
+        // dock it is in, since it has no plate.
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.show_spreadsheet = true;
+        state.add_dock_tab(Dock::Right, NETWORK_PANEL_IDX);
         state.rebuild_positions();
         state.apply_layout();
 
@@ -1116,7 +1104,7 @@ mod tests {
 
         state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Bottom);
         assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), Some(Dock::Bottom));
-        assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Left));
+        assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Right));
 
         let net_after = state.slots.get_dyn(NETWORK_PANEL_IDX).rect();
         let ss_after = state.slots.get_dyn(SPREADSHEET_IDX).rect();
@@ -1128,7 +1116,7 @@ mod tests {
         assert!(net_after.2 > 0.0 && ss_after.2 > 0.0, "a pane vanished in the swap");
 
         // Dropping it back restores the original arrangement.
-        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Left);
+        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Right);
         assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Bottom));
     }
 
@@ -2254,9 +2242,8 @@ mod tests {
     #[test]
     fn the_playbar_is_attached_to_the_bottom_edge() {
         use crate::app::{playbar_shelf_h, PLAYBAR_H, STATUS_H};
-        use crate::slots::{NETWORK_PANEL_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
+        use crate::slots::{PLAYBAR_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.execute_menu_action("Show Playbar Pane");
         state.execute_menu_action("Show Spreadsheet Pane");
@@ -2276,7 +2263,8 @@ mod tests {
         let prev = state.slots.playbar.inner().transport_button_rect(pb_rect, -1).expect("the step buttons are on");
         assert!(prev.x >= lip, "clear of the left lip: {prev:?}");
         assert!(prev.y + prev.height <= 900.0 - STATUS_H - lip, "clear of the bottom lip: {prev:?}");
-        for idx in [NETWORK_PANEL_IDX, SPREADSHEET_IDX] {
+        // (The network has no plate: it spans the window, under the shelf.)
+        for idx in [SPREADSHEET_IDX] {
             let (_, y, _, h) = state.positions[idx];
             assert_eq!(y + h, pb.1 - 18.0, "the {idx} plate stops a gap above it");
         }
@@ -2296,7 +2284,6 @@ mod tests {
         use crate::app::{Dock, NO_PANE};
         use crate::slots::{NETWORK_PANEL2_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -2354,13 +2341,21 @@ mod tests {
         assert!(pb.scrollbar_visible(), "the sphere's rows overflow a {hh} px HUD and scroll");
         assert_eq!(state.params_claim(), (hx, hy, hw, hh), "the plate fills the HUD");
 
-        // Under the plate in the right dock: it takes the pointer there.
-        assert!(state.plates_over_params().contains(&state.positions[NETWORK_PANEL2_IDX]));
-        let (nx, ny, nw, _) = state.positions[NETWORK_PANEL2_IDX];
+        // A network editor in the right dock has no plate, so it covers
+        // nothing of the HUD.
+        assert!(!state.plates_over_params().contains(&state.positions[NETWORK_PANEL2_IDX]));
+        // Under a plate in the right dock: it takes the pointer there.
+        state.set_spreadsheet_full_width(false);
+        state.move_pane_to_dock(SPREADSHEET_IDX, Dock::Right);
+        state.rebuild_positions();
+        state.apply_layout();
+        let (hx, hy, hw, _) = state.positions[PARAM_IDX];
+        assert!(state.plates_over_params().contains(&state.positions[SPREADSHEET_IDX]));
+        let (nx, ny, nw, _) = state.positions[SPREADSHEET_IDX];
         let over = (nx.max(hx) + 5.0, ny.max(hy) + 30.0);
         assert!(over.0 < nx + nw && over.0 < hx + hw);
         assert!(!state.params_claims(over.0, over.1), "a plate over the HUD takes the pointer");
-        assert_eq!(state.plate_at(over.0, over.1), Some(NETWORK_PANEL2_IDX));
+        assert_eq!(state.plate_at(over.0, over.1), Some(SPREADSHEET_IDX));
 
         // An older save docked the params pane; it loads out of the dock.
         let dir = std::env::temp_dir().join(format!("cce-designer-hud-dock-test-{}", std::process::id()));
@@ -2420,7 +2415,6 @@ mod tests {
     #[test]
     fn the_params_plate_fits_its_rows() {
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         assert!(state.params_plate, "the plate is on by default");
         assert_eq!(state.command_toggle_state("toggle_params_plate"), Some(true));
         // A HUD with no rows collapses its plate to the small circle, and
@@ -2876,7 +2870,6 @@ mod tests {
     fn the_viewport_menu_groups_its_display_rows() {
         use crate::app::{ViewportMenuAction as A, ViewportMenuPage as P};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         let groups = |page: Option<P>| -> Vec<Vec<A>> {
             let (options, actions) = state.viewport_menu_rows_of(page);
             assert_eq!(options.len(), actions.len());
@@ -2886,6 +2879,7 @@ mod tests {
         assert_eq!(
             groups(None),
             vec![
+                vec![A::NetworkPage],
                 vec![A::FrameAll, A::OneToOne],
                 vec![A::Command("toggle_grid"), A::Command("toggle_origin"), A::Command("toggle_camera_pivot"), A::CameraPivotSizeSlider],
                 vec![A::Page(P::Style), A::Page(P::Markers), A::Command("attribute_visualizers")],
@@ -3490,7 +3484,9 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
+        // Without the network the menu has no Network row at its head, so
+        // its rows are the ones counted below.
+        state.show_network = false;
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
@@ -3932,7 +3928,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -3943,7 +3938,6 @@ mod tests {
         state.set_active_camera("Default Camera");
         state.save_to_file(&dir).expect("save");
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -3966,13 +3960,11 @@ mod tests {
 
         // New: back to the Default Camera from a node, on both copies.
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.new_project();
         assert_eq!(state.viewport().active_camera, "Default Camera");
 
         // The viewport menu's choice: a node, then the default again.
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.set_active_camera("Default Camera");
         state.set_active_camera("camera1");
         assert_eq!(state.viewport().active_camera, "camera1");
@@ -4033,7 +4025,6 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, Position};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -4096,7 +4087,21 @@ mod tests {
         assert!(state.cursor_in_viewport());
         let orbit = |state: &State| (state.viewport().rotation_x, state.viewport().rotation_y);
 
+        // The network lies over the whole window, and the middle button is
+        // its pan wherever it is laid out: the graph slides, the camera not.
         let (pivot, turned) = (state.viewport().pivot, orbit(&state));
+        let graph = (state.pan_x, state.pan_y);
+        press(&mut state, MouseButton::Middle, ElementState::Pressed);
+        assert!(state.pan_drag.is_none(), "over the network the middle button is the graph's");
+        at(&mut state, cx + 40.0, cy + 10.0);
+        press(&mut state, MouseButton::Middle, ElementState::Released);
+        assert_ne!((state.pan_x, state.pan_y), graph, "the graph panned");
+        assert_eq!(state.viewport().pivot, pivot);
+
+        // With the network hidden it is the camera's.
+        state.execute_menu_action("Show Network Pane");
+        assert!(!state.show_network);
+        at(&mut state, cx, cy);
         press(&mut state, MouseButton::Middle, ElementState::Pressed);
         assert!(state.pan_drag.is_some() && state.pointer_captured(), "a middle press arms the pan");
         at(&mut state, cx + 40.0, cy + 10.0);
@@ -4104,6 +4109,8 @@ mod tests {
         assert!(state.pan_drag.is_none());
         assert_ne!(state.viewport().pivot, pivot, "the middle drag panned");
         assert_eq!(orbit(&state), turned, "and did not turn the camera");
+        state.execute_menu_action("Show Network Pane");
+        assert!(state.show_network);
 
         at(&mut state, cx, cy);
         let pivot = state.viewport().pivot;
@@ -9637,12 +9644,13 @@ mod tests {
             "the suite writes settings inside the real cce config directory"
         );
 
-        // The flip that carried the damage: it marks settings dirty and
-        // `execute_action` saves at the end of the action.
+        // A flip of the kind that carried the damage: it marks settings
+        // dirty and `execute_action` saves at the end of the action. (It was
+        // the network plate's toggle, retired with the plate.)
         let mut state = State::new(false);
-        let plate = state.network_plate;
-        assert!(state.run_command("toggle_network_plate"));
-        assert_ne!(state.network_plate, plate, "the toggle did not flip the plate");
+        let plate = state.params_plate;
+        assert!(state.run_command("toggle_params_plate"));
+        assert_ne!(state.params_plate, plate, "the toggle did not flip the plate");
 
         // Without this the test passes on a save that never happened, which
         // is exactly the bug wearing a different face.
@@ -9725,51 +9733,6 @@ mod tests {
             (140.0, 70.0, 80.0, 40.0),
             "State::new did not start on the pinned lattice"
         );
-    }
-
-    /// The network plate is optional, and the option is reachable three ways
-    /// that cannot disagree: the View settings node's toggle, the network
-    /// pane's View menu, and the command palette.
-    ///
-    /// The flip itself is exercised by
-    /// `the_suite_does_not_write_the_users_own_settings`, which is what it is
-    /// for: until the settings path was redirected under test, flipping the
-    /// plate here would have rewritten the user's own state.kdl as a side
-    /// effect. What is asserted below is everything around the flip — the
-    /// default, the wiring, and the mirror.
-    #[test]
-    fn test_the_network_plate_is_an_option() {
-        use crate::command::{by_id, Run};
-
-        let state = State::new(false);
-        assert!(!state.network_plate, "the plate is off unless the user turned it on");
-
-        // The command exists, is rebindable, and runs the same action the menu
-        // row does — one implementation behind both.
-        let cmd = by_id("toggle_network_plate").expect("no toggle_network_plate command");
-        assert_eq!(cmd.label, "Network Plate");
-        assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::ToggleNetworkPlate));
-        assert!(cmd.default_chord.is_some(), "the plate toggle has no chord");
-
-        // The live flag and the dialog's switch are one reading: the
-        // command's palette row goes through `command_toggle_state` rather
-        // than mirroring the flag onto a node that could fall out of step
-        // with it.
-        let mut state = State::new(false);
-        assert_eq!(state.command_toggle_state("toggle_network_plate"), Some(false));
-        assert!(state.run_command("toggle_network_plate"));
-        assert!(state.network_plate);
-        assert_eq!(state.command_toggle_state("toggle_network_plate"), Some(true));
-
-        state.run_command("command_palette");
-        let row = state
-            .slots
-            .dialog
-            .rows
-            .iter()
-            .find(|r| r.id == "toggle_network_plate")
-            .expect("a Network Plate row");
-        assert_eq!(row.toggle(), Some(true), "the row's switch reads the live flag");
     }
 
     /// The viewport guide toggles survive the next parameter edit.
@@ -16320,7 +16283,7 @@ mod tests {
             "toggle_grid", "toggle_origin", "toggle_wireframe",
             "toggle_wire_single_color", "toggle_ray_traced_preview",
             "toggle_circular_pane", "toggle_camera_pivot", "toggle_square_viewport",
-            "toggle_network_plate", "toggle_params_plate",
+            "toggle_params_plate",
         ] {
             assert!(crate::command::by_id(id).is_some(), "the toggle '{id}' has no command");
             assert!(state.command_toggle_state(id).is_some(), "the toggle '{id}' draws no switch");
@@ -16351,8 +16314,9 @@ mod tests {
         assert_eq!(state.slots.dialog.query, "");
     }
 
-    /// A left press on empty grid puts the cursor on the pressed cell — on the
-    /// PRESS — and dragging from there expands it into a region, which stays
+    /// A ctrl+left press on empty grid puts the cursor on the pressed cell — on
+    /// the PRESS — and dragging from there expands it into a region (without
+    /// ctrl the press is the scene's, and orbits), which stays
     /// after the release. Moving the cursor any other way collapses it, since
     /// the expanse is only read back while its anchor is the live cursor.
     #[test]
@@ -16360,7 +16324,6 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{ElementState, MouseButton};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -16383,11 +16346,21 @@ mod tests {
             });
         };
 
+        // A plain press on empty space is the scene's: it orbits, and the
+        // cursor stays. With ctrl it is the grid's.
         move_to(&mut state, anchor);
+        let before = (state.grid_cursor_col, state.grid_cursor_row);
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        assert!(state.orbit_drag.is_some() && state.grid_cursor_drag.is_none(), "a plain press orbits");
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), before);
+        state.modifiers.ctrl = true;
         state.handle_event(&WindowEvent::MouseInput {
             state: ElementState::Pressed,
             button: MouseButton::Left,
         });
+        state.modifiers.ctrl = false;
+        assert_eq!(state.focused_pane, crate::slots::LEFT_MENUBAR_IDX, "the network has focus");
         assert_eq!(
             (state.grid_cursor_col, state.grid_cursor_row),
             anchor,
@@ -16616,7 +16589,6 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{ElementState, MouseButton};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -16651,10 +16623,13 @@ mod tests {
             });
         };
 
-        // Select a and b by dragging a box round them; it settles onto their
+        // Select a and b by dragging a box round them, ctrl held as the
+        // press lands on empty space; it settles onto their
         // bounding box, (1, 5) to (2, 7).
         move_to(&mut state, (0, 4));
+        state.modifiers.ctrl = true;
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+        state.modifiers.ctrl = false;
         move_to(&mut state, (3, 9));
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
         assert_eq!(state.grid_cursor_region(), (1, 5, 2, 3));
@@ -16696,7 +16671,6 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{ElementState, MouseButton};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -16732,10 +16706,12 @@ mod tests {
             });
         };
         move_to(&mut state, (0, 3));
+        state.modifiers.ctrl = true;
         state.handle_event(&WindowEvent::MouseInput {
             state: ElementState::Pressed,
             button: MouseButton::Left,
         });
+        state.modifiers.ctrl = false;
         move_to(&mut state, (3, 9));
         assert_eq!(state.grid_cursor_region(), (0, 3, 4, 7), "the box as drawn");
         assert_eq!(state.selected_slots(), vec![a, b]);
@@ -17100,95 +17076,6 @@ mod tests {
             position: LocalPosition { x: px as f64, y: (py + 120.0) as f64 },
         });
         assert_eq!(state.grid_cursor_region(), before, "no region grew out of it");
-    }
-
-    /// A right press on EMPTY network space opens the network's own context
-    /// menu — until 2026-09-22 it opened the add-node palette outright, which
-    /// left the network the one pane whose right-click was not a context menu,
-    /// and left every other graph-wide command reachable only by chord or
-    /// through the palette. Add Node is the first row, and picking it is what
-    /// opens the palette — at the cell the press landed on, since the press
-    /// moves the grid cursor there before the menu goes up.
-    #[test]
-    fn network_right_click_opens_a_menu_whose_first_row_is_add_node() {
-        use crate::dialog::Mode;
-        use crate::slots::CONTENT_IDX;
-        use crate::window::{LocalPosition, WindowEvent};
-        use cce_ui::widget::{ElementState, MouseButton};
-        let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
-        state.resize(1600.0, 900.0, 1.0);
-        state.rebuild_positions();
-        state.apply_layout();
-
-        // A point in the network pane with no node under it: the plate is on,
-        // so the pane's rect is its own and empty space is still the graph's.
-        assert!(state.network_plate, "the plate is on by default");
-        let (cx, cy, cw, ch) = state.positions[CONTENT_IDX];
-        let (px, py) = (cx + cw * 0.85, cy + ch * 0.85);
-        state.handle_event(&WindowEvent::CursorMoved {
-            position: LocalPosition { x: px as f64, y: py as f64 },
-        });
-        assert!(state.in_network_pane(), "the press must land in the network pane");
-        assert!(
-            state.graph().node_at(px, py).is_none(),
-            "pick a cell with no node on it"
-        );
-        let cell = state.cell_at(px, py);
-
-        state.handle_event(&WindowEvent::MouseInput {
-            state: ElementState::Pressed,
-            button: MouseButton::Right,
-        });
-        assert!(!state.dialog_visible(), "no palette straight off the press");
-        assert!(cce_ui::widget::context_menu::is_visible());
-        let options = cce_ui::widget::context_menu::options();
-        assert_eq!(options.first().map(String::as_str), Some("Add Node"));
-        assert!(
-            options.iter().any(|o| o == "Layout Nodes"),
-            "the graph-wide commands come with it: {options:?}"
-        );
-        assert!(
-            options.iter().any(|o| o.ends_with("Network Plate")),
-            "a toggle row carries its mark: {options:?}"
-        );
-        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cell);
-
-        // A left click on the first row runs Add Node: the menu goes, the
-        // palette comes up, and it will add at the cell that was clicked.
-        let rx = cce_ui::widget::context_menu::x() + 8.0;
-        let ry = cce_ui::widget::context_menu::row_y(0) + 4.0;
-        state.handle_event(&WindowEvent::CursorMoved {
-            position: LocalPosition { x: rx as f64, y: ry as f64 },
-        });
-        let menu_corner = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
-        state.handle_event(&WindowEvent::MouseInput {
-            state: ElementState::Pressed,
-            button: MouseButton::Left,
-        });
-        assert!(!cce_ui::widget::context_menu::is_visible(), "the pick closes the menu");
-        assert!(state.dialog_visible());
-        assert_eq!(state.slots.dialog.mode, Mode::AddNode);
-        assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cell);
-
-        // The menu turns into the list: the plate opens on the menu's
-        // corner, as far as the window lets it, not centred.
-        let (dx, dy, dw, dh) = state.positions[crate::slots::DIALOG_IDX];
-        let want = crate::dialog::layout_at(state.width, state.height, menu_corner.0, menu_corner.1);
-        assert_eq!((dx, dy, dw, dh), want);
-        assert_ne!((dx, dy), {
-            let (x, y, _, _) = crate::dialog::layout_in(state.width, state.height);
-            (x, y)
-        }, "not the centred plate");
-        assert!(dx + dw <= state.width && dy + dh <= state.height, "inside the window");
-
-        // Tab and the palette's other openings still centre it.
-        state.close_dialog();
-        state.open_node_palette();
-        assert_eq!(
-            state.positions[crate::slots::DIALOG_IDX],
-            crate::dialog::layout_in(state.width, state.height)
-        );
     }
 
     /// An anchored plate keeps its corner where it fits, gives up height
@@ -18120,7 +18007,6 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{scroll_motion::set_scroll_phase, MouseScrollDelta, Position, ScrollPhase};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -18511,7 +18397,6 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{scroll_motion::set_scroll_phase, MouseScrollDelta, ParametersBg, Position, ScrollPhase};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();
@@ -18646,7 +18531,6 @@ mod tests {
         use crate::window::{LocalPosition, WindowEvent};
         use cce_ui::widget::{scroll_motion::set_scroll_phase, MouseScrollDelta, ParametersBg, Position, ScrollPhase};
         let mut state = State::new(false);
-        state.network_plate = true; // written against the plated network
         state.resize(1600.0, 900.0, 1.0);
         state.rebuild_positions();
         state.apply_layout();

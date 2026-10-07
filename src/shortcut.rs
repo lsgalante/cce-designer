@@ -77,8 +77,6 @@ pub enum Action {
     FrameAll,
     /// Arrange the current level's nodes from their wiring.
     LayoutNodes,
-    /// Draw the network pane's plate, or let the graph overlay the scene.
-    ToggleNetworkPlate,
     /// Draw the params pane's plate, or stand its controls on the scene.
     ToggleParamsPlate,
     /// Clear the node selection.

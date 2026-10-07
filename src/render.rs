@@ -511,9 +511,8 @@ impl State {
             } else {
                 clip
             };
-            // No plate here: the pane's plate is NETWORK_PANEL_IDX's
-            // PassivePlate (the params material, gated on `network_plate`
-            // in the generic arm). Until 2026-09-20 this arm ALSO painted
+            // No plate here, and none behind: the network has no plate
+            // (since 2026-10-06), its nodes standing on the scene. Until 2026-09-20 this arm ALSO painted
             // the graph widget's own background over it — the cell colour
             // at the network opacity, a flat blue-grey wash that predated
             // the plate and made the network pane the one pane with a hue.
@@ -667,8 +666,8 @@ impl State {
                 //
                 // In the accent only while the network has focus, as a
                 // focused plate's rim is; otherwise in the plates' neutral
-                // border colour. With the network plate off this is the
-                // network's ONLY focus cue — no plate, no rim to tint.
+                // border colour. Outside the circular pane this is the
+                // network's ONLY focus cue — it has no plate, no rim to tint.
                 // Without the shader plates the glint is drawn untinted, so
                 // focus adds a flat ring in the accent over it.
                 let focused = self.focused_pane == LEFT_MENUBAR_IDX;
@@ -822,7 +821,7 @@ impl State {
             let (wx, wy, ww2, wh2) = w.rect();
             let network_panel =
                 idx == NETWORK_PANEL_IDX || idx == crate::slots::NETWORK_PANEL2_IDX;
-            if !(network_panel && !self.network_plate) {
+            if !network_panel {
                 append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             }
 
@@ -945,20 +944,9 @@ impl State {
                     );
                     return;
                 }
-                // With its plate off the network spans the window and has no
-                // edge to ring: the grid cursor carries its focus instead.
-                if relief || !self.network_plate {
-                    return;
-                }
-                color[3] *= self.network_opacity;
-                // Whichever network editor is FRONTED owns the ring — pane
-                // 1's rect is zero while it waits as a tab.
-                let p2 = self.positions[crate::slots::NETWORK_PANEL2_IDX];
-                if p2.2 > 0.0 && self.positions[NETWORK_PANEL_IDX].2 <= 0.0 {
-                    p2
-                } else {
-                    self.positions[NETWORK_PANEL_IDX]
-                }
+                // The network has no plate and spans the window, so there
+                // is no edge to ring: the grid cursor carries its focus.
+                return;
             }
             RIGHT_MENUBAR_IDX => {
                 if !self.show_viewport || relief {

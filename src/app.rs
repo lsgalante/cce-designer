@@ -634,7 +634,6 @@ pub const NETWORK_MENU_COMMANDS: &[Option<&'static str>] = &[
     Some("frame_cursor"),
     None,
     Some("reset_zoom"),
-    Some("toggle_network_plate"),
     Some("toggle_circular_pane"),
 ];
 
@@ -2222,13 +2221,6 @@ pub struct ViewportSettings {
     pub grid_thickness: f32,
     #[serde(default = "default_grid_color")]
     pub grid_color: [f32; 3],
-    /// Whether the network pane draws its plate. Lives beside the viewport
-    /// settings rather than in a pane-state list because it is an appearance
-    /// choice that outlives any one project — a pane's VISIBILITY belongs to
-    /// the project, but whether its surface is drawn is how you like to work.
-    /// Off by default (since 2026-10-06): the nodes stand on the scene.
-    #[serde(default = "default_network_plate")]
-    pub network_plate: bool,
     /// Whether the params HUD draws its plate — one FITTED to its rows,
     /// not to the HUD's rect. On by default; off, the rows stand on the
     /// scene. Either way the HUD claims only the band its rows cover.
@@ -2450,10 +2442,6 @@ impl Default for RenderSettings {
     }
 }
 
-fn default_network_plate() -> bool {
-    false
-}
-
 fn default_params_plate() -> bool {
     true
 }
@@ -2467,7 +2455,6 @@ impl Default for ViewportSettings {
             camera_pivot_size: 1.0,
             show_grid_enabled: true,
             show_origin_enabled: true,
-            network_plate: false,
             params_plate: true,
             node_wire_style: String::new(),
             show_point_markers: false,
@@ -2685,9 +2672,9 @@ fn hex_to_float_array4(hex: &str) -> Option<[f32; 4]> {
 /// terminal's) cannot read each other's writes. And per TEST within a
 /// process, because settings are shared mutable state and libtest runs tests
 /// in parallel threads: `the_suite_does_not_write_the_users_own_settings`
-/// runs the plate toggle, which SAVES `network_plate = false`, and with one
+/// ran the network plate toggle (retired since), which SAVED `network_plate = false`, and with one
 /// file between them every `State::new` racing it loaded that and came up
-/// with the plate switched off — `test_the_network_plate_is_an_option`
+/// with the plate switched off — `test_the_network_plate_is_an_option` (retired with it)
 /// failing perhaps one run in six, in an assertion about a row in the View
 /// node. Nothing in the suite had ever toggled a setting before
 /// 2026-09-23, so this was not a pre-existing race so much as one that
@@ -2728,7 +2715,7 @@ impl DesignSettings {
     /// `State::new` loads the BUNDLED project, whose meta subnets overwrote
     /// the live viewport flags on every parameter change (the meta node is
     /// retired, but the hazard was real and the redirect is what caught it).
-    /// Any test that then reached `save_settings` — `toggle_network_plate`,
+    /// Any test that then reached `save_settings` — a plate toggle,
     /// the dialog's toggle rows — wrote the bundled project's
     /// show_grid / show_cube / show_origin over the user's own state.kdl.
     /// (The cube guide has since been removed.)
@@ -3100,8 +3087,8 @@ pub struct State {
     /// with the flag saying the open menu is this one.
     pub network_menu_active: bool,
     pub network_menu_actions: Vec<NetworkMenuAction>,
-    /// The menu the network menu was turned to from — the viewport's, with
-    /// the plate off — which its back band returns to. None when a right
+    /// The menu the network menu was turned to from — the viewport's, while
+    /// the network overlays the scene — which its back band returns to. None when a right
     /// press on the graph opened it.
     pub network_menu_from: Option<crate::menu_page::MenuOrigin>,
     /// The grid cell under the viewport menu's right press, while the
@@ -3274,12 +3261,6 @@ pub struct State {
     pub space_pressed: bool,
     pub active_camera: String,
     pub show_network: bool,
-    /// Whether the network pane draws its PLATE — the filled, frosted surface
-    /// the graph sits on. With it off the nodes and wires overlay the 3D scene
-    /// directly, since the viewport is full-bleed and the network floats over
-    /// it. The pane is still there: it keeps its rect, its focus, its corner
-    /// menus and its clip; only the surface under it stops being drawn.
-    pub network_plate: bool,
     /// Whether the params pane draws its PLATE. With it off the rows stand
     /// directly over the scene, and the pane claims only what its rows
     /// cover (`params_claim`), so the scene under the rest of its rect
@@ -3784,7 +3765,6 @@ impl State {
                 origin_size: self.origin_size,
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
-                network_plate: self.network_plate,
                 params_plate: self.params_plate,
                 node_wire_style: self.slots.content.inner().chosen_wire_style().map(|w| w.name().to_string()).unwrap_or_default(),
                 show_point_markers: self.show_point_markers,
@@ -3866,7 +3846,6 @@ impl State {
         self.camera_pivot_size = v.camera_pivot_size;
         self.origin_size = v.origin_size;
         self.grid_thickness = v.grid_thickness;
-        self.network_plate = v.network_plate;
         self.params_plate = v.params_plate;
         self.set_node_wire_style(cce_ui::widget::display::WireStyle::parse(&v.node_wire_style));
         self.circular_network_pane = self.is_detached_network || v.circular_pane;
@@ -4275,14 +4254,14 @@ impl State {
         self.viewport_dirty = true;
     }
 
-    /// Whether the network is drawn as an OVERLAY on the scene rather than on
-    /// its own plate: the plate switched off, in the ordinary docked layout.
+    /// Whether the network is drawn as an OVERLAY on the scene: shown, in the
+    /// ordinary layout. It has no plate (since 2026-10-06; it was a switch),
+    /// so its nodes stand on the scene and it spans the window.
     ///
     /// The circular pane and a detached network window have their own
     /// geometry and their own hit tests, and neither is a thing to overlay.
     pub fn network_overlay(&self) -> bool {
-        !self.network_plate
-            && self.show_network
+        self.show_network
             && !self.circular_network_pane
             && !self.is_detached_network
     }
@@ -4406,11 +4385,7 @@ impl State {
         if self.circular_network_pane {
             return self.circular_network_layout.hit_test_content(px, py, 0.0, breadcrumb_h());
         }
-        self.network_plate
-            && [NETWORK_PANEL_IDX, crate::slots::NETWORK_PANEL2_IDX].iter().any(|&idx| {
-                let (x, y, w, h) = self.positions[idx];
-                w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h
-            })
+        false
     }
 
     fn over_floating_pane(&self) -> bool {
@@ -4450,12 +4425,17 @@ impl State {
     ///
     /// Distinct from [`in_network_pane`](Self::in_network_pane), which in
     /// overlay mode narrows to the nodes so a click can reach the scene. The
-    /// two differ only when the plate is off, and the difference is the point:
+    /// two differ only in overlay mode, and the difference is the point:
     /// a CLICK on empty space is not the network's, but a PAN gesture over
     /// that same space is — middle-drag and space+left mean nothing to the
     /// scene, and a graph you cannot pan by dragging because its own surface
     /// stopped being drawn would be a strange thing to ship.
     pub fn in_network_area(&self, px: f32, py: f32) -> bool {
+        // A hidden network has no area: its rect is still laid out, and a
+        // middle-drag panned the graph no one could see.
+        if !self.show_network {
+            return false;
+        }
         if self.circular_network_pane {
             return self.circular_network_layout.hit_test_content(px, py, 0.0, breadcrumb_h());
         }
@@ -4612,14 +4592,19 @@ impl State {
     }
 
     pub fn cursor_in_viewport(&self) -> bool {
+        let (px, py) = (self.cursor_x, self.cursor_y);
+        let inside = |(x, y, w, h): (f32, f32, f32, f32)| w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h;
         if self.network_overlay() {
-            // The complement of the overlay: everything in the body the
-            // network is not holding and no floating pane covers.
-            return !self.in_network_pane()
+            // The complement of the overlay: everything in the viewport the
+            // network is not holding and no floating pane covers — the
+            // second editor, docked, holds its rect. Bounded by the
+            // viewport's rect; until 2026-10-06 it stopped at the old
+            // column split (`splitter2_x`), so the scene under the params
+            // HUD's rows, right of it, was nobody's.
+            return inside(self.positions[VIEWPORT_IDX])
+                && !self.in_network_pane()
                 && !self.over_floating_pane()
-                && self.cursor_x < self.splitter_layout.splitter2_x
-                && self.cursor_y >= HEADER_H
-                && self.cursor_y < self.height - STATUS_H;
+                && !inside(self.positions[crate::slots::NETWORK_PANEL2_IDX]);
         }
         // Minus the floating panes here too. The spreadsheet and the playbar
         // sit INSIDE the centre column, over the full-bleed scene, and this
@@ -4638,8 +4623,6 @@ impl State {
         // and a right-click there opened nothing. The circular pane is
         // excluded by its callers (`in_circle_network_pane`): its rect is
         // the circle's bounding box, whose corners are scene.
-        let (px, py) = (self.cursor_x, self.cursor_y);
-        let inside = |(x, y, w, h): (f32, f32, f32, f32)| w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h;
         let over_network = !self.circular_network_pane
             && [NETWORK_PANEL_IDX, crate::slots::NETWORK_PANEL2_IDX].iter().any(|&idx| inside(self.positions[idx]));
         inside(self.positions[VIEWPORT_IDX]) && !over_network && !self.over_floating_pane()
@@ -4652,7 +4635,8 @@ impl State {
     /// The floating network pane's edge-resize hotspot at (cx, cy) — only the right
     /// edge resizes. `None` while the pane is circular or hidden.
     pub fn network_resize_edge_at(&self, cx: f32, cy: f32) -> Option<ResizeDirection> {
-        if self.circular_network_pane || !self.show_network {
+        // The overlay spans the window and has no edge to drag.
+        if self.circular_network_pane || !self.show_network || self.network_overlay() {
             return None;
         }
         let (fx, fy, _, fh) = self.floating_network_layout;
@@ -4737,10 +4721,6 @@ impl State {
                 out.push(r);
             }
         };
-        if self.network_plate && !self.circular_network_pane {
-            take(NETWORK_PANEL_IDX);
-            take(crate::slots::NETWORK_PANEL2_IDX);
-        }
         take(SPREADSHEET_IDX);
         take(PLAYBAR_IDX);
         if self.circular_network_pane && self.show_network && !self.detached_circular_network {
@@ -5593,11 +5573,6 @@ impl State {
             }
             "Detach Circular Window" | "Detach Pane" => {
                 self.execute_action(Action::DetachCircularWindow);
-            }
-            // Both spellings reach the one action: "Show Network Plate" is
-            // the View node's parameter name, "Network Plate" the menu row.
-            "Show Network Plate" | "Network Plate" => {
-                self.execute_action(Action::ToggleNetworkPlate);
             }
             "Show Network Pane" => {
                 self.show_network = !self.show_network;
@@ -7376,8 +7351,8 @@ impl State {
             None => {}
         }
 
-        // With the network's plate off, empty graph space is the scene's,
-        // so the network's menu is a page of this one, at its head.
+        // While the network overlays the scene, empty graph space is the
+        // scene's, so the network's menu is a page of this one, at its head.
         if self.network_overlay() {
             row(&mut options, &mut actions, "Network".into(), ViewportMenuAction::NetworkPage);
             row(&mut options, &mut actions, "-".into(), sep);
@@ -8602,7 +8577,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             splitter2: Splitter::new(SPLITTER_W),
             param: ParametersBg::new(),
             canvas: Canvas::new(),
-            left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Network Plate", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
+            left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
             right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["square_aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
             param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
             status: StatusBar::new().with_text("Ready"),
@@ -8820,7 +8795,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             space_pressed: false,
             active_camera,
             show_network: true,
-            network_plate: settings.viewport.network_plate,
             params_plate: settings.viewport.params_plate,
             show_viewport: true,
             show_parameters: true,
@@ -9769,9 +9743,9 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 };
 
                 let (px, py, pw, ph) = rect_for(NETWORK_PANEL_IDX, self);
-                // With the plate off the network is an overlay on the scene,
-                // so it takes the whole body instead of its dock: there is no
-                // surface left to bound it, and a graph confined to a
+                // The network has no plate (since 2026-10-06): it is an
+                // overlay on the scene, so it takes the whole body instead of
+                // its dock — there is no surface to bound it, and a graph confined to a
                 // rectangle you cannot see is worse than one that spans what
                 // it is drawn over. Everything below derives from these four
                 // numbers — content, panel, breadcrumb — so overriding them
@@ -10589,19 +10563,6 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             }
             Action::NetworkPan(dc, dr) => {
                 self.network_pan_view(dc, dr);
-            }
-            Action::ToggleNetworkPlate => {
-                self.network_plate = !self.network_plate;
-                self.rebuild_positions();
-                self.apply_layout();
-                self.update_status_text(if self.network_plate {
-                    "Network plate on."
-                } else {
-                    "Network plate off — the graph overlays the scene."
-                });
-                // Saved through the same `settings_changed` path every other
-                // viewport toggle uses, rather than a save call of its own.
-                settings_changed = true;
             }
             Action::ToggleParamsPlate => {
                 self.params_plate = !self.params_plate;
@@ -11576,7 +11537,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 }
                 let in_network_pane = self.in_network_pane();
 
-                // Panning asks the AREA, not the nodes: with the plate off a
+                // Panning asks the AREA, not the nodes: in overlay mode a
                 // middle-drag over empty space still pans the graph, because
                 // nothing else wants that gesture.
                 let is_pan_trigger = self.in_network_area(self.cursor_x, self.cursor_y)
@@ -11617,8 +11578,8 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
 
                 // A middle press on the scene slides the camera. After the
                 // network's own pan above, which the middle button is
-                // wherever the network is laid out — with its plate off,
-                // the whole window, where shift and the left button pan
+                // wherever the network is laid out — in overlay mode the
+                // whole window, where shift and the left button pan
                 // the camera instead.
                 if *button == MouseButton::Middle
                     && *btn_state == ElementState::Pressed
@@ -11937,6 +11898,34 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                             {
                                 return true;
                             }
+                        }
+
+                        // Ctrl and a left press on empty space over the
+                        // overlaid network box-selects: the press is the
+                        // empty-grid press of the network's own cascade — the
+                        // cursor to the cell pressed, an expansion drag armed
+                        // from it, settled on the release — which a plain
+                        // press there cannot be, empty space being the
+                        // scene's to orbit. The network takes focus, as a
+                        // press on its grid gives it.
+                        if *button == MouseButton::Left
+                            && self.modifiers.control_key()
+                            && self.network_overlay()
+                            && !in_network_pane
+                            && self.in_network_area(self.cursor_x, self.cursor_y)
+                            && self.app_drag.is_none()
+                        {
+                            let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
+                            self.grid_cursor_col = col;
+                            self.grid_cursor_row = row;
+                            self.grid_cursor_expanse = None;
+                            self.grid_cursor_drag = Some((col, row));
+                            self.focused_pane = LEFT_MENUBAR_IDX;
+                            if let Some(old) = self.focused_widget.take() {
+                                self.slots.get_dyn_mut(old).unfocus();
+                            }
+                            self.sync_pane_focus();
+                            return true;
                         }
 
                         // A left press on empty scene arms a camera orbit.
