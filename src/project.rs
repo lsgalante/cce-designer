@@ -96,7 +96,7 @@ impl State {
 
 
     /// The view-state block every save and snapshot shares — the pane state
-    /// (visibility, collapse, splitter proportions, docks, pins) beside the
+    /// (visibility, collapse, splitter proportions, plate sizes) beside the
     /// camera/pan fields. Visibility rode the root meta node's View subnet
     /// params into the file until that node was retired.
     pub(crate) fn project_view_state(&self) -> ProjectViewState {
@@ -114,26 +114,14 @@ impl State {
         } else {
             None
         };
-        // What each dock holds, by name: a list of at most one, the shape
-        // the save has kept since docks held tabs.
-        let dock_tabs = (0..3)
-            .map(|d| {
-                crate::plate_menu::pane_name_from_slot(self.dock_panes[d])
-                    .map(|n| vec![n.to_string()])
-                    .unwrap_or_default()
-            })
-            .collect();
         // A plate's stored size is what was asked for and may exceed a window
         // that has since shrunk; the loader refuses a fraction past 1 (and
         // with it the whole block), so a save caps each at the full window.
         let plates = if self.width > 1.0 && self.height > 1.0 {
             Some(PlateGeometry {
-                network_width: (self.floating_network_layout.2 / self.width).min(1.0),
-                params_width: (self.floating_param_width / self.width).min(1.0),
                 spreadsheet_height: (self.floating_spreadsheet_height / self.height).min(1.0),
-                spreadsheet_inset_left: self.floating_spreadsheet_inset_left / self.width,
-                spreadsheet_inset_right: self.floating_spreadsheet_inset_right / self.width,
                 hud_width: Some((self.params_hud_width / self.width).min(1.0)),
+                params_width: None,
             })
         } else {
             None
@@ -152,7 +140,6 @@ impl State {
             ),
             collapsed_panes,
             splitters,
-            dock_tabs,
             plates,
             frame_range: {
                 let pb = self.slots.playbar.inner();
@@ -318,45 +305,6 @@ impl State {
                 .map_or(false, |n| vs.collapsed_panes.iter().any(|c| c == n));
             self.set_pane_collapsed(idx, desired);
         }
-        // What the docks hold: accepted only whole — three lists whose names
-        // resolve and cover each dockable pane exactly once. Anything else
-        // (older saves' empty list included) keeps the current layout rather
-        // than loading half of one. A list of an older save is a tab group,
-        // active first; its first dockable name is what the dock holds.
-        if vs.dock_tabs.len() == 3 {
-            let resolved: Vec<Vec<usize>> = vs
-                .dock_tabs
-                .iter()
-                .map(|names| {
-                    names
-                        .iter()
-                        .filter_map(|n| crate::plate_menu::pane_slot_from_name(n))
-                        .collect()
-                })
-                .collect();
-            // "network2", the second network editor (removed 2026-10-07),
-            // names no pane and is dropped wherever an older save had it.
-            let all: Vec<usize> = resolved.iter().flatten().copied().collect();
-            // Neither the params pane nor the network is docked since
-            // 2026-10-06 (the one a HUD on the scene, the other an overlay
-            // spanning it): an older save lists them in docks, and they are
-            // taken out — a dock one fronted holds its next tab, or is
-            // empty.
-            let undocked = |s: usize| s == crate::slots::PARAM_IDX || s == crate::slots::NETWORK_PANEL_IDX;
-            let resolved: Vec<Vec<usize>> = resolved
-                .into_iter()
-                .map(|tabs| tabs.into_iter().filter(|&s| !undocked(s)).collect())
-                .collect();
-            let all: Vec<usize> = all.into_iter().filter(|&s| !undocked(s)).collect();
-            let expected = vec![crate::slots::SPREADSHEET_IDX];
-            if all == expected {
-                for d in 0..3 {
-                    self.dock_panes[d] = resolved[d].first().copied().unwrap_or(crate::app::NO_PANE);
-                }
-                self.rebuild_positions();
-                self.apply_layout();
-            }
-        }
         if let Some((f1, f2)) = vs.splitters {
             if self.width > 1.0 && f1 > 0.02 && f2 < 0.98 && f1 < f2 {
                 self.splitter_layout.splitter1_x = f1 * self.width;
@@ -375,20 +323,15 @@ impl State {
     }
 
     /// Scale saved plate fractions onto this window. The layout pass clamps
-    /// them exactly as a drag would (minimum widths, the spreadsheet's tuck
-    /// limits). A save with a nonsense value keeps the live geometry rather
+    /// them exactly as a drag would (minimum widths and heights). A save with a nonsense value keeps the live geometry rather
     /// than loading half of one.
     pub(crate) fn apply_plate_geometry(&mut self, pg: crate::app::PlateGeometry) {
         let sane = |f: f32| f.is_finite() && (0.0..=1.0).contains(&f);
-        let hud = pg.hud_width.unwrap_or(pg.params_width);
-        let all = [pg.network_width, pg.params_width, pg.spreadsheet_height, pg.spreadsheet_inset_left, pg.spreadsheet_inset_right, hud];
+        let Some(hud) = pg.hud_width.or(pg.params_width) else { return };
+        let all = [pg.spreadsheet_height, hud];
         if self.width > 1.0 && self.height > 1.0 && all.iter().all(|&f| sane(f)) {
-            self.floating_network_layout.2 = pg.network_width * self.width;
-            self.floating_param_width = pg.params_width * self.width;
             self.params_hud_width = hud * self.width;
             self.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
-            self.floating_spreadsheet_inset_left = pg.spreadsheet_inset_left * self.width;
-            self.floating_spreadsheet_inset_right = pg.spreadsheet_inset_right * self.width;
             self.rebuild_positions();
             self.apply_layout();
         }
@@ -449,7 +392,7 @@ impl State {
         }
         self.drag_widget = None;
         if !keep_own_view {
-            // A pane-edge or dock drag is layout, which a sync reload no
+            // A pane-edge drag is layout, which a sync reload no
             // longer touches — the drag in hand stays in hand.
             self.app_drag = None;
         }

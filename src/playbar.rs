@@ -1,5 +1,5 @@
-//! The playbar pane: a full-width animation-transport strip docked below the
-//! other panes (`PLAYBAR_IDX`). App-owned on the narrow traits wrapped in
+//! The playbar pane: a full-width animation-transport strip along the
+//! window's bottom edge, below the other panes (`PLAYBAR_IDX`). App-owned on the narrow traits wrapped in
 //! `Adapted<Playbar>`, like `Viewport3D`. Unlike the other panes it paints
 //! through the modern `paint()` path — the designer's render walk special-cases
 //! `PLAYBAR_IDX` to `paint_self` (geometry AND text) instead of the legacy

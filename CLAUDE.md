@@ -247,20 +247,16 @@ gone from cce-ui with the wgpu path).
 - `src/plate_menu.rs` — the plate menu: what can be done to a pane's PLATE
   (`PLATE_SLOTS` — network, params, spreadsheet, playbar; NOT the viewport,
   whose plate is the window-spanning lip) — Collapse/Expand, Detach/Reattach,
-  Full Width (only with a plate in a side dock to tuck under) and **Move To
-  Left/Right/Bottom**. (Docks held TABS until 2026-10-07 — several panes to a
-  dock, with tab rows, Add Tab and Move To Own Plate here — retired once the
-  spreadsheet was the one pane a dock could hold; a save keeps the
-  `dock_tabs` field and its list shape, one name to a dock, and an older
-  save's tab group loads as its first dockable name.) The network and
-  the params HUD are in no dock, so theirs are Detach alone, and the
+  and nothing else (see "There are no docks": Full Width, the dock tabs and
+  Move To went on 2026-10-07). The network's and the params HUD's are
+  Detach alone, as neither collapses, and the
   network's are in no menu: its Plate page went on 2026-10-07, Detach being the
   `detach_circular_window` command in the palette. `plate_menu_rows(idx)` is the
   one list. **There is no corner trigger** (since 2026-10-01; it was a small
   circle on each plate's top-right, which opened these rows as a menu of their
   own and, DRAGGED, moved the pane to another dock — the drag, its drop
-  highlight and `AppDrag::DockDrag` went with it, and Move To is the rows'
-  replacement). The rows are in each plate's RIGHT-CLICK menu: a **Plate**
+  highlight and `AppDrag::DockDrag` went with it, and Move To was the rows'
+  replacement until the docks went). The rows are in each plate's RIGHT-CLICK menu: a **Plate**
   PAGE row (see "Page rows" below) at the foot of the playbar's menu
   (`PlaybarMenuAction::PlatePage`), which turns the menu into them under a
   band back to it (`open_plate_page`; until 2026-10-06 they were appended
@@ -2786,12 +2782,32 @@ the spreadsheet and the viewport followed) and the three PINS
 `param_editor_selected`, `param_editor_dir` and `viewport_editor_dir` stay
 as names for what they read — the one editor's selection and level.
 
-An older save's `"network2"` in its dock lists names no pane and is dropped
-wherever it stood, its `current_path2` and pins ignored
-(`an_older_saves_second_network_editor_is_dropped`). With the network and
-the params HUD out of the docks too, the spreadsheet is the one dockable
-pane: Move To still moves it between the three docks, and its Full Width row is shown only while a side dock
-holds a plate to tuck under — which, with nothing else dockable, is never.
+An older save's `"network2"` dock entry, its `current_path2` and pins are
+ignored (`an_older_saves_second_network_editor_is_dropped`).
+
+### There are no docks (since 2026-10-07)
+
+The floating layout had three DOCKS — a left column, a right column and a
+bottom strip — which owned the plate dimensions (`floating_network_layout`,
+`floating_param_width`, the spreadsheet's height and its side TUCKS under a
+side dock's plate), with panes assigned to them (`Dock`, `dock_panes`),
+held several to a dock as TABS (`dock_tabs`, Add Tab, Move To Own Plate),
+and swapped by the plate menus' **Move To** rows. The network, the params
+HUD and the second network editor left them one after another, which left
+the spreadsheet the one pane a dock could hold, and the model went whole:
+tabs first, then the docks.
+
+What is left is two plate edges. The **spreadsheet** is the strip along
+the bottom, a gap in from the window's sides and a gap above the playbar,
+as tall as `floating_spreadsheet_height` asks (`floating_spreadsheet_rect`,
+the one derivation); its TOP edge resizes it (`on_spreadsheet_resize_edge`
+— its sides tucked it under a side dock's plate). The **params HUD**'s left
+edge sets `params_hud_width`. The plate menus hold the window actions alone
+— Collapse / Expand, Detach / Reattach. `PlateGeometry` saves those two
+(`hud_width`, `spreadsheet_height`); an older save's dock widths, tucks and
+`dock_tabs` are ignored, its `params_width` read as the HUD's when it has
+no `hud_width`, and a spreadsheet it had moved into a side dock opens along
+the bottom. `the_plates_have_no_docks` is the test.
 
 ### The network has no plate (since 2026-10-06)
 
@@ -2815,25 +2831,17 @@ params HUD (`plates_over_params`) and over a point number (`under_a_plate`).
 The pane keeps its focus domain, its menus, its clip and its keyboard
 navigation.
 
-**The network is in no dock** (since 2026-10-07), as the params HUD is in
-none. The left dock starts EMPTY (`dock_panes` `[NO_PANE, NO_PANE,
-spreadsheet]`), so the spreadsheet runs flush to the window's left, where
-it stopped short of the network's invisible dock until then;
-the network's
-plate menu is Detach alone (no tab, Move To or Collapse rows) — and is in
-no menu: the network menu's Plate page went the next day, Detach being the
-palette's `detach_circular_window` — and
-`set_pane_collapsed` refuses it; the pane-state load takes it out of an
-older save's tab lists, the dock it fronted fronting its next tab or
-emptying (`the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones`
-loads one). `plate_at` never answers the network. The left dock's right edge
-resizes whatever plate is docked there (`on_left_dock_resize_edge`,
-`AppDrag::LeftDockResize`, writing `floating_network_layout.2`, which kept
-its name and its place in the save as the left dock's width) — it was the
-network's own edge (`network_resize_edge_at`, `NetworkResize`). And a press
-on the network's breadcrumb is asked where the breadcrumb is drawn: it was
-asked in the old dock's top strip, so a press in that band of the scene
-focused the network and went nowhere. `the_network_is_in_no_dock`.
+**The network is in no dock** (it left the left dock on 2026-10-07, and
+the docks went the same day — see "There are no docks"): the spreadsheet
+runs flush to the window's left, where it stopped short of the network's
+invisible dock until then. The network's plate menu is Detach alone, and
+in no menu — the network menu's Plate page went too, Detach being the
+palette's `detach_circular_window` — and `set_pane_collapsed` refuses it.
+`plate_at` never answers the network. It had a resize edge of its own
+(`network_resize_edge_at`, `NetworkResize`), gone with the dock. And a
+press on the network's breadcrumb is asked where the breadcrumb is drawn:
+it was asked in the old dock's top strip, so a press in that band of the
+scene focused the network and went nowhere. `the_network_is_in_no_dock`.
 
 **The pane spans the whole window** (`network_overlay`, which is true while
 the network is shown, not circular and not a detached window), laid out in
@@ -2931,33 +2939,24 @@ rows. `the_params_plate_fits_its_rows` and
 
 ### The params pane is a HUD on the scene (since 2026-10-06)
 
-The params pane is not a dock pane: it lives on the scene viewer, drawn
-right after it and under every plate, and its size has no relation to any
-plate. Until this it was the right dock's pane — as wide as that dock, its
+The params pane is a HUD on the scene viewer, drawn right after it and
+under every plate, and its size has no relation to any plate. Until this
+it was the right dock's pane (the docks went the next day) — as wide as that dock, its
 bottom raised by a spreadsheet tucked under it, tabbable and movable.
 
 - **Laid out from the viewport** (`State::params_hud_rect`): the
   viewport's top-right corner a gap in, `params_hud_width` wide (its own
-  field, apart from the right dock's `floating_param_width`; saved as
-  `PlateGeometry::hud_width`, and an older save's `params_width` is read
-  as it), as tall as the viewport — but **it stops a gap above the
+  field; saved as `PlateGeometry::hud_width`, and an older save's
+  `params_width` is read as it), as tall as the viewport — but **it stops a gap above the
   spreadsheet or the playbar when one lies below it** (since later the
   same day; for an afternoon they covered its bottom, and rows under them
   could be neither seen nor reached). What does not fit then scrolls, the
   pane's own scrolling, and the fitted plate fills the HUD. Laid out again
   after the collapse and detach post-passes in `rebuild_positions`, so a
-  stubbed spreadsheet is what it stops above. A plate in the right dock,
-  over the HUD's top, sizes nothing and is drawn over it. Its left edge drags its width
+  stubbed spreadsheet is what it stops above. Its left edge drags its width
   (`AppDrag::HudResize`, `on_param_resize_edge`), as far down as it claims.
-  The right dock's own edge is `on_right_dock_resize_edge` /
-  `AppDrag::RightDockResize`, asked first, its plate being on top.
-- **Out of the docks.** The right dock starts EMPTY (`dock_panes`
-  `[NO_PANE, NO_PANE, spreadsheet]` — the network left the left dock the
-  next day); the tab candidates (tabs went 2026-10-07) no longer listed params, its plate menu has no tab, Move To or Collapse rows (Detach
-  stays), `set_pane_collapsed` refuses it, and the pane-state load
-  takes it out of an older save's tab lists — the dock it fronted fronts
-  its next tab or empties. A plate moved into the right dock is drawn over
-  the HUD. The legacy column branches (circular network, detached circular
+- **Out of the docks.** Its plate menu has no Collapse row (Detach stays)
+  and `set_pane_collapsed` refuses it. The legacy column branches (circular network, detached circular
   window) still place it in their right column.
 - **Under every plate.** Draw order: viewport (-7), the HUD (-6), the
   network panels (-5, drawn with no plate), then the rest.
@@ -3427,7 +3426,7 @@ down INTO the lip, and only its top edge is a plate's.
   rect less that on the left, right and bottom (`Playbar::content`). Zero
   in the legacy column layouts, which draw the old plate.
 
-What stands above it — the docked plates (`pb_off`, `playbar_shelf_h()`)
+What stands above it — the spreadsheet (`pb_off`, `playbar_shelf_h()`)
 and the params HUD — stops a gap short of its top, and the viewport's
 bottom-anchored text, a viewer state's line, stands
 on it (`State::scene_text_floor`) rather than on its transport.

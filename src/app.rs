@@ -284,16 +284,8 @@ pub struct ProjectViewState {
     /// window size. None in older saves keeps the live positions.
     #[serde(default)]
     pub splitters: Option<(f32, f32)>,
-    /// What each dock holds, Left/Right/Bottom order: a list of pane names,
-    /// at most one since docks held no tabs (2026-10-07) — the name and the
-    /// list shape kept, so an older save, whose lists were tab groups with
-    /// the active tab first, still loads (its first dockable name is the
-    /// dock's). Empty (older saves) keeps the default arrangement; a set
-    /// that does not name each dockable pane exactly once is ignored the
-    /// same way. ("network2", the second network editor, removed the same
-    /// day, is dropped from an older save's.)
-    #[serde(default)]
-    pub dock_tabs: Vec<Vec<String>>,
+    // `dock_tabs`, what each dock held, rode here until 2026-10-07, when
+    // the docks went; an older save's is ignored.
     // `current_path2` and the viewport / params / spreadsheet pins rode
     // here until 2026-10-07, for the second network editor; an older save's
     // are ignored.
@@ -352,26 +344,24 @@ pub struct DefaultCameraView {
     pub pivot: [f32; 3],
 }
 
-/// The user-dragged plate edges of the floating layout, each as a fraction
-/// of the window dimension it spans: widths and side insets of the width,
-/// the spreadsheet height of the height. The remaining plate coordinates
-/// (the network plate's top-left, the parameter plate's right anchor, the
-/// spreadsheet's bottom) are derived by `rebuild_positions`, so these five
-/// numbers fix every plate's size and position.
+/// The user-dragged plate edges, each as a fraction of the window
+/// dimension it spans: the params HUD's width and the spreadsheet's height.
+/// Everything else about where the plates stand is derived by
+/// `rebuild_positions`. (Until 2026-10-07 this also held the left and
+/// right docks' widths and the spreadsheet's tucks under them; an older
+/// save's are ignored.)
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub struct PlateGeometry {
-    pub network_width: f32,
-    pub params_width: f32,
     pub spreadsheet_height: f32,
-    /// How far the spreadsheet's left/right edge tucks under its neighbor
-    /// (0 = flush beside it) — see `floating_spreadsheet_inset_left`.
-    pub spreadsheet_inset_left: f32,
-    pub spreadsheet_inset_right: f32,
     /// The params HUD's width (since 2026-10-06, when it left the right
-    /// dock). Absent in an older save, whose `params_width` was the params
-    /// pane's and is read as the HUD's.
+    /// dock).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hud_width: Option<f32>,
+    /// The right dock's width in an older save: read as the HUD's when the
+    /// save has no `hud_width` (one from before the HUD left the dock, when
+    /// it was the params pane's). Never written.
+    #[serde(default, skip_serializing)]
+    pub params_width: Option<f32>,
 }
 
 fn default_camera() -> String {
@@ -2826,35 +2816,11 @@ pub struct ResizeDirection {
 /// now ONLY ever names a widget drag (a slot whose `Input` drag hooks are driving:
 /// panel move, graph node drag, param slider, spreadsheet scroll). Exactly one of
 /// `app_drag`/`drag_widget` is armed per press.
-/// The floating layout's three dock slots. Dimensions belong to the DOCK
-/// (left/right column widths, bottom strip height and tucks), panes are
-/// assigned to docks — so swapping panes preserves the geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dock {
-    Left,
-    Right,
-    Bottom,
-}
-
-/// `dock_panes` entry for a dock that holds nothing: no slot index, so `pane_shown` reads it as hidden and the dock lays out
-/// nothing. Never a valid `positions[..]` index.
-pub const NO_PANE: usize = usize::MAX;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AppDrag {
-    /// The left dock's right edge — the plate docked there, if any.
-    LeftDockResize { start_w: f32, start_mouse_x: f32 },
-    /// The right dock's left edge — the plate docked there, if any.
-    RightDockResize { start_w: f32, start_mouse_x: f32 },
     /// The params HUD's left edge: its own width, which no plate shares.
     HudResize { start_w: f32, start_mouse_x: f32 },
     SpreadsheetResize { start_h: f32, start_mouse_y: f32 },
-    /// The spreadsheet's left edge drag, as an inset past the flush position
-    /// beside the network pane: a positive inset tucks the spreadsheet UNDER
-    /// the pane, whose bottom the layout raises to make room.
-    SpreadsheetResizeLeft { start_inset: f32, start_mouse_x: f32 },
-    /// The spreadsheet's right edge, symmetrically, tucking under the parameter pane.
-    SpreadsheetResizeRight { start_inset: f32, start_mouse_x: f32 },
 }
 
 #[repr(C)]
@@ -3129,10 +3095,6 @@ pub struct State {
     /// Panes shrunk to their title stub, indexed by slot. Only the
     /// `plate_menu::PLATE_SLOTS` entries are ever set.
     pub collapsed_panes: [bool; WIDGET_COUNT],
-    /// Dock occupancy, indexed Left/Right/Bottom: the pane each dock holds,
-    /// or [`NO_PANE`]. Swapped by the plate menu's Move To rows. One pane
-    /// to a dock: the tabs that let several share one went on 2026-10-07.
-    pub dock_panes: [usize; 3],
 
     pub drag_widget: Option<usize>,
     /// Where the pointer pressed when `drag_widget` armed — the drag
@@ -3286,21 +3248,13 @@ pub struct State {
     pub node_tint: Option<[f32; 4]>,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
-    pub floating_network_layout: (f32, f32, f32, f32),
     /// The active app-mode drag (pane edge resize), if any. See [`AppDrag`].
     pub app_drag: Option<AppDrag>,
-    pub floating_param_width: f32,
     /// The params HUD's width as asked for (`params_hud_rect` fits it to
-    /// the viewport). Its own, apart from the right dock's: the HUD lives
-    /// on the scene, not in a dock.
+    /// the viewport). It lives on the scene, not in a dock — there are none
+    /// (since 2026-10-07).
     pub params_hud_width: f32,
     pub floating_spreadsheet_height: f32,
-    /// How far the spreadsheet's left/right edge reaches INTO the neighboring
-    /// pane's span past its flush position (0 = glued beside the neighbor).
-    /// A positive inset tucks the spreadsheet UNDER that neighbor: the layout
-    /// raises the neighbor's bottom edge to the spreadsheet's top.
-    pub floating_spreadsheet_inset_left: f32,
-    pub floating_spreadsheet_inset_right: f32,
     /// Whether the compositor has told us the window's size yet. Until it
     /// has, `width`/`height` are `State::new`'s 1280x800 placeholder.
     pub window_configured: bool,
@@ -3325,7 +3279,7 @@ pub struct State {
     pub gpu_at_launch: String,
     pub last_saved_root_json: String,
     /// The pane layout as of the last save — [`State::pane_layout_json`] —
-    /// so a dragged plate edge, a collapse or a re-dock dirties the title
+    /// so a dragged plate edge or a collapse dirties the title
     /// like an edit to the tree: the save file carries them, so unsaved
     /// they are unsaved changes.
     pub last_saved_layout_json: String,
@@ -3665,21 +3619,13 @@ impl State {
     pub fn pane_layout_json(&self) -> String {
         let vs = self.project_view_state();
         let splitters = vs.splitters.map(|(a, b)| ((a * 1000.0).round(), (b * 1000.0).round()));
-        let plates = (
-            self.floating_network_layout.2.round(),
-            self.floating_param_width.round(),
-            self.params_hud_width.round(),
-            self.floating_spreadsheet_height.round(),
-            self.floating_spreadsheet_inset_left.round(),
-            self.floating_spreadsheet_inset_right.round(),
-        );
+        let plates = (self.params_hud_width.round(), self.floating_spreadsheet_height.round());
         // The display settings ride the file now, so changing one is an
         // edit the title's asterisk should show.
         let display = serde_json::to_string(&vs.display).unwrap_or_default();
         serde_json::to_string(&(
             vs.collapsed_panes,
             splitters,
-            vs.dock_tabs,
             vs.frame_range,
             plates,
             display,
@@ -4020,7 +3966,7 @@ impl State {
     /// scrolled one.
     /// Is the pointer CAPTURED — owned by a gesture or a modal rather than
     /// free to hover whatever it is over? A widget drag, an app drag (pane
-    /// edges, the dock), a camera orbit, a network pan, a grid expansion
+    /// edges), a camera orbit, a network pan, a grid expansion
     /// drag, a viewer-tool handle grab, a held viewport-menu slider, or the
     /// dialog. While it is, no pane hovers (`broadcast_pointer`).
     pub(crate) fn pointer_captured(&self) -> bool {
@@ -4585,23 +4531,6 @@ impl State {
     // the press handlers arm the matching `AppDrag` off it, and `pane_resize_cursor`
     // shows the resize cursor over it, so the two can't drift apart.
 
-    /// Whether (cx, cy) is on the left dock's right edge-resize hotspot —
-    /// the edge of whatever plate is docked there. The network is not one
-    /// (since 2026-10-06; it spans the window), so the dock is empty unless
-    /// a plate was moved into it.
-    pub fn on_left_dock_resize_edge(&self, cx: f32, cy: f32) -> bool {
-        if self.circular_network_pane || !self.dock_shown(Dock::Left) {
-            return false;
-        }
-        let pane = self.pane_in_dock(Dock::Left);
-        if self.pane_is_stubbed(pane) {
-            return false;
-        }
-        let (x, y, w, h) = self.positions[pane];
-        let margin = 8.0_f32;
-        w > 0.0 && cx >= x + w - margin && cx <= x + w + margin && cy >= y - margin && cy <= y + h + margin
-    }
-
     /// Whether (cx, cy) is on the params HUD's left edge-resize hotspot:
     /// the edge as far down as the HUD claims (its rows, without its
     /// plate), and nowhere a plate covers it.
@@ -4620,28 +4549,13 @@ impl State {
             && !self.plate_over_params_at(cx, cy)
     }
 
-    /// Whether (cx, cy) is on the right dock's left edge-resize hotspot —
-    /// the edge of whatever plate is docked there.
-    pub fn on_right_dock_resize_edge(&self, cx: f32, cy: f32) -> bool {
-        if self.circular_network_pane || !self.dock_shown(Dock::Right) {
-            return false;
-        }
-        let pane = self.pane_in_dock(Dock::Right);
-        if self.pane_is_stubbed(pane) {
-            return false;
-        }
-        let (x, y, w, h) = self.positions[pane];
-        let margin = 8.0_f32;
-        w > 0.0 && cx >= x - margin && cx <= x + margin && cy >= y - margin && cy <= y + h + margin
-    }
-
     /// The params HUD's rect: laid out from the VIEWPORT — its top right
     /// corner, a gap in, as wide as `params_hud_width` asks — and as tall as
     /// the viewport, except that it stops a gap above the spreadsheet or the
     /// playbar when one lies below it (since 2026-10-06): rows under a plate
     /// along the bottom could be neither seen nor reached, and with the HUD
-    /// stopped short the pane scrolls them instead. A plate beside or over
-    /// the HUD's top (the right dock's) sizes nothing; it is drawn over the
+    /// stopped short the pane scrolls them instead. A plate over the HUD
+    /// (the circular network pane's) sizes nothing; it is drawn over the
     /// HUD (`plates_over_params`).
     pub fn params_hud_rect(&self) -> (f32, f32, f32, f32) {
         let gap = 18.0_f32;
@@ -4688,156 +4602,50 @@ impl State {
             .any(|&(x, y, w, h)| px >= x && px < x + w && py >= y && py < y + h)
     }
 
-    /// The floating spreadsheet pane's rect (the single derivation the layout pass
-    /// and the edge hotspots share). A positive side inset pulls that edge past its
-    /// flush position into the neighbor's span — the pane tucks UNDER the neighbor,
-    /// whose bottom the layout raises to the spreadsheet's top — so the height clamp
-    /// keeps 100px of shortened neighbor above.
-    pub fn pane_in_dock(&self, dock: Dock) -> usize {
-        self.dock_panes[dock as usize]
-    }
-
-    pub fn dock_of_pane(&self, slot: usize) -> Option<Dock> {
-        [Dock::Left, Dock::Right, Dock::Bottom]
-            .into_iter()
-            .find(|&d| self.dock_panes[d as usize] == slot)
-    }
-
-    /// Is the pane occupying a slot currently shown (its View toggle)?
-    pub fn pane_shown(&self, slot: usize) -> bool {
-        match slot {
-            NETWORK_PANEL_IDX => self.show_network,
-            PARAM_IDX => self.show_parameters,
-            SPREADSHEET_IDX => self.show_spreadsheet,
-            PLAYBAR_IDX => self.show_playbar,
-            _ => false,
-        }
-    }
-
-    pub(crate) fn dock_shown(&self, dock: Dock) -> bool {
-        self.pane_shown(self.pane_in_dock(dock))
-    }
-
-    /// Move a plate to a dock, swapping with the pane that held it. The
-    /// dock-owned dimensions stay put, so the geometry survives the swap.
-    pub fn move_pane_to_dock(&mut self, slot: usize, dock: Dock) {
-        let Some(from) = self.dock_of_pane(slot) else { return };
-        if from == dock {
-            return;
-        }
-        self.dock_panes.swap(from as usize, dock as usize);
-        self.after_dock_change();
-    }
-
-    /// The full re-sync a dock change needs: layout, panel offsets, the
-    /// graphs' grid origins (they follow their pane rects), and the node
-    /// lists — a fronted pane must not wait for the next unrelated event to
-    /// fill in.
-    fn after_dock_change(&mut self) {
-        self.rebuild_positions();
-        self.apply_layout();
-        self.read_panel_offsets();
-        self.sync_grid_settings();
-        self.sync_nodes();
-    }
-
+    /// The spreadsheet's rect — the single derivation the layout pass and
+    /// the edge hotspot share: the strip along the bottom, a gap in from
+    /// the window's sides, standing a gap above the playbar, as tall as
+    /// `floating_spreadsheet_height` asks within the window. (Until
+    /// 2026-10-07 it was the bottom DOCK's rect: panes were assigned to a
+    /// left, right and bottom dock, swapped by Move To, and the
+    /// spreadsheet's sides could tuck under a side dock's plate.)
     pub fn floating_spreadsheet_rect(&self) -> (f32, f32, f32, f32) {
         let gap = 18.0_f32;
-        let fx = gap;
-        let fw = self.left_dock_width();
-        let param_w = self.right_dock_width();
-        let param_x = self.width - gap - param_w;
-        let flush_left = if self.dock_shown(Dock::Left) { fx + fw + gap } else { gap };
-        let flush_right = if self.dock_shown(Dock::Right) { param_x - gap } else { self.width - gap };
-        let ss_x = (flush_left - self.floating_spreadsheet_inset_left.max(0.0)).max(gap);
-        let ss_end = (flush_right + self.floating_spreadsheet_inset_right.max(0.0)).min(self.width - gap);
-        let ss_w = (ss_end - ss_x).max(150.0);
         // The playbar is attached to the bottom edge: what stands above it
         // stops a gap short of its top, the gap the bottom edge gives it.
         let pb_off = if self.show_playbar { playbar_shelf_h() } else { 0.0 };
         let ss_y_end = self.height - STATUS_H - pb_off - gap;
-        let max_h = if self.spreadsheet_tucks_left() || self.spreadsheet_tucks_right() {
-            ss_y_end - (gap + 100.0 + gap)
-        } else {
-            ss_y_end - gap
-        };
-        let ss_h = self.floating_spreadsheet_height.clamp(100.0, max_h.max(100.0));
-        let ss_y = ss_y_end - ss_h;
-        (ss_x, ss_y, ss_w, ss_h)
+        let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
+        (gap, ss_y_end - ss_h, (self.width - 2.0 * gap).max(150.0), ss_h)
     }
 
-    /// The left dock's width as drawn: `floating_network_layout.2` (the
-    /// width asked for) fitted to this window. Read this, not the field,
-    /// wherever the plate's ON-SCREEN width matters.
-    pub fn left_dock_width(&self) -> f32 {
-        let gap = 18.0_f32;
-        self.floating_network_layout.2.clamp(150.0, (self.width - 2.0 * gap).max(150.0))
-    }
-
-    /// The right dock's width as drawn — `floating_param_width` fitted to
-    /// this window, as [`Self::left_dock_width`] is for the left.
-    pub fn right_dock_width(&self) -> f32 {
-        let gap = 18.0_f32;
-        self.floating_param_width.clamp(150.0, (self.width - 2.0 * gap).max(150.0))
-    }
-
-    /// Whether the spreadsheet is tucked under the network / parameter pane
-    /// (side inset active while both panes are shown).
-    pub fn spreadsheet_tucks_left(&self) -> bool {
-        self.dock_shown(Dock::Bottom) && self.dock_shown(Dock::Left) && self.floating_spreadsheet_inset_left > 0.5
-    }
-
-    pub fn spreadsheet_tucks_right(&self) -> bool {
-        self.dock_shown(Dock::Bottom) && self.dock_shown(Dock::Right) && self.floating_spreadsheet_inset_right > 0.5
-    }
-
-    /// The spreadsheet pane's edge-resize hotspot at (cx, cy): top resizes the
-    /// pane's own height; the left/right edges drive the neighboring pane's width
-    /// (network / parameters), so each exists only while that neighbor is shown
-    /// to make room. `None` off every edge.
-    pub fn spreadsheet_resize_edge_at(&self, cx: f32, cy: f32) -> Option<ResizeDirection> {
+    /// Whether (cx, cy) is on the spreadsheet's top edge, which resizes its
+    /// height. (Its left and right edges tucked it under a side dock's plate
+    /// until the docks went, 2026-10-07.)
+    pub fn on_spreadsheet_resize_edge(&self, cx: f32, cy: f32) -> bool {
         if !self.show_spreadsheet {
-            return None;
+            return false;
         }
-        let (ss_x, ss_y, ss_w, ss_h) = self.floating_spreadsheet_rect();
+        let (ss_x, ss_y, ss_w, _) = self.floating_spreadsheet_rect();
         let margin = 8.0_f32;
-        let in_v = cy >= ss_y - margin && cy <= ss_y + ss_h + margin;
-        if self.show_network && !self.circular_network_pane && in_v && cx >= ss_x - margin && cx <= ss_x + margin {
-            return Some(ResizeDirection { left: true, right: false, top: false, bottom: false });
-        }
-        if self.dock_shown(Dock::Right) && in_v && cx >= ss_x + ss_w - margin && cx <= ss_x + ss_w + margin {
-            return Some(ResizeDirection { left: false, right: true, top: false, bottom: false });
-        }
-        if cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin {
-            return Some(ResizeDirection { left: false, right: false, top: true, bottom: false });
-        }
-        None
+        cx >= ss_x && cx <= ss_x + ss_w && cy >= ss_y - margin && cy <= ss_y + margin
     }
 
     /// The resize cursor for an active pane-edge drag, or for hovering one of the
     /// hotspots above. `None` otherwise (the engine then falls back to its CSD cursors).
     pub fn pane_resize_cursor(&self, cx: f32, cy: f32) -> Option<cce_ui::engine::CursorIcon> {
         use cce_ui::engine::CursorIcon;
-        let dir_cursor = |dir: ResizeDirection| {
-            if dir.left || dir.right { CursorIcon::EwResize } else { CursorIcon::NsResize }
-        };
         if let Some(drag) = self.app_drag {
             return Some(match drag {
-                AppDrag::LeftDockResize { .. } | AppDrag::RightDockResize { .. } | AppDrag::HudResize { .. } => CursorIcon::EwResize,
+                AppDrag::HudResize { .. } => CursorIcon::EwResize,
                 AppDrag::SpreadsheetResize { .. } => CursorIcon::NsResize,
-                AppDrag::SpreadsheetResizeLeft { .. } | AppDrag::SpreadsheetResizeRight { .. } => {
-                    CursorIcon::EwResize
-                }
             });
         }
-        if self.on_left_dock_resize_edge(cx, cy) {
+        if self.on_param_resize_edge(cx, cy) {
             return Some(CursorIcon::EwResize);
         }
-        if self.on_right_dock_resize_edge(cx, cy) || self.on_param_resize_edge(cx, cy) {
-            return Some(CursorIcon::EwResize);
-        }
-        if let Some(dir) = self.spreadsheet_resize_edge_at(cx, cy) {
-            return Some(dir_cursor(dir));
+        if self.on_spreadsheet_resize_edge(cx, cy) {
+            return Some(CursorIcon::NsResize);
         }
         None
     }
@@ -8510,10 +8318,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
             collapsed_panes: [false; WIDGET_COUNT],
-            // The left and right docks start empty: neither the network nor
-            // the params HUD is a dock pane (both live on the scene), and a
-            // plate moved into either is drawn over them.
-            dock_panes: [NO_PANE, NO_PANE, SPREADSHEET_IDX],
             drag_widget: None,
             drag_press_cursor: None,
             focused_widget: None,
@@ -8614,13 +8418,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 }
                 mod_time
             },
-            floating_network_layout: (18.0, 44.0, 400.0, 710.0),
             app_drag: None,
-            floating_param_width: 300.0,
             params_hud_width: 300.0,
             floating_spreadsheet_height: 250.0,
-            floating_spreadsheet_inset_left: 0.0,
-            floating_spreadsheet_inset_right: 0.0,
             window_configured: false,
             pending_plates: None,
             loaded_project_path: None,
@@ -9407,41 +9207,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.slots.spreadsheet_menubar.set_visible(false);
                 self.slots.playbar.set_visible(self.show_playbar);
             } else {
-                let gap = 18.0_f32;
-                // The playbar is attached to the bottom edge (below), so the
-                // plates above stop a gap short of its top.
-                let pb_off = if self.show_playbar { playbar_shelf_h() } else { 0.0 };
-                // The stored widths and height are what the user ASKED for;
-                // the clamps below fit them to this window for drawing and are
-                // never written back. Storing the clamp made every transient
-                // shrink permanent — a window briefly narrower than a plate
-                // left it that narrow when the window grew again.
-                let fw = self.left_dock_width();
-                let fx = paginator_w + gap;
-                let fy = gap;
-                let mut fh = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
-                self.floating_network_layout.0 = fx;
-                self.floating_network_layout.1 = fy;
-                self.floating_network_layout.3 = fh;
-
-                let param_w = self.right_dock_width();
-                let param_x = self.width - gap - param_w;
-                let param_y = gap;
-                let mut param_h = (self.height - STATUS_H - pb_off - 2.0 * gap).max(100.0);
-
-                // The spreadsheet rect (shared derivation with the edge hotspots —
-                // reads the clamped network width written back above). A side inset
-                // tucks the spreadsheet UNDER that neighbor: the neighbor's bottom
-                // rises to the spreadsheet's top edge to make room.
-                let (ss_x, ss_y, ss_w, ss_h) = self.floating_spreadsheet_rect();
-                if self.spreadsheet_tucks_left() {
-                    fh = (ss_y - gap - fy).max(100.0);
-                    self.floating_network_layout.3 = fh;
-                }
-                if self.spreadsheet_tucks_right() {
-                    param_h = (ss_y - gap - param_y).max(100.0);
-                }
-
                 let viewport_visible = self.show_viewport;
                 let spreadsheet_visible = self.show_spreadsheet;
                 let right_visible = self.show_parameters;
@@ -9450,26 +9215,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 let col_c_w = self.width - paginator_w;
                 let vp_y = 0.0;
                 let vp_h = if viewport_visible { body_h } else { 0.0 };
-
-                // Dock model: the three rects computed above belong to the
-                // DOCKS (left column, right column, bottom strip); which pane
-                // wears which rect is the dock assignment, swapped by dragging
-                // a plate's corner dot. A hidden pane zeroes its rect wherever
-                // it is docked.
-                let dock_rects = [
-                    (fx, fy, fw, fh),
-                    (param_x, param_y, param_w, param_h),
-                    (ss_x, ss_y, ss_w, ss_h),
-                ];
-                let rect_for = |slot: usize, state: &Self| -> (f32, f32, f32, f32) {
-                    if !state.pane_shown(slot) {
-                        return (0.0, 0.0, 0.0, 0.0);
-                    }
-                    match state.dock_of_pane(slot) {
-                        Some(d) => dock_rects[d as usize],
-                        None => (0.0, 0.0, 0.0, 0.0),
-                    }
-                };
 
                 // The network is in no dock (since 2026-10-06): it has no
                 // plate, and is an overlay on the scene spanning the whole
@@ -9522,7 +9267,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
 
                 self.positions[SPREADSHEET_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-                self.positions[SPREADSHEET_IDX] = rect_for(SPREADSHEET_IDX, self);
+                // The strip along the bottom, its one place (there are no
+                // docks since 2026-10-07).
+                self.positions[SPREADSHEET_IDX] =
+                    if spreadsheet_visible { self.floating_spreadsheet_rect() } else { (0.0, 0.0, 0.0, 0.0) };
                 self.slots.spreadsheet.set_rect(
                     self.positions[SPREADSHEET_IDX].0,
                     self.positions[SPREADSHEET_IDX].1,
@@ -11056,28 +10804,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 } else {
                     if let Some(drag) = self.app_drag {
                         match drag {
-                            AppDrag::LeftDockResize { start_w, start_mouse_x } => {
-                                let dx = self.cursor_x - start_mouse_x;
-                                self.floating_network_layout.2 = (start_w + dx).max(150.0);
-                                // A drag commits the width it SHOWS: storing an
-                                // overshoot past the window's limit would leave
-                                // the edge dead on the way back until the pointer
-                                // had unwound it.
-                                self.floating_network_layout.2 = self.left_dock_width();
-                                self.rebuild_positions();
-                                self.apply_layout();
-                                self.sync_grid_settings();
-                                changed = true;
-                            }
-                            AppDrag::RightDockResize { start_w, start_mouse_x } => {
-                                let dx = self.cursor_x - start_mouse_x;
-                                let new_w = (start_w - dx).max(150.0);
-                                self.floating_param_width = new_w;
-                                self.floating_param_width = self.right_dock_width();
-                                self.rebuild_positions();
-                                self.apply_layout();
-                                changed = true;
-                            }
                             AppDrag::HudResize { start_w, start_mouse_x } => {
                                 let dx = self.cursor_x - start_mouse_x;
                                 self.params_hud_width = (start_w - dx).max(PARAMS_HUD_MIN_W);
@@ -11091,35 +10817,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 let new_h = (start_h - dy).max(100.0);
                                 self.floating_spreadsheet_height = new_h;
                                 self.floating_spreadsheet_height = self.floating_spreadsheet_rect().3;
-                                self.rebuild_positions();
-                                self.apply_layout();
-                                changed = true;
-                            }
-                            AppDrag::SpreadsheetResizeLeft { start_inset, start_mouse_x } => {
-                                // Dragging the left edge past its flush position tucks the
-                                // spreadsheet under the network pane (the layout raises the
-                                // pane's bottom to make room); back to flush un-tucks it.
-                                let dx = self.cursor_x - start_mouse_x;
-                                let gap = 18.0_f32;
-                                let fx = self.floating_network_layout.0;
-                                let flush_left = fx + self.left_dock_width() + gap;
-                                let max_inset = (flush_left - gap).max(0.0);
-                                self.floating_spreadsheet_inset_left =
-                                    (start_inset - dx).clamp(0.0, max_inset);
-                                self.rebuild_positions();
-                                self.apply_layout();
-                                self.sync_grid_settings();
-                                changed = true;
-                            }
-                            AppDrag::SpreadsheetResizeRight { start_inset, start_mouse_x } => {
-                                // The right edge tucks under the parameter pane, symmetrically.
-                                let dx = self.cursor_x - start_mouse_x;
-                                let gap = 18.0_f32;
-                                let param_x = self.width - gap - self.right_dock_width();
-                                let flush_right = param_x - gap;
-                                let max_inset = (self.width - gap - flush_right).max(0.0);
-                                self.floating_spreadsheet_inset_right =
-                                    (start_inset + dx).clamp(0.0, max_inset);
                                 self.rebuild_positions();
                                 self.apply_layout();
                                 changed = true;
@@ -11449,18 +11146,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             }
                         }
 
-                        // The left dock's edge: the plate docked there, if any.
-                        if *button == MouseButton::Left && self.on_left_dock_resize_edge(self.cursor_x, self.cursor_y) {
-                            self.app_drag = Some(AppDrag::LeftDockResize {
-                                start_w: self.left_dock_width(),
-                                start_mouse_x: self.cursor_x,
-                            });
-                            if let Some(old) = self.focused_widget {
-                                self.slots.get_dyn_mut(old).unfocus();
-                                self.focused_widget = None;
-                            }
-                            return true;
-                        }
                         // The network's breadcrumb hovers over the graph and
                         // claims its segments only. Asked where it is drawn:
                         // until 2026-10-07 this tested the old left dock's
@@ -11476,19 +11161,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             }
                         }
 
-                        // The right dock's plate is over the HUD, so its edge
-                        // is asked first.
-                        if *button == MouseButton::Left && self.on_right_dock_resize_edge(self.cursor_x, self.cursor_y) {
-                            self.app_drag = Some(AppDrag::RightDockResize {
-                                start_w: self.right_dock_width(),
-                                start_mouse_x: self.cursor_x,
-                            });
-                            if let Some(old) = self.focused_widget {
-                                self.slots.get_dyn_mut(old).unfocus();
-                                self.focused_widget = None;
-                            }
-                            return true;
-                        }
                         if *button == MouseButton::Left && self.show_parameters {
                             let cx = self.cursor_x;
                             let cy = self.cursor_y;
@@ -11511,23 +11183,11 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             let cx = self.cursor_x;
                             let cy = self.cursor_y;
 
-                            if let Some(dir) = self.spreadsheet_resize_edge_at(cx, cy) {
-                                self.app_drag = Some(if dir.left {
-                                    AppDrag::SpreadsheetResizeLeft {
-                                        start_inset: self.floating_spreadsheet_inset_left,
-                                        start_mouse_x: cx,
-                                    }
-                                } else if dir.right {
-                                    AppDrag::SpreadsheetResizeRight {
-                                        start_inset: self.floating_spreadsheet_inset_right,
-                                        start_mouse_x: cx,
-                                    }
-                                } else {
-                                    let (_, _, _, ss_h) = self.floating_spreadsheet_rect();
-                                    AppDrag::SpreadsheetResize {
-                                        start_h: ss_h,
-                                        start_mouse_y: cy,
-                                    }
+                            if self.on_spreadsheet_resize_edge(cx, cy) {
+                                let (_, _, _, ss_h) = self.floating_spreadsheet_rect();
+                                self.app_drag = Some(AppDrag::SpreadsheetResize {
+                                    start_h: ss_h,
+                                    start_mouse_y: cy,
                                 });
                                 self.focused_pane = SPREADSHEET_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
@@ -11895,27 +11555,14 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             // shared teardown for faithfulness — the pane widget never began
                             // a drag in resize mode, so its commit/cancel hook is a no-op.
                             let idx = match drag {
-                                AppDrag::LeftDockResize { .. } => self.pane_in_dock(Dock::Left),
                                 AppDrag::HudResize { .. } => PARAM_IDX,
-                                AppDrag::RightDockResize { .. } => self.pane_in_dock(Dock::Right),
-                                AppDrag::SpreadsheetResize { .. }
-                                | AppDrag::SpreadsheetResizeLeft { .. }
-                                | AppDrag::SpreadsheetResizeRight { .. } => SPREADSHEET_IDX,
+                                AppDrag::SpreadsheetResize { .. } => SPREADSHEET_IDX,
                             };
                             {
                                 let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                             }
                             self.sync_layout();
-                            // Both of these resized the network pane, so the node
-                            // offsets need the same refresh.
-                            if matches!(
-                                drag,
-                                AppDrag::LeftDockResize { .. }
-                                    | AppDrag::SpreadsheetResizeLeft { .. }
-                            ) {
-                                self.read_panel_offsets();
-                            }
                             changed = true;
                         }
                         if self.drag_widget.is_some() {

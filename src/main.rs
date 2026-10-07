@@ -472,33 +472,61 @@ mod tests {
         press_at(&mut state, 2.0, 2.0, MouseButton::Left);
     }
 
-    /// Move To swaps the pane, and the tabs riding it, with what holds the
-    /// other dock — what dragging the corner used to do.
+    /// There are no docks (since 2026-10-07): the spreadsheet is the strip
+    /// along the bottom, a gap in from the sides, and nothing moves it there
+    /// or elsewhere; the plate menus hold the window actions alone; only the
+    /// spreadsheet's top edge resizes it; and an older save that had moved it
+    /// into a side dock opens with it along the bottom.
     #[test]
-    fn move_to_swaps_a_pane_into_another_dock() {
-        use crate::app::{Dock, NO_PANE};
+    fn the_plates_have_no_docks() {
         use crate::plate_menu::PlateMenuAction;
-        use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, SPREADSHEET_IDX};
+        use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
-        state.show_spreadsheet = true;
-        state.open_plate_menu(SPREADSHEET_IDX);
-        assert!(state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Right)));
-        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::MoveTo(Dock::Bottom)), "not to its own dock");
-        state.close_plate_menu();
-        state.run_plate_menu_action(SPREADSHEET_IDX, PlateMenuAction::MoveTo(Dock::Left));
-        assert_eq!(state.dock_of_pane(SPREADSHEET_IDX), Some(Dock::Left));
-        assert_eq!(state.pane_in_dock(Dock::Bottom), NO_PANE, "it swapped with the empty dock");
-        let (x, _, w, _) = state.positions[SPREADSHEET_IDX];
-        assert_eq!((x, w), (18.0, state.left_dock_width()), "it wears the left dock's rect");
-        // Neither the params HUD nor the network is in a dock, and neither
-        // moves to one.
-        for idx in [PARAM_IDX, NETWORK_PANEL_IDX] {
-            state.open_plate_menu(idx);
-            assert!(!state.plate_menu_actions.iter().any(|a| matches!(a, PlateMenuAction::MoveTo(_))));
-            assert_eq!(state.dock_of_pane(idx), None);
-            state.close_plate_menu();
+        state.execute_menu_action("Show Spreadsheet Pane");
+        if !state.show_playbar {
+            state.execute_menu_action("Show Playbar Pane");
         }
+        let (x, y, w, h) = state.positions[SPREADSHEET_IDX];
+        assert_eq!((x, w), (18.0, 1600.0 - 36.0), "the window's width, a gap in");
+        assert_eq!(y + h, state.positions[PLAYBAR_IDX].1 - 18.0, "a gap above the playbar");
+
+        for idx in [SPREADSHEET_IDX, PARAM_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX] {
+            for (label, action) in state.plate_menu_rows(idx).0.iter().zip(state.plate_menu_rows(idx).1) {
+                assert!(
+                    matches!(action, PlateMenuAction::Collapse | PlateMenuAction::Expand | PlateMenuAction::Detach | PlateMenuAction::Reattach),
+                    "{label} on plate {idx}"
+                );
+            }
+        }
+
+        // Only the top edge resizes: the sides tucked under a dock's plate.
+        assert!(state.on_spreadsheet_resize_edge(x + w * 0.5, y));
+        assert!(!state.on_spreadsheet_resize_edge(x, y + h * 0.5));
+        assert!(!state.on_spreadsheet_resize_edge(x + w, y + h * 0.5));
+
+        // An older save with the spreadsheet moved to the left dock, its
+        // width and tucks recorded: it loads along the bottom, and the HUD
+        // width it recorded still loads.
+        let dir = std::env::temp_dir().join(format!("cce-designer-no-docks-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        state.save_to_file(&dir).expect("save");
+        let file = dir.join("state.json");
+        let mut json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        json["view_state"]["dock_tabs"] = serde_json::json!([["spreadsheet"], [], []]);
+        json["view_state"]["plates"] = serde_json::json!({
+            "network_width": 0.4, "params_width": 0.25, "spreadsheet_height": 0.3,
+            "spreadsheet_inset_left": 0.1, "spreadsheet_inset_right": 0.0,
+        });
+        fs::write(&file, serde_json::to_string(&json).unwrap()).unwrap();
+        let mut b = State::new(false);
+        b.resize(1600.0, 900.0, 1.0);
+        b.load_from_file(&dir).expect("load");
+        let (bx, _, bw, _) = b.positions[SPREADSHEET_IDX];
+        assert_eq!((bx, bw), (18.0, 1600.0 - 36.0), "along the bottom");
+        assert!((b.params_hud_width - 400.0).abs() < 0.5, "an older save's params width is the HUD's: {}", b.params_hud_width);
+        assert!((b.floating_spreadsheet_height - 270.0).abs() < 0.5);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Collapse must actually reclaim the plate AND take its body with it, and
@@ -598,9 +626,6 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         assert!(state.network_overlay(), "the network overlays the scene");
-        // Spanning the window, it has no edge to drag where its dock's was.
-        let (fx, fy, _, fh) = state.floating_network_layout;
-        assert!(!state.on_left_dock_resize_edge(fx + state.left_dock_width(), fy + fh * 0.5));
         let press = |state: &mut State, x: f32, y: f32, b: MouseButton| {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: b });
@@ -1061,31 +1086,6 @@ mod tests {
         assert!(s.points().has("uv") && !s.points().has("UV"));
     }
 
-    /// Full width tucks the spreadsheet under BOTH neighbors (their bottoms
-    /// rise via the tuck interlock); between-panes clears both tucks.
-    #[test]
-    fn test_spreadsheet_full_width_round_trip() {
-        use crate::plate_menu::PlateMenuAction;
-        use crate::slots::SPREADSHEET_IDX;
-        let mut state = State::new(false);
-        state.resize(1600.0, 900.0, 1.0);
-        state.show_spreadsheet = true;
-        state.rebuild_positions();
-        // No plate beside it to tuck under (the spreadsheet is the one
-        // dockable pane): it spans the window already, and Full Width is not
-        // offered.
-        let (ss_x, _, ss_w, _) = state.floating_spreadsheet_rect();
-        assert!(ss_x <= 18.5 && ss_x + ss_w >= 1600.0 - 18.5, "not full width: x={ss_x} w={ss_w}");
-        state.open_plate_menu(SPREADSHEET_IDX);
-        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::FullWidth));
-        assert!(!state.plate_menu_actions.contains(&PlateMenuAction::BetweenPanes));
-        state.close_plate_menu();
-        state.set_spreadsheet_full_width(true);
-        assert!(!state.spreadsheet_tucks_left() && !state.spreadsheet_tucks_right());
-        let (ss_x, _, ss_w, _) = state.floating_spreadsheet_rect();
-        assert!(ss_x <= 18.5 && ss_x + ss_w >= 1600.0 - 18.5);
-    }
-
     /// The way back. A detached pane's menu offers Reattach and nothing else,
     /// and reattaching restores the pane in full.
     #[test]
@@ -1498,15 +1498,14 @@ mod tests {
         assert_eq!(m.match_command(&ctrl_shift, &lower), Some("save_document_as"));
     }
 
-    /// The network is in no dock (since 2026-10-07): it spans the body
-    /// whatever the docks hold, the left dock starts empty — so the
-    /// spreadsheet runs flush to the left — and the network neither
-    /// collapses nor moves. The left dock's edge resizes the plate docked
-    /// there, and a press in the band the network's dock had along the
-    /// top, off the breadcrumb's segments, is the scene's.
+    /// The network spans the body, shown though it fronts no dock (it was
+    /// in the left dock until 2026-10-07, when it left, and the docks went
+    /// the same day), and it does not collapse: its plate menu is Detach.
+    /// A press in the band its dock had along the top, off the
+    /// breadcrumb's segments, is the scene's.
     #[test]
     fn the_network_is_in_no_dock() {
-        use crate::app::{Dock, NO_PANE, HEADER_H};
+        use crate::app::HEADER_H;
         use crate::plate_menu::PlateMenuAction;
         use crate::slots::{BREADCRUMB_IDX, LEFT_MENUBAR_IDX, NETWORK_PANEL_IDX, SPREADSHEET_IDX};
         use crate::window::{LocalPosition, WindowEvent};
@@ -1514,16 +1513,12 @@ mod tests {
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
         state.execute_menu_action("Show Spreadsheet Pane");
-        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), None);
-        assert_eq!(state.pane_in_dock(Dock::Left), NO_PANE);
         assert_eq!(state.positions[NETWORK_PANEL_IDX], (0.0, HEADER_H, 1600.0, state.body_h()));
-        assert!(state.slots.get_dyn(crate::slots::CONTENT_IDX).visible(), "shown though it fronts no dock");
-        assert_eq!(state.positions[SPREADSHEET_IDX].0, 18.0, "flush left, a gap in");
+        assert!(state.slots.get_dyn(crate::slots::CONTENT_IDX).visible(), "shown");
+        assert_eq!(state.positions[SPREADSHEET_IDX].0, 18.0, "the spreadsheet flush left, a gap in");
 
         state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
         assert!(!state.pane_is_collapsed(NETWORK_PANEL_IDX));
-        state.move_pane_to_dock(NETWORK_PANEL_IDX, Dock::Bottom);
-        assert_eq!(state.dock_of_pane(NETWORK_PANEL_IDX), None);
         state.open_plate_menu(NETWORK_PANEL_IDX);
         assert_eq!(state.plate_menu_actions, vec![PlateMenuAction::Detach]);
         state.close_plate_menu();
@@ -1554,29 +1549,14 @@ mod tests {
         assert!(state.orbit_drag.is_some(), "the press orbits");
         press(&mut state, ElementState::Released);
         assert_ne!(state.focused_pane, LEFT_MENUBAR_IDX);
-
-        // A plate in the left dock: its right edge resizes the dock.
-        state.move_pane_to_dock(SPREADSHEET_IDX, Dock::Left);
-        let (qx, qy, qw, qh) = state.positions[SPREADSHEET_IDX];
-        assert!(qw > 0.0);
-        let w0 = state.left_dock_width();
-        let edge = (qx + qw, qy + qh * 0.5);
-        assert!(state.on_left_dock_resize_edge(edge.0, edge.1));
-        at(&mut state, edge.0, edge.1);
-        press(&mut state, ElementState::Pressed);
-        at(&mut state, edge.0 + 40.0, edge.1);
-        press(&mut state, ElementState::Released);
-        assert!((state.left_dock_width() - (w0 + 40.0)).abs() < 0.5, "{} against {}", state.left_dock_width(), w0 + 40.0);
-        assert_eq!(state.positions[SPREADSHEET_IDX].2, state.left_dock_width());
     }
 
     /// An older save docked the network and sometimes the second network
     /// editor (removed 2026-10-07), in front of it or waiting behind it as a
-    /// tab. Neither is a dock pane now: both are dropped wherever they stood,
-    /// and the rest of the arrangement loads.
+    /// tab, and pinned panes to it. All of it is ignored — the docks went the
+    /// same day — and the save loads, the spreadsheet along the bottom.
     #[test]
     fn an_older_saves_second_network_editor_is_dropped() {
-        use crate::app::{Dock, NO_PANE};
         use crate::slots::SPREADSHEET_IDX;
         let dir = std::env::temp_dir().join(format!("cce-designer-hidden-editor-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -1599,9 +1579,8 @@ mod tests {
             serde_json::json!([[], ["network2"], ["spreadsheet"]]),
         ] {
             let b = load_with(tabs.clone());
-            assert_eq!(b.pane_in_dock(Dock::Left), NO_PANE, "{tabs}");
-            assert_eq!(b.pane_in_dock(Dock::Right), NO_PANE, "{tabs}");
-            assert_eq!(b.pane_in_dock(Dock::Bottom), SPREADSHEET_IDX, "{tabs}");
+            assert_eq!(b.floating_spreadsheet_rect().0, 18.0, "{tabs}");
+            assert_eq!(b.positions[SPREADSHEET_IDX].0, if b.show_spreadsheet { 18.0 } else { 0.0 }, "{tabs}");
         }
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1627,8 +1606,6 @@ mod tests {
         assert!(!a.collapsed_panes[PARAM_IDX], "the params HUD does not collapse");
         a.splitter_layout.splitter1_x = 400.0;
         a.splitter_layout.splitter2_x = 1200.0;
-        // Dock state: the spreadsheet moved to the left dock.
-        a.move_pane_to_dock(crate::slots::SPREADSHEET_IDX, crate::app::Dock::Left);
         a.save_to_file(&dir).expect("save");
 
         let mut b = State::new(false);
@@ -1641,9 +1618,6 @@ mod tests {
         assert!((b.splitter_layout.splitter1_x - 200.0).abs() < 1.0,
             "splitters restore as fractions: 400/1600 of an 800-wide window = 200, got {}",
             b.splitter_layout.splitter1_x);
-        // The dock arrangement rides the file; the network is in none.
-        assert_eq!(b.pane_in_dock(crate::app::Dock::Left), crate::slots::SPREADSHEET_IDX, "the spreadsheet loads where it was moved");
-        assert_eq!(b.dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None, "the network loads in no dock");
 
         // A detached pane window must ignore the same file's pane state.
         let mut d = State::new(true);
@@ -1667,43 +1641,33 @@ mod tests {
         a.resize(1600.0, 900.0, 1.0);
         a.execute_menu_action("Show Spreadsheet Pane");
         assert!(a.show_spreadsheet);
-        a.floating_network_layout.2 = 520.0;
-        a.floating_param_width = 360.0;
         a.params_hud_width = 420.0;
         a.floating_spreadsheet_height = 300.0;
-        a.set_spreadsheet_full_width(true);
         a.rebuild_positions();
-        let insets = (a.floating_spreadsheet_inset_left, a.floating_spreadsheet_inset_right);
-        assert!(insets.0 > 0.0 && insets.1 > 0.0, "full width must set both tucks");
-        assert!((a.floating_network_layout.2 - 520.0).abs() < 0.5 && (a.floating_param_width - 360.0).abs() < 0.5);
         a.save_to_file(&dir).expect("save");
 
         let plates = a.project_view_state().plates.expect("a sized window records its plates");
-        assert!((plates.network_width - 520.0 / 1600.0).abs() < 1e-4, "widths save as window fractions");
+        assert!((plates.hud_width.unwrap() - 420.0 / 1600.0).abs() < 1e-4, "widths save as window fractions");
+        assert!(plates.params_width.is_none(), "the retired right dock width is never written");
 
         let mut b = State::new(false);
         b.resize(1600.0, 900.0, 1.0);
         b.load_from_file(&dir).expect("load");
-        assert!((b.floating_network_layout.2 - 520.0).abs() < 0.5, "network width: {}", b.floating_network_layout.2);
-        assert!((b.floating_param_width - 360.0).abs() < 0.5, "param width: {}", b.floating_param_width);
         assert!((b.params_hud_width - 420.0).abs() < 0.5, "HUD width: {}", b.params_hud_width);
         assert!((b.floating_spreadsheet_height - 300.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
-        assert!((b.floating_spreadsheet_inset_left - insets.0).abs() < 0.5 && (b.floating_spreadsheet_inset_right - insets.1).abs() < 0.5,
-            "tucks: {:?} vs {:?}", (b.floating_spreadsheet_inset_left, b.floating_spreadsheet_inset_right), insets);
 
         // Half the window: the same fractions land at half the pixels.
         let mut c = State::new(false);
         c.resize(800.0, 450.0, 1.0);
         c.load_from_file(&dir).expect("load half-size");
-        assert!((c.floating_network_layout.2 - 260.0).abs() < 0.5, "scaled network width: {}", c.floating_network_layout.2);
-        assert!((c.floating_param_width - 180.0).abs() < 0.5, "scaled param width: {}", c.floating_param_width);
         assert!((c.params_hud_width - 210.0).abs() < 0.5, "scaled HUD width: {}", c.params_hud_width);
+        assert!((c.floating_spreadsheet_height - 150.0).abs() < 0.5, "scaled spreadsheet height: {}", c.floating_spreadsheet_height);
 
         // A detached pane window keeps its own plates.
         let mut d = State::new(true);
-        let before = d.floating_param_width;
+        let before = d.params_hud_width;
         d.load_from_file(&dir).expect("load detached");
-        assert_eq!(d.floating_param_width, before);
+        assert_eq!(d.params_hud_width, before);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1721,8 +1685,7 @@ mod tests {
         let mut a = State::new(false);
         a.resize(1400.0, 1080.0, 1.0);
         a.execute_menu_action("Show Spreadsheet Pane");
-        a.floating_network_layout.2 = 350.0;
-        a.floating_param_width = 310.0;
+        a.params_hud_width = 310.0;
         a.floating_spreadsheet_height = 100.0;
         a.rebuild_positions();
         a.save_to_file(&dir).expect("save");
@@ -1732,16 +1695,15 @@ mod tests {
         assert!(!b.window_configured);
         b.load_from_file(&dir).expect("load");
         b.resize(1400.0, 1080.0, 1.0);
-        assert!((b.left_dock_width() - 350.0).abs() < 0.5, "network width: {}", b.left_dock_width());
-        assert!((b.right_dock_width() - 310.0).abs() < 0.5, "param width: {}", b.right_dock_width());
+        assert!((b.params_hud_width - 310.0).abs() < 0.5, "HUD width: {}", b.params_hud_width);
         assert!((b.floating_spreadsheet_height - 100.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
         let pg = b.project_view_state().plates.expect("plates");
-        assert!((pg.network_width - 350.0 / 1400.0).abs() < 1e-4, "a save writes back what was loaded: {:?}", pg);
+        assert!((pg.hud_width.unwrap() - 310.0 / 1400.0).abs() < 1e-4, "a save writes back what was loaded: {:?}", pg);
 
         // Only the FIRST configure: a later window resize keeps the plates'
         // pixels, as it always has.
         b.resize(1000.0, 1080.0, 1.0);
-        assert!((b.left_dock_width() - 350.0).abs() < 0.5, "a later resize rescaled the plate: {}", b.left_dock_width());
+        assert!((b.params_hud_width - 310.0).abs() < 0.5, "a later resize rescaled the plate: {}", b.params_hud_width);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1757,8 +1719,8 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let mut a = State::new(false);
         a.resize(1400.0, 1080.0, 1.0);
-        a.floating_network_layout.2 = 350.0;
-        a.floating_param_width = 310.0;
+        a.params_hud_width = 310.0;
+        a.floating_spreadsheet_height = 180.0;
         a.rebuild_positions();
         a.save_to_file(&dir).expect("save");
 
@@ -1787,8 +1749,6 @@ mod tests {
         let mut s = State::new(false);
         s.resize(1600.0, 900.0, 1.0);
         s.execute_menu_action("Show Spreadsheet Pane");
-        s.floating_network_layout.2 = 700.0;
-        s.floating_param_width = 650.0;
         s.params_hud_width = 650.0;
         s.floating_spreadsheet_height = 600.0;
         s.rebuild_positions();
@@ -1802,8 +1762,7 @@ mod tests {
 
         s.resize(1600.0, 900.0, 1.0);
         s.rebuild_positions();
-        assert!((s.left_dock_width() - 700.0).abs() < 0.5, "network width: {}", s.left_dock_width());
-        assert!((s.right_dock_width() - 650.0).abs() < 0.5, "param width: {}", s.right_dock_width());
+        assert!((s.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", s.params_hud_width);
         assert!((s.floating_spreadsheet_rect().3 - 600.0).abs() < 0.5, "spreadsheet height: {:?}", s.floating_spreadsheet_rect());
         assert!((s.positions[crate::slots::PARAM_IDX].2 - 650.0).abs() < 0.5, "drawn HUD width: {:?}", s.positions[crate::slots::PARAM_IDX]);
     }
@@ -1821,8 +1780,7 @@ mod tests {
 
         let mut main = State::new(false);
         main.resize(1600.0, 900.0, 1.0);
-        main.floating_network_layout.2 = 700.0;
-        main.floating_param_width = 650.0;
+        main.params_hud_width = 650.0;
         main.floating_spreadsheet_height = 420.0;
         main.viewport_mut().rotation_x = 0.7;
         main.rebuild_positions();
@@ -1838,8 +1796,7 @@ mod tests {
         main.load_sync_channel(&channel, true).expect("main reloads");
 
         assert!(main.fs_root.children.iter().any(|c| c.name == "synced_edit"), "the tree edit must sync");
-        assert!((main.floating_network_layout.2 - 700.0).abs() < 0.5, "network width: {}", main.floating_network_layout.2);
-        assert!((main.floating_param_width - 650.0).abs() < 0.5, "param width: {}", main.floating_param_width);
+        assert!((main.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", main.params_hud_width);
         assert!((main.floating_spreadsheet_height - 420.0).abs() < 0.5, "spreadsheet height: {}", main.floating_spreadsheet_height);
         assert!((main.viewport().rotation_x - 0.7).abs() < 1e-6, "camera: {}", main.viewport().rotation_x);
         assert!(main.app_drag.is_some(), "a plate drag in progress survives the reload");
@@ -1860,7 +1817,7 @@ mod tests {
 
         let mut main = State::new(false);
         main.resize(1600.0, 900.0, 1.0);
-        main.floating_param_width = 650.0;
+        main.params_hud_width = 650.0;
         main.viewport_mut().rotation_x = 0.7;
         main.rebuild_positions();
         main.save_to_file(&channel).expect("main writes the channel");
@@ -1877,7 +1834,8 @@ mod tests {
         assert!(proj.root.children.iter().any(|c| c.name == "synced_edit"), "the tree is the child's");
         assert_eq!(proj.view_state.selected_node, Some(0), "so is the navigation");
         let plates = proj.view_state.plates.expect("the main window's plates stay in the file");
-        assert!((plates.params_width - 650.0 / 1600.0).abs() < 1e-4, "params width: {}", plates.params_width);
+        let hud = plates.hud_width.expect("the HUD's width");
+        assert!((hud - 650.0 / 1600.0).abs() < 1e-4, "HUD width: {hud}");
         let view = proj.view_state.default_view.expect("the main window's camera stays in the file");
         assert!((view.rotation.0 - 0.7).abs() < 1e-6, "camera: {:?}", view.rotation);
 
@@ -1908,7 +1866,7 @@ mod tests {
         state.resize(1600.0, 900.0, 1.0);
         assert!(!state.has_unsaved_changes(), "a window resize is not an edit");
 
-        state.floating_param_width += 60.0;
+        state.floating_spreadsheet_height += 60.0;
         state.rebuild_positions();
         state.update_window_title();
         assert!(state.has_unsaved_changes(), "a plate resize must dirty the title");
@@ -2138,7 +2096,6 @@ mod tests {
     /// in the right dock, over its top, sizes nothing.
     #[test]
     fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
-        use crate::app::{Dock, NO_PANE};
         use crate::slots::{PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
@@ -2147,16 +2104,12 @@ mod tests {
         let hud = state.positions[PARAM_IDX];
         assert_eq!(hud, state.params_hud_rect());
         assert_eq!(hud.1 + hud.3, 900.0 - crate::app::STATUS_H - 18.0, "the viewport's height, a gap in");
-        assert_eq!(state.dock_of_pane(PARAM_IDX), None, "the HUD is in no dock");
-        assert_eq!(state.pane_in_dock(Dock::Right), NO_PANE);
 
         // The spreadsheet and the playbar below it: it stops a gap above
-        // the higher of them. The right dock's width sizes nothing.
+        // the higher of them.
         state.execute_menu_action("Show Spreadsheet Pane");
         state.execute_menu_action("Show Playbar Pane");
         state.floating_spreadsheet_height = 500.0;
-        state.set_spreadsheet_full_width(true);
-        state.floating_param_width = 700.0;
         state.rebuild_positions();
         state.apply_layout();
         let (hx, hy, hw, hh) = state.positions[PARAM_IDX];
@@ -2196,37 +2149,12 @@ mod tests {
         assert!(pb.scrollbar_visible(), "the sphere's rows overflow a {hh} px HUD and scroll");
         assert_eq!(state.params_claim(), (hx, hy, hw, hh), "the plate fills the HUD");
 
-        // Under a plate in the right dock: it takes the pointer there.
-        state.set_spreadsheet_full_width(false);
-        state.move_pane_to_dock(SPREADSHEET_IDX, Dock::Right);
-        state.rebuild_positions();
-        state.apply_layout();
-        let (hx, hy, hw, _) = state.positions[PARAM_IDX];
-        assert!(state.plates_over_params().contains(&state.positions[SPREADSHEET_IDX]));
-        let (nx, ny, nw, _) = state.positions[SPREADSHEET_IDX];
-        let over = (nx.max(hx) + 5.0, ny.max(hy) + 30.0);
-        assert!(over.0 < nx + nw && over.0 < hx + hw);
-        assert!(!state.params_claims(over.0, over.1), "a plate over the HUD takes the pointer");
-        assert_eq!(state.plate_at(over.0, over.1), Some(SPREADSHEET_IDX));
-
-        // An older save docked the params pane and the network; both load
-        // out of the docks.
-        let dir = std::env::temp_dir().join(format!("cce-designer-hud-dock-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let mut a = State::new(false);
-        a.save_to_file(&dir).expect("save");
-        let file = dir.join("state.json");
-        let mut json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
-        json["view_state"]["dock_tabs"] = serde_json::json!([["parameters"], ["network"], ["spreadsheet"]]);
-        fs::write(&file, serde_json::to_string(&json).unwrap()).unwrap();
-        let mut b = State::new(false);
-        b.load_from_file(&dir).expect("load");
-        assert_eq!(b.pane_in_dock(Dock::Left), NO_PANE, "the dock the params fronted is empty");
-        assert_eq!(b.pane_in_dock(Dock::Right), NO_PANE, "the dock the network fronted is empty");
-        assert_eq!(b.pane_in_dock(Dock::Bottom), SPREADSHEET_IDX, "the rest of the arrangement loads");
-        assert_eq!(b.dock_of_pane(PARAM_IDX), None);
-        assert_eq!(b.dock_of_pane(crate::slots::NETWORK_PANEL_IDX), None);
-        let _ = fs::remove_dir_all(&dir);
+        // (A plate in the right dock stood over the HUD's top and took the
+        // pointer there, until the docks went, 2026-10-07; the spreadsheet
+        // and the playbar it stops above are the plates left.)
+        assert!(!state.plates_over_params().iter().any(|&(x, y, w, h)| {
+            x < hx + hw && x + w > hx && y < hy + hh && y + h > hy
+        }), "no plate stands over the HUD");
     }
 
     /// What the plates leave of the HUD, as rects that do not overlap.

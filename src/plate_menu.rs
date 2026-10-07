@@ -1,5 +1,5 @@
-//! The plate menu: what can be done to a pane's PLATE — collapse, detach,
-//! where it is docked — as rows of that pane's right-click menu.
+//! The plate menu: what can be done to a pane's PLATE — collapse and
+//! detach — as rows of that pane's right-click menu.
 //!
 //! Until 2026-10-01 these rows were a menu of their own, opened by a small
 //! circular trigger on the top-right of every plate (and that trigger, dragged,
@@ -8,14 +8,15 @@
 //! playbar's) the rows are a PAGE of it, its **Plate** row turning the menu
 //! into them (since 2026-10-06; they were appended inline until then), and
 //! they make up the whole menu where it has none (the params pane off a
-//! row, the spreadsheet, and a collapsed or detached plate's stub). Moving a pane to another dock is a row too,
-//! `Move To …`, which swaps it with what is there as the drag did.
+//! row, the spreadsheet, and a collapsed or detached plate's stub). Moving
+//! a pane to another dock was a row too (`Move To …`) until the docks went,
+//! 2026-10-07.
 //!
 //! [`State::plate_menu_rows`] is the one list; [`State::open_plate_menu_at`]
 //! shows it alone and [`State::open_plate_page`] as another menu's page,
 //! dispatching a pick through [`State::run_plate_menu_action`].
 
-use crate::app::{Dock, State};
+use crate::app::State;
 use crate::slots::{
     NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX, WIDGET_COUNT,
 };
@@ -35,14 +36,6 @@ pub enum PlateMenuAction {
     Detach,
     /// Take a detached pane back, closing the window that held it.
     Reattach,
-    /// Spreadsheet: span the full window width, tucking under both neighbors
-    /// (whose bottoms the layout raises to make room — the playbar treatment).
-    FullWidth,
-    /// Spreadsheet: back to the strip between the network and params panes.
-    BetweenPanes,
-    /// Move this pane to another dock, swapping with what is there — what
-    /// dragging the plate's corner used to do.
-    MoveTo(Dock),
     /// A "-" row: engraved, inert — keeps the action list aligned with the
     /// option rows so a click on the line dispatches nothing.
     Separator,
@@ -59,14 +52,6 @@ pub fn plate_title(idx: usize) -> &'static str {
     }
 }
 
-/// A dock's name in a `Move To` row.
-fn dock_title(d: Dock) -> &'static str {
-    match d {
-        Dock::Left => "Left",
-        Dock::Right => "Right",
-        Dock::Bottom => "Bottom",
-    }
-}
 
 impl State {
     /// The plate whose rect holds (px, py), topmost first — the plate a
@@ -122,56 +107,9 @@ impl State {
                 PlateDockAction::Reattach => PlateMenuAction::Reattach,
             });
         }
-        if state.detached {
-            return (options, actions);
-        }
-
-        // Group boundaries are engraved separators ("-" rows — the toolkit
-        // convention): window actions | layout spans | Move To. Pushed lazily so a group that contributes nothing
-        // leaves no orphaned line.
-        let separate = |options: &mut Vec<String>, actions: &mut Vec<PlateMenuAction>| {
-            if !options.is_empty() && options.last().map(String::as_str) != Some("-") {
-                options.push("-".to_string());
-                actions.push(PlateMenuAction::Separator);
-            }
-        };
-
-        // Only with a plate beside it to tuck under: with neither side dock
-        // holding one (the spreadsheet being the one dockable pane, the
-        // usual case) it spans the window already, and the rows would do
-        // nothing.
-        if idx == SPREADSHEET_IDX
-            && !self.collapsed_panes[idx]
-            && (self.dock_shown(Dock::Left) || self.dock_shown(Dock::Right))
-        {
-            separate(&mut options, &mut actions);
-            // Layout spans: full-width is the playbar treatment; the neighbors'
-            // bottoms rise to make room via the tuck interlock.
-            if !(self.spreadsheet_tucks_left() && self.spreadsheet_tucks_right()) {
-                options.push("Full Width".to_string());
-                actions.push(PlateMenuAction::FullWidth);
-            }
-            if self.spreadsheet_tucks_left() || self.spreadsheet_tucks_right() {
-                options.push("Between Panes".to_string());
-                actions.push(PlateMenuAction::BetweenPanes);
-            }
-        }
-
-        // Move To — only on docked plates (the playbar's strip is not a
-        // dock): every other dock, swapping with what is there, the drag the
-        // corner trigger used to start, as rows. (Docks held TABS until
-        // 2026-10-07 — several panes to a dock, switched, added and split
-        // from here — retired when the spreadsheet became the one pane a
-        // dock could hold.)
-        if let Some(d) = self.dock_of_pane(idx) {
-            separate(&mut options, &mut actions);
-            for other in [Dock::Left, Dock::Right, Dock::Bottom] {
-                if other != d {
-                    options.push(format!("Move To {}", dock_title(other)));
-                    actions.push(PlateMenuAction::MoveTo(other));
-                }
-            }
-        }
+        // The window actions are the whole menu: the spreadsheet's Full
+        // Width / Between Panes rows and every docked plate's Move To rows
+        // went with the docks, 2026-10-07.
         (options, actions)
     }
 
@@ -246,23 +184,8 @@ impl State {
             PlateMenuAction::Expand => self.set_pane_collapsed(idx, false),
             PlateMenuAction::Detach => self.detach_plate(idx),
             PlateMenuAction::Reattach => self.reattach_plate(idx),
-            PlateMenuAction::FullWidth => self.set_spreadsheet_full_width(true),
-            PlateMenuAction::BetweenPanes => self.set_spreadsheet_full_width(false),
-            PlateMenuAction::MoveTo(d) => self.move_pane_to_dock(idx, d),
             PlateMenuAction::Separator => {}
         }
-    }
-
-    /// Spreadsheet span: full width sets both tuck insets to their maxima
-    /// (the rect derivation clamps to the usable span), between-panes clears
-    /// them. The neighbors' heights follow through the existing tuck interlock.
-    pub fn set_spreadsheet_full_width(&mut self, full: bool) {
-        let v = if full { self.width.max(1.0) } else { 0.0 };
-        self.floating_spreadsheet_inset_left = v;
-        self.floating_spreadsheet_inset_right = v;
-        self.rebuild_positions();
-        self.apply_layout();
-        self.read_panel_offsets();
     }
 
     pub fn set_pane_collapsed(&mut self, idx: usize, collapsed: bool) {
