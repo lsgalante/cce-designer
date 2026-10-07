@@ -2712,6 +2712,22 @@ Until then the graph filled itself with `cell_color` (chosen by a
 `gap_color`; all three keys are retired, reported by path at load and not
 read.
 The next section is about dropping the pane plate entirely.
+
+**Floors: a faint plate, compressed content** (since 2026-10-06). The way
+to make the plates recede and keep what is on them readable is to compress
+the scene under the CONTENT rather than under the whole plate:
+`style.surface.param.backdrop_compression` puts a floor of the pane
+material under each params row (cce-ui's `paint_row_floors`), and
+`style.surface.graph.node_compression` sets the node bodies' compression
+and, set at all, puts the same floor behind each node's NAME
+(`State::node_label_floors`, from the graph's own laid-out text, drawn in
+the bodies' run so they share its blur snapshot). Compression pulls the
+backdrop's luminance toward the material's tint RGB and ignores its alpha,
+so a DARK pane colour at a low alpha (`#2020280d`) is a plate that barely
+shows and a dark key under light ink: the mid-grey `#6c6c7b` it replaced
+capped full compression at about 3.3:1 against `#ccccd4`. 0.85 was where
+labels read over a bright model in a shadow session; 0.6 left them grey
+on grey.
 The params widget alone also reads `style.surface.param.backdrop_compression`.
 The rules live in cce-ui's CLAUDE.md ("There is one roll width", "The
 relief is two shapes", "Frost is one block"); this is the designer's view of

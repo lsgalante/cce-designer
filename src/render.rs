@@ -510,6 +510,13 @@ impl State {
             // at the network opacity, a flat blue-grey wash that predated
             // the plate and made the network pane the one pane with a hue.
 
+            // A node's name hangs off its body onto whatever is behind the
+            // pane, so with the plate faint it stands on the bare scene. With
+            // `node_compression` set it gets a floor of the bodies' material,
+            // as each params row does (`param.backdrop_compression`).
+            let label_floors =
+                if self.node_compression.is_some() { self.node_label_floors(w) } else { Vec::new() };
+
             pc.clip(clip, |pc| {
                 // Node bodies wear the parameter plate's fill exactly — same
                 // tint, opacity, and blur-behind marker (param_plate_fill) —
@@ -616,6 +623,10 @@ impl State {
                 // what still says so while the node is selected and its
                 // roll is the selection's colour.
                 let mut bars: Vec<cce_ui::scene::layout::Rect> = Vec::new();
+                // In the bodies' run, so they share its blur snapshot.
+                for (floor, r) in &label_floors {
+                    pc.fill_material(*floor, (*r, *r, *r, *r), &node_mat);
+                }
                 for (qx, qy, qw, qh, highlighted, off) in bodies {
                     if highlighted {
                         pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel, hl_tint);
@@ -986,6 +997,38 @@ impl State {
     /// graph's clamped to the network pane (and distance-filtered against the circular
     /// pane), network text fading with `network_opacity`. Popovers follow in
     /// `append_popovers`.
+    /// A floor behind each node name a network editor draws, with its corner
+    /// radius: the labels as the graph lays them out (read back from its
+    /// text, so the left-hand flip is the widget's own), measured as
+    /// shaped, padded a little. A name the circular pane drops in
+    /// `append_frame_text` gets no floor either.
+    fn node_label_floors(&self, w: &dyn WidgetHost) -> Vec<(Rect, f32)> {
+        let (ncx, ncy, ncr) =
+            (self.circular_network_layout.x, self.circular_network_layout.y, self.circular_network_layout.r);
+        let mut scratch = PaintCtx::new();
+        append_widget_text(&self.ui_context, w, &mut scratch);
+        scratch
+            .finish()
+            .items
+            .into_iter()
+            .filter_map(|item| {
+                let Prim::Text { text, x, y, font_size, font, .. } = item.prim else { return None };
+                if self.circular_network_pane && (x - ncx).powi(2) + (y - ncy).powi(2) > ncr * ncr {
+                    return None;
+                }
+                let family = match &font {
+                    Some(f) => cce_ui::layout::split_font_string(f).0.to_string(),
+                    None => cce_ui::layout::graph_node_font_parsed().0,
+                };
+                let tw = crate::dialog::shaped_width(&text, &family, font_size);
+                let (px, py) = (font_size * 0.4, font_size * 0.2);
+                let h = font_size + 2.0 * py;
+                let r = cce_ui::layout::control_corner_radius().min(h * 0.5);
+                Some((rect(x - px, y - py, tw + 2.0 * px, h), r))
+            })
+            .collect()
+    }
+
     fn append_frame_text(&self, pc: &mut PaintCtx) {
         let circular = self.circular_network_pane;
         let ncx = self.circular_network_layout.x;

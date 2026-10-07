@@ -902,7 +902,7 @@ impl Layout for Dialog {
 /// through usvg's font database and measured a choice's value some 8 px
 /// wider than it drew, which put the right arrow twice as far from it as
 /// the left; it is the fallback for a font system that shapes nothing.
-fn shaped_width(text: &str, family: &str, font_size: f32) -> f32 {
+pub(crate) fn shaped_width(text: &str, family: &str, font_size: f32) -> f32 {
     cce_ui::geometry_font_system()
         .lock()
         .ok()
