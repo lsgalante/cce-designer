@@ -3252,6 +3252,21 @@ bottom-anchored text, the scale readout and a viewer state's line, stands
 on it (`State::scene_text_floor`) rather than on its transport.
 `the_playbar_is_attached_to_the_bottom_edge` is the test.
 
+### Playback plays every frame (since 2026-10-06)
+
+`Playbar::tick` moves the playhead by `dt * fps`, but the SHOWN frame
+(the playhead rounded) by one at most: a tick that would carry it further
+lands on the next frame. So playback holds the rate while the frames keep
+up and slows to a frame a tick when they do not — a simulation too slow
+for its rate plays every step, slower, where until then the playhead kept
+to the clock and the frames between two ticks were never drawn (the solve
+still ran them; they were not seen). The loop is every frame of the
+range, frame k shown over k ± 0.5, so the step past the end is to the
+start in either direction; it was a loop of `end - start` that gave the
+end and the start half a frame each, and with the cap would have stepped
+over the start. With Repeat off, landing on the far end stops there.
+`playback_plays_every_frame_however_late_the_tick` is the test.
+
 ### The playbar's right-click menu
 
 A right press on the playbar's plate (`over_playbar`) opens the sixth

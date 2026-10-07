@@ -18,6 +18,7 @@ pub mod shapes;
 pub mod gpu;
 pub mod springs;
 pub mod collide;
+pub mod surface_flow;
 
 // Root-level aliases some modules import via `crate::` paths.
 #[allow(unused_imports)]
@@ -3601,9 +3602,48 @@ mod tests {
         let moved =
             cce_ui::widget::Input::tick(state.slots.playbar.inner_mut(), 0.1, rect);
         assert!(moved, "reverse playback advances the frame");
+        assert_eq!(state.slots.playbar.inner().current_frame, 1.0, "the start frame is played, not stepped over");
+        cce_ui::widget::Input::tick(state.slots.playbar.inner_mut(), 0.1, rect);
         let f = state.slots.playbar.inner().current_frame;
-        assert!(f > 200.0, "running off the start wraps to the end, got {f}");
+        assert_eq!(f.round(), 240.0, "running off the start wraps to the end, got {f}");
         assert!(state.slots.playbar.inner().playing, "the wrap does not stop playback");
+    }
+
+    /// Playback plays every frame: a tick that came late moves the shown
+    /// frame by one, not by as many as the clock says, so a slow
+    /// simulation plays every step slower rather than skipping some — in
+    /// either direction and across the loop. A tick that keeps up still
+    /// plays at the rate.
+    #[test]
+    fn playback_plays_every_frame_however_late_the_tick() {
+        use cce_ui::widget::Input;
+        let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 30.0 };
+        let mut adapted = crate::playbar::Playbar::new();
+        let pb = adapted.inner_mut();
+        (pb.start_frame, pb.end_frame, pb.fps, pb.repeat) = (1.0, 10.0, 24.0, true);
+        for reversed in [false, true] {
+            pb.current_frame = 5.0;
+            pb.begin(reversed);
+            let mut shown = vec![5];
+            for _ in 0..25 {
+                // A quarter of a second a tick: six frames at the rate.
+                Input::tick(&mut *pb, 0.25, rect);
+                shown.push(pb.current_frame.round() as i32);
+            }
+            let step = if reversed { -1 } else { 1 };
+            for w in shown.windows(2) {
+                let expected = (w[0] - 1 + step).rem_euclid(10) + 1;
+                assert_eq!(w[1], expected, "reversed {reversed}: {shown:?}");
+            }
+        }
+        // On time: 48 ticks of a 48th of a second at 24 fps is 24 frames.
+        pb.current_frame = 1.0;
+        pb.end_frame = 100.0;
+        pb.begin(false);
+        for _ in 0..48 {
+            Input::tick(&mut *pb, 1.0 / 48.0, rect);
+        }
+        assert_eq!(pb.current_frame.round(), 25.0);
     }
 
     #[test]

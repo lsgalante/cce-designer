@@ -366,26 +366,33 @@ impl Input for Playbar {
             return false;
         }
         let dir = if self.reversed { -1.0 } else { 1.0 };
-        self.current_frame += dir * dt * self.fps;
-        let range = (self.end_frame - self.start_frame).max(1.0);
-        if self.current_frame > self.end_frame {
-            if self.repeat {
-                self.current_frame = self.start_frame + (self.current_frame - self.start_frame) % range;
-            } else {
-                // Repeat off: land ON the last frame and stop there, so the
-                // final state of a simulation is what stays on screen.
-                self.current_frame = self.end_frame;
-                self.playing = false;
-            }
-        } else if self.current_frame < self.start_frame {
-            // The reverse wrap, mirroring the forward one: run off the start,
-            // come back in from the end.
-            if self.repeat {
-                self.current_frame = self.end_frame - (self.start_frame - self.current_frame) % range;
-            } else {
-                self.current_frame = self.start_frame;
-                self.playing = false;
-            }
+        let shown = self.current_frame.round();
+        let mut next = self.current_frame + dir * dt * self.fps;
+        // Every frame is played: a tick moves the shown frame by one at
+        // most, landing ON the next frame when the time since the last tick
+        // would carry it further. So the rate is the fps while the frames
+        // keep up, and slows to a frame a tick when they do not — a
+        // simulation too slow for its rate plays every step slower rather
+        // than showing some of them. Until 2026-10-06 the playhead kept to
+        // the clock and the frames between two ticks were never drawn.
+        if (next.round() - shown).abs() > 1.0 {
+            next = shown + dir;
+        }
+        if !self.repeat && (next >= self.end_frame && !self.reversed || next <= self.start_frame && self.reversed) {
+            // Repeat off: land ON the last frame and stop there, so the
+            // final state of a simulation is what stays on screen.
+            self.current_frame = if self.reversed { self.start_frame } else { self.end_frame };
+            self.playing = false;
+        } else if self.repeat {
+            // The loop is every frame of the range, the end and the start
+            // each shown for a frame (frame k is shown over k ± 0.5), so the
+            // step past the end is to the start and the one before the start
+            // is to the end, in either direction.
+            let lo = self.start_frame - 0.5;
+            let frames = (self.end_frame - self.start_frame + 1.0).max(1.0);
+            self.current_frame = lo + (next - lo).rem_euclid(frames);
+        } else {
+            self.current_frame = next.clamp(self.start_frame, self.end_frame);
         }
         true
     }
