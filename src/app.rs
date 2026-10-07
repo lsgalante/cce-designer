@@ -3822,15 +3822,17 @@ impl State {
         self.viewport_dirty = true;
     }
 
+    /// The viewport background: NDC corners, drawn `screen_space` (z is
+    /// ignored), so it fills the pane's scissor at the far plane.
     pub(crate) fn viewport_bg_vertices(bg_color: [f32; 3]) -> Vec<Vertex3D> {
         vec![
-            Vertex3D { position: [-1.0, -1.0, 9.99], color: bg_color }, // Bottom-left
-            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
-            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
+            Vertex3D { position: [-1.0, -1.0, 0.0], color: bg_color }, // Bottom-left
+            Vertex3D { position: [ 1.0, -1.0, 0.0], color: bg_color }, // Bottom-right
+            Vertex3D { position: [-1.0,  1.0, 0.0], color: bg_color }, // Top-left
 
-            Vertex3D { position: [ 1.0, -1.0, 9.99], color: bg_color }, // Bottom-right
-            Vertex3D { position: [ 1.0,  1.0, 9.99], color: bg_color }, // Top-right
-            Vertex3D { position: [-1.0,  1.0, 9.99], color: bg_color }, // Top-left
+            Vertex3D { position: [ 1.0, -1.0, 0.0], color: bg_color }, // Bottom-right
+            Vertex3D { position: [ 1.0,  1.0, 0.0], color: bg_color }, // Top-right
+            Vertex3D { position: [-1.0,  1.0, 0.0], color: bg_color }, // Top-left
         ]
     }
 
@@ -12683,37 +12685,37 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         // nothing re-uploads; the next entry just sorts anew.
                         self.sorted_fill_key = None;
                     }
-                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None }];
+                    let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: true }];
                     if self.viewport().show_grid {
-                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None });
+                        draws.push(SceneDraw { mesh: meshes.grid, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: false });
                     }
                     if self.viewport().show_origin {
-                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None });
+                        draws.push(SceneDraw { mesh: meshes.origin, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: false });
                     }
                     if self.viewport().show_camera_pivot {
-                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None });
+                        draws.push(SceneDraw { mesh: meshes.pivot, mvp: mvp_pivot, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: false });
                     }
                     // Selected-Group markers: full-opacity selection feedback,
                     // deliberately outside the Render node's Opacity.
                     if self.group_point_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.group_points) });
+                        draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.group_points), screen_space: false });
                     }
                     // The marked groups: the same amber as a selected
                     // group's markers, and the same tier.
                     if self.marked_group_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.marked_points) });
+                        draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.marked_points), screen_space: false });
                     }
                     // The spreadsheet's selected rows, while it is shown.
                     if self.show_spreadsheet && self.row_marker_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.row_points) });
+                        draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.row_points), screen_space: false });
                     }
                     // Show Point Markers and Show Vertex Markers, the same
                     // full-opacity tier, each its sphere instanced.
                     if self.overlay_point_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.point_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.overlay_points) });
+                        draws.push(SceneDraw { mesh: meshes.point_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.overlay_points), screen_space: false });
                     }
                     if self.vertex_marker_count > 0 {
-                        draws.push(SceneDraw { mesh: meshes.vertex_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.vertex_points) });
+                        draws.push(SceneDraw { mesh: meshes.vertex_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.vertex_points), screen_space: false });
                     }
                     // The page the level shows stands in the scene as an
                     // image: after the furniture and the markers, which are
@@ -12736,18 +12738,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         // width deliberately fixed (a chunky Wire Width is a
                         // wireframe styling choice, not a normals one).
                         if self.overlay_normal_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: true, instances: None });
+                            draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: true, instances: None, screen_space: false });
                         }
                         // Pull arrows: selection feedback, like the group
                         // markers — full opacity, a little heavier than the
                         // whiskers.
                         if self.pull_arrow_count > 0 {
-                            draws.push(SceneDraw { mesh: meshes.pull_arrows, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 2.0, wire_base_width: 0.0, prelit: false, see_through: true, instances: None });
+                            draws.push(SceneDraw { mesh: meshes.pull_arrows, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 2.0, wire_base_width: 0.0, prelit: false, see_through: true, instances: None, screen_space: false });
                         }
                         // With wires coming, the fill is pushed back by its
                         // slope-scaled offset so the lattice reads solid.
                         let base = if self.wireframe { self.wire_width } else { 0.0 };
-                        let mut fill = Some(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading, see_through, instances: None });
+                        let mut fill = Some(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading, see_through, instances: None, screen_space: false });
                         // A see-through fill writes no depth, so wires drawn
                         // AFTER it pass everywhere and the far side's paint
                         // over the near faces. Seen through, the wires go
@@ -12777,7 +12779,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 [0.0, 0.0, 0.0, 0.0]
                             };
                             let wire_alpha = self.wire_opacity.clamp(0.0, 1.0);
-                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through, instances: None });
+                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through, instances: None, screen_space: false });
                         }
                         draws.extend(fill);
                     }

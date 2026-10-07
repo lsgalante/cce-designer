@@ -201,12 +201,13 @@ fn grid_verts() -> Vec<Vertex3D> {
     v
 }
 
-/// The designer's viewport-background quad: z=9.99 triggers the shader's
-/// far-plane special case, filling the scissor with the (linear) bg color.
+/// The designer's viewport-background quad: NDC corners, drawn
+/// `screen_space`, filling the scissor with the (linear) bg color at the far
+/// plane.
 fn viewport_bg_verts() -> Vec<Vertex3D> {
     let color = cce_ui::colors::to_linear_rgb([0.10, 0.10, 0.13]);
     let mut v = Vec::new();
-    quad3(&mut v, [-1.0, -1.0, 9.99], [1.0, -1.0, 9.99], [1.0, 1.0, 9.99], [-1.0, 1.0, 9.99], color);
+    quad3(&mut v, [-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0], color);
     v
 }
 
@@ -481,9 +482,9 @@ fn main() {
                 renderer.stage_scene(
                     pane,
                     vec![
-                        SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d(), wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None },
-                        SceneDraw { mesh: grid_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None },
-                        SceneDraw { mesh: cube_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None },
+                        SceneDraw { mesh: bg_mesh, mvp: Mat4::IDENTITY.to_cols_array_2d(), wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: true },
+                        SceneDraw { mesh: grid_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: false },
+                        SceneDraw { mesh: cube_mesh, mvp, wireframe: false, wire_tint: [0.0; 4], opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: false },
                     ],
                 );
             }
