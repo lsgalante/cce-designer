@@ -2240,8 +2240,9 @@ need.
   the key and they go with the solve they were frames of; the frame in
   hand does not (the next section).
 - **Within a count and a budget** (`CHECKPOINTS_MAX` 1024,
-  `CHECKPOINT_BUDGET` 2 GB per simnet by an estimate of a state's size;
-  48 and 512 MB until every frame was kept). **The budget is the SUM of
+  `CHECKPOINT_BUDGET` 4 GB per simnet by an estimate of a state's size;
+  48 and 512 MB until every frame was kept, then 2 GB until later on
+  2026-10-07, when the user raised it). **The budget is the SUM of
   what the kept checkpoints hold, each at its own size** (since
   2026-10-07, `Checkpoints::bytes`); it was the budget over the size of
   the checkpoint just kept, which charged every frame of a growing
@@ -2252,8 +2253,8 @@ need.
   counted by size, all 240 are kept at 1.5 GB (1.37 GB resident in a
   shadow session) and the replay runs no step at 34 ms a frame. Each
   checkpoint carries its frame's topology since later the same day (see
-  "A copy of a mesh shares its topology"), which brings the 240 to 1.9 GB:
-  a simulation larger or longer than that one begins to thin.
+  "A copy of a mesh shares its topology"), which brings the 240 to 1.9 GB,
+  close enough to the 2 GB budget then that the user raised it to 4.
   `checkpoints_are_budgeted_by_what_each_holds`. With no
   room the SPACING doubles and stays doubled — what is off the wider
   interval goes, and what arrives after arrives that far apart. Not the

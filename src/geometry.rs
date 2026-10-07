@@ -1170,8 +1170,9 @@ pub const CHECKPOINTS_MAX: usize = 1024;
 /// What one simnet's checkpoints may hold, by [`checkpoint_bytes`]. A state
 /// is kept twice over (itself and what its last substep consumed), so a
 /// hundred-thousand-point surface is tens of megabytes a checkpoint; past
-/// the budget the spacing doubles.
-pub const CHECKPOINT_BUDGET: usize = 2048 * 1024 * 1024;
+/// the budget the spacing doubles. 4 GB since 2026-10-07 (2 GB before),
+/// the user's call: a 240-frame solve growing to 57k points holds 1.9 GB.
+pub const CHECKPOINT_BUDGET: usize = 4096 * 1024 * 1024;
 
 /// About what a checkpoint of `state` holds: positions, ids and a handful
 /// of attributes a point, the primitives' indices, twice. An estimate — the
