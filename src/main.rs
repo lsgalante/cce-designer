@@ -6415,7 +6415,7 @@ mod tests {
         assert_eq!(
             headers,
             vec![
-                "Point", "group:pinned", "Pos.x", "Pos.y", "Pos.z", "Col.r", "Col.g", "Col.b",
+                "Point", "g:pinned", "Pos.x", "Pos.y", "Pos.z", "Col.r", "Col.g", "Col.b",
                 "ID", "UV.x", "UV.y", "d:mass_max~",
             ]
         );

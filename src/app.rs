@@ -7284,15 +7284,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     // It is now the point index, which is also what the Point Numbers overlay
     // draws.
     // The groups stand FIRST after the point's number, a column each,
-    // `group:<name>`, 1 for a member and 0 for the rest. Until 2026-09-29
+    // `g:<name>`, 1 for a member and 0 for the rest. Until 2026-09-29
     // they were `g:` columns after every attribute — the thirteenth column
     // of a sphere's table, off the right of any pane — and blank for a
     // point not in the group, so a group of one point among five hundred
     // was a column that looked empty. Sorting the column, descending,
-    // brings the members to the top.
+    // brings the members to the top. The header was `group:<name>` from
+    // then until 2026-10-07, when the columns came to fit their content and
+    // the header was the widest thing in a column of 0s and 1s; `g:` is the
+    // detail columns' `d:` again.
     let groups = geom.points().group_names();
     let mut headers = vec!["Point".to_string()];
-    headers.extend(groups.iter().map(|g| format!("group:{}", g)));
+    headers.extend(groups.iter().map(|g| format!("g:{}", g)));
     headers.extend([
         "Pos.x".to_string(),
         "Pos.y".to_string(),
