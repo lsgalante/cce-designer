@@ -3224,13 +3224,30 @@ multi-selection, so taking `Shift+L` now would have to be given back later.
 
 ### The playbar is attached to the bottom edge (since 2026-10-06)
 
-The playbar is a bar along the window's bottom edge, the full width
-(`(0, height - STATUS_H - PLAYBAR_H, width, PLAYBAR_H)` in the floating
-layout), where it floated a gap in from the sides and the bottom like the
-other plates. Its bottom corners are the window's, read off the rect by
-`pane_plate_radii`; its top corners are a plate's. What stands above it —
-the docked plates (`pb_off`, now `PLAYBAR_H` without a gap of its own) and
-the params HUD — stops a gap short of its top, and the viewport's
+The playbar is a SHELF of the window's bottom edge, the full width
+(`(0, height - STATUS_H - playbar_shelf_h(), width, playbar_shelf_h())` in
+the floating layout), where it floated a gap in from the sides and the
+bottom like the other plates. Its height is `PLAYBAR_H` over the window's
+bottom lip (`playbar_shelf_h`, `PLAYBAR_H + bevel_width`): the shelf runs
+down INTO the lip, and only its top edge is a plate's.
+
+- **Drawn as part of the window's edge** (the PLAYBAR_IDX render arm):
+  its plate runs out past the window's sides and bottom with square
+  corners, so only the TOP is rolled on screen, and the window's own lip
+  (`State::append_window_lip`, the viewport's) is drawn again over the
+  shelf, clipped to it — so the side lips run down unbroken into the
+  bottom corners and along the bottom, as around a window with no bar.
+  For its first hours it was a plate rolled all round, its top corners
+  rounded in from the side lips, and the two rolls stood side by side at
+  its ends and along its bottom. The lip goes on after the transport (a
+  quad between a plate and its carves drops them to the overlay shading).
+- **The transport stands clear of the lip**: `Playbar::frame` is the lip's
+  width, and the widget lays its buttons, track and readout out in its
+  rect less that on the left, right and bottom (`Playbar::content`). Zero
+  in the legacy column layouts, which draw the old plate.
+
+What stands above it — the docked plates (`pb_off`, `playbar_shelf_h()`)
+and the params HUD — stops a gap short of its top, and the viewport's
 bottom-anchored text, the scale readout and a viewer state's line, stands
 on it (`State::scene_text_floor`) rather than on its transport.
 `the_playbar_is_attached_to_the_bottom_edge` is the test.

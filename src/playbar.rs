@@ -33,6 +33,12 @@ pub struct Playbar {
     /// (`playbar_step_buttons`). On by default. Off, the play button and
     /// the track stand where they always did.
     pub step_buttons: bool,
+    /// The window lip the transport stands clear of, on the left, the right
+    /// and the bottom: the pane is a SHELF of the window's edge (see the
+    /// PLAYBAR_IDX render arm), its rect running out to the window's sides
+    /// and bottom, and the lip is drawn over that band. Zero where the
+    /// playbar is laid out anywhere else.
+    pub frame: f32,
     dragging: bool,
 }
 
@@ -60,6 +66,7 @@ impl Playbar {
             fps: 24.0,
             repeat: true,
             step_buttons: true,
+            frame: 0.0,
             dragging: false,
         })
     }
@@ -86,6 +93,13 @@ impl Playbar {
     /// share it; neither pauses a playing timeline.
     pub fn step(&mut self, by: f32) {
         self.current_frame = (self.current_frame.round() + by).clamp(self.start_frame, self.end_frame);
+    }
+
+    /// The part of the pane the transport is laid out in: the pane less the
+    /// window lip on its left, right and bottom ([`Playbar::frame`]).
+    fn content(&self, rect: Rect) -> Rect {
+        let f = self.frame;
+        Rect { x: rect.x + f, y: rect.y, width: (rect.width - 2.0 * f).max(0.0), height: (rect.height - f).max(0.0) }
     }
 
     /// The transport's square buttons, left to right: Previous Frame, Play,
@@ -118,7 +132,7 @@ impl Playbar {
             0 => Btn::Play,
             _ => Btn::Next,
         };
-        self.button_rects(rect).into_iter().find(|(b, _)| *b == want).map(|(_, r)| r)
+        self.button_rects(self.content(rect)).into_iter().find(|(b, _)| *b == want).map(|(_, r)| r)
     }
 
     fn track_rect(&self, rect: Rect) -> Rect {
@@ -185,6 +199,7 @@ impl Paint for Playbar {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
+        let rect = self.content(rect);
         let relief = cce_ui::layout::control_relief();
         let accent = colors::highlight_primary_color();
 
@@ -296,7 +311,7 @@ impl Input for Playbar {
     }
 
     fn on_event(&mut self, event: &Event, ectx: &mut EventCtx) -> bool {
-        let rect = ectx.rect;
+        let rect = self.content(ectx.rect);
         match event {
             Event::MouseButton { button: MouseButton::Left, state, x, y, .. } => match state {
                 ElementState::Pressed => {

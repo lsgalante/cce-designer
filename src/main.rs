@@ -2110,7 +2110,7 @@ mod tests {
     /// bottom-anchored text stands on it rather than on its transport.
     #[test]
     fn the_playbar_is_attached_to_the_bottom_edge() {
-        use crate::app::{PLAYBAR_H, STATUS_H};
+        use crate::app::{playbar_shelf_h, PLAYBAR_H, STATUS_H};
         use crate::slots::{NETWORK_PANEL_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
@@ -2120,9 +2120,18 @@ mod tests {
         state.apply_layout();
         assert!(state.show_playbar && state.show_spreadsheet);
         let pb = state.positions[PLAYBAR_IDX];
-        assert_eq!(pb, (0.0, 900.0 - STATUS_H - PLAYBAR_H, 1600.0, PLAYBAR_H), "flush to the bottom, the full width");
+        let lip = cce_ui::layout::bevel_width();
+        assert_eq!(playbar_shelf_h(), PLAYBAR_H + lip);
+        assert_eq!(pb, (0.0, 900.0 - STATUS_H - playbar_shelf_h(), 1600.0, playbar_shelf_h()), "flush to the bottom, the full width, down into the lip");
         let flags = cce_ui::scene::paint::PlateSpec::window_corner_flags(cce_ui::scene::layout::Rect { x: pb.0, y: pb.1, width: pb.2, height: pb.3 }, 1600.0, 900.0);
         assert_eq!(flags, (false, false, true, true), "its bottom corners are the window's");
+        // A shelf of the window's edge: the transport stands clear of the
+        // window's lip, which is drawn over the shelf's sides and bottom.
+        assert_eq!(state.slots.playbar.inner().frame, lip);
+        let pb_rect = cce_ui::scene::layout::Rect { x: pb.0, y: pb.1, width: pb.2, height: pb.3 };
+        let prev = state.slots.playbar.inner().transport_button_rect(pb_rect, -1).expect("the step buttons are on");
+        assert!(prev.x >= lip, "clear of the left lip: {prev:?}");
+        assert!(prev.y + prev.height <= 900.0 - STATUS_H - lip, "clear of the bottom lip: {prev:?}");
         for idx in [NETWORK_PANEL_IDX, SPREADSHEET_IDX] {
             let (_, y, _, h) = state.positions[idx];
             assert_eq!(y + h, pb.1 - 18.0, "the {idx} plate stops a gap above it");

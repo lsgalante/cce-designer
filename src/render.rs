@@ -55,6 +55,56 @@ impl State {
     /// that arc there (what a full-window root plate does in one piece).
     /// Interior corners keep the widget-scale nominal plate radius, matching
     /// the squircles of the sibling panes around them.
+    /// The window's own edge, over the whole window: the scene viewer's lip
+    /// (the VIEWPORT_IDX arm) and again over the playbar's shelf, which
+    /// runs down into it.
+    ///
+    /// The 3D canvas is full-bleed (CANVAS_IDX covers the window; the other
+    /// panes float over it), so the lip spans the WHOLE window with the
+    /// window radius on all four corners (the SHARED silhouette value,
+    /// concentric with the compositor clip). Under control_relief it is the
+    /// fill-less ROLL OVERLAY (negative-depth Plate): exactly the roll other
+    /// windows' root plates wear — same width, profile, crest and specular,
+    /// full band inside the silhouette — screened over what is beneath,
+    /// since a filled Plate would cover it (and a frosting fill would blur
+    /// it). It replaced the Boss rim, whose boundary-straddling wall lost its
+    /// outer half to the compositor clip: the visible band ran half a roll
+    /// wide and started at mid-slope. Focus adds the fill-less tinted Bevel
+    /// — the wrapped accent glint on the same silhouette, the network
+    /// cursor's prim — matching the focused plates' treatment (shading
+    /// unchanged, glint in accent). Without control_relief it degrades to
+    /// the flat plate-border stroke, exactly a bordered plate's
+    /// outline→relief degradation, and append_context_border owns the focus
+    /// ring.
+    fn append_window_lip(&self, pc: &mut PaintCtx) {
+        let Some(bc) = cce_ui::colors::plate_border_color() else { return };
+        let (px, py, pw, ph) = (0.0, 0.0, self.width, self.height);
+        if pw <= 0.0 || ph <= 0.0 {
+            return;
+        }
+        let vp_rect = rect(px, py, pw, ph);
+        let radii = self.pane_plate_radii(px, py, pw, ph);
+        if cce_ui::layout::control_relief() {
+            // The window-edge roll width (style.surface.relief width), read
+            // directly as the root plates of other windows read it. The
+            // interior pane plates roll over the same number through
+            // `plate_bevel_width` — one roll width since 2026-09-28; the
+            // `plate.bevel_width` key that once set theirs apart is retired.
+            let depth = cce_ui::layout::bevel_width();
+            pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
+                rect: vp_rect,
+                material: cce_ui::scene::Material::opaque([0.0; 4]),
+                window_corners: (true, true, true, true),
+                depth: -depth,
+            });
+            if let Some(tint) = self.plate_focus_tint(VIEWPORT_IDX) {
+                pc.bevel_tinted(vp_rect, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
+            }
+        } else {
+            pc.border(vp_rect, radii, [0.0; 4], bc, cce_ui::colors::plate_border_thickness());
+        }
+    }
+
     fn pane_plate_radii(&self, x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
         // Delegates to the toolkit since RFC Phase 7b moved this math into
         // PlateSpec: window-corner arcs follow the SHARED silhouette curve
@@ -371,8 +421,28 @@ impl State {
             // text (a subtree painter; append_frame_text skips this slot so the
             // text isn't doubled).
             let (wx, wy, ww2, wh2) = w.rect();
-            append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
-            w.paint_self(&self.ui_context, pc);
+            if self.slots.playbar.inner().frame > 0.0 {
+                // A SHELF of the window's bottom edge, not a plate laid on
+                // it: the plate runs out past the window's sides and bottom
+                // with square corners, so only its TOP is rolled on screen,
+                // and the window's own lip is drawn again over its band —
+                // the side lips run down unbroken into the bottom corners
+                // and along the bottom, as they do around a window with no
+                // bar. Until this the bar was a plate rolled all round,
+                // its top corners rounded in from the side lips, and the
+                // two rolls stood side by side at its ends and its bottom.
+                // The lip goes on AFTER the transport: a quad between a
+                // plate and its carves drops them to the overlay shading,
+                // and the transport stands clear of the lip
+                // (`Playbar::frame`), so nothing it draws is under it.
+                let e = cce_ui::colors::plate_bevel_width() + 1.0;
+                append_plate_at(w, pc, rect(wx - e, wy, ww2 + 2.0 * e, wh2 + e), None, (0.0, 0.0, 0.0, 0.0));
+                w.paint_self(&self.ui_context, pc);
+                pc.clip(rect(wx, wy, ww2, wh2), |pc| self.append_window_lip(pc));
+            } else {
+                append_widget_plate_radii(w, pc, None, self.pane_plate_radii(wx, wy, ww2, wh2));
+                w.paint_self(&self.ui_context, pc);
+            }
         } else if idx == BREADCRUMB_IDX || idx == crate::slots::BREADCRUMB2_IDX {
             // Modern-paint control: Breadcrumb's whole look lives in its
             // Paint::paint() (the cce-ui restyle — per-segment plates on the
@@ -402,51 +472,8 @@ impl State {
             append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             w.paint_self(&self.ui_context, pc);
         } else if idx == VIEWPORT_IDX {
-            // The scene viewer's lip is the window's own root plate edge: the
-            // 3D canvas is full-bleed (CANVAS_IDX covers the window; the other
-            // panes float over it), so the lip spans the WHOLE window with the
-            // window radius on all four corners (the SHARED silhouette value,
-            // concentric with the compositor clip). Under control_relief it is
-            // the fill-less ROLL OVERLAY (negative-depth Plate): exactly the
-            // roll other windows' root plates wear — same width, profile,
-            // crest and specular, full band inside the silhouette — screened
-            // over the 3D scene, since a filled Plate would cover it (and a
-            // frosting fill would blur it). It replaced the Boss rim, whose
-            // boundary-straddling wall lost its outer half to the compositor
-            // clip: the visible band ran half a roll wide and started at
-            // mid-slope. Focus adds the fill-less tinted Bevel — the wrapped
-            // accent glint on the same silhouette, the network cursor's prim —
-            // matching the focused plates' treatment (shading unchanged, glint
-            // in accent). Without control_relief it degrades to the flat
-            // plate-border stroke, exactly a bordered plate's outline→relief
-            // degradation, and append_context_border owns the focus ring.
-            if let Some(bc) = cce_ui::colors::plate_border_color() {
-                let (px, py, pw, ph) = (0.0, 0.0, self.width, self.height);
-                if pw > 0.0 && ph > 0.0 {
-                    let vp_rect = rect(px, py, pw, ph);
-                    let radii = self.pane_plate_radii(px, py, pw, ph);
-                    if cce_ui::layout::control_relief() {
-                        // The window-edge roll width (style.surface.relief
-                        // width), read directly as the root plates of other
-                        // windows read it. The interior pane plates roll over
-                        // the same number through `plate_bevel_width` — one
-                        // roll width since 2026-09-28; the `plate.bevel_width`
-                        // key that once set theirs apart is retired.
-                        let depth = cce_ui::layout::bevel_width();
-                        pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
-                            rect: vp_rect,
-                            material: cce_ui::scene::Material::opaque([0.0; 4]),
-                            window_corners: (true, true, true, true),
-                            depth: -depth,
-                        });
-                        if let Some(tint) = self.plate_focus_tint(idx) {
-                            pc.bevel_tinted(vp_rect, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
-                        }
-                    } else {
-                        pc.border(vp_rect, radii, [0.0; 4], bc, cce_ui::colors::plate_border_thickness());
-                    }
-                }
-            }
+            // The scene viewer's lip is the window's own edge.
+            self.append_window_lip(pc);
             for (qx, qy, qw, qh, qc) in w.extra_quads() {
                 pc.quad(rect(qx, qy, qw, qh), qc);
             }

@@ -78,6 +78,13 @@ pub fn breadcrumb_h() -> f32 {
 }
 pub const PLAYBAR_H: f32 = 36.0;
 
+/// The attached playbar's whole height: the transport's [`PLAYBAR_H`] over
+/// the window's bottom lip, which the playbar's shelf runs down into (see
+/// `Playbar::frame`).
+pub fn playbar_shelf_h() -> f32 {
+    PLAYBAR_H + cce_ui::layout::bevel_width()
+}
+
 pub use crate::param::{invalid_params, is_param_name, misnamed_params, param_name_of, unknown_param_kinds, ParamDef, ParamKind, ParamSlot, ParamValue};
 
 /// Expand a leading `~` to the home directory. A path typed into a text field
@@ -4722,7 +4729,7 @@ impl State {
         let ss_w = (ss_end - ss_x).max(150.0);
         // The playbar is attached to the bottom edge: what stands above it
         // stops a gap short of its top, the gap the bottom edge gives it.
-        let pb_off = if self.show_playbar { PLAYBAR_H } else { 0.0 };
+        let pb_off = if self.show_playbar { playbar_shelf_h() } else { 0.0 };
         let ss_y_end = self.height - STATUS_H - pb_off - gap;
         let max_h = if self.spreadsheet_tucks_left() || self.spreadsheet_tucks_right() {
             ss_y_end - (gap + 100.0 + gap)
@@ -9354,6 +9361,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
             self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
             self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
             self.positions[PLAYBAR_IDX] = (0.0, HEADER_H + body_h, self.width, pb_h);
+            self.slots.playbar.inner_mut().frame = 0.0;
 
             self.slots.header.set_visible(true);
             self.slots.status.set_visible(false);
@@ -9468,6 +9476,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[PLAYBAR_IDX] = (0.0, body_h, self.width, pb_h);
+                self.slots.playbar.inner_mut().frame = 0.0;
 
                 self.slots.header.set_visible(false);
                 self.slots.status.set_visible(false);
@@ -9488,7 +9497,7 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 let gap = 18.0_f32;
                 // The playbar is attached to the bottom edge (below), so the
                 // plates above stop a gap short of its top.
-                let pb_off = if self.show_playbar { PLAYBAR_H } else { 0.0 };
+                let pb_off = if self.show_playbar { playbar_shelf_h() } else { 0.0 };
                 // The stored widths and height are what the user ASKED for;
                 // the clamps below fit them to this window for drawing and are
                 // never written back. Storing the clamp made every transient
@@ -9637,15 +9646,21 @@ pub(crate) fn geometry_to_spreadsheet_data(geom: &Detail) -> (Vec<String>, Vec<V
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[PLAYBAR_IDX] = if self.show_playbar {
-                    // Attached to the window's bottom edge, the full width:
-                    // its bottom corners are the window's (`pane_plate_radii`
-                    // reads them off the rect), and the plates above stop a
-                    // gap short of its top (`pb_off`). It floated a gap in
-                    // from the sides and the bottom until 2026-10-06.
-                    (0.0, self.height - STATUS_H - PLAYBAR_H, self.width, PLAYBAR_H)
+                    // A SHELF of the window's bottom edge, the full width and
+                    // down into the window's lip: its sides and bottom are the
+                    // window's own edge, drawn over it, and only its top is a
+                    // plate's (the PLAYBAR_IDX render arm). The transport
+                    // stands clear of the lip (`Playbar::frame`), and the
+                    // plates above stop a gap short of its top (`pb_off`). It
+                    // floated a gap in from the sides and the bottom until
+                    // 2026-10-06, and was a plate of its own laid on the
+                    // window's edge, rolled all round, until later that day.
+                    let h = playbar_shelf_h();
+                    (0.0, self.height - STATUS_H - h, self.width, h)
                 } else {
                     (0.0, 0.0, 0.0, 0.0)
                 };
+                self.slots.playbar.inner_mut().frame = cce_ui::layout::bevel_width();
 
                 // Tab-aware visibility: a pane WAITING in a dock's tab list
                 // is hidden regardless of its View flag — a zero rect alone
