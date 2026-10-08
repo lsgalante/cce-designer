@@ -231,6 +231,13 @@ impl Application for State {
         Some(&self.ui_context)
     }
 
+    /// Tab is the designer's own: it opens the node palette over the graph, and closes the
+    /// dialog's open dropdown. The toolkit's Tab walk (on by default since 2026-10-08) would
+    /// take it first.
+    fn plate_navigation(&self) -> bool {
+        false
+    }
+
     fn ui_context_mut(&mut self) -> Option<&mut cce_ui::context::UiContext> {
         Some(&mut self.ui_context)
     }
