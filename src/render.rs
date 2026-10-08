@@ -10,7 +10,7 @@ use crate::slots::{
     BREADCRUMB_IDX, HEADER_IDX, RIGHT_MENUBAR_IDX,
     SPREADSHEET_MENUBAR_IDX, SPREADSHEET_IDX,
     LEFT_MENUBAR_IDX, PARAM_MENUBAR_IDX, NETWORK_PANEL_IDX, PLAYBAR_IDX,
-    DIALOG_IDX,
+    DIALOG_IDX, SPLITTER1_IDX, SPLITTER2_IDX,
 };
 use crate::geometry::network_sphere_vertices_with_errors;
 use cce_ui::scene::layout::Rect;
@@ -491,12 +491,7 @@ impl State {
         } else if idx == VIEWPORT_IDX {
             // The scene viewer's lip is the window's own edge.
             self.append_window_lip(pc);
-            for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                pc.quad(rect(qx, qy, qw, qh), qc);
-            }
-            for (cx, cy, cr, cc) in w.extra_circles() {
-                pc.circle(cx, cy, cr, cc);
-            }
+            w.paint_self(&self.ui_context, pc);
         } else if idx == CONTENT_IDX {
             // No plate here, and none behind: the network has no plate
             // (since 2026-10-06), its nodes standing on the scene. Until 2026-09-20 this arm ALSO painted
@@ -629,9 +624,13 @@ impl State {
                 }
             });
 
-            for (cx, cy, cr, cc) in w.extra_circles() {
-                if cx >= clip.x && cx <= clip.x + clip.width && cy >= clip.y && cy <= clip.y + clip.height {
-                    pc.circle(cx, cy, cr, cc);
+            // The connector dots: the circles the graph paints (the rest of it is drawn
+            // above, in this pane's own order).
+            for prim in w.painted_prims() {
+                if let cce_ui::scene::paint::Prim::Circle { cx, cy, radius: cr, color: cc } = prim {
+                    if cx >= clip.x && cx <= clip.x + clip.width && cy >= clip.y && cy <= clip.y + clip.height {
+                        pc.circle(cx, cy, cr, cc);
+                    }
                 }
             }
 
@@ -806,12 +805,10 @@ impl State {
             if idx != NETWORK_PANEL_IDX {
                 append_widget_plate_radii(w, pc, self.plate_focus_tint(idx), self.pane_plate_radii(wx, wy, ww2, wh2));
             }
-
-            for (qx, qy, qw, qh, qc) in w.extra_quads() {
-                pc.quad(rect(qx, qy, qw, qh), qc);
-            }
-            for (cx, cy, cr, cc) in w.extra_circles() {
-                pc.circle(cx, cy, cr, cc);
+            // A splitter IS its widget plate, lit in the splitter's colour; its own paint is
+            // that colour again as a flat capsule, which would cover the plate's relief.
+            if idx != SPLITTER1_IDX && idx != SPLITTER2_IDX {
+                w.paint_self(&self.ui_context, pc);
             }
         }
 
@@ -853,12 +850,7 @@ impl State {
         }
 
         append_widget_plate(element, pc);
-        for (qx, qy, qw, qh, qc) in element.extra_quads() {
-            pc.quad(rect(qx, qy, qw, qh), qc);
-        }
-        for (cx, cy, cr, cc) in element.extra_circles() {
-            pc.circle(cx, cy, cr, cc);
-        }
+        element.paint_self(&self.ui_context, pc);
 
         for child_ptr in self.ui_context.tree.children_ptrs(element.base().id()) {
             unsafe {
