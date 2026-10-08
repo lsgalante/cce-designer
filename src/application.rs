@@ -8,12 +8,11 @@
 use std::time::{Duration, Instant};
 
 use cce_ui::engine::{
-    xdg_toplevel::ResizeEdge, Application, CursorIcon, EngineState, LogicalPosition, LogicalSize,
+    xdg_toplevel::ResizeEdge, Application, CursorIcon, LogicalPosition, LogicalSize,
     WindowAction, WindowSettings,
 };
 use cce_ui::vk::VkRenderer;
 use cce_ui::widget::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
-use wayland_client::QueueHandle;
 
 use crate::api::start_mcp_server;
 use crate::app::{CustomEvent, PendingWindowDrag, State};
@@ -144,10 +143,9 @@ impl State {
 impl Application for State {
     type Message = CustomEvent;
 
-    fn new(
-        _qh: &QueueHandle<EngineState<Self>>,
-        sender: calloop::channel::Sender<CustomEvent>,
-    ) -> Self {
+    fn create(sender: cce_ui::engine::AppSender<CustomEvent>) -> Self {
+        // The app keeps calloop's sender; `AppSender` converts into it.
+        let sender: calloop::channel::Sender<CustomEvent> = sender.into();
         let is_detached_network = std::env::args().any(|arg| arg == "--detached-network");
         let detached_pane = std::env::args()
             .find_map(|arg| crate::plate_menu::pane_from_detach_flag(&arg));
