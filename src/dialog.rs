@@ -2649,7 +2649,7 @@ impl State {
         // Opened as the toolkit opens one from the keyboard: focused, then
         // Enter, which unfolds it with the current option highlighted.
         let dd_id = self.slots.dialog.dropdown.base().id();
-        cce_ui::widget::focus::set_focused_id(dd_id, Some(&mut self.ui_context));
+        self.ui_context.set_focused_id(dd_id);
         let enter = Event::KeyInput(KeyEvent {
             state: ElementState::Pressed,
             logical_key: Key::Named(NamedKey::Enter),
