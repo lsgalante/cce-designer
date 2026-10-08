@@ -7,7 +7,7 @@ use std::io::BufReader;
 
 use serde::{Deserialize, Serialize};
 
-use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey};
+use cce_ui::widget::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, Key, NamedKey, WidgetHostExt};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},

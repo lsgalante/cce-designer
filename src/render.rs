@@ -1,4 +1,5 @@
 
+use cce_ui::widget::WidgetHostExt;
 use cce_ui::colors;
 use cce_ui::widget::WidgetHost;
 
@@ -445,7 +446,7 @@ impl State {
                 let opening = rect(wx, wy - self.height, ww2, self.height);
                 let material = cce_ui::scene::material::Material::from_fill(w.color());
                 let depth = if cce_ui::layout::control_relief() {
-                    w.plate_bevel().unwrap_or_else(cce_ui::colors::plate_bevel_width)
+                    cce_ui::colors::plate_bevel_width()
                 } else {
                     0.0
                 };
@@ -1940,9 +1941,7 @@ pub(crate) fn uncovered(r: Rect, covers: &[(f32, f32, f32, f32)]) -> Vec<Rect> {
 fn append_plate_at(w: &dyn WidgetHost, pc: &mut PaintCtx, r: Rect, tint: Option<[f32; 3]>, radii: (f32, f32, f32, f32)) {
     let tint = tint.unwrap_or([1.0, 1.0, 1.0]);
     let fill = cce_ui::scene::material::Material::from_fill(w.color());
-    if let Some(thickness) = w.plate_bevel() {
-        pc.bevel_tinted(r, radii, &fill, thickness, tint);
-    } else if let Some((border_color, thickness)) = w.solid_border() {
+    if let Some((border_color, thickness)) = w.solid_border() {
         if cce_ui::layout::control_relief() {
             pc.bevel_tinted(r, radii, &fill, cce_ui::colors::plate_bevel_width(), tint);
         } else {
