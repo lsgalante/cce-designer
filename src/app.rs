@@ -8177,37 +8177,37 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             "Main Menu".to_string(),
         ];
         let mut slots = Box::new(WidgetSlots {
-            header: MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane", "Show Playbar Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4),
-            content: Graph::new(),
-            splitter1: Splitter::new(SPLITTER_W),
-            viewport: Viewport3D::new(),
-            splitter2: Splitter::new(SPLITTER_W),
-            param: ParametersBg::new(),
-            canvas: Canvas::new(),
-            left_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0),
-            right_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["square_aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1),
-            param_menubar: MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2),
-            status: StatusBar::new().with_text("Ready"),
+            header: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane", "Show Playbar Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
+            content: cce_ui::widget::Owned::new(Graph::new()),
+            splitter1: cce_ui::widget::Owned::new(Splitter::new(SPLITTER_W)),
+            viewport: cce_ui::widget::Owned::new(Viewport3D::new()),
+            splitter2: cce_ui::widget::Owned::new(Splitter::new(SPLITTER_W)),
+            param: cce_ui::widget::Owned::new(ParametersBg::new()),
+            canvas: cce_ui::widget::Owned::new(Canvas::new()),
+            left_menubar: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0)),
+            right_menubar: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["square_aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1)),
+            param_menubar: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2)),
+            status: cce_ui::widget::Owned::new(StatusBar::new().with_text("Ready")),
             breadcrumb: {
                 let mut bc = Breadcrumb::new();
                 // Raised, not the default trough: the segments float in front
                 // of the network plate rather than reading as inset into it.
                 bc.set_raised(true);
-                bc
+                cce_ui::widget::Owned::new(bc)
             },
-            spreadsheet: Spreadsheet::new(),
+            spreadsheet: cce_ui::widget::Owned::new(Spreadsheet::new()),
             spreadsheet_menubar: {
                 let mut mb = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 3);
                 mb.set_visible(false);
-                mb
+                cce_ui::widget::Owned::new(mb)
             },
-            network_panel: PassivePlate::new(),
+            network_panel: cce_ui::widget::Owned::new(PassivePlate::new()),
             playbar: {
                 let mut pb = Playbar::new();
                 pb.set_visible(false);
-                pb
+                cce_ui::widget::Owned::new(pb)
             },
-            dialog: crate::dialog::Dialog::new(),
+            dialog: cce_ui::widget::Owned::new(crate::dialog::Dialog::new()),
         });
 
         slots.playbar.inner_mut().repeat = settings.playbar_repeat;

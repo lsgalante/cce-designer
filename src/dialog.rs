@@ -345,7 +345,7 @@ pub struct Dialog {
     /// plate grows out of the trigger into the list and back. Boxed and
     /// never replaced, because the UI context holds a pointer to it while
     /// it is registered as an occluder.
-    pub dropdown: Box<Adapted<Dropdown>>,
+    pub dropdown: cce_ui::widget::Owned<Adapted<Dropdown>>,
     /// The row id the open dropdown serves.
     pub dropdown_row: Option<String>,
     /// Whether the dropdown was last seen expanded. The runner hands every
@@ -391,7 +391,7 @@ pub struct Dialog {
     /// not stamps, because each carries state of its own: a hex edit in
     /// progress, a picker process streaming values. Kept across
     /// re-rankings so a query that drops the row does not kill its picker.
-    colors: Vec<(String, Adapted<ColorSelector>)>,
+    colors: Vec<(String, cce_ui::widget::Owned<Adapted<ColorSelector>>)>,
     /// Colour rows the selectors changed, `(row id, hex)`, drained by the app.
     color_changes: Vec<(String, String)>,
 }
@@ -421,7 +421,7 @@ impl Dialog {
             hover_ctl: None,
             activated: None,
             dropdown_stamp: RefCell::new(Dropdown::new(Vec::new(), 0)),
-            dropdown: Box::new(Dropdown::new(Vec::new(), 0)),
+            dropdown: cce_ui::widget::Owned::new(Dropdown::new(Vec::new(), 0)),
             dropdown_row: None,
             dropdown_armed: false,
             occluding: true,
@@ -685,13 +685,13 @@ impl Dialog {
 
     /// The colour selector behind a colour row, if that row has one.
     pub fn color_selector(&self, id: &str) -> Option<&Adapted<ColorSelector>> {
-        self.colors.iter().find(|(k, _)| k == id).map(|(_, s)| s)
+        self.colors.iter().find(|(k, _)| k == id).map(|(_, s)| &**s)
     }
 
     /// The colour selector whose hex well is being typed into, if any — the
     /// app hands it the keyboard ahead of the filter.
     pub fn editing_color(&mut self) -> Option<&mut Adapted<ColorSelector>> {
-        self.colors.iter_mut().find(|(_, s)| s.inner().editing).map(|(_, s)| s)
+        self.colors.iter_mut().find(|(_, s)| s.inner().editing).map(|(_, s)| &mut **s)
     }
 
     pub fn take_color_changes(&mut self) -> Vec<(String, String)> {
@@ -708,7 +708,7 @@ impl Dialog {
             let k = match self.colors.iter().position(|(k, _)| *k == row.id) {
                 Some(k) => k,
                 None => {
-                    self.colors.push((row.id.clone(), ColorSelector::new([0; 3])));
+                    self.colors.push((row.id.clone(), cce_ui::widget::Owned::new(ColorSelector::new([0; 3]))));
                     self.colors.len() - 1
                 }
             };
@@ -2987,7 +2987,7 @@ impl State {
         // below, or dragging a value past the dialog's edge and letting go
         // would close the dialog instead of committing.
         if state == ElementState::Released && self.drag_widget == Some(DIALOG_IDX) {
-            let ptr = &mut self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
+            let ptr = &mut *self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
             unsafe {
                 (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context);
                 (*ptr).handle_event(
@@ -3019,7 +3019,7 @@ impl State {
         // wherever it goes until the release.
         if state == ElementState::Pressed && self.slots.dialog.slider_dragging() {
             let ev = cce_ui::widget::Event::DragStart { start_x: x, start_y: y };
-            let ptr = &mut self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
+            let ptr = &mut *self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
             unsafe {
                 (*ptr).handle_event(&ev, &mut self.ui_context);
             }

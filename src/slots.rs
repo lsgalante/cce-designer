@@ -34,7 +34,7 @@ macro_rules! widget_roster {
         /// `get_dyn`/`get_dyn_mut` for the genuinely index-driven paths (draw order, focus cycling,
         /// broadcast loops); everything else reaches the concrete field.
         pub struct WidgetSlots {
-            $(pub $field: Adapted<$ty>,)+
+            $(pub $field: cce_ui::widget::Owned<Adapted<$ty>>,)+
         }
 
         impl WidgetSlots {
@@ -55,13 +55,17 @@ macro_rules! widget_roster {
                 }
             }
 
+            /// The slot's widget itself — the address the registry holds for it, which is what
+            /// `find_index` compares — not the `Owned` box around it.
             pub fn get_dyn(&self, idx: usize) -> &(dyn WidgetHost + 'static) {
                 match idx {
-                    $($idx => &self.$field,)+
+                    $($idx => &*self.$field,)+
                     _ => slot_out_of_range(idx),
                 }
             }
 
+            /// The slot's `Owned` box, so registering it records the stable address and the
+            /// box's liveness rather than the widget's own.
             pub fn get_dyn_mut(&mut self, idx: usize) -> &mut (dyn WidgetHost + 'static) {
                 match idx {
                     $($idx => &mut self.$field,)+
