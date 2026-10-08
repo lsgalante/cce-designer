@@ -7122,7 +7122,7 @@ impl State {
         if self.focused_pane != LEFT_MENUBAR_IDX {
             self.focused_pane = LEFT_MENUBAR_IDX;
             if let Some(old) = self.focused_widget.take() {
-                self.slots.get_dyn_mut(old).unfocus();
+                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
             }
             self.sync_pane_focus();
         }
@@ -9424,7 +9424,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         self.slots.param_menubar.set_selected(PARAM_MENUBAR_IDX == f);
         self.slots.spreadsheet_menubar.set_selected(SPREADSHEET_MENUBAR_IDX == f);
         if self.focused_pane != PARAM_MENUBAR_IDX {
-            self.slots.param.unfocus();
+            self.ui_context.unfocus_widget(&mut self.slots.param);
             self.sync_parameters_to_project();
         }
         self.sync_context_dropdowns();
@@ -11150,10 +11150,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             if on_border {
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.slots.get_dyn_mut(old).unfocus();
+                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
                                     self.focused_widget = None;
                                 }
-                                self.slots.param.unfocus();
+                                self.ui_context.unfocus_widget(&mut self.slots.param);
                                 self.sync_parameters_to_project();
                                 return true;
                             }
@@ -11185,7 +11185,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 });
                                 self.focused_pane = PARAM_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.slots.get_dyn_mut(old).unfocus();
+                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
                                     self.focused_widget = None;
                                 }
                                 return true;
@@ -11204,7 +11204,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 });
                                 self.focused_pane = SPREADSHEET_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.slots.get_dyn_mut(old).unfocus();
+                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
                                     self.focused_widget = None;
                                 }
                                 return true;
@@ -11253,7 +11253,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             self.grid_cursor_drag = Some((col, row));
                             self.focused_pane = LEFT_MENUBAR_IDX;
                             if let Some(old) = self.focused_widget.take() {
-                                self.slots.get_dyn_mut(old).unfocus();
+                                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
                             }
                             self.sync_pane_focus();
                             return true;
@@ -11280,7 +11280,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             }
                             self.focused_pane = RIGHT_MENUBAR_IDX;
                             if let Some(old) = self.focused_widget {
-                                self.slots.get_dyn_mut(old).unfocus();
+                                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
                                 self.focused_widget = None;
                             }
                             self.sync_pane_focus();
@@ -11419,12 +11419,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
                         if let Some(old) = self.focused_widget {
                             if click_target != Some(old) && click_target != Some(PARAM_IDX) {
-                                self.slots.get_dyn_mut(old).unfocus();
+                                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
                                 self.focused_widget = None;
                             }
                         }
                         if click_target != Some(PARAM_IDX) {
-                            self.slots.param.unfocus();
+                            self.ui_context.unfocus_widget(&mut self.slots.param);
                             self.sync_parameters_to_project();
                         }
                         if click_target.is_none() && in_circle_network_pane {
@@ -11470,12 +11470,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 self.drag_press_cursor = Some((self.cursor_x, self.cursor_y));
                             }
                             if i != PARAM_IDX {
-                                self.slots.get_dyn_mut(i).focus();
+                                self.ui_context.focus_widget(self.slots.get_dyn_mut(i));
                                 self.focused_widget = Some(i);
                                 if self.menubar_at(i).map(|m| m.is_menu_bar()).unwrap_or(false)
                                     && !self.slots.get_dyn_mut(i).focused(&self.ui_context)
                                 {
-                                    self.slots.get_dyn_mut(i).unfocus();
+                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(i));
                                     self.focused_widget = None;
                                 }
                             }

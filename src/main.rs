@@ -2528,7 +2528,7 @@ mod tests {
         assert!((state.geo_opacity - 0.40).abs() < 1e-6);
 
         // Press on the band's right end: 100%, live; drag back; release.
-        let band = context_menu::CONTEXT_MENU.with(|m| m.borrow().slider_band(i));
+        let band = context_menu::with_state(|m| m.borrow().slider_band(i));
         state.cursor_x = band.x + band.width - 1.0;
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         assert!((state.geo_opacity - 1.0).abs() < 1e-6, "{}", state.geo_opacity);
@@ -3266,7 +3266,7 @@ mod tests {
         assert!(kdl.contains("wire_width (f64)3") || kdl.contains("wire_width 3"), "persisted: {kdl}");
         assert!(state.viewport_menu_open());
 
-        let band = context_menu::CONTEXT_MENU.with(|m| m.borrow().slider_band(i));
+        let band = context_menu::with_state(|m| m.borrow().slider_band(i));
         state.cursor_x = band.x + 1.0;
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
@@ -3290,7 +3290,7 @@ mod tests {
         state.cursor_x = 300.0;
         state.cursor_y = 200.0;
         state.open_viewport_context_menu();
-        let full = context_menu::CONTEXT_MENU.with(|m| m.borrow().content_h);
+        let full = context_menu::with_state(|m| m.borrow().content_h);
         context_menu::place(300.0, 0.0, full * 0.5);
 
         // Over the first row, which is Frame All — an action, not a slider.
@@ -3301,7 +3301,7 @@ mod tests {
             position: LocalPosition { x: state.cursor_x as f64, y: state.cursor_y as f64 },
         });
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -3.0) });
-        let scroll = context_menu::CONTEXT_MENU.with(|m| m.borrow().scroll);
+        let scroll = context_menu::with_state(|m| m.borrow().scroll);
         assert_eq!(scroll, 3.0 * context_menu::ROW_H, "three notches down, three rows");
         assert!(state.viewport_menu_open(), "scrolling keeps the menu up");
 
