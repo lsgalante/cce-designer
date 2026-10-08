@@ -2958,7 +2958,7 @@ pub struct State {
 
     pub slots: Box<WidgetSlots>,
     pub positions: Vec<(f32, f32, f32, f32)>,
-    pub splitter_layout: cce_ui::layout::SplitterLayout,
+    pub splitter_layout: crate::panes::SplitterLayout,
     /// The node right-click context menu: the targeted node slot and the
     /// actions parallel to the visible items pushed into `context_menu::show`.
     /// `None` when no menu is open. The menu's geometry/paint lives in the
@@ -3190,7 +3190,7 @@ pub struct State {
     pub graph_scroll_friction: f32,
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
-    pub circular_network_layout: cce_ui::layout::CircularPaneLayout,
+    pub circular_network_layout: crate::panes::CircularPaneLayout,
     pub is_detached_network: bool,
     pub detached_circular_network: bool,
     /// This process IS the detached window for one pane — the generic sibling
@@ -8118,7 +8118,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
         // Bundled fonts only (the designer's UI uses bundled families).
 
-        let splitter_layout = cce_ui::layout::SplitterLayout::new(sw, SPLITTER_W, MIN_COLUMN);
+        let splitter_layout = crate::panes::SplitterLayout::new(sw, SPLITTER_W, MIN_COLUMN);
         let templates_root = load_fs_tree();
         let node_templates = flatten_node_templates(&templates_root);
 
@@ -8397,7 +8397,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             graph_scroll_friction: 0.90,
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network || settings.viewport.circular_pane,
-            circular_network_layout: cce_ui::layout::CircularPaneLayout::new(250.0, 300.0, 180.0),
+            circular_network_layout: crate::panes::CircularPaneLayout::new(250.0, 300.0, 180.0),
             is_detached_network,
             detached_circular_network: false,
             detached_pane: None,
