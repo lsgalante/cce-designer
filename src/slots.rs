@@ -127,11 +127,8 @@ widget_roster! {
 impl WidgetSlots {
     /// Roster index of the slot at `target_addr` (a thin widget address — the comparison
     /// never dereferences; callers pass `ptr as *const ()`).
-    pub fn find_index(&self, ui: &UiContext, target_addr: *const ()) -> Option<usize> {
-        (0..WIDGET_COUNT).position(|i| {
-            let w_ptr = self.get_dyn(ui, i) as *const dyn WidgetHost as *const ();
-            w_ptr == target_addr
-        })
+    pub fn find_index(&self, ui: &UiContext, id: cce_ui::widget::WidgetId) -> Option<usize> {
+        (0..WIDGET_COUNT).position(|i| self.get_dyn(ui, i).base().id() == id)
     }
 
     // Roster accessors on CONCRETE types (Phase 6aw, controller decision option 2): each

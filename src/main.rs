@@ -15439,18 +15439,17 @@ mod tests {
         use crate::dialog::{Control, Dialog, Row, SLIDER_W};
         use cce_ui::widget::{ElementState, MouseButton, WidgetHost};
         let mut ctx = cce_ui::context::UiContext::new();
-        let mut d = Dialog::new();
-        d.set_visible(true);
-        WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
-        ctx.register_host(&mut d);
+        let d = ctx.insert(Dialog::new());
+        ctx[d].set_visible(true);
+        WidgetHost::set_rect(&mut ctx[d], 0.0, 0.0, 520.0, 420.0);
         let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), control: None, truncate_head: false };
-        d.set_rows(vec![
+        ctx[d].set_rows(vec![
             Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), control: Some(Control::Slider { value: 100.0, min: 20.0, max: 320.0, dec: 0, step: 10.0, suffix: "%" }), truncate_head: false },
             plain(1),
             plain(2),
         ]);
-        d.set_page(10);
-        d.set_occluding(false);
+        ctx[d].set_page(10);
+        ctx[d].set_occluding(false);
 
         // The first row's rect, as the widget lays it out: the list starts
         // below the query line; the band begins SLIDER_W in from the row's
@@ -15464,43 +15463,43 @@ mod tests {
         // Press at three quarters along the band: the value lands three
         // quarters into the range, and the row is not activated as a pick.
         let px = band_x + band_w * 0.75;
-        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, px, row_y, &mut ctx));
-        assert!(d.slider_dragging());
-        let v = d.take_slider_change().map(|(_, v)| v).expect("a press on the band reports a value");
+        assert!(ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Pressed, px, row_y, ctx)).unwrap());
+        assert!(ctx[d].slider_dragging());
+        let v = ctx[d].take_slider_change().map(|(_, v)| v).expect("a press on the band reports a value");
         assert!((v - (20.0 + 0.75 * 300.0)).abs() < 3.0, "value {v} is not three quarters of the range");
-        assert_eq!(d.rows[0].slider_value(), Some(v), "the row follows");
-        assert_eq!(d.take_activated(), None, "the band is a control, not a pick");
-        assert_eq!(d.take_slider_change(), None, "reported once");
-        d.mouse_input(MouseButton::Left, ElementState::Released, px, row_y, &mut ctx);
-        assert!(!d.slider_dragging());
+        assert_eq!(ctx[d].rows[0].slider_value(), Some(v), "the row follows");
+        assert_eq!(ctx[d].take_activated(), None, "the band is a control, not a pick");
+        assert_eq!(ctx[d].take_slider_change(), None, "reported once");
+        ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Released, px, row_y, ctx)).unwrap();
+        assert!(!ctx[d].slider_dragging());
 
         // A press on the row's label end selects it and reports nothing.
-        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, 30.0, row_y, &mut ctx));
-        assert_eq!(d.selected, 0);
-        assert!(!d.slider_dragging());
-        assert_eq!(d.take_slider_change(), None);
-        assert_eq!(d.take_activated(), None);
-        d.mouse_input(MouseButton::Left, ElementState::Released, 30.0, row_y, &mut ctx);
+        assert!(ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Pressed, 30.0, row_y, ctx)).unwrap());
+        assert_eq!(ctx[d].selected, 0);
+        assert!(!ctx[d].slider_dragging());
+        assert_eq!(ctx[d].take_slider_change(), None);
+        assert_eq!(ctx[d].take_activated(), None);
+        ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Released, 30.0, row_y, ctx)).unwrap();
 
         // An ordinary row still picks.
-        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, 30.0, row_y + 24.0, &mut ctx));
-        assert_eq!(d.take_activated().as_deref(), Some("c1"));
+        assert!(ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Pressed, 30.0, row_y + 24.0, ctx)).unwrap());
+        assert_eq!(ctx[d].take_activated().as_deref(), Some("c1"));
 
         // The wheel over the control turns the slider — a notch up is 2% of
         // the range more, as on the toolkit's slider — and over the label
         // end it scrolls the list instead, reporting nothing.
-        let before = d.rows[0].slider_value().unwrap();
+        let before = ctx[d].rows[0].slider_value().unwrap();
         let wheel = |x: f32, y: f32| cce_ui::widget::Event::MouseWheel {
             delta: cce_ui::widget::MouseScrollDelta::LineDelta(0.0, 1.0),
             x, y, local_x: x, local_y: y,
         };
         ctx.note_scroll_event();
-        assert!(d.handle_event(&wheel(band_x + 10.0, row_y), &mut ctx));
-        let v = d.take_slider_change().map(|(_, v)| v).expect("a wheel over the band reports a value");
+        assert!(ctx.lend_h(d, |w, ctx| w.handle_event(&wheel(band_x + 10.0, row_y), ctx)).unwrap());
+        let v = ctx[d].take_slider_change().map(|(_, v)| v).expect("a wheel over the band reports a value");
         assert!((v - (before + 0.02 * 300.0)).abs() < 1e-3, "notch up: {before} -> {v}");
         ctx.note_scroll_event();
-        d.handle_event(&wheel(30.0, row_y), &mut ctx);
-        assert_eq!(d.take_slider_change(), None, "over the label the wheel is the list's");
+        ctx.lend_h(d, |w, ctx| w.handle_event(&wheel(30.0, row_y), ctx)).unwrap();
+        assert_eq!(ctx[d].take_slider_change(), None, "over the label the wheel is the list's");
     }
 
     /// The band ends where the key bindings do. The chord column's right edge
@@ -15512,16 +15511,15 @@ mod tests {
         use crate::dialog::{Control, Dialog, Row, SLIDER_W, TOGGLE_W};
         use cce_ui::widget::{ElementState, MouseButton, WidgetHost};
         let mut ctx = cce_ui::context::UiContext::new();
-        let mut d = Dialog::new();
-        d.set_visible(true);
-        WidgetHost::set_rect(&mut d, 0.0, 0.0, 520.0, 420.0);
-        ctx.register_host(&mut d);
-        d.set_rows(vec![
+        let d = ctx.insert(Dialog::new());
+        ctx[d].set_visible(true);
+        WidgetHost::set_rect(&mut ctx[d], 0.0, 0.0, 520.0, 420.0);
+        ctx[d].set_rows(vec![
             Row { id: "zoom_level".into(), label: "Zoom".into(), chord: String::new(), control: Some(Control::Slider { value: 100.0, min: 20.0, max: 320.0, dec: 0, step: 10.0, suffix: "%" }), truncate_head: false },
             Row { id: "show_grid".into(), label: "Show Grid".into(), chord: "Ctrl+G".into(), control: Some(Control::Toggle(true)), truncate_head: false },
         ]);
-        d.set_page(10);
-        d.set_occluding(false);
+        ctx[d].set_page(10);
+        ctx[d].set_occluding(false);
 
         let row_y = 12.0 + 30.0 + 8.0 + 12.0;
         let row_right = 520.0 - 12.0 - 8.0;
@@ -15530,22 +15528,22 @@ mod tests {
 
         // The band's last pixel is the range's top; the switch column past it
         // is not the band's.
-        assert!(d.mouse_input(MouseButton::Left, ElementState::Pressed, band_right - 1.0, row_y, &mut ctx));
-        assert!(d.slider_dragging(), "the band reaches the chord column's edge");
-        let v = d.take_slider_change().map(|(_, v)| v).expect("a press on the band reports a value");
+        assert!(ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Pressed, band_right - 1.0, row_y, ctx)).unwrap());
+        assert!(ctx[d].slider_dragging(), "the band reaches the chord column's edge");
+        let v = ctx[d].take_slider_change().map(|(_, v)| v).expect("a press on the band reports a value");
         assert!((v - 320.0).abs() < 4.0, "the band's end is the range's end, got {v}");
-        d.mouse_input(MouseButton::Left, ElementState::Released, band_right - 1.0, row_y, &mut ctx);
+        ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Released, band_right - 1.0, row_y, ctx)).unwrap();
 
-        d.mouse_input(MouseButton::Left, ElementState::Pressed, band_right + 4.0, row_y, &mut ctx);
-        assert!(!d.slider_dragging(), "past the chord column the row is not the band");
-        assert_eq!(d.take_slider_change(), None);
-        d.mouse_input(MouseButton::Left, ElementState::Released, band_right + 4.0, row_y, &mut ctx);
+        ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Pressed, band_right + 4.0, row_y, ctx)).unwrap();
+        assert!(!ctx[d].slider_dragging(), "past the chord column the row is not the band");
+        assert_eq!(ctx[d].take_slider_change(), None);
+        ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Released, band_right + 4.0, row_y, ctx)).unwrap();
 
         // The readout lane sits ahead of the band and takes no hold either.
         let lane_x = row_right - SLIDER_W - 60.0 - 8.0;
-        d.mouse_input(MouseButton::Left, ElementState::Pressed, lane_x + 4.0, row_y, &mut ctx);
-        assert!(!d.slider_dragging(), "the readout is a readout, not a track");
-        assert_eq!(d.take_slider_change(), None);
+        ctx.lend_h(d, |w, ctx| w.mouse_input(MouseButton::Left, ElementState::Pressed, lane_x + 4.0, row_y, ctx)).unwrap();
+        assert!(!ctx[d].slider_dragging(), "the readout is a readout, not a track");
+        assert_eq!(ctx[d].take_slider_change(), None);
     }
 
     /// A captured pointer hovers no pane. A control lit at the press used to
@@ -15851,7 +15849,7 @@ mod tests {
         assert!(dd_at > dialog_at);
         // And resolvable, which is what the engine's clamp walks: an id the
         // tree has dropped is skipped in silence.
-        assert!(state.ui_context.tree.get_ptr(dd_id).is_some(), "the dropdown is in the widget tree");
+        assert!(state.ui_context.tree.is_registered(dd_id), "the dropdown is in the widget tree");
 
         // Down, Enter: the next unit, the dialog still up.
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));

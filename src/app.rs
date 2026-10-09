@@ -3543,8 +3543,8 @@ impl State {
 
     pub fn viewport_mut(&mut self) -> &mut Viewport3D { self.slots.viewport_mut(&mut self.ui_context) }
 
-    pub fn find_widget_index(&self, target_addr: *const ()) -> Option<usize> {
-        self.slots.find_index(&self.ui_context, target_addr)
+    pub fn find_widget_index(&self, id: cce_ui::widget::WidgetId) -> Option<usize> {
+        self.slots.find_index(&self.ui_context, id)
     }
 
     pub fn has_any_open_menu(&self, idx: usize) -> bool {
@@ -3567,9 +3567,9 @@ impl State {
                 return true;
             }
         }
-        let child_ptrs = self.ui_context.tree.children_ptrs(self.slots.get_dyn(&self.ui_context, idx).base().id());
-        for child_ptr in child_ptrs {
-            if let Some(child_idx) = self.find_widget_index(child_ptr as *const ()) {
+        let child_ids = self.ui_context.tree.child_ids(self.slots.get_dyn(&self.ui_context, idx).base().id());
+        for child_id in child_ids {
+            if let Some(child_idx) = self.find_widget_index(child_id) {
                 if self.has_any_open_menu_impl(child_idx, visited) {
                     return true;
                 }

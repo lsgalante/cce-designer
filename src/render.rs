@@ -808,13 +808,11 @@ impl State {
         }
 
         // Child elements, then the widget's popover on top of them.
-        for child_ptr in self.ui_context.tree.children_ptrs(w.base().id()) {
-            if let Some(child_idx) = self.find_widget_index(child_ptr as *const ()) {
+        for child_id in self.ui_context.tree.child_ids(w.base().id()) {
+            if let Some(child_idx) = self.find_widget_index(child_id) {
                 self.paint_widget(child_idx, pc, show_cursor, visited, clip, clip_circle);
-            } else {
-                unsafe {
-                    self.paint_element(&*child_ptr, pc, show_cursor, visited, clip, clip_circle);
-                }
+            } else if let Some(child) = self.ui_context.get_widget(child_id) {
+                self.paint_element(child, pc, show_cursor, visited, clip, clip_circle);
             }
         }
 
@@ -839,7 +837,7 @@ impl State {
             return;
         }
 
-        if let Some(idx) = self.find_widget_index(element as *const dyn WidgetHost as *const ()) {
+        if let Some(idx) = self.find_widget_index(element.base().id()) {
             self.paint_widget(idx, pc, show_cursor, visited, clip, clip_circle);
             return;
         }
@@ -847,9 +845,9 @@ impl State {
         append_widget_plate(element, pc);
         element.paint_self(&self.ui_context, pc);
 
-        for child_ptr in self.ui_context.tree.children_ptrs(element.base().id()) {
-            unsafe {
-                self.paint_element(&*child_ptr, pc, show_cursor, visited, clip, clip_circle);
+        for child_id in self.ui_context.tree.child_ids(element.base().id()) {
+            if let Some(child) = self.ui_context.get_widget(child_id) {
+                self.paint_element(child, pc, show_cursor, visited, clip, clip_circle);
             }
         }
     }
