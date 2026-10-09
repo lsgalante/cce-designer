@@ -3539,12 +3539,12 @@ pub struct State {
 }
 
 impl State {
-    pub fn viewport(&self) -> &Viewport3D { self.slots.viewport() }
+    pub fn viewport(&self) -> &Viewport3D { self.slots.viewport(&self.ui_context) }
 
-    pub fn viewport_mut(&mut self) -> &mut Viewport3D { self.slots.viewport_mut() }
+    pub fn viewport_mut(&mut self) -> &mut Viewport3D { self.slots.viewport_mut(&mut self.ui_context) }
 
     pub fn find_widget_index(&self, target_addr: *const ()) -> Option<usize> {
-        self.slots.find_index(target_addr)
+        self.slots.find_index(&self.ui_context, target_addr)
     }
 
     pub fn has_any_open_menu(&self, idx: usize) -> bool {
@@ -3567,7 +3567,7 @@ impl State {
                 return true;
             }
         }
-        let child_ptrs = self.ui_context.tree.children_ptrs(self.slots.get_dyn(idx).base().id());
+        let child_ptrs = self.ui_context.tree.children_ptrs(self.slots.get_dyn(&self.ui_context, idx).base().id());
         for child_ptr in child_ptrs {
             if let Some(child_idx) = self.find_widget_index(child_ptr as *const ()) {
                 if self.has_any_open_menu_impl(child_idx, visited) {
@@ -3580,23 +3580,23 @@ impl State {
 
     // Typed roster accessors: the concrete-type asserts live on `WidgetSlots` (src/slots.rs);
     // these forward so the ~40 call sites keep reading `self.menu(..)` / `self.graph_mut()`.
-    pub fn menubar_at(&self, idx: usize) -> Option<&MenuBar> { self.slots.menubar_at(idx) }
+    pub fn menubar_at(&self, idx: usize) -> Option<&MenuBar> { self.slots.menubar_at(&self.ui_context, idx) }
 
-    pub fn menu(&self, idx: usize) -> &dyn cce_ui::widget::MenuController { self.slots.menu(idx) }
+    pub fn menu(&self, idx: usize) -> &dyn cce_ui::widget::MenuController { self.slots.menu(&self.ui_context, idx) }
 
-    pub fn menu_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::MenuController { self.slots.menu_mut(idx) }
+    pub fn menu_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::MenuController { self.slots.menu_mut(&mut self.ui_context, idx) }
 
-    pub fn graph(&self) -> &dyn cce_ui::widget::GraphController { self.slots.graph() }
+    pub fn graph(&self) -> &dyn cce_ui::widget::GraphController { self.slots.graph(&self.ui_context) }
 
-    pub fn graph_mut(&mut self) -> &mut dyn cce_ui::widget::GraphController { self.slots.graph_mut() }
+    pub fn graph_mut(&mut self) -> &mut dyn cce_ui::widget::GraphController { self.slots.graph_mut(&mut self.ui_context) }
 
-    pub fn param(&self) -> &dyn cce_ui::widget::ParamController { self.slots.param() }
+    pub fn param(&self) -> &dyn cce_ui::widget::ParamController { self.slots.param(&self.ui_context) }
 
-    pub fn param_mut(&mut self) -> &mut dyn cce_ui::widget::ParamController { self.slots.param_mut() }
+    pub fn param_mut(&mut self) -> &mut dyn cce_ui::widget::ParamController { self.slots.param_mut(&mut self.ui_context) }
 
-    pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController { self.slots.spreadsheet_mut() }
+    pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController { self.slots.spreadsheet_mut(&mut self.ui_context) }
 
-    pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController { self.slots.path_mut() }
+    pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController { self.slots.path_mut(&mut self.ui_context) }
 
     pub fn has_unsaved_changes(&self) -> bool {
         let tree_changed = match serde_json::to_string(&self.fs_root) {
@@ -3663,7 +3663,7 @@ impl State {
                 grid_thickness: self.grid_thickness,
                 grid_color: self.viewport().grid_color,
                 params_plate: self.params_plate,
-                node_wire_style: self.slots.content.inner().chosen_wire_style().map(|w| w.name().to_string()).unwrap_or_default(),
+                node_wire_style: self.ui_context[self.slots.content].inner().chosen_wire_style().map(|w| w.name().to_string()).unwrap_or_default(),
                 show_point_markers: self.show_point_markers,
                 show_point_numbers: self.show_point_numbers,
                 show_point_normals: self.show_point_normals,
@@ -3702,9 +3702,9 @@ impl State {
             render: display.render,
             default_project: self.default_project_setting.clone(),
             gpu: self.gpu_preference.clone(),
-            playbar_repeat: self.slots.playbar.inner().repeat,
-            playbar_fps: self.slots.playbar.inner().fps,
-            playbar_step_buttons: self.slots.playbar.inner().step_buttons,
+            playbar_repeat: self.ui_context[self.slots.playbar].inner().repeat,
+            playbar_fps: self.ui_context[self.slots.playbar].inner().fps,
+            playbar_step_buttons: self.ui_context[self.slots.playbar].inner().step_buttons,
         };
         settings.save();
         self.last_design_mod_time = {
@@ -3840,12 +3840,12 @@ impl State {
 
     /// The timeline frame the graph is evaluated at — what a simnet solves up to.
     pub fn sim_frame(&self) -> i32 {
-        self.slots.playbar.inner().current_frame.round() as i32
+        self.ui_context[self.slots.playbar].inner().current_frame.round() as i32
     }
 
     /// The timeline's first frame: where every sim sits at its seed.
     pub fn sim_start_frame(&self) -> i32 {
-        self.slots.playbar.inner().start_frame.round() as i32
+        self.ui_context[self.slots.playbar].inner().start_frame.round() as i32
     }
 
     /// Hand the playbar what the simulations hold ([`playbar_cache_runs`]),
@@ -3856,7 +3856,7 @@ impl State {
     /// screen reads. Returns whether the strip changed.
     pub fn sync_playbar_cache(&mut self) -> bool {
         let (start, end) = {
-            let pb = self.slots.playbar.inner();
+            let pb = self.ui_context[self.slots.playbar].inner();
             (pb.start_frame.round() as i32, pb.end_frame.round() as i32)
         };
         let key = (self.sim_cache.revision(), self.rt_geometry_version, start, end);
@@ -3878,7 +3878,7 @@ impl State {
             walk(&self.fs_root, &solved, &mut chains);
         }
         let runs = playbar_cache_runs(&solved, &chains, start, end);
-        let pb = self.slots.playbar.inner_mut();
+        let pb = self.ui_context[self.slots.playbar].inner_mut();
         if pb.cache == runs {
             return false;
         }
@@ -4014,16 +4014,16 @@ impl State {
                     } else if i == BREADCRUMB_IDX {
                         self.circular_network_layout.hit_test_breadcrumb(cx, cy, 0.0, breadcrumb_h())
                     } else if i == NETWORK_PANEL_IDX {
-                        self.slots.network_panel.hit_test(cx, cy, &self.ui_context)
+                        self.ui_context[self.slots.network_panel].hit_test(cx, cy, &self.ui_context)
                     } else {
                         false
                     }
                 } else {
-                    self.slots.get_dyn_mut(i).hit_test(cx, cy, &self.ui_context)
+                    self.slots.get_dyn(&self.ui_context, i).hit_test(cx, cy, &self.ui_context)
                 };
             let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
             let mv = cce_ui::widget::Event::PointerMove { x: tx, y: ty, local_x: tx, local_y: ty };
-            let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
+            let ptr = self.slots.get_dyn_mut(&mut self.ui_context, i) as *mut (dyn WidgetHost + 'static);
             if unsafe { (*ptr).handle_event(&mv, &mut self.ui_context) } {
                 changed = true;
             }
@@ -4219,7 +4219,7 @@ impl State {
     /// 1). `None` with the plate off or the HUD not shown.
     pub fn params_plate_target(&self) -> Option<[f32; 5]> {
         let (_, _, w, h) = self.positions[PARAM_IDX];
-        if !self.params_plate || w <= 0.0 || h <= 0.0 || self.pane_is_stubbed(PARAM_IDX) || !self.slots.param.visible() {
+        if !self.params_plate || w <= 0.0 || h <= 0.0 || self.pane_is_stubbed(PARAM_IDX) || !self.ui_context[self.slots.param].visible() {
             return None;
         }
         let (cx, cy, cw, ch) = self.params_claim();
@@ -4264,12 +4264,12 @@ impl State {
     /// no plate covers it, or on a dropdown it has open, which grows past
     /// its rows and is drawn over everything.
     pub fn params_claims(&self, px: f32, py: f32) -> bool {
-        if !self.slots.param.visible() {
+        if !self.ui_context[self.slots.param].visible() {
             return false;
         }
         let inside = |(x, y, w, h): (f32, f32, f32, f32)| w > 0.0 && h > 0.0 && px >= x && px < x + w && py >= y && py < y + h;
         (inside(self.params_claim()) && !self.plate_over_params_at(px, py))
-            || self.slots.param.popover_rect().is_some_and(inside)
+            || self.ui_context[self.slots.param].popover_rect().is_some_and(inside)
     }
 
     /// Whether (px, py) is under a plate drawn over the scene: a floating
@@ -4564,7 +4564,7 @@ impl State {
         let mut bottom = vy + vh - gap;
         for idx in [SPREADSHEET_IDX, PLAYBAR_IDX] {
             let (px, py, pw, ph) = self.positions[idx];
-            let below = pw > 0.0 && ph > 0.0 && self.slots.get_dyn(idx).visible() && px < x + w && px + pw > x && py > top + PARAMS_DOT_D;
+            let below = pw > 0.0 && ph > 0.0 && self.slots.get_dyn(&self.ui_context, idx).visible() && px < x + w && px + pw > x && py > top + PARAMS_DOT_D;
             if below {
                 bottom = bottom.min(py - gap);
             }
@@ -4580,7 +4580,7 @@ impl State {
         let mut out = Vec::new();
         let mut take = |idx: usize| {
             let r = self.positions[idx];
-            if r.2 > 0.0 && r.3 > 0.0 && self.slots.get_dyn(idx).visible() {
+            if r.2 > 0.0 && r.3 > 0.0 && self.slots.get_dyn(&self.ui_context, idx).visible() {
                 out.push(r);
             }
         };
@@ -4623,7 +4623,7 @@ impl State {
         let ss_y_end = self.height - STATUS_H - pb_off - gap;
         let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
         let room = (self.width - 2.0 * gap).max(Self::SPREADSHEET_MIN_W);
-        let w = self.slots.spreadsheet().content_width().ceil().clamp(Self::SPREADSHEET_MIN_W, room);
+        let w = self.slots.spreadsheet(&self.ui_context).content_width().ceil().clamp(Self::SPREADSHEET_MIN_W, room);
         (gap, ss_y_end - ss_h, w, ss_h)
     }
 
@@ -5186,9 +5186,9 @@ impl State {
             }
             "Show Network Pane" => {
                 self.show_network = !self.show_network;
-                self.slots.content.set_visible(self.show_network);
-                self.slots.left_menubar.set_visible(self.show_network);
-                self.slots.breadcrumb.set_visible(self.show_network);
+                self.ui_context[self.slots.content].set_visible(self.show_network);
+                self.ui_context[self.slots.left_menubar].set_visible(self.show_network);
+                self.ui_context[self.slots.breadcrumb].set_visible(self.show_network);
                 let val = self.show_network;
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 4, val);
                 if !self.show_network && self.focused_pane == LEFT_MENUBAR_IDX {
@@ -5207,8 +5207,8 @@ impl State {
             }
             "Show Viewport Pane" => {
                 self.show_viewport = !self.show_viewport;
-                self.slots.viewport.set_visible(self.show_viewport);
-                self.slots.right_menubar.set_visible(self.show_viewport);
+                self.ui_context[self.slots.viewport].set_visible(self.show_viewport);
+                self.ui_context[self.slots.right_menubar].set_visible(self.show_viewport);
                 let val = self.show_viewport;
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 5, val);
                 if !self.show_viewport && self.focused_pane == RIGHT_MENUBAR_IDX {
@@ -5227,8 +5227,8 @@ impl State {
             }
             "Show Parameters Pane" => {
                 self.show_parameters = !self.show_parameters;
-                self.slots.param.set_visible(self.show_parameters);
-                self.slots.param_menubar.set_visible(self.show_parameters);
+                self.ui_context[self.slots.param].set_visible(self.show_parameters);
+                self.ui_context[self.slots.param_menubar].set_visible(self.show_parameters);
                 let val = self.show_parameters;
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 6, val);
                 if !self.show_parameters && self.focused_pane == PARAM_MENUBAR_IDX {
@@ -5247,8 +5247,8 @@ impl State {
             }
             "Show Spreadsheet Pane" => {
                 self.show_spreadsheet = !self.show_spreadsheet;
-                self.slots.spreadsheet.set_visible(self.show_spreadsheet);
-                self.slots.spreadsheet_menubar.set_visible(self.show_spreadsheet);
+                self.ui_context[self.slots.spreadsheet].set_visible(self.show_spreadsheet);
+                self.ui_context[self.slots.spreadsheet_menubar].set_visible(self.show_spreadsheet);
                 let val = self.show_spreadsheet;
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
                 if !self.show_spreadsheet && self.focused_pane == SPREADSHEET_MENUBAR_IDX {
@@ -5267,7 +5267,7 @@ impl State {
             }
             "Show Playbar Pane" => {
                 self.show_playbar = !self.show_playbar;
-                self.slots.playbar.set_visible(self.show_playbar);
+                self.ui_context[self.slots.playbar].set_visible(self.show_playbar);
                 let val = self.show_playbar;
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 8, val);
                 // Not in the focus-cycle roster (get_next_visible_pane): the
@@ -5287,9 +5287,9 @@ impl State {
                 match parent_name {
                     "Network" => {
                         self.show_network = false;
-                        self.slots.content.set_visible(false);
-                        self.slots.left_menubar.set_visible(false);
-                        self.slots.breadcrumb.set_visible(false);
+                        self.ui_context[self.slots.content].set_visible(false);
+                        self.ui_context[self.slots.left_menubar].set_visible(false);
+                        self.ui_context[self.slots.breadcrumb].set_visible(false);
                         self.menu_mut(HEADER_IDX).set_item_checked(2, 4, false);
                         if self.focused_pane == LEFT_MENUBAR_IDX {
                             self.focused_pane = get_next_visible_pane(
@@ -5307,8 +5307,8 @@ impl State {
                     }
                     "Viewport" => {
                         self.show_viewport = false;
-                        self.slots.viewport.set_visible(false);
-                        self.slots.right_menubar.set_visible(false);
+                        self.ui_context[self.slots.viewport].set_visible(false);
+                        self.ui_context[self.slots.right_menubar].set_visible(false);
                         self.menu_mut(HEADER_IDX).set_item_checked(2, 5, false);
                         if self.focused_pane == RIGHT_MENUBAR_IDX {
                             self.focused_pane = get_next_visible_pane(
@@ -5326,8 +5326,8 @@ impl State {
                     }
                     "Parameters" => {
                         self.show_parameters = false;
-                        self.slots.param.set_visible(false);
-                        self.slots.param_menubar.set_visible(false);
+                        self.ui_context[self.slots.param].set_visible(false);
+                        self.ui_context[self.slots.param_menubar].set_visible(false);
                         self.menu_mut(HEADER_IDX).set_item_checked(2, 6, false);
                         if self.focused_pane == PARAM_MENUBAR_IDX {
                             self.focused_pane = get_next_visible_pane(
@@ -5345,8 +5345,8 @@ impl State {
                     }
                     "Spreadsheet" => {
                         self.show_spreadsheet = false;
-                        self.slots.spreadsheet.set_visible(false);
-                        self.slots.spreadsheet_menubar.set_visible(false);
+                        self.ui_context[self.slots.spreadsheet].set_visible(false);
+                        self.ui_context[self.slots.spreadsheet_menubar].set_visible(false);
                         self.menu_mut(HEADER_IDX).set_item_checked(2, 7, false);
                         if self.focused_pane == SPREADSHEET_MENUBAR_IDX {
                             self.focused_pane = get_next_visible_pane(
@@ -5898,7 +5898,7 @@ impl State {
         if options.is_empty() {
             return;
         }
-        let target = self.slots.get_dyn(CONTENT_IDX).base().id();
+        let target = self.slots.get_dyn(&self.ui_context, CONTENT_IDX).base().id();
         self.put_up_menu(at, None, options, 0, target);
         crate::menu_page::mark_page_rows(&actions, |a| a == NodeMenuAction::Rename);
         self.node_menu_slot = Some(slot);
@@ -6156,7 +6156,7 @@ impl State {
     /// node it shows — the one geometry the row menu's hit test and the
     /// expression tint both read.
     pub fn param_row_rects(&self) -> Vec<(f32, f32, f32, f32)> {
-        self.slots.param.as_any().downcast_ref::<ParametersBg>().map(|pb| pb.get_param_rects()).unwrap_or_default()
+        self.ui_context[self.slots.param].as_any().downcast_ref::<ParametersBg>().map(|pb| pb.get_param_rects()).unwrap_or_default()
     }
 
     /// What the template says `pname` on `node` defaults to, where `dir` is
@@ -6310,7 +6310,7 @@ impl State {
     fn open_param_context_menu(&mut self, slot: usize, pname: String) {
         let node_id = self.param_editor_dir().children[slot].id.clone();
         let (options, actions, headers) = self.param_menu_rows(slot, &pname);
-        let target = self.slots.get_dyn(crate::slots::PARAM_IDX).base().id();
+        let target = self.slots.get_dyn(&self.ui_context, crate::slots::PARAM_IDX).base().id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, headers, target);
         self.param_menu_active = true;
         self.param_menu_actions = actions;
@@ -6391,7 +6391,7 @@ impl State {
     /// The slider a playbar menu row carries, from the live value.
     pub(crate) fn playbar_menu_slider(&self, action: PlaybarMenuAction) -> Option<cce_ui::widget::context_menu::MenuSlider> {
         use cce_ui::widget::context_menu::MenuSlider;
-        let pb = self.slots.playbar.inner();
+        let pb = self.ui_context[self.slots.playbar].inner();
         Some(match action {
             PlaybarMenuAction::FpsSlider => MenuSlider { value: pb.fps.clamp(1.0, 120.0).round(), min: 1.0, max: 120.0, step: 1.0, decimals: 0, suffix: " fps" },
             PlaybarMenuAction::StartFrameSlider => MenuSlider { value: pb.start_frame.round().clamp(1.0, 999.0), min: 1.0, max: 999.0, step: 1.0, decimals: 0, suffix: "" },
@@ -6405,7 +6405,7 @@ impl State {
     /// is a setting and saved with them; the range is the project's and
     /// dirties it.
     fn land_playbar_menu_slider(&mut self, action: PlaybarMenuAction, v: f32) {
-        let pb = self.slots.playbar.inner_mut();
+        let pb = self.ui_context[self.slots.playbar].inner_mut();
         match action {
             PlaybarMenuAction::FpsSlider => pb.fps = v.round().clamp(1.0, 120.0),
             PlaybarMenuAction::StartFrameSlider => {
@@ -6430,7 +6430,7 @@ impl State {
     /// The playbar's menu at the pointer, or with its top-left at `at`.
     pub(crate) fn open_playbar_context_menu_at(&mut self, at: Option<(f32, f32)>) {
         let (options, actions) = self.playbar_menu_rows();
-        let target = self.slots.get_dyn(PLAYBAR_IDX).base().id();
+        let target = self.slots.get_dyn(&self.ui_context, PLAYBAR_IDX).base().id();
         self.put_up_menu(at, None, options, 0, target);
         crate::menu_page::mark_page_rows(&actions, |a| a == PlaybarMenuAction::PlatePage);
         for (i, a) in actions.iter().enumerate() {
@@ -7122,7 +7122,7 @@ impl State {
         if self.focused_pane != LEFT_MENUBAR_IDX {
             self.focused_pane = LEFT_MENUBAR_IDX;
             if let Some(old) = self.focused_widget.take() {
-                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
+                self.ui_context.unfocus_id(self.slots.id(old));
             }
             self.sync_pane_focus();
         }
@@ -7162,7 +7162,7 @@ impl State {
         // in no dock, so its plate rows were Detach alone, which is the
         // `detach_circular_window` command in the palette.
 
-        let target = self.slots.get_dyn(CONTENT_IDX).base().id();
+        let target = self.slots.get_dyn(&self.ui_context, CONTENT_IDX).base().id();
         let back = self.network_menu_from.filter(|_| at.is_some());
         self.put_up_menu(at, back, options, 0, target);
         crate::menu_page::mark_page_rows(&actions, |a| a.leads_to_page());
@@ -8176,49 +8176,51 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             "3: Spreadsheet".to_string(),
             "Main Menu".to_string(),
         ];
-        let mut slots = Box::new(WidgetSlots {
-            header: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane", "Show Playbar Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
-            content: cce_ui::widget::Owned::new(Graph::new()),
-            splitter1: cce_ui::widget::Owned::new(Splitter::new(SPLITTER_W)),
-            viewport: cce_ui::widget::Owned::new(Viewport3D::new()),
-            splitter2: cce_ui::widget::Owned::new(Splitter::new(SPLITTER_W)),
-            param: cce_ui::widget::Owned::new(ParametersBg::new()),
-            canvas: cce_ui::widget::Owned::new(Canvas::new()),
-            left_menubar: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0)),
-            right_menubar: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["square_aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1)),
-            param_menubar: cce_ui::widget::Owned::new(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2)),
-            status: cce_ui::widget::Owned::new(StatusBar::new().with_text("Ready")),
+        // The context owns the widgets; the roster keeps their handles.
+        let mut ui_context = cce_ui::context::UiContext::new();
+        let slots = Box::new(WidgetSlots {
+            header: ui_context.insert(MenuBar::new(0.0, 0.0, 0.0, HEADER_H).with_title("Designer").with_label("Main Menu Bar").with_item("File", &["New Project", "Save", "Save As", "Exit"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Reset Zoom", "Detach Circular Window", "Show Network Pane", "Show Viewport Pane", "Show Parameters Pane", "Show Spreadsheet Pane", "Show Playbar Pane"]).with_item("Help", &["About"]).with_z_index(110).with_context_options(context_opts.clone(), 4)),
+            content: ui_context.insert(Graph::new()),
+            splitter1: ui_context.insert(Splitter::new(SPLITTER_W)),
+            viewport: ui_context.insert(Viewport3D::new()),
+            splitter2: ui_context.insert(Splitter::new(SPLITTER_W)),
+            param: ui_context.insert(ParametersBg::new()),
+            canvas: ui_context.insert(Canvas::new()),
+            left_menubar: ui_context.insert(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("0: Network").with_label("Network Menu Bar").with_item("File", &["New", "Save", "Save As"]).with_item("Edit", &["Undo", "Redo"]).with_item("View", &["Zoom In", "Zoom Out", "Circular Pane", "Detach Pane", "Close Pane"]).with_context_options(context_opts.clone(), 0)),
+            right_menubar: ui_context.insert(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("1: Viewport").with_label("Viewport Menu Bar").with_item("Camera", &["Perspective", "Orthographic"]).with_item("Display", &["square_aspect"]).with_item("Guides", &["Show Grid", "Origin", "Camera Pivot"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 1)),
+            param_menubar: ui_context.insert(MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("2: Parameters").with_label("Parameters Menu Bar").with_item("Preset", &["Default"]).with_item("Reset", &["All"]).with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 2)),
+            status: ui_context.insert(StatusBar::new().with_text("Ready")),
             breadcrumb: {
                 let mut bc = Breadcrumb::new();
                 // Raised, not the default trough: the segments float in front
                 // of the network plate rather than reading as inset into it.
                 bc.set_raised(true);
-                cce_ui::widget::Owned::new(bc)
+                ui_context.insert(bc)
             },
-            spreadsheet: cce_ui::widget::Owned::new(Spreadsheet::new()),
+            spreadsheet: ui_context.insert(Spreadsheet::new()),
             spreadsheet_menubar: {
                 let mut mb = MenuBar::new(0.0, 0.0, 0.0, MENUBAR_H).with_title("3: Spreadsheet").with_label("Spreadsheet Menu Bar").with_item("View", &["Close Pane"]).with_context_options(context_opts.clone(), 3);
                 mb.set_visible(false);
-                cce_ui::widget::Owned::new(mb)
+                ui_context.insert(mb)
             },
-            network_panel: cce_ui::widget::Owned::new(PassivePlate::new()),
+            network_panel: ui_context.insert(PassivePlate::new()),
             playbar: {
                 let mut pb = Playbar::new();
                 pb.set_visible(false);
-                cce_ui::widget::Owned::new(pb)
+                ui_context.insert(pb)
             },
-            dialog: cce_ui::widget::Owned::new(crate::dialog::Dialog::new()),
+            dialog: ui_context.insert(crate::dialog::Dialog::new()),
         });
 
-        slots.playbar.inner_mut().repeat = settings.playbar_repeat;
-        slots.playbar.inner_mut().step_buttons = settings.playbar_step_buttons;
+        ui_context[slots.playbar].inner_mut().repeat = settings.playbar_repeat;
+        ui_context[slots.playbar].inner_mut().step_buttons = settings.playbar_step_buttons;
         let wire_style = cce_ui::widget::display::WireStyle::parse(&settings.viewport.node_wire_style);
-        slots.content.inner_mut().set_wire_style(wire_style);
+        ui_context[slots.content].inner_mut().set_wire_style(wire_style);
         // A node dropped on a node swaps places with it, connections and all
         // (`swap_places`).
-        slots.content.inner_mut().set_swap_on_drop(true);
-        slots.playbar.inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
-        if let Some(viewport) = slots.viewport.as_any_mut().downcast_mut::<Viewport3D>() {
+        ui_context[slots.content].inner_mut().set_swap_on_drop(true);
+        ui_context[slots.playbar].inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
+        if let Some(viewport) = ui_context[slots.viewport].as_any_mut().downcast_mut::<Viewport3D>() {
             viewport.show_grid = settings.viewport.show_grid_enabled;
             viewport.show_origin = settings.viewport.show_origin_enabled;
             viewport.show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
@@ -8559,7 +8561,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             rt_geometry_version: 0,
             last_rt_scene_key: None,
             page_version: 0,
-            ui_context: cce_ui::context::UiContext::new(),
+            ui_context,
         };
 
         state.update_inertial_settings();
@@ -8597,9 +8599,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         state.sync_pane_focus();
         state.sync_cursor_and_selection();
         state.sync_parameters_pane();
-        for i in 0..WIDGET_COUNT {
-            state.ui_context.register_host(state.slots.get_dyn_mut(i));
-        }
         // The layout baseline waits for the layout pass above (it clamps the
         // plate fields), and the title computed earlier must be re-read
         // against it or a fresh window opens starred.
@@ -8767,14 +8766,14 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         graph.set_node_size(node_w, node_h);
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
-        if let Some(graph) = self.slots.content.as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
+        if let Some(graph) = self.ui_context[self.slots.content].as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
             graph.set_network_opacity(self.network_opacity);
             graph.set_node_opacity(self.node_opacity);
         }
-        if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+        if let Some(menubar) = self.ui_context[self.slots.left_menubar].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
             menubar.set_network_opacity(self.network_opacity);
         }
-        if let Some(breadcrumb) = self.slots.breadcrumb.as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
+        if let Some(breadcrumb) = self.ui_context[self.slots.breadcrumb].as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
             breadcrumb.set_network_opacity(self.network_opacity);
         }
 
@@ -8971,15 +8970,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
             self.positions[0] = (0.0, 0.0, 0.0, 0.0);
             self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-            if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+            if let Some(menubar) = self.ui_context[self.slots.left_menubar].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                 menubar.set_curved_circle(None);
             }
             let bc_h = breadcrumb_h();
             self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, bc_h);
             self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + bc_h, 2.0 * r, 2.0 * r - (45.0 + bc_h));
             self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
-            self.slots.network_panel.set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-            if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
+            self.ui_context[self.slots.network_panel].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
+            if let Some(plate) = self.ui_context[self.slots.network_panel].as_any_mut().downcast_mut::<PassivePlate>() {
                 plate.set_curved_circle(Some((cx, cy, r)));
             }
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -8994,21 +8993,21 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.positions[STATUS_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[PLAYBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
 
-            self.slots.header.set_visible(false);
-            self.slots.status.set_visible(false);
-            self.slots.playbar.set_visible(false);
-            self.slots.content.set_visible(true);
-            self.slots.network_panel.set_visible(true);
-            self.slots.left_menubar.set_visible(false);
-            self.slots.breadcrumb.set_visible(true);
-            self.slots.splitter1.set_visible(false);
-            self.slots.splitter2.set_visible(false);
-            self.slots.viewport.set_visible(false);
-            self.slots.right_menubar.set_visible(false);
-            self.slots.param.set_visible(false);
-            self.slots.param_menubar.set_visible(false);
-            self.slots.spreadsheet.set_visible(false);
-            self.slots.spreadsheet_menubar.set_visible(false);
+            self.ui_context[self.slots.header].set_visible(false);
+            self.ui_context[self.slots.status].set_visible(false);
+            self.ui_context[self.slots.playbar].set_visible(false);
+            self.ui_context[self.slots.content].set_visible(true);
+            self.ui_context[self.slots.network_panel].set_visible(true);
+            self.ui_context[self.slots.left_menubar].set_visible(false);
+            self.ui_context[self.slots.breadcrumb].set_visible(true);
+            self.ui_context[self.slots.splitter1].set_visible(false);
+            self.ui_context[self.slots.splitter2].set_visible(false);
+            self.ui_context[self.slots.viewport].set_visible(false);
+            self.ui_context[self.slots.right_menubar].set_visible(false);
+            self.ui_context[self.slots.param].set_visible(false);
+            self.ui_context[self.slots.param_menubar].set_visible(false);
+            self.ui_context[self.slots.spreadsheet].set_visible(false);
+            self.ui_context[self.slots.spreadsheet_menubar].set_visible(false);
         } else if self.detached_circular_network {
             // Parent process: Network pane is detached (hidden from main window)
             let pb_h = if self.show_playbar { PLAYBAR_H } else { 0.0 };
@@ -9072,7 +9071,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.positions[BREADCRUMB_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[CONTENT_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[NETWORK_PANEL_IDX] = (0.0, 0.0, 0.0, 0.0);
-            self.slots.network_panel.set_rect(0.0, 0.0, 0.0, 0.0);
+            self.ui_context[self.slots.network_panel].set_rect(0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
             self.positions[SPLITTER2_IDX] = (s2_x, HEADER_H, s2_w, body_h);
             self.positions[PARAM_IDX] = (col_r_x, HEADER_H, col_r_w, body_h);
@@ -9087,23 +9086,23 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.positions[PARAM_MENUBAR_IDX] = (col_r_x, HEADER_H, col_r_w, if right_visible { MENUBAR_H } else { 0.0 });
             self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
             self.positions[PLAYBAR_IDX] = (0.0, HEADER_H + body_h, self.width, pb_h);
-            self.slots.playbar.inner_mut().frame = 0.0;
+            self.ui_context[self.slots.playbar].inner_mut().frame = 0.0;
 
-            self.slots.header.set_visible(true);
-            self.slots.status.set_visible(false);
-            self.slots.content.set_visible(false);
-            self.slots.network_panel.set_visible(false);
-            self.slots.left_menubar.set_visible(false);
-            self.slots.breadcrumb.set_visible(false);
-            self.slots.splitter1.set_visible(false);
-            self.slots.splitter2.set_visible(s2_w > 0.0);
-            self.slots.viewport.set_visible(viewport_visible);
-            self.slots.right_menubar.set_visible(viewport_visible);
-            self.slots.param.set_visible(right_visible);
-            self.slots.param_menubar.set_visible(right_visible);
-            self.slots.spreadsheet.set_visible(spreadsheet_visible);
-            self.slots.spreadsheet_menubar.set_visible(spreadsheet_visible);
-            self.slots.playbar.set_visible(self.show_playbar);
+            self.ui_context[self.slots.header].set_visible(true);
+            self.ui_context[self.slots.status].set_visible(false);
+            self.ui_context[self.slots.content].set_visible(false);
+            self.ui_context[self.slots.network_panel].set_visible(false);
+            self.ui_context[self.slots.left_menubar].set_visible(false);
+            self.ui_context[self.slots.breadcrumb].set_visible(false);
+            self.ui_context[self.slots.splitter1].set_visible(false);
+            self.ui_context[self.slots.splitter2].set_visible(s2_w > 0.0);
+            self.ui_context[self.slots.viewport].set_visible(viewport_visible);
+            self.ui_context[self.slots.right_menubar].set_visible(viewport_visible);
+            self.ui_context[self.slots.param].set_visible(right_visible);
+            self.ui_context[self.slots.param_menubar].set_visible(right_visible);
+            self.ui_context[self.slots.spreadsheet].set_visible(spreadsheet_visible);
+            self.ui_context[self.slots.spreadsheet_menubar].set_visible(spreadsheet_visible);
+            self.ui_context[self.slots.playbar].set_visible(self.show_playbar);
         } else {
             let paginator_w = 0.0;
             let body_h = self.height - STATUS_H;
@@ -9176,18 +9175,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 let cy = self.circular_network_layout.y;
 
                 self.positions[LEFT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
-                if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+                if let Some(menubar) = self.ui_context[self.slots.left_menubar].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
                 }
                 let bc_h = breadcrumb_h();
                 self.positions[BREADCRUMB_IDX] = (cx - r, cy - r + 45.0, 2.0 * r, bc_h);
                 self.positions[CONTENT_IDX] = (cx - r, cy - r + 45.0 + bc_h, 2.0 * r, 2.0 * r - (45.0 + bc_h));
                 self.positions[NETWORK_PANEL_IDX] = (cx - r, cy - r, 2.0 * r, 2.0 * r);
-                self.slots.network_panel.set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
-                if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
+                self.ui_context[self.slots.network_panel].set_rect(cx - r, cy - r, 2.0 * r, 2.0 * r);
+                if let Some(plate) = self.ui_context[self.slots.network_panel].as_any_mut().downcast_mut::<PassivePlate>() {
                     plate.set_curved_circle(Some((cx, cy, r)));
                 }
-                self.slots.network_panel.set_drag_bounds(0.0, 0.0, self.width, self.height);
+                self.ui_context[self.slots.network_panel].set_drag_bounds(0.0, 0.0, self.width, self.height);
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[SPLITTER2_IDX] = (s2_x, 0.0, s2_w, body_h);
                 self.positions[PARAM_IDX] = (col_r_x, 0.0, col_r_w, body_h);
@@ -9202,23 +9201,23 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.positions[PARAM_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 self.positions[STATUS_IDX] = (0.0, self.height - STATUS_H, self.width, STATUS_H);
                 self.positions[PLAYBAR_IDX] = (0.0, body_h, self.width, pb_h);
-                self.slots.playbar.inner_mut().frame = 0.0;
+                self.ui_context[self.slots.playbar].inner_mut().frame = 0.0;
 
-                self.slots.header.set_visible(false);
-                self.slots.status.set_visible(false);
-                self.slots.content.set_visible(self.show_network);
-                self.slots.network_panel.set_visible(self.show_network);
-                self.slots.left_menubar.set_visible(false);
-                self.slots.breadcrumb.set_visible(self.show_network);
-                self.slots.splitter1.set_visible(false);
-                self.slots.splitter2.set_visible(s2_w > 0.0);
-                self.slots.viewport.set_visible(viewport_visible);
-                self.slots.right_menubar.set_visible(false);
-                self.slots.param.set_visible(right_visible);
-                self.slots.param_menubar.set_visible(false);
-                self.slots.spreadsheet.set_visible(spreadsheet_visible);
-                self.slots.spreadsheet_menubar.set_visible(false);
-                self.slots.playbar.set_visible(self.show_playbar);
+                self.ui_context[self.slots.header].set_visible(false);
+                self.ui_context[self.slots.status].set_visible(false);
+                self.ui_context[self.slots.content].set_visible(self.show_network);
+                self.ui_context[self.slots.network_panel].set_visible(self.show_network);
+                self.ui_context[self.slots.left_menubar].set_visible(false);
+                self.ui_context[self.slots.breadcrumb].set_visible(self.show_network);
+                self.ui_context[self.slots.splitter1].set_visible(false);
+                self.ui_context[self.slots.splitter2].set_visible(s2_w > 0.0);
+                self.ui_context[self.slots.viewport].set_visible(viewport_visible);
+                self.ui_context[self.slots.right_menubar].set_visible(false);
+                self.ui_context[self.slots.param].set_visible(right_visible);
+                self.ui_context[self.slots.param_menubar].set_visible(false);
+                self.ui_context[self.slots.spreadsheet].set_visible(spreadsheet_visible);
+                self.ui_context[self.slots.spreadsheet_menubar].set_visible(false);
+                self.ui_context[self.slots.playbar].set_visible(self.show_playbar);
             } else {
                 let viewport_visible = self.show_viewport;
                 let spreadsheet_visible = self.show_spreadsheet;
@@ -9242,7 +9241,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     (0.0, 0.0, 0.0, 0.0)
                 };
 
-                if let Some(menubar) = self.slots.left_menubar.as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
+                if let Some(menubar) = self.ui_context[self.slots.left_menubar].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
                     menubar.set_curved_circle(None);
                 }
                 
@@ -9256,8 +9255,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
                 self.positions[CONTENT_IDX] = (px, py + mb_h, pw, content_h);
                 self.positions[NETWORK_PANEL_IDX] = (px, py, pw, ph);
-                self.slots.network_panel.set_rect(px, py, pw, ph);
-                if let Some(plate) = self.slots.network_panel.as_any_mut().downcast_mut::<PassivePlate>() {
+                self.ui_context[self.slots.network_panel].set_rect(px, py, pw, ph);
+                if let Some(plate) = self.ui_context[self.slots.network_panel].as_any_mut().downcast_mut::<PassivePlate>() {
                     plate.set_curved_circle(None);
                 }
                 self.positions[SPLITTER1_IDX] = (0.0, 0.0, 0.0, 0.0);
@@ -9267,7 +9266,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 // out from the viewport alone, under every plate.
                 let p_rect = if right_visible { self.params_hud_rect() } else { (0.0, 0.0, 0.0, 0.0) };
                 self.positions[PARAM_IDX] = p_rect;
-                self.slots.param.set_rect(p_rect.0, p_rect.1, p_rect.2, p_rect.3);
+                self.ui_context[self.slots.param].set_rect(p_rect.0, p_rect.1, p_rect.2, p_rect.3);
                 self.positions[RIGHT_MENUBAR_IDX] = (0.0, 0.0, 0.0, 0.0);
                 // The raised run floats clear of the plate's edge: offset past
                 // the plate's rolled lip (bevel_width) plus the run's own boss
@@ -9284,7 +9283,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 // docks since 2026-10-07).
                 self.positions[SPREADSHEET_IDX] =
                     if spreadsheet_visible { self.floating_spreadsheet_rect() } else { (0.0, 0.0, 0.0, 0.0) };
-                self.slots.spreadsheet.set_rect(
+                self.ui_context[self.slots.spreadsheet].set_rect(
                     self.positions[SPREADSHEET_IDX].0,
                     self.positions[SPREADSHEET_IDX].1,
                     self.positions[SPREADSHEET_IDX].2,
@@ -9309,23 +9308,23 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 } else {
                     (0.0, 0.0, 0.0, 0.0)
                 };
-                self.slots.playbar.inner_mut().frame = cce_ui::layout::bevel_width();
+                self.ui_context[self.slots.playbar].inner_mut().frame = cce_ui::layout::bevel_width();
 
-                self.slots.header.set_visible(false);
-                self.slots.status.set_visible(false);
-                self.slots.playbar.set_visible(self.show_playbar);
-                self.slots.content.set_visible(self.show_network);
-                self.slots.network_panel.set_visible(self.show_network);
-                self.slots.left_menubar.set_visible(false);
-                self.slots.breadcrumb.set_visible(self.show_network);
-                self.slots.splitter1.set_visible(false);
-                self.slots.splitter2.set_visible(false);
-                self.slots.viewport.set_visible(viewport_visible);
-                self.slots.right_menubar.set_visible(false);
-                self.slots.param.set_visible(right_visible);
-                self.slots.param_menubar.set_visible(false);
-                self.slots.spreadsheet.set_visible(spreadsheet_visible);
-                self.slots.spreadsheet_menubar.set_visible(false);
+                self.ui_context[self.slots.header].set_visible(false);
+                self.ui_context[self.slots.status].set_visible(false);
+                self.ui_context[self.slots.playbar].set_visible(self.show_playbar);
+                self.ui_context[self.slots.content].set_visible(self.show_network);
+                self.ui_context[self.slots.network_panel].set_visible(self.show_network);
+                self.ui_context[self.slots.left_menubar].set_visible(false);
+                self.ui_context[self.slots.breadcrumb].set_visible(self.show_network);
+                self.ui_context[self.slots.splitter1].set_visible(false);
+                self.ui_context[self.slots.splitter2].set_visible(false);
+                self.ui_context[self.slots.viewport].set_visible(viewport_visible);
+                self.ui_context[self.slots.right_menubar].set_visible(false);
+                self.ui_context[self.slots.param].set_visible(right_visible);
+                self.ui_context[self.slots.param_menubar].set_visible(false);
+                self.ui_context[self.slots.spreadsheet].set_visible(spreadsheet_visible);
+                self.ui_context[self.slots.spreadsheet_menubar].set_visible(false);
             }
         }
 
@@ -9357,7 +9356,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             ];
             for &idx in &menubars {
                 self.positions[idx] = (0.0, 0.0, 0.0, 0.0);
-                self.slots.get_dyn_mut(idx).set_visible(false);
+                self.slots.get_dyn_mut(&mut self.ui_context, idx).set_visible(false);
             }
         }
 
@@ -9375,7 +9374,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         {
             let r = self.params_hud_rect();
             self.positions[PARAM_IDX] = r;
-            self.slots.param.set_rect(r.0, r.1, r.2, r.3);
+            self.ui_context[self.slots.param].set_rect(r.0, r.1, r.2, r.3);
         }
         // Last of all: the dialog floats over whatever the branches above
         // produced, so its rect depends on the window and nothing else.
@@ -9386,8 +9385,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub fn apply_layout(&mut self) {
         for (i, pos) in self.positions.iter().enumerate() {
             if i < WIDGET_COUNT {
-                if self.slots.is_dragging(i) { continue; }
-                let widget = self.slots.get_dyn_mut(i);
+                if self.slots.is_dragging(&self.ui_context, i) { continue; }
+                let widget = self.slots.get_dyn_mut(&mut self.ui_context, i);
                 let (x, y, w, h) = *pos;
                 widget.set_rect(x, y, w, h);
             }
@@ -9418,13 +9417,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // 6bd value shrink: `set_selected` left `WidgetHost` — the five menubar slots are
         // concrete `Adapted<MenuBar>` fields, selected-state sync goes to them directly.
         let f = self.focused_pane;
-        self.slots.header.set_selected(HEADER_IDX == f);
-        self.slots.left_menubar.set_selected(LEFT_MENUBAR_IDX == f);
-        self.slots.right_menubar.set_selected(RIGHT_MENUBAR_IDX == f);
-        self.slots.param_menubar.set_selected(PARAM_MENUBAR_IDX == f);
-        self.slots.spreadsheet_menubar.set_selected(SPREADSHEET_MENUBAR_IDX == f);
+        self.ui_context[self.slots.header].set_selected(HEADER_IDX == f);
+        self.ui_context[self.slots.left_menubar].set_selected(LEFT_MENUBAR_IDX == f);
+        self.ui_context[self.slots.right_menubar].set_selected(RIGHT_MENUBAR_IDX == f);
+        self.ui_context[self.slots.param_menubar].set_selected(PARAM_MENUBAR_IDX == f);
+        self.ui_context[self.slots.spreadsheet_menubar].set_selected(SPREADSHEET_MENUBAR_IDX == f);
         if self.focused_pane != PARAM_MENUBAR_IDX {
-            self.ui_context.unfocus_widget(&mut self.slots.param);
+            self.ui_context.unfocus_id(self.slots.param.id());
             self.sync_parameters_to_project();
         }
         self.sync_context_dropdowns();
@@ -9435,11 +9434,11 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let center_visible = self.show_viewport || self.show_spreadsheet;
         let right_visible = self.show_parameters;
 
-        if left_visible && center_visible && self.slots.splitter1.visible() && self.slots.splitter1.rect().2 > 0.0 {
-            self.splitter_layout.splitter1_x = self.slots.splitter1.rect().0;
+        if left_visible && center_visible && self.ui_context[self.slots.splitter1].visible() && self.ui_context[self.slots.splitter1].rect().2 > 0.0 {
+            self.splitter_layout.splitter1_x = self.ui_context[self.slots.splitter1].rect().0;
         }
-        if right_visible && (center_visible || left_visible) && self.slots.splitter2.visible() && self.slots.splitter2.rect().2 > 0.0 {
-            self.splitter_layout.splitter2_x = self.slots.splitter2.rect().0;
+        if right_visible && (center_visible || left_visible) && self.ui_context[self.slots.splitter2].visible() && self.ui_context[self.slots.splitter2].rect().2 > 0.0 {
+            self.splitter_layout.splitter2_x = self.ui_context[self.slots.splitter2].rect().0;
         }
         self.rebuild_positions();
         self.apply_layout();
@@ -10221,8 +10220,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             }
             Action::ToggleSpreadsheet => {
                 self.show_spreadsheet = !self.show_spreadsheet;
-                self.slots.spreadsheet.set_visible(self.show_spreadsheet);
-                self.slots.spreadsheet_menubar.set_visible(self.show_spreadsheet);
+                self.ui_context[self.slots.spreadsheet].set_visible(self.show_spreadsheet);
+                self.ui_context[self.slots.spreadsheet_menubar].set_visible(self.show_spreadsheet);
                 let val = self.show_spreadsheet;
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 7, val);
                 if !self.show_spreadsheet && self.focused_pane == SPREADSHEET_MENUBAR_IDX {
@@ -10313,7 +10312,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // was tried and rejected: a moving timeline should always stop on
             // the first transport press.)
             Action::PlayPause | Action::PlayPauseReverse => {
-                let pb = self.slots.playbar.inner_mut();
+                let pb = self.ui_context[self.slots.playbar].inner_mut();
                 if pb.playing {
                     pb.playing = false;
                 } else {
@@ -10323,12 +10322,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // Repeat is a setting, not a transport press: the timeline keeps
             // doing whatever it is doing, and the next run-off honours it.
             Action::TogglePlaybarRepeat => {
-                let pb = self.slots.playbar.inner_mut();
+                let pb = self.ui_context[self.slots.playbar].inner_mut();
                 pb.repeat = !pb.repeat;
                 settings_changed = true;
             }
             Action::TogglePlaybarStepButtons => {
-                let pb = self.slots.playbar.inner_mut();
+                let pb = self.ui_context[self.slots.playbar].inner_mut();
                 pb.step_buttons = !pb.step_buttons;
                 settings_changed = true;
             }
@@ -10337,13 +10336,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // tick_frame's last_sim_frame diff.
             Action::FrameNext | Action::FramePrev => {
                 let step = if action == Action::FrameNext { 1.0 } else { -1.0 };
-                self.slots.playbar.inner_mut().step(step);
+                self.ui_context[self.slots.playbar].inner_mut().step(step);
             }
             // Rewind: pause whatever is playing and land on the start frame.
             // The scene rebuild follows from tick_frame's last_sim_frame
             // diff, as for the steps above.
             Action::FrameStart => {
-                let pb = self.slots.playbar.inner_mut();
+                let pb = self.ui_context[self.slots.playbar].inner_mut();
                 pb.playing = false;
                 pb.current_frame = pb.start_frame;
             }
@@ -10463,8 +10462,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 let r = self.width / old_width;
                 self.splitter_layout.scale(r);
                 let body_h = self.body_h();
-                self.slots.splitter1.set_rect(self.splitter_layout.splitter1_x, HEADER_H, SPLITTER_W, body_h);
-                self.slots.splitter2.set_rect(self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
+                self.ui_context[self.slots.splitter1].set_rect(self.splitter_layout.splitter1_x, HEADER_H, SPLITTER_W, body_h);
+                self.ui_context[self.slots.splitter2].set_rect(self.splitter_layout.splitter2_x, HEADER_H, SPLITTER_W, body_h);
             }
 
             self.window_configured = true;
@@ -10620,13 +10619,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         if i == PARAM_IDX && !self.params_claims(self.cursor_x, self.cursor_y) {
                             continue;
                         }
-                        let root = self.slots.get_dyn_mut(i).base().id();
+                        let root = self.slots.get_dyn_mut(&mut self.ui_context, i).base().id();
                         if self.ui_context.propagate_event(&wheel_ev, root) {
                             handled = true;
                             if i == CONTENT_IDX {
                                 let active_node_area_y = self.positions[CONTENT_IDX].1;
                                 let active_node_area_x = self.positions[CONTENT_IDX].0;
-                                let w = self.slots.get_dyn(i);
+                                let w = self.slots.get_dyn(&self.ui_context, i);
                                 let (gx, gy) = cce_ui::widget::GraphController::grid_origin(
                                     w.as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph"),
                                 );
@@ -10710,7 +10709,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     // hand the event to the viewport widget here — its ctrl
                     // branch is the camera zoom. (Trackpad pinches take the
                     // direct `handle_pinch` path and never reach this.)
-                    self.slots.get_dyn_mut(VIEWPORT_IDX).set_modifiers(
+                    self.slots.get_dyn_mut(&mut self.ui_context, VIEWPORT_IDX).set_modifiers(
                         self.modifiers.control_key(),
                         self.modifiers.shift_key(),
                         self.modifiers.alt_key(),
@@ -10837,10 +10836,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         }
                     } else if let Some(idx) = self.drag_widget {
                         // A widget drag: the slot's own Input drag hooks are driving.
-                        self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                        self.slots.get_dyn_mut(&mut self.ui_context, idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                         if {
                             let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                            let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                            let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                             unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                         } {
                             changed = true;
@@ -10995,7 +10994,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         // The HUD is under every plate, and without its own
                         // plate it is its rows: a press anywhere else is the
                         // plate's or the scene's.
-                        state.params_claims(x, y) && state.slots.get_dyn(i).hit_test(x, y, &state.ui_context)
+                        state.params_claims(x, y) && state.slots.get_dyn(&state.ui_context, i).hit_test(x, y, &state.ui_context)
                     } else if state.network_overlay() && i == CONTENT_IDX {
                         // The graph's RECT spans the window in overlay mode,
                         // so the widget's own hit test would claim every press
@@ -11006,7 +11005,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         // same way.
                         state.overlay_claims(x, y)
                     } else {
-                        state.slots.get_dyn(i).hit_test(x, y, &state.ui_context)
+                        state.slots.get_dyn(&state.ui_context, i).hit_test(x, y, &state.ui_context)
                     }
                 };
 
@@ -11150,10 +11149,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             if on_border {
                                 self.focused_pane = LEFT_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
+                                    self.ui_context.unfocus_id(self.slots.id(old));
                                     self.focused_widget = None;
                                 }
-                                self.ui_context.unfocus_widget(&mut self.slots.param);
+                                self.ui_context.unfocus_id(self.slots.param.id());
                                 self.sync_parameters_to_project();
                                 return true;
                             }
@@ -11168,7 +11167,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             let (bx, by, bw, bh) = self.positions[BREADCRUMB_IDX];
                             let (cx, cy) = (self.cursor_x, self.cursor_y);
                             if cx >= bx && cx < bx + bw && cy >= by && cy < by + bh
-                                && self.slots.breadcrumb.mouse_input(*button, *btn_state, cx, cy, &mut self.ui_context)
+                                && self.ui_context.lend_h(self.slots.breadcrumb, |b, ui| b.mouse_input(*button, *btn_state, cx, cy, ui)).unwrap_or(false)
                             {
                                 return true;
                             }
@@ -11185,7 +11184,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 });
                                 self.focused_pane = PARAM_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
+                                    self.ui_context.unfocus_id(self.slots.id(old));
                                     self.focused_widget = None;
                                 }
                                 return true;
@@ -11204,7 +11203,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 });
                                 self.focused_pane = SPREADSHEET_MENUBAR_IDX;
                                 if let Some(old) = self.focused_widget {
-                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
+                                    self.ui_context.unfocus_id(self.slots.id(old));
                                     self.focused_widget = None;
                                 }
                                 return true;
@@ -11253,7 +11252,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             self.grid_cursor_drag = Some((col, row));
                             self.focused_pane = LEFT_MENUBAR_IDX;
                             if let Some(old) = self.focused_widget.take() {
-                                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
+                                self.ui_context.unfocus_id(self.slots.id(old));
                             }
                             self.sync_pane_focus();
                             return true;
@@ -11280,7 +11279,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             }
                             self.focused_pane = RIGHT_MENUBAR_IDX;
                             if let Some(old) = self.focused_widget {
-                                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
+                                self.ui_context.unfocus_id(self.slots.id(old));
                                 self.focused_widget = None;
                             }
                             self.sync_pane_focus();
@@ -11351,7 +11350,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                     // priority never shadows the graph elsewhere in the strip.
                                     1
                                 } else {
-                                    self.slots.get_dyn_mut(i).z_index()
+                                    self.slots.get_dyn_mut(&mut self.ui_context, i).z_index()
                                 };
                                 -z
                             });
@@ -11419,12 +11418,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
                         if let Some(old) = self.focused_widget {
                             if click_target != Some(old) && click_target != Some(PARAM_IDX) {
-                                self.ui_context.unfocus_widget(self.slots.get_dyn_mut(old));
+                                self.ui_context.unfocus_id(self.slots.id(old));
                                 self.focused_widget = None;
                             }
                         }
                         if click_target != Some(PARAM_IDX) {
-                            self.ui_context.unfocus_widget(&mut self.slots.param);
+                            self.ui_context.unfocus_id(self.slots.param.id());
                             self.sync_parameters_to_project();
                         }
                         if click_target.is_none() && in_circle_network_pane {
@@ -11434,7 +11433,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             changed = true;
                         }
                         if let Some(i) = click_target {
-                            self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                            self.slots.get_dyn_mut(&mut self.ui_context, i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                             // Kept as a binding: the network's cursor-expansion
                             // drag must not arm on a press the graph already
                             // took. A press on a PORT is the case that bites —
@@ -11444,7 +11443,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             // motion the rubber-band line is drawn from.
                             let widget_took = {
                                 let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
+                                let ptr = self.slots.get_dyn_mut(&mut self.ui_context, i) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                             };
                             if widget_took {
@@ -11459,23 +11458,23 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 }
 
                             }
-                            if self.slots.draggable(i) {
-                                self.slots.get_dyn_mut(i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                            if self.slots.draggable(&self.ui_context, i) {
+                                self.slots.get_dyn_mut(&mut self.ui_context, i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                                 {
                                     let ev = cce_ui::widget::Event::DragStart { start_x: self.cursor_x, start_y: self.cursor_y };
-                                    let ptr = self.slots.get_dyn_mut(i) as *mut (dyn WidgetHost + 'static);
+                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, i) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&ev, &mut self.ui_context); }
                                 }
                                 self.drag_widget = Some(i);
                                 self.drag_press_cursor = Some((self.cursor_x, self.cursor_y));
                             }
                             if i != PARAM_IDX {
-                                self.ui_context.focus_widget(self.slots.get_dyn_mut(i));
+                                self.ui_context.focus_id(self.slots.id(i));
                                 self.focused_widget = Some(i);
                                 if self.menubar_at(i).map(|m| m.is_menu_bar()).unwrap_or(false)
-                                    && !self.slots.get_dyn_mut(i).focused(&self.ui_context)
+                                    && !self.slots.get_dyn(&self.ui_context, i).focused(&self.ui_context)
                                 {
-                                    self.ui_context.unfocus_widget(self.slots.get_dyn_mut(i));
+                                    self.ui_context.unfocus_id(self.slots.id(i));
                                     self.focused_widget = None;
                                 }
                             }
@@ -11513,9 +11512,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                             // it trading places would leave
                                             // the rest where the offset put
                                             // them, the selection scattered.
-                                            self.slots.content.inner_mut().set_swap_on_drop(false);
+                                            self.ui_context[self.slots.content].inner_mut().set_swap_on_drop(false);
                                         } else {
-                                            self.slots.content.inner_mut().set_swap_on_drop(true);
+                                            self.ui_context[self.slots.content].inner_mut().set_swap_on_drop(true);
                                             self.grid_cursor_col = pos.0 as i32;
                                             self.grid_cursor_row = pos.1 as i32;
                                         }
@@ -11572,7 +11571,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 AppDrag::SpreadsheetResize { .. } => SPREADSHEET_IDX,
                             };
                             {
-                                let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                             }
                             self.sync_layout();
@@ -11582,19 +11581,19 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             let idx = self.drag_widget.unwrap();
                             if idx == PARAM_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 self.sync_layout();
                             } else if idx == SPREADSHEET_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 self.sync_layout();
                             } else if idx == CONTENT_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                                 let updated_nodes = self.graph().get_nodes();
@@ -11633,7 +11632,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 self.update_panel_bounds();
                             } else {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                                     unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
                                 }
                             }
@@ -11649,12 +11648,14 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         }
                         let mut sync_params = false;
                         {
-                            let ctx = &mut self.ui_context;
+                            let (ctrl, shift, alt) = (self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                            let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
                             for i in 0..WIDGET_COUNT {
-                                let w = self.slots.get_dyn_mut(i);
-                                w.set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-                                let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                if w.handle_event(&ev, ctx) {
+                                let handled = self.ui_context.lend(self.slots.id(i), |w, ui| {
+                                    w.set_modifiers(ctrl, shift, alt);
+                                    w.handle_event(&ev, ui)
+                                });
+                                if handled == Some(true) {
                                     changed = true;
                                     if i == PARAM_IDX {
                                         sync_params = true;
@@ -11744,7 +11745,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     }
                 }
 
-                if self.slots.param.keyboard_input(event, &mut self.ui_context) {
+                if self.ui_context.lend_h(self.slots.param, |p, ui| p.keyboard_input(event, ui)).unwrap_or(false) {
                     self.sync_parameters_to_project();
                     return true;
                 }
@@ -11956,7 +11957,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 } else if let Some(idx) = self.focused_widget {
                     {
                     let kev = cce_ui::widget::Event::KeyInput(event.clone());
-                    let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                     unsafe { (*ptr).handle_event(&kev, &mut self.ui_context) }
                 }
                 } else { false }
@@ -11973,7 +11974,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         if std::mem::take(&mut self.title_dirty) {
             self.update_window_title();
         }
-        if self.settings_save_pending && !self.slots.dialog.slider_dragging() {
+        if self.settings_save_pending && !self.ui_context[self.slots.dialog].slider_dragging() {
             self.settings_save_pending = false;
             self.save_settings();
         }
@@ -12073,9 +12074,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                          let settings = DesignSettings::load();
                          self.default_project_setting = settings.default_project.clone();
                          self.gpu_preference = settings.gpu.clone();
-                         self.slots.playbar.inner_mut().repeat = settings.playbar_repeat;
-                         self.slots.playbar.inner_mut().step_buttons = settings.playbar_step_buttons;
-                         self.slots.playbar.inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
+                         self.ui_context[self.slots.playbar].inner_mut().repeat = settings.playbar_repeat;
+                         self.ui_context[self.slots.playbar].inner_mut().step_buttons = settings.playbar_step_buttons;
+                         self.ui_context[self.slots.playbar].inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
                          self.square_viewport = settings.viewport.square;
                          self.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;
@@ -12114,9 +12115,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let mut tick_changed = false;
         let mut param_ticked = false;
         let mut graph_ticked = false;
-        let ctx = &mut self.ui_context;
         for i in 0..WIDGET_COUNT {
-            if self.slots.get_dyn_mut(i).tick(dt, ctx) {
+            if self.ui_context.lend(self.slots.id(i), |w, ui| w.tick(dt, ui)) == Some(true) {
                 tick_changed = true;
                 if i == PARAM_IDX {
                     param_ticked = true;
@@ -12182,9 +12182,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // reveal window, and syncing the whole parameter list on each of
         // those (clone + compare every param) made the params scroll choppy.
         if param_ticked {
-            let streamed = self
-                .slots
-                .param
+            let streamed = self.ui_context[self.slots.param]
                 .as_any_mut()
                 .downcast_mut::<cce_ui::widget::ParametersBg>()
                 .map_or(false, |p| p.take_tick_value_change());
@@ -12284,10 +12282,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.pan_velocity_y = 0.0;
             self.sync_grid_settings();
             if let Some(idx) = self.drag_widget {
-                self.slots.get_dyn_mut(idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
+                self.slots.get_dyn_mut(&mut self.ui_context, idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                 {
                                 let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn WidgetHost + 'static);
+                                let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
                                 unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
                             };
             }
@@ -12586,7 +12584,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // scene: x right, y up, z back toward the camera (a right-handed
         // view looks down its own -Z).
         let row = |i: usize| [m.x_axis[i], m.y_axis[i], m.z_axis[i]];
-        self.slots.param.inner_mut().set_trackball_view([row(0), row(1), row(2)])
+        self.ui_context[self.slots.param].inner_mut().set_trackball_view([row(0), row(1), row(2)])
     }
 
     pub fn stage_frame(&mut self, renderer: &mut cce_ui::vk::VkRenderer) -> bool {

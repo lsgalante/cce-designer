@@ -142,7 +142,7 @@ impl State {
             splitters,
             plates,
             frame_range: {
-                let pb = self.slots.playbar.inner();
+                let pb = self.ui_context[self.slots.playbar].inner();
                 Some((pb.start_frame.round() as i32, pb.end_frame.round() as i32))
             },
             default_view: Some(crate::app::DefaultCameraView {
@@ -284,7 +284,7 @@ impl State {
         // list and the splitters follow.
         if let Some((start, end)) = vs.frame_range {
             if start >= 1 && end > start {
-                let pb = self.slots.playbar.inner_mut();
+                let pb = self.ui_context[self.slots.playbar].inner_mut();
                 pb.start_frame = start as f32;
                 pb.end_frame = end as f32;
                 pb.current_frame = pb.current_frame.clamp(pb.start_frame, pb.end_frame);

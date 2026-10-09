@@ -58,7 +58,7 @@ impl State {
     /// right press there is about.
     pub fn plate_at(&self, px: f32, py: f32) -> Option<usize> {
         PLATE_SLOTS.iter().rev().copied().find(|&idx| {
-            let w = self.slots.get_dyn(idx);
+            let w = self.slots.get_dyn(&self.ui_context, idx);
             if !w.visible() {
                 return false;
             }
@@ -126,7 +126,7 @@ impl State {
         if options.is_empty() {
             return;
         }
-        let target = self.slots.get_dyn(idx).base().id();
+        let target = self.slots.get_dyn(&self.ui_context, idx).base().id();
         self.put_up_menu(at, None, options, 0, target);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
@@ -140,7 +140,7 @@ impl State {
         if options.is_empty() {
             return;
         }
-        let target = self.slots.get_dyn(idx).base().id();
+        let target = self.slots.get_dyn(&self.ui_context, idx).base().id();
         self.put_up_menu(Some(at), Some(from), options, 0, target);
         self.plate_menu_slot = Some(idx);
         self.plate_menu_actions = actions;
@@ -356,7 +356,7 @@ impl State {
                     continue;
                 }
                 self.positions[i] = (0.0, 0.0, 0.0, 0.0);
-                self.slots.get_dyn_mut(i).set_visible(false);
+                self.slots.get_dyn_mut(&mut self.ui_context, i).set_visible(false);
             }
             let m = DETACHED_MARGIN;
             self.positions[idx] = (
@@ -365,7 +365,7 @@ impl State {
                 (self.width - 2.0 * m).max(0.0),
                 (self.height - 2.0 * m).max(0.0),
             );
-            self.slots.get_dyn_mut(idx).set_visible(true);
+            self.slots.get_dyn_mut(&mut self.ui_context, idx).set_visible(true);
             return;
         }
 
@@ -391,7 +391,7 @@ impl State {
         if idx == NETWORK_PANEL_IDX {
             for child in [crate::slots::CONTENT_IDX, crate::slots::BREADCRUMB_IDX] {
                 self.positions[child] = (0.0, 0.0, 0.0, 0.0);
-                self.slots.get_dyn_mut(child).set_visible(false);
+                self.slots.get_dyn_mut(&mut self.ui_context, child).set_visible(false);
             }
         }
     }

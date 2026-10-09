@@ -95,33 +95,33 @@ impl State {
                             LEFT_MENUBAR_IDX => {
                                 if !state.show_network {
                                     state.show_network = true;
-                                    state.slots.content.set_visible(true);
-                                    state.slots.left_menubar.set_visible(true);
-                                    state.slots.breadcrumb.set_visible(true);
+                                    state.ui_context[state.slots.content].set_visible(true);
+                                    state.ui_context[state.slots.left_menubar].set_visible(true);
+                                    state.ui_context[state.slots.breadcrumb].set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 4, true);
                                 }
                             }
                             RIGHT_MENUBAR_IDX => {
                                 if !state.show_viewport {
                                     state.show_viewport = true;
-                                    state.slots.viewport.set_visible(true);
-                                    state.slots.right_menubar.set_visible(true);
+                                    state.ui_context[state.slots.viewport].set_visible(true);
+                                    state.ui_context[state.slots.right_menubar].set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 5, true);
                                 }
                             }
                             PARAM_MENUBAR_IDX => {
                                 if !state.show_parameters {
                                     state.show_parameters = true;
-                                    state.slots.param.set_visible(true);
-                                    state.slots.param_menubar.set_visible(true);
+                                    state.ui_context[state.slots.param].set_visible(true);
+                                    state.ui_context[state.slots.param_menubar].set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 6, true);
                                 }
                             }
                             SPREADSHEET_MENUBAR_IDX => {
                                 if !state.show_spreadsheet {
                                     state.show_spreadsheet = true;
-                                    state.slots.spreadsheet.set_visible(true);
-                                    state.slots.spreadsheet_menubar.set_visible(true);
+                                    state.ui_context[state.slots.spreadsheet].set_visible(true);
+                                    state.ui_context[state.slots.spreadsheet_menubar].set_visible(true);
                                     state.menu_mut(HEADER_IDX).set_item_checked(2, 7, true);
                                 }
                             }
@@ -162,7 +162,7 @@ impl State {
                 state.read_panel_offsets();
                 state.sync_cursor_and_selection();
 
-                if state.drag_widget == Some(PARAM_IDX) && state.slots.param.is_dragging() {
+                if state.drag_widget == Some(PARAM_IDX) && state.ui_context[state.slots.param].is_dragging() {
                     state.sync_parameters_to_project();
                 }
 
@@ -243,7 +243,7 @@ impl State {
             // Additive sibling of the project fields: the playbar is app
             // state, not project state, so it must not enter the Project
             // struct (the save format) — but automation needs to read it.
-            let pb = self.slots.playbar.inner();
+            let pb = self.ui_context[self.slots.playbar].inner();
             v["playbar"] = serde_json::json!({
                 "frame": pb.current_frame.round() as i64,
                 "playing": pb.playing,
@@ -590,7 +590,7 @@ impl State {
             }
             McpAction::SetFrame { frame } => {
                 let clamped = {
-                    let pb = state.slots.playbar.inner_mut();
+                    let pb = state.ui_context[state.slots.playbar].inner_mut();
                     pb.current_frame = frame.clamp(pb.start_frame, pb.end_frame).round();
                     pb.current_frame
                 };

@@ -416,7 +416,7 @@ mod tests {
         let collapse = "Collapse".to_string();
 
         // The spreadsheet: the plate menu alone.
-        let (x, y, w, h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        let (x, y, w, h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
         press_at(&mut state, x + w - 6.0, y + h - 6.0, MouseButton::Right);
         assert_eq!(state.plate_menu_slot, Some(SPREADSHEET_IDX));
         assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
@@ -431,7 +431,7 @@ mod tests {
         state.apply_action(crate::app::McpAction::Select { slot }, &mut redraw).unwrap();
         state.apply_layout();
         state.params_plate = true;
-        let (x, y, w, h) = state.slots.get_dyn(PARAM_IDX).rect();
+        let (x, y, w, h) = state.slots.get_dyn(&state.ui_context, PARAM_IDX).rect();
         let free = (0..(h as i32))
             .rev()
             .map(|dy| (x + w - 6.0, y + dy as f32))
@@ -489,7 +489,7 @@ mod tests {
             state.execute_menu_action("Show Playbar Pane");
         }
         let (x, y, w, h) = state.positions[SPREADSHEET_IDX];
-        let table = state.slots.spreadsheet().content_width().ceil();
+        let table = state.slots.spreadsheet(&state.ui_context).content_width().ceil();
         assert_eq!((x, w), (18.0, table.clamp(State::SPREADSHEET_MIN_W, 1600.0 - 36.0)), "as wide as its table, within the window");
         assert_eq!(y + h, state.positions[PLAYBAR_IDX].1 - 18.0, "a gap above the playbar");
 
@@ -544,19 +544,19 @@ mod tests {
         assert!(!state.pane_is_collapsed(NETWORK_PANEL_IDX), "the network does not collapse");
         state.execute_menu_action("Show Spreadsheet Pane");
 
-        let (_, _, _, full_h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        let (_, _, _, full_h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
         assert!(full_h > STUB_H, "the plate starts taller than a stub");
 
         state.set_pane_collapsed(SPREADSHEET_IDX, true);
-        let (_, _, _, stub_h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        let (_, _, _, stub_h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
         assert_eq!(stub_h, STUB_H, "collapsed plate is not the stub height");
         // A right press on the stub offers Expand; a left press expands it.
-        let (x, y, w, h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        let (x, y, w, h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
         press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Right);
         assert!(state.plate_menu_actions.contains(&crate::plate_menu::PlateMenuAction::Expand));
         state.close_plate_menu();
         press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Left);
-        let (_, _, _, back_h) = state.slots.get_dyn(SPREADSHEET_IDX).rect();
+        let (_, _, _, back_h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
         assert_eq!(back_h, full_h, "expanding did not restore the plate height");
     }
 
@@ -573,10 +573,10 @@ mod tests {
         child.detached_pane = Some(PARAM_IDX);
         child.resize(600.0, 400.0, 1.0);
         for i in 0..WIDGET_COUNT {
-            let visible = child.slots.get_dyn(i).visible();
+            let visible = child.slots.get_dyn(&child.ui_context, i).visible();
             assert_eq!(visible, i == PARAM_IDX, "slot {i} visibility in a detached window");
         }
-        let (x, y, w, h) = child.slots.get_dyn(PARAM_IDX).rect();
+        let (x, y, w, h) = child.slots.get_dyn(&child.ui_context, PARAM_IDX).rect();
         assert_eq!((x, y), (DETACHED_MARGIN, DETACHED_MARGIN));
         assert_eq!(w, 600.0 - 2.0 * DETACHED_MARGIN);
         assert_eq!(h, 400.0 - 2.0 * DETACHED_MARGIN);
@@ -586,17 +586,17 @@ mod tests {
         use crate::plate_menu::STUB_H;
         let mut parent = State::new(false);
         parent.resize(1600.0, 900.0, 1.0);
-        assert!(parent.slots.get_dyn(PARAM_IDX).visible(), "params starts in the parent");
-        let (_, _, _, full_h) = parent.slots.get_dyn(PARAM_IDX).rect();
+        assert!(parent.slots.get_dyn(&parent.ui_context, PARAM_IDX).visible(), "params starts in the parent");
+        let (_, _, _, full_h) = parent.slots.get_dyn(&parent.ui_context, PARAM_IDX).rect();
 
         parent.detached_panes[PARAM_IDX] = true;
         parent.rebuild_positions();
         parent.apply_layout();
 
-        let (_, _, _, stub_h) = parent.slots.get_dyn(PARAM_IDX).rect();
+        let (_, _, _, stub_h) = parent.slots.get_dyn(&parent.ui_context, PARAM_IDX).rect();
         assert!(full_h > stub_h, "detaching did not shrink the pane in the parent");
         assert_eq!(stub_h, STUB_H, "the parent's leftover is not a stub");
-        let (sx, sy, sw, sh) = parent.slots.get_dyn(PARAM_IDX).rect();
+        let (sx, sy, sw, sh) = parent.slots.get_dyn(&parent.ui_context, PARAM_IDX).rect();
         press_at(&mut parent, sx + sw * 0.5, sy + sh * 0.5, cce_ui::widget::MouseButton::Right);
         assert_eq!(parent.plate_menu_actions, vec![crate::plate_menu::PlateMenuAction::Reattach],
             "the stub's right press offers Reattach — nothing else can reattach the pane");
@@ -604,7 +604,7 @@ mod tests {
         // Collapsed and detached stubs must not read the same.
         let label = parent.pane_stub_label(PARAM_IDX).expect("a detached pane is stubbed");
         assert!(label.contains("detached"), "stub does not say the pane is detached: {label}");
-        assert!(parent.slots.get_dyn(VIEWPORT_IDX).visible(), "the rest of the parent survived");
+        assert!(parent.slots.get_dyn(&parent.ui_context, VIEWPORT_IDX).visible(), "the rest of the parent survived");
     }
 
     /// The network has no plate, so a right press on empty
@@ -1096,7 +1096,7 @@ mod tests {
         use crate::slots::PARAM_IDX;
         let mut state = State::new(false);
         state.resize(1600.0, 900.0, 1.0);
-        let (_, _, _, full_h) = state.slots.get_dyn(PARAM_IDX).rect();
+        let (_, _, _, full_h) = state.slots.get_dyn(&state.ui_context, PARAM_IDX).rect();
 
         state.detached_panes[PARAM_IDX] = true;
         state.rebuild_positions();
@@ -1110,7 +1110,7 @@ mod tests {
         state.reattach_plate(PARAM_IDX);
         assert!(!state.pane_is_detached(PARAM_IDX), "still marked detached after reattach");
         assert!(state.pane_stub_label(PARAM_IDX).is_none(), "still a stub after reattach");
-        let (_, _, _, back_h) = state.slots.get_dyn(PARAM_IDX).rect();
+        let (_, _, _, back_h) = state.slots.get_dyn(&state.ui_context, PARAM_IDX).rect();
         assert_eq!(back_h, full_h, "reattach did not restore the pane height");
     }
 
@@ -1180,7 +1180,7 @@ mod tests {
         // which are on the scene and not plates of a dock.
         let idx = PLATE_SLOTS.iter().copied()
             .filter(|&i| i != crate::slots::NETWORK_PANEL_IDX && i != crate::slots::PARAM_IDX)
-            .find(|&i| state.slots.get_dyn(i).visible())
+            .find(|&i| state.slots.get_dyn(&state.ui_context, i).visible())
             .expect("some plate is shown at this size");
 
         state.open_plate_menu(idx);
@@ -1516,7 +1516,7 @@ mod tests {
         state.resize(1600.0, 900.0, 1.0);
         state.execute_menu_action("Show Spreadsheet Pane");
         assert_eq!(state.positions[NETWORK_PANEL_IDX], (0.0, HEADER_H, 1600.0, state.body_h()));
-        assert!(state.slots.get_dyn(crate::slots::CONTENT_IDX).visible(), "shown");
+        assert!(state.slots.get_dyn(&state.ui_context, crate::slots::CONTENT_IDX).visible(), "shown");
         assert_eq!(state.positions[SPREADSHEET_IDX].0, 18.0, "the spreadsheet flush left, a gap in");
 
         state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
@@ -1539,7 +1539,7 @@ mod tests {
         let x = (0..40)
             .map(|k| bx + 200.0 + k as f32 * 5.0)
             .find(|&x| {
-                !state.slots.get_dyn(BREADCRUMB_IDX).hit_test(x, y, &state.ui_context)
+                !state.slots.get_dyn(&state.ui_context, BREADCRUMB_IDX).hit_test(x, y, &state.ui_context)
                     && state.graph().node_at(x, y).is_none()
                     && !state.over_floating_pane_at(x, y)
             })
@@ -1980,14 +1980,14 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let mut state = State::new(false);
         state.apply_setting("Node Wire Style", "Bezier");
-        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::Bezier);
+        assert_eq!(state.ui_context[state.slots.content].inner().wire_style(), WireStyle::Bezier);
         assert_eq!(state.display_settings().viewport.node_wire_style, "bezier");
         state.save_to_file(&dir).expect("save");
 
         state.apply_setting("Node Wire Style", "Straight");
         assert!(state.has_unsaved_changes(), "a wire style is an edit to the file");
         state.load_from_file(&dir).expect("load");
-        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::Bezier, "the file's style comes back");
+        assert_eq!(state.ui_context[state.slots.content].inner().wire_style(), WireStyle::Bezier, "the file's style comes back");
 
         // A file that names no style hands the choice back to the config.
         let state_json = dir.join("state.json");
@@ -1995,8 +1995,8 @@ mod tests {
         v["view_state"]["display"]["viewport"].as_object_mut().unwrap().remove("node_wire_style");
         fs::write(&state_json, serde_json::to_string(&v).unwrap()).unwrap();
         state.load_from_file(&dir).expect("load an older save");
-        assert_eq!(state.slots.content.inner().chosen_wire_style(), None);
-        assert_eq!(state.slots.content.inner().wire_style(), WireStyle::configured());
+        assert_eq!(state.ui_context[state.slots.content].inner().chosen_wire_style(), None);
+        assert_eq!(state.ui_context[state.slots.content].inner().wire_style(), WireStyle::configured());
 
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
@@ -2034,7 +2034,7 @@ mod tests {
         state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
         state.params_plate = true;
         state.positions[crate::slots::PARAM_IDX] = (800.0, 200.0, 200.0, 690.0);
-        state.slots.get_dyn_mut(crate::slots::PARAM_IDX).set_rect(800.0, 200.0, 200.0, 690.0);
+        state.slots.get_dyn_mut(&mut state.ui_context, crate::slots::PARAM_IDX).set_rect(800.0, 200.0, 200.0, 690.0);
         let plate = state.params_claim();
         assert!(plate.1 == 200.0 && plate.3 > 100.0 && plate.3 < 690.0, "the plate fits the rows: {plate:?}");
         let in_plate = |x: f32, y: f32| x >= 800.0 && x < 1000.0 && y + 6.0 >= plate.1 && y + 6.0 < plate.1 + plate.3;
@@ -2049,7 +2049,7 @@ mod tests {
         assert!(state.point_number_labels().len() >= fewer.len());
         state.params_plate = true;
         state.positions[crate::slots::PARAM_IDX] = (px, py, pw, ph);
-        state.slots.get_dyn_mut(crate::slots::PARAM_IDX).set_rect(px, py, pw, ph);
+        state.slots.get_dyn_mut(&mut state.ui_context, crate::slots::PARAM_IDX).set_rect(px, py, pw, ph);
         assert_eq!(state.point_number_labels().len(), all.len());
     }
 
@@ -2075,9 +2075,9 @@ mod tests {
         assert_eq!(flags, (false, false, true, true), "its bottom corners are the window's");
         // A shelf of the window's edge: the transport stands clear of the
         // window's lip, which is drawn over the shelf's sides and bottom.
-        assert_eq!(state.slots.playbar.inner().frame, lip);
+        assert_eq!(state.ui_context[state.slots.playbar].inner().frame, lip);
         let pb_rect = cce_ui::scene::layout::Rect { x: pb.0, y: pb.1, width: pb.2, height: pb.3 };
-        let prev = state.slots.playbar.inner().transport_button_rect(pb_rect, -1).expect("the step buttons are on");
+        let prev = state.ui_context[state.slots.playbar].inner().transport_button_rect(pb_rect, -1).expect("the step buttons are on");
         assert!(prev.x >= lip, "clear of the left lip: {prev:?}");
         assert!(prev.y + prev.height <= 900.0 - STATUS_H - lip, "clear of the bottom lip: {prev:?}");
         // (The network has no plate: it spans the window, under the shelf.)
@@ -2161,7 +2161,7 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         let (hx, hy, hw, hh) = state.positions[PARAM_IDX];
-        let pb = state.slots.get_dyn(PARAM_IDX).as_any().downcast_ref::<cce_ui::widget::ParametersBg>().unwrap();
+        let pb = state.slots.get_dyn(&state.ui_context, PARAM_IDX).as_any().downcast_ref::<cce_ui::widget::ParametersBg>().unwrap();
         assert!(pb.scrollbar_visible(), "the sphere's rows overflow a {hh} px HUD and scroll");
         assert_eq!(state.params_claim(), (hx, hy, hw, hh), "the plate fills the HUD");
 
@@ -3064,7 +3064,7 @@ mod tests {
         state.cursor_x = context_menu::x() + 20.0;
         state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 6.0) });
-        assert_eq!(state.slots.playbar.inner().fps, 30.0);
+        assert_eq!(state.ui_context[state.slots.playbar].inner().fps, 30.0);
         assert!(state.playbar_menu_open(), "a slider row keeps the menu up");
         let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
         assert_eq!(crate::app::DesignSettings::from_kdl_str(&kdl).playbar_fps, 30.0, "persisted");
@@ -3072,18 +3072,18 @@ mod tests {
 
         // The range: an end moved past the other carries it along, and the
         // playhead stays inside.
-        state.slots.playbar.inner_mut().current_frame = 200.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 200.0;
         let i = actions.iter().position(|a| *a == A::EndFrameSlider).unwrap();
         state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -100.0) });
-        let pb = state.slots.playbar.inner();
+        let pb = state.ui_context[state.slots.playbar].inner();
         assert_eq!(pb.end_frame, 140.0, "{}", pb.end_frame);
         assert_eq!(pb.current_frame, 140.0, "the playhead is kept inside");
         assert!(state.has_unsaved_changes(), "the range is the project's");
         let i = actions.iter().position(|a| *a == A::StartFrameSlider).unwrap();
         state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 150.0) });
-        let pb = state.slots.playbar.inner();
+        let pb = state.ui_context[state.slots.playbar].inner();
         assert_eq!((pb.start_frame, pb.end_frame), (151.0, 152.0), "the far end is carried a frame ahead of the near");
 
         // A command row runs and closes.
@@ -3091,7 +3091,7 @@ mod tests {
         state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         assert!(!state.playbar_menu_open());
-        assert!(!state.slots.playbar.inner().repeat, "Repeat was flipped");
+        assert!(!state.ui_context[state.slots.playbar].inner().repeat, "Repeat was flipped");
 
         // The range rides the project file.
         state.save_to_file(&dir).expect("save");
@@ -3099,7 +3099,7 @@ mod tests {
         let mut again = State::new(false);
         again.resize(1600.0, 900.0, 1.0);
         again.load_from_file(&dir).expect("load");
-        let pb = again.slots.playbar.inner();
+        let pb = again.ui_context[again.slots.playbar].inner();
         assert_eq!((pb.start_frame, pb.end_frame), (151.0, 152.0));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3122,29 +3122,29 @@ mod tests {
         state.apply_layout();
         let (px, py, pw, ph) = state.positions[PLAYBAR_IDX];
         let rect = Rect { x: px, y: py, width: pw, height: ph };
-        assert!(state.slots.playbar.inner().step_buttons, "on by default");
+        assert!(state.ui_context[state.slots.playbar].inner().step_buttons, "on by default");
         let press = |state: &mut State, r: Rect| {
             let (x, y) = (r.x + r.width * 0.5, r.y + r.height * 0.5);
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
             state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
         };
-        let pb = state.slots.playbar.inner();
+        let pb = state.ui_context[state.slots.playbar].inner();
         let prev = pb.transport_button_rect(rect, -1).expect("a Previous Frame button");
         let play = pb.transport_button_rect(rect, 0).expect("a play button");
         let next = pb.transport_button_rect(rect, 1).expect("a Next Frame button");
         assert!(prev.x + prev.width < play.x && play.x + play.width < next.x, "|< > >| left to right");
 
-        state.slots.playbar.inner_mut().current_frame = 10.4;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 10.4;
         press(&mut state, next);
-        assert_eq!(state.slots.playbar.inner().current_frame, 11.0, "a whole frame on, off the rounded one");
+        assert_eq!(state.ui_context[state.slots.playbar].inner().current_frame, 11.0, "a whole frame on, off the rounded one");
         press(&mut state, prev);
         press(&mut state, prev);
-        assert_eq!(state.slots.playbar.inner().current_frame, 9.0);
-        assert!(!state.slots.playbar.inner().playing, "a step does not start playback");
-        state.slots.playbar.inner_mut().current_frame = 1.0;
+        assert_eq!(state.ui_context[state.slots.playbar].inner().current_frame, 9.0);
+        assert!(!state.ui_context[state.slots.playbar].inner().playing, "a step does not start playback");
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 1.0;
         press(&mut state, prev);
-        assert_eq!(state.slots.playbar.inner().current_frame, 1.0, "held inside the range");
+        assert_eq!(state.ui_context[state.slots.playbar].inner().current_frame, 1.0, "held inside the range");
 
         // The menu's switch hides them, and is saved.
         let (options, actions) = state.playbar_menu_rows();
@@ -3157,7 +3157,7 @@ mod tests {
         state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         assert!(!state.playbar_menu_open());
-        let pb = state.slots.playbar.inner();
+        let pb = state.ui_context[state.slots.playbar].inner();
         assert!(!pb.step_buttons);
         assert!(pb.transport_button_rect(rect, -1).is_none() && pb.transport_button_rect(rect, 1).is_none());
         assert_eq!(pb.transport_button_rect(rect, 0).unwrap().x, prev.x, "the play button takes the first place");
@@ -3165,11 +3165,11 @@ mod tests {
         assert!(!crate::app::DesignSettings::from_kdl_str(&kdl).playbar_step_buttons, "persisted");
 
         // Where Next Frame stood is the track now: a press there scrubs.
-        state.slots.playbar.inner_mut().current_frame = 50.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 50.0;
         press(&mut state, next);
-        assert_ne!(state.slots.playbar.inner().current_frame, 51.0, "no step button there any more");
+        assert_ne!(state.ui_context[state.slots.playbar].inner().current_frame, 51.0, "no step button there any more");
         state.run_command("toggle_playbar_step_buttons");
-        assert!(state.slots.playbar.inner().step_buttons);
+        assert!(state.ui_context[state.slots.playbar].inner().step_buttons);
     }
 
     /// Camera Pivot Size is a slider under Show Camera Pivot, over 0–1:
@@ -3503,7 +3503,7 @@ mod tests {
 
         let mut state = State::new(false);
         {
-            let pb = state.slots.playbar.inner_mut();
+            let pb = state.ui_context[state.slots.playbar].inner_mut();
             pb.start_frame = 1.0;
             pb.end_frame = 48.0;
             pb.current_frame = 17.5;
@@ -3512,20 +3512,20 @@ mod tests {
         }
         assert!(state.run_command("frame_start"));
         {
-            let pb = state.slots.playbar.inner();
+            let pb = state.ui_context[state.slots.playbar].inner();
             assert!(!pb.playing, "a moving timeline stops");
             assert_eq!(pb.current_frame, 1.0, "and lands on the start frame");
         }
         // Stopped, mid-timeline: a plain jump.
-        state.slots.playbar.inner_mut().current_frame = 30.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 30.0;
         state.run_command("frame_start");
-        assert_eq!(state.slots.playbar.inner().current_frame, 1.0);
-        assert!(!state.slots.playbar.inner().playing);
+        assert_eq!(state.ui_context[state.slots.playbar].inner().current_frame, 1.0);
+        assert!(!state.ui_context[state.slots.playbar].inner().playing);
         // Whatever the start frame is.
-        state.slots.playbar.inner_mut().start_frame = 5.0;
-        state.slots.playbar.inner_mut().current_frame = 30.0;
+        state.ui_context[state.slots.playbar].inner_mut().start_frame = 5.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 30.0;
         state.run_command("frame_start");
-        assert_eq!(state.slots.playbar.inner().current_frame, 5.0);
+        assert_eq!(state.ui_context[state.slots.playbar].inner().current_frame, 5.0);
     }
 
     /// Either play toggle pauses a moving timeline; direction only chooses
@@ -3537,25 +3537,25 @@ mod tests {
 
         state.execute_action(Action::PlayPauseReverse);
         {
-            let pb = state.slots.playbar.inner();
+            let pb = state.ui_context[state.slots.playbar].inner();
             assert!(pb.playing && pb.reversed, "Down from stopped plays in reverse");
         }
         state.execute_action(Action::PlayPause);
-        assert!(!state.slots.playbar.inner().playing, "Up while reverse-playing pauses");
+        assert!(!state.ui_context[state.slots.playbar].inner().playing, "Up while reverse-playing pauses");
         state.execute_action(Action::PlayPause);
         {
-            let pb = state.slots.playbar.inner();
+            let pb = state.ui_context[state.slots.playbar].inner();
             assert!(pb.playing && !pb.reversed, "Up from stopped plays forward");
         }
         state.execute_action(Action::PlayPauseReverse);
-        assert!(!state.slots.playbar.inner().playing, "Down while forward-playing pauses");
+        assert!(!state.ui_context[state.slots.playbar].inner().playing, "Down while forward-playing pauses");
         state.execute_action(Action::PlayPauseReverse);
-        assert!(state.slots.playbar.inner().reversed, "Down from stopped is reverse again");
+        assert!(state.ui_context[state.slots.playbar].inner().reversed, "Down from stopped is reverse again");
         state.execute_action(Action::PlayPauseReverse);
-        assert!(!state.slots.playbar.inner().playing, "same-direction press pauses");
+        assert!(!state.ui_context[state.slots.playbar].inner().playing, "same-direction press pauses");
 
         {
-            let pb = state.slots.playbar.inner_mut();
+            let pb = state.ui_context[state.slots.playbar].inner_mut();
             pb.playing = true;
             pb.reversed = true;
             pb.repeat = true;
@@ -3563,13 +3563,13 @@ mod tests {
         }
         let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 30.0 };
         let moved =
-            cce_ui::widget::Input::tick(state.slots.playbar.inner_mut(), 0.1, rect);
+            cce_ui::widget::Input::tick(state.ui_context[state.slots.playbar].inner_mut(), 0.1, rect);
         assert!(moved, "reverse playback advances the frame");
-        assert_eq!(state.slots.playbar.inner().current_frame, 1.0, "the start frame is played, not stepped over");
-        cce_ui::widget::Input::tick(state.slots.playbar.inner_mut(), 0.1, rect);
-        let f = state.slots.playbar.inner().current_frame;
+        assert_eq!(state.ui_context[state.slots.playbar].inner().current_frame, 1.0, "the start frame is played, not stepped over");
+        cce_ui::widget::Input::tick(state.ui_context[state.slots.playbar].inner_mut(), 0.1, rect);
+        let f = state.ui_context[state.slots.playbar].inner().current_frame;
         assert_eq!(f.round(), 240.0, "running off the start wraps to the end, got {f}");
-        assert!(state.slots.playbar.inner().playing, "the wrap does not stop playback");
+        assert!(state.ui_context[state.slots.playbar].inner().playing, "the wrap does not stop playback");
     }
 
     /// Playback plays every frame: a tick that came late moves the shown
@@ -6962,9 +6962,7 @@ mod tests {
         state.sync_parameters_pane();
 
         {
-            let dropdown = state
-                .slots
-                .param
+            let dropdown = state.ui_context[state.slots.param]
                 .inner_mut()
                 .choices
                 .iter_mut()
@@ -7657,9 +7655,7 @@ mod tests {
         state.wire_color = [0.2, 0.6, 0.9];
         state.run_command("command_palette");
         let id = setting_row_id("Wireframe Color");
-        let row = state
-            .slots
-            .dialog
+        let row = state.ui_context[state.slots.dialog]
             .rows
             .iter()
             .find(|r| r.id == id)
@@ -7670,7 +7666,7 @@ mod tests {
         // selector stands behind it at the same value.
         let hex = crate::project::color_to_hex([0.2, 0.6, 0.9]);
         assert_eq!(row.control, Some(Control::Color { hex: hex.clone() }));
-        let sel = state.slots.dialog.color_selector(&id).expect("a colour selector behind the row");
+        let sel = state.ui_context[state.slots.dialog].color_selector(&id).expect("a colour selector behind the row");
         assert_eq!(sel.get_value_string().as_deref(), Some(hex.as_str()));
         let s = SETTINGS.iter().find(|s| s.label == "Wireframe Color").unwrap();
         assert_eq!(s.owner, Owner::Field("wire_color"));
@@ -7684,7 +7680,7 @@ mod tests {
         assert_eq!(state.wire_color, [0.0, 0.0, 0.0], "the colour row writes the live wire colour");
         assert!(state.wire_single_color, "a colour edit turns single-colour mode on");
         assert!(state.dialog_visible());
-        let row = state.slots.dialog.rows.iter().find(|r| r.id == id).unwrap();
+        let row = state.ui_context[state.slots.dialog].rows.iter().find(|r| r.id == id).unwrap();
         assert_eq!(row.control, Some(Control::Color { hex: "#000000".into() }));
 
         // And the switch is a command row of its own, flipped in place.
@@ -8018,12 +8014,12 @@ mod tests {
 
         // A camera node is a row of the palette, found by its name.
         state.open_dialog();
-        state.slots.dialog.query = "camera1".to_string();
+        state.ui_context[state.slots.dialog].query = "camera1".to_string();
         state.refresh_dialog_rows();
         let id = format!("{CAMERA_ROW_PREFIX}camera1");
-        let row = state.slots.dialog.rows.iter().position(|r| r.id == id).expect("no row for camera1");
-        assert_eq!(state.slots.dialog.rows[row].label, "Camera: camera1");
-        state.slots.dialog.selected = row;
+        let row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == id).expect("no row for camera1");
+        assert_eq!(state.ui_context[state.slots.dialog].rows[row].label, "Camera: camera1");
+        state.ui_context[state.slots.dialog].selected = row;
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert!(!state.dialog_visible());
         assert_eq!(state.active_camera, "camera1");
@@ -8656,19 +8652,19 @@ mod tests {
 
         // From the palette: the command turns it into the groups list.
         state.run_command("command_palette");
-        assert_eq!(state.slots.dialog.mode, Mode::Commands);
+        assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Commands);
         assert!(state.run_command("group_markers"));
         assert!(state.dialog_visible());
-        assert_eq!(state.slots.dialog.mode, Mode::Groups);
-        let row = state.slots.dialog.rows.iter().position(|r| r.id == format!("{GROUP_ROW_PREFIX}five")).expect("a row for the group");
-        assert_eq!(state.slots.dialog.rows[row].chord, "5 points");
-        assert_eq!(state.slots.dialog.rows[row].toggle(), Some(false));
+        assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Groups);
+        let row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == format!("{GROUP_ROW_PREFIX}five")).expect("a row for the group");
+        assert_eq!(state.ui_context[state.slots.dialog].rows[row].chord, "5 points");
+        assert_eq!(state.ui_context[state.slots.dialog].rows[row].toggle(), Some(false));
 
         // Enter on the row marks the group, and the list stays up.
-        state.slots.dialog.selected = row;
+        state.ui_context[state.slots.dialog].selected = row;
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert!(state.dialog_visible(), "a switch is worked in place");
-        assert_eq!(state.slots.dialog.rows[row].toggle(), Some(true));
+        assert_eq!(state.ui_context[state.slots.dialog].rows[row].toggle(), Some(true));
         assert!(state.group_marked("five"));
         assert!(!state.marked_group_instances.is_empty() && state.marked_groups_dirty, "the markers are staged");
         let one = state.marked_group_instances.len();
@@ -8694,7 +8690,7 @@ mod tests {
         assert!(!state.group_marked("five"));
         assert!(state.marked_group_instances.is_empty());
         state.dialog_key_input(&typed("z"));
-        assert!(state.slots.dialog.rows.is_empty(), "no group matches");
+        assert!(state.ui_context[state.slots.dialog].rows.is_empty(), "no group matches");
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
         assert!(!state.dialog_visible());
 
@@ -8717,9 +8713,9 @@ mod tests {
         let sibling = state.current_dir().children.iter().position(|c| c.node_type == "box").unwrap();
         let old = state.current_dir().children[sphere].name.clone();
         let other = state.current_dir().children[sibling].name.clone();
-        let row = |state: &State| state.slots.dialog.rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
+        let row = |state: &State| state.ui_context[state.slots.dialog].rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
         let retype = |state: &mut State, name: &str| {
-            while !state.slots.dialog.query.is_empty() {
+            while !state.ui_context[state.slots.dialog].query.is_empty() {
                 state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
             }
             for c in name.chars() {
@@ -8733,9 +8729,9 @@ mod tests {
 
         state.run_node_menu_action(sphere, crate::app::NodeMenuAction::Rename);
         assert!(state.dialog_visible());
-        assert_eq!(state.slots.dialog.mode, Mode::Rename);
-        assert_eq!(state.slots.dialog.query, old, "the dialog opens holding the name");
-        assert_eq!(state.slots.dialog.rows[0].id, RENAME_ROW_ID);
+        assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Rename);
+        assert_eq!(state.ui_context[state.slots.dialog].query, old, "the dialog opens holding the name");
+        assert_eq!(state.ui_context[state.slots.dialog].rows[0].id, RENAME_ROW_ID);
 
         // Its own name, a sibling's, and none: each is said, and Enter on
         // it writes nothing.
@@ -8761,8 +8757,8 @@ mod tests {
         // The command renames the selection, and says so when there is none.
         state.graph_mut().set_selected_node(Some(sphere));
         assert!(state.run_command("rename_node"));
-        assert_eq!(state.slots.dialog.mode, Mode::Rename);
-        assert_eq!(state.slots.dialog.query, old);
+        assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Rename);
+        assert_eq!(state.ui_context[state.slots.dialog].query, old);
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
         assert_eq!(state.current_dir().children[sphere].name, old, "Escape renames nothing");
 
@@ -15282,7 +15278,7 @@ mod tests {
         // rows, and the network pane's zoom slider row when that pane is
         // focused (it is by default).
         assert_eq!(
-            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID && !r.id.starts_with(crate::dialog::CAMERA_ROW_PREFIX)).count(),
+            state.ui_context[state.slots.dialog].rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID && !r.id.starts_with(crate::dialog::CAMERA_ROW_PREFIX)).count(),
             crate::command::COMMANDS.len(),
             "an empty query lists everything"
         );
@@ -15301,14 +15297,14 @@ mod tests {
         for c in ["d", "e", "s", "e", "l"] {
             state.dialog_key_input(&typed(c));
         }
-        assert_eq!(state.slots.dialog.query, "desel");
+        assert_eq!(state.ui_context[state.slots.dialog].query, "desel");
         assert_eq!(
-            state.slots.dialog.selected_id(),
+            state.ui_context[state.slots.dialog].selected_id(),
             Some("deselect"),
             "rows: {:?}",
-            state.slots.dialog.rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
+            state.ui_context[state.slots.dialog].rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
         );
-        let row = &state.slots.dialog.rows[state.slots.dialog.selected];
+        let row = &state.ui_context[state.slots.dialog].rows[state.ui_context[state.slots.dialog].selected];
         assert_eq!(row.toggle(), None, "Deselect runs and is done; it draws no switch");
 
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
@@ -15327,24 +15323,24 @@ mod tests {
         for c in ["s", "q", "u", "a"] {
             state.dialog_key_input(&typed(c));
         }
-        assert_eq!(state.slots.dialog.selected_id(), Some("toggle_square_viewport"));
+        assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some("toggle_square_viewport"));
         let before = state.square_viewport;
-        let row = state.slots.dialog.rows[state.slots.dialog.selected].clone();
+        let row = state.ui_context[state.slots.dialog].rows[state.ui_context[state.slots.dialog].selected].clone();
         assert_eq!(row.toggle(), Some(before), "the switch shows the live value");
 
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert_eq!(state.square_viewport, !before, "Enter ran the command");
         assert!(state.dialog_visible(), "and the dialog stayed up");
-        assert_eq!(state.slots.dialog.query, "squa", "with its query intact");
-        assert_eq!(state.slots.dialog.selected_id(), Some("toggle_square_viewport"), "and its selection");
-        let row = &state.slots.dialog.rows[state.slots.dialog.selected];
+        assert_eq!(state.ui_context[state.slots.dialog].query, "squa", "with its query intact");
+        assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some("toggle_square_viewport"), "and its selection");
+        let row = &state.ui_context[state.slots.dialog].rows[state.ui_context[state.slots.dialog].selected];
         assert_eq!(row.toggle(), Some(!before), "the switch moved with the value");
 
         // And back again, without leaving.
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
         assert_eq!(state.square_viewport, before);
         assert!(state.dialog_visible());
-        assert_eq!(state.slots.dialog.rows[state.slots.dialog.selected].toggle(), Some(before));
+        assert_eq!(state.ui_context[state.slots.dialog].rows[state.ui_context[state.slots.dialog].selected].toggle(), Some(before));
 
         // A click on the row is the same pick as Enter.
         state.take_dialog_pick("toggle_square_viewport".to_string());
@@ -15394,7 +15390,7 @@ mod tests {
         state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
         state.run_command("command_palette");
         assert!(state.dialog_visible());
-        let rows = &state.slots.dialog.rows;
+        let rows = &state.ui_context[state.slots.dialog].rows;
         assert_eq!(rows[0].id, ZOOM_ROW_ID, "the zoom row heads the network list");
         assert!((rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
         assert!(rows.iter().filter(|r| r.id == ZOOM_ROW_ID).count() == 1);
@@ -15404,7 +15400,7 @@ mod tests {
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
         assert!(state.dialog_visible());
         assert!(state.zoom_percent() > before, "right arrow zooms in");
-        assert!((state.slots.dialog.rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
+        assert!((state.ui_context[state.slots.dialog].rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
         assert!((state.zoom_percent() - before).abs() < 0.5, "left arrow zooms back out");
 
@@ -15418,20 +15414,20 @@ mod tests {
         assert!((state.zoom_percent() - 150.0).abs() < 0.5);
         state.set_zoom_percent(100_000.0);
         assert!((state.grid_pitch_x - crate::app::MAX_PITCH_X).abs() < 0.5, "clamped to the max pitch");
-        assert!((state.slots.dialog.rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
+        assert!((state.ui_context[state.slots.dialog].rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
         state.set_zoom_percent(100.0);
 
         // A query that does not match "Zoom" drops the row.
         for c in ["s", "a", "v"] {
             state.dialog_key_input(&key_press(Key::Character(c.into())));
         }
-        assert!(state.slots.dialog.rows.iter().all(|r| r.id != ZOOM_ROW_ID));
+        assert!(state.ui_context[state.slots.dialog].rows.iter().all(|r| r.id != ZOOM_ROW_ID));
         state.close_dialog();
 
         // Another pane focused: no slider row at all.
         state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
         state.run_command("command_palette");
-        assert!(state.slots.dialog.rows.iter().all(|r| r.id != ZOOM_ROW_ID));
+        assert!(state.ui_context[state.slots.dialog].rows.iter().all(|r| r.id != ZOOM_ROW_ID));
     }
 
     /// At the widget: a press on the slider row's band takes hold, jumps the
@@ -15568,7 +15564,7 @@ mod tests {
         let (x, y, w, h) = state.positions[NETWORK_PANEL_IDX];
         assert!(w > 0.0 && h > 0.0, "the network plate is laid out");
         let (cx, cy) = (x + w * 0.5, y + h * 0.5);
-        let hovered = |state: &State| state.slots.get_dyn(NETWORK_PANEL_IDX).base().hovered;
+        let hovered = |state: &State| state.slots.get_dyn(&state.ui_context, NETWORK_PANEL_IDX).base().hovered;
         let moved = |state: &mut State, x: f32, y: f32| {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
         };
@@ -15628,11 +15624,11 @@ mod tests {
         assert!((saved(&path) - 1.0).abs() < 1e-3);
 
         state.open_dialog();
-        state.slots.dialog.query = "geometry opacity".into();
+        state.ui_context[state.slots.dialog].query = "geometry opacity".into();
         state.refresh_dialog_rows();
         let row = setting_row_id("Geometry Opacity");
-        assert_eq!(state.slots.dialog.rows.first().map(|r| r.id.as_str()), Some(row.as_str()), "the setting row ranks first");
-        let has_toggle = state.slots.dialog.rows.iter().any(|r| matches!(r.control, Some(Control::Toggle(_))));
+        assert_eq!(state.ui_context[state.slots.dialog].rows.first().map(|r| r.id.as_str()), Some(row.as_str()), "the setting row ranks first");
+        let has_toggle = state.ui_context[state.slots.dialog].rows.iter().any(|r| matches!(r.control, Some(Control::Toggle(_))));
         let (x, y, w, _) = state.positions[DIALOG_IDX];
         let row_y = y + 12.0 + 30.0 + 8.0 + ROW_H * 0.5;
         let band_right = x + w - 12.0 - 8.0 - if has_toggle { TOGGLE_W + 12.0 } else { 0.0 };
@@ -15647,7 +15643,7 @@ mod tests {
         // and nothing is written.
         at(&mut state, 0.5);
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-        assert!(state.slots.dialog.slider_dragging(), "the press took the band");
+        assert!(state.ui_context[state.slots.dialog].slider_dragging(), "the press took the band");
         assert!((state.geo_opacity - 0.5).abs() < 0.02, "{}", state.geo_opacity);
         assert_eq!(state.rt_geometry_version, version, "a draw-time value re-evaluated the graph");
         assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
@@ -15655,14 +15651,14 @@ mod tests {
         // A motion lands the value live and re-reads the row in place.
         at(&mut state, 0.25);
         assert!((state.geo_opacity - 0.25).abs() < 0.02, "{}", state.geo_opacity);
-        let shown = state.slots.dialog.rows[0].slider_value().expect("a slider row");
+        let shown = state.ui_context[state.slots.dialog].rows[0].slider_value().expect("a slider row");
         assert!((shown - state.geo_opacity).abs() < 1e-3, "the row shows {shown}, the field holds {}", state.geo_opacity);
         assert_eq!(state.rt_geometry_version, version, "a drag motion re-evaluated the graph");
         assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
 
         // The release writes the file once.
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-        assert!(!state.slots.dialog.slider_dragging());
+        assert!(!state.ui_context[state.slots.dialog].slider_dragging());
         assert!((saved(&path) - state.geo_opacity).abs() < 1e-3, "the release did not save");
         assert_eq!(state.rt_geometry_version, version);
 
@@ -15747,13 +15743,13 @@ mod tests {
         for c in ["z", "z", "z"] {
             state.dialog_key_input(&typed(c));
         }
-        assert!(state.slots.dialog.rows.is_empty(), "nothing matches 'zzz'");
+        assert!(state.ui_context[state.slots.dialog].rows.is_empty(), "nothing matches 'zzz'");
         for _ in 0..3 {
             state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
         }
-        assert_eq!(state.slots.dialog.query, "");
+        assert_eq!(state.ui_context[state.slots.dialog].query, "");
         assert_eq!(
-            state.slots.dialog.rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID && !r.id.starts_with(crate::dialog::CAMERA_ROW_PREFIX)).count(),
+            state.ui_context[state.slots.dialog].rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID && !r.id.starts_with(crate::dialog::CAMERA_ROW_PREFIX)).count(),
             crate::command::COMMANDS.len()
         );
     }
@@ -15775,7 +15771,7 @@ mod tests {
         // "l" is Cursor Right in the network pane and a plain letter here.
         state.handle_event(&WindowEvent::KeyboardInput { event: typed("l") });
         assert_eq!(state.grid_cursor_col, col, "the grid cursor must not move");
-        assert_eq!(state.slots.dialog.query, "l");
+        assert_eq!(state.ui_context[state.slots.dialog].query, "l");
     }
 
     /// The settings are rows of the one list, each carrying its control —
@@ -15833,15 +15829,15 @@ mod tests {
         };
         press(&mut state, vx + 2.0, vy + 4.0);
         assert!(state.dialog_dropdown_open(), "the press opened the dropdown");
-        let units = state.slots.dialog.dropdown.options.clone();
-        assert_eq!(units[state.slots.dialog.dropdown.selected], "mm");
-        let (tx, ty, tw, th) = state.slots.dialog.dropdown.rect();
+        let units = state.ui_context[state.slots.dialog].dropdown.options.clone();
+        assert_eq!(units[state.ui_context[state.slots.dialog].dropdown.selected], "mm");
+        let (tx, ty, tw, th) = state.ui_context[state.slots.dialog].dropdown.rect();
         assert!(vx >= tx && vx < tx + tw && vy >= ty - 4.0 && vy < ty + th, "laid out on the band its value was drawn in");
 
         // The plate grows out of the trigger into the list. Judged by where
         // it ends, not by a reading taken as it opens: the growth runs on
         // the wall clock, and a slow press had already finished it.
-        let grown = |state: &State| state.slots.dialog.dropdown.popover_rect().map(|r| r.3).unwrap_or(0.0);
+        let grown = |state: &State| state.ui_context[state.slots.dialog].dropdown.popover_rect().map(|r| r.3).unwrap_or(0.0);
         std::thread::sleep(std::time::Duration::from_millis(250));
         state.tick_frame(0.25);
         assert!(grown(&state) > th + 24.0, "the trigger {th} grew to {}", grown(&state));
@@ -15849,8 +15845,8 @@ mod tests {
         // and its labels are not.
         let _ = state.collect_display_list();
         let pops = &state.ui_context.active_popovers;
-        let dialog_at = pops.iter().position(|&p| p == state.slots.dialog.base().id()).expect("the dialog");
-        let dd_id = state.slots.dialog.dropdown.base().id();
+        let dialog_at = pops.iter().position(|&p| p == state.ui_context[state.slots.dialog].base().id()).expect("the dialog");
+        let dd_id = state.ui_context[state.slots.dialog].dropdown.base().id();
         let dd_at = pops.iter().position(|&p| p == dd_id).expect("the dropdown");
         assert!(dd_at > dialog_at);
         // And resolvable, which is what the engine's clamp walks: an id the
@@ -15866,7 +15862,7 @@ mod tests {
         // A press on a row of the list picks that row.
         state.open_dialog_dropdown(&setting_row_id("World Unit"));
         let k = units.iter().position(|u| u == "in").expect("inches");
-        let (rx, ry, _, _) = state.slots.dialog.dropdown.popover_geom(cce_ui::scene::layout::Rect { x: tx, y: ty, width: tw, height: th });
+        let (rx, ry, _, _) = state.ui_context[state.slots.dialog].dropdown.popover_geom(cce_ui::scene::layout::Rect { x: tx, y: ty, width: tw, height: th });
         press(&mut state, rx + 10.0, ry + k as f32 * 24.0 + 12.0);
         assert_eq!(state.world_unit.suffix(), "in");
         assert!(state.dialog_visible());
@@ -15880,7 +15876,7 @@ mod tests {
         assert!(!state.dialog_dropdown_open() && state.dialog_visible(), "a press off the list closes it alone");
         assert_eq!(state.world_unit.suffix(), "in", "and picks nothing");
         state.close_dialog();
-        assert!(!state.slots.dialog.dropdown.open, "a closed dialog leaves no plate behind");
+        assert!(!state.ui_context[state.slots.dialog].dropdown.open, "a closed dialog leaves no plate behind");
     }
 
     /// A control in the palette lifts under the pointer: the row whose
@@ -15900,14 +15896,14 @@ mod tests {
         for c in ["s", "h", "o", "w", "g", "r", "i"] {
             state.dialog_key_input(&typed(c));
         }
-        let rows = &state.slots.dialog.rows;
+        let rows = &state.ui_context[state.slots.dialog].rows;
         let toggle = rows.iter().position(|r| r.id == "toggle_grid").expect("a Show Grid row");
         assert!(matches!(rows[toggle].control, Some(Control::Toggle(_))));
         let (dx, dy, dw, dh) = state.positions[DIALOG_IDX];
         assert!(dw > 0.0 && dh > 0.0);
         let at = |state: &mut State, x: f32, y: f32| {
             state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
-            state.slots.dialog.hovered_control()
+            state.ui_context[state.slots.dialog].hovered_control()
         };
         // Walk down the switch column until the pointer is over the row's
         // switch.
@@ -15929,13 +15925,13 @@ mod tests {
         assert_eq!(at(&mut state, dx - 50.0, y), None);
 
         // A slider row: its whole control, readout lane included.
-        while !state.slots.dialog.query.is_empty() {
+        while !state.ui_context[state.slots.dialog].query.is_empty() {
             state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
         }
         for c in ["g", "e", "o", "m", "e", "t", "r", "y"] {
             state.dialog_key_input(&typed(c));
         }
-        let slider = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("Geometry Opacity")).expect("a slider row");
+        let slider = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == setting_row_id("Geometry Opacity")).expect("a slider row");
         let mut found = None;
         let mut y = dy;
         while y < dy + dh {
@@ -15957,12 +15953,12 @@ mod tests {
         use crate::dialog::{setting_row_id, Control, SETTINGS};
         let mut state = State::new(false);
         state.run_command("toggle_dialog");
-        let ids: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        let ids: Vec<String> = state.ui_context[state.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
         for s in SETTINGS {
             assert!(ids.contains(&setting_row_id(s.label)), "'{}' has no row", s.label);
         }
         let control = |label: &str| {
-            state.slots.dialog.rows.iter().find(|r| r.id == setting_row_id(label)).and_then(|r| r.control.clone())
+            state.ui_context[state.slots.dialog].rows.iter().find(|r| r.id == setting_row_id(label)).and_then(|r| r.control.clone())
         };
         assert!(matches!(control("Grid Color"), Some(Control::Color { .. })));
         assert!(matches!(control("Grid Thickness"), Some(Control::Slider { dec: 0, .. })), "a spin is a whole-number slider");
@@ -15972,7 +15968,7 @@ mod tests {
         // A command's switch is its own row; the settings table lists none
         // of them twice.
         assert!(control("Show Grid").is_none());
-        assert!(state.slots.dialog.rows.iter().any(|r| r.id == "toggle_grid" && r.toggle().is_some()));
+        assert!(state.ui_context[state.slots.dialog].rows.iter().any(|r| r.id == "toggle_grid" && r.toggle().is_some()));
 
         // Tab does not move anywhere, and the dialog stays.
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Tab)));
@@ -15983,7 +15979,7 @@ mod tests {
         for c in ["g", "r", "i", "d", "c"] {
             state.dialog_key_input(&typed(c));
         }
-        assert_eq!(state.slots.dialog.selected_id(), Some(setting_row_id("Grid Color").as_str()));
+        assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some(setting_row_id("Grid Color").as_str()));
     }
 
     /// A Settings row writes to whatever OWNS its value.
@@ -16011,13 +16007,13 @@ mod tests {
         // A Field row: Grid Thickness is a whole number in thousandths.
         state.apply_setting("Grid Thickness", "40");
         assert!((state.grid_thickness - 0.04).abs() < 1e-6, "{}", state.grid_thickness);
-        let row = state.slots.dialog.rows.iter().find(|r| r.id == setting_row_id("Grid Thickness")).unwrap();
+        let row = state.ui_context[state.slots.dialog].rows.iter().find(|r| r.id == setting_row_id("Grid Thickness")).unwrap();
         assert!(matches!(row.control, Some(Control::Slider { value, .. }) if (value - 40.0).abs() < 1e-6), "the row re-read the value");
 
         // The arrows work the selected row's control in place: a choice
         // steps, a slider nudges, each landing on the live state.
-        let unit_row = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("World Unit")).unwrap();
-        state.slots.dialog.selected = unit_row;
+        let unit_row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == setting_row_id("World Unit")).unwrap();
+        state.ui_context[state.slots.dialog].selected = unit_row;
         let before = state.world_unit;
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
         assert_ne!(state.world_unit, before, "right arrow steps the unit");
@@ -16031,8 +16027,8 @@ mod tests {
         assert!(!state.dialog_dropdown_open());
         assert!(state.dialog_visible(), "and keeps the dialog up");
 
-        let scale_row = state.slots.dialog.rows.iter().position(|r| r.id == setting_row_id("Group Marker Size")).unwrap();
-        state.slots.dialog.selected = scale_row;
+        let scale_row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == setting_row_id("Group Marker Size")).unwrap();
+        state.ui_context[state.slots.dialog].selected = scale_row;
         let before = state.group_marker_size;
         state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
         assert!(state.group_marker_size > before, "right arrow grows the markers");
@@ -16065,7 +16061,7 @@ mod tests {
         state.recent_files = vec![a.clone(), b.clone()];
 
         state.open_dialog();
-        let rows: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        let rows: Vec<String> = state.ui_context[state.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
         let id_a = format!("{RECENT_ROW_PREFIX}{}", a.display());
         let id_b = format!("{RECENT_ROW_PREFIX}{}", b.display());
         let ia = rows.iter().position(|r| *r == id_a).expect("no row for the newest recent project");
@@ -16073,21 +16069,21 @@ mod tests {
         assert!(ia < ib, "the recent list is not in most-recent-first order");
         // The row shows the path, truncated from the LEFT — the tail is what
         // identifies a project — with the file name in the chord column.
-        let row = &state.slots.dialog.rows[ia];
+        let row = &state.ui_context[state.slots.dialog].rows[ia];
         assert_eq!(row.label, a.display().to_string());
         assert_eq!(row.chord, "cce-recent-alpha");
         assert!(row.truncate_head);
         // And it ranks against the path text like any other row.
-        state.slots.dialog.query = "beta".to_string();
+        state.ui_context[state.slots.dialog].query = "beta".to_string();
         state.refresh_dialog_rows();
-        let rows: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        let rows: Vec<String> = state.ui_context[state.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
         assert!(rows.contains(&id_b) && !rows.contains(&id_a), "{rows:?}");
         state.close_dialog();
 
         // The project already open is not offered a second time.
         state.loaded_project_path = Some(a.clone());
         state.open_dialog();
-        let rows: Vec<String> = state.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        let rows: Vec<String> = state.ui_context[state.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
         assert!(!rows.contains(&id_a), "the open project is listed as a recent one");
         assert!(rows.contains(&id_b));
     }
@@ -16133,7 +16129,7 @@ mod tests {
             assert!(state.command_toggle_state(id).is_some(), "the toggle '{id}' draws no switch");
         }
         state.run_command("command_palette");
-        assert!(state.slots.dialog.rows.iter().any(|r| r.id == "toggle_grid" && r.toggle().is_some()));
+        assert!(state.ui_context[state.slots.dialog].rows.iter().any(|r| r.id == "toggle_grid" && r.toggle().is_some()));
         // The Main node's buttons are commands, and the active camera keeps
         // the viewport menubar's own menu — neither is a row here.
         for id in [
@@ -16155,7 +16151,7 @@ mod tests {
         assert!(!state.dialog_visible());
 
         state.run_command("toggle_dialog");
-        assert_eq!(state.slots.dialog.query, "");
+        assert_eq!(state.ui_context[state.slots.dialog].query, "");
     }
 
     /// A ctrl+left press on empty grid puts the cursor on the pressed cell — on
@@ -16371,11 +16367,11 @@ mod tests {
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         let (ax, ay) = state.cell_center(1, 5);
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (ax + 23.0) as f64, y: (ay + 11.0) as f64 } });
-        let ghost = state.slots.content.inner().node_rect(slot(&state, "b")).unwrap();
+        let ghost = state.ui_context[state.slots.content].inner().node_rect(slot(&state, "b")).unwrap();
         let cell = state.cell_rect(1, 5);
         assert!((ghost.0 - cell.0).abs() < 0.5 && (ghost.1 - cell.1).abs() < 0.5, "the dragged node sits on a's cell: {ghost:?} vs {cell:?}");
         move_to(&mut state, (1, 5));
-        assert_eq!(state.slots.content.inner().swap_target_idx(), Some(slot(&state, "a")), "a is the swap target");
+        assert_eq!(state.ui_context[state.slots.content].inner().swap_target_idx(), Some(slot(&state, "a")), "a is the swap target");
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
 
         assert_eq!((at(&state, "b"), at(&state, "a")), ((1.0, 5.0), (1.0, 6.0)), "the two traded places");
@@ -16883,7 +16879,7 @@ mod tests {
         // A real port centre, off the widget's own geometry — the ports sit
         // outside the node body, so nothing but this gets one right.
         let (px, py) = {
-            let g = state.slots.content.inner();
+            let g = state.ui_context[state.slots.content].inner();
             (0..state.current_dir().children.len())
                 .find_map(|i| {
                     g.port_center(i, cce_ui::widget::display::graph::PortType::Output, 0)
@@ -16970,7 +16966,7 @@ mod tests {
         assert!(state.project_path_readout().is_none());
         state.run_command("command_palette");
         assert!(
-            !state.slots.dialog.rows.iter().any(|r| r.id == PATH_ROW_ID),
+            !state.ui_context[state.slots.dialog].rows.iter().any(|r| r.id == PATH_ROW_ID),
             "no project, no row"
         );
         state.close_dialog();
@@ -16980,7 +16976,7 @@ mod tests {
         assert_eq!(state.loaded_project_path.as_deref(), Some(dir.as_path()));
 
         state.run_command("command_palette");
-        let row = state.slots.dialog.rows.first().expect("rows").clone();
+        let row = state.ui_context[state.slots.dialog].rows.first().expect("rows").clone();
         assert_eq!(row.id, PATH_ROW_ID, "it heads the list");
         assert_eq!(row.label, dir.to_string_lossy(), "the label is the whole path");
         assert_eq!(row.chord, "my_project", "the file name reads in the chord column");
@@ -16991,11 +16987,11 @@ mod tests {
         for c in ["m", "y", "_", "p"] {
             state.dialog_key_input(&typed(c));
         }
-        assert!(state.slots.dialog.rows.iter().any(|r| r.id == PATH_ROW_ID));
+        assert!(state.ui_context[state.slots.dialog].rows.iter().any(|r| r.id == PATH_ROW_ID));
         for c in ["z", "z", "z"] {
             state.dialog_key_input(&typed(c));
         }
-        assert!(!state.slots.dialog.rows.iter().any(|r| r.id == PATH_ROW_ID));
+        assert!(!state.ui_context[state.slots.dialog].rows.iter().any(|r| r.id == PATH_ROW_ID));
 
         // Picking it copies the path and leaves, the way a command does.
         state.close_dialog();
@@ -17020,12 +17016,12 @@ mod tests {
         state.open_node_palette();
 
         assert!(state.dialog_visible());
-        assert_eq!(state.slots.dialog.mode, Mode::AddNode);
+        assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::AddNode);
         // Inside the bundled project's Geometry node: every template but the
         // three that stand at the root.
-        assert_eq!(state.slots.dialog.rows.len(), state.node_templates.len() - 3);
+        assert_eq!(state.ui_context[state.slots.dialog].rows.len(), state.node_templates.len() - 3);
         assert!(
-            state.slots.dialog.rows.iter().all(|r| r.chord.is_empty()),
+            state.ui_context[state.slots.dialog].rows.iter().all(|r| r.chord.is_empty()),
             "a template has no chord to teach"
         );
 
@@ -17050,10 +17046,10 @@ mod tests {
             state.dialog_key_input(&typed(c));
         }
         assert_eq!(
-            state.slots.dialog.selected_id(),
+            state.ui_context[state.slots.dialog].selected_id(),
             Some("Box"),
             "rows: {:?}",
-            state.slots.dialog.rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
+            state.ui_context[state.slots.dialog].rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
         );
 
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
@@ -17174,7 +17170,7 @@ mod tests {
     #[test]
     fn the_add_node_list_offers_what_belongs_at_the_level() {
         let mut state = State::new(false);
-        let labels = |state: &State| state.slots.dialog.rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
+        let labels = |state: &State| state.ui_context[state.slots.dialog].rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
         let inside = state.current_path.clone();
         assert_eq!(state.path_names_at(&inside), ["geometry1"]);
 
@@ -17246,8 +17242,8 @@ mod tests {
 
         state.run_command("command_palette");
         assert!(state.dialog_visible(), "it lands, it does not toggle");
-        assert_eq!(state.slots.dialog.mode, Mode::Commands);
-        assert_eq!(state.slots.dialog.query, "", "landing starts a fresh query");
+        assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Commands);
+        assert_eq!(state.ui_context[state.slots.dialog].query, "", "landing starts a fresh query");
 
         state.run_command("toggle_dialog");
         assert!(!state.dialog_visible(), "Alt+D toggles");
@@ -17910,8 +17906,8 @@ mod tests {
         assert!(crate::geometry::contains_simnet(&state.fs_root));
         state.tick_frame(1.0 / 60.0);
         assert_eq!(state.last_sim_frame, state.sim_frame());
-        state.slots.playbar.inner_mut().playing = true;
-        state.slots.playbar.inner_mut().fps = 60.0;
+        state.ui_context[state.slots.playbar].inner_mut().playing = true;
+        state.ui_context[state.slots.playbar].inner_mut().fps = 60.0;
         let start = state.sim_frame();
         for i in 1..=3 {
             assert!(state.tick_frame(1.0 / 60.0), "a playing tick asks for a redraw");
@@ -18062,11 +18058,11 @@ mod tests {
         let slot = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
         state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
         state.sync_nodes();
-        let table = state.slots.spreadsheet().content_width();
+        let table = state.slots.spreadsheet(&state.ui_context).content_width();
         let (x, _, w, _) = state.positions[SPREADSHEET_IDX];
         assert!(table > State::SPREADSHEET_MIN_W && table < 1600.0 - 36.0, "a sphere's table: {table}");
         assert_eq!((x, w), (18.0, table.ceil()), "the plate is the table's width, on the left");
-        assert_eq!(cce_ui::widget::WidgetHost::rect(&state.slots.spreadsheet).2, w, "and the widget has it");
+        assert_eq!(cce_ui::widget::WidgetHost::rect(&state.ui_context[state.slots.spreadsheet]).2, w, "and the widget has it");
         assert_eq!(state.param_editor_selected(), Some(slot), "the selection is as it was");
 
         state.spreadsheet_mut().set_spreadsheet_data(vec![], vec![]);
@@ -18207,10 +18203,10 @@ mod tests {
             state.apply_action(McpAction::ToggleGeometry { slot }, &mut redraw).unwrap();
         }
         let go = |state: &mut State, frame: f32| {
-            state.slots.playbar.inner_mut().current_frame = frame;
+            state.ui_context[state.slots.playbar].inner_mut().current_frame = frame;
             state.tick_frame(1.0 / 60.0);
         };
-        let strip = |state: &State| state.slots.playbar.inner().cache.clone();
+        let strip = |state: &State| state.ui_context[state.slots.playbar].inner().cache.clone();
         for f in 1..=20 {
             go(&mut state, f as f32);
         }
@@ -18249,43 +18245,44 @@ mod tests {
         // file and another's save could follow.
         let kdl = fs::read_to_string(DesignSettings::file_path()).expect("state.kdl was written");
         assert!(!DesignSettings::from_kdl_str(&kdl).playbar_repeat, "{kdl}");
-        assert!(!State::new(false).slots.playbar.inner().repeat, "a new State seeds the playbar from the setting");
+        let fresh = State::new(false);
+        assert!(!fresh.ui_context[fresh.slots.playbar].inner().repeat, "a new State seeds the playbar from the setting");
 
         // Forward: run off the end, land on it, stop.
         {
-            let pb = state.slots.playbar.inner_mut();
+            let pb = state.ui_context[state.slots.playbar].inner_mut();
             pb.current_frame = pb.end_frame - 0.5;
             pb.begin(false);
         }
-        assert!(Input::tick(state.slots.playbar.inner_mut(), 0.1, rect));
+        assert!(Input::tick(state.ui_context[state.slots.playbar].inner_mut(), 0.1, rect));
         {
-            let pb = state.slots.playbar.inner();
+            let pb = state.ui_context[state.slots.playbar].inner();
             assert_eq!(pb.current_frame, pb.end_frame, "stopped on the last frame");
             assert!(!pb.playing, "and playback ended");
         }
         // Play again from the end: restarts from the start frame.
         state.execute_action(Action::PlayPause);
         {
-            let pb = state.slots.playbar.inner();
+            let pb = state.ui_context[state.slots.playbar].inner();
             assert!(pb.playing && !pb.reversed);
             assert_eq!(pb.current_frame, pb.start_frame, "a play press at the far end rewinds");
         }
         // Reverse: run off the start, stop there; Down restarts from the end.
         {
-            let pb = state.slots.playbar.inner_mut();
+            let pb = state.ui_context[state.slots.playbar].inner_mut();
             pb.playing = false;
             pb.current_frame = pb.start_frame + 0.5;
             pb.begin(true);
         }
-        assert!(Input::tick(state.slots.playbar.inner_mut(), 0.1, rect));
+        assert!(Input::tick(state.ui_context[state.slots.playbar].inner_mut(), 0.1, rect));
         {
-            let pb = state.slots.playbar.inner();
+            let pb = state.ui_context[state.slots.playbar].inner();
             assert_eq!(pb.current_frame, pb.start_frame);
             assert!(!pb.playing);
         }
         state.execute_action(Action::PlayPauseReverse);
         {
-            let pb = state.slots.playbar.inner();
+            let pb = state.ui_context[state.slots.playbar].inner();
             assert!(pb.playing && pb.reversed);
             assert_eq!(pb.current_frame, pb.end_frame);
         }
@@ -18464,7 +18461,7 @@ mod tests {
         // The Y band of the Value row, from the pane's own float3 group.
         let (bx, by) = {
             // The slot is statically an `Adapted<ParametersBg>`.
-            let pane: &ParametersBg = state.slots.param.inner();
+            let pane: &ParametersBg = state.ui_context[state.slots.param].inner();
             let f = pane.float3s.iter().flatten().next().expect("the Value row is a float3");
             let (rx, ry, rw, rh) = f.get_row_rects()[1];
             (rx + (rw - 68.0) * 0.5, ry + rh * 0.5)
@@ -18554,7 +18551,7 @@ mod tests {
         // the viewer, swings onto +X at the length it had.
         show(&mut state, pull);
         let (cx, cy, r) = {
-            let pane: &ParametersBg = state.slots.param.inner();
+            let pane: &ParametersBg = state.ui_context[state.slots.param].inner();
             pane.float3s.iter().flatten().next().expect("the Value row").ball_circle().expect("its ball")
         };
         let at = |x: f32, y: f32| WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } };
@@ -18593,7 +18590,7 @@ mod tests {
         state.rebuild_positions();
         state.apply_layout();
         let (cx, cy, _) = {
-            let pane: &ParametersBg = state.slots.param.inner();
+            let pane: &ParametersBg = state.ui_context[state.slots.param].inner();
             pane.float3s.iter().flatten().next().expect("the Value row").ball_circle().expect("its ball")
         };
         let value = |state: &State| -> Vec<f32> {
@@ -18653,7 +18650,7 @@ mod tests {
         assert!(state.sync_trackball_view(eye, Vec3::ZERO, Vec3::ZERO), "the view moved off the identity");
         assert!(!state.sync_trackball_view(eye, Vec3::ZERO, Vec3::ZERO), "the same camera again moves nothing");
         let ball_view = |state: &State| {
-            let pane: &ParametersBg = state.slots.param.inner();
+            let pane: &ParametersBg = state.ui_context[state.slots.param].inner();
             pane.float3s.iter().flatten().next().expect("the Value row").view()
         };
         let view = ball_view(&state);
@@ -18665,7 +18662,7 @@ mod tests {
         // Roll the ball a quarter turn right: the pull, which pointed at
         // the camera, now points along the camera's right.
         let (cx, cy, r) = {
-            let pane: &ParametersBg = state.slots.param.inner();
+            let pane: &ParametersBg = state.ui_context[state.slots.param].inner();
             pane.float3s.iter().flatten().next().unwrap().ball_circle().unwrap()
         };
         let at = |x: f32, y: f32| WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } };
@@ -18709,7 +18706,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let channel = dir.join("default_project.json");
         let ball_view = |state: &State| {
-            let pane: &ParametersBg = state.slots.param.inner();
+            let pane: &ParametersBg = state.ui_context[state.slots.param].inner();
             pane.float3s.iter().flatten().next().expect("a float3 row").view()
         };
         let same = |a: [[f32; 3]; 3], b: [[f32; 3]; 3]| (0..3).all(|i| (0..3).all(|k| (a[i][k] - b[i][k]).abs() < 1e-4));
@@ -18876,7 +18873,7 @@ mod tests {
         state.sync_nodes();
         let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
         state.apply_action(McpAction::Select { slot: pull }, &mut redraw).unwrap();
-        state.slots.playbar.inner_mut().current_frame = 5.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 5.0;
         state.tick_frame(1.0 / 60.0);
         state.sync_nodes();
         assert!(!state.spreadsheet_points.is_empty());
@@ -18889,7 +18886,7 @@ mod tests {
         let (row_at, marker_at) = (state.spreadsheet_points[3][0], middle(&state));
         assert!((row_at - marker_at).abs() < 1e-3);
 
-        state.slots.playbar.inner_mut().current_frame = 15.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 15.0;
         state.tick_frame(1.0 / 60.0);
         let moved = state.spreadsheet_points[3][0] - row_at;
         assert!(moved > 0.3, "ten frames of the pull moved the row's point {moved}");
@@ -18934,7 +18931,7 @@ mod tests {
             let output = simnet.children.iter_mut().find(|c| c.node_type == "output").expect("a simnet has an output");
             output.params.iter_mut().find(|p| p.name == "input").unwrap().set_text("pull1".to_string());
         }
-        state.slots.playbar.inner_mut().current_frame = 61.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 61.0;
         state.sync_nodes();
         state.rebuild_scene_geometry();
 
@@ -18990,7 +18987,7 @@ mod tests {
         state.tick_frame(1.0 / 60.0);
         let opened_at = state.last_spreadsheet_read_at;
         assert_eq!(opened_at.0, state.sim_frame());
-        state.slots.playbar.inner_mut().current_frame = 7.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 7.0;
         state.tick_frame(1.0 / 60.0);
         assert_eq!(state.last_spreadsheet_read_at.0, 7, "read again at the new frame");
         // The same frame again reads nothing again.
@@ -19034,11 +19031,11 @@ mod tests {
         }
         state.apply_action(McpAction::SetParam { slot: tagged, name: "input".into(), value: "sim".into() }, &mut redraw).unwrap();
         state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
-        state.slots.playbar.inner_mut().current_frame = 10.0;
+        state.ui_context[state.slots.playbar].inner_mut().current_frame = 10.0;
         state.tick_frame(1.0 / 60.0);
         let mut last = marks(&state);
-        state.slots.playbar.inner_mut().playing = true;
-        state.slots.playbar.inner_mut().fps = 60.0;
+        state.ui_context[state.slots.playbar].inner_mut().playing = true;
+        state.ui_context[state.slots.playbar].inner_mut().fps = 60.0;
         for _ in 0..3 {
             state.tick_frame(1.0 / 60.0);
             assert_eq!(state.last_spreadsheet_read_at.0, state.sim_frame(), "the rows are this frame's");

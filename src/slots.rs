@@ -8,9 +8,10 @@
 //! the struct fields and every index→field dispatch are generated. The typed accessors
 //! that assert each slot's concrete type are hand-written, below the macro.
 
+use cce_ui::context::UiContext;
 use cce_ui::widget::{
     Adapted, Breadcrumb, Graph, MenuBar, ParametersBg, Splitter, Spreadsheet,
-    StatusBar, WidgetHost,
+    StatusBar, WidgetHost, WidgetId,
 };
 
 use crate::playbar::Playbar;
@@ -29,46 +30,51 @@ macro_rules! widget_roster {
 
         /// The roster, concretely typed (Phase 6bb): every slot's type is statically known — the
         /// old `Vec<Box<dyn WidgetHost>>` erased that and pinned `WidgetHost`'s full surface through the
-        /// broadcast loops. Boxed as a whole so registered widget pointers stay stable while the
-        /// containing `State` moves. The `*_IDX` constants keep addressing the same slots through
+        /// broadcast loops. The widgets live in the `UiContext`; the roster holds their handles
+        /// (`docs/rfc-owning-registry.md` in cce-ui). The `*_IDX` constants keep addressing the same slots through
         /// `get_dyn`/`get_dyn_mut` for the genuinely index-driven paths (draw order, focus cycling,
         /// broadcast loops); everything else reaches the concrete field.
         pub struct WidgetSlots {
-            $(pub $field: cce_ui::widget::Owned<Adapted<$ty>>,)+
+            $(pub $field: cce_ui::widget::Handle<Adapted<$ty>>,)+
         }
 
         impl WidgetSlots {
             // Per-slot drag queries (the ControlPanel endgame took `draggable`/`is_dragging`
             // off `WidgetHost`): the roster routes an index to the concrete slot's inherent
             // `Adapted` read, like the other value drains.
-            pub fn draggable(&self, idx: usize) -> bool {
+            pub fn draggable(&self, ui: &UiContext, idx: usize) -> bool {
                 match idx {
-                    $($idx => self.$field.draggable(),)+
+                    $($idx => ui[self.$field].draggable(),)+
                     _ => slot_out_of_range(idx),
                 }
             }
 
-            pub fn is_dragging(&self, idx: usize) -> bool {
+            pub fn is_dragging(&self, ui: &UiContext, idx: usize) -> bool {
                 match idx {
-                    $($idx => self.$field.is_dragging(),)+
+                    $($idx => ui[self.$field].is_dragging(),)+
                     _ => slot_out_of_range(idx),
                 }
             }
 
-            /// The slot's widget itself — the address the registry holds for it, which is what
-            /// `find_index` compares — not the `Owned` box around it.
-            pub fn get_dyn(&self, idx: usize) -> &(dyn WidgetHost + 'static) {
+            /// The slot's widget id: what focus, popovers and dispatch are keyed by.
+            pub fn id(&self, idx: usize) -> WidgetId {
                 match idx {
-                    $($idx => &*self.$field,)+
+                    $($idx => self.$field.id(),)+
                     _ => slot_out_of_range(idx),
                 }
             }
 
-            /// The slot's `Owned` box, so registering it records the stable address and the
-            /// box's liveness rather than the widget's own.
-            pub fn get_dyn_mut(&mut self, idx: usize) -> &mut (dyn WidgetHost + 'static) {
+            /// The slot's widget, which the context owns.
+            pub fn get_dyn<'a>(&self, ui: &'a UiContext, idx: usize) -> &'a (dyn WidgetHost + 'static) {
                 match idx {
-                    $($idx => &mut self.$field,)+
+                    $($idx => &ui[self.$field],)+
+                    _ => slot_out_of_range(idx),
+                }
+            }
+
+            pub fn get_dyn_mut<'a>(&self, ui: &'a mut UiContext, idx: usize) -> &'a mut (dyn WidgetHost + 'static) {
+                match idx {
+                    $($idx => &mut ui[self.$field],)+
                     _ => slot_out_of_range(idx),
                 }
             }
@@ -121,9 +127,9 @@ widget_roster! {
 impl WidgetSlots {
     /// Roster index of the slot at `target_addr` (a thin widget address — the comparison
     /// never dereferences; callers pass `ptr as *const ()`).
-    pub fn find_index(&self, target_addr: *const ()) -> Option<usize> {
+    pub fn find_index(&self, ui: &UiContext, target_addr: *const ()) -> Option<usize> {
         (0..WIDGET_COUNT).position(|i| {
-            let w_ptr = self.get_dyn(i) as *const dyn WidgetHost as *const ();
+            let w_ptr = self.get_dyn(ui, i) as *const dyn WidgetHost as *const ();
             w_ptr == target_addr
         })
     }
@@ -133,15 +139,15 @@ impl WidgetSlots {
     // Deref instead of WidgetHost's deleted as_*_controller discovery hooks. Signatures keep
     // returning the narrow trait objects so the ~40 call sites stay unchanged. The dynamic
     // `idx` of menu()/menu_mut() only ever receives the five menubar indexes.
-    pub fn viewport(&self) -> &Viewport3D {
-        self.viewport
+    pub fn viewport<'a>(&self, ui: &'a UiContext) -> &'a Viewport3D {
+        ui[self.viewport]
             .as_any()
             .downcast_ref::<Viewport3D>()
             .expect("VIEWPORT_IDX must be a Viewport3D")
     }
 
-    pub fn viewport_mut(&mut self) -> &mut Viewport3D {
-        self.viewport
+    pub fn viewport_mut<'a>(&self, ui: &'a mut UiContext) -> &'a mut Viewport3D {
+        ui[self.viewport]
             .as_any_mut()
             .downcast_mut::<Viewport3D>()
             .expect("VIEWPORT_IDX must be a Viewport3D")
@@ -149,53 +155,53 @@ impl WidgetSlots {
 
     /// The menu-capable roster entries are exactly the `Adapted<MenuBar>` bars (Phase 6aw
     /// concrete typing); `None` for everything else.
-    pub fn menubar_at(&self, idx: usize) -> Option<&MenuBar> {
+    pub fn menubar_at<'a>(&self, ui: &'a UiContext, idx: usize) -> Option<&'a MenuBar> {
         // Adapted::as_any exposes the INNER widget, so the downcast targets MenuBar itself.
-        self.get_dyn(idx).as_any().downcast_ref::<MenuBar>()
+        self.get_dyn(ui, idx).as_any().downcast_ref::<MenuBar>()
     }
 
-    pub fn menu(&self, idx: usize) -> &dyn cce_ui::widget::MenuController {
-        self.get_dyn(idx).as_any().downcast_ref::<MenuBar>().expect("not a MenuBar")
+    pub fn menu<'a>(&self, ui: &'a UiContext, idx: usize) -> &'a dyn cce_ui::widget::MenuController {
+        self.get_dyn(ui, idx).as_any().downcast_ref::<MenuBar>().expect("not a MenuBar")
     }
 
-    pub fn menu_mut(&mut self, idx: usize) -> &mut dyn cce_ui::widget::MenuController {
-        self.get_dyn_mut(idx).as_any_mut().downcast_mut::<MenuBar>().expect("not a MenuBar")
+    pub fn menu_mut<'a>(&self, ui: &'a mut UiContext, idx: usize) -> &'a mut dyn cce_ui::widget::MenuController {
+        self.get_dyn_mut(ui, idx).as_any_mut().downcast_mut::<MenuBar>().expect("not a MenuBar")
     }
 
-    pub fn graph(&self) -> &dyn cce_ui::widget::GraphController {
-        self.content.as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph")
+    pub fn graph<'a>(&self, ui: &'a UiContext) -> &'a dyn cce_ui::widget::GraphController {
+        ui[self.content].as_any().downcast_ref::<Graph>().expect("CONTENT_IDX must be a Graph")
     }
 
-    pub fn graph_mut(&mut self) -> &mut dyn cce_ui::widget::GraphController {
-        self.content.as_any_mut().downcast_mut::<Graph>().expect("CONTENT_IDX must be a Graph")
+    pub fn graph_mut<'a>(&self, ui: &'a mut UiContext) -> &'a mut dyn cce_ui::widget::GraphController {
+        ui[self.content].as_any_mut().downcast_mut::<Graph>().expect("CONTENT_IDX must be a Graph")
     }
 
-    pub fn param(&self) -> &dyn cce_ui::widget::ParamController {
-        self.param.as_any().downcast_ref::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
+    pub fn param<'a>(&self, ui: &'a UiContext) -> &'a dyn cce_ui::widget::ParamController {
+        ui[self.param].as_any().downcast_ref::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
-    pub fn param_mut(&mut self) -> &mut dyn cce_ui::widget::ParamController {
-        self.param.as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
+    pub fn param_mut<'a>(&self, ui: &'a mut UiContext) -> &'a mut dyn cce_ui::widget::ParamController {
+        ui[self.param].as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
     /// The pane as its concrete type, for what `ParamController` does not
     /// carry — the code row's error line.
-    pub fn param_bg_mut(&mut self) -> &mut ParametersBg {
-        self.param.as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
+    pub fn param_bg_mut<'a>(&self, ui: &'a mut UiContext) -> &'a mut ParametersBg {
+        ui[self.param].as_any_mut().downcast_mut::<ParametersBg>().expect("PARAM_IDX must be a ParametersBg")
     }
 
     /// The spreadsheet as itself, for what its controller trait does not
     /// carry — the scrollbars the render arm straddles around the plate.
-    pub fn spreadsheet(&self) -> &Spreadsheet {
-        self.spreadsheet.as_any().downcast_ref::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
+    pub fn spreadsheet<'a>(&self, ui: &'a UiContext) -> &'a Spreadsheet {
+        ui[self.spreadsheet].as_any().downcast_ref::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
     }
 
-    pub fn spreadsheet_mut(&mut self) -> &mut dyn cce_ui::widget::SpreadsheetController {
-        self.spreadsheet.as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
+    pub fn spreadsheet_mut<'a>(&self, ui: &'a mut UiContext) -> &'a mut dyn cce_ui::widget::SpreadsheetController {
+        ui[self.spreadsheet].as_any_mut().downcast_mut::<Spreadsheet>().expect("SPREADSHEET_IDX must be a Spreadsheet")
     }
 
-    pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController {
-        self.breadcrumb.as_any_mut().downcast_mut::<Breadcrumb>().expect("BREADCRUMB_IDX must be a Breadcrumb")
+    pub fn path_mut<'a>(&self, ui: &'a mut UiContext) -> &'a mut dyn cce_ui::widget::PathController {
+        ui[self.breadcrumb].as_any_mut().downcast_mut::<Breadcrumb>().expect("BREADCRUMB_IDX must be a Breadcrumb")
     }
 }
 

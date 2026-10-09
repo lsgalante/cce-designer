@@ -1665,11 +1665,11 @@ pub fn dialog_row_leads(mode: Mode, id: &str) -> bool {
 
 impl State {
     pub fn dialog_visible(&self) -> bool {
-        self.slots.dialog.visible()
+        self.ui_context[self.slots.dialog].visible()
     }
 
     pub fn toggle_dialog(&mut self) {
-        if self.dialog_visible() && self.slots.dialog.mode == Mode::Commands {
+        if self.dialog_visible() && self.ui_context[self.slots.dialog].mode == Mode::Commands {
             self.close_dialog();
         } else {
             self.open_dialog();
@@ -1691,7 +1691,7 @@ impl State {
     /// with the app, and put a second filterable list in front of the user
     /// that looked nothing like the first.
     pub fn open_node_palette(&mut self) {
-        if self.dialog_visible() && self.slots.dialog.mode == Mode::AddNode {
+        if self.dialog_visible() && self.ui_context[self.slots.dialog].mode == Mode::AddNode {
             self.close_dialog();
             return;
         }
@@ -1720,7 +1720,7 @@ impl State {
         self.close_dialog();
         self.open_dialog_anchored(mode, Some(at));
         self.dialog_from = Some(origin);
-        self.slots.dialog.turning = Some(DialogTurn { from: Some(from), start: std::time::Instant::now(), dir: 1.0 });
+        self.ui_context[self.slots.dialog].turning = Some(DialogTurn { from: Some(from), start: std::time::Instant::now(), dir: 1.0 });
     }
 
     /// Turn the open dialog to `mode`, as the row or key that leads there
@@ -1764,7 +1764,7 @@ impl State {
             Some((origin, at)) => self.open_dialog_from(Mode::Rename, origin, at),
             None => self.open_dialog_in(Mode::Rename),
         }
-        self.slots.dialog.query = name;
+        self.ui_context[self.slots.dialog].query = name;
         self.refresh_dialog_rows();
     }
 
@@ -1794,8 +1794,8 @@ impl State {
         // the trail a swipe back follows — or, when the mode it turns to IS
         // the trail's last, it is going back, and comes off. Opened afresh
         // it has neither, and whoever opened it from a menu says so after.
-        let was = self.dialog_visible().then_some(self.slots.dialog.mode);
-        self.slots.dialog.turning = None;
+        let was = self.dialog_visible().then_some(self.ui_context[self.slots.dialog].mode);
+        self.ui_context[self.slots.dialog].turning = None;
         match was {
             Some(prev) if anchor.is_none() => {
                 // The same plate turned to another list: the rows slide in,
@@ -1809,10 +1809,10 @@ impl State {
                 } else {
                     None
                 };
-                self.slots.dialog.turning = dir.map(|dir| DialogTurn { from: None, start: std::time::Instant::now(), dir });
+                self.ui_context[self.slots.dialog].turning = dir.map(|dir| DialogTurn { from: None, start: std::time::Instant::now(), dir });
             }
             _ => {
-                self.slots.dialog.anchor = anchor;
+                self.ui_context[self.slots.dialog].anchor = anchor;
                 self.dialog_trail.clear();
                 self.dialog_from = None;
             }
@@ -1820,9 +1820,9 @@ impl State {
         // Always with an empty query: a dialog that reopens holding the last
         // search has to be cleared before it can be used, which is a step
         // every single time to save one occasionally.
-        self.slots.dialog.mode = mode;
-        self.slots.dialog.query.clear();
-        self.slots.dialog.set_visible(true);
+        self.ui_context[self.slots.dialog].mode = mode;
+        self.ui_context[self.slots.dialog].query.clear();
+        self.ui_context[self.slots.dialog].set_visible(true);
         self.refresh_dialog_rows();
         self.rebuild_positions();
         self.apply_layout();
@@ -1843,10 +1843,10 @@ impl State {
         // Shut, not animated: with the dialog gone there is nothing to
         // shrink into, and a plate still reporting itself open would keep
         // covering presses meant for the panes.
-        self.slots.dialog.dropdown.inner_mut().open = false;
-        self.slots.dialog.dropdown_row = None;
-        self.slots.dialog.dropdown_armed = false;
-        self.slots.dialog.set_visible(false);
+        self.ui_context[self.slots.dialog].dropdown.inner_mut().open = false;
+        self.ui_context[self.slots.dialog].dropdown_row = None;
+        self.ui_context[self.slots.dialog].dropdown_armed = false;
+        self.ui_context[self.slots.dialog].set_visible(false);
         self.dialog_from = None;
         self.dialog_trail.clear();
         if self.focused_widget == Some(DIALOG_IDX) {
@@ -1869,8 +1869,8 @@ impl State {
     /// thing in every list; they carry no chord, so the column is simply
     /// empty for them.
     pub fn refresh_dialog_rows(&mut self) {
-        let query = self.slots.dialog.query.clone();
-        let rows: Vec<Row> = match self.slots.dialog.mode {
+        let query = self.ui_context[self.slots.dialog].query.clone();
+        let rows: Vec<Row> = match self.ui_context[self.slots.dialog].mode {
             // One row, which is what Enter will do: the name as it will be
             // written, or why it will not be.
             Mode::Rename => match self.rename_outcome(&query) {
@@ -2032,7 +2032,7 @@ impl State {
         };
         // A row that turns the dialog into another list says so where a
         // menu's page row does, at its right end.
-        let mode = self.slots.dialog.mode;
+        let mode = self.ui_context[self.slots.dialog].mode;
         let rows = rows
             .into_iter()
             .map(|mut r| {
@@ -2042,7 +2042,7 @@ impl State {
                 r
             })
             .collect();
-        self.slots.dialog.set_rows(rows);
+        self.ui_context[self.slots.dialog].set_rows(rows);
     }
 
     /// The open project's path and its file name, for the palette's path row
@@ -2119,8 +2119,8 @@ impl State {
     /// Re-read the zoom row from the live zoom, in place.
     fn refresh_dialog_zoom(&mut self) {
         let c = self.zoom_control();
-        if self.slots.dialog.rows.iter().any(|r| r.id == ZOOM_ROW_ID) {
-            self.slots.dialog.set_control(ZOOM_ROW_ID, Some(c));
+        if self.ui_context[self.slots.dialog].rows.iter().any(|r| r.id == ZOOM_ROW_ID) {
+            self.ui_context[self.slots.dialog].set_control(ZOOM_ROW_ID, Some(c));
         }
     }
 
@@ -2162,8 +2162,8 @@ impl State {
             "show_viewport_pane" => self.show_viewport,
             "show_parameters_pane" => self.show_parameters,
             "show_playbar_pane" => self.show_playbar,
-            "toggle_playbar_repeat" => self.slots.playbar.inner().repeat,
-            "toggle_playbar_step_buttons" => self.slots.playbar.inner().step_buttons,
+            "toggle_playbar_repeat" => self.ui_context[self.slots.playbar].inner().repeat,
+            "toggle_playbar_step_buttons" => self.ui_context[self.slots.playbar].inner().step_buttons,
             "toggle_snap" => self.viewer_tool.as_ref()?.snap.is_some(),
             _ => return None,
         })
@@ -2176,20 +2176,20 @@ impl State {
     /// moved, and re-ranking would throw the selection back to the top of a
     /// list the user is still working down.
     pub(crate) fn refresh_dialog_controls(&mut self) {
-        if self.slots.dialog.mode == Mode::Groups {
-            let ids: Vec<String> = self.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        if self.ui_context[self.slots.dialog].mode == Mode::Groups {
+            let ids: Vec<String> = self.ui_context[self.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
             for id in ids {
                 if let Some(name) = id.strip_prefix(GROUP_ROW_PREFIX) {
                     let on = self.group_marked(name);
-                    self.slots.dialog.set_control(&id, Some(Control::Toggle(on)));
+                    self.ui_context[self.slots.dialog].set_control(&id, Some(Control::Toggle(on)));
                 }
             }
             return;
         }
-        if self.slots.dialog.mode != Mode::Commands {
+        if self.ui_context[self.slots.dialog].mode != Mode::Commands {
             return;
         }
-        let ids: Vec<String> = self.slots.dialog.rows.iter().map(|r| r.id.clone()).collect();
+        let ids: Vec<String> = self.ui_context[self.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
         for id in ids {
             let control = if let Some(s) = setting_of_row(&id) {
                 Some(self.setting_control(s))
@@ -2200,7 +2200,7 @@ impl State {
             } else {
                 continue;
             };
-            self.slots.dialog.set_control(&id, control);
+            self.ui_context[self.slots.dialog].set_control(&id, control);
         }
     }
 
@@ -2317,7 +2317,7 @@ impl State {
         match key {
             "world_unit" => self.world_unit.suffix().to_string(),
             "gpu" => self.gpu_preference.clone(),
-            "node_wire_style" => self.slots.content.inner().wire_style().label().to_string(),
+            "node_wire_style" => self.ui_context[self.slots.content].inner().wire_style().label().to_string(),
             _ => String::new(),
         }
     }
@@ -2407,7 +2407,7 @@ impl State {
     /// config's `wire_style`. The widget holds it; the save reads it back
     /// off it.
     pub(crate) fn set_node_wire_style(&mut self, style: Option<cce_ui::widget::display::WireStyle>) {
-        self.slots.content.inner_mut().set_wire_style(style);
+        self.ui_context[self.slots.content].inner_mut().set_wire_style(style);
     }
 
     /// Write one setting's value to whatever owns it.
@@ -2436,7 +2436,7 @@ impl State {
         self.rebuild_scene_geometry();
         self.sync_nodes();
         // A slider drag saves once, when it ends (`tick_frame`).
-        if self.slots.dialog.slider_dragging() {
+        if self.ui_context[self.slots.dialog].slider_dragging() {
             self.settings_save_pending = true;
         } else {
             self.save_settings();
@@ -2473,12 +2473,12 @@ impl State {
             self.positions[DIALOG_IDX] = (0.0, 0.0, 0.0, 0.0);
             return;
         }
-        let (x, y, w, h) = match self.slots.dialog.anchor {
+        let (x, y, w, h) = match self.ui_context[self.slots.dialog].anchor {
             Some((ax, ay)) => layout_at(self.width, self.height, ax, ay),
             None => layout_in(self.width, self.height),
         };
         self.positions[DIALOG_IDX] = (x, y, w, h);
-        self.slots.dialog.set_page(visible_rows(x, y, w, h));
+        self.ui_context[self.slots.dialog].set_page(visible_rows(x, y, w, h));
     }
 
     /// Every key, while the dialog is open.
@@ -2495,7 +2495,7 @@ impl State {
         // A colour row's hex well, while it is being typed into, has the
         // keyboard ahead of everything — Escape and Enter included, which
         // end the edit rather than the dialog.
-        if let Some(sel) = self.slots.dialog.editing_color() {
+        if let Some(sel) = self.ui_context[self.slots.dialog].editing_color() {
             let ptr = sel as *mut cce_ui::widget::Adapted<ColorSelector>;
             unsafe {
                 (*ptr).keyboard_input(event, &mut self.ui_context);
@@ -2524,7 +2524,7 @@ impl State {
             Key::Named(NamedKey::Tab) => {
                 // Tab is what opened the add-node palette, so the same key
                 // closes it again. In the commands list it means nothing.
-                if self.slots.dialog.mode == Mode::AddNode {
+                if self.ui_context[self.slots.dialog].mode == Mode::AddNode {
                     self.close_dialog();
                 }
                 return true;
@@ -2533,27 +2533,27 @@ impl State {
         }
 
         match &event.logical_key {
-            Key::Named(NamedKey::ArrowDown) => self.slots.dialog.move_selection(1),
-            Key::Named(NamedKey::ArrowUp) => self.slots.dialog.move_selection(-1),
+            Key::Named(NamedKey::ArrowDown) => self.ui_context[self.slots.dialog].move_selection(1),
+            Key::Named(NamedKey::ArrowUp) => self.ui_context[self.slots.dialog].move_selection(-1),
             Key::Named(NamedKey::PageDown) => {
-                let page = self.slots.dialog.page_len() as i32;
-                self.slots.dialog.move_selection(page);
+                let page = self.ui_context[self.slots.dialog].page_len() as i32;
+                self.ui_context[self.slots.dialog].move_selection(page);
             }
             Key::Named(NamedKey::PageUp) => {
-                let page = self.slots.dialog.page_len() as i32;
-                self.slots.dialog.move_selection(-page);
+                let page = self.ui_context[self.slots.dialog].page_len() as i32;
+                self.ui_context[self.slots.dialog].move_selection(-page);
             }
             Key::Named(NamedKey::Home) => {
-                self.slots.dialog.selected = 0;
-                self.slots.dialog.scroll_to_selected();
+                self.ui_context[self.slots.dialog].selected = 0;
+                self.ui_context[self.slots.dialog].scroll_to_selected();
             }
             Key::Named(NamedKey::End) => {
-                let last = self.slots.dialog.rows.len().saturating_sub(1);
-                self.slots.dialog.selected = last;
-                self.slots.dialog.scroll_to_selected();
+                let last = self.ui_context[self.slots.dialog].rows.len().saturating_sub(1);
+                self.ui_context[self.slots.dialog].selected = last;
+                self.ui_context[self.slots.dialog].scroll_to_selected();
             }
             Key::Named(NamedKey::Enter) => {
-                if let Some(id) = self.slots.dialog.selected_id().map(str::to_string) {
+                if let Some(id) = self.ui_context[self.slots.dialog].selected_id().map(str::to_string) {
                     self.take_dialog_pick(id);
                 }
             }
@@ -2566,12 +2566,12 @@ impl State {
                 self.nudge_dialog_selection(dir);
             }
             Key::Named(NamedKey::Backspace) => {
-                if self.slots.dialog.query.pop().is_some() {
+                if self.ui_context[self.slots.dialog].query.pop().is_some() {
                     self.refresh_dialog_rows();
                 }
             }
             Key::Named(NamedKey::Space) => {
-                self.slots.dialog.query.push(' ');
+                self.ui_context[self.slots.dialog].query.push(' ');
                 self.refresh_dialog_rows();
             }
             Key::Character(c) => {
@@ -2581,7 +2581,7 @@ impl State {
                     && !self.modifiers.alt_key()
                     && !self.modifiers.super_key()
                 {
-                    self.slots.dialog.query.push_str(c);
+                    self.ui_context[self.slots.dialog].query.push_str(c);
                     self.refresh_dialog_rows();
                 }
             }
@@ -2593,13 +2593,13 @@ impl State {
     /// Step the selected row's control by `dir` (-1 or 1) and land the
     /// value: a slider by its step, a choice to its neighbouring option.
     fn nudge_dialog_selection(&mut self, dir: i32) {
-        let Some(id) = self.slots.dialog.selected_id().map(str::to_string) else { return };
-        let Some(control) = self.slots.dialog.selected_control().cloned() else { return };
+        let Some(id) = self.ui_context[self.slots.dialog].selected_id().map(str::to_string) else { return };
+        let Some(control) = self.ui_context[self.slots.dialog].selected_control().cloned() else { return };
         match control {
             Control::Slider { value, step, .. } => {
-                let i = self.slots.dialog.selected;
-                self.slots.dialog.set_slider_value(i, value + dir as f32 * step);
-                let Some(v) = self.slots.dialog.rows[i].slider_value() else { return };
+                let i = self.ui_context[self.slots.dialog].selected;
+                self.ui_context[self.slots.dialog].set_slider_value(i, value + dir as f32 * step);
+                let Some(v) = self.ui_context[self.slots.dialog].rows[i].slider_value() else { return };
                 self.land_dialog_slider(&id, v);
             }
             Control::Choice { options, index } => {
@@ -2629,26 +2629,26 @@ impl State {
     /// into the list, the current option highlighted. A pick lands through
     /// [`Self::land_dialog_choice`]; the dialog stays up.
     pub(crate) fn open_dialog_dropdown(&mut self, id: &str) {
-        let Some(i) = self.slots.dialog.rows.iter().position(|r| r.id == id) else { return };
-        let Some(Control::Choice { options, index }) = self.slots.dialog.rows[i].control.clone() else { return };
+        let Some(i) = self.ui_context[self.slots.dialog].rows.iter().position(|r| r.id == id) else { return };
+        let Some(Control::Choice { options, index }) = self.ui_context[self.slots.dialog].rows[i].control.clone() else { return };
         if options.is_empty() {
             return;
         }
-        self.slots.dialog.selected = i;
-        self.slots.dialog.scroll_to_selected();
+        self.ui_context[self.slots.dialog].selected = i;
+        self.ui_context[self.slots.dialog].scroll_to_selected();
         {
-            let dd = self.slots.dialog.dropdown.inner_mut();
+            let dd = self.ui_context[self.slots.dialog].dropdown.inner_mut();
             dd.options = options;
             dd.selected = index;
         }
-        self.slots.dialog.dropdown_row = Some(id.to_string());
+        self.ui_context[self.slots.dialog].dropdown_row = Some(id.to_string());
         if !self.sync_dialog_dropdown() {
-            self.slots.dialog.dropdown_row = None;
+            self.ui_context[self.slots.dialog].dropdown_row = None;
             return;
         }
         // Opened as the toolkit opens one from the keyboard: focused, then
         // Enter, which unfolds it with the current option highlighted.
-        let dd_id = self.slots.dialog.dropdown.base().id();
+        let dd_id = self.ui_context[self.slots.dialog].dropdown.base().id();
         self.ui_context.set_focused_id(dd_id);
         let enter = Event::KeyInput(KeyEvent {
             state: ElementState::Pressed,
@@ -2659,33 +2659,33 @@ impl State {
             shift: false,
             alt: false,
         });
-        let ptr = &mut *self.slots.dialog.dropdown as *mut Adapted<Dropdown>;
+        let ptr = &mut *self.ui_context[self.slots.dialog].dropdown as *mut Adapted<Dropdown>;
         unsafe {
             (*ptr).handle_event(&enter, &mut self.ui_context);
         }
-        self.slots.dialog.dropdown_armed = true;
+        self.ui_context[self.slots.dialog].dropdown_armed = true;
     }
 
     /// Lay the live dropdown out on its row's band, as the dialog now
     /// stands. False when there is no such row in view.
     pub(crate) fn sync_dialog_dropdown(&mut self) -> bool {
         let (x, y, w, h) = self.positions[DIALOG_IDX];
-        let Some(band) = self.slots.dialog.dropdown_trigger(Rect { x, y, width: w, height: h }) else { return false };
-        WidgetHost::set_rect(&mut *self.slots.dialog.dropdown, band.x, band.y, band.width, band.height);
+        let Some(band) = self.ui_context[self.slots.dialog].dropdown_trigger(Rect { x, y, width: w, height: h }) else { return false };
+        WidgetHost::set_rect(&mut *self.ui_context[self.slots.dialog].dropdown, band.x, band.y, band.width, band.height);
         true
     }
 
     /// Whether the dropdown is open and taking input — not while it
     /// shrinks closed, when the dialog under it has the pointer again.
     pub(crate) fn dialog_dropdown_open(&self) -> bool {
-        self.dialog_visible() && self.slots.dialog.dropdown_row.is_some() && self.slots.dialog.dropdown.is_expanded()
+        self.dialog_visible() && self.ui_context[self.slots.dialog].dropdown_row.is_some() && self.ui_context[self.slots.dialog].dropdown.is_expanded()
     }
 
     /// Close the dropdown — animated, as an outside press closes it.
     pub(crate) fn close_dialog_dropdown(&mut self) {
-        self.slots.dialog.dropdown_armed = false;
-        if self.slots.dialog.dropdown.open {
-            let ptr = &mut *self.slots.dialog.dropdown as *mut Adapted<Dropdown>;
+        self.ui_context[self.slots.dialog].dropdown_armed = false;
+        if self.ui_context[self.slots.dialog].dropdown.open {
+            let ptr = &mut *self.ui_context[self.slots.dialog].dropdown as *mut Adapted<Dropdown>;
             unsafe {
                 (*ptr).handle_event(&Event::FocusOut, &mut self.ui_context);
             }
@@ -2700,7 +2700,7 @@ impl State {
             return false;
         }
         self.sync_dialog_dropdown();
-        let ptr = &mut *self.slots.dialog.dropdown as *mut Adapted<Dropdown>;
+        let ptr = &mut *self.ui_context[self.slots.dialog].dropdown as *mut Adapted<Dropdown>;
         let taken = unsafe { (*ptr).handle_event(ev, &mut self.ui_context) };
         self.land_dialog_dropdown_pick();
         taken
@@ -2710,11 +2710,11 @@ impl State {
     /// reached it, and note whether it is still expanded.
     fn land_dialog_dropdown_pick(&mut self) {
         let picked = {
-            let dd = self.slots.dialog.dropdown.inner_mut();
+            let dd = self.ui_context[self.slots.dialog].dropdown.inner_mut();
             dd.take_change().then(|| dd.options.get(dd.selected).cloned()).flatten()
         };
-        self.slots.dialog.dropdown_armed = self.slots.dialog.dropdown.is_expanded();
-        if let (Some(value), Some(id)) = (picked, self.slots.dialog.dropdown_row.clone()) {
+        self.ui_context[self.slots.dialog].dropdown_armed = self.ui_context[self.slots.dialog].dropdown.is_expanded();
+        if let (Some(value), Some(id)) = (picked, self.ui_context[self.slots.dialog].dropdown_row.clone()) {
             self.land_dialog_choice(&id, &value);
         }
     }
@@ -2723,7 +2723,7 @@ impl State {
     /// until this very press — which the runner then handed it first (see
     /// `Dialog::dropdown_armed`).
     pub(crate) fn dialog_dropdown_takes_press(&self) -> bool {
-        self.dialog_dropdown_open() || (self.dialog_visible() && self.slots.dialog.dropdown_armed)
+        self.dialog_dropdown_open() || (self.dialog_visible() && self.ui_context[self.slots.dialog].dropdown_armed)
     }
 
     /// A press while the dropdown is open: on a row it picks it, on the
@@ -2735,7 +2735,7 @@ impl State {
             // The runner handed it the press already: a pick, or the close
             // a press anywhere else makes. Land it, and the press is spent.
             self.land_dialog_dropdown_pick();
-            self.slots.dialog.dropdown_armed = false;
+            self.ui_context[self.slots.dialog].dropdown_armed = false;
             return true;
         }
         if button != MouseButton::Left {
@@ -2787,7 +2787,7 @@ impl State {
             };
             if landed {
                 self.refresh_dialog_controls();
-                if !self.slots.dialog.slider_dragging() {
+                if !self.ui_context[self.slots.dialog].slider_dragging() {
                     self.save_settings();
                 }
                 return;
@@ -2815,7 +2815,7 @@ impl State {
     /// does nothing; the controls re-read, and the selection stays where it
     /// was — by Enter or by a click, since both arrive here.
     pub(crate) fn take_dialog_pick(&mut self, id: String) {
-        let mode = self.slots.dialog.mode;
+        let mode = self.ui_context[self.slots.dialog].mode;
         if mode == Mode::Commands && id == ZOOM_ROW_ID {
             return;
         }
@@ -2831,7 +2831,7 @@ impl State {
         }
         if mode == Mode::Commands {
             if let Some(s) = setting_of_row(&id) {
-                let control = self.slots.dialog.rows.iter().find(|r| r.id == id).and_then(|r| r.control.clone());
+                let control = self.ui_context[self.slots.dialog].rows.iter().find(|r| r.id == id).and_then(|r| r.control.clone());
                 match control {
                     Some(Control::Toggle(on)) => {
                         let v = if on { "false" } else { "true" };
@@ -2898,7 +2898,7 @@ impl State {
             // relays the panes.
             Mode::Rename => {
                 let Some(target) = self.rename_target.take() else { return };
-                let typed = self.slots.dialog.query.clone();
+                let typed = self.ui_context[self.slots.dialog].query.clone();
                 match self.rename_node(&target, &typed) {
                     Ok(said) | Err(said) => self.update_status_text(&said),
                 }
@@ -2939,15 +2939,15 @@ impl State {
     /// dialog. Returns whether anything changed.
     pub(crate) fn drain_dialog_clicks(&mut self) -> bool {
         let mut changed = false;
-        if let Some(id) = self.slots.dialog.take_activated() {
+        if let Some(id) = self.ui_context[self.slots.dialog].take_activated() {
             self.take_dialog_pick(id);
             changed = true;
         }
-        if let Some((id, v)) = self.slots.dialog.take_slider_change() {
+        if let Some((id, v)) = self.ui_context[self.slots.dialog].take_slider_change() {
             self.land_dialog_slider(&id, v);
             changed = true;
         }
-        for (id, hex) in self.slots.dialog.take_color_changes() {
+        for (id, hex) in self.ui_context[self.slots.dialog].take_color_changes() {
             if let Some(s) = setting_of_row(&id) {
                 self.apply_setting(s.label, &hex);
                 changed = true;
@@ -2987,14 +2987,10 @@ impl State {
         // below, or dragging a value past the dialog's edge and letting go
         // would close the dialog instead of committing.
         if state == ElementState::Released && self.drag_widget == Some(DIALOG_IDX) {
-            let ptr = &mut *self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
-            unsafe {
-                (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context);
-                (*ptr).handle_event(
-                    &cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y },
-                    &mut self.ui_context,
-                );
-            }
+            self.ui_context.lend_h(self.slots.dialog, |d, ui| {
+                d.handle_event(&cce_ui::widget::Event::DragEnd, ui);
+                d.handle_event(&cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y }, ui);
+            });
             self.drag_widget = None;
             self.drag_press_cursor = None;
             self.drain_dialog_clicks();
@@ -3017,12 +3013,9 @@ impl State {
         // A press that took a slider's band arms the same widget drag the
         // params pane's sliders arm, so the value follows the pointer
         // wherever it goes until the release.
-        if state == ElementState::Pressed && self.slots.dialog.slider_dragging() {
+        if state == ElementState::Pressed && self.ui_context[self.slots.dialog].slider_dragging() {
             let ev = cce_ui::widget::Event::DragStart { start_x: x, start_y: y };
-            let ptr = &mut *self.slots.dialog as *mut cce_ui::widget::Adapted<Dialog>;
-            unsafe {
-                (*ptr).handle_event(&ev, &mut self.ui_context);
-            }
+            self.ui_context.lend_h(self.slots.dialog, |d, ui| d.handle_event(&ev, ui));
             self.drag_widget = Some(DIALOG_IDX);
             self.drag_press_cursor = Some((x, y));
         }
@@ -3042,8 +3035,8 @@ impl State {
                 Some(cce_ui::widget::SwipeDir::Forward) => {
                     let (rx, ry, rw, rh) = self.positions[DIALOG_IDX];
                     let rect = Rect { x: rx, y: ry, width: rw, height: rh };
-                    let mode = self.slots.dialog.mode;
-                    let row = self.slots.dialog.row_index_at(rect, x, y).and_then(|i| self.slots.dialog.rows.get(i)).map(|r| r.id.clone());
+                    let mode = self.ui_context[self.slots.dialog].mode;
+                    let row = self.ui_context[self.slots.dialog].row_index_at(rect, x, y).and_then(|i| self.ui_context[self.slots.dialog].rows.get(i)).map(|r| r.id.clone());
                     if let Some(id) = row.filter(|id| dialog_row_leads(mode, id)) {
                         self.take_dialog_pick(id);
                         return true;
@@ -3072,7 +3065,7 @@ impl State {
     /// covered — by the dialog's own plate. Inside a modal the geometry IS
     /// the answer.
     pub(crate) fn in_dialog_slot(&self, idx: usize, x: f32, y: f32) -> bool {
-        if !self.slots.get_dyn(idx).visible() {
+        if !self.slots.get_dyn(&self.ui_context, idx).visible() {
             return false;
         }
         let (rx, ry, rw, rh) = self.positions[idx];
@@ -3090,7 +3083,7 @@ impl State {
     /// decided who gets this event, so the claim comes down for the dispatch
     /// and goes straight back up.
     pub(crate) fn dispatch_uncovered(&mut self, idx: usize, ev: &cce_ui::widget::Event) -> bool {
-        self.slots.dialog.set_occluding(false);
+        self.ui_context[self.slots.dialog].set_occluding(false);
         // The coverage answer is memoized per point, so lowering the claim is
         // not enough — a query from earlier this frame is served from the
         // cache, and the engine makes one on every left press
@@ -3102,9 +3095,9 @@ impl State {
         if matches!(ev, cce_ui::widget::Event::MouseWheel { .. }) {
             self.ui_context.note_scroll_event();
         }
-        let ptr = self.slots.get_dyn_mut(idx) as *mut (dyn cce_ui::widget::WidgetHost + 'static);
+        let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn cce_ui::widget::WidgetHost + 'static);
         let taken = unsafe { (*ptr).handle_event(ev, &mut self.ui_context) };
-        self.slots.dialog.set_occluding(true);
+        self.ui_context[self.slots.dialog].set_occluding(true);
         self.ui_context.invalidate_coverage_cache();
         taken
     }

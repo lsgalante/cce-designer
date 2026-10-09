@@ -171,8 +171,8 @@ impl State {
         // walk must do it explicitly or open dropdowns get no occlusion.
         self.ui_context.clear_popovers();
         for i in 0..WIDGET_COUNT {
-            if self.slots.get_dyn(i).visible() && self.slots.get_dyn(i).popover_rect().is_some() {
-                self.ui_context.register_popover(self.slots.get_dyn_mut(i));
+            if self.slots.get_dyn(&self.ui_context, i).visible() && self.slots.get_dyn(&self.ui_context, i).popover_rect().is_some() {
+                self.ui_context.register_popover_id(self.slots.id(i));
             }
         }
 
@@ -220,7 +220,7 @@ impl State {
             {
                 -3
             } else {
-                self.slots.get_dyn(i).z_index()
+                self.slots.get_dyn(&self.ui_context, i).z_index()
             };
             (self.has_any_open_menu(i), base_key)
         });
@@ -228,16 +228,11 @@ impl State {
         // root plate container DISSOLVED (Phase 6as): register the widgets (registry consumers:
         // coverage/parent walks) and paint each top-level widget directly in sorted order.
         self.ui_context.clear_hierarchy();
-        // Register ALL slots, visible or not (id-rooted router): the wheel loop and the
-        // hidden-widget broadcasts dispatch by id over the whole roster, and visibility
-        // gates behavior inside the widget — an unregistered hidden root would drop the
-        // event before that gate. Before the paint pointers below are taken, so the
-        // `&mut` each registration borrows does not outlive them.
-        for i in 0..WIDGET_COUNT {
-            self.ui_context.register_host(self.slots.get_dyn_mut(i));
-        }
+        // Every slot stays registered through the wipe (the context owns them, and
+        // `clear_hierarchy` keeps what it owns): the wheel loop and the hidden-widget
+        // broadcasts dispatch by id over the whole roster, visible or not.
         let widget_ptrs: Vec<*mut (dyn WidgetHost + 'static)> = (0..WIDGET_COUNT)
-            .map(|i| self.slots.get_dyn(i) as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static))
+            .map(|i| self.slots.get_dyn(&self.ui_context, i) as *const (dyn WidgetHost + 'static) as *mut (dyn WidgetHost + 'static))
             .collect();
         // The dialog's open dropdown, AFTER the dialog and after the wipe
         // above (which would drop it from the tree, leaving an id the
@@ -245,15 +240,16 @@ impl State {
         // labels through only past the occluders registered before it, so
         // the dialog's labels under the list are clamped and the list's are
         // not.
-        if self.dialog_visible() && self.slots.dialog.dropdown.open && self.sync_dialog_dropdown() {
-            let dd: &mut (dyn cce_ui::widget::WidgetHost + 'static) = &mut *self.slots.dialog.dropdown;
-            self.ui_context.register_popover(dd);
+        if self.dialog_visible() && self.ui_context[self.slots.dialog].dropdown.open && self.sync_dialog_dropdown() {
+            // The dialog's dropdown is the dialog's own (an embedded widget): lent with the
+            // dialog, it is registered from inside, where the context is free to take it.
+            self.ui_context.lend_h(self.slots.dialog, |d, ui| ui.register_popover(&mut *d.dropdown));
         }
 
         let mut pc = PaintCtx::new();
         let mut visited = vec![false; WIDGET_COUNT];
         for &i in &draw_order {
-            if !self.slots.get_dyn(i).visible() {
+            if !self.slots.get_dyn(&self.ui_context, i).visible() {
                 continue;
             }
             // The dialog is painted after the overlay passes below, not in the
@@ -307,7 +303,7 @@ impl State {
         }
         visited[idx] = true;
 
-        let w = self.slots.get_dyn(idx);
+        let w = self.slots.get_dyn(&self.ui_context, idx);
         if !w.visible() {
             return;
         }
@@ -378,7 +374,7 @@ impl State {
             // opacity as the hosted menus must.
             let (x, y, ww, h) = w.rect();
             let full = rect(x, y, ww, h);
-            match (self.slots.dialog.turn_progress(), self.slots.dialog.turning) {
+            match (self.ui_context[self.slots.dialog].turn_progress(), self.ui_context[self.slots.dialog].turning) {
                 (Some(e), Some(turn)) => {
                     // Turning (see `dialog::DialogTurn`): the plate on its way
                     // from the one it replaced, and what it shows sliding in
@@ -386,7 +382,7 @@ impl State {
                     // and replayed moved; the text is cut at the plate as it
                     // is drawn, which is the occluder the dialog claims
                     // meanwhile, so the clamp still lets it through.
-                    let now = self.slots.dialog.drawn_rect(full);
+                    let now = self.ui_context[self.slots.dialog].drawn_rect(full);
                     cce_ui::widget::context_menu::paint_menu_plate(pc, now, false);
                     let mut scratch = PaintCtx::new();
                     w.paint_self(&self.ui_context, &mut scratch);
@@ -423,7 +419,7 @@ impl State {
             // text (a subtree painter; append_frame_text skips this slot so the
             // text isn't doubled).
             let (wx, wy, ww2, wh2) = w.rect();
-            if self.slots.playbar.inner().frame > 0.0 {
+            if self.ui_context[self.slots.playbar].inner().frame > 0.0 {
                 // A SHELF of the window's bottom edge, not a plate laid on
                 // it: a plate turned inside out (cce-ui's `frame`), whose
                 // face is everything below the scene's opening and whose
@@ -481,7 +477,7 @@ impl State {
             // The idle copy fades OUT as the fore copy fades in: left at full
             // strength it showed through the plate under the raised bar and
             // the two stacked, so a raised bar read nearly opaque.
-            let sheet = self.slots.spreadsheet();
+            let sheet = self.slots.spreadsheet(&self.ui_context);
             let sheet_rect = rect(wx, wy, ww2, wh2);
             if sheet.scrollbars_shown(sheet_rect) {
                 sheet.paint_scrollbars(sheet_rect, pc, 1.0 - sheet.scrollbar_fade());
@@ -691,9 +687,7 @@ impl State {
             // translucent plate every frame, its fore copy over the content
             // at the raise's fade, so a raise and a sink are a fade.
             let param_scrollbar = {
-                let pb = self
-                    .slots
-                    .param
+                let pb = self.ui_context[self.slots.param]
                     .as_any()
                     .downcast_ref::<cce_ui::widget::ParametersBg>()
                     .expect("PARAM_IDX must be a ParametersBg");
@@ -1025,7 +1019,7 @@ impl State {
         let ncr = self.circular_network_layout.r;
 
         for i in 0..WIDGET_COUNT {
-            let w = self.slots.get_dyn(i);
+            let w = self.slots.get_dyn(&self.ui_context, i);
             if !w.visible() {
                 continue;
             }
@@ -1114,7 +1108,7 @@ impl State {
         visited: &mut [bool],
         clip: Rect,
     ) {
-        if !self.slots.dialog.visible() {
+        if !self.ui_context[self.slots.dialog].visible() {
             return;
         }
         self.paint_widget(DIALOG_IDX, pc, show_cursor, visited, clip, None);
@@ -1127,7 +1121,7 @@ impl State {
     /// pass would sit under every label.
     fn append_popovers(&self, pc: &mut PaintCtx) {
         for i in 0..WIDGET_COUNT {
-            let w = self.slots.get_dyn(i);
+            let w = self.slots.get_dyn(&self.ui_context, i);
             if !w.visible() {
                 continue;
             }
@@ -1411,7 +1405,7 @@ impl State {
         // params pane shows, the pane flags that line in its code row. Cleared
         // whenever the evaluation says nothing about that node.
         let flagged = ocl_error.as_deref().and_then(|e| self.code_error_line_for_pane(e));
-        self.slots.param_bg_mut().set_code_error_line(flagged);
+        self.slots.param_bg_mut(&mut self.ui_context).set_code_error_line(flagged);
         if let Some(e) = ocl_error {
             self.update_status_text(&format!("Node error: {}", e));
         } else {
@@ -1607,7 +1601,7 @@ impl State {
     /// editor, when one is open. False otherwise, so the caller's own
     /// handling runs.
     pub(crate) fn code_editor_action(&mut self, action: cce_ui::widget::ContextAction) -> bool {
-        let pane = self.slots.param_bg_mut();
+        let pane = self.slots.param_bg_mut(&mut self.ui_context);
         pane.code_editing() && pane.code_action(action)
     }
 
@@ -1621,7 +1615,7 @@ impl State {
     pub(crate) fn update_status_text(&mut self, text: &str) {
         if self.last_status_text != text {
             self.last_status_text = text.to_string();
-            self.slots.status.set_text(text);
+            self.ui_context[self.slots.status].set_text(text);
         }
     }
 }
