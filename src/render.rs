@@ -240,10 +240,11 @@ impl State {
         // labels through only past the occluders registered before it, so
         // the dialog's labels under the list are clamped and the list's are
         // not.
-        if self.dialog_visible() && self.ui_context[self.slots.dialog].dropdown.open && self.sync_dialog_dropdown() {
-            // The dialog's dropdown is the dialog's own (an embedded widget): lent with the
-            // dialog, it is registered from inside, where the context is free to take it.
-            self.ui_context.lend_h(self.slots.dialog, |d, ui| ui.register_popover(&mut *d.dropdown));
+        if self.dialog_visible() && self.ui_context[self.dialog_dd()].open && self.sync_dialog_dropdown() {
+            // The dialog's dropdown is the dialog's own (an embedded widget), the context's
+            // entry, registered as a popover by its id.
+            let dd = self.dialog_dd();
+            self.ui_context.register_popover_id(dd.id());
         }
 
         let mut pc = PaintCtx::new();

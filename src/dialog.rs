@@ -345,7 +345,10 @@ pub struct Dialog {
     /// plate grows out of the trigger into the list and back. Boxed and
     /// never replaced, because the UI context holds a pointer to it while
     /// it is registered as an occluder.
-    pub dropdown: cce_ui::widget::Owned<Adapted<Dropdown>>,
+    /// An [`Embedded`] child, the context's once the dialog is (the designer reaches it
+    /// through [`State::dialog_dd`]); invisible while closed, so it is no Tab stop and
+    /// nothing hits it.
+    pub dropdown: Embedded<Adapted<Dropdown>>,
     /// The row id the open dropdown serves.
     pub dropdown_row: Option<String>,
     /// Whether the dropdown was last seen expanded. The runner hands every
@@ -391,7 +394,7 @@ pub struct Dialog {
     /// not stamps, because each carries state of its own: a hex edit in
     /// progress, a picker process streaming values. Kept across
     /// re-rankings so a query that drops the row does not kill its picker.
-    colors: Vec<(String, cce_ui::widget::Owned<Adapted<ColorSelector>>)>,
+    colors: Vec<(String, Adapted<ColorSelector>)>,
     /// Colour rows the selectors changed, `(row id, hex)`, drained by the app.
     color_changes: Vec<(String, String)>,
 }
@@ -421,7 +424,11 @@ impl Dialog {
             hover_ctl: None,
             activated: None,
             dropdown_stamp: RefCell::new(Dropdown::new(Vec::new(), 0)),
-            dropdown: cce_ui::widget::Owned::new(Dropdown::new(Vec::new(), 0)),
+            dropdown: Embedded::new({
+                let mut dd = Dropdown::new(Vec::new(), 0);
+                dd.set_visible(false);
+                dd
+            }),
             dropdown_row: None,
             dropdown_armed: false,
             occluding: true,
@@ -685,13 +692,13 @@ impl Dialog {
 
     /// The colour selector behind a colour row, if that row has one.
     pub fn color_selector(&self, id: &str) -> Option<&Adapted<ColorSelector>> {
-        self.colors.iter().find(|(k, _)| k == id).map(|(_, s)| &**s)
+        self.colors.iter().find(|(k, _)| k == id).map(|(_, s)| s)
     }
 
     /// The colour selector whose hex well is being typed into, if any — the
     /// app hands it the keyboard ahead of the filter.
     pub fn editing_color(&mut self) -> Option<&mut Adapted<ColorSelector>> {
-        self.colors.iter_mut().find(|(_, s)| s.inner().editing).map(|(_, s)| &mut **s)
+        self.colors.iter_mut().find(|(_, s)| s.inner().editing).map(|(_, s)| s)
     }
 
     pub fn take_color_changes(&mut self) -> Vec<(String, String)> {
@@ -708,7 +715,7 @@ impl Dialog {
             let k = match self.colors.iter().position(|(k, _)| *k == row.id) {
                 Some(k) => k,
                 None => {
-                    self.colors.push((row.id.clone(), cce_ui::widget::Owned::new(ColorSelector::new([0; 3]))));
+                    self.colors.push((row.id.clone(), ColorSelector::new([0; 3])));
                     self.colors.len() - 1
                 }
             };
@@ -894,6 +901,16 @@ impl Layout for Dialog {
     fn z_order(&self) -> i32 {
         900
     }
+
+    /// The live dropdown into the context with the dialog. Not linked: the designer routes
+    /// to it itself (`State::dialog_dropdown_event`).
+    fn register_embedded_children(&mut self, _host_id: WidgetId, ctx: &mut UiContext) {
+        self.dropdown.attach(ctx);
+    }
+
+    fn release_embedded_children(&mut self, ctx: &mut UiContext) {
+        self.dropdown.detach(ctx);
+    }
 }
 
 /// How wide `text` draws: shaped by the frame's own font system, as
@@ -990,10 +1007,24 @@ impl Paint for Dialog {
         self.occluding.then_some((r.x, r.y, r.width, r.height))
     }
 
+    /// Without a context the live dropdown is reached only while the dialog holds it; a
+    /// dialog in the context paints through `paint_ui`, which reaches it there.
     fn paint(&self, rect: Rect, ctx: &mut PaintCtx) {
+        self.paint_with(self.dropdown.here(), rect, ctx);
+    }
+
+    fn paint_ui(&self, ui: &UiContext, rect: Rect, ctx: &mut PaintCtx) {
+        self.paint_with(Some(self.dropdown.get(ui)), rect, ctx);
+    }
+}
+
+impl Dialog {
+    /// The dialog's paint, with the live dropdown when it can be reached.
+    fn paint_with(&self, dropdown: Option<&Adapted<Dropdown>>, rect: Rect, ctx: &mut PaintCtx) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
+        let open = dropdown.is_some_and(|d| d.open);
         let (family, font_size) = cce_ui::layout::control_label_font_parsed();
         let accent = colors::highlight_primary_color();
         let tint = [accent[0], accent[1], accent[2]];
@@ -1233,8 +1264,8 @@ impl Paint for Dialog {
                     // row's is open (it grows out of this trigger, painted
                     // over the rows below), else the shared stamp.
                     let band = self.slider_band_rect(r);
-                    if self.dropdown_row.as_deref() == Some(row.id.as_str()) && self.dropdown.open {
-                        paint_retagged(self.dropdown.inner(), band, ctx, own);
+                    if let Some(dd) = dropdown.filter(|_| open && self.dropdown_row.as_deref() == Some(row.id.as_str())) {
+                        paint_retagged(dd.inner(), band, ctx, own);
                     } else {
                         let mut stamp = self.dropdown_stamp.borrow_mut();
                         stamp.inner_mut().options = options.clone();
@@ -1252,8 +1283,8 @@ impl Paint for Dialog {
         // which `State::collect_display_list` registers as an occluder
         // AFTER the dialog's, so the dialog's labels under it are clamped
         // and its own are not.
-        if self.dropdown.open && self.dropdown_trigger(rect).is_some() {
-            WidgetHost::render_popover(&*self.dropdown, ctx);
+        if let Some(dd) = dropdown.filter(|_| open && self.dropdown_trigger(rect).is_some()) {
+            WidgetHost::render_popover(dd, ctx);
         }
 
         // The scrollbar's fore copy, over the rows, at the activity's fade:
@@ -1310,12 +1341,24 @@ impl Input for Dialog {
             picking |= Input::tick(sel.inner_mut(), dt, rect);
         }
         let colored = self.drain_color_selectors();
-        // The open dropdown's grow and shrink: frames while it runs, and a
-        // landed close settled back to a closed trigger.
-        let band = self.dropdown_trigger(rect).unwrap_or(rect);
-        let unfolding = self.dropdown.open && Input::tick(self.dropdown.inner_mut(), dt, band);
+        // The open dropdown's grow and shrink is ticked in `tick_ctx`: it is the context's.
         let turning = self.turn_progress().is_some();
-        moved || self.scroll_motion.is_animating() || flipped || self.sb_activity.holding() || fading || picking || colored || unfolding || turning
+        moved || self.scroll_motion.is_animating() || flipped || self.sb_activity.holding() || fading || picking || colored || turning
+    }
+
+    /// The open dropdown's grow and shrink: frames while it runs, and a landed close settled
+    /// back to a closed trigger — then out of sight again, so a closed one is no Tab stop.
+    fn tick_ctx(&mut self, dt: f32, ectx: &mut EventCtx) -> bool {
+        let rect = ectx.rect;
+        let Some(ui) = ectx.ui.as_deref_mut() else { return false };
+        let band = self.dropdown_trigger(rect).unwrap_or(rect);
+        let dd = self.dropdown.get_mut(ui);
+        let unfolding = dd.open && Input::tick(dd.inner_mut(), dt, band);
+        let open = dd.open;
+        if dd.visible() != open {
+            dd.set_visible(open);
+        }
+        unfolding
     }
 
     /// The whole rect, always — this is what makes the dialog modal over what
@@ -1843,7 +1886,9 @@ impl State {
         // Shut, not animated: with the dialog gone there is nothing to
         // shrink into, and a plate still reporting itself open would keep
         // covering presses meant for the panes.
-        self.ui_context[self.slots.dialog].dropdown.inner_mut().open = false;
+        let dd = self.dialog_dd();
+        self.ui_context[dd].inner_mut().open = false;
+        self.ui_context[dd].set_visible(false);
         self.ui_context[self.slots.dialog].dropdown_row = None;
         self.ui_context[self.slots.dialog].dropdown_armed = false;
         self.ui_context[self.slots.dialog].set_visible(false);
@@ -2637,7 +2682,8 @@ impl State {
         self.ui_context[self.slots.dialog].selected = i;
         self.ui_context[self.slots.dialog].scroll_to_selected();
         {
-            let dd = self.ui_context[self.slots.dialog].dropdown.inner_mut();
+            let dd = self.dialog_dd();
+            let dd = self.ui_context[dd].inner_mut();
             dd.options = options;
             dd.selected = index;
         }
@@ -2648,8 +2694,14 @@ impl State {
         }
         // Opened as the toolkit opens one from the keyboard: focused, then
         // Enter, which unfolds it with the current option highlighted.
-        let dd_id = self.ui_context[self.slots.dialog].dropdown.base().id();
-        self.ui_context.set_focused_id(dd_id);
+        // In sight while it is open (`Dialog::tick_ctx` hides it again once it has closed).
+        let dd = self.dialog_dd();
+        self.ui_context[dd].set_visible(true);
+        // The keys are the dropdown's (the focus record names it, which a closed dropdown
+        // checks before it takes Enter), but it is not told it is focused, so its trigger
+        // wears no focus ring: the row's band already says which control is open, as the
+        // params pane's dropdowns do.
+        self.ui_context.claim_focus(dd.id());
         let enter = Event::KeyInput(KeyEvent {
             state: ElementState::Pressed,
             logical_key: Key::Named(NamedKey::Enter),
@@ -2659,11 +2711,14 @@ impl State {
             shift: false,
             alt: false,
         });
-        let ptr = &mut *self.ui_context[self.slots.dialog].dropdown as *mut Adapted<Dropdown>;
-        unsafe {
-            (*ptr).handle_event(&enter, &mut self.ui_context);
-        }
+        self.ui_context.lend_h(dd, |w, ctx| w.handle_event(&enter, ctx));
         self.ui_context[self.slots.dialog].dropdown_armed = true;
+    }
+
+    /// The dialog's live dropdown: the context's since the dialog was inserted (an
+    /// `Embedded` child of the dialog).
+    pub(crate) fn dialog_dd(&self) -> Handle<Adapted<Dropdown>> {
+        self.ui_context[self.slots.dialog].dropdown.handle().expect("the dialog's dropdown is the context's")
     }
 
     /// Lay the live dropdown out on its row's band, as the dialog now
@@ -2671,24 +2726,23 @@ impl State {
     pub(crate) fn sync_dialog_dropdown(&mut self) -> bool {
         let (x, y, w, h) = self.positions[DIALOG_IDX];
         let Some(band) = self.ui_context[self.slots.dialog].dropdown_trigger(Rect { x, y, width: w, height: h }) else { return false };
-        WidgetHost::set_rect(&mut *self.ui_context[self.slots.dialog].dropdown, band.x, band.y, band.width, band.height);
+        let dd = self.dialog_dd();
+        WidgetHost::set_rect(&mut self.ui_context[dd], band.x, band.y, band.width, band.height);
         true
     }
 
     /// Whether the dropdown is open and taking input — not while it
     /// shrinks closed, when the dialog under it has the pointer again.
     pub(crate) fn dialog_dropdown_open(&self) -> bool {
-        self.dialog_visible() && self.ui_context[self.slots.dialog].dropdown_row.is_some() && self.ui_context[self.slots.dialog].dropdown.is_expanded()
+        self.dialog_visible() && self.ui_context[self.slots.dialog].dropdown_row.is_some() && self.ui_context[self.dialog_dd()].is_expanded()
     }
 
     /// Close the dropdown — animated, as an outside press closes it.
     pub(crate) fn close_dialog_dropdown(&mut self) {
         self.ui_context[self.slots.dialog].dropdown_armed = false;
-        if self.ui_context[self.slots.dialog].dropdown.open {
-            let ptr = &mut *self.ui_context[self.slots.dialog].dropdown as *mut Adapted<Dropdown>;
-            unsafe {
-                (*ptr).handle_event(&Event::FocusOut, &mut self.ui_context);
-            }
+        let dd = self.dialog_dd();
+        if self.ui_context[dd].open {
+            self.ui_context.lend_h(dd, |w, ctx| w.handle_event(&Event::FocusOut, ctx));
         }
     }
 
@@ -2700,8 +2754,8 @@ impl State {
             return false;
         }
         self.sync_dialog_dropdown();
-        let ptr = &mut *self.ui_context[self.slots.dialog].dropdown as *mut Adapted<Dropdown>;
-        let taken = unsafe { (*ptr).handle_event(ev, &mut self.ui_context) };
+        let dd = self.dialog_dd();
+        let taken = self.ui_context.lend_h(dd, |w, ctx| w.handle_event(ev, ctx)).unwrap_or(false);
         self.land_dialog_dropdown_pick();
         taken
     }
@@ -2710,10 +2764,11 @@ impl State {
     /// reached it, and note whether it is still expanded.
     fn land_dialog_dropdown_pick(&mut self) {
         let picked = {
-            let dd = self.ui_context[self.slots.dialog].dropdown.inner_mut();
+            let dd = self.dialog_dd();
+            let dd = self.ui_context[dd].inner_mut();
             dd.take_change().then(|| dd.options.get(dd.selected).cloned()).flatten()
         };
-        self.ui_context[self.slots.dialog].dropdown_armed = self.ui_context[self.slots.dialog].dropdown.is_expanded();
+        self.ui_context[self.slots.dialog].dropdown_armed = self.ui_context[self.dialog_dd()].is_expanded();
         if let (Some(value), Some(id)) = (picked, self.ui_context[self.slots.dialog].dropdown_row.clone()) {
             self.land_dialog_choice(&id, &value);
         }

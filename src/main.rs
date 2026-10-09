@@ -15829,15 +15829,15 @@ mod tests {
         };
         press(&mut state, vx + 2.0, vy + 4.0);
         assert!(state.dialog_dropdown_open(), "the press opened the dropdown");
-        let units = state.ui_context[state.slots.dialog].dropdown.options.clone();
-        assert_eq!(units[state.ui_context[state.slots.dialog].dropdown.selected], "mm");
-        let (tx, ty, tw, th) = state.ui_context[state.slots.dialog].dropdown.rect();
+        let units = state.ui_context[state.dialog_dd()].options.clone();
+        assert_eq!(units[state.ui_context[state.dialog_dd()].selected], "mm");
+        let (tx, ty, tw, th) = state.ui_context[state.dialog_dd()].rect();
         assert!(vx >= tx && vx < tx + tw && vy >= ty - 4.0 && vy < ty + th, "laid out on the band its value was drawn in");
 
         // The plate grows out of the trigger into the list. Judged by where
         // it ends, not by a reading taken as it opens: the growth runs on
         // the wall clock, and a slow press had already finished it.
-        let grown = |state: &State| state.ui_context[state.slots.dialog].dropdown.popover_rect().map(|r| r.3).unwrap_or(0.0);
+        let grown = |state: &State| state.ui_context[state.dialog_dd()].popover_rect().map(|r| r.3).unwrap_or(0.0);
         std::thread::sleep(std::time::Duration::from_millis(250));
         state.tick_frame(0.25);
         assert!(grown(&state) > th + 24.0, "the trigger {th} grew to {}", grown(&state));
@@ -15846,7 +15846,7 @@ mod tests {
         let _ = state.collect_display_list();
         let pops = &state.ui_context.active_popovers;
         let dialog_at = pops.iter().position(|&p| p == state.ui_context[state.slots.dialog].base().id()).expect("the dialog");
-        let dd_id = state.ui_context[state.slots.dialog].dropdown.base().id();
+        let dd_id = state.ui_context[state.dialog_dd()].base().id();
         let dd_at = pops.iter().position(|&p| p == dd_id).expect("the dropdown");
         assert!(dd_at > dialog_at);
         // And resolvable, which is what the engine's clamp walks: an id the
@@ -15862,7 +15862,7 @@ mod tests {
         // A press on a row of the list picks that row.
         state.open_dialog_dropdown(&setting_row_id("World Unit"));
         let k = units.iter().position(|u| u == "in").expect("inches");
-        let (rx, ry, _, _) = state.ui_context[state.slots.dialog].dropdown.popover_geom(cce_ui::scene::layout::Rect { x: tx, y: ty, width: tw, height: th });
+        let (rx, ry, _, _) = state.ui_context[state.dialog_dd()].popover_geom(cce_ui::scene::layout::Rect { x: tx, y: ty, width: tw, height: th });
         press(&mut state, rx + 10.0, ry + k as f32 * 24.0 + 12.0);
         assert_eq!(state.world_unit.suffix(), "in");
         assert!(state.dialog_visible());
@@ -15876,7 +15876,7 @@ mod tests {
         assert!(!state.dialog_dropdown_open() && state.dialog_visible(), "a press off the list closes it alone");
         assert_eq!(state.world_unit.suffix(), "in", "and picks nothing");
         state.close_dialog();
-        assert!(!state.ui_context[state.slots.dialog].dropdown.open, "a closed dialog leaves no plate behind");
+        assert!(!state.ui_context[state.dialog_dd()].open, "a closed dialog leaves no plate behind");
     }
 
     /// A control in the palette lifts under the pointer: the row whose
