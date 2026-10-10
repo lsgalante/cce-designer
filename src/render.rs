@@ -15,7 +15,7 @@ use crate::slots::{
 use crate::geometry::network_sphere_vertices_with_errors;
 use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::{DisplayList, PaintCtx, Prim};
-use cce_ui::scene::painter::{append_widget_plate, append_widget_plate_radii, append_widget_text};
+use cce_ui::widget::painter::{append_widget_plate, append_widget_plate_radii, append_widget_text};
 
 const TAU: f32 = 2.0 * std::f32::consts::PI;
 
