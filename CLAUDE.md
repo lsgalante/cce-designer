@@ -18,7 +18,7 @@ This crate is one member of the multi-repo `cce` Cargo workspace; workspace-wide
 ```sh
 cargo build -p cce-designer            # from the workspace root
 cargo run  -p cce-designer             # needs a Wayland session (cce or any compositor)
-cargo test -p cce-designer             # all tests live in src/main.rs's tests module
+cargo test -p cce-designer             # unit tests live in src/tests/, one module per area
 cargo test -p cce-designer test_keyboard_shortcut_system   # one test
 make install                           # release build, then `ccebuild install --no-build cce-designer`
 ```
@@ -4618,8 +4618,13 @@ name and every wire to them ambiguous.
 ## Repo hygiene
 
 `scratch/` holds ad-hoc debug scripts/logs and `screenshot*.png` at the root are
-debugging artifacts — not source, don't extend them. Tests live in
-`src/main.rs`'s `#[cfg(test)]` module; add new ones there. The exception is
+debugging artifacts — not source, don't extend them. Unit tests live in
+`src/tests/`, one child module per area (`ui.rs`, `volumes.rs`, `modelling.rs`,
+…), each starting `use super::*` so `src/tests/mod.rs`'s imports and the
+fixture builders it re-exports (`ref_node`, `eval`, `eval_node`, …) are in
+scope; add a test to the area it belongs to, and a helper another area needs
+goes `pub(super)` with a `use` in `mod.rs`. Until 2026-10-10 they were one
+19k-line `mod tests` in `src/main.rs`. The exception is
 `tests/`, which holds the two tests that SCAN the crate's own source —
 `doc_claims.rs` (CLAUDE.md's `(~Nk lines)` figures) and `user_paths.rs` (below)
 — and they are out there because a scanner under `src/` is the first thing it
