@@ -1575,10 +1575,11 @@ fn every_node_in_the_region_is_painted_selected() {
     state.grid_cursor_expanse = Some(((1, 4), (2, 6)));
     assert_eq!(state.selected_slots().len(), 2, "a and b, not c");
 
-    // The selected look is a specular tint of the highlight colour, and
-    // the toolkit's DEFAULT highlight is white — the very tint a plain
-    // bevel wears — so with no config every body matches and c reads as
-    // selected. Which config a test sees depends on the build:
+    // The selected look is a specular tint of the highlight colour, and a
+    // white highlight — the toolkit's default until cce-ui@69a06f8, and
+    // still a valid config — is the very tint a plain bevel wears, so
+    // every body would match and c read as selected. Which config a test
+    // sees depends on the build:
     // `-p cce-designer` reads ~/.config/cce, while a `--workspace` test
     // build unifies cce-core's `test-isolation` (cce-ui enables it for its
     // own tests) and sees the defaults. So pin a highlight only when the
