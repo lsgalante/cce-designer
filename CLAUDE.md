@@ -222,12 +222,18 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~13.1k lines) — the heart: `State` (the entire app model), `McpAction` /
-  `CustomEvent`, node-template loading, pane layout. `tick_frame` (simulation:
+- `src/app.rs` (~10.8k lines) — the heart: `State` (the entire app model), `McpAction` /
+  `CustomEvent`, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
   (`pending_*` fields, `spheres_dirty`) and flushed in `stage_frame` because only
   the engine hooks see the renderer.
+- `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
+  GPU: `FsNode`, `Project` (load, migrations, template merge), node ids, the wire and
+  splice operations, parameter rows, `load_fs_tree` (node-template loading).
+- `src/settings.rs` — `ViewportSettings`, `RenderSettings`, `DesignSettings`, the grid
+  geometry and the GPU preference, with their KDL load and save. `app.rs` re-exports
+  both modules, so `crate::app::FsNode` and the rest still resolve.
 - `src/slots.rs` — the widget roster. Top-level widgets live in fixed slots on
   `WidgetSlots` addressed by `*_IDX` constants (`VIEWPORT_IDX`, `PARAM_IDX`,
   `NETWORK_PANEL_IDX`, … up to `WIDGET_COUNT`) rather than a dynamic tree; every slot
