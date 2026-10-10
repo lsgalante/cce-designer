@@ -1575,23 +1575,47 @@ fn every_node_in_the_region_is_painted_selected() {
     state.grid_cursor_expanse = Some(((1, 4), (2, 6)));
     assert_eq!(state.selected_slots().len(), 2, "a and b, not c");
 
+    // The selected look is a specular tint of the highlight colour, and
+    // the toolkit's DEFAULT highlight is white — the very tint a plain
+    // bevel wears — so with no config every body matches and c reads as
+    // selected. Which config a test sees depends on the build:
+    // `-p cce-designer` reads ~/.config/cce, while a `--workspace` test
+    // build unifies cce-core's `test-isolation` (cce-ui enables it for its
+    // own tests) and sees the defaults. So pin a highlight only when the
+    // one read back cannot be told from a plain bevel. Pinning always would
+    // race: every parallel `State::new` reloads the config, which rewrites
+    // a CONFIGURED highlight (to the same value, so leaving it is stable),
+    // while with no config nothing writes the highlight after the two
+    // one-time loads, which run first — the colours' own, and the style
+    // registry's, which reloads the colours too.
+    let plain = [1.0, 1.0, 1.0];
+    cce_ui::layout::lazy_init_style_registry();
+    let configured = cce_ui::color::highlight_primary_color();
+    if configured[..3] == plain {
+        cce_ui::color::set_highlight_primary_color([0.9, 0.2, 0.5, 1.0]);
+    }
     let hl = cce_ui::color::highlight_primary_color();
-    let tinted_at = |list: &cce_ui::scene::paint::DisplayList, (cx, cy): (f32, f32)| {
-        list.items.iter().any(|item| match &item.prim {
-            Prim::Bevel { rect, tint, .. } => {
-                tint[0] == hl[0]
-                    && tint[1] == hl[1]
-                    && tint[2] == hl[2]
-                    && (rect.x + rect.width * 0.5 - cx).abs() < 1.0
-                    && (rect.y + rect.height * 0.5 - cy).abs() < 1.0
-            }
-            _ => false,
-        })
+    let tints_at = |list: &cce_ui::scene::paint::DisplayList, (cx, cy): (f32, f32)| -> Vec<[f32; 3]> {
+        list.items
+            .iter()
+            .filter_map(|item| match &item.prim {
+                Prim::Bevel { rect, tint, .. }
+                    if (rect.x + rect.width * 0.5 - cx).abs() < 1.0
+                        && (rect.y + rect.height * 0.5 - cy).abs() < 1.0 =>
+                {
+                    Some(*tint)
+                }
+                _ => None,
+            })
+            .collect()
     };
     let list = state.collect_display_list();
-    assert!(tinted_at(&list, state.cell_center(1, 4)), "a is painted selected");
-    assert!(tinted_at(&list, state.cell_center(2, 5)), "b is painted selected");
-    assert!(!tinted_at(&list, state.cell_center(3, 9)), "c is outside the region");
+    let hl_tint = [hl[0], hl[1], hl[2]];
+    assert_eq!(tints_at(&list, state.cell_center(1, 4)), vec![hl_tint], "a is painted selected");
+    assert_eq!(tints_at(&list, state.cell_center(2, 5)), vec![hl_tint], "b is painted selected");
+    // Painted, and with the plain bevel's tint: an absent body would pass
+    // a mere "not highlighted" check.
+    assert_eq!(tints_at(&list, state.cell_center(3, 9)), vec![plain], "c is outside the region");
 }
 
 /// Copy takes the whole selection and paste lays it back out in the shape
