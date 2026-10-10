@@ -434,7 +434,7 @@ fn detail_vertices_are_the_triangulation() {
         for p in (0..n).step_by(3) {
             d.points_mut().set_value(&name, p, crate::detail::AttribValue::Float3([0.1, p as f32 * 0.001, -0.2])).unwrap();
         }
-        let lin = cce_ui::colors::to_linear_rgb;
+        let lin = cce_ui::color::to_linear_rgb;
         let mut want = Vec::new();
         for p in 0..n {
             let dir = d.points().value(&name, p).unwrap().as_vec3();

@@ -5,7 +5,7 @@
 //! `PLAYBAR_IDX` to `paint_self` (geometry AND text) instead of the legacy
 //! flat views, and skips it in `append_frame_text` so the text isn't doubled.
 
-use cce_ui::colors;
+use cce_ui::color;
 use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::PaintCtx;
 use cce_ui::widget::*;
@@ -206,11 +206,11 @@ impl Paint for Playbar {
     /// (`style.surface.param.color`) with the other panes, where the old
     /// hand-rolled PARAM_BG copy froze this pane at the built-in default.
     fn color(&self) -> [f32; 4] {
-        colors::param_plate_fill()
+        color::param_plate_fill()
     }
 
     fn solid_border(&self) -> Option<([f32; 4], f32)> {
-        colors::plate_border_color().map(|bc| (bc, colors::plate_border_thickness()))
+        color::plate_border_color().map(|bc| (bc, color::plate_border_thickness()))
     }
 
     fn corner_style(&self, _rect: Rect) -> Option<(f32, (bool, bool, bool, bool))> {
@@ -251,7 +251,7 @@ impl Paint for Playbar {
         // well, drawn by the Slider's painter.
         let track = self.track_rect(rect);
         let px = track.x + self.t() * track.width;
-        let band_color = if self.dragging { colors::slider_thumb_drag() } else { colors::slider_thumb() };
+        let band_color = if self.dragging { color::slider_thumb_drag() } else { color::slider_thumb() };
         cce_ui::widget::input::slider::paint_band_shape(
             ctx,
             track.x,
@@ -267,7 +267,7 @@ impl Paint for Playbar {
         if !self.cache.is_empty() {
             let range = (self.end_frame - self.start_frame).max(1.0);
             let at = |f: f32| track.x + ((f - self.start_frame) / range * track.width).clamp(0.0, track.width);
-            let accent = colors::highlight_primary_color();
+            let accent = color::highlight_primary_color();
             let h = 3.0f32.min(track.height * 0.25);
             for run in &self.cache {
                 let x0 = at(run.from as f32 - 0.5);

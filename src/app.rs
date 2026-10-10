@@ -38,7 +38,7 @@ use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg,
 use cce_ui::widget::UiContext;
 use crate::playbar::Playbar;
 use crate::viewport_3d::Viewport3D;
-use cce_ui::colors;
+use cce_ui::color;
 use glam::{Mat4, Vec3};
 
 use crate::geometry::*;
@@ -1661,7 +1661,7 @@ impl State {
     // and flush to the GPU meshes in `stage_renderer`.
 
     pub fn update_grid_geometry(&mut self) {
-        let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
+        let linear_grid_color = cce_ui::color::to_linear_rgb(self.grid_color);
         self.pending_grid = Some(grid_vertices(self.grid_thickness, linear_grid_color));
         self.viewport_dirty = true;
     }
@@ -1677,7 +1677,7 @@ impl State {
     }
 
     pub fn update_viewport_bg_geometry(&mut self) {
-        let bg_color = cce_ui::colors::to_linear_rgb(self.viewport().bg_color);
+        let bg_color = cce_ui::color::to_linear_rgb(self.viewport().bg_color);
         self.pending_viewport_bg = Some(Self::viewport_bg_vertices(bg_color));
         self.viewport_dirty = true;
     }
@@ -5774,7 +5774,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // The group markers' warm accent: both are "what the selected node
         // does", and they read as one feature.
         self.pull_arrow_verts =
-            crate::geometry::arrow_vertices(&shown, cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]));
+            crate::geometry::arrow_vertices(&shown, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
         self.pull_arrows_dirty = true;
     }
 
@@ -5837,11 +5837,11 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub(crate) fn rebuild_overlay_markers(&mut self) {
         self.overlay_marker_instances = crate::geometry::marker_instances(
             &self.overlay_marker_points,
-            cce_ui::colors::to_linear_rgb(self.point_marker_color),
+            cce_ui::color::to_linear_rgb(self.point_marker_color),
         );
         self.vertex_marker_instances = crate::geometry::marker_instances(
             &self.overlay_vertex_marker_points,
-            cce_ui::colors::to_linear_rgb(crate::render::VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
+            cce_ui::color::to_linear_rgb(crate::render::VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
         );
         self.overlay_dirty = true;
     }
@@ -5880,8 +5880,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             .filter_map(|&r| self.spreadsheet_points.get(r))
             .map(|&position| Vertex3D { position, color: [0.0; 3] })
             .collect();
-        let [r, g, b, _] = cce_ui::colors::highlight_primary_color();
-        self.row_marker_instances = crate::geometry::marker_instances(&at, cce_ui::colors::to_linear_rgb([r, g, b]));
+        let [r, g, b, _] = cce_ui::color::highlight_primary_color();
+        self.row_marker_instances = crate::geometry::marker_instances(&at, cce_ui::color::to_linear_rgb([r, g, b]));
         self.row_markers_dirty = true;
         self.viewport_dirty = true;
     }
@@ -5901,7 +5901,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             .filter(|(name, _)| self.marked_groups.contains(name))
             .flat_map(|(_, members)| members.iter().map(|&position| Vertex3D { position, color: [0.0; 3] }))
             .collect();
-        self.marked_group_instances = crate::geometry::marker_instances(&at, cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]));
+        self.marked_group_instances = crate::geometry::marker_instances(&at, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
         self.marked_groups_dirty = true;
         self.viewport_dirty = true;
     }
@@ -5946,7 +5946,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         self.rebuild_row_markers();
         self.rebuild_marked_group_markers();
         self.group_point_instances =
-            crate::geometry::marker_instances(&self.group_members, cce_ui::colors::to_linear_rgb([1.0, 0.78, 0.20]));
+            crate::geometry::marker_instances(&self.group_members, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
         self.group_points_dirty = true;
         self.last_group_marker_size = self.group_marker_size;
     }
@@ -6427,7 +6427,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         state.update_inertial_settings();
         state.update_graph_settings_from_config();
         state.update_window_title();
-        colors::set_node_color(state.node_color);
+        color::set_node_color(state.node_color);
         state.migrate_meta_settings_node();
         state.sync_nodes();
         state.rebuild_scene_geometry();
@@ -6715,7 +6715,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
         if self.node_color != node_color {
             self.node_color = node_color;
-            colors::set_node_color(node_color);
+            color::set_node_color(node_color);
             changed = true;
         }
         // `graph_grid_snap` is not read: a dragged node always snaps to a
@@ -9948,7 +9948,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                          self.origin_size = settings.viewport.origin_size;
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
 
-                        colors::set_node_color(self.node_color);
+                        color::set_node_color(self.node_color);
 
                         self.update_origin_geometry();
                         self.update_grid_geometry();
@@ -10276,12 +10276,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     }
 
     pub fn init_renderer(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
-        let linear_grid_color = cce_ui::colors::to_linear_rgb(self.grid_color);
+        let linear_grid_color = cce_ui::color::to_linear_rgb(self.grid_color);
         let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
         let origin_verts = origin_vectors_vertices(self.origin_size);
         let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
         let bg_verts =
-            Self::viewport_bg_vertices(cce_ui::colors::to_linear_rgb(self.viewport().bg_color));
+            Self::viewport_bg_vertices(cce_ui::color::to_linear_rgb(self.viewport().bg_color));
         self.meshes = Some(SceneMeshes {
             viewport_bg: renderer.create_mesh(bytemuck::cast_slice(&bg_verts)),
             spheres: renderer.create_mesh(&[]),
@@ -10731,7 +10731,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     // Behind the scene, the Background Color, as the raster
                     // pass draws it (since 2026-10-02; it was the tracer's
                     // sky). The sky still lights the scene.
-                    renderer.set_rt_background(Some(cce_ui::colors::to_linear_rgb(self.viewport().bg_color)));
+                    renderer.set_rt_background(Some(cce_ui::color::to_linear_rgb(self.viewport().bg_color)));
                     renderer.set_rt_environment(self.environment.to_rt());
                     renderer.stage_rt((sx, sy, cw, ch), cce_ui::vk::RtCamera { inv_mvp });
                 }

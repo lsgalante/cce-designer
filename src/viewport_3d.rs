@@ -3,7 +3,7 @@
 //! wrapped in `Adapted<Viewport3D>` (Phase 6az). The roster keeps it as
 //! `Box<dyn WidgetHost>`; `as_any` downcasts reach this model.
 
-use cce_ui::colors;
+use cce_ui::color;
 use cce_ui::widget::*;
 use glam::{Mat4, Vec3};
 
@@ -224,7 +224,7 @@ impl cce_ui::widget::Layout for Viewport3D {}
 
 impl cce_ui::widget::Paint for Viewport3D {
     fn color(&self) -> [f32; 4] {
-        colors::VIEWPORT_BG
+        color::VIEWPORT_BG
     }
 }
 

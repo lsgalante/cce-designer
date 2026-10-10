@@ -26,7 +26,7 @@
 
 use std::cell::RefCell;
 
-use cce_ui::colors;
+use cce_ui::color;
 use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::{PaintCtx, Prim};
 use cce_ui::widget::*;
@@ -1026,9 +1026,9 @@ impl Dialog {
         }
         let open = dropdown.is_some_and(|d| d.open);
         let (family, font_size) = cce_ui::layout::control_label_font_parsed();
-        let accent = colors::highlight_primary_color();
+        let accent = color::highlight_primary_color();
         let tint = [accent[0], accent[1], accent[2]];
-        let depth = colors::plate_bevel_width();
+        let depth = color::plate_bevel_width();
         let ctrl_r = cce_ui::layout::control_corner_radius();
         let radii = (ctrl_r, ctrl_r, ctrl_r, ctrl_r);
         // The occlusion-clamp exemption (see `popover`): every label in here

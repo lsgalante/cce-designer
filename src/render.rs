@@ -1,6 +1,6 @@
 
 use cce_ui::widget::WidgetHostExt;
-use cce_ui::colors;
+use cce_ui::color;
 use cce_ui::widget::WidgetHost;
 
 use crate::app::State;
@@ -83,7 +83,7 @@ impl State {
     /// outline→relief degradation, and append_context_border owns the focus
     /// ring.
     fn append_window_lip(&self, pc: &mut PaintCtx) {
-        let Some(bc) = cce_ui::colors::plate_border_color() else { return };
+        let Some(bc) = cce_ui::color::plate_border_color() else { return };
         let (px, py, pw, ph) = (0.0, 0.0, self.width, self.height);
         if pw <= 0.0 || ph <= 0.0 {
             return;
@@ -107,7 +107,7 @@ impl State {
                 pc.bevel_tinted(vp_rect, radii, &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
             }
         } else {
-            pc.border(vp_rect, radii, [0.0; 4], bc, cce_ui::colors::plate_border_thickness());
+            pc.border(vp_rect, radii, [0.0; 4], bc, cce_ui::color::plate_border_thickness());
         }
     }
 
@@ -437,13 +437,13 @@ impl State {
                 // a quad between a plate and its carves drops them to the
                 // overlay shading — which stands clear of it
                 // (`Playbar::frame`).
-                let e = cce_ui::colors::plate_bevel_width() + 1.0;
+                let e = cce_ui::color::plate_bevel_width() + 1.0;
                 let cove = cce_ui::layout::plate_corner_radius().min(wh2);
                 let face = rect(wx - e, wy - cove, ww2 + 2.0 * e, wh2 + cove + e);
                 let opening = rect(wx, wy - self.height, ww2, self.height);
                 let material = cce_ui::scene::material::Material::from_fill(w.color());
                 let depth = if cce_ui::layout::control_relief() {
-                    cce_ui::colors::plate_bevel_width()
+                    cce_ui::color::plate_bevel_width()
                 } else {
                     0.0
                 };
@@ -518,11 +518,11 @@ impl State {
                 // Half the plate's roll: a node is far smaller than the pane,
                 // so the plate's full bevel width would eat most of the body —
                 // a tighter lip keeps the flat face reading.
-                let node_bevel = cce_ui::colors::plate_bevel_width() * 0.5;
+                let node_bevel = cce_ui::color::plate_bevel_width() * 0.5;
                 let node_mat = self.node_material();
-                let sel = cce_ui::colors::node_selected_color();
-                let drag = cce_ui::colors::node_drag_color();
-                let hl = cce_ui::colors::highlight_primary_color();
+                let sel = cce_ui::color::node_selected_color();
+                let drag = cce_ui::color::node_drag_color();
+                let hl = cce_ui::color::highlight_primary_color();
                 let hl_tint = [hl[0], hl[1], hl[2]];
                 let same_rgb = |a: [f32; 4], b: [f32; 4]| a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
 
@@ -651,17 +651,17 @@ impl State {
                 // Without the shader plates the glint is drawn untinted, so
                 // focus adds a flat ring in the accent over it.
                 let focused = self.focused_pane == LEFT_MENUBAR_IDX;
-                let accent = colors::highlight_primary_color();
+                let accent = color::highlight_primary_color();
                 let tint = if focused {
                     [accent[0], accent[1], accent[2]]
                 } else {
                     // Never pure white: a white tint is the untinted plate,
                     // which a fill-less bevel draws as nothing.
-                    let n = cce_ui::colors::plate_border_color().unwrap_or([0.58, 0.58, 0.66, 1.0]);
+                    let n = cce_ui::color::plate_border_color().unwrap_or([0.58, 0.58, 0.66, 1.0]);
                     [n[0].min(0.99), n[1].min(0.99), n[2].min(0.99)]
                 };
                 let ring = (focused && !focus_by_tint()).then_some([accent[0], accent[1], accent[2], 0.9]);
-                let depth = cce_ui::colors::plate_bevel_width();
+                let depth = cce_ui::color::plate_bevel_width();
                 let paint_cursor = |pc: &mut PaintCtx, r: f32| {
                     let cr = rect(cx, cy, cw, ch);
                     pc.bevel_tinted(cr, (r, r, r, r), &cce_ui::scene::Material::from_fill([0.0; 4]), depth, tint);
@@ -735,7 +735,7 @@ impl State {
                     // unfolds from its corner control.
                     let cs = cce_ui::layout::corner_shape();
                     let shape = cs + (2.0 - cs) * round;
-                    let depth = cce_ui::colors::plate_bevel_width() + (3.0 - cce_ui::colors::plate_bevel_width()) * round;
+                    let depth = cce_ui::color::plate_bevel_width() + (3.0 - cce_ui::color::plate_bevel_width()) * round;
                     pc.plate_shaped(
                         rect(fx, fy, fw, fh),
                         (r, r, r, r),
@@ -871,7 +871,7 @@ impl State {
             _ => false,
         };
         focused.then(|| {
-            let c = colors::highlight_primary_color();
+            let c = color::highlight_primary_color();
             [c[0], c[1], c[2]]
         })
     }
@@ -886,7 +886,7 @@ impl State {
         let relief = focus_by_tint();
 
         let thickness = 2.0;
-        let mut color = colors::highlight_primary_color();
+        let mut color = color::highlight_primary_color();
         color[3] = 0.9;
 
         let (x, y, w, h) = match self.focused_pane {
@@ -986,7 +986,7 @@ impl State {
     /// where configured — the knobs that differ between a node body and the
     /// plate it sits on. The name floors wear it too.
     fn node_material(&self) -> cce_ui::scene::Material {
-        let mut m = cce_ui::scene::Material::from_fill(cce_ui::colors::param_plate_fill());
+        let mut m = cce_ui::scene::Material::from_fill(cce_ui::color::param_plate_fill());
         if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.node_compression, &mut m.frost) {
             *compression = k;
         }
@@ -1551,7 +1551,7 @@ impl State {
         self.overlay_vertex_marker_points = elements.vertex_markers;
         self.vertex_marker_instances = crate::geometry::marker_instances(
             &self.overlay_vertex_marker_points,
-            cce_ui::colors::to_linear_rgb(VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
+            cce_ui::color::to_linear_rgb(VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
         );
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.
@@ -1562,7 +1562,7 @@ impl State {
         // same LINE_LIST channel as the normal whiskers.
         self.overlay_normal_verts.extend(crate::geometry::vis_marker_vertices(
             &geom,
-            cce_ui::colors::to_linear_rgb,
+            cce_ui::color::to_linear_rgb,
         ));
         self.overlay_dirty = true;
         // The numbers' dimming, for the view the scene was last staged
@@ -1653,7 +1653,7 @@ pub(crate) fn scene_point_overlays(
             .iter()
             .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
             .collect();
-        markers = crate::geometry::marker_instances(&src, cce_ui::colors::to_linear_rgb(marker_color));
+        markers = crate::geometry::marker_instances(&src, cce_ui::color::to_linear_rgb(marker_color));
     }
     if normals_on {
         // Smooth point normals: for each point, the normalized sum of the
@@ -1667,7 +1667,7 @@ pub(crate) fn scene_point_overlays(
         // but name, and it is what point_prims answers directly.
         use glam::Vec3;
         let len = point_size * 4.0;
-        let color = cce_ui::colors::to_linear_rgb([0.45, 0.8, 1.0]);
+        let color = cce_ui::color::to_linear_rgb([0.45, 0.8, 1.0]);
         for p in 0..geom.num_points() {
             let mut sum = Vec3::ZERO;
             for &prim in geom.point_prims(p) {
@@ -1770,7 +1770,7 @@ pub(crate) fn scene_element_overlays(
     if want == ElementOverlays::default() {
         return out;
     }
-    let to_linear = |c: [u8; 3]| cce_ui::colors::to_linear_rgb(c.map(|c| c as f32 / 255.0));
+    let to_linear = |c: [u8; 3]| cce_ui::color::to_linear_rgb(c.map(|c| c as f32 / 255.0));
     let (prim_color, vertex_color) = (to_linear(PRIM_LABEL_COLOR), to_linear(VERTEX_LABEL_COLOR));
     let own_normals = crate::geometry::own_vertex_normals(geom);
     let by_vertex = want.vertex_numbers || want.vertex_markers || want.vertex_normals;
@@ -1928,7 +1928,7 @@ fn append_plate_at(w: &dyn WidgetHost, pc: &mut PaintCtx, r: Rect, tint: Option<
     let fill = cce_ui::scene::material::Material::from_fill(w.color());
     if let Some((border_color, thickness)) = w.solid_border() {
         if cce_ui::layout::control_relief() {
-            pc.bevel_tinted(r, radii, &fill, cce_ui::colors::plate_bevel_width(), tint);
+            pc.bevel_tinted(r, radii, &fill, cce_ui::color::plate_bevel_width(), tint);
         } else {
             pc.border(r, radii, w.color(), border_color, thickness);
         }

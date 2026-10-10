@@ -42,7 +42,7 @@ use cce_ui::widget::{Adapted, Breadcrumb, MenuBar, MenuController, ParametersBg,
 use cce_ui::widget::UiContext;
 use crate::playbar::Playbar;
 use crate::viewport_3d::Viewport3D;
-use cce_ui::colors;
+use cce_ui::color;
 use glam::{Mat4, Vec3};
 
 use crate::geometry::*;

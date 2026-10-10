@@ -205,7 +205,7 @@ fn grid_verts() -> Vec<Vertex3D> {
 /// `screen_space`, filling the scissor with the (linear) bg color at the far
 /// plane.
 fn viewport_bg_verts() -> Vec<Vertex3D> {
-    let color = cce_ui::colors::to_linear_rgb([0.10, 0.10, 0.13]);
+    let color = cce_ui::color::to_linear_rgb([0.10, 0.10, 0.13]);
     let mut v = Vec::new();
     quad3(&mut v, [-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0], color);
     v

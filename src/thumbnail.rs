@@ -94,7 +94,7 @@ pub fn run(project: &Path, out: &Path, size: u32, samples: Option<u32>, frame: O
         proj.view_state
             .display
             .as_ref()
-            .map(|d| cce_ui::colors::to_linear_rgb(d.viewport.bg_color)),
+            .map(|d| cce_ui::color::to_linear_rgb(d.viewport.bg_color)),
     );
     let pixels = off.render(camera, size, size, samples.unwrap_or(SAMPLES));
 

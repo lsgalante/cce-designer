@@ -1575,7 +1575,7 @@ fn every_node_in_the_region_is_painted_selected() {
     state.grid_cursor_expanse = Some(((1, 4), (2, 6)));
     assert_eq!(state.selected_slots().len(), 2, "a and b, not c");
 
-    let hl = cce_ui::colors::highlight_primary_color();
+    let hl = cce_ui::color::highlight_primary_color();
     let tinted_at = |list: &cce_ui::scene::paint::DisplayList, (cx, cy): (f32, f32)| {
         list.items.iter().any(|item| match &item.prim {
             Prim::Bevel { rect, tint, .. } => {

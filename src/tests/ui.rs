@@ -4469,7 +4469,7 @@ fn test_point_overlays_are_a_global_view_setting() {
     assert_eq!(markers.len(), points);
     assert!(labels.iter().any(|(_, i)| *i > 0));
     // The marker color parameter flows into the vertices (linearized).
-    let expect = cce_ui::colors::to_linear_rgb([1.0, 0.5, 0.0]);
+    let expect = cce_ui::color::to_linear_rgb([1.0, 0.5, 0.0]);
     assert!(markers.iter().all(|v| v.color == expect));
     // Normals: one whisker per point, pointing OUT of the sphere
     // (center (0, 0.55, 0)) — this pins the winding/negation convention,
