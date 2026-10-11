@@ -1862,7 +1862,7 @@ fn an_old_wire_colour_alpha_becomes_the_wire_opacity() {
 #[test]
 fn the_viewport_menu_groups_its_display_rows() {
     use crate::app::{ViewportMenuAction as A, ViewportMenuPage as P};
-    let mut state = State::new(false);
+    let state = State::new(false);
     let groups = |page: Option<P>| -> Vec<Vec<A>> {
         let (options, actions) = state.viewport_menu_rows_of(page);
         assert_eq!(options.len(), actions.len());

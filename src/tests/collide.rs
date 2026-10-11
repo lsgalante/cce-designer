@@ -304,7 +304,7 @@ fn the_wire_vertices_are_the_edges_in_order() {
 /// edges cost nothing on a replay.
 #[test]
 fn a_copy_shares_the_topology_until_it_is_edited() {
-    let mut g = crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 5, 8);
+    let g = crate::geometry::sphere_detail(Vec3::ZERO, 1.0, 5, 8);
     assert!(!g.has_topology());
     let edges = g.edges().to_vec();
     let mut copy = g.clone();

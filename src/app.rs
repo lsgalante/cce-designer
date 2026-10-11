@@ -4217,7 +4217,7 @@ impl State {
         let mut options = Vec::new();
         let mut actions = Vec::new();
         let mark = |on: bool| if on { cce_ui::widget::context_menu::MARK_ON } else { cce_ui::widget::context_menu::MARK_OFF };
-        let mut command = |options: &mut Vec<String>, actions: &mut Vec<PlaybarMenuAction>, id: &'static str| {
+        let command = |options: &mut Vec<String>, actions: &mut Vec<PlaybarMenuAction>, id: &'static str| {
             let Some(c) = crate::command::by_id(id) else { return };
             let label = match self.command_toggle_state(id) {
                 Some(on) => format!("{}{}", mark(on), c.label),
@@ -4226,7 +4226,7 @@ impl State {
             options.push(label);
             actions.push(PlaybarMenuAction::Command(id));
         };
-        let mut row = |options: &mut Vec<String>, actions: &mut Vec<PlaybarMenuAction>, text: &str, a: PlaybarMenuAction| {
+        let row = |options: &mut Vec<String>, actions: &mut Vec<PlaybarMenuAction>, text: &str, a: PlaybarMenuAction| {
             options.push(text.to_string());
             actions.push(a);
         };
@@ -4736,6 +4736,7 @@ impl State {
     /// fill itself reads); then the editor pin. Split from the open so a
     /// test can read it. Marks are the ●/○ the pin rows and the network menu
     /// use.
+    #[cfg(test)]
     pub(crate) fn viewport_menu_rows(&self) -> (Vec<String>, Vec<ViewportMenuAction>) {
         self.viewport_menu_rows_of(None)
     }
@@ -5067,6 +5068,7 @@ impl State {
     }
 
     /// Run a row of a node's menu: what a click on it runs.
+    #[cfg(test)]
     pub(crate) fn run_node_menu_action(&mut self, slot: usize, action: NodeMenuAction) {
         self.dispatch_node_menu(slot, action);
     }
@@ -5887,6 +5889,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     }
 
     /// The points whose rows are selected in the spreadsheet, by index.
+    #[cfg(test)]
     pub(crate) fn selected_spreadsheet_points(&mut self) -> Vec<usize> {
         self.spreadsheet_mut().selected_rows()
     }
