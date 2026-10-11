@@ -4328,6 +4328,9 @@ fn test_param_pane_pick_lists() {
     assert_eq!(attr.params.iter().find(|p| p.name == "attribute_name").unwrap().text(), "weight");
     state.sync_parameters_pane();
     let rows = state.param_mut().node_params();
+    let row = |name: &str| {
+        rows.iter().find(|r| r.0 == name).unwrap_or_else(|| panic!("row {name}")).2.clone()
+    };
     // The Input row stays plain text.
     assert_eq!(row("Input"), "text");
 
