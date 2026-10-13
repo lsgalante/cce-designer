@@ -132,6 +132,14 @@ pub struct NetworkView {
     /// [`State::tick_frame`](crate::app::State::tick_frame), drawn by the
     /// CONTENT branch in render.rs under the wires.
     pub chain_box: Option<ChainBox>,
+    /// Whether the pointer was in a chain's box when last looked at
+    /// (`State::follow_chain_hover`): an ENTRY is what takes the keyboard.
+    pub chain_hovered: bool,
+    /// The focus a hover into a chain's box took — the pane and the
+    /// widget — to give back when the pointer leaves. None when the hover
+    /// took nothing, or a press or a scroll since chose the network
+    /// outright.
+    pub hover_focus_from: Option<(usize, Option<usize>)>,
 }
 
 /// The animated box round a chain (see [`NetworkView::chain_box`]).
@@ -1349,6 +1357,56 @@ impl State {
             (None, Some(_)) => true,
             (None, None) => false,
         }
+    }
+
+    /// The keyboard follows the pointer into a chain's box: entering one
+    /// gives the network the focus — the pane and the graph widget, as a
+    /// press on the graph does — and leaving gives it back to what had it,
+    /// so a look at a chain on the way across the scene costs the viewport
+    /// nothing. Not while a field anywhere is being typed into (cce-ui's
+    /// text-input claim, `ime::caret`): a half-typed value keeps its keys.
+    /// A press or a scroll in between makes the network's focus a choice
+    /// (`hover_focus_from` cleared), and leaving then gives nothing back;
+    /// so does a focus moved elsewhere meanwhile. True when the focus moved.
+    pub(crate) fn follow_chain_hover(&mut self) -> bool {
+        // A captured pointer — an orbit, a drag, the dialog — is in no box
+        // and has left none: the hover stands as it was until it is free.
+        if self.pointer_captured() {
+            return false;
+        }
+        let inside = self.chain_box_target().is_some();
+        if inside == self.net.chain_hovered {
+            return false;
+        }
+        self.net.chain_hovered = inside;
+        if inside {
+            if self.focused_pane == LEFT_MENUBAR_IDX || cce_ui::ime::caret().is_some() {
+                return false;
+            }
+            self.net.hover_focus_from = Some((self.focused_pane, self.focused_widget));
+            self.focused_pane = LEFT_MENUBAR_IDX;
+            if let Some(old) = self.focused_widget.take() {
+                self.ui_context.unfocus_id(self.slots.id(old));
+            }
+            self.ui_context.focus_id(self.slots.id(CONTENT_IDX));
+            self.focused_widget = Some(CONTENT_IDX);
+            self.sync_pane_focus();
+            return true;
+        }
+        let Some((pane, widget)) = self.net.hover_focus_from.take() else { return false };
+        if self.focused_pane != LEFT_MENUBAR_IDX {
+            return false;
+        }
+        self.focused_pane = pane;
+        if let Some(old) = self.focused_widget.take() {
+            self.ui_context.unfocus_id(self.slots.id(old));
+        }
+        if let Some(w) = widget {
+            self.ui_context.focus_id(self.slots.id(w));
+            self.focused_widget = Some(w);
+        }
+        self.sync_pane_focus();
+        true
     }
 
     /// Ease the chain box toward the chain under the pointer: it fades in

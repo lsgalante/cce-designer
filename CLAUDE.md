@@ -3063,6 +3063,21 @@ wins. Boxes are read off the graph widget's own nodes, so they are round
 what is drawn. `a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks`
 is the test. Checked in a shadow session.
 
+**The keyboard follows the pointer into a box** (`follow_chain_hover`, from
+pointer motion): ENTERING one gives the network the focus — the pane and the
+graph widget, as a press on the graph does — so hjkl, `f`, Delete and the
+rest of the network's keys work with no click; LEAVING gives the focus back
+to the pane and widget that had it (`State::net.hover_focus_from`), so a
+pass across a chain on the way over the scene costs the viewport nothing.
+Three exceptions: a press or a scroll in between makes the network's focus a
+choice and leaving gives nothing back; a focus moved elsewhere meanwhile is
+left alone; and while a field anywhere is being typed into (cce-ui's
+text-input claim, `ime::caret`) a hover takes nothing, so a half-typed value
+keeps its keys. A captured pointer — an orbit, a drag, the dialog — changes
+nothing either way, so opening the palette over a chain does not hand the
+focus back. `hovering_a_chain_box_gives_the_network_the_keyboard` is the
+test; checked in a shadow session (hover, `j`, the selection stepped).
+
 ### The params plate fits its rows, and is optional (since 2026-10-06)
 
 The params HUD's plate is FITTED to its rows: from the HUD's top to as far

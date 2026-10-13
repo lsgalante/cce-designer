@@ -718,6 +718,78 @@ fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
     assert_ne!(orbit(&state), turned, "a scroll outside the boxes orbits");
 }
 
+/// Hovering a chain's box gives the network the keyboard, and leaving it
+/// gives the keyboard back; a press in between keeps it the network's, and
+/// a field being typed into keeps its keys.
+#[test]
+fn hovering_a_chain_box_gives_the_network_the_keyboard() {
+    use crate::slots::{CONTENT_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX, VIEWPORT_IDX};
+    use crate::window::{LocalPosition, WindowEvent};
+    use cce_ui::widget::{ElementState, MouseButton};
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    state.rebuild_positions();
+    state.apply_layout();
+    {
+        let level = state.current_dir_mut();
+        let sphere = level.children.iter().find(|c| c.node_type == "sphere").expect("a sphere").clone();
+        let mut under = sphere.clone();
+        under.id = "chain_focus_test".into();
+        under.name = "under1".into();
+        under.position = (sphere.position.0, sphere.position.1 + 2.0);
+        under.params = vec![crate::app::ParamDef::new("input", "node", &sphere.name)];
+        level.children.push(under);
+    }
+    state.sync_nodes();
+    let at = |state: &mut State, x: f32, y: f32| {
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+    };
+    let (_, (bx, by, bw, bh)) = state.chain_boxes().remove(0);
+    let (ix, iy) = (1..10)
+        .flat_map(|i| (1..10).map(move |j| (bx + bw * i as f32 / 10.0, by + bh * j as f32 / 10.0)))
+        .find(|&(x, y)| state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
+        .expect("empty space in the box");
+    let (cx, cy, cw, ch) = state.positions[CONTENT_IDX];
+    let (ox, oy) = (1..20)
+        .flat_map(|i| (1..20).map(move |j| (cx + cw * i as f32 / 20.0, cy + ch * j as f32 / 20.0)))
+        .find(|&(x, y)| !state.overlay_claims(x, y) && !state.over_floating_pane_at(x, y))
+        .expect("empty scene");
+
+    // The viewport has the keyboard; the hover takes it, and a key is the
+    // network's.
+    at(&mut state, ox, oy);
+    state.focused_pane = RIGHT_MENUBAR_IDX;
+    state.focused_widget = Some(VIEWPORT_IDX);
+    at(&mut state, ix, iy);
+    assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX, "the hover gives the network the keyboard");
+    assert_eq!(state.focused_widget, Some(CONTENT_IDX));
+    let row = state.net.grid_cursor_row;
+    state.process_window_event(WindowEvent::KeyboardInput { event: alt_d_dialog::typed("j") });
+    assert_eq!(state.net.grid_cursor_row, row + 1, "j steps the grid cursor");
+
+    // Leaving gives it back.
+    at(&mut state, ox, oy);
+    assert_eq!(state.focused_pane, RIGHT_MENUBAR_IDX, "leaving gives the keyboard back");
+    assert_eq!(state.focused_widget, Some(VIEWPORT_IDX));
+
+    // A press in the box makes it the network's; leaving keeps it.
+    at(&mut state, ix, iy);
+    state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+    state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+    at(&mut state, ox, oy);
+    assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX, "a press chose the network");
+
+    // A field being typed into keeps the keyboard through a hover.
+    state.focused_pane = RIGHT_MENUBAR_IDX;
+    cce_ui::ime::begin_frame();
+    cce_ui::ime::report_caret(10.0, 10.0, 1.0, 14.0);
+    cce_ui::ime::end_frame();
+    at(&mut state, ix, iy);
+    assert_eq!(state.focused_pane, RIGHT_MENUBAR_IDX, "typing keeps its keys");
+    cce_ui::ime::begin_frame();
+    cce_ui::ime::end_frame();
+}
+
 /// The network plate is retired; a settings file or a project display
 /// block from when it was a switch still says `network_plate`, and must
 /// still load — the key is ignored, not an error that would read the

@@ -38,6 +38,8 @@ impl State {
     /// through the routed pass, and failing that the network's own zoom
     /// and pan or the viewport's ctrl zoom.
     fn on_wheel(&mut self, delta: &MouseScrollDelta) -> bool {
+        // A scroll chooses the focus as a press does (`follow_chain_hover`).
+        self.net.hover_focus_from = None;
         if let Some(r) = self.wheel_modal(delta) {
             return r;
         }
@@ -383,6 +385,10 @@ impl State {
         if self.chain_box_stale() {
             changed = true;
         }
+        // And the keyboard follows it in and out.
+        if self.follow_chain_hover() {
+            changed = true;
+        }
         changed
     }
 
@@ -527,6 +533,9 @@ impl State {
         }
         if *btn_state == ElementState::Pressed {
             self.stop_inertia();
+            // A press chooses where the focus goes; a hover's loan of it
+            // to the network is not given back after one.
+            self.net.hover_focus_from = None;
         }
         if let Some(r) = self.button_modal(btn_state, button) {
             return r;

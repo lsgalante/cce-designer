@@ -5260,6 +5260,8 @@ impl State {
                 node_color: cce_ui::color::graph_node_color(),
                 drop_glow: None,
                 chain_box: None,
+                chain_hovered: false,
+                hover_focus_from: None,
             },
             camera: CameraView {
                 active_camera,
