@@ -4463,13 +4463,15 @@ splits the keys between it and the list:
 
 It is measured as drawn (`LineMarks`, on `geometry_font_system`), scrolled
 to keep the caret in view (`keep_caret`, `Dialog::query_shift`) and painted
-by cce-ui's `paint_line` — into a scratch list (`Dialog::paint_query`),
-because `paint_line` clips its text to the line and a clipped label here is
-one the dialog's own occluder clamps away (the clamp knows a popover's text
-by bounds that ARE its rect; see below). The text is re-emitted under the
-dialog's bounds, cut to the characters wholly inside the line
-(`visible_span`), and the selection and caret go in as drawn; the caret's
-rect is what the dialog claims (`text_input::claim`). A Rename still opens
+by cce-ui's `paint_line` (`Dialog::paint_query`) with `LineLook::bounds`
+set to the dialog's rect: the clamp knows a popover's text by its own
+bounds being that rect (see below), read before the line's clip narrows
+them, so the text is the dialog's and is cut at the line as any field's
+is. That clip, and the list's, reach the frame because the render arm
+paints the dialog through `Dialog`'s own `Paint::paint_ui`
+(`paint_dialog_body` in `render.rs`): the adapter's `paint_self` replays
+a widget's prims without the rect clips it painted them under. The
+caret's rect is what the dialog claims (`text_input::claim`). A Rename still opens
 with the caret after the name. `set_query` / `query_text` are the line's
 setter and reader. `the_query_line_has_a_caret_and_the_list_keeps_its_keys`,
 `undo_with_the_dialog_up_is_the_query_lines` and

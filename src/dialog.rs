@@ -987,29 +987,6 @@ pub(crate) fn shaped_width(text: &str, family: &str, font_size: f32) -> f32 {
         .unwrap_or_else(|| display::measure_text_width(text, family, font_size))
 }
 
-/// The span of `marks.shown` whose characters stand wholly inside a text
-/// area `avail` wide with the text scrolled `shift` along it: the whole of
-/// it while it fits. What the query line draws, since its text cannot be
-/// clipped (see `Dialog::paint_query`).
-fn visible_span(marks: &LineMarks, shift: f32, avail: f32) -> (usize, usize) {
-    let len = marks.shown.len();
-    if shift <= 0.0 && marks.width() <= avail + 0.5 {
-        return (0, len);
-    }
-    let (mut first, mut last) = (None, 0);
-    for i in marks.shown.char_indices().map(|(i, _)| i).chain(std::iter::once(len)) {
-        let x = marks.x_of(i);
-        if first.is_none() && x >= shift - 0.5 {
-            first = Some(i);
-        }
-        if x <= shift + avail + 0.5 {
-            last = i;
-        }
-    }
-    let first = first.unwrap_or(len);
-    (first, last.max(first))
-}
-
 /// Paint `w` into `r` with its text re-emitted under the dialog's own bounds
 /// `own`. Painted twice, on purpose: a hosted widget's text has to carry the
 /// DIALOG's bounds or the occluder the dialog registers clamps it away, and a
@@ -1104,43 +1081,23 @@ impl Dialog {
     /// drawn by the toolkit's `paint_line` in the dialog's colours, `hint`
     /// standing in for an empty query. Returns the caret's rect.
     ///
-    /// `paint_line` clips its text to `area`, and a clipped label in here is
-    /// one the dialog's own occluder clamps away: the clamp knows a
-    /// popover's text by bounds that ARE its rect (see `paint_retagged`).
-    /// So it paints into a scratch list whose geometry — the selection, the
-    /// composition's underline, the caret — goes in as it is, clip and all,
-    /// and whose text is re-emitted under the dialog's bounds `own`, cut to
-    /// the characters wholly inside `area` rather than clipped, as the rows
-    /// truncate theirs.
+    /// The text carries the dialog's bounds `own` (`LineLook::bounds`) as
+    /// well as the line's clip: the engine's text clamp knows a popover's
+    /// text by its own bounds being the popover's rect, so the dialog's
+    /// occluder leaves it alone while the clip cuts it at the line.
     #[allow(clippy::too_many_arguments)]
     fn paint_query(&self, area: Rect, family: &str, size: f32, accent: [f32; 4], hint: &str, own: Option<[f32; 4]>, ctx: &mut PaintCtx) -> Rect {
         let marks = self.query_marks(family, size);
         let shift = marks.keep_caret(self.query_shift.get(), area.width);
         self.query_shift.set(shift);
-        let origin = area.x - shift;
         let look = LineLook {
             text: [0xe6, 0xe6, 0xee],
             placeholder: [0x70, 0x70, 0x7c],
             caret: [accent[0], accent[1], accent[2], 0.9],
+            bounds: own,
             ..LineLook::new(size, Some(family.to_string()))
         };
-        let mut scratch = PaintCtx::new();
-        let caret = line_edit::paint_line(&mut scratch, area, origin, &marks, &look, hint, true);
-        let mut list = scratch.finish();
-        let (texts, geometry): (Vec<_>, Vec<_>) = list.items.drain(..).partition(|i| matches!(i.prim, Prim::Text { .. }));
-        list.items = geometry;
-        ctx.append_translated(&list, 0.0, 0.0);
-        for item in texts {
-            let Prim::Text { text, y, font_size, color, font, .. } = item.prim else { continue };
-            let (text, x) = if marks.shown.is_empty() {
-                (text, origin)
-            } else {
-                let (a, b) = visible_span(&marks, shift, area.width);
-                (marks.shown[a..b].to_string(), origin + marks.x_of(a))
-            };
-            ctx.text_with(text, x, y, font_size, color, font, own);
-        }
-        caret
+        line_edit::paint_line(ctx, area, area.x - shift, &marks, &look, hint, true)
     }
 
     /// The dialog's paint, with the live dropdown when it can be reached.
@@ -1224,7 +1181,11 @@ impl Dialog {
             ctx.text_with(empty, list.x + 8.0, ty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
             return;
         }
-        ctx.clip(list, |ctx| {
+        // Cut at the list, so a partly scrolled row draws cut: outset by a
+        // pixel, the reach of the selected row's antialiased edge, since the
+        // row is as wide as the list and starts at its top.
+        let cut = Rect { x: list.x - 1.0, y: list.y - 1.0, width: list.width + 2.0, height: list.height + 2.0 };
+        ctx.clip(cut, |ctx| {
         for i in self.first_row()..self.rows.len() {
             let Some(r) = self.row_rect(rect, i) else { break };
             let row = &self.rows[i];

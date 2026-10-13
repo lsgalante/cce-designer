@@ -389,7 +389,7 @@ impl State {
                     let now = self.ui_context[self.slots.dialog].drawn_rect(full);
                     cce_ui::widget::context_menu::paint_menu_plate(pc, now, false);
                     let mut scratch = PaintCtx::new();
-                    w.paint_self(&self.ui_context, &mut scratch);
+                    self.paint_dialog_body(&mut scratch);
                     let dx = turn.dir * (1.0 - e) * cce_ui::widget::context_menu::TURN_SLIDE;
                     // Bounds are offset by the translate; these land on `now`.
                     let bounds = Some([now.x - dx, now.y, now.x + now.width - dx, now.y + now.height]);
@@ -414,7 +414,7 @@ impl State {
                 }
                 _ => {
                     cce_ui::widget::context_menu::paint_menu_plate(pc, full, false);
-                    w.paint_self(&self.ui_context, pc);
+                    self.paint_dialog_body(pc);
                 }
             }
         } else if idx == PLAYBAR_IDX {
@@ -1114,6 +1114,17 @@ impl State {
             return;
         }
         self.paint_widget(DIALOG_IDX, pc, show_cursor, visited, clip, None);
+    }
+
+    /// The dialog's own paint — the query line and the rows — straight from
+    /// `Dialog`'s `Paint` impl rather than through the adapter's
+    /// `paint_self`, which re-emits a widget's prims under the host's clip
+    /// and drops the rect clips the widget drew them under: the query line
+    /// is cut at its well and the rows at the list by theirs. The dialog is
+    /// a subtree painter with no label, so the adapter adds nothing else.
+    fn paint_dialog_body(&self, pc: &mut PaintCtx) {
+        let d = &self.ui_context[self.slots.dialog];
+        cce_ui::widget::Paint::paint_ui(d.inner(), &self.ui_context, d.content_rect(), pc);
     }
 
     /// Open popovers (the params pane's expanded dropdowns), background then

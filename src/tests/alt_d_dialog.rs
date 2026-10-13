@@ -247,10 +247,10 @@ fn undo_with_the_dialog_up_is_the_query_lines() {
 /// The query line is drawn by the toolkit's `paint_line` from marks
 /// measured as the renderer shapes the text: the caret stands at the
 /// shaped x of its place, the text carries the dialog's own bounds (or the
-/// dialog's occluder would clamp it away), a query wider than the line
-/// scrolls to keep the caret in view and draws only what is inside the
-/// line, and a press on the line puts the caret at the nearest boundary,
-/// a drag from it selecting.
+/// dialog's occluder would clamp it away) and is clipped to the line, a
+/// query wider than the line scrolls to keep the caret in view, and a
+/// press on the line puts the caret at the nearest boundary, a drag from
+/// it selecting.
 #[test]
 fn the_query_lines_caret_stands_on_its_glyphs() {
     use crate::dialog::query_text_area;
@@ -284,7 +284,7 @@ fn the_query_lines_caret_stands_on_its_glyphs() {
         Prim::Text { text, x, bounds, .. } if text == "desel" => Some((*x, *bounds, i.clip)),
         _ => None,
     });
-    assert_eq!(text, Some((area.x, Some(own), None)), "the query, at the line's left, under the dialog's bounds and no clip");
+    assert_eq!(text, Some((area.x, Some(own), Some(area))), "the query, at the line's left, under the dialog's bounds, cut at the line");
     let caret = list.items.iter().find_map(|i| match i.prim {
         Prim::Quad { rect, .. } if rect.width == CARET_W && rect.y > area.y && rect.y < area.y + area.height => Some(rect.x),
         _ => None,
@@ -312,8 +312,7 @@ fn the_query_lines_caret_stands_on_its_glyphs() {
     assert_eq!((d.query.cursor, d.query.selection), (2, Some((2, 4))), "dragged from 4 back to 2");
     assert_eq!(d.query_text(), "desel", "and nothing typed");
 
-    // Too long for the line: scrolled to the caret, and only what is
-    // inside the line drawn.
+    // Too long for the line: scrolled to the caret, and cut at the line.
     state.dialog_key_input(&key_press(Key::Named(NamedKey::End)));
     for _ in 0..80 {
         state.dialog_key_input(&typed("w"));
@@ -321,14 +320,14 @@ fn the_query_lines_caret_stands_on_its_glyphs() {
     let m = marks(&state);
     assert!(m.width() > area.width, "the query overflows the line");
     let list = state.collect_display_list();
-    let (x, shown) = list.items.iter().find_map(|i| match &i.prim {
-        Prim::Text { text, x, bounds: Some(b), .. } if text.ends_with("www") && *b == own => Some((*x, text.clone())),
+    let (x, clip) = list.items.iter().find_map(|i| match &i.prim {
+        Prim::Text { text, x, bounds: Some(b), .. } if text.ends_with("www") && *b == own => Some((*x, i.clip)),
         _ => None,
-    }).expect("the query's visible part");
-    let shift = area.x - x + m.x_of(m.shown.len() - shown.len());
+    }).expect("the query");
+    let shift = area.x - x;
     assert!(shift > 0.0, "scrolled");
-    assert!(x >= area.x - 0.5, "nothing drawn left of the line");
-    assert!(shown.len() < m.shown.len(), "the part off the line's left is not drawn");
+    assert!((x + m.width() - (area.x + area.width)).abs() < CARET_W + 0.5, "its end at the line's right: {x} + {}", m.width());
+    assert_eq!(clip, Some(area), "and nothing drawn outside the line");
     let caret = list.items.iter().find_map(|i| match i.prim {
         Prim::Quad { rect, .. } if rect.width == CARET_W && rect.y > area.y && rect.y < area.y + area.height => Some(rect.x),
         _ => None,
