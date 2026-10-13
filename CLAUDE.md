@@ -3602,6 +3602,15 @@ the cell it is centred on and drawn with the highlight tint the widget gives
 its own single selection, rather than by a second rect test that could
 disagree with the selection itself.
 
+**A selected node wears an accent RING** (since 2026-10-13): 2 px in
+`highlight_primary_color`, 3 px outside the body, over a dark keyline a
+pixel wider each side, drawn after every body (`SELECTED_RING_GAP` /
+`_W` in `render.rs`). The roll tinted in the accent was the only cue
+until then, and with clear bodies (`node_tint` at a low alpha) it was a
+faint rim no one could pick out over a bright model. The keyline is what
+keeps the cyan legible over a pale surface. Checked in a shadow session
+over the sphere and over the dark scene.
+
 Arming is gated on the graph NOT having taken the press (`widget_took`). The
 case that bites is a press on a PORT: it starts a connection and consumes the
 press without selecting anything, so the empty-grid arm would read it as bare

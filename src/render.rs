@@ -45,6 +45,11 @@ fn focus_by_tint() -> bool {
 /// this colour, and nothing else in the pane is.
 const BYPASS_TINT: [f32; 3] = [1.0, 0.74, 0.18];
 
+/// The accent ring round a selected node: how far outside the body it
+/// stands and how thick it is, logical px.
+const SELECTED_RING_GAP: f32 = 3.0;
+const SELECTED_RING_W: f32 = 2.0;
+
 /// The point numbers' font size, logical px.
 const POINT_NUMBER_PX: f32 = 10.0;
 /// The linear luminance above which a node name's floor takes dark ink
@@ -650,12 +655,18 @@ impl State {
                 // what still says so while the node is selected and its
                 // roll is the selection's colour.
                 let mut bars: Vec<cce_ui::scene::layout::Rect> = Vec::new();
+                // A selected node is ringed in the accent, just outside its
+                // body, after every body. The tinted roll alone was a faint
+                // rim on a clear body over a bright scene, and could not be
+                // told from its neighbours (2026-10-13).
+                let mut rings: Vec<cce_ui::scene::layout::Rect> = Vec::new();
                 // In the bodies' run, so they share its blur snapshot.
                 for (floor, r) in &label_floors {
                     pc.fill_material(*floor, (*r, *r, *r, *r), &label_mat);
                 }
                 for (qx, qy, qw, qh, highlighted, off) in bodies {
                     if highlighted {
+                        rings.push(rect(qx - SELECTED_RING_GAP, qy - SELECTED_RING_GAP, qw + SELECTED_RING_GAP * 2.0, qh + SELECTED_RING_GAP * 2.0));
                         pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel, hl_tint);
                     } else if off {
                         pc.bevel_tinted(rect(qx, qy, qw, qh), radii, &node_mat, node_bevel, BYPASS_TINT);
@@ -672,6 +683,15 @@ impl State {
                 }
                 for bar in bars {
                     pc.quad(bar, [BYPASS_TINT[0], BYPASS_TINT[1], BYPASS_TINT[2], 0.9]);
+                }
+                // Over a dark keyline a pixel wider on each side, so the
+                // accent holds over a pale model as well as the dark scene.
+                let ring_r = node_r + SELECTED_RING_GAP;
+                for ring in rings {
+                    let key = rect(ring.x - 1.0, ring.y - 1.0, ring.width + 2.0, ring.height + 2.0);
+                    let key_r = ring_r + 1.0;
+                    pc.border(key, (key_r, key_r, key_r, key_r), [0.0; 4], [0.02, 0.02, 0.05, 0.55], SELECTED_RING_W + 2.0);
+                    pc.border(ring, (ring_r, ring_r, ring_r, ring_r), [0.0; 4], [hl[0], hl[1], hl[2], 0.95], SELECTED_RING_W);
                 }
             });
 
