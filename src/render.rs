@@ -550,6 +550,21 @@ impl State {
                 // 2026-10-07, when the grid's visual was removed; the lattice
                 // itself — where nodes stand, snapping, the grid cursor — is
                 // unchanged.)
+                // The box round the wired chain the pointer is in, where
+                // the pointer is the network's (`overlay_claims`): a wash
+                // and a hairline in the plates' neutral border colour,
+                // under the wires, its corners concentric with the nodes'.
+                if let Some(b) = &self.net.chain_box {
+                    let n = cce_ui::color::plate_border_color().unwrap_or([0.58, 0.58, 0.66, 1.0]);
+                    let r = node_r + self.chain_box_pad();
+                    pc.border(
+                        rect(b.x, b.y, b.w, b.h),
+                        (r, r, r, r),
+                        [n[0], n[1], n[2], 0.07 * b.alpha],
+                        [n[0], n[1], n[2], 0.6 * b.alpha],
+                        1.5,
+                    );
+                }
                 g.paint_wires(clip, pc);
                 for (qx, qy, qw, qh, qc, cell) in g.geometry_quads_tagged(clip) {
                     if g.is_node_rect(qx, qy, qw, qh) {

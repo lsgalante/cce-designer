@@ -126,6 +126,27 @@ pub struct NetworkView {
     /// [`State::tick_frame`](crate::app::State::tick_frame), drawn by the
     /// CONTENT branch in render.rs.
     pub drop_glow: Option<DropGlow>,
+    /// The box drawn round the wired chain the pointer is in, eased in
+    /// and out (see [`State::chain_box_target`](crate::app::State::chain_box_target)).
+    /// None once fully faded. Advanced in
+    /// [`State::tick_frame`](crate::app::State::tick_frame), drawn by the
+    /// CONTENT branch in render.rs under the wires.
+    pub chain_box: Option<ChainBox>,
+}
+
+/// The animated box round a chain (see [`NetworkView::chain_box`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChainBox {
+    /// The chain's node ids, sorted: what tells one chain from another
+    /// while the box is up, so the box glides to a new chain and follows
+    /// its own exactly through a pan or a zoom.
+    pub ids: Vec<String>,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// 0..1, scaling the outline's and the wash's alpha.
+    pub alpha: f32,
 }
 
 /// The target a scroll gesture over the plateless network was given at its
@@ -171,6 +192,49 @@ pub struct DropGlow {
     pub h: f32,
     /// 0..1 — scales the whole feather's alpha profile.
     pub alpha: f32,
+}
+
+/// The level's wired CHAINS: the nodes joined by the wires the graph
+/// draws (a `node` parameter naming a sibling, as cce-ui's `wire_pairs`
+/// reads them), as slots, each chain in slot order and the chains by
+/// their first slot. A node wired to nothing is not a chain: its body is
+/// already what the overlay claims of it.
+pub fn wired_chains(nodes: &[GraphNode]) -> Vec<Vec<usize>> {
+    let mut root: Vec<usize> = (0..nodes.len()).collect();
+    fn find(root: &mut [usize], mut i: usize) -> usize {
+        while root[i] != i {
+            root[i] = root[root[i]];
+            i = root[i];
+        }
+        i
+    }
+    let mut wired = vec![false; nodes.len()];
+    for (i, n) in nodes.iter().enumerate() {
+        for (_, source, kind) in &n.parameters {
+            if kind != "node" || source.is_empty() {
+                continue;
+            }
+            let Some(j) = nodes.iter().position(|m| m.name == *source) else { continue };
+            if j == i {
+                continue;
+            }
+            wired[i] = true;
+            wired[j] = true;
+            let (a, b) = (find(&mut root, i), find(&mut root, j));
+            root[a.max(b)] = a.min(b);
+        }
+    }
+    let mut chains: Vec<Vec<usize>> = Vec::new();
+    let mut at: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for i in (0..nodes.len()).filter(|&i| wired[i]) {
+        let r = find(&mut root, i);
+        let k = *at.entry(r).or_insert_with(|| {
+            chains.push(Vec::new());
+            chains.len() - 1
+        });
+        chains[k].push(i);
+    }
+    chains
 }
 
 // The lattice and the cursor region, as arithmetic on the view alone. A
@@ -1212,6 +1276,125 @@ impl State {
             y_min.min(cy - font_size * 0.5),
             (y_min + g.node_h).max(cy + font_size * 0.5),
         )
+    }
+
+    /// How far a chain's box stands out from its nodes and their names:
+    /// a share of the body's height, so it scales with the zoom.
+    pub fn chain_box_pad(&self) -> f32 {
+        self.net.grid.node_h * 0.55
+    }
+
+    /// Every wired chain of the level the network shows, with the
+    /// window-space box round it: its bodies and their name labels
+    /// (`node_extent`, the rule Frame All fits), padded by
+    /// `chain_box_pad`. Read off the graph widget's own nodes, so the boxes
+    /// are round what is drawn.
+    pub fn chain_boxes(&self) -> Vec<(Vec<usize>, (f32, f32, f32, f32))> {
+        let nodes = self.graph().get_nodes();
+        let g = &self.net.grid;
+        let (ox, oy) = self.network_origin();
+        let (ox, oy) = (ox + self.net.pan_x, oy + self.net.pan_y);
+        let pad = self.chain_box_pad();
+        wired_chains(&nodes)
+            .into_iter()
+            .map(|chain| {
+                let (x0, x1, y0, y1) = chain.iter().fold(
+                    (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY),
+                    |(ax0, ax1, ay0, ay1), &i| {
+                        let (x0, x1, y0, y1) = Self::node_extent(&nodes[i].name, nodes[i].position, g);
+                        (ax0.min(x0), ax1.max(x1), ay0.min(y0), ay1.max(y1))
+                    },
+                );
+                let r = (ox + x0 - pad, oy + y0 - pad, x1 - x0 + pad * 2.0, y1 - y0 + pad * 2.0);
+                (chain, r)
+            })
+            .collect()
+    }
+
+    /// The chain whose box holds (px, py) while the network overlays the
+    /// scene — the smallest, where boxes overlap — or None. Inside it the
+    /// pointer is the network's (`overlay_claims`), empty space and all.
+    pub fn chain_box_at(&self, px: f32, py: f32) -> Option<(Vec<usize>, (f32, f32, f32, f32))> {
+        if !self.network_overlay() {
+            return None;
+        }
+        self.chain_boxes()
+            .into_iter()
+            .filter(|(_, (x, y, w, h))| px >= *x && px < x + w && py >= *y && py < y + h)
+            .min_by(|a, b| (a.1 .2 * a.1 .3).total_cmp(&(b.1 .2 * b.1 .3)))
+    }
+
+    /// The box to show: the chain under a free pointer that no floating
+    /// pane covers, as its sorted node ids and its rect. A captured pointer
+    /// — an orbit, a drag, the dialog — shows none.
+    pub(crate) fn chain_box_target(&self) -> Option<(Vec<String>, (f32, f32, f32, f32))> {
+        if self.pointer_captured() || self.over_floating_pane_at(self.cursor_x, self.cursor_y) {
+            return None;
+        }
+        let (chain, r) = self.chain_box_at(self.cursor_x, self.cursor_y)?;
+        let level = self.current_dir();
+        let mut ids: Vec<String> = chain.iter().filter_map(|&i| level.children.get(i).map(|c| c.id.clone())).collect();
+        ids.sort();
+        Some((ids, r))
+    }
+
+    /// Whether the box shown is not the one the pointer asks for: what
+    /// pointer motion repaints for, since the tick that eases the box runs
+    /// only on a frame something asked for.
+    pub(crate) fn chain_box_stale(&self) -> bool {
+        let target = self.chain_box_target().map(|(ids, _)| ids);
+        match (&self.net.chain_box, target) {
+            (Some(b), Some(ids)) => b.ids != ids || b.alpha < 1.0,
+            (Some(_), None) => true,
+            (None, Some(_)) => true,
+            (None, None) => false,
+        }
+    }
+
+    /// Ease the chain box toward the chain under the pointer: it fades in
+    /// over a chain, glides to another, and fades out where it was when
+    /// the pointer leaves. Over its own chain it follows the chain exactly,
+    /// so a pan or a zoom does not leave it behind. True while it moves.
+    pub(crate) fn animate_chain_box(&mut self, dt: f32) -> bool {
+        let ease = |k: f32| 1.0 - (-k * dt.max(1e-4)).exp();
+        let target = self.chain_box_target();
+        match (&mut self.net.chain_box, target) {
+            (Some(b), Some((ids, (tx, ty, tw, th)))) => {
+                let moving = if b.ids == ids && b.alpha > 0.5 {
+                    (b.x, b.y, b.w, b.h) = (tx, ty, tw, th);
+                    false
+                } else {
+                    let f = ease(20.0);
+                    b.x += (tx - b.x) * f;
+                    b.y += (ty - b.y) * f;
+                    b.w += (tw - b.w) * f;
+                    b.h += (th - b.h) * f;
+                    let near = (tx - b.x).abs() < 0.3 && (ty - b.y).abs() < 0.3 && (tw - b.w).abs() < 0.3 && (th - b.h).abs() < 0.3;
+                    if near {
+                        (b.x, b.y, b.w, b.h) = (tx, ty, tw, th);
+                        b.ids = ids;
+                    }
+                    !near
+                };
+                b.alpha += (1.0 - b.alpha) * ease(16.0);
+                if b.alpha > 0.995 {
+                    b.alpha = 1.0;
+                }
+                moving || b.alpha < 1.0
+            }
+            (Some(b), None) => {
+                b.alpha -= b.alpha * ease(12.0);
+                if b.alpha < 0.02 {
+                    self.net.chain_box = None;
+                }
+                true
+            }
+            (None, Some((ids, (x, y, w, h)))) => {
+                self.net.chain_box = Some(ChainBox { ids, x, y, w, h, alpha: 0.0 });
+                true
+            }
+            (None, None) => false,
+        }
     }
 
     /// The union of `node_extent` over the current level, or None when the

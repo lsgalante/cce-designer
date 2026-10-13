@@ -148,7 +148,7 @@ mod document;
 pub use document::Document;
 // `State::net`: the network editor's cursor, lattice, pan and look.
 mod network;
-pub use network::{DropGlow, NetworkView, NodeDragGroup, OverlayWheel, OVERLAY_WHEEL_GAP};
+pub use network::{wired_chains, ChainBox, DropGlow, NetworkView, NodeDragGroup, OverlayWheel, OVERLAY_WHEEL_GAP};
 // `State::camera`: the active camera, its drags, the view last staged.
 mod camera;
 pub use camera::CameraView;
@@ -1510,10 +1510,17 @@ impl State {
     }
 
     /// Whether the network claims the pointer at (px, py) while it is an
-    /// overlay: only where it has actually drawn a node, and only where no
-    /// floating pane covers it.
+    /// overlay: where it has drawn a node, and only where no floating pane
+    /// covers it.
+    ///
+    /// And inside the box round a wired chain (`chain_box_at`), which is
+    /// drawn while the pointer is in it: there the network has the
+    /// pointer, empty space and all — a press is the grid's, the wheel
+    /// pans the graph, a right press opens the network's menu — so a chain
+    /// can be worked on without each gesture having to begin on a node.
     pub fn overlay_claims(&self, px: f32, py: f32) -> bool {
-        !self.over_floating_pane_at(px, py) && self.graph().node_at(px, py).is_some()
+        !self.over_floating_pane_at(px, py)
+            && (self.graph().node_at(px, py).is_some() || self.chain_box_at(px, py).is_some())
     }
 
     /// Whether this wheel event over the plateless network is the graph's
@@ -5252,6 +5259,7 @@ impl State {
                 node_tint: None,
                 node_color: cce_ui::color::graph_node_color(),
                 drop_glow: None,
+                chain_box: None,
             },
             camera: CameraView {
                 active_camera,
@@ -6386,6 +6394,7 @@ impl State {
         // The params plate eases between the plate fitted to its rows and
         // the circle it collapses to with none.
         let plate_animating = self.animate_params_plate(dt);
+        let chain_box_animating = self.animate_chain_box(dt);
         let mut glow_animating = false;
         {
             let target = self.graph().drop_target_cell_rect();
@@ -6688,7 +6697,7 @@ impl State {
 
         let cache_moved = self.sync_playbar_cache();
 
-        tick_changed || panned || reclaimed || glow_animating || plate_animating || frame_moved || config_changed || light_moved || cache_moved
+        tick_changed || panned || reclaimed || glow_animating || chain_box_animating || plate_animating || frame_moved || config_changed || light_moved || cache_moved
     }
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.

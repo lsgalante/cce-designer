@@ -596,6 +596,128 @@ fn a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node() {
     assert!(!state.overlay_wheel_to_graph(ScrollPhase::Finger), "a new gesture over empty space is the scene's");
 }
 
+/// A wired chain of the plateless network has a box round it, shown while
+/// the pointer is in it, and inside it the pointer is the network's —
+/// empty space and all: the wheel pans the graph, a press is the grid's,
+/// a right press opens the network's menu. Outside every box the empty
+/// space is still the scene's.
+#[test]
+fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
+    use crate::app::wired_chains;
+    use crate::slots::{CONTENT_IDX, LEFT_MENUBAR_IDX, RIGHT_MENUBAR_IDX};
+    use crate::window::{LocalPosition, WindowEvent};
+    use cce_ui::widget::{ElementState, GraphNode, MouseButton, MouseScrollDelta, Position};
+
+    // The rule: the nodes joined by wires naming siblings; a node wired to
+    // nothing is no chain.
+    let node = |name: &str, input: &str| GraphNode {
+        id: name.into(),
+        name: name.into(),
+        position: (0.0, 0.0),
+        parameters: vec![("input".into(), input.into(), "node".into())],
+        geom_visible: false,
+        node_type: String::new(),
+        inputs: 1,
+        outputs: 1,
+    };
+    let nodes = [node("a", ""), node("lone", ""), node("b", "a"), node("c", "b"), node("d", ""), node("e", "d"), node("f", "nowhere")];
+    assert_eq!(wired_chains(&nodes), vec![vec![0, 2, 3], vec![4, 5]]);
+
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    state.rebuild_positions();
+    state.apply_layout();
+    assert!(state.network_overlay(), "the network overlays the scene");
+    state.set_active_camera("Default Camera");
+    let at = |state: &mut State, x: f32, y: f32| {
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
+    };
+    let orbit = |state: &State| (state.viewport().rotation_x, state.viewport().rotation_y);
+
+    // The bundled level is one sphere: wire a node under it, two rows down.
+    {
+        let level = state.current_dir_mut();
+        let sphere = level.children.iter().find(|c| c.node_type == "sphere").expect("a sphere").clone();
+        let mut under = sphere.clone();
+        under.id = "chain_box_test".into();
+        under.name = "under1".into();
+        under.position = (sphere.position.0, sphere.position.1 + 2.0);
+        under.params = vec![crate::app::ParamDef::new("input", "node", &sphere.name)];
+        level.children.push(under);
+    }
+    state.sync_nodes();
+
+    // Empty space inside a chain's box, clear of its nodes and the plates.
+    let boxes = state.chain_boxes();
+    assert_eq!(boxes.len(), 1, "one wired chain");
+    let (px, py) = boxes
+        .iter()
+        .flat_map(|(_, (x, y, w, h))| {
+            let (x, y, w, h) = (*x, *y, *w, *h);
+            (1..10).flat_map(move |i| (1..10).map(move |j| (x + w * i as f32 / 10.0, y + h * j as f32 / 10.0)))
+        })
+        .find(|&(x, y)| state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
+        .expect("empty space inside a chain's box");
+    at(&mut state, px, py);
+    assert!(state.overlay_claims(px, py) && state.in_network_pane(), "the box is the network's");
+    assert!(!state.cursor_in_viewport(), "and not the scene's");
+    state.tick_frame(1.0);
+    let shown = state.net.chain_box.clone().expect("the box is shown");
+    assert!(shown.x <= px && px < shown.x + shown.w && shown.y <= py && py < shown.y + shown.h, "round the pointer");
+
+    // The wheel pans the graph and turns no camera.
+    state.net.overlay_wheel = None;
+    let (turned, pan) = (orbit(&state), (state.net.pan_x, state.net.pan_y));
+    state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
+    assert_eq!(orbit(&state), turned, "a scroll in the box does not orbit");
+    assert_ne!((state.net.pan_x, state.net.pan_y), pan, "it pans the graph");
+    assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX);
+    state.net.overlay_wheel = None;
+
+    // The box followed its chain through the pan; find empty space in it again.
+    state.tick_frame(1.0 / 60.0);
+    let (px, py) = state
+        .chain_boxes()
+        .iter()
+        .flat_map(|(_, (x, y, w, h))| {
+            let (x, y, w, h) = (*x, *y, *w, *h);
+            (1..10).flat_map(move |i| (1..10).map(move |j| (x + w * i as f32 / 10.0, y + h * j as f32 / 10.0)))
+        })
+        .find(|&(x, y)| state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
+        .expect("empty space inside a chain's box");
+
+    // A press there is the grid's: the cursor goes to the cell, nothing orbits.
+    state.focused_pane = RIGHT_MENUBAR_IDX;
+    at(&mut state, px, py);
+    state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+    assert!(state.camera.orbit_drag.is_none(), "a press in the box arms no orbit");
+    assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), state.cell_at(px, py));
+    assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX, "the network takes the focus");
+    state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+
+    // A right press there opens the network's menu, not the viewport's.
+    state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
+    assert!(state.menus.network_menu_active, "the network's menu");
+    assert!(!state.viewport_menu_open());
+    state.close_network_menu();
+
+    // Outside every box, empty space is the scene's, and the box goes.
+    let (cx, cy, cw, ch) = state.positions[CONTENT_IDX];
+    let (ex, ey) = (1..20)
+        .flat_map(|i| (1..20).map(move |j| (cx + cw * i as f32 / 20.0, cy + ch * j as f32 / 20.0)))
+        .find(|&(x, y)| !state.overlay_claims(x, y) && !state.over_floating_pane_at(x, y))
+        .expect("empty scene");
+    at(&mut state, ex, ey);
+    assert!(state.cursor_in_viewport());
+    for _ in 0..60 {
+        state.tick_frame(1.0 / 30.0);
+    }
+    assert!(state.net.chain_box.is_none(), "the box fades out");
+    let turned = orbit(&state);
+    state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
+    assert_ne!(orbit(&state), turned, "a scroll outside the boxes orbits");
+}
+
 /// The network plate is retired; a settings file or a project display
 /// block from when it was a switch still says `network_plate`, and must
 /// still load — the key is ignored, not an error that would read the

@@ -378,6 +378,11 @@ impl State {
                 changed = true;
             }
         }
+        // The box round the chain under the pointer comes and goes with
+        // the pointer, which nothing else here repaints for.
+        if self.chain_box_stale() {
+            changed = true;
+        }
         changed
     }
 

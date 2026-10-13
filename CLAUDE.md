@@ -3034,6 +3034,35 @@ What changes for the user: a plain click on empty space is not the network's
 feel like a scene with a graph on it rather than a graph with a picture
 behind it. Deselecting is on Escape.
 
+### A wired chain claims its box (since 2026-10-13)
+
+The exception to "empty space is the scene's": every wired CHAIN of the
+level — the nodes joined by wires naming siblings, as cce-ui's
+`wire_pairs` reads them (`network::wired_chains`; a node wired to nothing
+is no chain) — has a box round its bodies and their name labels
+(`node_extent`, Frame All's rule), padded by `chain_box_pad` (0.55 of the
+body's height, so the ports stand inside). Inside it the pointer is the
+NETWORK'S, empty space and all: `overlay_claims` takes `chain_box_at` as
+well as `node_at`, and everything routed off it follows — `in_network_pane`,
+`cursor_in_viewport`, the press cascade's `hits_widget`, the wheel's
+per-gesture target. So in a chain's box a left press is the grid's (the
+cursor to the cell, an expansion drag armed, the network focused), the
+wheel pans the graph, a right press opens the network's menu, and a viewer
+state's handle under the box cannot be grabbed. Outside every box nothing
+changed.
+
+The box is DRAWN only while the pointer is in it
+(`State::net.chain_box`, eased in `animate_chain_box` from the tick: it
+fades in, glides to another chain, follows its own exactly through a pan
+or zoom, fades out where it was), a wash and a hairline in the plates'
+neutral border colour under the wires, its corners concentric with the
+nodes'. A captured pointer or a floating pane over it shows none.
+`chain_box_stale` is what pointer motion repaints for, since the tick runs
+only on a frame something asked for. Where boxes overlap the smallest
+wins. Boxes are read off the graph widget's own nodes, so they are round
+what is drawn. `a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks`
+is the test. Checked in a shadow session.
+
 ### The params plate fits its rows, and is optional (since 2026-10-06)
 
 The params HUD's plate is FITTED to its rows: from the HUD's top to as far
